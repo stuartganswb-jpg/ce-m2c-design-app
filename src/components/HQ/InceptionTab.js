@@ -4,6 +4,7 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query,
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { removeImageBackground } from '../Shared/removeBg';
 import GuideBuilder from '../Shared/GuideBuilder';
+import { isStepFile, codeFromFileName, stepUnitOf, stepToGlb } from '../Shared/stepImport';
 import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom';
 
 import * as THREE from 'three';
@@ -67,6 +68,38 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
 
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({ itemName: "", legacyErpId: "", collection: "N/A", productType: "", project: "", description: "", recordType: "PRODUCT" });
+  // ── STEP REVIEW (Stuart 2026-09-08): open a vendor / designer .stp, look at it, save it as a
+  // design of its own. Converted in the browser to the house .glb (Shared/stepImport); nothing is
+  // written until "Save as new design". Deliberately NOT the revision upload on an open design —
+  // that promotes a file to the working model every downstream tab builds on.
+  const [stepReview, setStepReview] = useState(null);   // { fileName, code, description, unit, tris, size, blob, url, busy, error, saving }
+  const reviewStepFile = async (file) => {
+      if (!file) return;
+      if (!isStepFile(file.name)) { alert('Drop a .stp / .step file here.'); return; }
+      if (stepReview?.url) URL.revokeObjectURL(stepReview.url);
+      const { code, description } = codeFromFileName(file.name);
+      setStepReview({ fileName: file.name, code, description, unit: '', tris: 0, size: null, blob: null, url: '', busy: true, error: '' });
+      try {
+          const unit = stepUnitOf(await file.slice(0, 6000).text());
+          const { glb, summary } = await stepToGlb(await file.arrayBuffer(), { name: code || 'PART' });
+          const blob = new Blob([glb], { type: 'model/gltf-binary' });
+          setStepReview({ fileName: file.name, code, description, unit, tris: summary.tris, size: summary.size, blob, url: URL.createObjectURL(blob), busy: false, error: '' });
+      } catch (e) {
+          console.error('STEP review failed', e);
+          setStepReview(prev => prev ? { ...prev, busy: false, error: e.message || String(e) } : null);
+      }
+  };
+  const clearStepReview = () => { if (stepReview?.url) URL.revokeObjectURL(stepReview.url); setStepReview(null); };
+  const saveStepAsDesign = async () => {
+      if (!stepReview?.blob) return;
+      const name = window.prompt('Save this model as a new design. Product name:', stepReview.description ? `${stepReview.code} ${stepReview.description}` : stepReview.code);
+      if (name === null) return;
+      if (!String(name).trim()) { alert('A product name is required.'); return; }
+      setStepReview(prev => ({ ...prev, saving: true }));
+      const file = new File([stepReview.blob], `${stepReview.code || 'PART'}.glb`, { type: 'model/gltf-binary' });
+      await saveAssembly("INCEPTION", { itemName: String(name).trim(), legacyErpId: stepReview.code, description: `From ${stepReview.fileName}`, file });
+      clearStepReview();
+  };
   const [imageFile, setImageFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -237,35 +270,44 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
     setIsAddingNewProject(false); setNewProjectName("");
   };
 
-  const saveAssembly = async (status) => {
-    if (!formData.itemName.trim()) return alert("Product Name is required.");
+  // `overrides` (2026-09-08, the STEP review on this tab): { itemName, legacyErpId, description,
+  // file } — saves a NEW record from a converted .glb, never a merge into whatever design is open.
+  // Everything else about the save is the one path below; only the record and the file differ.
+  const saveAssembly = async (status, overrides = null) => {
+    const cur = overrides ? null : activeAssembly;
+    const form = overrides
+        ? { ...formData, itemName: overrides.itemName || '', legacyErpId: overrides.legacyErpId || '', description: overrides.description || '', recordType: 'PRODUCT', collection: 'N/A', productType: '', project: '' }
+        : formData;
+    const upFile = overrides ? (overrides.file || null) : (imageMode === "UPLOAD" ? imageFile : null);
+    const libPick = overrides ? '' : (imageMode === "LIBRARY" ? selectedExistingImage : '');
+    if (!form.itemName.trim()) return alert("Product Name is required.");
     
-    let finalCollection = formData.collection;
+    let finalCollection = form.collection;
     if (isAddingNewCollection && newCollectionName.trim()) {
         finalCollection = newCollectionName.trim().toUpperCase();
         const safeId = `COL_${Date.now()}`;
         await setDoc(doc(db, "hq_collections", safeId), { id: safeId, name: finalCollection, brandId: activeBrand, allowedCustomers: [], allowedFinishes: [] });
     }
     
-    let finalProductType = formData.productType;
+    let finalProductType = form.productType;
     if (isAddingNewProductType && newProductTypeName.trim()){
         finalProductType = newProductTypeName.trim().toUpperCase();
         const updatedTypes = [...new Set([...dynamicProductTypes, finalProductType])];
         setDoc(doc(db, "system", "master_lists"), { prodTypes: updatedTypes }, { merge: true });
     }
 
-    let finalProject = formData.project;
+    let finalProject = form.project;
     if (isAddingNewProject && newProjectName.trim()) finalProject = newProjectName.trim().toUpperCase();
 
-    let finalUrl = activeAssembly?.finalImageUrl || "";
-    let finalCad = activeAssembly?.manufacturingSpecs?.cadUrl || "";
-    let updatedRevisions = activeAssembly?.revisions || [];
+    let finalUrl = cur?.finalImageUrl || "";
+    let finalCad = cur?.manufacturingSpecs?.cadUrl || "";
+    let updatedRevisions = cur?.revisions || [];
 
-    if (imageMode === "UPLOAD" && imageFile) {
-        const is3D = is3DFile(imageFile.name);
+    if (upFile) {
+        const is3D = is3DFile(upFile.name);
         const ext = is3D ? '.glb' : '.png'; 
-        const storageRef = ref(storage, `assemblies/${activeBrand}_${formData.itemName}_${Date.now()}${ext}`);
-        const uploadTask = uploadBytesResumable(storageRef, imageFile);
+        const storageRef = ref(storage, `assemblies/${activeBrand}_${form.itemName}_${Date.now()}${ext}`);
+        const uploadTask = uploadBytesResumable(storageRef, upFile);
         
         await new Promise((resolve, reject) => {
           uploadTask.on("state_changed", 
@@ -284,43 +326,43 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
             }
           );
         });
-    } else if (imageMode === "LIBRARY" && selectedExistingImage) {
-        const libImg = imageLibrary.find(img => img.url === selectedExistingImage);
+    } else if (libPick) {
+        const libImg = imageLibrary.find(img => img.url === libPick);
         if (libImg && libImg.is3D) {
-            finalCad = selectedExistingImage;
+            finalCad = libPick;
             updatedRevisions.push({ id: `REV-${Date.now()}`, name: `Linked 3D Model`, url: finalCad, timestamp: new Date().toISOString(), is3D: true });
         } else {
-            finalUrl = selectedExistingImage;
+            finalUrl = libPick;
             updatedRevisions.push({ id: `REV-${Date.now()}`, name: `Linked Shared Drawing`, url: finalUrl, timestamp: new Date().toISOString(), is3D: false });
         }
     }
 
-    const docId = activeAssembly ? activeAssembly.id : `${activeBrand.toUpperCase()}-ASM-${Math.floor(1000+Math.random()*9000)}`;
+    const docId = cur ? cur.id : `${activeBrand.toUpperCase()}-ASM-${Math.floor(1000+Math.random()*9000)}`;
     const payload = {
       brandId: activeBrand, partClass: "Assembly", itemId: docId,
-      itemName: formData.itemName.toUpperCase(), legacyErpId: formData.legacyErpId.toUpperCase() || "PENDING",
+      itemName: form.itemName.toUpperCase(), legacyErpId: form.legacyErpId.toUpperCase() || "PENDING",
       collection: finalCollection, productType: finalProductType, project: finalProject,
-      recordType: formData.recordType || "PRODUCT",
+      recordType: form.recordType || "PRODUCT",
       // A PRODUCT created in Inception IS a mainline assembly — stamp it MAIN so it flows to Node Grouping →
       // Visual Assembly → BOM. Projects are not mainline (kept off those tabs). Preserve any existing routing.
-      routingType: formData.recordType === 'PROJECT' ? (activeAssembly?.routingType || '') : (activeAssembly?.routingType || 'MAIN'),
-      description: formData.description, finalImageUrl: finalUrl, revisions: updatedRevisions,
-      lifecycleStatus: status, spatialCallouts: activeAssembly?.spatialCallouts || [], 
-      approvals: activeAssembly?.approvals || { designer: false, technical: false, machinist: false }, 
+      routingType: form.recordType === 'PROJECT' ? (cur?.routingType || '') : (cur?.routingType || 'MAIN'),
+      description: form.description, finalImageUrl: finalUrl, revisions: updatedRevisions,
+      lifecycleStatus: status, spatialCallouts: cur?.spatialCallouts || [], 
+      approvals: cur?.approvals || { designer: false, technical: false, machinist: false }, 
       author: currentUser, updatedAt: serverTimestamp()
     };
 
     if (finalCad) {
-        payload.manufacturingSpecs = activeAssembly?.manufacturingSpecs || {};
+        payload.manufacturingSpecs = cur?.manufacturingSpecs || {};
         payload.manufacturingSpecs.cadUrl = finalCad;
     }
 
     // If this save added a new model/image revision, make it the current working revision (badge + default).
-    if (updatedRevisions.length > (activeAssembly?.revisions || []).length) {
+    if (updatedRevisions.length > (cur?.revisions || []).length) {
         payload.finalRevisionId = updatedRevisions[updatedRevisions.length - 1].id;
     }
 
-    if (!activeAssembly) payload.createdAt = serverTimestamp();
+    if (!cur) payload.createdAt = serverTimestamp();
 
     try {
       await setDoc(doc(db, "Approved_Designs", docId), payload, { merge: true });
@@ -805,6 +847,52 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                 <button onClick={() => openEditor()} style={{ padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>+ Initiate New Product</button>
             </div>
           </div>
+      )}
+      {/* ── REVIEW CAD (.stp) — Stuart 2026-09-08: "open, review, see and look at them … save them
+          there". Converted in the browser (Shared/stepImport, OpenCascade wasm loaded on first use);
+          view only until "Save as new design", which makes an Inception record of its own. */}
+      {!isCanvasMaximized && (
+        <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '22px 26px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)' }}>📦 Review CAD (.stp)</div>
+              <label style={{ padding: '9px 16px', background: 'var(--ink)', color: '#fff', cursor: stepReview?.busy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                  {stepReview?.busy ? 'Reading…' : 'Open .stp / .step'}
+                  <input type="file" accept=".stp,.step" style={{ display: 'none' }} disabled={!!stepReview?.busy} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) reviewStepFile(f); }} />
+              </label>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', flex: 1, minWidth: '240px' }}>Look at a vendor or designer STEP file here without touching any product. Saving makes a NEW design of its own; it never replaces an existing model.</span>
+              {stepReview && !stepReview.busy && <button onClick={clearStepReview} style={{ padding: '8px 12px', background: '#fff', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>clear</button>}
+          </div>
+          {stepReview?.error && <div style={{ marginTop: '12px', fontFamily: 'var(--mono)', fontSize: '10px', color: '#b00020' }}>⚠ {stepReview.error}</div>}
+          {stepReview?.url && (
+              <div style={{ marginTop: '16px' }}>
+                  <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', alignItems: 'baseline', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '10px' }}>
+                      <span style={{ color: 'var(--ink)', fontSize: '12px', fontWeight: 600 }}>{stepReview.code || '—'}</span>
+                      {stepReview.description && <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)' }}>{stepReview.description}</span>}
+                      <span>{stepReview.fileName}</span>
+                      {stepReview.size && <span>{stepReview.size.map(v => v.toFixed(2)).join(' × ')} in{stepReview.unit ? ` · file says ${stepReview.unit}` : ''}</span>}
+                      <span>{stepReview.tris.toLocaleString()} triangles</span>
+                  </div>
+                  <div style={{ height: '440px', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>
+                      <ErrorBoundary>
+                          <React.Suspense fallback={<div style={{ padding: '60px', textAlign: 'center', fontFamily: 'var(--serif)', color: 'var(--ink-soft)' }}>Loading…</div>}>
+                              <Canvas camera={{ position: [5, 5, 5], fov: 50 }}>
+                                  <ambientLight intensity={0.5} />
+                                  <directionalLight position={[10, 10, 5]} intensity={1} />
+                                  <OrbitControls makeDefault />
+                                  <Bounds fit clip margin={1.2}>
+                                      <ReviewModel url={stepReview.url} isAddingCallout={false} onMeshClick={() => {}} />
+                                  </Bounds>
+                              </Canvas>
+                          </React.Suspense>
+                      </ErrorBoundary>
+                  </div>
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '12px', alignItems: 'center' }}>
+                      <button onClick={saveStepAsDesign} disabled={!!stepReview.saving} style={{ padding: '12px 20px', background: stepReview.saving ? 'var(--paper-2)' : 'var(--brass)', color: stepReview.saving ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: stepReview.saving ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{stepReview.saving ? 'Saving…' : '💾 Save as new design'}</button>
+                      <span style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>Creates an Inception record named after the file, with this model as its initial 3D revision. Nothing downstream reads it until you build on it.</span>
+                  </div>
+              </div>
+          )}
+        </div>
       )}
       {guideBuilderOpen && <GuideBuilder onClose={() => setGuideBuilderOpen(false)} currentUser={currentUser} activeBrand={activeBrand} />}
 
