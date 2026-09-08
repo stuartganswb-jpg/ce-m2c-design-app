@@ -16,7 +16,7 @@ import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
 import { isOpenPo, isDraftPo, approvePurchaseOrder, markPoSent, poRef, PO_STATUS } from '../Shared/purchaseOrders';
-import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone, liftPatchFor } from '../Shared/orderStatus';
+import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone, liftPatchFor, wholeOrderWait } from '../Shared/orderStatus';
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
@@ -357,7 +357,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // docs for work the warehouse is already doing: duplicate work orders for one order.
         const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId));
         const isSalesFlow = (o) => o.orderType === 'sales' || o.orderClass === 'ORDER_ENTRY' || (o.finPayload && o.finPayload.orderType === 'sales');
+        // FINISH COMPLETE by default (Stuart 2026-09-03): a sales-typed work order waits for every
+        // sibling line of its sales order unless that order is flagged "Finish as available".
+        const soOf = (o) => (o.soAppId ? liveSO.find(x => x.id === o.soAppId) : null) || null;
         const wo = !so && liveWO.find(o => o.status === 'Approved' && fresh(o) && isReleasable(o)
+            && !wholeOrderWait(o, liveWO, soOf(o)).wait
             && (o.finPayload || o.routeTo === 'FINISHING' || o.routeTo === 'SHOP'));
         const target = so || wo;
         if (!target) return;
@@ -1030,6 +1034,23 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 finishAsAvailable: !on, finishAsAvailableAt: Date.now(), finishAsAvailableBy: currentUser || '',
                 finishAsAvailableReason: reason,
             });
+            // THE RELEASE HALF: turning it ON lets the in-stock parts go now — the split's backorder
+            // hold on this order's floor docs is released (the engine takes any parked sibling WO on
+            // the next render, since wholeOrderWait reads the flag). Turning it OFF never re-holds
+            // work already on the floor — that would be a stop, and stops have their own button.
+            if (!on) {
+                try {
+                    const links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, so, 'sales');
+                    let n = 0;
+                    for (const [fid, fdoc] of links.fin) {
+                        if (fdoc && fdoc.held === true && fdoc.heldReasonKind === 'BACKORDER') {
+                            await updateDoc(doc(db, 'fin_workorders', fid), { held: false, heldClearedAt: Date.now(), heldClearedBy: currentUser || '', heldClearedNote: `Finish as available: ${reason}` });
+                            n++;
+                        }
+                    }
+                    if (n) addLog(`▶ ${n} floor doc(s) for SO ${ref} released from the backorder hold — the in-stock parts run now.`, 'success');
+                } catch (e) { addLog(`⚠ Could not release the backorder hold for SO ${ref}: ${e.message || e}`, 'error'); }
+            }
             addLog(`${!on ? '⚡ Finish as available ON' : 'Finish as available OFF'} for SO ${ref}: ${reason}`, !on ? 'warn' : 'info');
         } catch (e) { alert('Could not change it: ' + (e.message || e)); }
     };
@@ -1075,6 +1096,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         } else {
             const g = gateSummary(o);
             if (g) return { text: g, tone: 'wait' };
+            const ww = wholeOrderWait(o, liveWO, (o.soAppId ? liveSO.find(x => x.id === o.soAppId) : null) || null);
+            if (ww.wait) return { text: ww.reason, tone: 'wait' };
             if (!(o.routeTo === 'SHOP' || o.routeTo === 'FINISHING' || o.finPayload)) return { text: 'no route / floor payload on this record — release from View', tone: 'red' };
         }
         if (o.stopped) return { text: 'stopped — release from View', tone: 'red' };
@@ -1288,10 +1311,20 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     customFabStatus: 'Pending',
                     createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser
                 };
+                // FINISH COMPLETE by default (Stuart 2026-09-03): an order with backordered lines waits
+                // for them — the floor doc is written ON HOLD (the existing hold, which the Setup Queue
+                // honours) unless the sales order is flagged "Finish as available". Turning the flag on
+                // (RTG card / SO Pack) releases this hold; the material arriving does too (D).
+                const holdForBackorder = !pickOnly && plan.backorder.length > 0 && so.finishAsAvailable !== true;
                 await setDoc(doc(db, "fin_workorders", finId), buildFinDoc({
                     hqOrder: so, finPayload, by: currentUser || '',
-                    extra: { needBy: so.needBy || '', cutSheetMissing, visionUsed },
+                    extra: {
+                        needBy: so.needBy || '', cutSheetMissing, visionUsed,
+                        ...(holdForBackorder ? { held: true, heldAt: Date.now(), heldBy: 'split', heldStage: 'FINISHING', heldReasonKind: 'BACKORDER',
+                            heldReason: `waiting on backordered material — ${plan.backorder.map(b => `${b.qty} × ${b.code}`).join(', ')}. The order finishes complete when it arrives; flag "Finish as available" on the sales order to run the in-stock parts now.` } : {}),
+                    },
                 }));
+                if (holdForBackorder) addLog(`⏸ ${finId} written ON HOLD — ${plan.backorder.length} backordered line${plan.backorder.length === 1 ? '' : 's'}; finishes complete when the material arrives (or flag "Finish as available").`, 'warn');
                 addLog(pickOnly
                     ? `Created pick-only document ${finId} (${pickLines.length} plated line${pickLines.length === 1 ? '' : 's'} from stock${hasCustom ? ' + the custom half to pack' : ''}) — nothing for the finishing floor.`
                     : `Created Finishing WO ${finId} (${inHouseLines.length} in-house line${inHouseLines.length === 1 ? '' : 's'}${pickLines.length ? ` + ${pickLines.length} plated pick line${pickLines.length === 1 ? '' : 's'}` : ''}).`, "success");

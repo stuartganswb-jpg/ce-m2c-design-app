@@ -373,3 +373,21 @@ export const liftPatchFor = (gateKey, wo, { by = '', reason = '' } = {}) => {
     if (typeof g.lift === 'string') return g.lift;
     return g.lift(wo || {}, { by, reason });
 };
+
+// ── FINISH COMPLETE, OR FINISH AS AVAILABLE (Stuart 2026-09-03) ──────────────────────────────
+// "a flag on the order, that states 'Finish as available' that would be the outlier, default would
+// be to wait and finish complete when all available." The flag lives on the SALES ORDER
+// (finishAsAvailable, set on the RTG card or the WMS SO Pack card with a reason). The release half:
+//   default (absent/false) — a sales-typed work order waits until EVERY sibling work order of the
+//                            same sales order is releasable too, so the order finishes complete;
+//   true                   — each work order goes the moment its own gates clear.
+// Pure: the engine and the chip ask this with the live siblings in hand.
+export const wholeOrderWait = (wo, siblings = [], so = null) => {
+    if (!wo || !wo.soAppId) return { wait: false, reason: '' };
+    if (so && so.finishAsAvailable === true) return { wait: false, reason: '' };
+    const others = (siblings || []).filter(w => w && w.id !== wo.id && w.soAppId === wo.soAppId && !w.deleted
+        && !['Closed', 'Deleted', 'CANCELLED', 'Completed', 'Dispatched'].includes(String(w.status || '')));
+    const notReady = others.filter(w => !isReleasable(w));
+    if (!notReady.length) return { wait: false, reason: '' };
+    return { wait: true, reason: `waiting for the rest of the order — ${notReady.length} other line${notReady.length === 1 ? '' : 's'} not ready (${notReady.map(w => gateSummary(w) || 'not ready').join('; ')}); flag "Finish as available" on the sales order to send this line now` };
+};

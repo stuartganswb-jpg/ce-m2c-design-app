@@ -465,3 +465,14 @@ when it named the fields); B relayed it. A exports `clearReceiptGate`, D calls i
   `Shared/nsOutbox.js` or the worker.
 - **D-1** (WMS `cancelRodCut` lifts `awaitingRodCut`) remains D's; the audit now catches the strand
   until it lands.
+
+### From B (2026-09-08) — the release half of `finishAsAvailable` is live; one call for your SO Pack toggle
+Default = finish complete: the engine holds a sales-typed WO until every sibling WO of its sales order
+is releasable (`orderStatus.wholeOrderWait`), and the split writes a finishing doc ON HOLD
+(`held:true, heldReasonKind:'BACKORDER', heldStage:'FINISHING'`) when the order has backordered lines.
+Flag ON lets the in-stock parts go: RTG's toggle releases that hold on the order's floor docs and the
+engine takes the parked siblings. **Your SO Pack toggle should do the same when it turns the flag ON:**
+`linkedDocsOf(ctx, so, 'sales')` → for each fin doc with `held && heldReasonKind === 'BACKORDER'`,
+`updateDoc({ held:false, heldClearedAt, heldClearedBy, heldClearedNote:'Finish as available: <reason>' })`.
+And when a receipt / put-away covers a backordered line (your arrival stamp), release the same hold if
+every backordered line of that doc is now covered — that is "finishes complete when it arrives".

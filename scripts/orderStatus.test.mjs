@@ -7,7 +7,7 @@
 
 import {
     GATES, gatesOf, openGatesOf, isReleasable, gateSummary,
-    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor,
+    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor, wholeOrderWait,
 } from '../src/components/Shared/orderStatus.js';
 
 let pass = 0, fail = 0;
@@ -104,6 +104,18 @@ eq('convert lift drops the flag', liftPatchFor('convert', {}, { by: 'S', reason:
 eq('receipt lift names A\'s function', liftPatchFor('receipt', {}, {}), 'cancelReceiptGate');
 eq('nsWo has no hand lift', liftPatchFor('nsWo', {}, {}), null);
 eq('unknown gate → null', liftPatchFor('nope', {}, {}), null);
+
+// ── finish complete by default; finish as available is the outlier ──
+const A1 = { id: 'A1', soAppId: 'SO-9', status: 'Approved' };
+const A2 = { id: 'A2', soAppId: 'SO-9', status: 'Approved', awaitingReceipt: true, receiptGateNote: '12 × H1 on PO-1' };
+const B1 = { id: 'B1', soAppId: 'SO-8', status: 'Approved', awaitingRodCut: true };
+ok('sibling not ready → wait (default)', wholeOrderWait(A1, [A1, A2, B1], { id: 'SO-9' }).wait);
+ok('the wait names the sibling gate', /12 × H1 on PO-1/.test(wholeOrderWait(A1, [A1, A2], { id: 'SO-9' }).reason));
+ok('flag ON → no wait', !wholeOrderWait(A1, [A1, A2], { id: 'SO-9', finishAsAvailable: true }).wait);
+ok('another order\'s WO is not a sibling', !wholeOrderWait(A1, [A1, B1], { id: 'SO-9' }).wait);
+ok('all siblings ready → go', !wholeOrderWait(A1, [A1, { id: 'A3', soAppId: 'SO-9', status: 'Approved' }], { id: 'SO-9' }).wait);
+ok('a dispatched sibling does not hold the rest', !wholeOrderWait(A1, [A1, { id: 'A4', soAppId: 'SO-9', status: 'Dispatched', awaitingReceipt: true }], { id: 'SO-9' }).wait);
+ok('a stock WO (no soAppId) never waits on others', !wholeOrderWait({ id: 'S1', status: 'Approved' }, [A2], null).wait);
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
