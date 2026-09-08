@@ -17,6 +17,7 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
 import { issuePlatedDemand } from '../Shared/platingDemand';
 import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf, fetchOpenPoLines } from '../Shared/purchaseOrders';
+import { coverCodesOf, rowsFor, uncoveredCount, STATE_STYLE } from '../Shared/backorderBoard';
 import { runBatchPrecheck, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal, stampReceiptPo } from '../Shared/workOrderCreate';
@@ -245,6 +246,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [convSugFor, setConvSugFor] = useState(null); // row itemid with the ⇄ donor picker open
     const [convSugMap, setConvSugMap] = useState({});   // itemid → { from, qty } — rides onto the WO as a SUGGESTION (Setup Queue converts)
     const [openWos, setOpenWos] = useState(null);       // 📋 Open WOs cleanup panel { loading, rows, error }
+    const [backorders, setBackorders] = useState(null); // 📋 TRUE BACKORDERS board { loading, rows, error, filter }
     const [rawStock, setRawStock] = useState(null);     // { loading, availById, inboundById } — raw cores' NetSuite stock, fetched on first RAW toggle
     const [ropEdits, setRopEdits] = useState({});       // erp(base) -> edited ROP (pushed to Master Library manufacturingSpecs.reorderPoint)
     const [ropSaving, setRopSaving] = useState(false);
@@ -1660,6 +1662,60 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // phase, NetSuite WO/build state and pack status, plus the two repair actions the early
     // out-of-sync mess needs: RESET back to the Setup Queue (picked) after a wrong NetSuite
     // build was deleted, and soft-CLOSE (queues the NetSuite WO close when one exists).
+    // ── 📋 TRUE BACKORDERS (Stuart 2026-09-08; joint spec with B, 8654021) ──────────────────────
+    // "any of these orders that if plated not on hand and/or if painted and there is no /P stock
+    //  and no raw mill item stock these should be considered true backorders … everything that we
+    //  need to keep an eye out to make sure they get completed and nothing is not ordered or put in
+    //  the correct place when it arrives."
+    //
+    // B OWNS THE DEFINITION and writes hq_sales_orders.backorderLines[]. This reads that record and
+    // answers the two questions it cannot: has anybody ORDERED the cover, and has it ARRIVED. Four
+    // reads, all of them ones this screen already knows how to do.
+    const loadBackorders = async () => {
+        setBackorders({ loading: true, rows: [], error: '', filter: 'ALL' });
+        try {
+            const soSnap = await getDocs(query(collection(db, 'hq_sales_orders'), where('brand', '==', activeBrand)));
+            const orders = soSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(o => (o.backorderLines || []).length && !o.deleted
+                    && !['Closed', 'Deleted', 'Cancelled'].includes(String(o.status || '')));
+            if (!orders.length) return setBackorders({ loading: false, rows: [], error: '', filter: 'ALL' });
+            const covers = [...new Set(orders.flatMap(o => (o.backorderLines || []).flatMap(l => coverCodesOf(l))))];
+            const loc = (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17';
+            // Open POs and live stock come from NetSuite; open WOs and the pack docs from our own
+            // collections. A NetSuite failure must not blank the board — an UNCOVERED line the
+            // operator can still see and act on beats a spinner that never resolves.
+            const [poByCode, availByCode, woSnap, finSnap] = await Promise.all([
+                fetchOpenPoLines(covers).catch(e => { addLog(`⚠ Backorders: open-PO read failed (${e.message || e}) — cover from purchase orders is not shown.`, 'warn'); return {}; }),
+                fetchAvailability(covers, loc).catch(e => { addLog(`⚠ Backorders: stock read failed (${e.message || e}) — nothing can show as ARRIVED.`, 'warn'); return {}; }),
+                getDocs(collection(db, 'hq_work_orders')),
+                getDocs(collection(db, 'fin_workorders')),
+            ]);
+            const openWos = woSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(w => !w.deleted && !['Closed', 'Deleted', 'Cancelled', 'Complete'].includes(String(w.status || '')));
+            const packByOrderKey = {};
+            finSnap.docs.forEach(d => {
+                const f = { id: d.id, ...d.data() };
+                const k = String(f.orderKey || String(f.id).replace(/^WO-/, '')).toUpperCase();
+                if (k) packByOrderKey[k] = { id: f.id, bin: f.putawayBin || '', status: f.packStatus || f.currentPhase || '' };
+            });
+            setBackorders({ loading: false, error: '', filter: 'ALL', rows: rowsFor({ orders, poByCode, openWos, availByCode, packByOrderKey }) });
+        } catch (e) {
+            setBackorders({ loading: false, rows: [], error: e.message || String(e), filter: 'ALL' });
+        }
+    };
+
+    // "Order it" — the shortfall lands in the grid's own Order column, which is the ONE ordering
+    // path this screen has (Generate Orders decides PO vs WO per the item's sourcing, S4). A second
+    // ordering door here would be a second thing to keep in step.
+    const orderBackorderLine = (row) => {
+        const code = (row.covers || []).find(c => partByKey['erp:' + c]) || row.code;
+        const part = partByKey['erp:' + code];
+        if (!part) return alert(`${row.code} is not in the synced library, so the grid cannot order it.\n\nRaise the PO or work order from the item itself, or sync it first.`);
+        setOrderDrafts(d => ({ ...d, [part.id]: String(Math.max(1, Math.floor(Number(row.short) || 1))) }));
+        setBackorders(null);
+        alert(`${row.short} × ${code} is in the Order column.\n\nReview it in the grid, then press "⚙ Generate Orders (PO + WO)" — the item's sourcing decides whether it becomes a purchase order or a work order.`);
+    };
+
     const loadOpenWos = async () => {
         setOpenWos({ loading: true, rows: [] });
         try {
@@ -2894,6 +2950,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <button onClick={() => setSnapSort('item')} style={{ padding: '9px 14px', background: snapSort === 'item' ? 'var(--ink)' : '#fff', color: snapSort === 'item' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Item #</button>
                                     <button onClick={() => setSnapSort('finish')} style={{ padding: '9px 14px', background: snapSort === 'finish' ? 'var(--ink)' : '#fff', color: snapSort === 'finish' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Finish</button>
                                 </div>
+                                <button onClick={loadBackorders} title="TRUE backorders — plated lines with none on hand, painted lines with no finished stock, no /P and no raw mill. Oldest order first, with what covers each line and whether it has arrived." style={{ padding: '9px 14px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>📋 Backorders</button>
                                 <button onClick={loadOpenWos} title="Every work order not closed — floor phase, NetSuite WO/build state, pack status — with repair actions (↩ reset to Setup after deleting a wrong NetSuite build, ✕ close)" style={{ padding: '9px 14px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>📋 Open WOs</button>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${shownCount} ${snapView === 'TIER' ? (shownCount === 1 ? 'family' : 'families') : (shownCount === 1 ? 'item' : 'items')}`}</span>
                                 {Object.keys(ropEdits).length > 0 && (
@@ -3342,6 +3399,101 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             })()}
 
             {/* 📋 OPEN WORK ORDERS — cleanup panel with repair actions */}
+            {/* ── 📋 TRUE BACKORDERS BOARD (Stuart 2026-09-08; joint spec with B) ────────────────
+                One row per backorder line, OLDEST ORDER FIRST — his words, and the only order that
+                answers "what has been waiting longest". The state column is the point of the whole
+                board: UNCOVERED means nobody has ordered it. */}
+            {backorders && (() => {
+                const all = backorders.rows || [];
+                const f = backorders.filter || 'ALL';
+                const rows = all.filter(r => f === 'ALL' ? true : (f === 'UNCOVERED' ? r.state === 'UNCOVERED' : r.kind === f.toLowerCase()));
+                const nUnc = uncoveredCount(all);
+                const m9 = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
+                const th = { ...m9, textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid var(--line)', color: 'var(--ink-soft)', whiteSpace: 'nowrap' };
+                const td = { padding: '9px 10px', borderBottom: '1px solid var(--paper-2)', fontSize: '0.84rem', verticalAlign: 'top' };
+                const fBtn = (k, label) => (
+                    <button key={k} onClick={() => setBackorders(b => ({ ...b, filter: k }))}
+                        style={{ ...m9, padding: '7px 12px', background: f === k ? 'var(--ink)' : '#fff', color: f === k ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer' }}>{label}</button>
+                );
+                const dt = (t) => t ? new Date(t).toLocaleDateString() : '—';
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.8)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                        <div style={{ background: '#fff', width: '1240px', maxWidth: '97vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)' }}>
+                            <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>True Backorders</div>
+                                    <div style={{ ...m9, color: 'var(--ink-soft)', marginTop: '4px' }}>
+                                        Oldest order first · {all.length} line(s){nUnc ? <span style={{ color: '#d9534f' }}> · {nUnc} nobody has ordered</span> : ' · every line is covered or arrived'}
+                                    </div>
+                                </div>
+                                <button onClick={() => setBackorders(null)} style={{ background: 'none', border: 'none', fontSize: '1.7rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                            </div>
+                            <div style={{ padding: '12px 26px', borderBottom: '1px solid var(--line)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                {fBtn('ALL', `All · ${all.length}`)}
+                                {fBtn('UNCOVERED', `Uncovered · ${nUnc}`)}
+                                {fBtn('PLATED', `Plated · ${all.filter(r => r.kind === 'plated').length}`)}
+                                {fBtn('PAINTED', `Painted · ${all.filter(r => r.kind === 'painted').length}`)}
+                                <button onClick={loadBackorders} style={{ ...m9, marginLeft: 'auto', padding: '7px 12px', background: '#fff', border: '1px solid var(--line)', cursor: 'pointer', color: 'var(--ink)' }}>↻ Refresh</button>
+                            </div>
+                            <div style={{ overflow: 'auto', flex: 1 }}>
+                                {backorders.loading && <div style={{ padding: '30px 26px', color: 'var(--ink-soft)' }}>Reading the sales orders, their cover and live stock…</div>}
+                                {!!backorders.error && <div style={{ padding: '20px 26px', color: '#d9534f' }}>{backorders.error}</div>}
+                                {!backorders.loading && !backorders.error && !all.length && (
+                                    <div style={{ padding: '30px 26px', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>
+                                        No backorder lines recorded for this brand. A line is written when a sales order splits and nothing on the shelf can make it —
+                                        plated with none on hand, or painted with no finished stock, no /P and no raw mill.
+                                    </div>
+                                )}
+                                {!backorders.loading && !!all.length && (
+                                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                        <thead><tr>
+                                            <th style={th}>Ordered</th><th style={th}>Sales order</th><th style={th}>Customer</th>
+                                            <th style={th}>Item</th><th style={th}>Short</th><th style={th}>Type</th>
+                                            <th style={th}>What covers it</th><th style={th}>Lands</th><th style={th}>State</th><th style={th}></th>
+                                        </tr></thead>
+                                        <tbody>
+                                            {rows.map(r => {
+                                                const st = STATE_STYLE[r.state] || STATE_STYLE.UNCOVERED;
+                                                return (
+                                                    <tr key={r.key}>
+                                                        <td style={td}>{dt(r.since)}</td>
+                                                        <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: '0.8rem' }}>{r.soNumber}</td>
+                                                        <td style={td}>{r.customer || '—'}</td>
+                                                        <td style={td}>
+                                                            <div style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.code}</div>
+                                                            {r.name && <div style={{ fontSize: '0.75rem', color: 'var(--ink-soft)' }}>{r.name}</div>}
+                                                        </td>
+                                                        <td style={{ ...td, fontFamily: 'var(--mono)' }}><b>{r.short}</b>{r.wanted > r.short ? <span style={{ color: 'var(--ink-soft)' }}> of {r.wanted}</span> : null}</td>
+                                                        <td style={{ ...td, ...m9, color: 'var(--ink-soft)' }}>{r.kind}</td>
+                                                        <td style={td}>
+                                                            {r.cover.length ? r.cover.map((c, i) => (
+                                                                <div key={i} style={{ fontSize: '0.8rem' }}>
+                                                                    <b>{c.kind} {c.poNumber}</b> · {c.open} × {c.forCode}{c.due ? ` · due ${c.due}` : ''}
+                                                                </div>
+                                                            )) : <span style={{ color: '#d9534f', fontSize: '0.8rem' }}>nothing open for {r.covers.join(' / ')}</span>}
+                                                            {r.liveAvailable > 0 && <div style={{ ...m9, color: '#3a7d44', marginTop: '3px' }}>{r.liveAvailable} on the shelf now</div>}
+                                                        </td>
+                                                        <td style={{ ...td, fontSize: '0.78rem', color: 'var(--ink-soft)' }}>
+                                                            {r.pack ? <>{r.pack.id}{r.pack.bin ? <div>bin {r.pack.bin}</div> : null}{r.pack.status ? <div>{r.pack.status}</div> : null}</> : 'no pack doc yet'}
+                                                        </td>
+                                                        <td style={{ ...td, ...m9, color: st.color, fontWeight: 600 }} title={st.hint}>{st.label}</td>
+                                                        <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                                                            {r.state === 'UNCOVERED' && (
+                                                                <button onClick={() => orderBackorderLine(r)} style={{ ...m9, padding: '6px 10px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>Order it</button>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
             {openWos && (
                 <div onClick={() => setOpenWos(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 230, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
                     <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '1200px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
