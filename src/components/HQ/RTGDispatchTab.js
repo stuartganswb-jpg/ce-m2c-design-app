@@ -10,6 +10,7 @@ import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
 import { planSmallLines } from '../Shared/splitPlan';
+import { coverCodesOf } from '../Shared/backorder';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState } from '../Shared/orderLifecycle';
@@ -946,7 +947,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     <div>
                         <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(so) ? '#d9534f' : 'var(--ink)' }}>SO: {so.soId || so.id} <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '2px 6px', marginLeft: '6px' }}>Order Entry · stocked</span></div>
                         <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Cust: {so.customer || so.customerName || 'N/A'}{so.sidemark ? ` · ${so.sidemark}` : ''}{(so.lines || []).length ? ` · ${so.lines.length} line${so.lines.length === 1 ? '' : 's'}` : ''}</div>
-                        {urgentControls(so, 'hq_sales_orders')}{finishAsAvailableControls(so)}
+                        {urgentControls(so, 'hq_sales_orders')}{finishAsAvailableControls(so)}{backorderChip(so)}
                     </div>
                     <button onClick={() => deleteOrder('hq_sales_orders', so)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                 </div>
@@ -1031,6 +1032,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             });
             addLog(`${!on ? '⚡ Finish as available ON' : 'Finish as available OFF'} for SO ${ref}: ${reason}`, !on ? 'warn' : 'info');
         } catch (e) { alert('Could not change it: ' + (e.message || e)); }
+    };
+    // TRUE BACKORDER chip (Stuart 2026-09-08): the split's record, red, with the lines in the hover.
+    // Stock View's Backorders board is where they are worked; this is the record's own face.
+    const backorderChip = (so) => {
+        const lines = Array.isArray(so.backorderLines) ? so.backorderLines.filter(b => Number(b.qty) > 0) : [];
+        if (!lines.length) return null;
+        return (
+            <span title={`TRUE BACKORDER — nothing on the shelf can make these:\n${lines.map(b => `• ${b.qty} × ${b.code} (${b.kind}${b.onOrder ? `, ${b.onOrder} on order` : ''})`).join('\n')}\n\nWork them from Stock View → Backorders (oldest order first).`}
+                style={{ display: 'inline-block', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700, padding: '3px 8px', marginTop: '6px', marginLeft: '6px', border: '1px solid #d9534f', background: '#fdf3f3', color: '#d9534f' }}>
+                ⛔ BACKORDER · {lines.length} line{lines.length === 1 ? '' : 's'}
+            </span>
+        );
     };
     const finishAsAvailableControls = (so) => {
         const on = finishAsAvailableOn(so);
@@ -1178,7 +1191,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             const allPartsList = hasSmall ? buildPartsList(smallLines, partCache, assetMap, custKeys) : [];
             let stockRead = null;
             if (hasSmall && so.nsInternalId) {
-                const platedCodes = [...new Set(allPartsList.filter(l => l.finishOutsourced === true || /\/(M?EP\d*|P25)$/i.test(String(l.legacyErpId || l.partId || '')) || (!/\//.test(String(l.legacyErpId || l.partId || '')) && /^(M?EP\d*|P25)$/i.test(String(recipeCode)))).map(l => String(l.legacyErpId || l.partId || '').toUpperCase()).filter(Boolean))];
+                // Every cover code — a plated line's finished code; a painted line's finished code,
+                // its /P and its raw mill base — so a TRUE BACKORDER (Stuart 2026-09-08) is decided
+                // by one definition (Shared/backorder) with one read.
+                const platedCodes = [...new Set(allPartsList.flatMap(l => coverCodesOf(l, recipeCode)))];
                 if (platedCodes.length) {
                     try { stockRead = await fetchAvailabilityUnits(platedCodes, (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17'); }
                     catch (e) { addLog(`⚠ SO ${orderKey}: plated-line stock read failed (${e.message || e}) — plated lines go to the pick with a warning, not as a shortage.`, 'warn'); }
@@ -1186,7 +1202,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             } else if (hasSmall && !so.nsInternalId) {
                 addLog(`⚠ SO ${orderKey}: not yet accepted by NetSuite — plated lines cannot be stock-checked, they go to the pick with a warning.`, 'warn');
             }
-            const plan = planSmallLines(allPartsList, recipeCode, stockRead);
+            const plan = planSmallLines(allPartsList, recipeCode, stockRead, { since: so.createdAt || Date.now() });
             if (plan.summary) addLog(`🧭 SO ${orderKey} stock-first: ${plan.summary}.`, plan.backorder.length ? 'warn' : 'info');
             if (plan.backorder.length) {
                 // The record of what could not be covered — for the board and A's Backorder window.
@@ -2625,7 +2641,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                         <div>
                                             <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(so) ? '#d9534f' : 'var(--ink)' }}>SO: {so.soId || so.id}</div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Cust: {so.customer || 'N/A'}</div>
-                                            {urgentControls(so, 'hq_sales_orders')}{finishAsAvailableControls(so)}
+                                            {urgentControls(so, 'hq_sales_orders')}{finishAsAvailableControls(so)}{backorderChip(so)}
                                         </div>
                                         <button onClick={() => deleteOrder('hq_sales_orders', so)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
