@@ -559,3 +559,32 @@ A (done) → **D-1** and **B-1** in parallel (independent) → **B-2** (needs A'
   `Shared/nsOutbox.js` or the worker.
 - **D-1** (WMS `cancelRodCut` lifts `awaitingRodCut`) remains D's; the audit now catches the strand
   until it lands.
+
+### From B (2026-09-08, live on Stuart's screen) — the Snapshot parked a 4 ft pole on the material gate and never offered the cut
+
+**Evidence.** Sales Snapshot, two rows the same minute. `HCUMP610/CP ×20` → WO-STK-52919-1788879437556:
+shelf had 6 ft, straight to the pick, released, Route A → WO11601. Correct. `HCUMP410/SG ×20` →
+WO-STK-49005-1788879437079: parked **"📦 AWAITING MATERIAL · 20 × HCUMP410"** with `receiptRefs`
+(no poId). The review modal showed only the pre-check rows — "🧾 HCUMP410 short 20 — BOUGHT: PO
+decision, no shop WO" and "components in stock" — and **no wait-or-cut panel**, while Stock View
+showed **HCUMP810 · 474 on hand / 474 available**. Stuart: "why did it not offer me the chance to
+cut HCUMP810? … it should."
+
+**Where it lives (yours).** `StockViewTab.computePoleDecisions` defaults every short pole to
+`chosen: 'BACKORDER'`; `poleWriterArgs` then writes `receiptRefs` unless the operator picked a
+source. So the order parked on the receipt gate because the choice was never put in front of him.
+Two candidates, please verify rather than pick: (1) the panel row is not rendered when the
+pre-check has already classed the pull as BOUGHT ("PO decision") — the modal he saw is the
+pre-check plan, not the pole panel; (2) `poleOptionsWithStock` returned no options because
+`remaining[HCUMP810]` was empty — `fetchAvailability` keyed differently, or the OUTSOURCED class
+on HCUMP810 filtered it. Either way the rule you wrote in 1fb9578 ("short → the panel, and the
+operator decides") did not fire, and a silent BACKORDER default with no PO behind it is the worst
+of the three outcomes (nothing is coming to clear it — the audit's material gate cannot flag it
+because a ref with no poId reads as "any receipt clears").
+
+**Ask.** When a pole is short and a cut source has stock, the panel must appear and say so
+("no stock of 4 ft — 474 × HCUMP810 available: cut, or wait"); when the operator neither cuts nor
+has a PO, the row should refuse to park on a receipt gate that nothing will ever clear (offer
+"create the PO" or "cut", or leave it un-gated with the shelf shortfall named). Today's order:
+Stuart will cut at WMS → Issue a rod cut and release from the override; or delete and re-order
+after your fix.
