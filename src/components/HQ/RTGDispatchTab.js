@@ -9,6 +9,8 @@ import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderCo
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
+import { planSmallLines } from '../Shared/splitPlan';
+import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
@@ -1164,14 +1166,46 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             const shopId = `SHOP-${orderKey}`;
             const hasCustom = customLines.length > 0;
             const hasSmall = smallLines.length > 0;
+            const recipeCode = so.recipe || (finishRecipe !== "PENDING-RECIPE" ? finishRecipe : '');
 
-            // --- Finishing (small parts) ---
-            if (hasSmall) {
-                const assetMap = await loadAssetMap();
-                const partsList = buildPartsList(smallLines, partCache, assetMap, custKeys);
+            // --- STOCK FIRST (B5 part 2, Stuart 2026-09-03) ---
+            // A PLATED small-parts line is a stocked finished good, decided by live stock after the
+            // sales order posted (NetSuite has committed what it can): covered → a WMS pick line; short
+            // → a BACKORDER line for the Snapshot to cover (never a plating demand from here); unknown →
+            // picked with a warning. In-house lines go to the floor exactly as before. The reader is A's
+            // fetchAvailabilityUnits (available = net of all commitments; unitsKnown per pull).
+            const assetMap = hasSmall ? await loadAssetMap() : null;
+            const allPartsList = hasSmall ? buildPartsList(smallLines, partCache, assetMap, custKeys) : [];
+            let stockRead = null;
+            if (hasSmall && so.nsInternalId) {
+                const platedCodes = [...new Set(allPartsList.filter(l => l.finishOutsourced === true || /\/(M?EP\d*|P25)$/i.test(String(l.legacyErpId || l.partId || '')) || (!/\//.test(String(l.legacyErpId || l.partId || '')) && /^(M?EP\d*|P25)$/i.test(String(recipeCode)))).map(l => String(l.legacyErpId || l.partId || '').toUpperCase()).filter(Boolean))];
+                if (platedCodes.length) {
+                    try { stockRead = await fetchAvailabilityUnits(platedCodes, (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17'); }
+                    catch (e) { addLog(`⚠ SO ${orderKey}: plated-line stock read failed (${e.message || e}) — plated lines go to the pick with a warning, not as a shortage.`, 'warn'); }
+                }
+            } else if (hasSmall && !so.nsInternalId) {
+                addLog(`⚠ SO ${orderKey}: not yet accepted by NetSuite — plated lines cannot be stock-checked, they go to the pick with a warning.`, 'warn');
+            }
+            const plan = planSmallLines(allPartsList, recipeCode, stockRead);
+            if (plan.summary) addLog(`🧭 SO ${orderKey} stock-first: ${plan.summary}.`, plan.backorder.length ? 'warn' : 'info');
+            if (plan.backorder.length) {
+                // The record of what could not be covered — for the board and A's Backorder window.
+                await updateDoc(doc(db, "hq_sales_orders", so.id), { backorderLines: plan.backorder, backorderAt: Date.now() }).catch(() => {});
+            }
+            const inHouseLines = plan.inHouse;
+            const pickLines = [...plan.pick, ...plan.unknown];
+            // The floor doc exists when there is anything to finish, anything to pick, or a custom half
+            // that needs a pack document to land in (the custom-only order had none — D's finding).
+            const finishingNeeded = inHouseLines.length > 0;
+            const pickOnly = !finishingNeeded && (pickLines.length > 0 || hasCustom);
+
+            // --- Finishing (small parts) — or the pick-only document ---
+            if (finishingNeeded || pickOnly) {
+                const partsList = [...inHouseLines, ...pickLines];
                 const cpqSpecs = {};
                 smallLines.forEach(l => { cpqSpecs[cleanLineName(l.name)] = `Qty: ${l.qty}`; });
-                const totalParts = smallLines.reduce((s, l) => s + (Number(l.qty) || 0), 0) || smallLines.length;
+                // The floor's own count is the in-house pieces; picked plated goods are not sprayed.
+                const totalParts = inHouseLines.reduce((s, l) => s + (Number(l.qty) || 0), 0);
                 // WO-level size breakdown (for the planner's section packing + a single display chip).
                 // Per-part minutes still resolve off each partsList line; this is the rollup.
                 const paintSizes = partsList.reduce((acc, p) => {
@@ -1214,7 +1248,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     note: so.memo || job.sidemark || "",
                     reqDate: so.reqDate || "",
                     partsList,
-                    currentPhase: "Setup", stepStatus: 'Pending', currentStepIndex: 0,
+                    // PICK-ONLY (nothing for the finishing floor): born Complete so neither finishing
+                    // screen ever selects it, while the WMS pick, pack, handshake and fulfilment work
+                    // unchanged. Stuart 2026-09-02: "outsourced finishes never enter the finishing floor."
+                    ...(pickOnly
+                        ? { currentPhase: "Complete", stepStatus: 'Complete', currentStepIndex: 0, pickOnly: true, finishingRequired: false, completedAt: Date.now(), completedBy: 'split (pick only)' }
+                        : { currentPhase: "Setup", stepStatus: 'Pending', currentStepIndex: 0 }),
+                    ...(plan.backorder.length ? { backorderLines: plan.backorder } : {}),
                     tasks: makeFullTasks(),
                     machineAssigned: null, redlineAlert: false,
                     // §A1: a small-only order (no custom sibling) has no shop-start event to
@@ -1229,7 +1269,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     hqOrder: so, finPayload, by: currentUser || '',
                     extra: { needBy: so.needBy || '', cutSheetMissing, visionUsed },
                 }));
-                addLog(`Created Finishing WO ${finId} (${partsList.length} small lines).`, "success");
+                addLog(pickOnly
+                    ? `Created pick-only document ${finId} (${pickLines.length} plated line${pickLines.length === 1 ? '' : 's'} from stock${hasCustom ? ' + the custom half to pack' : ''}) — nothing for the finishing floor.`
+                    : `Created Finishing WO ${finId} (${inHouseLines.length} in-house line${inHouseLines.length === 1 ? '' : 's'}${pickLines.length ? ` + ${pickLines.length} plated pick line${pickLines.length === 1 ? '' : 's'}` : ''}).`, "success");
             }
 
             // --- Shop (custom fabrication) ---
@@ -1259,7 +1301,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
 
                 await setDoc(doc(db, "shop_custom_orders", shopId), buildShopDoc({
                     hqOrder: { ...so, hqJobId: so.hqJobId, soId: so.soId || null, orderKey, brand: activeBrand },
-                    orderType: 'sales', shopId, finishRecipe, finSiblingId: hasSmall ? finId : null,
+                    orderType: 'sales', shopId, finishRecipe, finSiblingId: (finishingNeeded || pickOnly) ? finId : null,
                     part: firstPart, by: currentUser || '',
                     fields: {
                         quoteId: so.hqJobId,
@@ -1337,7 +1379,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 // Fab geometry drives the pole box width: french-return bends need the wider 8" box.
                 fab: { shape: fabNotes.shape || null, qtyBends: fabNotes.qtyBends || 0, qtyMiterReturns: fabNotes.qtyMiterReturns || 0 },
                 // cpqData NOT stored here — large, and the grouping step re-fetches it via quoteId.
-                finSiblingId: hasSmall ? finId : null, shopSiblingId: hasCustom ? shopId : null,
+                finSiblingId: (finishingNeeded || pickOnly) ? finId : null, shopSiblingId: hasCustom ? shopId : null,
                 createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || null
             };
             // Strip any undefined (Firestore rejects it anywhere in the doc) via a JSON round-trip.
@@ -1352,7 +1394,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             });
             await updateDoc(doc(db, "hq_sales_orders", so.id), {
                 status: "Dispatched",
-                pushedToFinishing: hasSmall,
+                pushedToFinishing: finishingNeeded || pickOnly,
                 pushedToShop: hasCustom,
                 autoSplit: true,
                 dispatchedAt: Date.now(),

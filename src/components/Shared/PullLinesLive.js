@@ -76,6 +76,8 @@ const pullLinesOf = (wo) => {
             qty: Number(l.quantity != null ? l.quantity : l.qty) || 0,
             finish: l.finishLabel || l.finishCode || '',
             noFinish: !!l.noFinish,          // the 1.6 pin fact (e.g. clear acrylic) — takesNoFinish reads it
+            pickOnly: !!l.pickOnly,          // B5 part 2: a plated finished good pulled from stock — never sprayed here
+            stockUnknown: l.stockUnknown || '',
         }))
         .filter(l => l.code);
     const own = String((wo && (wo.stockErpId || wo.type)) || '').toUpperCase();
@@ -139,7 +141,9 @@ const PullLinesLive = ({ wo }) => {
                         <span style={{ minWidth: '180px' }}>
                             <span style={{ ...mono, fontWeight: 600, color: 'var(--ink)' }}>{l.code}</span>
                             <span style={{ color: 'var(--ink-soft)' }}> × {l.qty}</span>
-                            {takesNoFinish(parts[l.code], l)
+                            {l.pickOnly
+                                ? <span title={`A plated finished good, pulled from stock by the WMS — it never comes to this floor.${l.stockUnknown ? ` Stock could not be read at the split (${l.stockUnknown}) — verify before packing.` : ''}`} style={{ ...mono, fontSize: '10px', color: l.stockUnknown ? '#d9534f' : 'var(--ink-soft)' }}> · pick only{l.stockUnknown ? ' · stock unknown' : ''}</span>
+                                : takesNoFinish(parts[l.code], l)
                                 ? <span title="This part takes no finish (Unfinished tag on the item, or the pin says so) — it is pulled as is, never sprayed." style={{ ...mono, fontSize: '10px', color: 'var(--ink-soft)' }}> · no finish</span>
                                 : (l.finishes || []).length > 0 && <span style={{ ...mono, fontSize: '10px', color: 'var(--brass)' }}> · {l.finishes.join(', ')}</span>}
                             {l.name && <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{l.name}</div>}
