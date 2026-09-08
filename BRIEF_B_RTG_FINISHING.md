@@ -439,3 +439,54 @@ the job has no Vision engineering specs; the shop card will say so", and (2) sta
 The shop card already derives the same state from the empty `fabNotes` (Shared read would be
 better: if you extract `buildFabNotes(eng)` to Shared, C reads `cutSheetMissing` off the doc
 instead of re-deriving). No route change, no refusal — the order still splits.
+
+### TRUE BACKORDERS — the definition, the record, and the board (Stuart 2026-09-08; A + B)
+
+> "any of these orders that if plated not on hand and/or if painted and there is no /P stock and no
+> raw mill item stock these should be considered true backorders. we need clear button that can
+> open these to view in order by oldest order, that shows items, sales order, customer, open PO/WO
+> for the item, etc. everything that we need to keep an eye out to make sure they get completed and
+> nothing is not ordered or put in the correct place when it arrives."
+
+**The definition (one place, pure — B: `Shared/backorder.js`, extracted from `splitPlan`):** a sales-order
+line is a TRUE BACKORDER when nothing on the shelf can make it:
+- **plated** line (E's `finishOutsourced`, or the code's /EP /MEP /P25 suffix, or the order recipe): the
+  finished code's `available` is 0 (net of NetSuite commitment — `fetchAvailabilityUnits`);
+- **painted** line (in-house recipe): the finished code is not stocked AND `<mill>/P` `available` is 0
+  AND the raw mill base `available` is 0. (One of those in stock = the floor can make it; not a
+  backorder — the pick/convert path covers it.)
+- a line whose stock **cannot be read** (no inventory row, units unknown) is NOT a backorder — it is a
+  data fault, listed separately (D's rule: never let data problems wear the costume of demand).
+
+**The record (B — the split writes it, RTG shows it):** `hq_sales_orders.backorderLines[]` =
+`{ code, name, qty (short), wanted, kind: 'plated'|'painted', coverCodes: [finished, /P, mill],
+available: {code: n…}, onOrder, unit, since: <SO createdAt>, lineIndex }`, plus `backorderAt`.
+Written at the split (B5 part 2 already does this for plated lines; painted classification is B's
+next commit), and re-written whenever the split re-runs. The RTG SO card shows a red "BACKORDER · n
+line(s)" chip with the lines in the hover. An Order Entry / Quick Ship order gets the same field
+from E's save path (hand-off to E — the same pure function).
+
+**The board (A — Stock View 12.5, a clear button "📋 Backorders · n" beside Open WOs / Open POs):**
+one row per backorder line, **oldest order first** (`since`), columns: order date · sales order ·
+customer · item (code + name) · short qty (of wanted) · plated/painted · what covers it — every OPEN
+PO line and OPEN WO for the finished code, its /P and its mill base (`isOpenPo` + open hq_work_orders
+by itemCode), with qty, ETA / need-by and the PO/WO number · where it lands on arrival (the order's
+pack doc `WO-<orderKey>` and its bin/status) · state: **UNCOVERED** (nothing open for any cover code
+— red), COVERED (open PO/WO named), ARRIVED (available now ≥ short — green, "release/pick"). Actions per
+row: **Order it** (A's existing PO draft / WO chooser, pre-filled with the cover code and the short
+qty — S4 asks WO or PO), **→ RTG** (the SO card), **→ PO/WO** (the covering document). Filter:
+uncovered only; plated only; painted only. The count on the button is UNCOVERED lines.
+
+**Arrival (D — when the material lands):** the PO receipt / put-away that makes a cover code
+available re-evaluates the backorder lines that name it (the same pure function) and stamps
+`backorderCovered: true` on the line; the order's pick then proceeds as normal. Nothing here
+auto-releases; the board shows ARRIVED so a person sends it.
+
+**Downstream:** RTG — the SO card and the record; finishing — nothing (a backordered line was never
+going to the floor until covered); shop — nothing; WMS — the pick shorts as today until covered;
+NetSuite — the SO's own backordered quantity is the same fact seen from the other side; nothing new
+is written there.
+
+**Order of work:** B first (the pure definition + the painted classification at the split + the RTG
+chip), then A (the board, reading the record + live cover documents), then E (Order Entry lines
+through the same function), then D (arrival stamps).
