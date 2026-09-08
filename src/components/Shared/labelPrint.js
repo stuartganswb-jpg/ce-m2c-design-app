@@ -280,6 +280,62 @@ export const printRodPieceLabel = ({ pieceId, itemCode, lengthIn, bornOfRef }) =
 </div>`]);
 };
 
+// ── UOM / PACK LABELS (Stuart 2026-09-08) ─────────────────────────────────────────────────────
+// "we have the ring packs and the EA vs Pr … after the UOM add in () the actual # in pcs in the
+// label, so later when we scan these labels a warning can pop up."
+//
+// The piece count is on the label for the HUMAN, and inside the barcode for the SCANNER — a
+// 7-pack that scans identically to a single is exactly how an order ships short. The barcode
+// grammar is Shared/labelScan (item*unit*pieces); a single prints a plain code, so a label that
+// contains one piece is indistinguishable from an ordinary item label, which is correct.
+//
+// ONE LABEL = ONE PACK. Print 3 of a 7PK and the shelf carries 3 labels worth 7 rings each; scan
+// two of them and the screen owes the operator "14 pcs", not "2".
+const UOM_CSS = `${PAGE_CSS}
+.l{padding:0.12in 0.16in;display:flex;flex-direction:column;}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:0.12in;}
+.id{font-size:20pt;font-weight:900;line-height:1.02;word-break:break-all;min-width:0;}
+.wo{font-size:7.5pt;font-weight:700;color:#333;text-align:right;white-space:nowrap;line-height:1.25;flex:0 0 auto;}
+.nm{font-size:10pt;font-weight:600;line-height:1.15;margin-top:1pt;max-height:0.3in;overflow:hidden;}
+.u{margin-top:3pt;display:flex;align-items:baseline;gap:0.08in;}
+.uu{font-size:19pt;font-weight:900;letter-spacing:1px;}
+.up{font-size:12pt;font-weight:800;}
+.bc{margin-top:auto;} .bc svg{width:100%;height:0.38in;display:block;} .bct{font-size:7pt;letter-spacing:1px;text-align:center;word-break:break-all;}`;
+const uomLabelInner = ({ itemId, itemName, uom, pcs, woNum, scan }) => `<div class="l">
+  <div class="top"><div class="id">${esc(itemId || '')}</div>${woNum ? `<div class="wo">${esc(woNum)}</div>` : ''}</div>
+  <div class="nm">${esc(itemName || '')}</div>
+  <div class="u"><span class="uu">${esc(uom || 'EA')}</span><span class="up">${Number(pcs) > 1 ? `(${esc(pcs)} pcs)` : '(1 pc)'}</span></div>
+  <div class="bc">${code128BSvg(String(scan || itemId || ''))}<div class="bct">${esc(scan || itemId || '')}</div></div>
+</div>`;
+export const printUomLabels = ({ itemId, itemName, uom, pcs = 1, scan = '', woNum = '', copies = 1 }) =>
+    printDoc(`${itemId || ''} ${uom || ''} ×${copies}`, UOM_CSS,
+        Array.from({ length: Math.max(1, Math.min(100, parseInt(copies) || 1)) },
+            () => uomLabelInner({ itemId, itemName, uom, pcs, woNum, scan })));
+
+// ── SALES ORDER LABEL (Stuart 2026-09-08) ─────────────────────────────────────────────────────
+// For a box, a cart or a committed bin: which order these pieces belong to. The barcode is the
+// ORDER NUMBER (his ruling), so scanning it anywhere means "this order" and never an item.
+const SO_CSS = `${PAGE_CSS}
+.l{padding:0.12in 0.16in;display:flex;flex-direction:column;}
+.hd{display:flex;justify-content:space-between;align-items:baseline;}
+.k{font-size:8.5pt;font-weight:800;letter-spacing:2.5px;}
+.nb{font-size:9pt;font-weight:800;color:#b00;white-space:nowrap;}
+.so{font-size:19pt;font-weight:900;line-height:1.05;margin-top:1pt;word-break:break-all;}
+.cu{font-size:12pt;font-weight:700;margin-top:2pt;line-height:1.15;max-height:0.3in;overflow:hidden;}
+.sm{font-size:10pt;font-weight:600;margin-top:1pt;letter-spacing:.5px;}
+.bc{margin-top:auto;} .bc svg{width:100%;height:0.4in;display:block;} .bct{font-size:8pt;letter-spacing:2px;text-align:center;}`;
+const soLabelInner = ({ soRef, customer, sidemark, needBy, pcs, note }) => `<div class="l">
+  <div class="hd"><span class="k">SALES ORDER</span>${needBy ? `<span class="nb">NEED BY ${esc(needBy)}</span>` : ''}</div>
+  <div class="so">${esc(soRef || '')}</div>
+  <div class="cu">${esc(customer || '')}</div>
+  ${(sidemark || pcs || note) ? `<div class="sm">${sidemark ? `REF ${esc(sidemark)}` : ''}${sidemark && (pcs || note) ? ' · ' : ''}${pcs ? `${esc(pcs)} pcs` : ''}${note ? `${(sidemark || pcs) ? ' · ' : ''}${esc(note)}` : ''}</div>` : ''}
+  <div class="bc">${code128BSvg(String(soRef || ''))}<div class="bct">${esc(soRef || '')}</div></div>
+</div>`;
+export const printSalesOrderLabels = ({ soRef, customer, sidemark, needBy, pcs, note, copies = 1 }) =>
+    printDoc(`SO ${soRef || ''}`, SO_CSS,
+        Array.from({ length: Math.max(1, Math.min(50, parseInt(copies) || 1)) },
+            () => soLabelInner({ soRef, customer, sidemark, needBy, pcs, note })));
+
 export const printStockItemLabels = ({ itemId, itemName, uom, woNum, copies = 1 }) =>
     printDoc(`Item ${itemId || ''} ×${copies}`, STOCK_CSS, Array.from({ length: Math.max(1, Math.min(50, parseInt(copies) || 1)) }, () => stockItemLabelInner({ itemId, itemName, uom, woNum })));
 

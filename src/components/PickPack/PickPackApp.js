@@ -30,7 +30,15 @@ import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i1
 import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
-import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
+import { printUomLabels, printSalesOrderLabels, printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
+import { encodeUomScan, uomDisplay } from '../Shared/labelScan';
+// ⚠ ALIASED ON PURPOSE. This file already has a LOCAL `packSizeOf` (~:3763) that parses a pack
+// size out of an ITEM CODE suffix ("…-12" → 12) for the ring-pack builder. The shared one reads a
+// UNIT ("7PACK" → 7). Same name, different question — importing it unaliased silently shadowed
+// nothing and instead let the LOCAL one answer, which returns 0 for a unit string and would have
+// printed "(0 pcs)" on every pack label. The two are named and left as they are; only the import
+// is disambiguated.
+import { packSizeOf as uomPackSize, packLabelOf } from '../Shared/quickShipUom';
 import { machineLoadPlan } from '../Shared/finishingTime';
 import { shortagesOf, coverPlan } from '../Shared/finishRouting';
 import { readConvertDiag, diagSummary, isHealthyState } from '../Shared/convertDiag';
@@ -229,6 +237,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [platingFees, setPlatingFees] = useState({}); // system/plating_fees.rules — { PRODUCTTYPE: { fee, unit } }
     const [expandedShip, setExpandedShip] = useState({}); // out-at-plater shipments: collapsed by default
     const [expandedSo, setExpandedSo] = useState({});     // SO Pack: force a not-yet-ready card open
+    // ── LABELS TAB (Stuart 2026-09-08: "any label that may be needed for finishing, shop and wms
+    // to keep track off we can print a label there") ──────────────────────────────────────────
+    const [lblKind, setLblKind] = useState('ITEM');      // ITEM | BIN | WO | SO | UOM
+    const [lblSearch, setLblSearch] = useState('');      // item search (ITEM + UOM)
+    const [lblItem, setLblItem] = useState(null);
+    const [lblBin, setLblBin] = useState('');
+    const [lblRef, setLblRef] = useState('');            // WO ref / SO ref typed or scanned
+    const [lblUom, setLblUom] = useState('');
+    const [lblCopies, setLblCopies] = useState('1');
 
     // ── THE VENDOR DOCK — RECEIVING (PO) (Stuart 2026-09-04) ──────────────────────────────────
     // "we enter po, we have a scan field to enter item id to find item on po, we receive it to
@@ -6565,6 +6582,174 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </div>
                     </div>
                 )}
+
+                {/* 🏷 TAB: LABELS — every label the floors need, in one place (Stuart 2026-09-08) */}
+                {activeTab === 'LABELS' && (() => {
+                    const KINDS = [
+                        { k: 'ITEM', icon: '🏷', name: 'Item label', hint: 'the part, its name and its barcode' },
+                        { k: 'BIN', icon: '📍', name: 'Bin label', hint: 'a shelf location' },
+                        { k: 'WO', icon: '🧾', name: 'Work order', hint: 'the setup label the floor carries' },
+                        { k: 'SO', icon: '📦', name: 'Sales order', hint: 'whose order this box belongs to' },
+                        { k: 'UOM', icon: '🔢', name: 'UOM / pack', hint: 'a pack, with its piece count in the barcode' },
+                    ];
+                    // The unit list is the 4.5 master list (Stuart), so a new pack size is data.
+                    const uomList = [...new Set([...(globalLists.quickShipUom || []).map(u => String(u)), 'EA', 'PR'])]
+                        .filter(Boolean).sort();
+                    const matches = lblSearch.trim().length >= 2
+                        ? hqParts.filter(p => erpOf(p).includes(lblSearch.trim().toUpperCase())
+                            || String(p.itemName || '').toLowerCase().includes(lblSearch.trim().toLowerCase())).slice(0, 12)
+                        : [];
+                    const copies = Math.max(1, Math.min(100, parseInt(lblCopies) || 1));
+                    const uomPcs = uomPackSize(lblUom);
+                    const uomText = packLabelOf(lblUom) || 'EA';
+                    // The WO/SO reference resolves against what this tab already holds, so the
+                    // label carries the customer and the date rather than just a number.
+                    const soDoc = lblRef.trim() ? (soIndex[lblRef.trim()] || soIndex[lblRef.trim().toUpperCase()] || null) : null;
+                    const woDoc = lblRef.trim() ? finAll.find(j => String(j.id) === lblRef.trim() || woRefOf(j) === lblRef.trim().toUpperCase()) : null;
+                    const box = { background: '#fff', border: `1px solid ${theme.line}`, padding: '20px', marginBottom: '16px' };
+                    const inp = { padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '14px', background: '#fff', color: theme.ink, width: '100%', boxSizing: 'border-box' };
+                    const lab = { fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '6px' };
+                    const go = (bg) => ({ padding: '14px 26px', background: bg || theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' });
+                    return (
+                        <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%' }}>
+                            <div style={{ fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem', marginBottom: '6px' }}>{t('Labels')}</div>
+                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.05em', marginBottom: '20px' }}>
+                                {t('Any label the floors, the shop or the warehouse need — printed from one place.')}
+                            </div>
+
+                            {/* the five kinds */}
+                            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '22px' }}>
+                                {KINDS.map(x => (
+                                    <button key={x.k} onClick={() => setLblKind(x.k)} style={{
+                                        flex: '1 1 170px', textAlign: 'left', padding: '14px 16px', cursor: 'pointer',
+                                        background: lblKind === x.k ? theme.ink : theme.paper,
+                                        color: lblKind === x.k ? '#fff' : theme.ink,
+                                        border: `1px solid ${lblKind === x.k ? theme.ink : theme.line}`,
+                                    }}>
+                                        <div style={{ fontSize: '20px', lineHeight: 1 }}>{x.icon}</div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', fontWeight: 700, marginTop: '6px', letterSpacing: '.06em' }}>{t(x.name)}</div>
+                                        <div style={{ fontFamily: theme.sans, fontSize: '11px', marginTop: '3px', color: lblKind === x.k ? 'rgba(255,255,255,0.75)' : theme.inkSoft }}>{t(x.hint)}</div>
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* ITEM + UOM share the item picker */}
+                            {(lblKind === 'ITEM' || lblKind === 'UOM') && (
+                                <div style={box}>
+                                    <div style={lab}>{t('Item')}</div>
+                                    <input value={lblSearch} onChange={e => { setLblSearch(e.target.value); setLblItem(null); }} placeholder={t('Scan or type an item code or name')} style={inp} />
+                                    {!lblItem && matches.length > 0 && (
+                                        <div style={{ marginTop: '8px', maxHeight: '190px', overflowY: 'auto', border: `1px solid ${theme.line}` }}>
+                                            {matches.map(p => (
+                                                <div key={p.id} onClick={() => { setLblItem(p); setLblSearch(erpOf(p)); if (!lblUom) setLblUom(String((p.manufacturingSpecs || {}).quickShipUom || '')); }}
+                                                    style={{ padding: '10px 12px', cursor: 'pointer', borderBottom: `1px solid ${theme.paper2}`, fontFamily: theme.mono, fontSize: '12px' }}>
+                                                    <b>{erpOf(p)}</b> <span style={{ color: theme.inkSoft }}>{p.itemName || ''}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {lblItem && <div style={{ marginTop: '10px', fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>✓ {erpOf(lblItem)} · <span style={{ color: theme.inkSoft }}>{lblItem.itemName || ''}</span></div>}
+                                </div>
+                            )}
+
+                            {lblKind === 'UOM' && (
+                                <div style={box}>
+                                    <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                                        <div style={{ flex: '1 1 220px' }}>
+                                            <div style={lab}>{t('Unit of measure')}</div>
+                                            <select value={lblUom} onChange={e => setLblUom(e.target.value)} style={inp}>
+                                                <option value="">{t('— pick a unit —')}</option>
+                                                {uomList.map(u => <option key={u} value={u}>{u}</option>)}
+                                            </select>
+                                        </div>
+                                        <div style={{ flex: '0 0 150px' }}>
+                                            <div style={lab}>{t('How many labels')}</div>
+                                            <input type="number" min="1" max="100" value={lblCopies} onChange={e => setLblCopies(e.target.value)} style={{ ...inp, textAlign: 'center' }} />
+                                        </div>
+                                    </div>
+                                    {/* THE WHOLE POINT, said out loud before they print it. */}
+                                    {lblItem && lblUom && (
+                                        <div style={{ marginTop: '14px', padding: '12px', background: theme.paper, border: `1px solid ${theme.brass}` }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '13px', color: theme.ink }}>
+                                                {erpOf(lblItem)} · <b>{uomDisplay(uomText, uomPcs)}</b>
+                                            </div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, marginTop: '5px' }}>
+                                                {copies} {copies === 1 ? t('label') : t('labels')} · {t('each one is')} {uomPcs} {uomPcs === 1 ? t('piece') : t('pieces')} · {copies * uomPcs} {t('pieces in total')}
+                                            </div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '5px' }}>
+                                                {t('barcode')}: {encodeUomScan({ code: erpOf(lblItem), uom: uomText, pcs: uomPcs })}
+                                            </div>
+                                        </div>
+                                    )}
+                                    <button disabled={!lblItem || !lblUom} onClick={() => {
+                                        printUomLabels({
+                                            itemId: erpOf(lblItem), itemName: lblItem.itemName || '', uom: uomText, pcs: uomPcs,
+                                            scan: encodeUomScan({ code: erpOf(lblItem), uom: uomText, pcs: uomPcs }), copies,
+                                        });
+                                        writeLog(`Printed ${copies} × ${erpOf(lblItem)} ${uomText} (${uomPcs} pcs each) label(s).`, 'wms');
+                                    }} style={{ ...go(theme.brass), marginTop: '16px', opacity: (!lblItem || !lblUom) ? 0.4 : 1 }}>🖨 {t('Print')}</button>
+                                </div>
+                            )}
+
+                            {lblKind === 'ITEM' && (
+                                <div style={box}>
+                                    <div style={{ maxWidth: '180px' }}>
+                                        <div style={lab}>{t('How many labels')}</div>
+                                        <input type="number" min="1" max="100" value={lblCopies} onChange={e => setLblCopies(e.target.value)} style={{ ...inp, textAlign: 'center' }} />
+                                    </div>
+                                    <button disabled={!lblItem} onClick={() => {
+                                        printStockItemLabels({ itemId: erpOf(lblItem), itemName: lblItem.itemName || '', uom: 'EA', woNum: '', copies });
+                                        writeLog(`Printed ${copies} × ${erpOf(lblItem)} item label(s).`, 'wms');
+                                    }} style={{ ...go(), marginTop: '16px', opacity: lblItem ? 1 : 0.4 }}>🖨 {t('Print')}</button>
+                                </div>
+                            )}
+
+                            {lblKind === 'BIN' && (
+                                <div style={box}>
+                                    <div style={lab}>{t('Bin')}</div>
+                                    <input value={lblBin} onChange={e => setLblBin(e.target.value)} placeholder={t('Scan or type the bin')} style={inp} />
+                                    <button disabled={!lblBin.trim()} onClick={() => {
+                                        printBinLabel({ bin: normalizeBin(lblBin) });
+                                        writeLog(`Printed bin label ${normalizeBin(lblBin)}.`, 'wms');
+                                    }} style={{ ...go(), marginTop: '16px', opacity: lblBin.trim() ? 1 : 0.4 }}>🖨 {t('Print')}</button>
+                                </div>
+                            )}
+
+                            {(lblKind === 'WO' || lblKind === 'SO') && (
+                                <div style={box}>
+                                    <div style={lab}>{lblKind === 'WO' ? t('Work order') : t('Sales order')}</div>
+                                    <input value={lblRef} onChange={e => setLblRef(e.target.value)} placeholder={lblKind === 'WO' ? t('Scan or type the work order') : t('Scan or type the sales order')} style={inp} />
+                                    {lblKind === 'WO' && woDoc && <div style={{ marginTop: '10px', fontFamily: theme.mono, fontSize: '12px' }}>✓ {woRefOf(woDoc)} · {woItemCodeOf(woDoc) || ''} · <span style={{ color: theme.inkSoft }}>{woDoc.customerName || woDoc.customer || ''}</span></div>}
+                                    {lblKind === 'SO' && soDoc && <div style={{ marginTop: '10px', fontFamily: theme.mono, fontSize: '12px' }}>✓ {soDoc.soId || soDoc.id} · <span style={{ color: theme.inkSoft }}>{soDoc.customer || soDoc.customerName || ''}</span></div>}
+                                    <div style={{ maxWidth: '180px', marginTop: '14px' }}>
+                                        <div style={lab}>{t('How many labels')}</div>
+                                        <input type="number" min="1" max="50" value={lblCopies} onChange={e => setLblCopies(e.target.value)} style={{ ...inp, textAlign: 'center' }} />
+                                    </div>
+                                    <button disabled={!lblRef.trim()} onClick={() => {
+                                        if (lblKind === 'WO') {
+                                            const ref = woDoc ? woRefOf(woDoc) : lblRef.trim().toUpperCase();
+                                            printSetupLabel({
+                                                kind: 'WORK ORDER', woRef: ref, orderKey: woDoc ? (woDoc.orderKey || woDoc.id) : ref,
+                                                item: woDoc ? woItemCodeOf(woDoc) : '', qty: woDoc ? (woDoc.totalParts || woDoc.qty || '') : '',
+                                                finish: woDoc ? (woDoc.recipe || '') : '', customer: woDoc ? (woDoc.customerName || woDoc.customer || '') : '',
+                                            });
+                                            writeLog(`Printed work order label ${ref}.`, 'wms');
+                                        } else {
+                                            const ref = soDoc ? (soDoc.soId || soDoc.id) : lblRef.trim().toUpperCase();
+                                            printSalesOrderLabels({
+                                                soRef: ref, customer: soDoc ? (soDoc.customer || soDoc.customerName || '') : '',
+                                                sidemark: soDoc ? (soDoc.sidemark || '') : '', needBy: soDoc ? (soDoc.needBy || soDoc.needByDate || '') : '',
+                                                pcs: soDoc ? (soDoc.totalParts || '') : '', copies,
+                                            });
+                                            writeLog(`Printed ${copies} × sales order label ${ref}.`, 'wms');
+                                        }
+                                    }} style={{ ...go(), marginTop: '16px', opacity: lblRef.trim() ? 1 : 0.4 }}>🖨 {t('Print')}</button>
+                                    {lblKind === 'WO' && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '10px' }}>{t('A work order label prints one at a time — it belongs to one fixture.')}</div>}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })()}
 
                 {/* 🎨 TAB: SAMPLE CHIPS — PRODUCTION CONTROL */}
                 {activeTab === 'CHIPS' && (() => {
