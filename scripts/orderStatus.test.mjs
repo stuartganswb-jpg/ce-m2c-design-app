@@ -7,7 +7,7 @@
 
 import {
     GATES, gatesOf, openGatesOf, isReleasable, gateSummary,
-    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf,
+    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor,
 } from '../src/components/Shared/orderStatus.js';
 
 let pass = 0, fail = 0;
@@ -95,6 +95,15 @@ eq('QS: fulfilment present but not marked shipped = packed, fulfilment posted', 
 eq('QS: closed', quickShipStatusOf({ status: 'Closed' }).stage, 'CLOSED');
 eq('QS: null in, null out', quickShipStatusOf(null), null);
 ok('AWAITING_NS ranks below everything started', STAGES.AWAITING_NS.rank < STAGES.RELEASED.rank);
+
+// ── lifting a stranded gate by hand: the flag drops with who/why, nothing else is certified ──
+eq('rodCut lift drops the flag', liftPatchFor('rodCut', { rodCutNote: '8 × A → B' }, { by: 'Stuart', reason: 'cut cancelled' }).awaitingRodCut, false);
+ok('rodCut lift keeps the note and adds who/why', /8 × A → B.*gate lifted by Stuart: cut cancelled/.test(liftPatchFor('rodCut', { rodCutNote: '8 × A → B' }, { by: 'Stuart', reason: 'cut cancelled' }).rodCutNote));
+eq('components lift does NOT mark componentsDone', liftPatchFor('components', {}, { by: 'S', reason: 'r' }).componentsDone, undefined);
+eq('convert lift drops the flag', liftPatchFor('convert', {}, { by: 'S', reason: 'r' }).awaitingConvert, false);
+eq('receipt lift names A\'s function', liftPatchFor('receipt', {}, {}), 'cancelReceiptGate');
+eq('nsWo has no hand lift', liftPatchFor('nsWo', {}, {}), null);
+eq('unknown gate → null', liftPatchFor('nope', {}, {}), null);
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

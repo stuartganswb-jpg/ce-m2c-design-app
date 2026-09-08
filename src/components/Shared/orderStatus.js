@@ -265,6 +265,7 @@ export const GATES = [
     // arrived to cover THIS line". A PO for 12 landing as 5 does not make the order runnable.
     { key: 'receipt', kind: 'wait', icon: '📦',
       open: (wo) => !!wo.awaitingReceipt,
+      lift: 'cancelReceiptGate',   // A's Shared/workOrderCreate.cancelReceiptGate({ woId, by, reason }) — keeps the refs, stamps who/why
       label: 'awaiting material', detail: (wo) => wo.receiptGateNote || '',
       clearedBy: 'the WMS receiving tab recording enough received quantity to cover the line (clearReceiptGate)',
       // Stranded when every ref names a PO and not one of those POs is still open — a cancelled
@@ -279,6 +280,10 @@ export const GATES = [
       help: (wo) => `${wo.id} is waiting on material we had to buy.\n\n${wo.receiptGateNote || 'A purchase order was raised for this line and has not arrived yet.'}\n\nThe gate clears itself at the receiving dock the moment enough is received to cover this line — a part delivery keeps it closed and says how much is still owed. Releasing NOW sends the floor a job whose material is not in the building.` },
     { key: 'components', kind: 'wait', icon: '🧩',
       open: (wo) => !!wo.awaitingComponents && !wo.componentsDone,
+      // LIFT (B, 2026-09-08): a person clearing a stranded gate is tidying up, not certifying
+      // the components were milled — the flag drops with who/why, componentsDone stays untouched,
+      // nothing releases (the same rule the Convert tab settled on 2026-08-29).
+      lift: (wo, { by = '', reason = '' } = {}) => ({ awaitingComponents: false, componentsGateLiftedAt: Date.now(), componentsGateLiftedBy: by, componentsGateLiftReason: reason }),
       label: 'awaiting component milling', detail: (wo) => (wo.componentShopWoIds || []).length ? `${wo.componentShopWoIds.length} shop WO(s)` : '',
       clearedBy: 'every component shop WO completing (RTG\'s live effect stamps componentsDone)',
       // Stranded when every component shop WO it names is gone or closed without the completion
@@ -291,6 +296,7 @@ export const GATES = [
       help: (wo) => `${wo.id} is waiting on ${(wo.componentShopWoIds || []).length} component shop WO(s) still in milling.\n\nThe pulls do not exist yet — the gate clears itself the moment the shop completes them. Releasing NOW sends the floor a job it cannot pick.` },
     { key: 'convert', kind: 'wait', icon: '⇄',
       open: (wo) => !!wo.awaitingConvert,
+      lift: (wo, { by = '', reason = '' } = {}) => ({ awaitingConvert: false, convertGateLiftedAt: Date.now(), convertGateLiftedBy: by, convertGateLiftReason: reason, convertGateNote: `${wo.convertGateNote || ''} — gate lifted by ${by || '?'}${reason ? `: ${reason}` : ''}`.trim() }),
       label: 'awaiting phosphate convert', detail: (wo) => wo.convertGateNote || '',
       clearedBy: 'the WMS Convert tab posting the convert (clearConvertGate)',
       // Stranded when no convert to-do points at this order any more. Deleting the LAST demand
@@ -301,6 +307,7 @@ export const GATES = [
       help: (wo) => `${wo.id} is waiting on a phosphate CONVERT.\n\n${wo.convertGateNote || 'Component /P cores are short — a convert to-do is open on the WMS Convert tab.'}\n\nUntil the convert posts, the ${itemOf(wo)} components do not exist to pick. The gate clears itself when the WMS completes the convert.` },
     { key: 'rodCut', kind: 'wait', icon: '✂',
       open: (wo) => !!wo.awaitingRodCut,
+      lift: (wo, { by = '', reason = '' } = {}) => ({ awaitingRodCut: false, rodCutGateLiftedAt: Date.now(), rodCutGateLiftedBy: by, rodCutGateLiftReason: reason, rodCutNote: `${wo.rodCutNote || ''} — gate lifted by ${by || '?'}${reason ? `: ${reason}` : ''}`.trim() }),
       label: 'awaiting rod cut', detail: (wo) => wo.rodCutNote || '',
       clearedBy: 'WMS → ROD CUTS → Cuts for Finishing completing it (prints this order\'s label)',
       // Stranded when the cut was CANCELLED or removed while the order still waits on it — the
@@ -356,3 +363,13 @@ export const openGatesOf = (wo) => gatesOf(wo).filter(g => g.open);
 export const isReleasable = (wo) => !!wo && openGatesOf(wo).length === 0;
 // "awaiting SO accept · awaiting rod cut" — '' when nothing is open.
 export const gateSummary = (wo, sep = ' · ') => openGatesOf(wo).map(g => g.note).join(sep);
+
+// The patch that LIFTS a gate by hand (the stranded-gate audit's button). null when the gate has no
+// hand lift (NetSuite's answer, the done-marker); a STRING names the owner's exported function the
+// caller must use instead (the receipt gate keeps its refs — A's cancelReceiptGate).
+export const liftPatchFor = (gateKey, wo, { by = '', reason = '' } = {}) => {
+    const g = GATES.find(x => x.key === gateKey);
+    if (!g || !g.lift) return null;
+    if (typeof g.lift === 'string') return g.lift;
+    return g.lift(wo || {}, { by, reason });
+};

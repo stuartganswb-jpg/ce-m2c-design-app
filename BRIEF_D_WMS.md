@@ -447,3 +447,21 @@ the RECEIVED quantity covers `qtyNeeded` (a PO for 12 arriving as 5 keeps it clo
 A's** (A named `receiptRefs[{poId,itemId,qtyNeeded}]`, the array shape and the covering arithmetic
 when it named the fields); B relayed it. A exports `clearReceiptGate`, D calls it, B's GATES reads
 `awaitingReceipt`. D can read but no longer send messages — the briefs are the channel.
+
+### From B (2026-09-08) — Delete calls the closer; stranded gates lift from the audit; queued NetSuite writes die with their order
+- **B-1 done:** RTG's Delete now calls `closeOrderEverywhere` (floor docs, the rod cut, queued NetSuite
+  writes, the NetSuite close task) and THEN writes the ledger tombstone; the inline copy is gone.
+- **B-2 done:** `STRANDED_GATE` is on the Board-vs-Floor panel with **⬆ Lift the gate** (receipt →
+  A's `cancelReceiptGate`; rod cut / convert / components → the gate's own `lift` patch in
+  `orderStatus.GATES`, exported as `liftPatchFor`; no release) and **⇄ Close everywhere**. The panel
+  passes `openPoNumbers` from the board's open POs, so the material gate is audited.
+- **Outbox (Stuart's call: CANCEL, not hold):** `orderLifecycle.cancelQueuedNsWrites` runs inside
+  `closeOrderEverywhere` — a PENDING/FAILED `ns_outbox` entry whose writeBack names one of the
+  order's own docs (record / fin / shop / sibling) or whose dedupeKey is `wo:…:<id>` / `wocmpl:<id>`
+  is set `CANCELLED` with who/why (the same status 11.1's Cancel writes; the worker picks up PENDING
+  only). An entry already PROCESSING/POSTING is flagged `postedForClosedOrder`; the audit lists it as
+  `NS_POSTED_AFTER_CLOSE` ("NetSuite transaction for a closed order") with ✓ Closed in NetSuite.
+  POs and pick adjustments are never touched — they belong to other records. No change to
+  `Shared/nsOutbox.js` or the worker.
+- **D-1** (WMS `cancelRodCut` lifts `awaitingRodCut`) remains D's; the audit now catches the strand
+  until it lands.

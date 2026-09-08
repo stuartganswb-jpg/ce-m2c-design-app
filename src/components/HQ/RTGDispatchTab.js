@@ -7,12 +7,13 @@ import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines, car
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
+import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
 import { isOpenPo, isDraftPo, approvePurchaseOrder, markPoSent, poRef, PO_STATUS } from '../Shared/purchaseOrders';
-import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
+import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone, liftPatchFor } from '../Shared/orderStatus';
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
@@ -1650,28 +1651,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         const reason = window.prompt(`Remove ${id} from the dispatch board?\n\nThe record is KEPT — stamped deleted, dated, with your name — and stays on the master Deletion Ledger. Its floor documents close, and any open convert/plating demands raised for it are removed from the WMS (they gate nothing once the order is gone).\n\nReason (optional):`);
         if (reason === null) return;
         try {
+            // THE CLOSER FIRST (Stuart 2026-09-08: "can i delete it on RTG and it clears everywhere?" —
+            // it did not: this path re-implemented the close inline and never received what the
+            // closer learned later, so Close cancelled a rod cut and Delete stranded it on the saw).
+            // The copy was the defect. closeOrderEverywhere closes every linked floor doc, cancels the
+            // order's open rod cut, cancels its queued NetSuite writes and raises the NetSuite close
+            // task; the tombstone below then marks the record Deleted on top of Closed.
+            let closeNote = '';
+            if (collectionName === 'hq_sales_orders' || collectionName === 'hq_work_orders') {
+                try {
+                    const c = await closeEverywhere({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                        { order, kind: collectionName === 'hq_sales_orders' ? 'sales' : 'stock', by: currentUser || '', from: 'RTG_DELETE', reason: reason || 'board record deleted', notify });
+                    closeNote = `, ${c.fin} floor doc(s) + ${c.shop} shop doc(s) closed${c.rodCuts ? `, ${c.rodCuts} rod cut(s) cancelled` : ''}${(c.nsWritesCancelled || []).length ? `, ${c.nsWritesCancelled.length} queued NetSuite write(s) cancelled` : ''}${(c.nsWritesInFlight || []).length ? `, ⚠ ${c.nsWritesInFlight.length} NetSuite write(s) were IN FLIGHT — flagged for closing in NetSuite` : ''}${c.ns ? `, NetSuite close task raised (${c.ns})` : ''}`;
+                } catch (e) { console.warn('close-everywhere before delete failed:', e); closeNote = ` — ⚠ close-everywhere failed (${e.message || e}); check the floor`; }
+            }
             const res = await softDeleteOrder({ db, doc, updateDoc, setDoc }, {
                 collection: collectionName, docId: id, record: order,
                 kind: collectionName, by: currentUser || '', from: 'RTG_DISPATCH', reason: reason || '',
             });
-            // A tombstoned board record must not leave its floor documents alive in the Setup
-            // Queue / WMS pick queue (2026-08-25 audit #9) — close every linked doc, the same
-            // stamps closeOrderEverywhere uses.
-            let floorClosed = 0;
-            if (collectionName === 'hq_sales_orders' || collectionName === 'hq_work_orders') {
-                try {
-                    const links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, order, collectionName === 'hq_sales_orders' ? 'sales' : 'stock');
-                    const stamp = { closedAt: Date.now(), closedBy: currentUser || '', closedFrom: 'RTG_DELETE', closeReason: reason || 'board record deleted' };
-                    for (const [fid] of links.fin) {
-                        await updateDoc(doc(db, 'fin_workorders', fid), { currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed', sentToPickPack: false, pickStatus: 'Closed', ...stamp }).catch(() => {});
-                        floorClosed++;
-                    }
-                    for (const [sid] of links.shop) {
-                        await updateDoc(doc(db, 'shop_custom_orders', sid), { status: 'Completed', closed: true, ...stamp }).catch(() => {});
-                        floorClosed++;
-                    }
-                } catch (e) { console.warn('floor-doc close after delete failed:', e); }
-            }
             // STRANDED DEMAND CLEANUP (2026-08-29): a deleted WO's convert demands used to stay on
             // the WMS Convert tab forever — every deleted ordering attempt left a duplicate wave.
             let demandNote = '';
@@ -1695,7 +1692,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     demandNote += `, component ${c.woDisplayId || c.id} closed`;
                 } catch (e) { console.warn('component WO cascade on delete failed', cid, e); }
             }
-            addLog(`🗑 ${id} deleted (record kept${res.ledger ? ', ledger indexed' : ' — LEDGER WRITE FAILED, tombstone only'}${floorClosed ? `, ${floorClosed} floor doc(s) closed` : ''}${demandNote}).`, "warn");
+            addLog(`🗑 ${id} deleted (record kept${res.ledger ? ', ledger indexed' : ' — LEDGER WRITE FAILED, tombstone only'}${closeNote}${demandNote}).`, "warn");
             loadRTGOrders();
         } catch (e) {
             console.error(e);
@@ -1994,8 +1991,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // The four live feeds it already subscribes to are exactly what the audit needs, so this costs
     // no extra reads. Every finding names the document and offers the close that settles it.
     const orphanFindings = useMemo(
-        () => auditOrphans({ hqOrders: [...liveWO, ...liveSO], finWos: liveFin, shopJobs: liveShop, convertDemands: liveConvD, platingDemands: livePlatD, rodCuts: liveRodCuts, salesOrders: liveSO }),
-        [liveWO, liveSO, liveFin, liveShop, liveConvD, livePlatD, liveRodCuts]
+        () => auditOrphans({
+            hqOrders: [...liveWO, ...liveSO], finWos: liveFin, shopJobs: liveShop, convertDemands: liveConvD, platingDemands: livePlatD, rodCuts: liveRodCuts, salesOrders: liveSO,
+            // The material gate is audited against the OPEN POs this board already holds (A's isOpenPo);
+            // the outbox tail is the 12 most recent entries — a flagged write older than that is in 11.1.
+            openPoNumbers: new Set(purchaseOrders.flatMap(p => [p.poId, p.nsPoTran, p.id]).filter(Boolean).map(x => String(x).toUpperCase())),
+            outbox: nsOutboxTail,
+        }),
+        [liveWO, liveSO, liveFin, liveShop, liveConvD, livePlatD, liveRodCuts, purchaseOrders, nsOutboxTail]
     );
     const ORPHAN_COPY = {
         ORPHAN_FLOOR:   { label: 'On the floor, not on this board', why: 'A live floor job with no RTG record — nothing here can dispatch, close or report it.' },
@@ -2005,6 +2008,34 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         FLOOR_DONE:     { label: 'Finished on the floor, still live here', why: 'The floor completed or packed it; the board still lists it as live work. Close it everywhere to settle the record.' },
         DEMAND_ORPHAN:  { label: 'Demand for an order that no longer lives', why: 'A convert/plating to-do whose work order or sales order is gone or closed — it gates nothing and sits on a WMS tab forever. Delete it.' },
         RODCUT_ORPHAN:  { label: 'Open rod cut for a dead order', why: 'An open cut whose work order is gone or closed — cutting it would make pieces nothing is waiting for. Cancel it.' },
+        STRANDED_GATE:  { label: 'Held at a gate nothing can lift', why: 'A live order waiting on a cut, a convert, a component order or a purchase order that has been cancelled or deleted — nothing is coming to clear it. Lift the gate (the order stays parked; release it from its detail view) or close the order.' },
+        NS_POSTED_AFTER_CLOSE: { label: 'NetSuite transaction for a closed order', why: 'This write was already in flight when its order was closed or deleted, so it posted. Close the transaction in NetSuite, then tick it here.' },
+    };
+    // LIFT A STRANDED GATE by hand — the flag drops with who/why; the order stays parked and is NOT
+    // released (a person tidying a dead gate is not certifying that material arrived). The receipt
+    // gate keeps its refs through A's cancelReceiptGate; the others through the gate's own lift patch.
+    const liftStrandedGate = async (f) => {
+        const o = f.parent; if (!o) return;
+        const why = window.prompt(`⬆ Lift the "${f.gateLabel}" gate on ${woRefOf(o)}?\n\n${f.expected} no longer exists, so nothing will clear it on its own. Lifting it STOPS the wait — it does not release the order; release it from its detail view if the work should still go.\n\nWhy? (recorded)`, '');
+        if (why === null) return;
+        const reason = String(why).trim();
+        if (!reason) return alert('A reason is needed — nothing was changed.');
+        try {
+            const patch = liftPatchFor(f.gate, o, { by: currentUser || '', reason });
+            if (patch === 'cancelReceiptGate') {
+                const r = await cancelReceiptGate({ woId: o.id, by: currentUser || '', reason });
+                if (!r.ok) return alert(`Could not lift: ${r.note}`);
+            } else if (patch) {
+                await updateDoc(doc(db, 'hq_work_orders', o.id), patch);
+            } else return alert(`The "${f.gateLabel}" gate has no hand lift — it clears from NetSuite.`);
+            addLog(`⬆ ${woRefOf(o)}: "${f.gateLabel}" gate lifted by ${currentUser || '?'} — ${reason}. Parked; release from its detail view if the work should still go.`, 'warn');
+        } catch (e) { alert('Lift failed: ' + (e.message || e)); }
+    };
+    const ackPostedAfterClose = async (f) => {
+        const e = f.floor; if (!e) return;
+        if (!window.confirm(`Tick "${e.label || e.kind}" as closed in NetSuite${e.nsTran ? ` (${e.nsTran})` : ''}?\n\nOnly once the transaction is actually closed there.`)) return;
+        try { await updateDoc(doc(db, 'ns_outbox', e.id), { postedForClosedOrderAckAt: Date.now(), postedForClosedOrderAckBy: currentUser || '' }); addLog(`✓ ${e.label || e.id} — closed in NetSuite (${currentUser || '?'}).`, 'success'); }
+        catch (err) { alert('Could not record it: ' + (err.message || err)); }
     };
     // The one-click fix for a stranded demand/rod cut: delete (ledgered) — it serves nothing.
     const clearOrphanDemand = async (f) => {
@@ -2092,7 +2123,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>
                                 {ORPHAN_COPY[type].label} · {list.length}
                             </span>
-                            {!['NS_CLOSE_TODO', 'DEMAND_ORPHAN', 'RODCUT_ORPHAN'].includes(type) && list.length > 1 && (
+                            {!['NS_CLOSE_TODO', 'DEMAND_ORPHAN', 'RODCUT_ORPHAN', 'STRANDED_GATE', 'NS_POSTED_AFTER_CLOSE'].includes(type) && list.length > 1 && (
                                 <button onClick={() => reconcileAll(type, list)} disabled={bulkClosing}
                                     style={{ ...btnStyle, padding: '4px 12px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f', cursor: bulkClosing ? 'wait' : 'pointer' }}>
                                     {bulkClosing ? 'Closing…' : `⇄ Close all ${list.length}`}
@@ -2114,7 +2145,20 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                             <button onClick={() => clearOrphanDemand(f)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }}>🗑 Delete</button>
                                         </>
                                     )}
-                                    {!['NS_CLOSE_TODO', 'DEMAND_ORPHAN', 'RODCUT_ORPHAN'].includes(type) && (
+                                    {type === 'STRANDED_GATE' && (
+                                        <>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f' }}>{f.gateLabel} · {f.expected} is gone</span>
+                                            <button onClick={() => liftStrandedGate(f)} title={f.detail} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>⬆ Lift the gate</button>
+                                            <button onClick={() => reconcileOne(f)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }}>⇄ Close everywhere</button>
+                                        </>
+                                    )}
+                                    {type === 'NS_POSTED_AFTER_CLOSE' && (
+                                        <>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f' }}>{f.detail}</span>
+                                            <button onClick={() => ackPostedAfterClose(f)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#3a7d44', borderColor: '#3a7d44' }}>✓ Closed in NetSuite</button>
+                                        </>
+                                    )}
+                                    {!['NS_CLOSE_TODO', 'DEMAND_ORPHAN', 'RODCUT_ORPHAN', 'STRANDED_GATE', 'NS_POSTED_AFTER_CLOSE'].includes(type) && (
                                         <button onClick={() => reconcileOne(f)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }}>⇄ Close everywhere</button>
                                     )}
                                     {type === 'NS_CLOSE_TODO' && (

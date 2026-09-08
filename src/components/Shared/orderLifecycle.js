@@ -89,6 +89,61 @@ export async function linkedDocsOf(ctx, order, kind) {
     return { fin, shop, hq };
 }
 
+// ── A QUEUED NETSUITE WRITE DIES WITH ITS ORDER (Stuart 2026-09-08, B's call: cancel, not hold) ──
+// ns_outbox had no delete awareness: close and delete left queued entries alone, and the worker
+// posted them — a real NetSuite transaction for an order the app no longer had, i.e. exactly the
+// hand-closed work orders Stuart told us to stop making. A queued write for a closed order can only
+// ever be wrong to post, so it is CANCELLED (the same status 11.1's Cancel button writes; the worker
+// only ever picks up PENDING). Scoped tightly: an entry is the order's only when its writeBack names
+// one of the order's OWN documents (the record, its floor docs, its sibling) or its dedupeKey does —
+// a purchase order or a pick adjustment belongs to another record and is never touched. An entry
+// already in flight cannot be cancelled: it is FLAGGED, and the audit lists it as a NetSuite
+// transaction that posted after its order closed, for a person to close there.
+const ORDER_COLLS = new Set(['hq_work_orders', 'hq_sales_orders', 'fin_workorders', 'shop_custom_orders']);
+export const queuedWriteTargets = (entry) => {
+    const wb = entry && entry.writeBack;
+    const list = Array.isArray(wb) ? wb : (wb ? [wb] : []);
+    return list.filter(w => w && w.collection && w.docId).map(w => ({ collection: String(w.collection), docId: String(w.docId) }));
+};
+export const orderDocIdsOf = (order, links) => new Set([
+    ...identityKeysOf(order),
+    ...(links && links.fin ? [...links.fin.keys()] : []),
+    ...(links && links.shop ? [...links.shop.keys()] : []),
+    ...(links && links.hq ? [String(links.hq.id)] : []),
+].map(String));
+export const entryNamesOrder = (entry, docIds) => {
+    if (!entry) return false;
+    if (queuedWriteTargets(entry).some(t => ORDER_COLLS.has(t.collection) && docIds.has(t.docId))) return true;
+    const dk = String(entry.dedupeKey || '');
+    const m = dk.match(/^(?:wo|wocmpl):(?:[a-z_]+:)?(.+)$/);
+    return !!(m && docIds.has(m[1]));
+};
+export async function cancelQueuedNsWrites(ctx, { order, links, by, reason }) {
+    const { db, doc, updateDoc, getDocs, query, collection, where } = ctx;
+    const out = { cancelled: [], inFlight: [] };
+    if (!getDocs || !query || !collection || !where) return out;      // a caller without the reads cannot look
+    const docIds = orderDocIdsOf(order, links);
+    let snap;
+    try { snap = await getDocs(query(collection(db, 'ns_outbox'), where('status', 'in', ['PENDING', 'FAILED', 'PROCESSING', 'POSTING']))); }
+    catch (e) { console.warn('outbox scan on close failed (order is closed regardless):', e); return out; }
+    for (const d of snap.docs) {
+        const e = { id: d.id, ...d.data() };
+        if (!entryNamesOrder(e, docIds)) continue;
+        const st = String(e.status || '');
+        if (st === 'PENDING' || st === 'FAILED') {
+            await updateDoc(doc(db, 'ns_outbox', d.id), {
+                status: 'CANCELLED', cancelledAt: Date.now(), cancelledBy: by || '',
+                cancelReason: `order ${order.id} closed${reason ? ` — ${reason}` : ''} — queued write cancelled`,
+            }).catch(() => {});
+            out.cancelled.push(e.label || e.kind || d.id);
+        } else {
+            await updateDoc(doc(db, 'ns_outbox', d.id), { postedForClosedOrder: true, postedForClosedOrderId: String(order.id), postedForClosedOrderAt: Date.now() }).catch(() => {});
+            out.inFlight.push(e.label || e.kind || d.id);
+        }
+    }
+    return out;
+}
+
 /**
  * Close an order EVERYWHERE, from any starting screen.
  *
@@ -151,6 +206,12 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
             }
         }
     } catch (e) { console.warn('rod cut cancel on close failed (order is closed regardless):', e); }
+
+    // Queued NetSuite writes for this order are cancelled; ones already in flight are flagged.
+    try {
+        const nsq = await cancelQueuedNsWrites(ctx, { order, links, by, reason });
+        done.nsWritesCancelled = nsq.cancelled; done.nsWritesInFlight = nsq.inFlight;
+    } catch (e) { console.warn('queued-write cancel on close failed (order is closed regardless):', e); }
 
     // NetSuite: one close per order, and only when a work order is actually open there.
     const nsSrc = [...links.fin.entries()].find(([, d]) => d.nsWoId && !d.nsWoClosed && !d.nsWoCompletionPosted);
@@ -222,7 +283,7 @@ export async function propagateFloorState(ctx, { finWo, phase, by, extra }) {
  * extends the reach to the demand documents — the exact class that piled up unfound on the WMS
  * Convert tab. Pure, so the rules can be reasoned about without Firestore in the room.
  */
-export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], convertDemands = [], platingDemands = [], rodCuts = [], salesOrders = [], openPoNumbers = null }) {
+export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], convertDemands = [], platingDemands = [], rodCuts = [], salesOrders = [], outbox = [], openPoNumbers = null }) {
     const byKey = new Map();
     hqOrders.forEach(o => identityKeysOf(o).forEach(k => byKey.set(k, o)));
     const parentOf = (d) => identityKeysOf(d).map(k => byKey.get(k)).find(Boolean) || null;
@@ -293,6 +354,15 @@ export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], conver
             gate: g.key, gateLabel: g.label, expected: g.expected,
             detail: `${o.woDisplayId || o.id} is held at "${g.label}" but ${g.expected} no longer exists — nothing can lift it.`,
         }));
+    });
+    // A NetSuite write that was in flight when its order closed posted anyway (cancelQueuedNsWrites
+    // could only flag it). It is a real transaction for an order the app has closed — a person
+    // closes it in NetSuite and ticks it here.
+    outbox.forEach(e => {
+        if (e && e.postedForClosedOrder && !e.postedForClosedOrderAckAt) out.push({
+            type: 'NS_POSTED_AFTER_CLOSE', coll: 'ns_outbox', floor: e, parent: null,
+            detail: `${e.label || e.kind || e.id} posted to NetSuite after order ${e.postedForClosedOrderId || '?'} was closed${e.nsTran ? ` — ${e.nsTran}` : ''}.`,
+        });
     });
     return out;
 }
