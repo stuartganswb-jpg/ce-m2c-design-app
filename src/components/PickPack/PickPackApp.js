@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips from '../Shared/OrderStatusChips';
-import { orderStatusOf, customPartsReady } from '../Shared/orderStatus';
+import { orderStatusOf, customPartsReady, liftPatchFor } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
@@ -2442,11 +2442,51 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         }
     };
 
+    // ── CANCELLING A CUT MUST LIFT THE GATE IT WAS HOLDING (A's D-1, 2026-09-08) ──────────────
+    // The cancel used to stop at `status: 'CANCELLED'`. But `awaitingRodCut` is cleared in exactly
+    // ONE other place — the completion path above — so cancelling a cut to unstick an order did the
+    // opposite: the cut was gone, the gate stayed up, and nothing alive could ever lift it. The
+    // order waited forever and this tab went on saying "poles being cut" about a cut that no longer
+    // existed. Stuart hit it on 2026-09-08.
+    //
+    // Mirrors deleteConvertDemand exactly, including what it deliberately does NOT do:
+    //   • lift only when NO other open cut still points at that work order;
+    //   • the lift patch comes from Shared/orderStatus.liftPatchFor — the SAME function RTG's
+    //     stranded-gate button calls, so the board reads a WMS lift and an RTG lift identically
+    //     (B's ask, 2026-09-08). Hand-copying the four field names here is how the vocabulary
+    //     drifts, and it is the thing this repo has spent a week removing;
+    //   • NO auto-release. Lifting a gate is not deciding the order should go. What follows is
+    //     RTG's business: with its release engine on, a self-authorized order whose LAST gate drops
+    //     will release itself, and its pick will show short if the shelf has no poles — which is
+    //     the honest outcome, because no pieces were made.
     const cancelRodCut = async (o) => {
-        if (!window.confirm(`Cancel rod cut order ${o.id}?\n\n${o.qtySource} × ${o.sourceItemId} → ${o.qtyTarget} × ${o.targetItemId}\n\nNo inventory has moved — this just removes the order from the queue.`)) return;
+        const forWo = o.finWoId || '';
+        if (!window.confirm(`Cancel rod cut order ${o.id}?\n\n${o.qtySource} × ${o.sourceItemId} → ${o.qtyTarget} × ${o.targetItemId}\n\nNo inventory has moved — this just removes the cut.${forWo ? `\n\n⚠ ${forWo} is WAITING on this cut. Cancelling it stops the order waiting — no pieces will have been made, so its poles must come from stock or from a new cut.` : ''}`)) return;
         try {
             await updateDoc(doc(db, "rod_cut_orders", o.id), { status: 'CANCELLED', cancelledAt: Date.now(), cancelledBy: operator?.name || '' });
             writeLog(`Rod cut ${o.id} cancelled.`, 'wms');
+            if (forWo) {
+                // Only the LAST open cut lifts the gate — another one still on the saw is still a
+                // reason to wait. "Open" is the app's existing definition, from the gate's own
+                // clearer in Shared/orderStatus, not a second opinion invented here.
+                try {
+                    const others = rodCutOrders.filter(x => x.id !== o.id && String(x.finWoId || '') === forWo
+                        && !['CANCELLED', 'DONE', 'COMPLETE', 'COMPLETED'].includes(String(x.status || '').toUpperCase()));
+                    if (!others.length) {
+                        const woSnap = await getDoc(doc(db, 'hq_work_orders', forWo));
+                        const patch = liftPatchFor('rodCut', woSnap.exists() ? { id: forWo, ...woSnap.data() } : { id: forWo }, {
+                            by: operator?.name || 'WMS',
+                            reason: `cut ${o.id} cancelled at the WMS — no pieces were made, the poles must come from stock or a new cut`,
+                        });
+                        if (patch && typeof patch === 'object') {
+                            await updateDoc(doc(db, 'hq_work_orders', forWo), patch);
+                            writeLog(`Rod cut ${o.id} cancelled — gate lifted on ${forWo}; release from RTG (no pieces made).`, 'wms');
+                        }
+                    } else {
+                        writeLog(`Rod cut ${o.id} cancelled — ${forWo} still waits on ${others.length} open cut(s), gate left up.`, 'wms');
+                    }
+                } catch (e) { console.warn('rod-cut gate lift after cancel failed (the cancel stands):', e); }
+            }
             if (activeCut?.id === o.id) { setActiveCut(null); setCutSrcScan(''); setCutDestScan(''); setCutConfirmed(false); setCutMemo(''); }
         } catch (e) { alert('Failed to cancel: ' + (e.message || e)); }
     };
