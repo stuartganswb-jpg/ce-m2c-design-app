@@ -5,6 +5,7 @@ import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { removeImageBackground } from '../Shared/removeBg';
 import GuideBuilder from '../Shared/GuideBuilder';
 import { isStepFile, codeFromFileName, stepUnitOf, stepToGlb } from '../Shared/stepImport';
+import { StudioRig } from '../Shared/studioScene';
 import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom';
 
 import * as THREE from 'three';
@@ -83,7 +84,9 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
           const unit = stepUnitOf(await file.slice(0, 6000).text());
           const { glb, summary } = await stepToGlb(await file.arrayBuffer(), { name: code || 'PART' });
           const blob = new Blob([glb], { type: 'model/gltf-binary' });
-          setStepReview({ fileName: file.name, code, description, unit, tris: summary.tris, size: summary.size, blob, url: URL.createObjectURL(blob), busy: false, error: '' });
+          // Where the part's underside sits, so the studio rig's contact shadow lands beneath it.
+          const minY = summary.meshes.length ? Math.min(...summary.meshes.map(m => m.min[1])) : 0;
+          setStepReview({ fileName: file.name, code, description, unit, tris: summary.tris, size: summary.size, minY, blob, url: URL.createObjectURL(blob), busy: false, error: '' });
       } catch (e) {
           console.error('STEP review failed', e);
           setStepReview(prev => prev ? { ...prev, busy: false, error: e.message || String(e) } : null);
@@ -875,9 +878,12 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
                   <div style={{ height: '440px', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>
                       <ErrorBoundary>
                           <React.Suspense fallback={<div style={{ padding: '60px', textAlign: 'center', fontFamily: 'var(--serif)', color: 'var(--ink-soft)' }}>Loading…</div>}>
-                              <Canvas camera={{ position: [5, 5, 5], fov: 50 }}>
-                                  <ambientLight intensity={0.5} />
-                                  <directionalLight position={[10, 10, 5]} intensity={1} />
+                              <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ antialias: true }}>
+                                  {/* THE STUDIO RIG, NOT TWO LAMPS (Stuart 2026-09-08: "the render is very dark …
+                                      nearly black"). The house material is highly metallic and a metal reflects its
+                                      surroundings — with no environment it reflects nothing and reads black. This is
+                                      the same softbox environment CPQ renders every model in. */}
+                                  <StudioRig shadowY={(stepReview.minY ?? 0) - 0.02} />
                                   <OrbitControls makeDefault />
                                   <Bounds fit clip margin={1.2}>
                                       <ReviewModel url={stepReview.url} isAddingCallout={false} onMeshClick={() => {}} />
