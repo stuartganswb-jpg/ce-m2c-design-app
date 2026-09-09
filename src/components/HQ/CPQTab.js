@@ -736,6 +736,27 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const [trvRules, setTrvRules] = useState(null);
   const trvPendingRef = useRef(null);   // null = not asked yet; [] = skipped; [lines] = chosen
   const [pricingBreakdown, setPricingBreakdown] = useState([]);
+  // ── EDIT IN PLACE (Stuart 2026-09-09: "i did reopen, then clicked at top to select a line then
+  // hit checkout save" — and the line was gone). Edit used to PULL the line out of the cart and
+  // hand it to the configurator; anything short of Add configuration afterwards (checkout, editing
+  // another line, a reload) lost it silently. Now the line STAYS in the cart, marked as the one
+  // being edited, and Add configuration replaces it in place. Only Remove takes a line out.
+  const [editingCartId, setEditingCartId] = useState(null);
+  // Checkout with a line open in the configurator: the cart still holds that line AS IT WAS, so
+  // say so before the operator saves changes that are not in it.
+  const openCheckout = () => {
+      const open = editingCartId ? cart.find(c => c.id === editingCartId) : null;
+      if (open && !window.confirm(`"${open.sidemark || open.assemblyName || 'A line'}" is open in the configurator and any changes there are NOT in the cart yet — the cart still holds it as it was.\n\nSave the cart as it stands? (Cancel, then Add configuration, to keep the changes.)`)) return;
+      setShowCheckoutModal(true);
+  };
+  // Add a finished configuration to the cart — replacing the line being edited where there is one.
+  const placeInCart = (built) => {
+      setCart(prev => {
+          const at = editingCartId ? prev.findIndex(c => c.id === editingCartId) : -1;
+          return at >= 0 ? prev.map((c, i) => (i === at ? built : c)) : [...prev, built];
+      });
+      setEditingCartId(null);
+  };
   // Quote-display price level (Shared/priceLevels): Fabricut-data items price per the imported
   // sheet at FAB levels; everything else stays standard. Never drives NetSuite push rates.
   const [priceLevel, setPriceLevel] = useState('STANDARD');
@@ -1801,7 +1822,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   : (item.pricingBreakdown || []).filter(l => l.addedByHand)
                       .map(l => ({ code: l.partId, qty: String(l.qty || 1), note: l.customNote || '' })),
           });
-          setCart(cart.filter(c => c.id !== itemId));
+          setEditingCartId(itemId);
           if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
           return;
       }
@@ -1815,7 +1836,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       setAssemblyQty(parseInt(item.qty) || 1);
       setActiveDraftSvg(item.draftSvg || null);
       setCurrentStepIndex(0);
-      setCart(cart.filter(c => c.id !== itemId));
+      setEditingCartId(itemId);
       if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -1824,6 +1845,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       const item = cart.find(c => c.id === itemId);
       if (item && !window.confirm(`Remove "${item.assemblyName || 'this line'}"${item.sidemark ? ` [${item.sidemark}]` : ''} from the cart?`)) return;
       setCart(cart.filter(c => c.id !== itemId));
+      if (editingCartId === itemId) setEditingCartId(null);
   };
 
   const handleDeleteDraft = async (id) => {
@@ -2916,7 +2938,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               cloneSpecs: cloneSpecs || []
           })) : null
       };
-      setCart([...cart, item]);
+      placeInCart(item);
       
       // Update Firebase to mark this draft as configured!
       if (activeDraftId) {
@@ -3279,6 +3301,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           }
           
           setCart([]);
+          setEditingCartId(null);
           setAddOnSel({});
           localStorage.removeItem('hq_global_cart');
           localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote');
@@ -4345,7 +4368,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
             <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, background: 'var(--paper-2)', padding: '12px 24px', border: '1px solid var(--line)', color: 'var(--ink)' }}>
                 Config Total: ${(pricing.finalPrice * assemblyQty).toFixed(2)}
             </div>
-            <button onClick={() => setShowCheckoutModal(true)} disabled={cart.length === 0} style={{ padding: '16px 24px', background: cart.length > 0 ? 'var(--brass)' : 'var(--paper)', color: cart.length > 0 ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: cart.length > 0 ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+            <button onClick={() => openCheckout()} disabled={cart.length === 0} style={{ padding: '16px 24px', background: cart.length > 0 ? 'var(--brass)' : 'var(--paper)', color: cart.length > 0 ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: cart.length > 0 ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
                 Checkout ({cart.length} Items)
             </button>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
@@ -4375,7 +4398,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                     })()}
                   </div>
                 </div>
-                <button onClick={() => handleEditCartItem(item.id)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Edit</button>
+                <button onClick={() => handleEditCartItem(item.id)} title={editingCartId === item.id ? 'Open in the configurator — Add configuration replaces this line; the cart still holds it as it was' : 'Open this line in the configurator'} style={{ padding: '8px 16px', background: editingCartId === item.id ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{editingCartId === item.id ? 'Editing…' : 'Edit'}</button>
                 <button onClick={() => handleRemoveCartItem(item.id)} title="Remove from cart" style={{ padding: '8px 12px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>✕</button>
               </div>
             ))}
@@ -4956,7 +4979,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                     </div>
                     {activeAssemblyId && (
                          <div style={{ padding: '20px 24px', borderTop: '1px solid var(--line)', background: '#fff' }}>
-                             <button onClick={() => setShowCheckoutModal(true)} style={{ width: '100%', padding: '16px', border: 'none', background: 'var(--brass)', color: '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Finish Hardware Configuration</button>
+                             <button onClick={() => openCheckout()} style={{ width: '100%', padding: '16px', border: 'none', background: 'var(--brass)', color: '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Finish Hardware Configuration</button>
                          </div>
                     )}
                  </div>
@@ -5106,7 +5129,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                      from, the quote it belongs to, and how many are ordered. */
                                   onAdd={(item) => {
                                       const draft = previousDrafts.find(d => d.id === activeDraftId) || null;
-                                      setCart(prev => [...prev, {
+                                      placeInCart({
                                           ...item,
                                           masterQuoteId: activeMasterQuoteId,
                                           // ⚠ THE ENGINE'S OWN QTY WINS (Stuart 2026-08-26): the
@@ -5116,14 +5139,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                           qty: parseInt(item.qty, 10) || assemblyQty || 1,
                                           ...visionFieldsOf(draft, activeDraftSvg),
                                           capturedViews: capturedViews || null,
-                                      }]);
+                                      });
                                       if (activeDraftId) setDoc(doc(db, "cpq_drafts", activeDraftId), { status: 'CONFIGURED' }, { merge: true }).catch(() => {});
                                   }}
                                   /* The way OUT of the engine. The walk ends on its last step, and
                                      before this the operator had to know the page's own header
                                      button was the exit (Stuart 2026-08-21). Same modal, same cart —
                                      the count is passed so the button can say what is waiting. */
-                                  onCheckout={() => setShowCheckoutModal(true)}
+                                  onCheckout={() => openCheckout()}
                                   cartCount={cart.length}
                                   /* THE TRAVERSE COMPONENT CHART (system/traverse_rules_H1-2TRV),
                                      already live here for the old path's checkout modal. The new
