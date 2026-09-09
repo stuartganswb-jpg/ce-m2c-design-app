@@ -170,9 +170,34 @@ export const preferring = (pool, ...gates) => gates.reduce((acc, g) => {
     return kept.length ? kept : acc;
 }, Array.isArray(pool) ? pool : []);
 
-export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames, defaultHidden = false, clearNodes = null, stretchSpec = null, spliceMarks = [] }) => {
+export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames, defaultHidden = false, clearNodes = null, stretchSpec = null, spliceMarks = [], frameInches = 0 }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
-    const clonedScene = useMemo(() => scene.clone(true), [scene]);
+    const clonedScene = useMemo(() => {
+        const cs = scene.clone(true);
+        // ── THE PANE IS FRAMED FOR 20 FT (Stuart 2026-09-09: "a 144\" pole should once stretched cover
+        // 60% width of the window … it should only go out the window at 20+ft"). The camera fits to
+        // what is here at mount, so an invisible reference the length of the frame along the pole's
+        // axis makes the pane span that length whatever the model's own is: 144\" sits at 60%, 20 ft
+        // fills it, longer runs out, and the stretch can draw true scale. Never rendered, never a
+        // scene node a flow owns; only the tag engine's pane asks for it.
+        if (Number(frameInches) > 0) {
+            try {
+                cs.updateMatrixWorld(true);
+                const box = new THREE.Box3().setFromObject(cs);
+                if (!box.isEmpty()) {
+                    const size = box.getSize(new THREE.Vector3());
+                    const ax = size.x >= size.y && size.x >= size.z ? 'x' : (size.y >= size.z ? 'y' : 'z');
+                    const dims = { x: 0.01, y: 0.01, z: 0.01 }; dims[ax] = Number(frameInches);
+                    const ref = new THREE.Mesh(new THREE.BoxGeometry(dims.x, dims.y, dims.z), new THREE.MeshBasicMaterial({ visible: false }));
+                    ref.name = '__frameRef'; ref.visible = false;
+                    ref.position.copy(box.getCenter(new THREE.Vector3()));
+                    cs.add(ref);
+                }
+            } catch (e) { console.warn('frame reference skipped', e); }
+        }
+        return cs;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scene]);
 
     // WHAT THE .GLB ACTUALLY CONTAINS (2026-08-17). Every check until now compared the flow against
     // the assembly's stored CLUSTER RECORDS, which is a comparison of one record against another —
@@ -402,8 +427,9 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         // the pane; the extra length is drawn at 70% so the eye reads "longer" without
                         // losing the ends. Cut lengths, clone spacing and the splice line all follow this
                         // drawn rail, so the picture stays proportional to itself.
-                        const STRETCH_DAMP = 0.7;
-                        const factor = trueFactor > 1 ? 1 + (trueFactor - 1) * STRETCH_DAMP : trueFactor;
+                        // True scale now that the pane is framed for 20 ft (frameInches) — the 70% damping
+                        // that stood in for a frame is gone.
+                        const factor = trueFactor;
                         if (factor > 1.01) {
                             const c0 = rb.getCenter(new THREE.Vector3())[ax];
                             const vec = (v) => new THREE.Vector3(ax === 'x' ? v : 0, ax === 'y' ? v : 0, ax === 'z' ? v : 0);

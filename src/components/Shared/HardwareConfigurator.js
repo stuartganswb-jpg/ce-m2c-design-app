@@ -139,7 +139,15 @@ function HardwareConfiguratorInner({
     const [showDiag, setShowDiag] = useState(false);
     const [showGeo, setShowGeo] = useState(false);   // the untagged-node list, behind its count
     const [whySlot, setWhySlot] = useState(null);   // slot key whose exclusions are being read
-    const [globalFinish, setGlobalFinish] = useState('');
+    // ── ONE DEFAULT PER MATERIAL (Stuart 2026-09-09: "when i just selected finish for the metal
+    // center bracket it removed my finish selection of the wood components"). The rail still sets a
+    // default for every step at once — that is the typical order — but a stain and a paint are two
+    // defaults, one per material, held side by side; a part wears the one its material can take,
+    // and "just this part" (a wood gem finial and its metal collar each have their own) overrules
+    // it on any step exactly as before. `globalFinish` stays the METAL default for the readers that
+    // want one code: the per-foot rod pricing, the track's stock colour, the kit and Vision seeds.
+    const [globalFinishes, setGlobalFinishes] = useState({});   // { METAL: 'P14', WOOD: 'S11', … }
+    const globalFinish = globalFinishes.METAL || Object.values(globalFinishes).find(Boolean) || '';
     const [poleIn, setPoleIn] = useState('');            // finished length, whole inches
     const [poleFrac, setPoleFrac] = useState('');        // …and the fraction
     const [fabricId, setFabricId] = useState('PRINT');   // drives the span, so it is asked here
@@ -634,6 +642,22 @@ function HardwareConfiguratorInner({
         finishes.forEach(f => { const k = String(f.code || f.name || '').toUpperCase(); if (k) m.set(k, f); });
         return m;
     }, [finishes]);
+    const matOfFinish = useCallback((f) => String((f && (f.material || f.type)) || 'METAL').toUpperCase(), []);
+    // A single code lands in its material's slot (seeds, restores); blank clears every default.
+    const setGlobalFinish = useCallback((code) => {
+        const c = String(code || '').toUpperCase();
+        if (!c) { setGlobalFinishes({}); return; }
+        const f = finishByCode.get(c);
+        setGlobalFinishes(g => ({ ...g, [matOfFinish(f)]: c }));
+    }, [finishByCode, matOfFinish]);
+    // The default THIS part wears: the material's own pick.
+    const globalFinishFor = useCallback((c) => {
+        for (const code of Object.values(globalFinishes)) {
+            const f = finishByCode.get(String(code || '').toUpperCase());
+            if (f && finishesFor(c, [f]).length) return String(code).toUpperCase();
+        }
+        return '';
+    }, [globalFinishes, finishByCode]);
     const chosenList = useMemo(
         () => [...resolved.choices.filter(c => Object.values(livePicks).includes(c.id)), ...resolved.riders, ...resolved.companions],
         [resolved, livePicks]);
@@ -668,7 +692,7 @@ function HardwareConfiguratorInner({
         if (!arm) return '';
         return partFinish[arm.id] || partFinishByPart[String(arm.partId || '').toUpperCase()] || '';
     }, [resolved, livePicks, partFinish, partFinishByPart]);
-    const finishFor = useCallback((c) => partFinish[c.id] || armFinishOf(c) || globalFinish, [partFinish, armFinishOf, globalFinish]);
+    const finishFor = useCallback((c) => partFinish[c.id] || armFinishOf(c) || globalFinishFor(c), [partFinish, armFinishOf, globalFinishFor]);
 
     // ── A CUSTOM-FINISHED TRACK WEARS THE FASCIA'S FINISH (Stuart 2026-08-31) ────────────────
     // "one tick per track and we will need if ticked to associate the same finish color as
@@ -722,12 +746,12 @@ function HardwareConfiguratorInner({
         // send the floor an unpaid paint job. Only the upcharge above can paint a track.
         if (choice && choice.role === 'TRACK') return '';
         if (!choice || choice.noFinish) return '';
-        const code = partFinish[choice.id] || partFinishByPart[String(choice.partId || '').toUpperCase()] || armFinishOf(choice) || globalFinish;
+        const code = partFinish[choice.id] || partFinishByPart[String(choice.partId || '').toUpperCase()] || armFinishOf(choice) || globalFinishFor(choice);
         if (!code) return '';
         const f = finishByCode.get(String(code).toUpperCase());
         if (!f || !finishesFor(choice, [f]).length) return '';
         return code;
-    }, [partFinish, partFinishByPart, armFinishOf, globalFinish, finishByCode, matchFinishOverride]);
+    }, [partFinish, partFinishByPart, armFinishOf, globalFinishFor, finishByCode, matchFinishOverride]);
 
     // NODE → TEXTURE. A no-finish part is skipped entirely, so the clear rule paints it instead —
     // the collar of a two-part finial takes the finish, the acrylic top never does.
@@ -867,9 +891,9 @@ function HardwareConfiguratorInner({
     // exception. RTG reads the label off this, so it must be what is on the parts, not what is
     // selected in the panel.
     const chosenFinishObjects = useMemo(() => {
-        const codes = new Set([globalFinish, ...Object.values(partFinish)].filter(Boolean).map(c => String(c).toUpperCase()));
+        const codes = new Set([...Object.values(globalFinishes), ...Object.values(partFinish)].filter(Boolean).map(c => String(c).toUpperCase()));
         return [...codes].map(c => finishByCode.get(c)).filter(Boolean);
-    }, [globalFinish, partFinish, finishByCode]);
+    }, [globalFinishes, partFinish, finishByCode]);
     // A hidden part with no price is still a real problem — it just is not the operator's, so it
     // is reported quietly rather than in red on a quote they cannot act on.
     const priceWarnings = useMemo(() => pricingWarnings({ lines: priced.lines.filter(l => !l.hidden) }), [priced]);
@@ -1203,7 +1227,8 @@ function HardwareConfiguratorInner({
         setStepNotes({ ...(s.stepNotes || {}) });
         setStepQty({ ...(s.stepQty || {}) });   // operator-typed counts (rings, centre brackets) — defaults otherwise
         setExtras(Array.isArray(s.extras) ? s.extras : []);
-        if (s.globalFinish) setGlobalFinish(s.globalFinish);
+        if (s.globalFinishes && typeof s.globalFinishes === 'object') setGlobalFinishes({ ...s.globalFinishes });
+        else if (s.globalFinish) setGlobalFinish(s.globalFinish);
         if (Number(s.lengthInches) > 0) {
             const whole = Math.floor(Number(s.lengthInches));
             const frac = Number(s.lengthInches) - whole;
@@ -1297,7 +1322,7 @@ function HardwareConfiguratorInner({
             // handoff uses these verbatim so the docs, floors and NetSuite bill what was shown.
             // Filtered to extras actually TAKEN: extraLines coerces a 0 qty to 1 for display.
             extras, extraLines: extraLines.filter(l => Number((extras.find(x => x.code === l.partId && (x.slot || '') === (l.slot || '')) || {}).qty) > 0),
-            stepNotes, answers, picks: livePicks, partFinish, globalFinish, stepQty,
+            stepNotes, answers, picks: livePicks, partFinish, globalFinish, globalFinishes, stepQty,
             // The kit, so the cart bills exactly what the panel showed.
             kit: kitBill,
             // The track's components, in the shape the cart has always carried them — the ERP push
@@ -1484,11 +1509,11 @@ function HardwareConfiguratorInner({
                         <span style={{ ...mono, fontSize: '9px' }}>{mat} <span style={{ color: 'var(--ink-faint)' }}>· {g.inHouse.length + g.out.length}</span></span>
                         {!!g.inHouse.length && (<div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '5px' }}>
                             <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>{groupLabel(mat, 'in')} · {g.inHouse.length}</span>
-                            {swatchRow(g.inHouse, globalFinish, setGlobalFinish)}
+                            {swatchRow(g.inHouse, globalFinishes[mat] || '', (c) => setGlobalFinishes(gf => { const n = { ...gf }; if (c) n[mat] = c; else delete n[mat]; return n; }))}
                         </div>)}
                         {!!g.out.length && (<div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '5px' }}>
                             <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>{groupLabel(mat, 'out')} · {g.out.length}</span>
-                            {swatchRow(g.out, globalFinish, setGlobalFinish)}
+                            {swatchRow(g.out, globalFinishes[mat] || '', (c) => setGlobalFinishes(gf => { const n = { ...gf }; if (c) n[mat] = c; else delete n[mat]; return n; }))}
                         </div>)}
                     </div>
                 ))}
@@ -1504,7 +1529,7 @@ function HardwareConfiguratorInner({
                             </span>
                             {/* THE SAME LIST THE GRID USES — see offeredFinishes. This row reading
                                 the unfiltered library is what let a narrowed flow show everything. */}
-                            {swatchRow(finishesFor(o, offeredFinishes), partFinish[o.id] || globalFinish, (c) => setPartFinish(pf => ({ ...pf, [o.id]: c })))}
+                            {swatchRow(finishesFor(o, offeredFinishes), partFinish[o.id] || globalFinishFor(o), (c) => setPartFinish(pf => ({ ...pf, [o.id]: c })))}
                         </div>
                     );
                 })()}
@@ -2119,7 +2144,7 @@ function HardwareConfiguratorInner({
                                         renderScaleOf is 1 on any flow without a size matrix. */}
                                     <group scale={renderScaleOf(flow, sizePick, assembly)}>
                                         <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibleOverrides}
-                                            cloneSpecs={cloneSpecs} stretchSpec={stretchSpec} spliceMarks={spliceMarks} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
+                                            cloneSpecs={cloneSpecs} stretchSpec={stretchSpec} spliceMarks={spliceMarks} frameInches={200} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
                                     </group>
                                 </Bounds>
                             </Canvas>

@@ -239,6 +239,7 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                                                     cloneSpecs={rs.cloneSpecs}
                                                     stretchSpec={rs.stretchSpec || null}
                                                     spliceMarks={rs.spliceMarks || []}
+                                                    frameInches={200}
                                                     /* ⚠ THE TAG ENGINE RENDERS ADDITIVELY (Stuart
                                                        2026-08-21): nothing is visible until it is
                                                        chosen, so its saved state means "show ONLY
