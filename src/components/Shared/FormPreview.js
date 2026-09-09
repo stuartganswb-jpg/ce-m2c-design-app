@@ -101,6 +101,18 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
         </div>
       </div>
 
+      {/* What they are ordering — the 3D pane as it stood when each line was added (CPQ snapshot). */}
+      {showMoney && Array.isArray(d.images) && d.images.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', margin: '14px 0 6px' }}>
+          {d.images.map((im, i) => (
+            <figure key={i} style={{ margin: 0, width: d.images.length === 1 ? '100%' : 'calc(50% - 5px)', border: '1px solid var(--line)', background: '#fff' }}>
+              <img src={im.src} alt={im.caption || 'Configured item'} style={{ width: '100%', display: 'block', maxHeight: '260px', objectFit: 'contain', background: '#fff' }} />
+              {im.caption && <figcaption style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--ink-soft)', padding: '4px 8px', borderTop: '1px solid var(--line)' }}>{im.caption}</figcaption>}
+            </figure>
+          ))}
+        </div>
+      )}
+
       {/* Line items — grey-shaded column header */}
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '4px' }}>
         <thead>

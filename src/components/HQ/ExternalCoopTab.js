@@ -1286,6 +1286,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
           tax: isUnpricedRequest ? undefined : 0,
           total: isUnpricedRequest ? undefined : (activeDocJob.cpqData?.totalPrice || 0) + shippingAmt,
           unpriced: isUnpricedRequest,
+          // The pictures CPQ took as each line was added — the customer sees what they are ordering.
+          images: (activeDocJob.cpqData?.cartItems || [])
+              .filter(it => it && typeof it.renderSnapshot === 'string' && it.renderSnapshot.startsWith('data:image'))
+              .map(it => ({ src: it.renderSnapshot, caption: it.sidemark || it.memo || it.assemblyName || '' })),
       };
 
       let mathSection = '';

@@ -57,7 +57,7 @@ const codeOf = (part, fallback) => String(
  *   cutLength      the shop cuts to this; absent on anything that is not cut
  *   dimensions     wall measurements for returns, read by fabrication
  */
-function handoffLine(l, part, finishName = '', clientFinishName = '') {
+function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishCode = '') {
     return {
         // ⚠ THE 1.6 LABEL NEVER LEAVES 1.6 (Stuart 2026-08-31, invoice S060147: descriptions read
         // "H21INPOLELEFT" — the designer's node label). A pin's partName is whatever the .glb slot
@@ -87,6 +87,12 @@ function handoffLine(l, part, finishName = '', clientFinishName = '') {
         // has the same customer part#, customer color#") — the 4.5 client mapping for the customer
         // this was quoted to, stamped so paper and screens can say it without a second lookup.
         ...(l.finishCode && clientFinishName ? { clientFinishName } : {}),
+        // ── A STOCK-COLOUR PART SAYS ITS COLOUR (Stuart 2026-09-09: the track "should show the
+        // finish associated in library with P14"). The track is MADE in bronze or champagne, the
+        // one aligned to the order's finish in 4.5 (subFinishCode). It carries no finishCode — the
+        // /P variant lookup and the finishing routes must not fire — but the label says the colour,
+        // the same words Quick Ship pushes, so the floor pulls the right stock.
+        ...(!l.finishCode && subFinishCode ? { subFinishCode, finishLabel: `${subFinishCode} (sub finish)` } : {}),
         // ── THE KIT'S OWN FIELDS (Stuart 2026-08-22) ────────────────────────────────────────
         // `isKit`/`noNs` keep it off the NetSuite component list and off the pick list — its money
         // rides the rollup, its components are what ship. `inKit` marks a part the kit already paid
@@ -145,7 +151,15 @@ export function handoffItem(resolved, ctx = {}) {
         const hit = (Array.isArray(f?.clientMapping) ? f.clientMapping : []).find(m => custKeys.has(String(m?.customerId || '').trim().toUpperCase()));
         return String(hit?.clientFinishName || '').trim();
     };
-    const lines = priced.lines.map(l => handoffLine(l, typeof findPart === 'function' ? findPart(l.partId) : null, finishNameOf(l.finishCode), clientFinishNameOf(l.finishCode)));
+    // The order's finish and the stock colour aligned to it; a part that is made in the base
+    // colours (role TRACK, or flagged usesSubFinish in the library) wears that instead of a finish.
+    const orderFinish = (finishes || []).find(x => String(x.code || '').toUpperCase() === String(ctx.finishCode || '').toUpperCase());
+    const alignedSub = String(orderFinish?.subFinishCode || '').trim().toUpperCase();
+    const takesSub = (l, part) => String(l.role || '').toUpperCase() === 'TRACK' || !!part?.manufacturingSpecs?.usesSubFinish;
+    const lines = priced.lines.map(l => {
+        const part = typeof findPart === 'function' ? findPart(l.partId) : null;
+        return handoffLine(l, part, finishNameOf(l.finishCode), clientFinishNameOf(l.finishCode), takesSub(l, part) ? alignedSub : '');
+    });
 
     // Added by hand — real lines, so they route and bill like everything else. They carry their own
     // note because a splice's location is the whole point of adding one.
@@ -242,6 +256,9 @@ export function handoffItem(resolved, ctx = {}) {
         engineeringNotes: ctx.engineeringNotes || null,
         // The saved render, replayed by the floors' viewer. Null on an assembly with no .glb.
         renderState: ctx.renderState || null,
+        // What was on screen when the line was added — a JPEG of the 3D pane, for the documents
+        // (Stuart 2026-09-09: "so they get a visual of what they are ordering").
+        renderSnapshot: ctx.renderSnapshot || null,
         // The push reads this list directly, not the breakdown rows — same field, same contents.
         trvComponents,
         // What the engine is: the flag that tells a consumer which shape to expect.

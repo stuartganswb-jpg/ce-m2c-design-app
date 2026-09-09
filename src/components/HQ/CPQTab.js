@@ -536,7 +536,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
 // Canvas so it can drive gl/scene/camera; auto-orients off the model's bounding box (longest axis =
 // pole, shortest = depth/front), snaps two angles, then restores the user's view. Downscales to a
 // white-background JPEG so the data stays small enough to store. Needs Canvas gl.preserveDrawingBuffer.
-const ViewCapturer = ({ onReady }) => {
+export const ViewCapturer = ({ onReady }) => {
     const { gl, scene, camera } = useThree();
     useEffect(() => {
         onReady(() => {
@@ -3043,8 +3043,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   // The finish THIS line wears (the TAGS engine writes it per line) — carried so
                   // the split, the pick list and the plating gate read it off cpqData.breakdown
                   // without going back to the cart item. Absent = the line wears nothing (mill).
-                  ...(line.finishCode ? { finishCode: line.finishCode, finishLabel: line.finishLabel || line.finishCode } : {}),
+                  ...(line.finishCode ? { finishCode: line.finishCode, finishLabel: line.finishLabel || line.finishCode } : (line.finishLabel ? { finishLabel: line.finishLabel } : {})),
                   ...(line.clientFinishName ? { clientFinishName: line.clientFinishName } : {}),
+                  // A stock-colour part (the track) says which colour it is made in — no finishCode,
+                  // so the /P variant lookup and the finishing routes never fire on it.
+                  ...(line.subFinishCode ? { subFinishCode: line.subFinishCode } : {}),
                   // Per-foot stamps must survive the merge: money documents multiply qty by the
                   // feet, and the NetSuite push consumes rod stock by the foot off these two.
                   ...(line.perFoot ? { perFoot: true, feet: Number(line.feet) || 0 } : {}),

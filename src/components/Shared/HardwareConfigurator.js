@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
-import { DynamicModel } from '../HQ/CPQTab';
+import { DynamicModel, ViewCapturer } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
 import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
@@ -391,6 +391,7 @@ function HardwareConfiguratorInner({
     // The r3f state, captured at Canvas creation so the button can re-render the scene at a
     // boosted pixel ratio with a transparent background (Shared/guideCapture).
     const glStateRef = useRef(null);
+    const captureRef = useRef(null);   // the 3D pane's snapshot function, once the canvas is up
     const [guideCapBusy, setGuideCapBusy] = useState(false);
     const handleSendToGuide = async () => {
         if (guideCapBusy) return;
@@ -1261,8 +1262,12 @@ function HardwareConfiguratorInner({
         // finishing floor, RTG, the ERP push and the CRM documents all keep working without
         // knowing which engine produced the order. onAdd is what puts it in the cart; without one
         // the strip still works, so the configurator is usable before the cart is wired.
+        // A picture of what was configured, taken as it is added — front view, white ground, ≤900px
+        // JPEG (the same capturer the old engine used) — so the quotation and the sales order can
+        // show the customer what they are ordering. Never blocks the add: no canvas, no picture.
+        const renderSnapshot = (() => { try { const shots = captureRef.current ? captureRef.current() : null; return shots?.front || null; } catch { return null; } })();
         const item = handoffItem(resolved, {
-            ...priceCtx, assembly, flow, findPart, qty: cfgQtyN,
+            ...priceCtx, assembly, flow, findPart, qty: cfgQtyN, renderSnapshot,
             sidemark: configMemo, memo: configMemo,
             finishes: chosenFinishObjects, finishLabel: finishLabelOf(chosenFinishObjects),
             priceLevel: effectiveLevel, lengthInches, lengthFeet,
@@ -2082,6 +2087,7 @@ function HardwareConfiguratorInner({
                             <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ width: '100%', height: '100%' }}
                                 onCreated={(st) => { glStateRef.current = st; }}>
                                 <StudioRig />
+                                <ViewCapturer onReady={(fn) => { captureRef.current = fn; }} />
                                 <OrbitControls makeDefault />
                                 <Bounds fit clip margin={1.2}>
                                     {/* ⚠ ONE GEOMETRY, SCALED. A combined flow's .glb is the master
@@ -2149,6 +2155,17 @@ function HardwareConfiguratorInner({
                                                                 {(() => { const theirs = clientFinishName(f); const ours = (f.name && f.name !== f.code) ? f.name : ''; const label = theirs || ours; return label ? <>{label}<span style={{ color: 'var(--ink-faint)' }}>{` · ${f.code}`}</span></> : f.code; })()}
                                                             </span>
                                                         );
+                                                        // A STOCK-COLOUR PART (Stuart 2026-09-09: the track "should show the finish
+                                                        // associated in library with P14"): made in the bronze / champagne aligned
+                                                        // to the order's finish in 4.5, never painted unless the upcharge is added.
+                                                        const stockPart = !l.extra && !l.noFinish && (String(l.role || '').toUpperCase() === 'TRACK' || !!findPart(l.partId)?.manufacturingSpecs?.usesSubFinish);
+                                                        if (stockPart) {
+                                                            const sub = String(finishByCode.get(String(globalFinish || '').toUpperCase())?.subFinishCode || '').toUpperCase();
+                                                            const subObj = sub ? finishByCode.get(sub) : null;
+                                                            return sub
+                                                                ? <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--brass)' }}>{subObj?.name && subObj.name !== sub ? `${subObj.name} · ${sub}` : sub}<span style={{ color: 'var(--ink-faint)' }}> · stock colour</span></span>
+                                                                : <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--rust, #a4442c)' }}>{globalFinish ? `no aligned track colour for ${globalFinish} — set it in 4.5` : 'stock colour follows the finish — choose one'}</span>;
+                                                        }
                                                         return (
                                                             <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
                                                                 {l.extra ? '' : (l.noFinish ? 'clear · takes no finish' : 'mill · no finish')}

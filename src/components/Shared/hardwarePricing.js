@@ -200,6 +200,7 @@ export function priceConfiguration(model, ctx = {}) {
         return {
             partId: entry.partId,
             name: entry.name,
+            role: entry.role || '',
             sku: p.sku,
             aliasCode: p.aliasCode,
             billedId: p.billedId,   // the finished SKU that is actually sold and billed
