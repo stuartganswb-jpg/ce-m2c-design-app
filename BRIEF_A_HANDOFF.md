@@ -728,3 +728,37 @@ which is why Stuart accepted the four live orders as they were rather than let i
 14 assertions in `scripts/woodRouting.test.mjs`, including metal untouched, non-rod wood untouched,
 the fee and operator-override precedence preserved, and `WOODGRAIN LAMINATE STEEL` correctly NOT
 reading as wood (a steel rod that looks like wood is cut and finished as metal).
+
+### ⬜ B — the RTG PO line editor must honour the finality rule
+
+Stuart 2026-09-08, firm: *"once po has been sent to netsuite for po# and sent to vendor (via email,
+acknowledgement received back) then it is final, no changes or add's after these steps
+(acknowledgement attached = final confirmation)."*
+
+**A has encoded the rule once**, in the new pure module `Shared/poLock.js` (split out of
+`purchaseOrders.js` so it can be tested — that module imports firebase and cannot run under node;
+`purchaseOrders` re-exports every name, so no caller changed):
+
+```js
+poLineLock(po)     // → null when editable, else the sentence saying why it is final
+poLinesLocked(po)  // → boolean
+poLockMessage(po)  // → the refusal to show an operator
+```
+
+Locked at the FIRST of: queued/pushed to NetSuite · has an NS number · sent to the vendor ·
+acknowledged (the strongest true reason is the one reported). It governs **lines only** —
+receiving, delivery notes, the acknowledgement and the status progression are how a finished PO
+keeps moving and none of them changes what was ordered. `addToOpenPurchaseOrder` already refuses a
+locked PO and starts a new draft instead.
+
+**⬜ B's half — `RTGDispatchTab.js:194`.** The PO line editor writes `items` with **no status
+check**, so an approved, sent and acknowledged purchase order can still have its quantities and
+lines rewritten from the board today — silently, with NetSuite and the vendor both holding a
+different document. Guard it:
+
+```js
+if (poLinesLocked(e.po)) return alert(poLockMessage(e.po));
+```
+
+…and hide or disable the ✎ affordance on a locked card, so the refusal is not the first anyone
+hears of it. 13 assertions in `scripts/poLock.test.mjs`.

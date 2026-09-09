@@ -30,39 +30,22 @@ import { doc, setDoc, updateDoc, getDoc, collection, query, where, getDocs } fro
 import { enqueueNsWrite } from './nsOutbox';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { reserveShortNo } from './shortId';
+import {
+    PO_STATUS, isOpenPo, openQtyOf, isDraftPo, hasNsNumber, poRef, poLinesLocked,
+} from './poLock.js';
+export {
+    PO_STATUS, PO_TERMINAL_STATUSES, isOpenPo, openQtyOf, poFullyReceived,
+    isDraftPo, hasNsNumber, poRef, poLineLock, poLinesLocked, poLockMessage,
+} from './poLock.js';
 
 // ── STATUS, THE WHOLE LIFE ─────────────────────────────────────────────────────────────────────
 // Draft is new (2026-09-02). Everything from Approved on is the existing vocabulary — RTG's board
 // queries `status == 'Approved'`, the outbox write-back sets 'Pushed to NetSuite', and the plating
 // POs the WMS raises use 'Sent to Plater'. Nothing already written changes meaning.
-export const PO_STATUS = {
-    DRAFT: 'Draft',                       // created, previewed, not yet approved — goes nowhere
-    APPROVED: 'Approved',                 // approved, waiting on the outbox worker
-    QUEUED: 'Queued to NetSuite',
-    PUSHED: 'Pushed to NetSuite',         // has its real PO number
-    SENT: 'Sent to Vendor',
-    SENT_TO_PLATER: 'Sent to Plater',     // the WMS weekly plating shipment creates AND sends in one act
-    PARTIAL: 'Partially Received',        // some arrived — OPEN, and the one people chase
-    RECEIVED: 'Received',                 // everything arrived
-    CLOSED: 'Closed',
-    DELETED: 'Deleted',                   // soft delete
-};
+// The vocabulary and the finality rule live in Shared/poLock (pure, so they can be tested under
+// node — this module imports firebase and cannot be). Re-exported so every existing caller is
+// unchanged and there remains exactly one definition.
 
-// ── WHICH POs ARE STILL LIVE ───────────────────────────────────────────────────────────────────
-// The RTG board asked `status == 'Approved'` and nothing else, so a PO was invisible to it for the
-// whole of its real life: born Draft, then Queued → Pushed → Sent, never passing through the one
-// status the board looked for. Every reader asks THIS instead, so the board, the Open POs review
-// and the receiving station cannot drift apart, and a status added later is honoured everywhere at
-// once. Terminal is only: everything arrived, or somebody closed or deleted it.
-export const PO_TERMINAL_STATUSES = [PO_STATUS.RECEIVED, PO_STATUS.CLOSED, PO_STATUS.DELETED];
-export const isOpenPo = (po) => !!po && !po.deleted && !PO_TERMINAL_STATUSES.includes(String(po.status || ''));
-// What is still owed on one line: ordered minus what has actually ARRIVED. Never header status —
-// a PO for 5 that returned 4 with 1 short still owes 1, and reading the header would hide it.
-export const openQtyOf = (line) => Math.max(0, (Number(line && line.quantity) || 0) - (Number(line && line.received) || 0));
-export const poFullyReceived = (po) => ((po && po.items) || []).every(l => openQtyOf(l) === 0);
-export const isDraftPo = (po) => String((po && po.status) || '') === PO_STATUS.DRAFT;
-export const hasNsNumber = (po) => !!(po && (po.nsPoTran || po.nsPoId));
-export const poRef = (po) => String((po && (po.nsPoTran || po.poId || po.id)) || '');
 
 // ── VENDOR RESOLUTION ──────────────────────────────────────────────────────────────────────────
 // The library's vendor NAMES against the NetSuite-synced CRM records (crm_records VEND-<ns id>,
@@ -514,7 +497,10 @@ export const addToOpenPurchaseOrder = async ({
     try {
         const snap = await getDocs(query(collection(db, 'hq_purchase_orders'), where('brand', '==', brand)));
         open = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-            .filter(p => !p.deleted && String(p.status || '') === PO_STATUS.DRAFT
+            // DRAFT *and* not locked. The status test alone would be enough today, but the lock is
+            // the rule and the status is only how it is currently spelled — a PO that somehow
+            // carries a NetSuite number while still reading DRAFT must not be appended to.
+            .filter(p => !p.deleted && String(p.status || '') === PO_STATUS.DRAFT && !poLinesLocked(p)
                 && String(p.nsVendorId || '') === nsVendorId)
             .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0))[0] || null;
     } catch (e) { /* fall through to creating one — never lose the demand to a read */ }
