@@ -4,7 +4,7 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, addDoc, serverTimestamp } from "firebase/firestore";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
-import { SOURCING, sourcingOf } from '../Shared/sourcing';
+import { SOURCING, sourcingOf, orderRouteFor, ORDER_ROUTE } from '../Shared/sourcing';
 import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
 import { closeOrderEverywhere, hardDeleteWithLedger } from '../Shared/orderLifecycle';
@@ -2129,9 +2129,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     // Same rules as the Raw Cores router: sourced BOTH ways → always ask (defaulted to
                     // the work order); otherwise an assembly is BUILT here whatever isInHouse says.
                     const isAssembly = baseInfo.part.partClass === 'Assembly' || baseInfo.part.partClass === 'Master Assembly' || baseInfo.part.netSuiteRecordType === 'assemblyitem';
-                    if (sourcingOf(specs) === SOURCING.BOTH) buy.push({ ...x, vendorOverride: '__MAKE__', bothSourced: true });
+                    const rtT = orderRouteFor(specs);
+                    if (rtT.route === ORDER_ROUTE.ASK) buy.push({ ...x, vendorOverride: '__MAKE__', bothSourced: sourcingOf(specs) === SOURCING.BOTH, askWhy: rtT.why });
                     else if (isAssembly) shop.push(x);
-                    else if (specs.isInHouse === false || vendorName) buy.push({ ...x, vendorOverride: vendorName });
+                    else if (rtT.route === ORDER_ROUTE.BUY) buy.push({ ...x, vendorOverride: vendorName });
                     else shop.push(x);
                 }
             }
@@ -2474,7 +2475,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const { part } = resolveOePart(String(w.l.erp || '').toUpperCase());
             const finish = oeLineFinish(w.l);
             const specs = part?.manufacturingSpecs || {};
-            const isBuy = !isOutsourcedFinishCode(finish || '') && specs.isInHouse === false && !!String(specs.vendorName || '').trim() && sourcingOf(specs) !== SOURCING.BOTH;
+            // The same one rule as every other view (a plated finish is never a PO from here — it
+            // is a plating demand). Behaviour is unchanged for this path; it now reads from the
+            // shared answer rather than re-deriving it, so the doors cannot drift.
+            const isBuy = !isOutsourcedFinishCode(finish || '') && orderRouteFor(specs).route === ORDER_ROUTE.BUY;
             if (part && finish && !isOutsourcedFinishCode(finish)) reviewable.push({ ...w, buy: isBuy }); else direct.push(w);
         });
         for (const w of direct) {
@@ -2901,16 +2905,18 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // assembly rule, because a Both item is usually an assembly and would otherwise be
             // routed silently to the shop. It opens the vendor modal defaulted to ⚒ make-in-house,
             // so doing nothing produces the safe answer.
-            if (sourcingOf(specs) === SOURCING.BOTH) { buy.push({ ...x, vendorOverride: '__MAKE__', bothSourced: true }); return; }
+            const rt0 = orderRouteFor(specs);
+            if (rt0.route === ORDER_ROUTE.ASK) { buy.push({ ...x, vendorOverride: '__MAKE__', bothSourced: sourcingOf(specs) === SOURCING.BOTH, askWhy: rt0.why }); return; }
             // AN ASSEMBLY IS BUILT HERE — never a PO candidate, whatever the isInHouse flag says
             // (Stuart 2026-07-28: H2-138LBE, an assembly we make, was asking for a vendor). This is
             // the same exclusion the Min-OH rule already uses at isOutsourced above; 'Master
             // Assembly' is included too, since it is equally something we build.
             const isAssembly = part.partClass === 'Assembly' || part.partClass === 'Master Assembly' || part.netSuiteRecordType === 'assemblyitem';
             if (isAssembly) { shop.push(x); return; }
-            // Otherwise: outsourced, or in-house-but-vendored — both are PO candidates, and the
-            // vendor modal is where the operator decides (it offers "make in-house instead").
-            if (specs.isInHouse === false || vendorName) buy.push({ ...x, vendorOverride: vendorName });
+            // Otherwise the one rule decides: outsourced BUYS, in-house MAKES. "In-house but the
+            // record names a vendor" is no longer a PO candidate — that is what BOTH is for, and
+            // BOTH is handled above.
+            if (rt0.route === ORDER_ROUTE.BUY) buy.push({ ...x, vendorOverride: vendorName });
             else shop.push(x);
         });
         if (unlinked.length) alert(`⚠️ ${unlinked.length} core(s) have no Master Library part and were skipped:\n\n${unlinked.slice(0, 10).map(x => `• ${x.r.itemid}`).join('\n')}`);
@@ -2943,15 +2949,22 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // isInHouse true, so without this test the row fell through as plain in-house and a
             // vendor-less BOTH item became a WO with no prompt). Defaults to the WORK ORDER —
             // doing nothing produces the safe answer, same as the ⚖ vendor modal elsewhere.
-            if (sourcingOf(specs) === SOURCING.BOTH) { ambiguous.push({ ...x, bothSourced: true }); return; }
-            if (outsourced && vendorName) buy.push(x);
-            else if (outsourced && !vendorName) noVendor.push(x);
-            else if (vendorName) ambiguous.push(x);
+            // ONE RULE, EVERY VIEW (Shared/sourcing.orderRouteFor, 2026-09-09). An explicit mode is
+            // an answer: in-house MAKES, whatever vendor the record names — "in house stays work
+            // order, it happens to be able to be purchased, we will need to switch to BOTH, that is
+            // the reason for it." Only an un-migrated item still asks, and every ask opens on the
+            // work order.
+            const rt = orderRouteFor(specs);
+            if (rt.route === ORDER_ROUTE.BUY) buy.push(x);
+            else if (rt.route === ORDER_ROUTE.NO_VENDOR) noVendor.push(x);
+            else if (rt.route === ORDER_ROUTE.ASK) ambiguous.push({ ...x, bothSourced: sourcingOf(specs) === SOURCING.BOTH, askWhy: rt.why });
             else make.push(x);
         });
         if (unlinked.length) alert(`⚠️ ${unlinked.length} row(s) have no Master Library part and were skipped:\n\n${unlinked.slice(0, 10).map(x => `• ${x.r.itemid}`).join('\n')}`);
         if (noVendor.length) alert(`⚠️ ${noVendor.length} outsourced item(s) have NO vendor set and were skipped — add the vendor in the Master Library first:\n\n${noVendor.slice(0, 10).map(x => `• ${x.r.itemid}`).join('\n')}`);
-        if (ambiguous.length) { setRouteModal({ buy, make, items: ambiguous.map(x => ({ ...x, choice: x.bothSourced ? 'WO' : 'PO' })) }); return; }
+        // EVERY ask opens on the WORK ORDER. It used to default a non-BOTH row to PO, so an
+        // in-house bracket that merely named a supplier became a real purchase by pressing through.
+        if (ambiguous.length) { setRouteModal({ buy, make, items: ambiguous.map(x => ({ ...x, choice: 'WO' })) }); return; }
         executeOrders(buy, make);
     };
 
