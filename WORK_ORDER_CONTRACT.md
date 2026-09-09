@@ -201,6 +201,30 @@ view. Order Entry / Quick Ship SOs are on the board as records (`quickShipStatus
 
 ---
 
+## 5c. What the split writes since 2026-09-08 (Brief B)
+
+- **Stock first**: after the sales order has its NetSuite id, plated small lines are decided by
+  `Shared/splitPlan.planSmallLines` against `fetchAvailabilityUnits` — covered → pick lines
+  (`pickOnly:true, finishOutsourced:true`) on the floor doc; short → `hq_sales_orders.backorderLines[]`
+  (`Shared/backorder.js`: `{ code, name, qty, wanted, kind:'plated'|'painted', coverCodes, available,
+  onOrder, since, lineIndex }`); unreadable → picked with `stockUnknown`. Painted lines still go to
+  finishing and are recorded as true backorders when the finished code, its /P and its mill base are
+  all at 0. No plating demand is raised at the split.
+- **Pick-only document**: when nothing needs the finishing floor, the `fin_workorders` doc is born
+  `currentPhase:'Complete', pickOnly:true, finishingRequired:false` — WMS pick/pack/handshake unchanged,
+  finishing screens never select it. A custom-only order gets it as its pack document (finSiblingId set).
+- **Finish complete by default**: `orderStatus.wholeOrderWait` — a sales-typed WO waits for every
+  sibling WO of its sales order unless `hq_sales_orders.finishAsAvailable === true`; the split writes
+  the floor doc ON HOLD (`held:true, heldReasonKind:'BACKORDER', heldStage:'FINISHING'`) when the order
+  has backorder lines and the flag is off. The flag turning on releases that hold.
+- **Recipe**: `recipe` = the sales order's stamped code first; `recipeLabel`; `recipeSource` (`sales
+  order` | E's source | `job scan (order saved before the stamp)` | `none`). `needBy` on every doc.
+- **fabNotes** carries Vision's `traverseCuts[{role,cutInches,qty}]`, `drive`, `setup`, `frontLayer`,
+  `rodKind` (null on solid poles); `cutSheetMissing` / `visionUsed` on both floor docs; the shop doc
+  carries the item's `shopInstruction`.
+- **Lines are classified with the cut facts** (`classifyLine(line, part, eng)`): a straight wood rod
+  → finishing, a mitered / bent / spliced one → shop.
+
 ---
 
 ## 6. SO-import + auto-split flow (the new feature)
