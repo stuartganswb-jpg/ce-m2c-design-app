@@ -292,20 +292,34 @@ export const printRodPieceLabel = ({ pieceId, itemCode, lengthIn, bornOfRef }) =
 // ONE LABEL = ONE PACK. Print 3 of a 7PK and the shelf carries 3 labels worth 7 rings each; scan
 // two of them and the screen owes the operator "14 pcs", not "2".
 const UOM_CSS = `${PAGE_CSS}
-.l{padding:0.12in 0.16in;display:flex;flex-direction:column;}
+.l{padding:0.07in 0.14in;display:flex;flex-direction:column;gap:1.5pt;}
 .top{display:flex;justify-content:space-between;align-items:flex-start;gap:0.12in;}
-.id{font-size:20pt;font-weight:900;line-height:1.02;word-break:break-all;min-width:0;}
-.wo{font-size:7.5pt;font-weight:700;color:#333;text-align:right;white-space:nowrap;line-height:1.25;flex:0 0 auto;}
-.nm{font-size:10pt;font-weight:600;line-height:1.15;margin-top:1pt;max-height:0.3in;overflow:hidden;}
-.u{margin-top:3pt;display:flex;align-items:baseline;gap:0.08in;}
-.uu{font-size:19pt;font-weight:900;letter-spacing:1px;}
-.up{font-size:12pt;font-weight:800;}
-.bc{margin-top:auto;} .bc svg{width:100%;height:0.38in;display:block;} .bct{font-size:7pt;letter-spacing:1px;text-align:center;word-break:break-all;}`;
+.id{font-size:15pt;font-weight:900;line-height:1.02;word-break:break-all;min-width:0;}
+.wo{font-size:7pt;font-weight:700;color:#333;text-align:right;white-space:nowrap;line-height:1.25;flex:0 0 auto;}
+.nm{font-size:8.5pt;font-weight:600;line-height:1.12;max-height:0.2in;overflow:hidden;}
+.tag{font-size:5.5pt;font-weight:800;letter-spacing:1.5px;color:#333;line-height:1;}
+.bc svg{width:100%;height:0.3in;display:block;} .bct{font-size:6pt;letter-spacing:1px;text-align:center;word-break:break-all;line-height:1.1;}
+.u{display:flex;align-items:baseline;gap:0.08in;justify-content:center;margin:2pt 0;}
+.uu{font-size:16pt;font-weight:900;letter-spacing:1px;}
+.up{font-size:11pt;font-weight:800;}
+.legacy{display:flex;gap:0.25in;align-items:flex-end;} .legacy .item{flex:1;min-width:0;} .legacy .qty{flex:0 0 0.8in;}`;
+// ── TWO SCANNERS, ONE LABEL (Stuart 2026-09-09) ─────────────────────────────────────────────
+// "put pattern id and color top then description as is, then put app barcode string as is, then
+//  put the Pair 2pc in the middle as is, then put the legacy barcode the bottom, this way easy to
+//  scan the correct one." The APP barcode is the grammar (item*unit*pieces — Shared/labelScan) the
+// WMS counts packs by; the LEGACY row is what the old system reads: the plain item, then a
+// quantity of 1 — one scan of each books one pack. The pack count stays as text in the middle.
 const uomLabelInner = ({ itemId, itemName, uom, pcs, woNum, scan }) => `<div class="l">
   <div class="top"><div class="id">${esc(itemId || '')}</div>${woNum ? `<div class="wo">${esc(woNum)}</div>` : ''}</div>
   <div class="nm">${esc(itemName || '')}</div>
-  <div class="u"><span class="uu">${esc(uom || 'EA')}</span><span class="up">${Number(pcs) > 1 ? `(${esc(pcs)} pcs)` : '(1 pc)'}</span></div>
+  <div class="tag">APP</div>
   <div class="bc">${code128BSvg(String(scan || itemId || ''))}<div class="bct">${esc(scan || itemId || '')}</div></div>
+  <div class="u"><span class="uu">${esc(uom || 'EA')}</span><span class="up">${Number(pcs) > 1 ? `(${esc(pcs)} pcs)` : '(1 pc)'}</span></div>
+  <div class="tag">LEGACY · ITEM THEN QTY</div>
+  <div class="legacy">
+    <div class="item"><div class="bc">${code128BSvg(String(itemId || ''))}<div class="bct">${esc(itemId || '')}</div></div></div>
+    <div class="qty"><div class="bc">${code128BSvg('1')}<div class="bct">QTY 1</div></div></div>
+  </div>
 </div>`;
 export const printUomLabels = ({ itemId, itemName, uom, pcs = 1, scan = '', woNum = '', copies = 1 }) =>
     printDoc(`${itemId || ''} ${uom || ''} ×${copies}`, UOM_CSS,
