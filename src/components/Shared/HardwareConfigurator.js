@@ -581,8 +581,11 @@ function HardwareConfiguratorInner({
         // only as long as the ends leave it (a return drops its end piece).
     const railNames = useMemo(() => {
         const shown = new Set([...resolved.visible].map(n => String(n).toLowerCase()));
+        // The F-clip strip runs the length of the track (Stuart 2026-09-09: "it makes it appear
+        // that the track is too short since it does not stretch") — a rider, not a rod, but it is
+        // rail-length and stretches with the rail; carriers stay discrete pieces and spread.
         return [...new Set((model.choices || [])
-            .filter(c => ROD_ROLES.includes(c.role))
+            .filter(c => ROD_ROLES.includes(c.role) || c.role === 'FCLIP')
             .flatMap(c => c.nodes || [])
             .filter(n => shown.has(String(n).toLowerCase())))];
     }, [resolved, model]);

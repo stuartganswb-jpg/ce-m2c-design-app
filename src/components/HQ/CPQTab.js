@@ -381,6 +381,17 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         const sz = rb.getSize(new THREE.Vector3());
                         const ax = sz.x >= sz.y && sz.x >= sz.z ? 'x' : (sz.y >= sz.z ? 'y' : 'z');
                         const modelLen = sz[ax];
+                        // ANYTHING AS LONG AS THE RAIL IS RAIL (Stuart 2026-09-09, the traverse: the
+                        // F-clip strip and a companion mesh imported beside the track were as long
+                        // as the track, named for another slot, and so were MOVED, not scaled — the
+                        // track stretched and they did not, which reads as a track too short). A
+                        // visible mesh spanning 80% of the rail's length is not a bracket; it
+                        // stretches with the rail whatever it is called.
+                        clonedScene.traverse(c => {
+                            if (!c.isMesh || !c.visible || isFastener(c) || inClones(c) || railMeshes.includes(c)) return;
+                            const mb = new THREE.Box3().setFromObject(c); const ms = mb.getSize(new THREE.Vector3());
+                            if (ms[ax] >= 0.8 * modelLen) railMeshes.push(c);
+                        });
                         // Units guard: 1.6 exports production inches. A rail that does not read as a
                         // pole length in inches is a foreign model — left alone, never scaled wrong.
                         const factor = (modelLen > 12 && modelLen < 400) ? wantIn / modelLen : 1;
