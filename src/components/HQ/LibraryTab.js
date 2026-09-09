@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { buildGalleryIndex, galleryImageForPart, photoMayOverwrite, isAutoImage, isInheritedFromBase, splitCode, imageUpdate, IMG_GALLERY } from '../Shared/partImage';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { splitFinish, siblingsQuery, oneItemQuery, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
-import { buildStockFinPayload } from '../Shared/stockRun';
-import { buildFinDoc } from '../Shared/floorRelease';
+import { releaseRunToFloor as sharedReleaseRunToFloor, raisePaintRun as sharedRaisePaintRun } from '../Shared/repaintRun';
 import { parkWorkOrder, INTENT } from '../Shared/workOrderCreate';
 import { issuePlatedDemand } from '../Shared/platingDemand';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
@@ -1089,51 +1088,14 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   // `recipe` is the MACHINE code the floor groups and matches on (fin_recipes / finish code, e.g.
   // 'RF1'); `finishLabel` is the human string ('RF1 - Satin Nickel'). They were one field before,
   // and the label never matched a recipe — every library run grouped as an unknown recipe.
-  // ── WRITER 7 (Brief A, converted 2026-09-08 once B1 landed) ─────────────────────────────────
-  // The Library run was the last writer assembling its own fin_workorders document. Four paths
-  // hand-copied that field list and each carried something the others lacked — urgent, nsWoId,
-  // holds, needBy — which is exactly the divergence Shared/floorRelease.buildFinDoc exists to end.
-  //
-  // The PAYLOAD still comes from buildStockFinPayload (the Snapshot model, nothing re-derived at
-  // dispatch); what changes is that the DOCUMENT is now built by the one builder, so this path
-  // gains what it never had: the board's later urgent statement, a hold placed while parked, the
-  // NetSuite anchor when one exists, the dispatched stamps — and the pole/sled assertion that
-  // caught Sandra's WO11535, which a hand-written write could never have made.
-  const releaseRunToFloor = async ({ woId, part, qty, finishLabel, recipe, note, hqExtra = {}, finExtra = {} }) => {
-      const now = Date.now();
-      const reqDate = new Date(now + 6048e5).toISOString().split('T')[0];
-      const hqOrder = withItemCode({
-          id: woId, woId, woDisplayId: woId,
-          partErpId: String(part.legacyErpId || part.itemId || '').toUpperCase(),
-          rootItem: String(part.legacyErpId || part.itemId || '').toUpperCase(),
-          brand: activeBrand, customer: "Internal Stock",
-          hqJobId: part.id, totalParts: Math.max(1, Math.floor(Number(qty) || 1)),
-          reqDate, type: "Stock Build", recipe: recipe || finishLabel || 'PENDING-RECIPE',
-          finishLabel: finishLabel || '',
-          memo: note || '', createdAt: now,
-          // Released from the library, not the board — but the board still holds the record.
-          status: "Dispatched", pushedToFinishing: true,
-          dispatchedAt: now, dispatchedBy: (currentUser && (currentUser.name || currentUser.email)) || '', releasedFrom: 'MASTER_LIBRARY',
-          // FINISH-STREAM EXCEPTION rides the order (e.g. the elbow: small part finished to match
-          // the poles) — the floor's recipe resolution reads it off the WO doc.
-          ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
-          ...hqExtra,
-      });
-      await setDoc(doc(db, "hq_work_orders", woId), hqOrder);
-      try {
-          const finPayload = buildStockFinPayload({
-              woId, part, qty, finishLabel: recipe || finishLabel, brand: activeBrand,
-              createdBy: (currentUser && (currentUser.name || currentUser.email)) || '', reqDate, note,
-              tasks: makeFullTasks(), extra: { finishLabel: finishLabel || '', ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}), ...finExtra }, now,
-          });
-          await setDoc(doc(db, "fin_workorders", woId), buildFinDoc({
-              hqOrder, finPayload, by: (currentUser && (currentUser.name || currentUser.email)) || '', now,
-          }));
-      } catch (err) {
-          try { await deleteDoc(doc(db, "hq_work_orders", woId)); } catch (e) { /* leave the ledger entry; it is visible in RTG */ }
-          throw err;
-      }
-  };
+  // ── THE PAINT RUN AND THE FLOOR RELEASE LIVE IN Shared/repaintRun ───────────────────────────
+  // The Sales Snapshot raises the same repaint beside its ✂ rod cut (Stuart 2026-09-09: "have it
+  // be the exact same functioning tool"). "Exact same" is a promise about BEHAVIOUR, and the only
+  // way to keep it is one writer — so both moved out whole rather than being copied, and this
+  // screen calls them with its own brand and operator. Writer 7's conversion to buildFinDoc moved
+  // with them and is unchanged.
+  const releaseRunToFloor = (args) =>
+      sharedReleaseRunToFloor({ ...args, brand: activeBrand, by: (currentUser && (currentUser.name || currentUser.email)) || '' });
 
   // ── MAKE-UP ORDER CASCADE (Eric 2026-08-10: "system sees component shortage of the Phosphate
   // parts and creates orders … also sees shortage in the Mill Finish parts … and creates those
@@ -1430,33 +1392,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       }
   };
 
-  // ── THE ONE PAINT-RUN WRITER ────────────────────────────────────────────────────────────────
-  // Two doors raise this shape now — "Just For Paint" (an item the app was never taught) and
-  // "Repaint" (an item it knows, pulled in another colour). They are the SAME order: no assembly,
-  // no NetSuite work order, a pull line for the source and an adjustment at each end.
-  //
-  // Written once on purpose. The delete-vs-close divergence on 2026-09-08 was exactly this shape —
-  // a second copy that stopped receiving what the first one learned — and the fields below are the
-  // ones the WMS pick and the put-away read to decide whether to adjust anything at all. A copy
-  // that drifted by one field name would silently stop moving stock.
-  const raisePaintRun = async ({ woId, part, targetCode, nsItem, pullCode, nsPull, finishId, finishLabel, fin, qty, desc, runType, extra = {} }) => {
-      // What makes it a paint run rides on BOTH documents — the order declares it, because by
-      // packing time the library record is not in the room.
-      const jfpFields = {
-          paintOnly: true, jfpItemCode: targetCode, jfpItemId: String(nsItem.id),
-          jfpItemName: nsItem.displayname || '', jfpFinishId: finishId, jfpFinishLabel: finishLabel,
-          ...(nsPull && pullCode && pullCode !== targetCode
-              ? { jfpPullFrom: pullCode, jfpPullFromNsId: String(nsPull.id), jfpPullFromName: nsPull.displayname || '' }
-              : {}),
-          ...extra,
-      };
-      await releaseRunToFloor({
-          woId, part: { ...part, legacyErpId: targetCode, itemName: nsItem.displayname || targetCode },
-          qty, finishLabel, recipe: (fin && fin.code) || finishLabel, note: desc,
-          hqExtra: { ...jfpFields, type: runType },
-          finExtra: { ...jfpFields, type: nsItem.displayname || targetCode },
-      });
-  };
+  const raisePaintRun = (args) =>
+      sharedRaisePaintRun({ ...args, brand: activeBrand, by: (currentUser && (currentUser.name || currentUser.email)) || '' });
 
   // JFP RUN → FINISHING (Stuart 2026-08-03). No library assembly, no NetSuite work order — the item
   // rides as typed text and only meets NetSuite again at packing, as an adjustment.

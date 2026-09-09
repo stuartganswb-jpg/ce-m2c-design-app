@@ -18,6 +18,8 @@ import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
 import { issuePlatedDemand } from '../Shared/platingDemand';
 import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf, fetchOpenPoLines, addToOpenPurchaseOrder, isOpenPo } from '../Shared/purchaseOrders';
 import { coverCodesOf, rowsFor, uncoveredCount, STATE_STYLE } from '../Shared/backorderBoard';
+import { splitFinish, siblingsQuery, oneItemQuery, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
+import { raisePaintRun, repaintWoId } from '../Shared/repaintRun';
 import { runBatchPrecheck, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal, stampReceiptPo } from '../Shared/workOrderCreate';
@@ -27,6 +29,7 @@ import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan'
 import { queueNsAssemblyWorkOrder } from '../Shared/nsWorkOrder';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 
+const NS_SUITEQL_URL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
     'uniquity': { subsidiary: "6", location: "20" },
@@ -248,6 +251,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [convSugMap, setConvSugMap] = useState({});   // itemid → { from, qty } — rides onto the WO as a SUGGESTION (Setup Queue converts)
     const [openWos, setOpenWos] = useState(null);       // 📋 Open WOs cleanup panel { loading, rows, error }
     const [backorders, setBackorders] = useState(null); // 📋 TRUE BACKORDERS board { loading, rows, error, filter }
+    // 1 · WHO IS WAITING — total short qty per item across open sales orders, for the BO column.
+    const [boByCode, setBoByCode] = useState({});
+    const [inHouseFinishes, setInHouseFinishes] = useState([]);
+    // 2 · ♻ REPAINT from the Snapshot row, beside the ✂ rod cut.
+    const [snapRepaint, setSnapRepaint] = useState(null);
     const [rawStock, setRawStock] = useState(null);     // { loading, availById, inboundById } — raw cores' NetSuite stock, fetched on first RAW toggle
     const [ropEdits, setRopEdits] = useState({});       // erp(base) -> edited ROP (pushed to Master Library manufacturingSpecs.reorderPoint)
     const [ropSaving, setRopSaving] = useState(false);
@@ -331,6 +339,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => {
             setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         });
+        // The in-house finishes — the recipe a repaint run tells the floor to use. Same document
+        // the Master Library reads, so the two tools offer the same list.
+        const unsubFin = onSnapshot(doc(db, "system", "master_finishes"), snap => setInHouseFinishes((snap.exists() && snap.data().finishes) || []));
 
         // URGENT CORE DEMAND (Stuart 2026-07-30). Raised by the WMS pick app when a plated item is
         // short AND the mill core can't cover it: the parts have to be MADE before they can be
@@ -349,7 +360,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             );
         });
 
-        return () => { unsubParts(); unsubLists(); unsubCollections(); unsubOutsource(); unsubUrgent(); unsubPlating(); };
+        return () => { unsubParts(); unsubLists(); unsubCollections(); unsubOutsource(); unsubFin(); unsubUrgent(); unsubPlating(); };
     }, [activeBrand]);
 
     // --- ALIGNED DYNAMIC DICTIONARY LISTS ---
@@ -1257,6 +1268,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const newTotal = months.reduce((a, mo) => a + (newRec.m[mo.key] || 0), 0);
                 return { itemid: s.itemid, base: s.itemid, internalId: s.internalId, available: availById[s.internalId] || 0, onOrd: (inboundById[s.internalId] || {}).qty || 0, onOrdLines: (inboundById[s.internalId] || {}).lines || [], oldInternalId: oldSib ? oldSib.internalId : null, oldItemId: oldSib ? oldSib.itemid : null, cells, total, newTotal, avg: total / 12, orders: (newRec.orders || 0) + (oldRec.orders || 0), hasOld: !!oldSib };
             }).sort((a, b2) => String(a.itemid).localeCompare(String(b2.itemid), undefined, { numeric: true, sensitivity: 'base' }));
+            loadBackorderTally();      // who is waiting, alongside the report
             setSalesHist(s => (s ? { ...s, loading: false, note: null, rows, withOld: rows.filter(r => r.hasOld).length,
                 cacheNote: `${fromCache} of ${months.length} month(s) read from cache${fetchedMonths.length ? ` · ${fetchedMonths.join(', ')} pulled live` : ''} · closed months are cached, the current month never is` } : s));
         } catch (e) {
@@ -2206,6 +2218,123 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
         setGenBusy(false);
     };
+    // ── 1 · WHO IS ACTUALLY WAITING (Stuart 2026-09-09) ────────────────────────────────────────
+    // "add a qty column next to available for backorder, currently we have no visibility when
+    //  there are actually people waiting."
+    //
+    // NetSuite's own quantitybackordered is a different number — it counts what its sales orders
+    // could not commit, which includes orders we have already covered another way. This counts OUR
+    // record: the backorderLines the split writes when nothing on the shelf can make a line. That
+    // is the number with customers behind it, and clicking it opens the board that names them.
+    //
+    // One Firestore read, no NetSuite — it rides along with the report rather than adding to the
+    // wait, and a failure leaves the column blank rather than the report unopenable.
+    const loadBackorderTally = async () => {
+        try {
+            const snap = await getDocs(query(collection(db, 'hq_sales_orders'), where('brand', '==', activeBrand)));
+            const out = {};
+            snap.docs.forEach(d => {
+                const so = { id: d.id, ...d.data() };
+                if (so.deleted || ['Closed', 'Deleted', 'Cancelled'].includes(String(so.status || ''))) return;
+                (so.backorderLines || []).forEach(l => {
+                    const code = String(l.code || '').toUpperCase();
+                    const qty = Math.max(0, Number(l.qty) || 0);
+                    if (!code || !qty) return;
+                    const rec = out[code] || (out[code] = { qty: 0, orders: [] });
+                    rec.qty += qty;
+                    rec.orders.push(`${qty} × ${so.nsSoTran || so.soNumber || so.orderKey || so.id}${so.customer ? ` (${so.customer})` : ''}`);
+                });
+            });
+            setBoByCode(out);
+        } catch (e) { setBoByCode({}); }
+    };
+
+    // ── 2 · ♻ REPAINT FROM THE SNAPSHOT ROW (Stuart 2026-09-09) ────────────────────────────────
+    // "have that appear at the end just like the rod cuts option does — if we do not have enough
+    //  stock to fulfill an order we can put it on po or we can choose another to repaint in that
+    //  color. have it be the exact same functioning tool."
+    //
+    // EXACT SAME is a promise about behaviour, so the RULES are shared with the Master Library's
+    // tool, not re-implemented: Shared/repaintSource decides which colours qualify and refuses one
+    // without the stock, and Shared/repaintRun writes the order. Only the layout differs, because
+    // one lives on an item page and this one lives in a table row.
+    const openSnapRepaint = async (itemid, recQty) => {
+        const target = String(itemid).toUpperCase();
+        const { base } = splitFinish(target);
+        const qty = Math.max(1, Math.floor(Number(recQty) || 1));
+        setSnapRepaint({ target, base, loading: true, sources: [], error: '', sourceCode: '', freeCode: '', freeItem: null, freeBusy: false, qty: String(qty), finishId: '', busy: false });
+        try {
+            const resp = await nsProxyFetch({ targetUrl: NS_SUITEQL_URL, method: 'POST', payload: { q: siblingsQuery(base) } });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
+            const rows = data.items || [];
+            let availByCode = {};
+            try { availByCode = await fetchAvailability(rows.map(r => String(r.itemid).toUpperCase()), (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17'); } catch (e) { /* every row reads 0 and says so */ }
+            setSnapRepaint(r => r && ({ ...r, loading: false, sources: shapeSources({ rows, targetCode: target, availByCode, need: qty }) }));
+        } catch (e) {
+            setSnapRepaint(r => r && ({ ...r, loading: false, error: `Couldn't read the other colours of ${base} — ${e.message || e}` }));
+        }
+    };
+
+    const checkSnapFreeSource = async () => {
+        const code = String(snapRepaint?.freeCode || '').trim().toUpperCase();
+        if (!code) return;
+        setSnapRepaint(r => r && ({ ...r, freeBusy: true, freeItem: null, error: '' }));
+        try {
+            const resp = await nsProxyFetch({ targetUrl: NS_SUITEQL_URL, method: 'POST', payload: { q: oneItemQuery(code) } });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
+            const row = (data.items || [])[0] || null;
+            if (!row) return setSnapRepaint(r => r && ({ ...r, freeBusy: false, error: `NetSuite has no item called "${code}".` }));
+            let avail = 0;
+            try { const a = await fetchAvailability([code], (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17'); avail = Math.max(0, Number(a[code]) || 0); } catch (e) { /* reads 0 — refused below, the safe direction */ }
+            setSnapRepaint(r => r && ({ ...r, freeBusy: false, sourceCode: code, freeItem: { code, nsId: String(row.id), name: String(row.displayname || ''), available: avail } }));
+        } catch (e) {
+            setSnapRepaint(r => r && ({ ...r, freeBusy: false, error: `Couldn't check ${code} — ${e.message || e}` }));
+        }
+    };
+
+    const createSnapRepaint = async () => {
+        const st = snapRepaint; if (!st) return;
+        const chosen = st.freeItem && st.freeItem.code === st.sourceCode
+            ? st.freeItem : (st.sources || []).find(x => x.code === st.sourceCode) || null;
+        const qty = Number(st.qty);
+        const v = validateRepaint({ sourceCode: st.sourceCode, targetCode: st.target, qty, available: chosen ? chosen.available : 0, sourceKnown: !!chosen });
+        if (!v.ok) return alert(v.error);
+        if (!st.finishId) return alert('Choose the in-house finish — it sets the recipe the floor will run.');
+        const fin = inHouseFinishes.find(f => String(f.id) === String(st.finishId));
+        const finishLabel = fin ? (fin.code ? `${fin.code} - ${fin.name}` : fin.name) : '';
+        const desc = repaintDescription({ sourceCode: chosen.code, targetCode: st.target, finishLabel, qty });
+        setSnapRepaint(r => r && ({ ...r, busy: true }));
+        let nsItem = null;
+        try {
+            const resp = await nsProxyFetch({ targetUrl: NS_SUITEQL_URL, method: 'POST', payload: { q: oneItemQuery(st.target) } });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
+            nsItem = (data.items || [])[0] || null;
+        } catch (e) { setSnapRepaint(r => r && ({ ...r, busy: false })); return alert(`Couldn't reach NetSuite to check ${st.target} — nothing was created.\n\n${e.message || e}`); }
+        if (!nsItem) { setSnapRepaint(r => r && ({ ...r, busy: false })); return alert(`NetSuite has no item called "${st.target}" — the painted pieces are adjusted into it at packing, so it has to exist first.`); }
+        if (!window.confirm(`Send a REPAINT run to the finishing floor?\n\n${desc}\n\nPull ${qty} × ${chosen.code} — ${chosen.available} available.\n\nAt the WMS pick ${qty} × ${chosen.code} is adjusted OUT; at put-away ${qty} × ${st.target} is adjusted IN. It lands in the Setup Queue and on the RTG board.`)) {
+            return setSnapRepaint(r => r && ({ ...r, busy: false }));
+        }
+        try {
+            const part = partByKey['erp:' + st.target] || { legacyErpId: st.target, itemName: nsItem.displayname || st.target };
+            const res = await raisePaintRun({
+                woId: repaintWoId(st.target), part, targetCode: st.target, nsItem,
+                pullCode: chosen.code, nsPull: { id: chosen.nsId, displayname: chosen.name },
+                finishId: st.finishId, finishLabel, fin, qty, desc,
+                brand: activeBrand, by: currentUser || '', runType: 'Repaint',
+                extra: { repaint: true, repaintFrom: chosen.code, repaintAvailAtIssue: chosen.available, raisedFrom: 'SALES_SNAPSHOT' },
+            });
+            addLog(`♻ ${res.woId}: ${desc} — on the finishing floor and recorded in RTG.`, 'success');
+            alert(`✅ ${res.woId} is on the finishing floor.\n\n${desc}\n\nThe pick pulls ${chosen.code}; packing adjusts ${st.target} into the scanned bin.`);
+            setSnapRepaint(null);
+        } catch (e) {
+            setSnapRepaint(r => r && ({ ...r, busy: false }));
+            alert('Failed to create the repaint run: ' + (e.message || e));
+        }
+    };
+
     // ── A5 · STOCK BUILD NEEDS (Stuart Q8) ─────────────────────────────────────────────────────
     // "a needs a PO board for stock builds."
     //
@@ -3413,6 +3542,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <th style={monthTh}>Avg/mo</th>
                                                 <th style={monthTh}>Orders</th>
                                                 <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title="NetSuite quantity available">Avail</th>
+                                                <th style={{ ...monthTh, color: '#d9534f' }} title="BACKORDERED — pieces on open sales orders that nothing on the shelf can make. This is OUR record, the one with customers behind it, not NetSuite's quantitybackordered. Click a number for the orders and who is waiting.">BO</th>
                                                 <th style={{ ...monthTh, color: '#3f7fc4' }} title="Inbound: open purchase orders + work orders in production — click a number for the orders behind it">On Ord</th>
                                                 <th style={monthTh} title="Calculated minimum: OUTSOURCED = 6 months of demand · ASSEMBLY = 6 weeks (3wk finishing lead + 3wk safety) · else legacy 4-weeks rule. A re-order point acts as the FLOOR — a new item with no history shows its ROP (brass) until demand grows past it. Hover a value for its rule.">Min OH</th>
                                                 <th style={{ ...monthTh, color: 'var(--brass)' }} title="Re-order point — editable; ⬆ Save pushes to the Master Library (manufacturingSpecs.reorderPoint). Acts as the FLOOR under the calculated Min OH: it holds a new item up until real demand exceeds it.">ROP</th>
@@ -3445,6 +3575,17 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.avg.toFixed(1)}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.orders}</td>
                                                     <td style={{ ...numTd, color: (!info.isPack && info.available <= info.threshold) ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title={info.isSingleAgg ? 'Includes remaining pack shelf stock × pack size (single-equivalents)' : undefined}>{info.available}</td>
+                                                    {/* BACKORDERED — pieces on open sales orders that nothing on the shelf can
+                                                        make. Red because somebody is waiting, and clickable because "who" is
+                                                        the next question. */}
+                                                    <td style={{ ...numTd }}>{(() => {
+                                                        const bo = boByCode[String(r.itemid).toUpperCase()];
+                                                        if (!bo || !bo.qty) return <span style={{ color: 'var(--line)' }}>·</span>;
+                                                        return (
+                                                            <button onClick={loadBackorders} title={`${bo.qty} on backorder — ${bo.orders.join(' · ')}\n\nClick for the full board: who is waiting, what covers it, and what nobody has ordered.`}
+                                                                style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#d9534f', textDecoration: 'underline', fontWeight: 700 }}>{bo.qty}</button>
+                                                        );
+                                                    })()}</td>
                                                     <td style={{ ...numTd }}>{r.onOrd > 0 ? <button onClick={() => setOnOrdModal(r)} title="Open POs / work orders — click for detail" style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{Math.round(r.onOrd)}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                     <td style={{ ...numTd, color: info.rop && info.rop > info.minCalc ? 'var(--brass)' : 'var(--ink-soft)' }} title={info.minRule}>{info.minOnHand || '·'}</td>
                                                     <td style={{ ...numTd }}><input type="number" min="0" value={ropEdits[String(r.itemid).toUpperCase()] ?? (info.rop ?? '')} placeholder={info.isPack ? '·' : '—'} disabled={!info.part || info.isPack} title={info.isPack ? `Pack assembly — set the ROP on ${info.packSingle}` : (info.part ? 'Re-order point — ⬆ Save pushes to the Master Library; overrides Min OH' : 'No matching Master Library part — sync the item first')} onChange={e => setRopEdits(prev => ({ ...prev, [String(r.itemid).toUpperCase()]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[String(r.itemid).toUpperCase()] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: (info.part && !info.isPack) ? '#fff' : 'var(--paper-2)' }} /></td>
@@ -3455,7 +3596,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         productType to say POLE/ROD, which finished rods carry and RAW ones often do not,
                                                         so the ✂ vanished on exactly the rows finishing needs it for. poleLengthOf reads
                                                         the length out of the code itself — the same grammar the cut planner uses. */}
-                                                    {isPoleCategory(info.ptype) ? <button title="Cut this rod down — pick the source and the cut lengths on the tool" onClick={() => openCutModal(r.itemid, r.internalId, info.available)} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
+                                                    {isPoleCategory(info.ptype) ? <button title="Cut this rod down — pick the source and the cut lengths on the tool" onClick={() => openCutModal(r.itemid, r.internalId, info.available)} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}
+                                                    {/* ♻ REPAINT — the same tool as the Master Library's, offered where the shortage is
+                                                        seen. Only on a row that HAS a finish: a mill code has no colour to repaint into. */}
+                                                    {splitFinish(r.itemid).finish ? <button title={`Short of ${r.itemid}? Pull another colour of ${splitFinish(r.itemid).base} from stock and repaint it — the pick adjusts that colour out, put-away adjusts this one in. No BOM needed.`} onClick={() => openSnapRepaint(r.itemid, info.rec || info.short || 1)} style={{ marginLeft: '4px', padding: '3px 10px', background: 'transparent', border: '1px solid #3a7d44', color: '#3a7d44', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>♻</button> : null}</td>
                                                 </tr>
                                                 {convSugFor === r.itemid && (() => {
                                                     // Donor picker: sister finished variants of the same base with shelf stock.
@@ -3543,6 +3687,89 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             })()}
 
             {/* 📋 OPEN WORK ORDERS — cleanup panel with repair actions */}
+            {/* ── ♻ REPAINT FROM A SNAPSHOT ROW (Stuart 2026-09-09) ─────────────────────────────
+                The same tool as the Master Library's, offered where the shortage is seen. The
+                RULES are shared (Shared/repaintSource decides which colours qualify and refuses
+                one without the stock; Shared/repaintRun writes the order) — only the layout
+                differs, because one lives on an item page and this one on a table row. */}
+            {snapRepaint && (() => {
+                const st = snapRepaint;
+                const chosen = st.freeItem && st.freeItem.code === st.sourceCode
+                    ? st.freeItem : (st.sources || []).find(x => x.code === st.sourceCode) || null;
+                const need = Math.max(0, Math.floor(Number(st.qty) || 0));
+                const short = !!chosen && chosen.available < need;
+                const m9 = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
+                const ready = chosen && !short && st.finishId && !st.busy;
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.8)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                        <div style={{ background: '#fff', width: '620px', maxWidth: '96vw', maxHeight: '92vh', overflowY: 'auto', border: '1px solid var(--line)' }}>
+                            <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)' }}>♻ Repaint → {st.target}</div>
+                                    <div style={{ ...m9, color: 'var(--ink-soft)', marginTop: '4px' }}>Pull another colour of {st.base} · paint it · stock moves both ways</div>
+                                </div>
+                                <button onClick={() => setSnapRepaint(null)} style={{ background: 'none', border: 'none', fontSize: '1.6rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                            </div>
+                            <div style={{ padding: '18px 26px' }}>
+                                {st.loading && <div style={{ color: 'var(--ink-soft)' }}>Reading the other colours of {st.base} from NetSuite…</div>}
+                                {!!st.error && <div style={{ color: '#d9534f', marginBottom: '10px', fontSize: '0.86rem' }}>{st.error}</div>}
+                                {!st.loading && (
+                                    <>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr', gap: '14px', marginBottom: '12px' }}>
+                                            <div>
+                                                <label style={{ ...m9, display: 'block', color: 'var(--ink-soft)', marginBottom: '5px' }}>Pull from — this item's other colours</label>
+                                                <select value={st.sourceCode} onChange={e => setSnapRepaint(r => ({ ...r, sourceCode: e.target.value, freeItem: null }))} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px' }}>
+                                                    <option value="">— choose a colour —</option>
+                                                    {(st.sources || []).map(o => <option key={o.code} value={o.code}>{o.code}{o.finish ? ` · ${o.finish}` : ''} — {o.available} available{o.available < need ? ' (not enough)' : ''}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label style={{ ...m9, display: 'block', color: 'var(--ink-soft)', marginBottom: '5px' }}>Qty</label>
+                                                <input type="number" min="1" value={st.qty} onChange={e => setSnapRepaint(r => ({ ...r, qty: e.target.value }))} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px' }} />
+                                            </div>
+                                        </div>
+                                        {!(st.sources || []).length && !st.error && (
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '10px' }}>NetSuite lists no other colours of {st.base}. Type any item # below instead.</div>
+                                        )}
+                                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr', gap: '14px', marginBottom: '12px', alignItems: 'end' }}>
+                                            <div>
+                                                <label style={{ ...m9, display: 'block', color: 'var(--ink-soft)', marginBottom: '5px' }}>…or any other NetSuite item #</label>
+                                                <input value={st.freeCode} placeholder="e.g. HHRMBF75/M1"
+                                                    onChange={e => setSnapRepaint(r => ({ ...r, freeCode: e.target.value }))}
+                                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); checkSnapFreeSource(); } }}
+                                                    style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px' }} />
+                                            </div>
+                                            <button onClick={checkSnapFreeSource} disabled={st.freeBusy || !String(st.freeCode || '').trim()} style={{ ...m9, padding: '11px', background: 'transparent', border: '1px solid var(--line)', cursor: st.freeBusy ? 'wait' : 'pointer' }}>{st.freeBusy ? 'Checking…' : 'Check'}</button>
+                                        </div>
+                                        <div style={{ marginBottom: '12px' }}>
+                                            <label style={{ ...m9, display: 'block', color: 'var(--ink-soft)', marginBottom: '5px' }}>In-house finish (the recipe the floor runs)</label>
+                                            <select value={st.finishId} onChange={e => setSnapRepaint(r => ({ ...r, finishId: e.target.value }))} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px' }}>
+                                                <option value="">— choose the finish —</option>
+                                                {inHouseFinishes.map(f => <option key={f.id} value={f.id}>{f.code ? `${f.code} - ${f.name}` : f.name}</option>)}
+                                            </select>
+                                        </div>
+                                        {chosen && (
+                                            <div style={{ padding: '10px 12px', background: short ? '#fdf3f3' : 'var(--paper-2)', border: `1px solid ${short ? '#d9534f' : 'var(--line)'}`, marginBottom: '14px', fontSize: '0.88rem' }}>
+                                                <b>{need} × {chosen.code}</b>{chosen.name ? ` (${chosen.name})` : ''} → <b>{need} × {st.target}</b>
+                                                <div style={{ marginTop: '4px', fontSize: '0.82rem', color: short ? '#d9534f' : 'var(--ink-soft)' }}>
+                                                    {short ? `Only ${chosen.available} available — not enough for ${need}. Pick another colour, or lower the quantity.`
+                                                           : `${chosen.available} available · −${need} at the WMS pick, +${need} into the bin scanned at put-away.`}
+                                                </div>
+                                            </div>
+                                        )}
+                                        <button onClick={createSnapRepaint} disabled={!ready}
+                                            style={{ width: '100%', padding: '14px', background: ready ? '#3a7d44' : 'var(--paper-2)', color: ready ? '#fff' : 'var(--ink-soft)', border: ready ? 'none' : '1px solid var(--line)', cursor: st.busy ? 'wait' : (ready ? 'pointer' : 'not-allowed'), ...m9 }}>
+                                            {st.busy ? 'Releasing…' : '♻ Create Repaint Run → Finishing Floor'}
+                                        </button>
+                                        <div style={{ ...m9, color: 'var(--ink-soft)', marginTop: '10px', textAlign: 'center' }}>Lands in the Setup Queue and on the RTG board · no BOM, no NetSuite work order</div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
             {/* ── 📋 TRUE BACKORDERS BOARD (Stuart 2026-09-08; joint spec with B) ────────────────
                 One row per backorder line, OLDEST ORDER FIRST — his words, and the only order that
                 answers "what has been waiting longest". The state column is the point of the whole
