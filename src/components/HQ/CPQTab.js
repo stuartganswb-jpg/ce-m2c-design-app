@@ -170,7 +170,7 @@ export const preferring = (pool, ...gates) => gates.reduce((acc, g) => {
     return kept.length ? kept : acc;
 }, Array.isArray(pool) ? pool : []);
 
-export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames, defaultHidden = false, clearNodes = null, stretchSpec = null }) => {
+export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames, defaultHidden = false, clearNodes = null, stretchSpec = null, spliceMarks = [] }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -196,6 +196,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
     const visibilityOverridesString = JSON.stringify(visibilityOverrides);
     const cloneSpecsString = JSON.stringify(cloneSpecs);
     const stretchSpecString = JSON.stringify(stretchSpec);
+    const spliceMarksString = JSON.stringify(spliceMarks);
     const highlightOverridesString = JSON.stringify(highlightOverrides);
 
     useEffect(() => {
@@ -489,6 +490,51 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                     if (group.children.length) clonedScene.add(group);
                 }
             } catch (e) { console.warn('center-bracket clone skipped', e); }
+
+            // --- Splice marks (Stuart 2026-09-09: "a nice clean pencil line, just thick enough to show
+            // the pole is in two pieces") ------------------------------------------------------------
+            // One thin dark band around the rail at each fraction along it, after the stretch and the
+            // clones so it lands on the pole as drawn. Unlit, a hair proud of the pole, 0.06" long —
+            // a line, not a part. Rebuilt every pass; nothing here is ever a scene node the flow owns.
+            try {
+                const priorMarks = clonedScene.getObjectByName('__spliceMarks');
+                if (priorMarks) clonedScene.remove(priorMarks);
+                const marks = (Array.isArray(spliceMarks) ? spliceMarks : []).map(m => Number(m && m.frac)).filter(f => Number.isFinite(f) && f > 0 && f < 1);
+                const railList = Array.isArray(stretchSpec?.railNames) && stretchSpec.railNames.length ? stretchSpec.railNames
+                    : (Array.isArray(cloneSpecs?.[0]?.railNames) ? cloneSpecs[0].railNames : []);
+                if (marks.length && railList.length) {
+                    clonedScene.updateMatrixWorld(true);
+                    const railSet = new Set(railList.map(s => String(s).trim().toLowerCase()));
+                    const onRail = (mesh) => { let nd = mesh; while (nd) { if (nd.name === '__centerClones' || nd.name === '__spliceMarks') return false; if (nd.name && railSet.has(nd.name.toLowerCase())) return true; nd = nd.parent; } return false; };
+                    const rb = new THREE.Box3(); let any = false;
+                    clonedScene.traverse(c => { if (c.isMesh && c.visible && !isFastener(c) && onRail(c)) { rb.expandByObject(c); any = true; } });
+                    if (any) {
+                        const sz = rb.getSize(new THREE.Vector3());
+                        const ax = sz.x >= sz.y && sz.x >= sz.z ? 'x' : (sz.y >= sz.z ? 'y' : 'z');
+                        const others = ['x', 'y', 'z'].filter(k => k !== ax);
+                        const radius = 0.5 * Math.max(sz[others[0]], sz[others[1]]) * 1.04;
+                        const centre = rb.getCenter(new THREE.Vector3());
+                        const lo = rb.min[ax], hi = rb.max[ax];
+                        const invRoot = new THREE.Matrix4().copy(clonedScene.matrixWorld).invert();
+                        const grp = new THREE.Group(); grp.name = '__spliceMarks';
+                        const geo = new THREE.CylinderGeometry(radius, radius, 0.06, 48);
+                        const mat = new THREE.MeshBasicMaterial({ color: 0x1c1a16 });
+                        marks.forEach(frac => {
+                            const mesh = new THREE.Mesh(geo, mat);
+                            const pos = centre.clone(); pos[ax] = lo + (hi - lo) * frac;
+                            const q = new THREE.Quaternion();
+                            if (ax === 'x') q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+                            else if (ax === 'z') q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+                            const world = new THREE.Matrix4().compose(pos, q, new THREE.Vector3(1, 1, 1));
+                            mesh.matrixAutoUpdate = false;
+                            mesh.matrix.copy(invRoot).multiply(world);
+                            mesh.userData.originalMaterial = mat; mesh.userData.originalVisible = true; mesh.userData.spliceMark = true;
+                            grp.add(mesh);
+                        });
+                        clonedScene.add(grp);
+                    }
+                }
+            } catch (e) { console.warn('splice marks skipped', e); }
         };
 
         if (!textureOverrides || Object.keys(textureOverrides).length === 0) {
@@ -539,7 +585,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                 );
             }
         });
-    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, stretchSpecString, highlightOverridesString, defaultHidden, JSON.stringify(clearNodes)]);
+    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, stretchSpecString, spliceMarksString, highlightOverridesString, defaultHidden, JSON.stringify(clearNodes)]);
 
     return <primitive object={clonedScene} />;
 };

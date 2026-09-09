@@ -152,6 +152,7 @@ function HardwareConfiguratorInner({
     // 2026-08-17: "once i hit new engine … goes full blank on me". Every hook lives in this block.
     const [stepNotes, setStepNotes] = useState({});   // step key → note, stamped with the step
     const [extras, setExtras] = useState([]);         // [{ code, qty, note }] — added by hand
+    const [drawnSplices, setDrawnSplices] = useState([]);   // [{ distInches, ref }] — where Vision drew them, for the pencil line
     // How many, per decision. Empty means "use the recommendation"; a typed number always wins.
     const [stepQty, setStepQty] = useState({});       // slot key → count
 
@@ -441,6 +442,7 @@ function HardwareConfiguratorInner({
         // their locations in the note — that note is the same contract the length step banner
         // states ("Vision draws the splice where the note says"), read in the other direction.
         if ((seed.splices || []).length) {
+            setDrawnSplices(seed.splices.map(sp => ({ distInches: sp.distInches, ref: sp.ref || '' })));
             if (spliceCodes.length === 1) {
                 const code = spliceCodes[0];
                 const posTxt = seed.splices.map(sp => sp.note
@@ -595,6 +597,23 @@ function HardwareConfiguratorInner({
     // axis to this length and moves everything else out with the ends; only when the order is
     // longer than the model, and only where the model reads as inches.
     const stretchSpec = useMemo(() => (lengthInches > 0 && railNames.length ? { railNames, lengthInches } : null), [railNames, lengthInches]);
+    // ── A SPLICE IS DRAWN AS A PENCIL LINE (Stuart 2026-09-09: "any time there is a splice entered
+    // it adds a fine line to show it … from cpq it would always be shown in the center, if the
+    // splice is added in vision at an exact spot then ideally the rendering could show that").
+    // Fractions along the rail, left to right: the drawing's positions where Vision placed them
+    // (from the left edge = d / L, from the right = 1 − d / L), else one at the centre, N spread
+    // evenly. Keyed on the flow's own splice item — the same detection the length step uses — so
+    // every flow with a joiner gets the line. A picture of a decision already on the line.
+    const spliceMarks = useMemo(() => {
+        const count = extras.filter(x => spliceCodes.includes(x.code)).reduce((n, x) => n + (Number(x.qty) > 0 ? Number(x.qty) : 0), 0);
+        if (!count) return [];
+        const L = Number(lengthInches) || 0;
+        const drawn = drawnSplices.filter(sp => sp && sp.distInches != null && L > 0)
+            .map(sp => (String(sp.ref).toUpperCase() === 'END' ? 1 - Number(sp.distInches) / L : Number(sp.distInches) / L))
+            .filter(f => Number.isFinite(f)).map(f => Math.min(0.98, Math.max(0.02, f)));
+        if (drawn.length) return drawn.map(frac => ({ frac }));
+        return Array.from({ length: count }, (_, i) => ({ frac: (i + 1) / (count + 1) }));
+    }, [extras, spliceCodes, drawnSplices, lengthInches]);
     const cloneSpecs = useMemo(() => {
         const pickOf = (sl) => { const id = livePicks[sl.key]; return id ? (sl.options || []).find(x => x.id === id) || null : null; };
         const out = [];
@@ -1307,6 +1326,7 @@ function HardwareConfiguratorInner({
                 visibilityEntries: Object.entries(visibleOverrides || {}).map(([target, visible]) => ({ target, visible })),
                 cloneSpecs,
                 stretchSpec,
+                spliceMarks,
                 defaultHidden: true,
                 clearNodes: clearList,
             } : null,
@@ -1314,7 +1334,7 @@ function HardwareConfiguratorInner({
         if (typeof onAdd === 'function') onAdd(item);
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
-        setStepNotes({}); setExtras([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0);
+        setStepNotes({}); setExtras([]); setDrawnSplices([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0);
     };
 
     const railCell = (st, i) => {
@@ -2099,7 +2119,7 @@ function HardwareConfiguratorInner({
                                         renderScaleOf is 1 on any flow without a size matrix. */}
                                     <group scale={renderScaleOf(flow, sizePick, assembly)}>
                                         <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibleOverrides}
-                                            cloneSpecs={cloneSpecs} stretchSpec={stretchSpec} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
+                                            cloneSpecs={cloneSpecs} stretchSpec={stretchSpec} spliceMarks={spliceMarks} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
                                     </group>
                                 </Bounds>
                             </Canvas>
