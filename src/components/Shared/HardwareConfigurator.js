@@ -2144,7 +2144,7 @@ function HardwareConfiguratorInner({
                                         renderScaleOf is 1 on any flow without a size matrix. */}
                                     <group scale={renderScaleOf(flow, sizePick, assembly)}>
                                         <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibleOverrides}
-                                            cloneSpecs={cloneSpecs} stretchSpec={stretchSpec} spliceMarks={spliceMarks} frameInches={200} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
+                                            cloneSpecs={cloneSpecs} stretchSpec={stretchSpec} spliceMarks={spliceMarks} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
                                     </group>
                                 </Bounds>
                             </Canvas>
