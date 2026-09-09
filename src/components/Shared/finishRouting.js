@@ -83,9 +83,11 @@ const APPLIED_PAINT_RE = /^P\d*$/i;                 // P (the rollup), P01…P24
 // Order Entry always wants because miters never come through that door.
 //
 // The miter escalation already has its home and needs nothing from this file:
-// Shared/lineClassification reads `manufacturingSpecs.partHandling` from the item and lets the
-// PER-LINE `partHandling` (propagated from the CPQ flow step) override it, and RTG's
-// autoSplitSalesOrder splits on that. A mitered CPQ line escalates there; a straight one does not.
+// Shared/lineClassification.classifyLine(line, part, fab) reads the item's
+// `manufacturingSpecs.partHandling`, and — when the caller passes the job's cut facts (`fab`:
+// qtyMiters / qtyBends / qtySplices / qtyMiterReturns) — routes a WOOD rod by its CUT: straight →
+// finishing, mitered / bent / spliced → shop (A d8d45e7, 2026-09-08). RTG's split passes them.
+// (The earlier claim here that the per-line flag overrides the item was wrong — it was a fallback.)
 //
 // So `SG` (Satin Gold), `N90`, `CP` AND the wood stains `S04`/`S11` all fall through together —
 // which is what this function did before 224af1c, now deliberate and explained rather than

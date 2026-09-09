@@ -1149,9 +1149,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
 
             const smallLines = [];
             const customLines = [];
+            // THE CUT FACTS DECIDE A WOOD ROD (A d8d45e7, Stuart 2026-09-08: "wood is enough as a tag,
+            // just the rods"): classifyLine demotes a straight wood rod to finishing and keeps a
+            // mitered / bent / spliced one in the shop — but only when the caller PASSES the job's
+            // cut facts; silence keeps the item tag, so an omission can never send a mitered pole to
+            // the finishing floor. This is the caller. `eng` is hoisted above the split for it.
+            const eng = job.engineeringNotes || {};
             lines.forEach(line => {
                 const part = line.partId ? partCache.get(line.partId) : null;
-                (classifyLine(line, part) === DIVISION_CUSTOM ? customLines : smallLines).push(line);
+                (classifyLine(line, part, eng) === DIVISION_CUSTOM ? customLines : smallLines).push(line);
             });
 
             const { svgUri, finishRecipe } = await fetchEnrichedJobData(so.hqJobId, 'sales');
@@ -1159,7 +1165,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // Vision-computed fabrication geometry (bend vs splice vs miter, shape, O2O) lives
             // on the job's engineeringNotes. Carry it to the floors so the shop knows HOW to
             // make the pole, and the drawing rides along to both halves (it shows placement).
-            const eng = job.engineeringNotes || {};
             const fabNotes = {
                 shape: eng.shape || null,
                 qtyBends: eng.qtyBends || 0,
@@ -1418,7 +1423,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     qtyEach: l.qtyEach != null ? Number(l.qtyEach) : null,
                     configQty: l.configQty != null ? Number(l.configQty) : null,
                     division: isPolePart ? 'pole' : 'small',
-                    partHandling: l.partHandling || (classifyLine(l, part) === DIVISION_CUSTOM ? 'Custom' : 'Small Parts'),
+                    partHandling: l.partHandling || (classifyLine(l, part, eng) === DIVISION_CUSTOM ? 'Custom' : 'Small Parts'),
                     cutLength: l.cutLength || null,
                     dimensions: l.dimensions || null,
                     footprint,
@@ -2772,6 +2777,28 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                 </div>
                             ))}
 
+                            {/* ✂ ROD CUTS — THE FILE-CABINET COPY (Stuart 2026-09-08: "it would be nice if a copy of
+                                the rod cut did go to RTG just so it has it as the file cabinet and makes it easy to
+                                trace"). rod_cut_orders was the one production instruction with no face on the board.
+                                Read-only by design: the bench is the only place a cut is done. */}
+                            {(() => {
+                                const cuts = liveRodCuts.filter(c => !['DONE', 'CANCELLED'].includes(String(c.status || '').toUpperCase()));
+                                if (!cuts.length) return null;
+                                return (
+                                    <div style={{ marginTop: '14px', padding: '12px 14px', border: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', fontWeight: 700, marginBottom: '6px' }}>
+                                            ✂ Rod cuts open · {cuts.length} — done at WMS → Rod Cuts; this is the record
+                                        </div>
+                                        {cuts.map(c => (
+                                            <div key={c.id} style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline', padding: '4px 0', borderTop: '1px solid var(--line)', fontSize: '0.85rem' }}>
+                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{c.qtySource} × {c.sourceItemId} → {c.qtyTarget} × {c.targetItemId}</span>
+                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--brass)' }}>{c.status || 'OPEN'}</span>
+                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{c.id}{c.finWoId ? ` · for ${c.finWoId}` : ''}{c.purpose ? ` · ${String(c.purpose).toLowerCase()}` : ''}{c.createdVia ? ` · via ${c.createdVia}` : ''}{c.createdBy ? ` · ${c.createdBy}` : ''}{c.createdAt ? ` · ${whenStr(c.createdAt)}` : ''}{c.finWoReqDate ? ` · need by ${c.finWoReqDate}` : ''}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                );
+                            })()}
                             {nsOrphans.length > 0 && (
                                 <div style={{ marginTop: '14px', padding: '12px 14px', border: '1px solid #d9534f', background: '#fdf3f3' }}>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700, marginBottom: '6px' }}>
