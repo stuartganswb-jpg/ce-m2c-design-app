@@ -575,8 +575,16 @@ function HardwareConfiguratorInner({
     // slot's quantity as the count. Count comes from `quantities` — typed, else the span advice.
     const cloneSpecs = useMemo(() => {
         const pickOf = (sl) => { const id = livePicks[sl.key]; return id ? (sl.options || []).find(x => x.id === id) || null : null; };
-        const railNames = [];
-        resolved.slots.forEach(sl => { if (ROD_ROLES.includes(sl.kind)) { const o = pickOf(sl); if (o) railNames.push(...(o.nodes || [])); } });
+        // THE RAIL IS THE WHOLE POLE AS DRAWN (Stuart 2026-09-09: "the 1st bracket is no longer in
+        // the center it is off to the left"). A rod slot's pick is ONE piece of a pole modelled in
+        // three (LEFT / CENTER / RIGHT), so spacing along the pick alone centred the bracket on a
+        // piece. The rail is every rod-role node the render currently shows — all the pieces, and
+        // only as long as the ends leave it (a return drops its end piece).
+        const shown = new Set([...resolved.visible].map(n => String(n).toLowerCase()));
+        const railNames = [...new Set((model.choices || [])
+            .filter(c => ROD_ROLES.includes(c.role))
+            .flatMap(c => c.nodes || [])
+            .filter(n => shown.has(String(n).toLowerCase())))];
         const out = [];
         resolved.slots.forEach(sl => {
             if (sl.kind !== 'BRACKET' || String(sl.position || '').toUpperCase() !== 'CENTER') return;
@@ -588,7 +596,7 @@ function HardwareConfiguratorInner({
             out.push({ stepId: sl.key, meshNames: [...o.nodes, ...((plate && plate.nodes) || [])], anchorNames: [...o.nodes], railNames, count });
         });
         return out;
-    }, [resolved, livePicks, quantities]);
+    }, [resolved, model, livePicks, quantities]);
 
     const finishByCode = useMemo(() => {
         const m = new Map();
