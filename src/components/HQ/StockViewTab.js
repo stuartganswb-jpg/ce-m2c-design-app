@@ -16,7 +16,7 @@ import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
 import { issuePlatedDemand } from '../Shared/platingDemand';
-import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf, fetchOpenPoLines, addToOpenPurchaseOrder, isOpenPo } from '../Shared/purchaseOrders';
+import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf, fetchOpenPoLines, addToOpenPurchaseOrder, isOpenPo, discardDraftPurchaseOrder } from '../Shared/purchaseOrders';
 import { coverCodesOf, rowsFor, uncoveredCount, STATE_STYLE } from '../Shared/backorderBoard';
 import { splitFinish, siblingsQuery, oneItemQuery, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
 import { raisePaintRun, repaintWoId } from '../Shared/repaintRun';
@@ -2218,6 +2218,27 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
         setGenBusy(false);
     };
+    // Discard a draft PO from the review window — soft, ledgered, and refused once it has a
+    // NetSuite number (Shared/purchaseOrders.discardDraftPurchaseOrder owns that rule).
+    const discardDraftPo = async (po) => {
+        const reason = window.prompt(`Discard draft ${po.poId} · ${po.vendor}?\n\n${(po.items || []).map(l => `• ${l.quantity} × ${l.itemId}`).join('\n')}\n\nThe record is KEPT — stamped deleted, dated, with your name — and drops off every screen. Nothing was ever sent to the vendor or to NetSuite.\n\nReason (optional):`);
+        if (reason === null) return;
+        setPoReview(p => p && ({ ...p, busy: true }));
+        try {
+            const res = await discardDraftPurchaseOrder({ po, by: currentUser || '', reason: reason || '', from: 'STOCK_VIEW_REVIEW' });
+            if (!res.ok) { setPoReview(p => p && ({ ...p, busy: false })); return alert(res.error); }
+            addLog(`🗑 Draft ${po.poId} discarded${res.ledger ? ' (ledger indexed)' : ' — LEDGER WRITE FAILED, tombstone only'}.`, 'warn');
+            setPoReview(p => {
+                if (!p) return p;
+                const left = (p.pos || []).filter(x => x.id !== po.id);
+                return left.length ? { ...p, pos: left, busy: false } : null;
+            });
+        } catch (e) {
+            setPoReview(p => p && ({ ...p, busy: false }));
+            alert('Could not discard it: ' + (e.message || e));
+        }
+    };
+
     // ── 1 · WHO IS ACTUALLY WAITING (Stuart 2026-09-09) ────────────────────────────────────────
     // "add a qty column next to available for backorder, currently we have no visibility when
     //  there are actually people waiting."
@@ -4137,7 +4158,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         <div key={po.id} style={{ border: '1px solid var(--line)', marginBottom: '14px', background: 'var(--paper)' }}>
                                             <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
                                                 <span><b style={{ fontFamily: 'var(--mono)' }}>{po.poId}</b> · {po.vendor}</span>
-                                                <span style={{ ...mono9, color: 'var(--ink-soft)' }}>{(po.items || []).length} line(s) · ${total.toFixed(2)}{po.reqDate ? ` · req ${po.reqDate}` : ''}</span>
+                                                <span style={{ ...mono9, color: 'var(--ink-soft)', marginLeft: 'auto' }}>{(po.items || []).length} line(s) · ${total.toFixed(2)}{po.reqDate ? ` · req ${po.reqDate}` : ''}</span>
+                                                {/* DISCARD — a draft that is never approved used to have nowhere to go: it stayed
+                                                    here for ever, counted itself in the toolbar badge, and would quietly collect
+                                                    real lines later as the vendor's "open" PO. Soft and ledgered, like every other
+                                                    order-like document; refused once the PO has a NetSuite number. */}
+                                                <button onClick={() => discardDraftPo(po)} disabled={poReview.busy}
+                                                    title={`Discard ${po.poId} — the record is KEPT, stamped deleted with your name and reason, and drops off every screen. Nothing was ever sent.`}
+                                                    style={{ ...mono9, padding: '5px 10px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: poReview.busy ? 'wait' : 'pointer' }}>✕ Discard</button>
                                             </div>
                                             {po.vendorSubsidiaryGap && (
                                                 <div style={{ margin: '8px 14px', padding: '8px 10px', background: '#fdf0ef', border: '1px solid #d9534f', color: '#d9534f', fontSize: '0.8rem' }}>

@@ -31,7 +31,7 @@ import { enqueueNsWrite } from './nsOutbox';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { reserveShortNo } from './shortId';
 import {
-    PO_STATUS, isOpenPo, openQtyOf, isDraftPo, hasNsNumber, poRef, poLinesLocked,
+    PO_STATUS, isOpenPo, openQtyOf, isDraftPo, hasNsNumber, poRef, poLineLock, poLinesLocked,
 } from './poLock.js';
 export {
     PO_STATUS, PO_TERMINAL_STATUSES, isOpenPo, openQtyOf, poFullyReceived,
@@ -567,4 +567,33 @@ export const addToOpenPurchaseOrder = async ({
         minimum: vendorMinimumOf(rec, items),
         po: { ...open, ...patch },
     };
+};
+
+// ── DISCARD A DRAFT PURCHASE ORDER (Stuart 2026-09-09) ─────────────────────────────────────────
+// "i see these items open in draft po … i need a way to close these draft po."
+//
+// A draft that is never approved had nowhere to go: it stayed in the review window for ever,
+// counted itself in the toolbar's draft badge, and quietly became a vendor's open PO in
+// addToOpenPurchaseOrder — so a stale draft from a half-built screen could collect real lines
+// months later. Leaving as drafts had to stop being the only answer.
+//
+// SOFT, AND LEDGERED. The house rule holds for a purchase order as much as a work order: no
+// order-like document leaves this system without a permanent record. The doc stays, stamped
+// deleted/when/who/why and moved to a terminal status, so isOpenPo drops it everywhere at once —
+// the board, the draft badge, the accumulation target, the Backorders board's cover check.
+//
+// REFUSED ONCE IT HAS LEFT US. The same finality rule that governs lines governs this: a PO with a
+// NetSuite number exists over there, and making our copy vanish would leave the two disagreeing
+// with nobody able to see it. Those are closed in NetSuite and marked here, which is a different
+// act with a different record.
+export const discardDraftPurchaseOrder = async ({ po, by = '', reason = '', from = 'STOCK_VIEW' }) => {
+    if (!po || !po.id) return { ok: false, error: 'no purchase order given' };
+    const lock = poLineLock(po);
+    if (lock) return { ok: false, error: `${poRef(po)} cannot be discarded — ${lock}.\n\nClose it in NetSuite; our copy is marked from there, so the two never disagree.` };
+    const { softDeleteOrder } = await import('./orderLifecycle.js');
+    const res = await softDeleteOrder({ db, doc, updateDoc }, {
+        collection: 'hq_purchase_orders', docId: po.id, record: po, kind: 'purchase_order',
+        by, from, reason, terminalStatus: PO_STATUS.DELETED,
+    });
+    return { ok: true, ledger: !!res.ledger, poId: po.id };
 };
