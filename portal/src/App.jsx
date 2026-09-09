@@ -8,6 +8,9 @@ const VisionIntake = lazy(() => import('./VisionIntake.jsx'));
 const QuickShip = lazy(() => import('./QuickShip.jsx'));
 const Gallery = lazy(() => import('./Gallery.jsx'));
 const Tools = lazy(() => import('./Tools.jsx'));
+// Public policy page — rendered WITHOUT login at #/policies (the card brands' underwriters must
+// be able to read it), and linked from the footer + sign-in screen.
+const Policies = lazy(() => import('./Policies.jsx'));
 
 const fmtMoney = (v) => (v === null || v === undefined) ? '' :
   Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -150,6 +153,9 @@ const SignIn = () => {
         {msg && <div className={`msg${msg.ok ? ' ok' : ''}`}>{msg.text}</div>}
         <div style={{ textAlign: 'center', marginTop: 22, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
           <button className="btn-ghost" onClick={forgot}>Forgot password</button>
+        </div>
+        <div style={{ textAlign: 'center', marginTop: 14, fontSize: 12 }}>
+          <PolicyLinks style={{ justifyContent: 'center', color: 'var(--ink-soft)' }} />
         </div>
       </div>
     </div>
@@ -301,16 +307,43 @@ const Header = ({ user, branding }) => (
   </div>
 );
 
+// The policy links satisfy the Visa/Mastercard website checklist: terms, returns, privacy, and
+// the security statement must be reachable from the pages a cardholder uses.
+const PolicyLinks = ({ style }) => (
+  <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '4px 14px', ...style }}>
+    <a href="#/policies/terms">Terms &amp; Conditions</a>
+    <a href="#/policies/returns">Returns</a>
+    <a href="#/policies/privacy">Privacy</a>
+    <a href="#/policies/security">Payments &amp; Security</a>
+  </span>
+);
+
 const PortalFooter = () => (
   <footer className="portal">
     <span>Classical Elements</span>
+    <PolicyLinks />
     <a href="https://www.classicalelements.com">www.classicalelements.com</a>
   </footer>
 );
 
 export default function App() {
   const [user, setUser] = useState(undefined); // undefined = checking
+  const [route, setRoute] = useState(window.location.hash);
   useEffect(() => onAuthStateChanged(auth, setUser), []);
+  useEffect(() => {
+    const onHash = () => setRoute(window.location.hash);
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  // Policies are public — no login, no data: render before the auth gate resolves.
+  if (route.startsWith('#/policies')) {
+    return (
+      <Suspense fallback={<div className="loading">One moment…</div>}>
+        <Policies />
+      </Suspense>
+    );
+  }
 
   if (user === undefined) return <div className="loading">One moment…</div>;
   return user ? <Dashboard user={user} /> : <SignIn />;
