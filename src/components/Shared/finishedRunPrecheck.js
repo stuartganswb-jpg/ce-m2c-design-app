@@ -179,7 +179,7 @@ export const runBatchPrecheck = async ({ rows = [], inventory = [], locationId }
 let seq = 0;
 export const executeMakeupActions = async ({ actions = [], brandId, finWoId, finWoErpId, createdBy = '', inventory = [], source = 'precheck', reqDate = '', dispatchShop = false, soRef = '', customerName = '' }) => {
     const partOf = (c) => inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === String(c).toUpperCase()) || null;
-    const made = [], convertDemandIds = [], shopWoIds = [];
+    const made = [], convertDemandIds = [], shopWoIds = [], buyNeeds = [];
     for (let i = 0; i < actions.length; i++) {
         const a = actions[i];
         if (a.kind === 'CONVERT') {
@@ -234,6 +234,16 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
             made.push(`✔ ${a.qty} × ${a.code} already covered by ${a.coveredBy} on order (open PO/WO in NetSuite) — nothing raised`);
         } else if (a.kind === 'BUY_NOTE') {
             made.push(`🧾 ${a.code} short ${a.qty} — BOUGHT item${a.vendorName ? ` (vendor ${a.vendorName})` : ''}: raise the PO from Stock View / the review gate; no shop WO invented${a.onOrder ? ` (${a.onOrder} on order, not enough)` : ''}`);
+            // A5 — THE NEED SURVIVES THE LOG LINE (Stuart Q8). Until now a bought shortage was said
+            // once, in a log nobody re-reads, and the work order carried no memory of it: the run
+            // was created, the component was never ordered, and the first anyone knew was the pick
+            // failing. Recorded on the order so the Stock Build Needs board can find it, and so the
+            // order itself can answer "what is this still waiting to be bought".
+            buyNeeds.push({
+                code: a.code, qty: a.qty, vendorName: a.vendorName || '',
+                reason: a.reason || 'component short — bought item',
+                onOrder: Number(a.onOrder) || 0, raisedAt: Date.now(),
+            });
         } else if (a.kind === 'SHOP') {
             const p = partOf(a.code);
             if (!p) { made.push(`⚠ ${a.code} not in the library — order it manually`); continue; }
@@ -297,11 +307,17 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
             }
         }
     }
-    const gateFields = convertDemandIds.length ? {
-        awaitingConvert: true, convertDemandIds,
-        convertGateNote: made.filter(m => m.startsWith('⇄')).join(' · '),
-    } : {};
-    return { made, convertDemandIds, shopWoIds, gateFields };
+    const gateFields = {
+        ...(convertDemandIds.length ? {
+            awaitingConvert: true, convertDemandIds,
+            convertGateNote: made.filter(m => m.startsWith('⇄')).join(' · '),
+        } : {}),
+        // NOT A GATE. A bought shortage does not stop the order — the pre-check's own policy is
+        // that a PO is a person's decision — so this rides with the gate fields to reach the
+        // document, and deliberately declares no `awaiting*` flag of its own.
+        ...(buyNeeds.length ? { buyNeeds } : {}),
+    };
+    return { made, convertDemandIds, shopWoIds, buyNeeds, gateFields };
 };
 
 // Release a parked finishing WO to the floor: verbatim finPayload copy → fin_workorders, the hq

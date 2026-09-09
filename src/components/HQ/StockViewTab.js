@@ -16,7 +16,7 @@ import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
 import { issuePlatedDemand } from '../Shared/platingDemand';
-import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf, fetchOpenPoLines } from '../Shared/purchaseOrders';
+import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf, fetchOpenPoLines, addToOpenPurchaseOrder, isOpenPo } from '../Shared/purchaseOrders';
 import { coverCodesOf, rowsFor, uncoveredCount, STATE_STYLE } from '../Shared/backorderBoard';
 import { runBatchPrecheck, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
@@ -240,6 +240,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [snapWatch, setSnapWatch] = useState('');     // snapshot watchlist filter (catalog is growing)
     const [snapView, setSnapView] = useState('FIN');    // FIN = finished stocked items · RAW = BOM core parts behind the finish variants · TIER = raw + /P + plated read together · OENEEDS = Order Entry sales-order needs
     const [oeNeeds, setOeNeeds] = useState(null);       // { loading, orders: [{so, wos, pos}], error } — the Order Entry Needs board
+    const [buyNeeds, setBuyNeeds] = useState(null);     // A5 — { loading, vendors: [{vendorName, rows}], error } — Stock Build Needs
     const [snapSort, setSnapSort] = useState('item');   // 'item' (load order) | 'finish' (/SG · /N25 grouped — batch same-finish WOs)
     const [snapCat, setSnapCat] = useState('');         // snapshot category (productType) filter
     const [snapColl, setSnapColl] = useState('');       // snapshot collection filter
@@ -2205,6 +2206,97 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
         setGenBusy(false);
     };
+    // ── A5 · STOCK BUILD NEEDS (Stuart Q8) ─────────────────────────────────────────────────────
+    // "a needs a PO board for stock builds."
+    //
+    // A bought component short on a stock run used to be one line in a log nobody re-reads. The
+    // work order was created, the component was never ordered, and the first anyone knew was the
+    // pick failing weeks later. The pre-check now records each one on the order as `buyNeeds`;
+    // this is where they are seen and acted on.
+    //
+    // GROUPED BY VENDOR, because the action is per vendor: one PO that accumulates until it clears
+    // the minimum, which is the whole reason addToOpenPurchaseOrder exists.
+    //
+    // NOTHING AUTOMATIC. The PO decision stays a person's — the pre-check's own policy, and the
+    // reason it writes a note rather than a document.
+    const loadBuyNeeds = async () => {
+        setBuyNeeds({ loading: true, vendors: [], error: '' });
+        try {
+            const [woSnap, poSnap] = await Promise.all([
+                getDocs(collection(db, 'hq_work_orders')),
+                getDocs(query(collection(db, 'hq_purchase_orders'), where('brand', '==', activeBrand))),
+            ]);
+            const openPos = poSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.deleted && isOpenPo(p));
+            const poById = new Map(openPos.map(p => [String(p.id), p]));
+            const codesOnOpenPos = new Set(openPos.flatMap(p => (p.items || []).map(i => String(i.itemId || '').toUpperCase())));
+            const rows = [];
+            woSnap.docs.forEach(d => {
+                const wo = { id: d.id, ...d.data() };
+                if (wo.brand !== activeBrand || wo.deleted) return;
+                if (['Closed', 'Deleted', 'Cancelled', 'Complete'].includes(String(wo.status || ''))) return;
+                const needs = (wo.buyNeeds || []).filter(n => n && n.code && Number(n.qty) > 0);
+                if (!needs.length) return;
+                // COVERED means a PO we can still add to or send names it. A closed or deleted PO
+                // does not count — the same rule the Order Entry Needs board uses, because a
+                // shortage covered by a dead document is not covered at all.
+                const stamped = wo.buyNeedsPoId ? poById.get(String(wo.buyNeedsPoId)) : null;
+                needs.forEach(n => {
+                    const code = String(n.code).toUpperCase();
+                    const onStamped = !!(stamped && (stamped.items || []).some(i => String(i.itemId || '').toUpperCase() === code));
+                    rows.push({
+                        key: `${wo.id}:${code}`, woId: wo.id, woDisplay: wo.woDisplayId || wo.id,
+                        item: wo.partErpId || wo.rootItem || '', needBy: wo.needBy || wo.reqDate || '',
+                        code, qty: Math.max(0, Number(n.qty) || 0), vendorName: String(n.vendorName || '').trim(),
+                        reason: n.reason || '', onOrder: Number(n.onOrder) || 0,
+                        covered: onStamped, coveredBy: onStamped ? stamped.id : '',
+                        alsoOnAPo: !onStamped && codesOnOpenPos.has(code),
+                        part: partByKey['erp:' + code] || null,
+                    });
+                });
+            });
+            const byVendor = new Map();
+            rows.forEach(r => {
+                const v = r.vendorName || '(no vendor on the item)';
+                if (!byVendor.has(v)) byVendor.set(v, []);
+                byVendor.get(v).push(r);
+            });
+            const vendors = [...byVendor.entries()]
+                .map(([vendorName, rs]) => ({ vendorName, rows: rs.sort((a, b) => a.code.localeCompare(b.code)) }))
+                .sort((a, b) => a.vendorName.localeCompare(b.vendorName));
+            setBuyNeeds({ loading: false, vendors, error: '' });
+        } catch (e) {
+            setBuyNeeds({ loading: false, vendors: [], error: e.message || String(e) });
+        }
+    };
+
+    // One vendor's uncovered needs → their OPEN purchase order (created only if none is open), and
+    // the PO id stamped back on every work order that contributed, so the board can read itself as
+    // covered next time without guessing.
+    const addVendorNeedsToPo = async (group) => {
+        const todo = group.rows.filter(r => !r.covered);
+        if (!todo.length) return alert('Every line for this vendor is already on an open purchase order.');
+        const missing = todo.filter(r => !r.part);
+        if (missing.length) return alert(`Not in the synced library, so they cannot be put on a PO:\n\n${missing.map(r => `• ${r.code}`).join('\n')}\n\nSync them (11.1) and retry.`);
+        if (!window.confirm(`Add ${todo.length} line(s) to ${group.vendorName}'s open purchase order?\n\n${todo.map(r => `• ${r.qty} × ${r.code} (${r.woDisplay})`).join('\n')}\n\nIf they have no open draft, one is created. Nothing is sent — you review and approve it in RTG.`)) return;
+        setGenBusy(true);
+        try {
+            const res = await addToOpenPurchaseOrder({
+                vendorName: group.vendorName,
+                lines: todo.map(r => ({ part: r.part, qty: r.qty, reason: r.reason || 'stock build need', from: 'STOCK_BUILD_NEEDS' })),
+                brand: activeBrand, createdBy: currentUser || '', source: 'STOCK_BUILD_NEEDS',
+                note: `Stock Build Needs · ${[...new Set(todo.map(r => r.woDisplay))].join(', ')}`,
+            });
+            if (res.skipped) { setGenBusy(false); return alert(`Nothing was added — ${res.skipped}`); }
+            for (const woId of [...new Set(todo.map(r => r.woId))]) {
+                await updateDoc(doc(db, 'hq_work_orders', woId), { buyNeedsPoId: res.poId, buyNeedsPoAt: Date.now() }).catch(() => {});
+            }
+            addLog(`🧾 ${todo.length} line(s) → ${res.created ? 'new' : 'existing'} PO ${res.poId} for ${group.vendorName}.`, 'success');
+            alert(`✅ ${todo.length} line(s) on ${res.poId} (${res.created ? 'new draft' : `added to the open draft — ${res.lineCount} lines now`}).${res.minimum ? `\n\nVendor minimum: ${res.minimum}` : ''}${res.gap ? `\n\n⚠ Vendor is not assigned to this brand's subsidiary (${res.gap.has.join(', ')}) — fix in NetSuite before approving.` : ''}\n\nReview and approve it in RTG Dispatch.`);
+            await loadBuyNeeds();
+        } catch (e) { alert('Could not add to the purchase order: ' + (e.message || e)); }
+        setGenBusy(false);
+    };
+
     // ── ORDER ENTRY NEEDS (Stuart 2026-08-28) ──────────────────────────────────────────────────
     // Client-manufactured lines keep their SALES link (the CPQ rule, extended to Order Entry):
     // this board lists open Order Entry sales orders whose lines are made to order, shows the
@@ -2938,6 +3030,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <button onClick={() => { setSnapView('RAW'); if (!rawStock) loadRawStock(); }} title="Demand rolled up to the RAW core behind each finish variant (…/BL + /CP + /SG → base item) — set core ROPs so finishing never runs out of parts" style={{ padding: '9px 14px', background: snapView === 'RAW' ? 'var(--ink)' : '#fff', color: snapView === 'RAW' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Raw Cores (BOM)</button>
                                     <button onClick={() => { setSnapView('TIER'); if (!rawStock) loadRawStock(); }} title="Three-tier items (Fabricut H1): the raw mill core, its /P phosphated base and the plated /EP tiers read together, each with its own Order column — raw → shop floor, /P → WMS Convert, plated → WMS Plating" style={{ padding: '9px 14px', background: snapView === 'TIER' ? 'var(--ink)' : '#fff', color: snapView === 'TIER' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>3-Tier (raw · /P · plated)</button>
                                     <button onClick={() => { setSnapView('OENEEDS'); loadOeNeeds(); }} title="Made-to-order lines from Order Entry sales orders — SO#, customer, need-by, notes; generate the linked work orders / POs from here. Client work keeps its sales link; the other views stay for STOCK." style={{ padding: '9px 14px', background: snapView === 'OENEEDS' ? 'var(--brass)' : '#fff', color: snapView === 'OENEEDS' ? '#fff' : 'var(--brass)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700 }}>🧾 Order Entry Needs</button>
+                                    <button onClick={() => { setSnapView('BUYNEEDS'); loadBuyNeeds(); }} title="Bought components a STOCK build is short of — the pre-check recorded them on the work order instead of leaving them in a log line. Grouped by vendor, with one Add to PO per vendor that accumulates onto their open draft until it clears the minimum." style={{ padding: '9px 14px', background: snapView === 'BUYNEEDS' ? 'var(--brass)' : '#fff', color: snapView === 'BUYNEEDS' ? '#fff' : 'var(--brass)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700 }}>🧱 Stock Build Needs</button>
                                 </div>
                                 {draftPoList.length > 0 && (
                                     <button onClick={() => setPoReview({ pos: draftPoList, busy: false })}
@@ -2968,7 +3061,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     Need by
                                     <input type="date" value={woNeedBy} onChange={e => setWoNeedBy(e.target.value)} style={{ padding: '6px 8px', border: `1px solid ${woNeedBy ? 'var(--brass)' : 'var(--line)'}`, fontFamily: 'var(--mono)', fontSize: '11px', outline: 'none' }} />
                                 </label>
-                                <button onClick={snapView === 'OENEEDS' ? generateAllOeMissing : snapView === 'RAW' ? generateRawOrders : snapView === 'TIER' ? generateTierOrders : generateOrders} disabled={genBusy || (snapView !== 'OENEEDS' && !shownCount)} title={snapView === 'OENEEDS' ? 'Generate the linked orders for EVERY made-to-order line that has none yet — each routes itself (in stock → finishing now · /P short → convert then finishing · raw short → shop milling first). Lines already linked are untouched.' : snapView === 'RAW' ? 'Route every core with an Order qty: bought cores confirm their vendor then group into ONE PO per vendor; in-house cores become shop-floor work orders. Both stage in RTG Dispatch.' : snapView === 'TIER' ? 'Route every tier row with an Order qty by what it IS: raw core → shop-floor WO (or a vendor PO if it\'s bought), /P → WMS Convert to-do, plated → WMS Plating to-do, finished → Finishing WO.' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : (snapView === 'OENEEDS' ? '⚙ Generate All Missing (OE)' : snapView === 'RAW' ? '⚙ Generate Core Orders (PO + WO)' : snapView === 'TIER' ? '⚙ Generate Tier Orders' : '⚙ Generate Orders (PO + WO)')}</button>
+                                <button onClick={snapView === 'OENEEDS' ? generateAllOeMissing : snapView === 'RAW' ? generateRawOrders : snapView === 'TIER' ? generateTierOrders : generateOrders} disabled={genBusy || snapView === 'BUYNEEDS' || (snapView !== 'OENEEDS' && !shownCount)} title={snapView === 'OENEEDS' ? 'Generate the linked orders for EVERY made-to-order line that has none yet — each routes itself (in stock → finishing now · /P short → convert then finishing · raw short → shop milling first). Lines already linked are untouched.' : snapView === 'RAW' ? 'Route every core with an Order qty: bought cores confirm their vendor then group into ONE PO per vendor; in-house cores become shop-floor work orders. Both stage in RTG Dispatch.' : snapView === 'TIER' ? 'Route every tier row with an Order qty by what it IS: raw core → shop-floor WO (or a vendor PO if it\'s bought), /P → WMS Convert to-do, plated → WMS Plating to-do, finished → Finishing WO.' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : (snapView === 'BUYNEEDS' ? '⚙ Use “Add to PO” per vendor' : snapView === 'OENEEDS' ? '⚙ Generate All Missing (OE)' : snapView === 'RAW' ? '⚙ Generate Core Orders (PO + WO)' : snapView === 'TIER' ? '⚙ Generate Tier Orders' : '⚙ Generate Orders (PO + WO)')}</button>
                             </div>
 
                             {/* ⚠ URGENT CORES — a live backorder is waiting on these being MADE. The reorder
@@ -3005,7 +3098,58 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                             })()}
 
                             <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)' }}>
-                                {snapView === 'OENEEDS' ? (
+                                {snapView === 'BUYNEEDS' ? (() => {
+                                    const b = buyNeeds;
+                                    const m9 = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
+                                    if (!b || b.loading) return <div style={{ padding: '30px 6px', color: 'var(--ink-soft)' }}>Reading the stock work orders and their open purchase orders…</div>;
+                                    if (b.error) return <div style={{ padding: '20px 6px', color: '#d9534f' }}>{b.error}</div>;
+                                    if (!b.vendors.length) return (
+                                        <div style={{ padding: '30px 6px', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>
+                                            No stock build is short of a bought component. A need appears here when a run's pre-check finds a BOUGHT item short — the run is still created, because a purchase order is a person's decision, and this is where that decision gets made.
+                                        </div>
+                                    );
+                                    return (
+                                        <div style={{ padding: '4px 0' }}>
+                                            {b.vendors.map(g => {
+                                                const open = g.rows.filter(r => !r.covered);
+                                                const noVendor = g.vendorName.startsWith('(');
+                                                return (
+                                                    <div key={g.vendorName} style={{ border: '1px solid var(--line)', marginBottom: '14px' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
+                                                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)' }}>{g.vendorName}</span>
+                                                            <span style={{ ...m9, color: open.length ? '#d9534f' : '#3a7d44' }}>{open.length ? `${open.length} not on a PO` : 'all on a purchase order'}</span>
+                                                            {!noVendor && !!open.length && (
+                                                                <button onClick={() => addVendorNeedsToPo(g)} disabled={genBusy} style={{ ...m9, marginLeft: 'auto', padding: '8px 14px', background: genBusy ? 'var(--paper)' : 'var(--brass)', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer' }}>🧾 Add {open.length} to PO</button>
+                                                            )}
+                                                            {noVendor && <span style={{ ...m9, marginLeft: 'auto', color: '#d9534f' }}>set a vendor on the item before it can be ordered</span>}
+                                                        </div>
+                                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                            <thead><tr>
+                                                                {['Component', 'Short', 'For work order', 'Item', 'Need by', 'State'].map(h => (
+                                                                    <th key={h} style={{ ...m9, textAlign: 'left', padding: '7px 14px', borderBottom: '1px solid var(--paper-2)', color: 'var(--ink-soft)' }}>{h}</th>
+                                                                ))}
+                                                            </tr></thead>
+                                                            <tbody>
+                                                                {g.rows.map(r => (
+                                                                    <tr key={r.key}>
+                                                                        <td style={{ padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: '0.82rem', borderBottom: '1px solid var(--paper-2)' }}>{r.code}{!r.part && <div style={{ ...m9, color: '#d9534f' }}>not in the library</div>}</td>
+                                                                        <td style={{ padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: '0.82rem', borderBottom: '1px solid var(--paper-2)' }}><b>{r.qty}</b>{r.onOrder ? <span style={{ color: 'var(--ink-soft)' }}> · {r.onOrder} on order</span> : null}</td>
+                                                                        <td style={{ padding: '8px 14px', fontSize: '0.82rem', borderBottom: '1px solid var(--paper-2)' }}>{r.woDisplay}</td>
+                                                                        <td style={{ padding: '8px 14px', fontSize: '0.82rem', borderBottom: '1px solid var(--paper-2)' }}>{r.item}</td>
+                                                                        <td style={{ padding: '8px 14px', fontSize: '0.82rem', borderBottom: '1px solid var(--paper-2)' }}>{r.needBy || '—'}</td>
+                                                                        <td style={{ padding: '8px 14px', ...m9, borderBottom: '1px solid var(--paper-2)', color: r.covered ? '#3a7d44' : (r.alsoOnAPo ? 'var(--ink)' : '#d9534f') }}>
+                                                                            {r.covered ? `on ${r.coveredBy}` : (r.alsoOnAPo ? 'on another open PO' : 'not ordered')}
+                                                                        </td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    );
+                                })() : snapView === 'OENEEDS' ? (
                                     /* ORDER ENTRY NEEDS — made-to-order sales lines with their linked orders. */
                                     !oeNeeds || oeNeeds.loading ? (
                                         <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Reading Order Entry sales orders…</div>

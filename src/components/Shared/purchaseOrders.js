@@ -476,3 +476,109 @@ export const onOrderSummary = (lines = []) => {
     const due = lines.map(l => l.due).filter(Boolean).sort()[0] || '';
     return { open, due, count: lines.length };
 };
+
+// ── ADD TO THE VENDOR'S OPEN PURCHASE ORDER (Brief A, S5) ──────────────────────────────────────
+// Stuart: "purchase orders should open and items should be added before final send, since many
+// vendors have minimum orders."
+//
+// Every path that needed something bought used to mint a NEW draft, so a vendor with a $500
+// minimum collected five $120 POs that each failed it — and the operator's only remedy was to
+// notice and merge them by hand before sending.
+//
+// WHICH PO IS "OPEN". The brief said status Approved, written before A4 gave a PO its ten real
+// statuses. Approve is now the act that PUSHES it to NetSuite for its number, so appending after
+// that would silently amend a purchase order that already exists over there — a thing nobody asked
+// for and nobody would see. So accumulation happens on a DRAFT, which is exactly "before final
+// send", and a vendor whose only open PO has already been approved gets a new draft rather than a
+// surprise. No new status invented; the choice is about WHICH existing one accumulates.
+//
+// QUERIED ON ONE FIELD. brand only, with status and vendor filtered in memory — two equality
+// filters would want a composite index, and an index is a manual deploy, i.e. a feature that
+// silently does not work until someone remembers to run it.
+export const addToOpenPurchaseOrder = async ({
+    vendorName = '', vendorNsId = '', lines = [], brand, createdBy = '',
+    reqDate = '', source = '', note = '', soRef = '', soAppId = '',
+}) => {
+    const clean = (lines || []).filter(l => l && l.part && Number(l.qty) > 0);
+    if (!clean.length) return { skipped: 'no lines with a quantity' };
+
+    const vendors = await loadNsVendors();
+    const wantName = String(vendorName || clean[0].part?.manufacturingSpecs?.vendorName || '').trim();
+    const rec = resolveVendorRec(vendors, wantName)
+        || resolveVendorByNsId(vendors, vendorNsId || consensusVendorNsId(clean.map(l => l.part)));
+    if (!rec) return { skipped: `no vendor record for "${wantName || vendorNsId || 'the lines'}" — sync vendors (11.1), then retry` };
+    const nsVendorId = String(rec.id || '').replace(/^VEND-/, '');
+
+    // The vendor's open draft for this brand, newest first.
+    let open = null;
+    try {
+        const snap = await getDocs(query(collection(db, 'hq_purchase_orders'), where('brand', '==', brand)));
+        open = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            .filter(p => !p.deleted && String(p.status || '') === PO_STATUS.DRAFT
+                && String(p.nsVendorId || '') === nsVendorId)
+            .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0))[0] || null;
+    } catch (e) { /* fall through to creating one — never lose the demand to a read */ }
+
+    if (!open) {
+        const res = await createDraftPurchaseOrders({
+            lines: clean.map(l => ({ ...l, vendorName: wantName || rec.name, soRef: l.soRef || soRef, soAppId: l.soAppId || soAppId })),
+            brand, createdBy, reqDate, source, note,
+        });
+        const po = (res.pos || [])[0] || null;
+        if (!po) return { skipped: (res.unmatched || []).length ? 'vendor could not be matched at creation' : 'nothing to order' };
+        return { poId: po.id, created: true, rec, gap: (res.gaps || [])[0] || null, lineCount: (po.items || []).length, minimum: po.minimum || null, po };
+    }
+
+    // APPEND. A code already on the PO FROM THE SAME SALES ORDER adds to its quantity; from a
+    // different one it gets its own row, because the line is what says who the parts are for and
+    // merging two orders' demands would erase that (the same rule createDraftPurchaseOrders uses).
+    const items = (open.items || []).map(r => ({ ...r }));
+    const keyOf = (code, sid) => `${String(code).toUpperCase()}|${sid || ''}`;
+    const idx = new Map(items.map((r, i) => [keyOf(r.itemId, r.soAppId), i]));
+    let added = 0, bumped = 0;
+    clean.forEach(l => {
+        const code = String(l.part?.legacyErpId || l.part?.itemId || '').toUpperCase();
+        if (!code) return;
+        const sid = l.soAppId || soAppId || '';
+        const at = idx.get(keyOf(code, sid));
+        const qty = Math.max(0, Number(l.qty) || 0);
+        if (at != null) { items[at].quantity = (Number(items[at].quantity) || 0) + qty; bumped++; return; }
+        items.push({
+            itemId: code,
+            nsItemId: l.part?.netSuiteInternalId ? String(l.part.netSuiteInternalId) : null,
+            vendorPart: l.part?.manufacturingSpecs?.vendorId || 'N/A',
+            quantity: qty,
+            rate: l.rate != null ? Number(l.rate) : poRateOf(l.part),
+            description: l.part?.manufacturingSpecs?.purchaseDescription || l.part?.itemName || code,
+            ...(sid ? { soAppId: sid, soRef: l.soRef || soRef || '' } : {}),
+            ...(l.reason ? { reason: l.reason } : {}),
+            ...(l.from ? { from: l.from } : {}),
+            received: 0,
+        });
+        idx.set(keyOf(code, sid), items.length - 1);
+        added++;
+    });
+    if (!added && !bumped) return { skipped: 'every line was empty' };
+
+    const soAppIds = [...new Set(items.map(i => i.soAppId).filter(Boolean))];
+    const soRefs = [...new Set(items.map(i => i.soRef).filter(Boolean))];
+    const sources = [...new Set([...String(open.source || '').split(',').map(x => x.trim()).filter(Boolean), source].filter(Boolean))];
+    const patch = {
+        items,
+        ...(soAppIds.length ? { soAppIds, soRefs } : {}),
+        source: sources.join(','),
+        // The memo keeps every reason the PO grew, so the vendor's copy explains itself.
+        note: [String(open.note || '').trim(), String(note || '').trim()].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' · '),
+        lastAddedAt: Date.now(), lastAddedBy: createdBy || '',
+    };
+    await updateDoc(doc(db, 'hq_purchase_orders', open.id), patch);
+    const subsidiary = (BRAND_NETSUITE_MAP[String(brand || '').toLowerCase()] || {}).subsidiary || '';
+    const gapArr = vendorSubsidiaryGap(rec, subsidiary);
+    return {
+        poId: open.id, created: false, rec,
+        gap: gapArr ? { poId: open.id, vendor: rec.name || wantName, has: gapArr } : null,
+        lineCount: items.length, added, bumped,
+        minimum: vendorMinimumOf(rec, items),
+        po: { ...open, ...patch },
+    };
+};
