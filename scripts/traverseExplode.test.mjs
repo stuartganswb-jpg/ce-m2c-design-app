@@ -114,6 +114,17 @@ test('every bracket shape carries the base-colour fact, not just the single', { 
     assert.equal(ring.lines.find(l => l.code === 'H1-2RCTPR').subFinish, false);   // the front ring pole is visible
 });
 
+test('a splice below the chart\'s first length is not consumed — optional up to 10 ft (Stuart 2026-09-09)', () => {
+    const rules = { usage: [{ itemId: 'H1-2TRVSPLC', byFeet: { 11: 1, 20: 1, 21: 2 } }] };
+    const at = (feet) => explodeTraverse({ family: 'H1-2TRV', align: { setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL', material: 'P', frontRail: '' }, feet, rules, proj: '' })
+        .lines.filter(l => l.role === 'splice').reduce((n, l) => n + l.qty, 0);
+    assert.equal(at(5), 0);
+    assert.equal(at(10), 0);
+    assert.equal(at(11), 1);
+    assert.equal(at(15), 1);
+    assert.equal(at(21), 2);
+});
+
 test('the motor is not a painted part', { skip }, () => {
     const r = explodeTraverse({ align: A({ drive: 'MOTORIZED' }), feet: 4, motorItem: 'HSOM-20', rules });
     assert.equal(r.lines.find(l => l.code === 'HSOM-20').subFinish, false);

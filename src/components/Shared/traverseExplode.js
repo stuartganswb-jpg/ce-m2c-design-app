@@ -120,7 +120,12 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
         skipped.push('no projection on this line — consumed the standard ' + singleCode + ' (' + (singleHit ? singleHit.label : '') + ')');
 
     const spliceRow = (rules?.usage || []).find(u => U(u.itemId) === U(P.splice));
-    const splices = spliceRow ? usageAt(spliceRow, ft) : 0;
+    // ⚠ A SPLICE IS FIRST NEEDED WHERE THE CHART BEGINS (Stuart 2026-09-09: "a splice is optional
+    // up to 10 feet"). The chart starts at 11 ft; usageAt's between-entries rule reads UP, so a 5 ft
+    // system was consuming the 11 ft row's splice. Below the first entry the count is zero — the
+    // brackets keep the up-rule because their chart starts at the shortest system there is.
+    const spliceFirstFt = spliceRow ? Math.min(...Object.keys(spliceRow.byFeet || {}).map(Number).filter(Number.isFinite)) : Infinity;
+    const splices = (spliceRow && ft >= spliceFirstFt) ? usageAt(spliceRow, ft) : 0;
     if (splices > 0) add(P.splice, splices, 'splices (count table)', 'splice');
 
     if (U(align.drive) === 'MOTORIZED') add(U(motorItem) || P.baseMotor, 1, 'motor', 'motor');

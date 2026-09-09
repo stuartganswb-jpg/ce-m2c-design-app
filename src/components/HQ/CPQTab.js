@@ -742,6 +742,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // another line, a reload) lost it silently. Now the line STAYS in the cart, marked as the one
   // being edited, and Add configuration replaces it in place. Only Remove takes a line out.
   const [editingCartId, setEditingCartId] = useState(null);
+  // ── A CLEAN PAGE AFTER A SAVE, AND ON CLEAR ALL (Stuart 2026-09-09: "when the pop up is closed
+  // the cpq page should be refreshed not sitting in the same selection from the previous order").
+  // One reset for both: flow, steps, drafts, cart, session, job header — the page the operator
+  // sees when they first open the tab.
+  const resetWorkspace = () => {
+      setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setLineTag(''); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', sidemark: '', needBy: '', productionNotes: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
+      setEditingCartId(null); setAddOnSel({});
+  };
   // Checkout with a line open in the configurator: the cart still holds that line AS IT WAS, so
   // say so before the operator saves changes that are not in it.
   const openCheckout = () => {
@@ -3291,8 +3299,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               }
           }
 
-          await generateOrderDocuments(payload, allDraftSvgs);
-
           const savedNoun = saveAs === 'SALES_ORDER' ? 'Sales Order' : 'Quote';
           if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
               alert(`✅ ${savedNoun} Saved!\nRouted to Tab 10.5 (Project Management) for multi-order dissection.${nsQueueNote}`);
@@ -3300,12 +3306,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               alert(`✅ ${savedNoun} Saved!\nOn the customer's pipeline (Tab 10)${saveAs === 'SALES_ORDER' ? ' and the RTG board' : ''}.${nsQueueNote}`);
           }
           
-          setCart([]);
-          setEditingCartId(null);
-          setAddOnSel({});
-          localStorage.removeItem('hq_global_cart');
-          localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote');
           setShowCheckoutModal(false);
+          resetWorkspace();
           setJobData({ customerId: '', jobName: '', sidemark: '', needBy: '', productionNotes: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
           setActiveMasterQuoteId(null);
 
@@ -3315,193 +3317,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       }
   };
 
-  const generateOrderDocuments = async (job, svgs) => {
-      const printWindow = window.open('', '_blank');
-      
-      let mathSection = '';
-      if (job.engineeringNotes) {
-          const notes = job.engineeringNotes;
-          mathSection = `
-              <div style="background: #faf8f4; border: 1px dashed rgba(28,26,22,.14); padding: 20px;">
-                  <h4 style="margin:0 0 15px 0; color: #1c1a16; font-family: Georgia, serif; text-transform: uppercase;">Reference Math</h4>
-                  <table style="width: 100%; border-collapse: collapse; font-size: 14px; font-family: sans-serif;">
-                      <tr>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">Pole O2O (Edge-to-Edge):</td>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.poleO2O ? notes.poleO2O.toFixed(2) + '"' : 'N/A'}</td>
-                      </tr>
-                      <tr>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">Total System O2O (+ Brackets):</td>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.totalSystemO2O ? notes.totalSystemO2O.toFixed(2) + '"' : 'N/A'}</td>
-                      </tr>
-                      ${notes.shape === 'MITERED' ? `
-                      <tr>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">Left Wall C2C:</td>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.pole1 ? notes.pole1.toFixed(2) + '"' : 'N/A'}</td>
-                      </tr>
-                      ` : ''}
-                      <tr>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">${notes.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</td>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.pole2 ? notes.pole2.toFixed(2) + '"' : 'N/A'}</td>
-                      </tr>
-                      ${notes.shape === 'MITERED' ? `
-                      <tr>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); color: #524e46;">Right Wall C2C:</td>
-                          <td style="padding: 8px; border-bottom: 1px solid rgba(28,26,22,.14); font-weight: bold;">${notes.pole3 ? notes.pole3.toFixed(2) + '"' : 'N/A'}</td>
-                      </tr>
-                      ` : ''}
-                  </table>
-              </div>
-          `;
-      }
-
-      const html = `
-        <html>
-          <head>
-            <title>${job.jobId} - Documents</title>
-            <style>
-              body { font-family: 'Inter', -apple-system, sans-serif; color: #1c1a16; margin: 0; padding: 0; background: #525659; }
-              .page { background: #faf8f4; width: 8.5in; min-height: 11in; padding: 0.5in; margin: 0.25in auto; box-sizing: border-box; box-shadow: 0 0 10px rgba(0,0,0,0.5); position: relative; }
-              @media print {
-                  body { background: #fff; }
-                  .page { margin: 0; border: none; box-shadow: none; width: 100%; min-height: auto; page-break-after: always; padding: 0.25in; }
-              }
-              .header { display: flex; justify-content: space-between; border-bottom: 1px solid rgba(28,26,22,.14); padding-bottom: 15px; margin-bottom: 30px; align-items: flex-end; }
-              .brand { font-size: 28px; font-weight: 500; font-family: 'Cormorant Garamond', Georgia, serif; text-transform: uppercase; letter-spacing: 0.05em; line-height: 1; }
-              .doc-type { font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: #524e46; letter-spacing: .15em; text-transform: uppercase; }
-              
-              .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 40px; }
-              .label { font-size: 10px; font-family: 'IBM Plex Mono', monospace; color: #524e46; text-transform: uppercase; letter-spacing: .1em; }
-              .val { font-size: 14px; font-weight: 500; margin-top: 4px; display: block; }
-              
-              .split-layout { display: flex; gap: 30px; margin-bottom: 40px; align-items: flex-start; }
-              .column-left { flex: 1.5; }
-              .column-right { flex: 1; }
-
-              .section-box { border: 1px solid rgba(28,26,22,.14); background: #fff; padding: 20px; margin-bottom: 20px; }
-              .section-header { font-family: 'Cormorant Garamond', Georgia, serif; font-size: 18px; margin-bottom: 15px; border-bottom: 1px solid rgba(28,26,22,.14); padding-bottom: 10px; }
-              
-              .row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid rgba(28,26,22,.08); font-size: 13px; }
-              .row:last-child { border-bottom: none; }
-              .row.total { font-weight: 500; font-size: 16px; border-top: 1px solid rgba(28,26,22,.14); border-bottom: none; margin-top: 10px; padding-top: 15px; }
-              
-              .signature-block { margin-top: 60px; display: flex; justify-content: space-between; gap: 30px; }
-              .sig-line { flex: 1; border-top: 1px solid rgba(28,26,22,.14); padding-top: 8px; font-size: 10px; font-family: 'IBM Plex Mono', monospace; color: #524e46; text-align: left; text-transform: uppercase; letter-spacing: .1em; }
-            </style>
-          </head>
-          <body>
-            
-            <div class="page">
-                <div class="header">
-                  <div class="brand">${brandLogos[activeBrand] ? `<img src="${brandLogos[activeBrand]}" alt="${activeBrand}" style="max-height:56px;max-width:240px;display:block" />` : activeBrand}</div>
-                  <div class="doc-type">Quotation</div>
-                </div>
-                
-                <div class="meta-grid">
-                  <div><span class="label">Project</span><span class="val">${job.jobName || 'Multi-Room Order'}</span></div>
-                  <div><span class="label">Quote ID</span><span class="val">${job.quoteNo || job.jobId}</span></div>
-                  <div><span class="label">Prepared For</span><span class="val">${job.customer?.name}</span></div>
-                  <div><span class="label">Date</span><span class="val">${job.dateSaved}</span></div>
-                  ${job.orderSidemark ? `<div><span class="label">Sidemark</span><span class="val">${job.orderSidemark}</span></div>` : ''}
-                </div>
-
-                <div class="split-layout">
-                    <div class="column-left">
-                        <div class="section-box">
-                            <div class="section-header">Configuration Details</div>
-                            ${job.cpqData?.breakdown?.map(item => `
-                                <div class="row" style="${item.isHeader ? 'font-weight: bold; background: #f4f0e6; padding: 8px;' : ''}${item.isDiscount ? 'color: #8a6d3b;' : ''}${item.isNetLine ? 'font-weight: bold;' : ''}">
-                                    <span style="flex: 3;">${item.name}${item.cutLength ? `<span style="color:#7a736a;font-size:10px;"> &nbsp;·&nbsp; ${cutText(item.cutLength)}</span>` : ''}</span>
-                                    <span style="flex: 1; text-align: center; color: #524e46;">${(item.isHeader || item.isDiscount || item.isNetLine) ? '' : `Qty: ${item.qty}`}</span>
-                                    <span style="flex: 1; text-align: right;">$${item.total.toFixed(2)}</span>
-                                </div>
-                            `).join('')}
-                            ${(parseFloat(job.shippingAmount) || 0) > 0 ? `
-                            <div class="row">
-                                <span style="flex: 4; text-align: right; padding-right: 20px;">Shipping</span>
-                                <span style="flex: 1; text-align: right;">$${(parseFloat(job.shippingAmount) || 0).toFixed(2)}</span>
-                            </div>` : ''}
-                            <div class="row total">
-                                <span style="flex: 4; text-align: right; padding-right: 20px; font-family: 'Cormorant Garamond', serif;">Total Estimate</span>
-                                <span style="flex: 1; text-align: right;">$${((job.cpqData?.totalPrice || 0) + (parseFloat(job.shippingAmount) || 0)).toFixed(2)}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="column-right">
-                        ${mathSection}
-                    </div>
-                </div>
-
-                <div class="signature-block">
-                    <div class="sig-line">Client Approval</div>
-                    <div class="sig-line" style="max-width: 200px;">Date</div>
-                </div>
-            </div>
-
-            <div class="page">
-                <div class="header">
-                  <div class="brand">${brandLogos[activeBrand] ? `<img src="${brandLogos[activeBrand]}" alt="${activeBrand}" style="max-height:56px;max-width:240px;display:block" />` : activeBrand}</div>
-                  <div class="doc-type">Factory Router</div>
-                </div>
-                
-                <div class="meta-grid">
-                  <div><span class="label">Project</span><span class="val">${job.jobName || 'Multi-Room Order'}</span></div>
-                  <div><span class="label">Work Order ID</span><span class="val">${job.jobId}</span></div>
-                  ${job.orderSidemark ? `<div><span class="label">Sidemark</span><span class="val">${job.orderSidemark}</span></div>` : ''}
-                </div>
-
-                <div class="split-layout">
-                    <div class="column-left">
-                        <div class="section-box">
-                            <div class="section-header">Bill of Materials</div>
-                            <div class="row" style="color: #524e46; font-family: 'IBM Plex Mono', monospace; font-size: 10px; text-transform: uppercase;">
-                                <span style="flex: 3;">Component</span>
-                                <span style="flex: 1; text-align: right;">Req. Qty</span>
-                            </div>
-                            ${job.cpqData?.breakdown?.filter(item => !item.isDiscount && !item.isNetLine).map(item => `
-                                <div class="row" style="${item.isHeader ? 'font-weight: bold; background: #f4f0e6; padding: 8px;' : ''}">
-                                    <span style="flex: 3; font-weight: 500;">${item.name}${item.cutLength ? `<span style="color:#7a736a;font-weight:400;font-size:10px;"> &nbsp;·&nbsp; ${cutText(item.cutLength)}</span>` : ''}</span>
-                                    <span style="flex: 1; text-align: right; font-size: 14px; font-weight: 500;">${item.isHeader ? '' : (() => { const ft = Number(item.feet) || (item.cutLength ? Math.ceil(Number(item.cutLength) / 12) : 0); return ft > 0 ? `${item.qty} (${ft} ft)` : item.qty; })()}</span>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                    <div class="column-right">
-                        ${mathSection}
-                    </div>
-                </div>
-            </div>
-            
-            ${svgs && svgs.length > 0 ? svgs.map(draft => `
-            <div class="page">
-                <div class="header">
-                  <div class="brand">${brandLogos[activeBrand] ? `<img src="${brandLogos[activeBrand]}" alt="${activeBrand}" style="max-height:56px;max-width:240px;display:block" />` : activeBrand}</div>
-                  <div class="doc-type">Engineering Drawing</div>
-                </div>
-                <div class="meta-grid">
-                  <div><span class="label">Sidemark</span><span class="val">${draft.sidemark}</span></div>
-                  <div><span class="label">Quote ID</span><span class="val">${job.quoteNo || job.jobId}</span></div>
-                </div>
-                <div style="width: 100%; border: 1px solid rgba(28,26,22,.14); background: #fff; padding: 20px; margin-top: 20px; box-sizing: border-box;">
-                    ${draft.svg}
-                </div>
-                <div class="signature-block">
-                    <div class="sig-line">Fabrication Sign-Off</div>
-                    <div class="sig-line" style="max-width: 200px;">Date</div>
-                </div>
-            </div>
-            `).join('') : ''}
-
-            <script> 
-                window.onload = function() { 
-                    setTimeout(() => window.print(), 500); 
-                } 
-            </script>
-          </body>
-        </html>
-      `;
-      printWindow.document.write(html);
-      printWindow.document.close();
-  };
+  // (The post-save print window is gone — Stuart 2026-09-09: "once you hit check out, no longer
+  // need to print that screen". The quotation and sales order print from the CRM's DOCS.)
 
   const renderOptionPrice = (opt, currentStep) => {
       const allParts = [...libraryParts, ...liveAssemblies];
@@ -4372,7 +4189,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                 Checkout ({cart.length} Items)
             </button>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setLineTag(''); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', sidemark: '', needBy: '', productionNotes: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
+            <button onClick={() => resetWorkspace()} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
         </div>
       </div>
 
