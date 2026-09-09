@@ -57,7 +57,7 @@ const codeOf = (part, fallback) => String(
  *   cutLength      the shop cuts to this; absent on anything that is not cut
  *   dimensions     wall measurements for returns, read by fabrication
  */
-function handoffLine(l, part, finishName = '') {
+function handoffLine(l, part, finishName = '', clientFinishName = '') {
     return {
         // ⚠ THE 1.6 LABEL NEVER LEAVES 1.6 (Stuart 2026-08-31, invoice S060147: descriptions read
         // "H21INPOLELEFT" — the designer's node label). A pin's partName is whatever the .glb slot
@@ -83,6 +83,10 @@ function handoffLine(l, part, finishName = '') {
         // cannot be sprayed off one label, so the line says what IT is finished in. A part that
         // wears nothing carries nothing, and the floor reads that as mill.
         ...(l.finishCode ? { finishCode: l.finishCode, finishLabel: finishName || l.finishCode } : {}),
+        // THEIR word for the finish (Stuart 2026-09-09: the documents and View Item "neither one
+        // has the same customer part#, customer color#") — the 4.5 client mapping for the customer
+        // this was quoted to, stamped so paper and screens can say it without a second lookup.
+        ...(l.finishCode && clientFinishName ? { clientFinishName } : {}),
         // ── THE KIT'S OWN FIELDS (Stuart 2026-08-22) ────────────────────────────────────────
         // `isKit`/`noNs` keep it off the NetSuite component list and off the pick list — its money
         // rides the rollup, its components are what ship. `inKit` marks a part the kit already paid
@@ -133,7 +137,15 @@ export function handoffItem(resolved, ctx = {}) {
         const f = (finishes || []).find(x => String(x.code || '').toUpperCase() === String(code || '').toUpperCase());
         return f ? (f.name || f.code || '') : '';
     };
-    const lines = priced.lines.map(l => handoffLine(l, typeof findPart === 'function' ? findPart(l.partId) : null, finishNameOf(l.finishCode)));
+    // The customer's own name for it — the same client-mapping row the CPQ chips read.
+    const custKeys = new Set([ctx.customerId, ctx.customer?.name, ctx.customer?.companyName].filter(Boolean).map(v => String(v).trim().toUpperCase()));
+    const clientFinishNameOf = (code) => {
+        if (!custKeys.size) return '';
+        const f = (finishes || []).find(x => String(x.code || '').toUpperCase() === String(code || '').toUpperCase());
+        const hit = (Array.isArray(f?.clientMapping) ? f.clientMapping : []).find(m => custKeys.has(String(m?.customerId || '').trim().toUpperCase()));
+        return String(hit?.clientFinishName || '').trim();
+    };
+    const lines = priced.lines.map(l => handoffLine(l, typeof findPart === 'function' ? findPart(l.partId) : null, finishNameOf(l.finishCode), clientFinishNameOf(l.finishCode)));
 
     // Added by hand — real lines, so they route and bill like everything else. They carry their own
     // note because a splice's location is the whole point of adding one.
@@ -162,7 +174,7 @@ export function handoffItem(resolved, ctx = {}) {
                 total: Number.isFinite(Number(x.total)) && x.total !== null ? Number(x.total) : unit * n,
                 ...(x.sku ? { sku: x.sku } : {}),
                 ...(x.finishCode ? { finishCode: x.finishCode } : {}),
-            }, part, finishNameOf(x.finishCode)),
+            }, part, finishNameOf(x.finishCode), clientFinishNameOf(x.finishCode)),
             addedByHand: true,
             ...(x.note ? { customNote: x.note } : {}),
         };

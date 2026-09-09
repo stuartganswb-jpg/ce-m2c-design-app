@@ -61,7 +61,13 @@ export const cartFinishLabelOf = (cpqData) =>
 
 const withLineFinish = (l, fallback) => {
     if (!l || l.isHeader || l.isDiscount || l.isNetLine || l.isFee || l.inKit) return l;
-    const fin = l.finishLabel || l.finishCode || fallback || '';
+    // THEIR word first, ours otherwise, the code always (Stuart 2026-09-09: the customer's colour
+    // name belongs on the customer's paper): "Aged Champagne (P14)"; a finish with no name prints
+    // its code alone, exactly as before.
+    const code = String(l.finishCode || '').trim();
+    const ours = l.finishLabel && l.finishLabel !== code ? l.finishLabel : '';
+    const name = String(l.clientFinishName || ours || '').trim();
+    const fin = code ? (name ? `${name} (${code})` : code) : (l.finishLabel || fallback || '');
     if (!fin || String(l.name || '').includes(fin)) return l;
     return { ...l, name: `${l.name} — Finish: ${fin}`, finishText: fin };
 };

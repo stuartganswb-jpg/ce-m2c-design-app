@@ -1252,7 +1252,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
               .map(l => ({ item: '', desc: l.name, qty: l.qty || '', price: null, amount: null }))
           // Money documents drop BOM-only parts — the same rule the RTG forms use, from the same
           // helper so the two can never disagree about what a customer may read.
-          : customerDocLines(activeDocJob.cpqData?.breakdown || [], activeDocType, cartFinishLabelOf(activeDocJob.cpqData), {
+          // ⚠ THE QUOTE PAGE IS A MONEY DOCUMENT WHEREVER IT PRINTS (Stuart 2026-09-09: the packet's
+          // quotation showed our part numbers and "1 × $0.00" for the pole). Built as FULL_PACKET it
+          // missed the customer-SKU swap and the per-foot qty rule that only fire for QUOTE /
+          // SALES_ORDER / INVOICE. These lines feed the quotation page only.
+          : customerDocLines(activeDocJob.cpqData?.breakdown || [], activeDocType === 'FULL_PACKET' ? 'QUOTE' : activeDocType, cartFinishLabelOf(activeDocJob.cpqData), {
               findPart: (id) => docPartIndex.get(String(id || '').trim().toUpperCase()) || null,
               custKeys: customerKeys(activeDocJob.customer?.id || '', jobCrm || { name: activeDocJob.customer?.name || activeDocJob.clientName || '' }),
           }).map(b => ({

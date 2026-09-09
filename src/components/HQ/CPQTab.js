@@ -3044,6 +3044,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   // the split, the pick list and the plating gate read it off cpqData.breakdown
                   // without going back to the cart item. Absent = the line wears nothing (mill).
                   ...(line.finishCode ? { finishCode: line.finishCode, finishLabel: line.finishLabel || line.finishCode } : {}),
+                  ...(line.clientFinishName ? { clientFinishName: line.clientFinishName } : {}),
                   // Per-foot stamps must survive the merge: money documents multiply qty by the
                   // feet, and the NetSuite push consumes rod stock by the foot off these two.
                   ...(line.perFoot ? { perFoot: true, feet: Number(line.feet) || 0 } : {}),
