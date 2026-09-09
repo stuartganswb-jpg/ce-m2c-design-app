@@ -265,3 +265,34 @@ export function handoffItem(resolved, ctx = {}) {
         engine: 'TAGS',
     };
 }
+
+// ── CATCH-UP STAMPS AT SAVE (Stuart 2026-09-09: "will it work if i reload all my new quotes from
+// crm?") ────────────────────────────────────────────────────────────────────────────────────────
+// The customer's finish name and the track's stock colour are stamped when a configuration is
+// ADDED; a quote reopened from the CRM carries its lines exactly as saved, so lines saved before
+// those stamps existed would print without them forever. Re-finalizing now fills in what is
+// missing from what is known at save — the finish code on the line, the 4.5 finishes, the customer
+// and the item — and never overwrites a stamp the add already made. A picture cannot be recovered
+// this way (it needs the 3D pane), so an old line keeps none until it is added again.
+export function restampLines(lines = [], { finishes = [], custKeys = null, findPart = null, orderFinishCode = '' } = {}) {
+    const keys = custKeys instanceof Set ? custKeys : new Set([...(custKeys || [])].map(v => String(v).trim().toUpperCase()));
+    const finishOf = (code) => (finishes || []).find(x => String(x.code || '').toUpperCase() === String(code || '').toUpperCase());
+    const theirs = (code) => {
+        if (!keys.size) return '';
+        const f = finishOf(code);
+        const hit = (Array.isArray(f?.clientMapping) ? f.clientMapping : []).find(m => keys.has(String(m?.customerId || '').trim().toUpperCase()));
+        return String(hit?.clientFinishName || '').trim();
+    };
+    const alignedSub = String(finishOf(orderFinishCode)?.subFinishCode || '').trim().toUpperCase();
+    return (lines || []).map(l => {
+        if (!l || l.isHeader) return l;
+        const out = { ...l };
+        if (out.finishCode && !out.clientFinishName) { const n = theirs(out.finishCode); if (n) out.clientFinishName = n; }
+        if (!out.finishCode && !out.subFinishCode && alignedSub) {
+            const part = typeof findPart === 'function' ? findPart(out.partId) : null;
+            const takesSub = String(out.role || '').toUpperCase() === 'TRACK' || !!part?.manufacturingSpecs?.usesSubFinish;
+            if (takesSub) { out.subFinishCode = alignedSub; out.finishLabel = `${alignedSub} (sub finish)`; }
+        }
+        return out;
+    });
+}

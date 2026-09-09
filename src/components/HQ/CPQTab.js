@@ -29,6 +29,7 @@ import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, ch
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
+import { restampLines } from '../Shared/hardwareHandoff';
 import { buildLookupIndex } from '../Shared/partLookup.js';
 import PartLookupPanel from '../Shared/PartLookupPanel.js';
 
@@ -2989,7 +2990,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       const mergedQuantities = {};
       const mergedDimensions = {};
 
-      cart.forEach((item) => {
+      // ── CATCH-UP STAMPS (Stuart 2026-09-09) ─────────────────────────────────────────────
+      // A reopened quote's lines are exactly as saved; the customer's finish name and the track's
+      // stock colour are filled in here where a line lacks them (Shared/hardwareHandoff). A stamp
+      // the add already made is never overwritten; a picture cannot be recovered this way.
+      const restampCust = customerKeys(jobData.customerId, liveCustomers.find(c => c.id === jobData.customerId) || null);
+      const restampFinishes = [...globalFinishes, ...outsourceFinishes];
+      const cartForSave = cart.map(it => ({
+          ...it,
+          pricingBreakdown: restampLines(it.pricingBreakdown || [], {
+              finishes: restampFinishes, custKeys: restampCust, findPart: lookupFindPart,
+              orderFinishCode: it.engineConfig?.globalFinish || it.finishes?.[0]?.code || '',
+          }),
+      }));
+      cartForSave.forEach((item) => {
           const disc = tradeDiscountFor(item);
           const grossTotal = item.pricing.finalPrice * item.qty;
           const discTotal = disc ? disc.amount * item.qty : 0;
@@ -3143,7 +3157,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               breakdown: stampLineFinishRouting(mergedBreakdown, outsourceFinishes),
               // tradeDiscount stamped per item (always set, so a re-finalize after the code
               // changed can't keep a stale stamp). finalPrice stays GROSS per-unit; net derives.
-              cartItems: cart.map(it => ({ ...it, tradeDiscount: tradeDiscountFor(it) || null, pricingBreakdown: stampLineFinishRouting(it.pricingBreakdown || [], outsourceFinishes) })),
+              cartItems: cartForSave.map(it => ({ ...it, tradeDiscount: tradeDiscountFor(it) || null, pricingBreakdown: stampLineFinishRouting(it.pricingBreakdown || [], outsourceFinishes) })),
               // Consumed by ERPPushPullTab to map lines -> physical NetSuite inventory.
               configuration: mergedConfiguration,
               quantities: mergedQuantities,
