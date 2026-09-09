@@ -395,7 +395,15 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         });
                         // Units guard: 1.6 exports production inches. A rail that does not read as a
                         // pole length in inches is a foreign model — left alone, never scaled wrong.
-                        const factor = (modelLen > 12 && modelLen < 400) ? wantIn / modelLen : 1;
+                        const trueFactor = (modelLen > 12 && modelLen < 400) ? wantIn / modelLen : 1;
+                        // THE STRETCH IS A PICTURE, NOT A MEASUREMENT (Stuart 2026-09-09: "the pole stretch
+                        // is a bit too much … i would lower the stretch amount by 30%, a 144" pole should once
+                        // stretched cover 60% of the width of the window"). True scale ran a long order off
+                        // the pane; the extra length is drawn at 70% so the eye reads "longer" without
+                        // losing the ends. Cut lengths, clone spacing and the splice line all follow this
+                        // drawn rail, so the picture stays proportional to itself.
+                        const STRETCH_DAMP = 0.7;
+                        const factor = trueFactor > 1 ? 1 + (trueFactor - 1) * STRETCH_DAMP : trueFactor;
                         if (factor > 1.01) {
                             const c0 = rb.getCenter(new THREE.Vector3())[ax];
                             const vec = (v) => new THREE.Vector3(ax === 'x' ? v : 0, ax === 'y' ? v : 0, ax === 'z' ? v : 0);
