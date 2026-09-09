@@ -135,3 +135,97 @@ export const lineCode = (l) => up((l && (l.erp || l.legacyErpId || l.partId || l
 
 /** Quantity off a line in either dialect, including the partsList double spelling. */
 export const lineQty = (l) => Number((l && (l.quantity ?? l.qty)) ) || 0;
+
+// ══ WHICH POLE IS THIS? ═══════════════════════════════════════════════════════════════════════
+//
+// Stuart 2026-09-09: "we need to add the pole length/details to the card, currently only shows the
+// description and qty, but not the actual length, if the labels fall of the pole there is no way
+// for packaging to be sure they are packing the correct pole with the correct small parts."
+//
+// WHY THE SCREEN COULD NOT SAY IT. The packer works from the FINISHING document, which holds the
+// small parts. The pole is fabricated on the SHOP order, and that is where its length lives —
+// `cutLength`, plus a structured `cutList` of one entry per cut. The warehouse loaded neither, so
+// there was nothing to show. The link already existed: the finishing doc carries `shopSiblingId`.
+//
+// ⚠ TWO LENGTHS, TWO UNITS, AND THEY MUST NEVER RENDER ALIKE.
+//   • a CUT length off the shop order is in INCHES  (96, "96 1/2")  → shown 96"
+//   • a length parsed out of a STOCKED code is in FEET (…-4 → 4)    → shown 4 ft
+// Printing a bare "4" beside a bare "96" on a packing bench is how the wrong pole goes in the box,
+// which is the exact failure this is meant to prevent. The unit rides every row.
+//
+// AND IT NEVER GUESSES. A shop order with no cut list yields no length and the caller says so —
+// a blank reads as "not recorded", while an inferred number reads as verified.
+
+const asQty = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
+
+/** One length, formatted with its unit. Numbers get the mark; free text is trusted as typed. */
+export function formatPoleLength(value, unit) {
+    if (value == null || value === '') return '';
+    const raw = String(value).trim();
+    if (!raw) return '';
+    const n = Number(raw);
+    if (unit === 'ft') return Number.isFinite(n) ? `${n} ft` : `${raw} ft`;
+    // inches: a bare number gets the inch mark; "96 1/2" or '96"' is already legible
+    if (Number.isFinite(n)) return `${n}"`;
+    return /["']|\bIN\b/i.test(raw) ? raw : `${raw}"`;
+}
+
+/**
+ * The pole rows for a pack/pick card: what it is, how many, how long.
+ *
+ * @param {object} job        the fin_workorders doc the card is showing
+ * @param {object} shopDoc    its shop sibling (by `job.shopSiblingId`), or null
+ * @param {object} salesOrder the joined hq_sales_orders doc, or null — sidemark only
+ * @returns {{ rows: Array, sidemark: string, source: 'shop'|'code'|'none' }}
+ *          rows: [{ name, qty, length, unit, display }]
+ */
+export function poleDetailsOf({ job, shopDoc = null, salesOrder = null } = {}) {
+    const sidemark = String(
+        (job && job.sidemark) || (salesOrder && (salesOrder.sidemark || salesOrder.memo)) ||
+        (shopDoc && shopDoc.note) || (job && job.note) || ''
+    ).trim();
+
+    // 1. THE SHOP ORDER'S CUT LIST — the real answer for a made-to-order pole.
+    const cuts = (shopDoc && Array.isArray(shopDoc.cutList) ? shopDoc.cutList : [])
+        .filter(c => c && c.cutLength != null && String(c.cutLength) !== '');
+    if (cuts.length) {
+        return {
+            source: 'shop', sidemark,
+            rows: cuts.map(c => {
+                const qty = asQty(c.qty) || 1;
+                return {
+                    name: String(c.name || c.legacyErpId || 'Pole'),
+                    qty, length: c.cutLength, unit: 'in',
+                    display: formatPoleLength(c.cutLength, 'in'),
+                };
+            }),
+        };
+    }
+    // 2. A single cutLength on the shop order, when there is no per-line list.
+    if (shopDoc && shopDoc.cutLength != null && String(shopDoc.cutLength) !== '') {
+        return {
+            source: 'shop', sidemark,
+            rows: [{
+                name: String(shopDoc.item || shopDoc.partNum || 'Pole'),
+                qty: asQty(shopDoc.qty) || 1, length: shopDoc.cutLength, unit: 'in',
+                display: formatPoleLength(shopDoc.cutLength, 'in'),
+            }],
+        };
+    }
+    // 3. A STOCKED pole carries its length in its own code, in FEET. `poleLengthOf` is the shared
+    //    grammar (Shared/poleCut) — the caller passes it in rather than this module importing the
+    //    pole vocabulary, so the one reader stays free of routing knowledge.
+    return { source: 'none', sidemark, rows: [] };
+}
+
+/**
+ * The stocked-pole case, kept separate because its unit is FEET and its source is the item code.
+ * @param {string} code       the pole's item code
+ * @param {number} qty        pieces
+ * @param {function} lengthOf `poleLengthOf` from Shared/poleCut, passed in by the caller
+ */
+export function stockedPoleDetail(code, qty, lengthOf) {
+    const ft = typeof lengthOf === 'function' ? lengthOf(code) : null;
+    if (!ft) return null;
+    return { name: String(code || 'Pole'), qty: asQty(qty) || 1, length: ft, unit: 'ft', display: formatPoleLength(ft, 'ft') };
+}

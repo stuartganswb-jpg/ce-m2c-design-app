@@ -152,6 +152,7 @@ const ES = {
     'Scan or type the bin': 'Escanee o escriba la ubicación',
     'Scan or type the work order': 'Escanee o escriba la orden de trabajo',
     'Scan or type the sales order': 'Escanee o escriba la orden de venta',
+    'no cut length recorded for this order': 'sin largo de corte registrado para esta orden',
     'A work order label prints one at a time — it belongs to one fixture.': 'La etiqueta de orden de trabajo se imprime de una en una — pertenece a un solo montaje.',
     'Complete Packing': 'Completar Embalaje',
     'Put Away to Bin': 'Guardar en Bin',

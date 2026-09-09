@@ -6,7 +6,7 @@ import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
-import { packLinesOf as packLinesShared, pickableLinesOf } from '../Shared/pickLines';
+import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail } from '../Shared/pickLines';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
@@ -237,6 +237,36 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [platingFees, setPlatingFees] = useState({}); // system/plating_fees.rules — { PRODUCTTYPE: { fee, unit } }
     const [expandedShip, setExpandedShip] = useState({}); // out-at-plater shipments: collapsed by default
     const [expandedSo, setExpandedSo] = useState({});     // SO Pack: force a not-yet-ready card open
+    // ── WHICH POLE IS THIS? (Stuart 2026-09-09) ──────────────────────────────────────────────
+    // "if the labels fall of the pole there is no way for packaging to be sure they are packing
+    // the correct pole with the correct small parts."
+    // The packer works from the FINISHING doc, which holds small parts; the pole's LENGTH lives on
+    // the SHOP order (cutLength + the structured cutList). The link already existed —
+    // `shopSiblingId` — nobody had ever read it here. Loaded once per order and cached, like the
+    // bin index; a card that shows a dozen lines must not open a dozen reads.
+    const [shopSibs, setShopSibs] = useState({});        // shopSiblingId → doc | null
+    const shopSibReq = useRef(new Set());
+    const loadShopSibling = async (id) => {
+        if (!id || shopSibReq.current.has(id)) return;
+        shopSibReq.current.add(id);
+        try {
+            const snap = await getDoc(doc(db, 'shop_custom_orders', id));
+            setShopSibs(p => ({ ...p, [id]: snap.exists() ? { id: snap.id, ...snap.data() } : null }));
+        } catch (e) { setShopSibs(p => ({ ...p, [id]: null })); }
+    };
+    // The pole rows for a job: the shop order's cuts when there is a sibling, else the length the
+    // STOCKED code carries. Never both, never invented — see Shared/pickLines.poleDetailsOf.
+    const poleInfoOf = (job) => {
+        if (!job) return { rows: [], sidemark: '', source: 'none' };
+        const sid = job.shopSiblingId || null;
+        if (sid && shopSibs[sid] === undefined) { loadShopSibling(sid); }
+        const so = soIndex[String(job.salesOrderId || '')] || soIndex[String(job.orderKey || '')] || null;
+        const info = poleDetailsOf({ job, shopDoc: sid ? (shopSibs[sid] || null) : null, salesOrder: so });
+        if (info.rows.length) return info;
+        // A stocked pole run: the length is in the item's own code, in FEET.
+        const st = stockedPoleDetail(woItemCodeOf(job) || (job.poles && job.poles.type) || '', job.totalPoles || (job.poles && job.poles.qty) || 0, poleLengthOf);
+        return st ? { ...info, rows: [st], source: 'code' } : info;
+    };
     // ── LABELS TAB (Stuart 2026-09-08: "any label that may be needed for finishing, shop and wms
     // to keep track off we can print a label there") ──────────────────────────────────────────
     const [lblKind, setLblKind] = useState('ITEM');      // ITEM | BIN | WO | SO | UOM
@@ -4251,6 +4281,18 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         {sidemark ? `REF: ${sidemark}` : ''}{sidemark && poNum ? '  ·  ' : ''}{poNum ? `PO: ${poNum}` : ''}
                                                     </div>
                                                 )}
+                                                {/* The pole this order is waiting on, by LENGTH — the
+                                                    picker stages it against the small parts. */}
+                                                {(() => {
+                                                    const info = poleInfoOf(job);
+                                                    if (!info.rows.length) return null;
+                                                    return (
+                                                        <div style={{ marginTop: '6px', fontFamily: theme.mono, fontSize: '11px', color: theme.brass, letterSpacing: '.03em' }}>
+                                                            ✂ {info.rows.map(r => `${r.display} ×${r.qty}`).join('  ·  ')}
+                                                            {info.sidemark ? `  ·  REF ${info.sidemark}` : ''}
+                                                        </div>
+                                                    );
+                                                })()}
                                                 <OrderStatusChips wo={job} style={{ marginTop: '8px' }} />
                                                 {renderClaimLine(job, 'pick')}
                                                 <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Item{pickable.length === 1 ? '' : 's'}{grouping.changed ? ` (${grouping.from} BOM lines grouped into ${grouping.to} picks)` : ''}{rawPickable.length !== (job.partsList?.length || 0) ? ` · ${(job.partsList?.length || 0) - rawPickable.length} return/fee line(s) ride the shop order` : ''} · tap for parts</div>
@@ -4691,6 +4733,23 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: g.box === 'POLE' ? theme.brass : theme.inkSoft, borderBottom: `1px solid ${theme.line}`, paddingBottom: '6px', marginBottom: '10px' }}>
                                     {g.title} · {g.box === 'POLE' ? 'LARGE BOX / TUBE' : 'SMALL BOX'}
                                 </div>
+                                {/* WHICH POLE IS THIS (Stuart 2026-09-09) — length, qty and sidemark,
+                                    so a pole whose label fell off can still be matched to its order. */}
+                                {g.box === 'POLE' && (() => {
+                                    const info = poleInfoOf(packJob);
+                                    if (!info.rows.length && !info.sidemark) return null;
+                                    return (
+                                        <div style={{ margin: '0 0 10px', padding: '8px 10px', background: theme.paper, borderLeft: `3px solid ${theme.brass}` }}>
+                                            {info.rows.map((r, i) => (
+                                                <div key={i} style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
+                                                    <b style={{ fontSize: '14px' }}>{r.display}</b> · ×{r.qty}{r.name ? ` · ${r.name}` : ''}
+                                                </div>
+                                            ))}
+                                            {info.sidemark && <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '3px', letterSpacing: '.05em' }}>REF: {info.sidemark}</div>}
+                                            {!info.rows.length && <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{t('no cut length recorded for this order')}</div>}
+                                        </div>
+                                    );
+                                })()}
                                 {gl.map(l => lineRow(l, side))}
                             </div>
                         );

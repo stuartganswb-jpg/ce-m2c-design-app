@@ -8,7 +8,9 @@
 
 import {
     lineIsFeeish, isQuickShip, pickableLinesOf, packLinesOf, lineCode, lineQty,
+    poleDetailsOf, stockedPoleDetail, formatPoleLength,
 } from '../src/components/Shared/pickLines.js';
+import { poleLengthOf } from '../src/components/Shared/poleCut.js';
 
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -81,6 +83,56 @@ eq('the kit label rides the pack name so the packer sees the set',
 eq('aliasErp is carried but erp stays the real code',
     packLinesOf({ orderClass: 'QUICKSHIP', lines: [{ erp: 'REAL', aliasErp: 'H9560F', name: 'x', qty: 1 }] })[0],
     { key: 'L0', erp: 'REAL', aliasErp: 'H9560F', name: 'x', qty: 1 });
+
+// ── WHICH POLE IS THIS? (Stuart 2026-09-09 — labels fall off poles) ──────────────────────────
+// The unit is the safety rule: a cut length is INCHES, a stocked code's length is FEET, and a bare
+// "4" beside a bare "96" on a packing bench is how the wrong pole goes in the box.
+eq('a cut length reads in inches', formatPoleLength(96, 'in'), '96"');
+eq('a stocked length reads in feet', formatPoleLength(4, 'ft'), '4 ft');
+eq('free text is trusted as typed', formatPoleLength('96 1/2"', 'in'), '96 1/2"');
+eq('free text without a mark gets one', formatPoleLength('96 1/2', 'in'), '96 1/2"');
+eq('nothing formats to nothing', [formatPoleLength(null, 'in'), formatPoleLength('', 'in')], ['', '']);
+
+const shop = {
+    item: 'Pole Length', qty: 3, note: 'ROOM LEFT',
+    cutList: [
+        { name: 'Pole Length', qty: 2, cutLength: 96 },
+        { name: 'Pole Length (short)', qty: 1, cutLength: '76 1/2' },
+        { name: 'Bracket arm', qty: 4, cutLength: null },       // not a cut — must not appear
+    ],
+};
+let pd = poleDetailsOf({ job: { id: 'WO-1' }, shopDoc: shop });
+eq('every CUT becomes a row, and only cuts', pd.rows.map(r => r.display), ['96"', '76 1/2"']);
+eq('quantities ride the rows', pd.rows.map(r => r.qty), [2, 1]);
+eq('the source is named', pd.source, 'shop');
+eq('the sidemark comes off the order', pd.sidemark, 'ROOM LEFT');
+
+eq('a single cutLength with no list still answers',
+    poleDetailsOf({ job: {}, shopDoc: { item: 'Pole', qty: 2, cutLength: 84 } }).rows[0].display, '84"');
+
+pd = poleDetailsOf({ job: { id: 'W' }, shopDoc: { cutList: [] } });
+eq('a shop order with no cut list yields NO length — it never guesses', pd.rows.length, 0);
+eq('and says so', pd.source, 'none');
+eq('no shop doc at all is the same honest blank', poleDetailsOf({ job: { id: 'W' } }).rows.length, 0);
+
+eq('sidemark falls back through the sales order',
+    poleDetailsOf({ job: {}, salesOrder: { sidemark: 'WORKROOM' } }).sidemark, 'WORKROOM');
+eq('then to the order memo',
+    poleDetailsOf({ job: {}, salesOrder: { memo: 'CAFE' } }).sidemark, 'CAFE');
+eq('the job wins over the sales order when it carries one',
+    poleDetailsOf({ job: { sidemark: 'ON THE JOB' }, salesOrder: { sidemark: 'ON THE SO' } }).sidemark, 'ON THE JOB');
+
+// ── the stocked pole, whose length is in its CODE and in FEET ────────────────────────────────
+// The grammar is NOT a "-4" suffix — it is a digit PAIR inside the code (Shared/poleCut LEN_RE:
+// length 4|6|8|12 followed by the diameter code 10|15|35). HCUMP810 is an 8 ft 1" pole. Written
+// down because the first draft of this test assumed the suffix and "proved" the reader wrong.
+const st = stockedPoleDetail('HCUMP810', 6, poleLengthOf);
+eq('a stocked pole reads its length off the code, in feet', st && st.display, '8 ft');
+eq('and keeps its quantity', st && st.qty, 6);
+eq('every stocked length the grammar knows', ['HCUMP410', 'HCUMP610', 'HCUMP810', 'HCUMP1210'].map(c => stockedPoleDetail(c, 1, poleLengthOf).display), ['4 ft', '6 ft', '8 ft', '12 ft']);
+eq('a finish suffix does not hide the length', stockedPoleDetail('HCUMP810/P', 1, poleLengthOf).display, '8 ft');
+eq('a ring has no length and gets no guess', stockedPoleDetail('HCUSR1', 2, poleLengthOf), null);
+eq('nor does a joiner', stockedPoleDetail('H1-1JNR-16G', 2, poleLengthOf), null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
