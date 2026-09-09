@@ -1550,11 +1550,17 @@ function HardwareConfiguratorInner({
                     <select value={kitPick} onChange={e => applyKit(e.target.value)}
                         style={{ padding: '6px 8px', border: '1px solid var(--line)', background: '#fff', fontSize: '12px', minWidth: '260px' }}>
                         <option value="">— configure from scratch —</option>
-                        {kits.map(k => (
-                            <option key={k.id || k.legacyErpId} value={String(k.id || k.legacyErpId || '')}>
-                                {k.legacyErpId || k.itemName}{k.itemName && k.legacyErpId ? ` · ${k.itemName}` : ''}
-                            </option>
-                        ))}
+                        {kits.map(k => {
+                            // THEIR code for the kit beside ours (Stuart 2026-09-09: "it only displays
+                            // our part# and description for the kits, please add the fabricut kit
+                            // codes") — the active customer's 4.6 row, the one the kit prices from.
+                            const theirs = String(findClientPriceRow(k.clientPricing, customerKeys(customerId, customer))?.clientSku || '').trim();
+                            return (
+                                <option key={k.id || k.legacyErpId} value={String(k.id || k.legacyErpId || '')}>
+                                    {k.legacyErpId || k.itemName}{theirs && theirs !== k.legacyErpId ? ` · ${theirs}` : ''}{k.itemName && k.legacyErpId ? ` · ${k.itemName}` : ''}
+                                </option>
+                            );
+                        })}
                     </select>
                     {/* ADDITIONAL FEET (Stuart 2026-08-22): "on rod qty it starts at the 4ft set
                         then each additional foot so add a field for additional qty." The kit's base
