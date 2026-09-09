@@ -169,7 +169,7 @@ export const preferring = (pool, ...gates) => gates.reduce((acc, g) => {
     return kept.length ? kept : acc;
 }, Array.isArray(pool) ? pool : []);
 
-export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames, defaultHidden = false, clearNodes = null }) => {
+export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames, defaultHidden = false, clearNodes = null, stretchSpec = null }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -194,6 +194,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
     const textureOverridesString = JSON.stringify(textureOverrides);
     const visibilityOverridesString = JSON.stringify(visibilityOverrides);
     const cloneSpecsString = JSON.stringify(cloneSpecs);
+    const stretchSpecString = JSON.stringify(stretchSpec);
     const highlightOverridesString = JSON.stringify(highlightOverrides);
 
     useEffect(() => {
@@ -352,6 +353,64 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                 onVisAudit([...visTokens].filter(t => !hitTokens.has(t)).sort());
             }
 
+            // --- Pole stretch (Stuart 2026-09-09: "can you stretch the rod/pole when they are long?") ---
+            // The .glb pole is one modelled length; a 144" order with five centre brackets crowds the
+            // clones onto the end brackets. When the order is LONGER than the model, the pole meshes
+            // are scaled along their long axis about the pole's centre to the ordered length, and
+            // every other visible mesh is MOVED (never scaled) by the same ratio about that centre —
+            // ends land at the new pole ends, rings spread evenly, the centre bracket stays put.
+            // Every mesh keeps its original matrix, so each pass starts from the model and a finish
+            // or count change never compounds the stretch. Fully graceful: no rail, no inches, no
+            // stretch. Runs BEFORE the clones so they space along the stretched rail.
+            try {
+                clonedScene.traverse(c => { if (c.isMesh && !c.userData.originalMatrix) c.userData.originalMatrix = c.matrix.clone(); });
+                clonedScene.traverse(c => { if (c.isMesh && c.userData.stretched && c.userData.originalMatrix?.isMatrix4) { c.matrix.copy(c.userData.originalMatrix); c.userData.stretched = false; } });
+                clonedScene.updateMatrixWorld(true);
+                // Last pass's clones are still in the tree here (the clone block below rebuilds them);
+                // they are never moved, and they never keep a real original matrix to reset from.
+                const inClones = (m) => { let nd = m; while (nd) { if (nd.name === '__centerClones') return true; nd = nd.parent; } return false; };
+                const wantIn = Number(stretchSpec?.lengthInches) || 0;
+                const railList = Array.isArray(stretchSpec?.railNames) ? stretchSpec.railNames : [];
+                if (wantIn > 0 && railList.length) {
+                    const railSet = new Set(railList.map(s => String(s).trim().toLowerCase()));
+                    const onRail = (mesh) => { let nd = mesh; while (nd) { if (nd.name && railSet.has(nd.name.toLowerCase())) return true; nd = nd.parent; } return false; };
+                    const railMeshes = []; clonedScene.traverse(c => { if (c.isMesh && c.visible && !isFastener(c) && !inClones(c) && onRail(c)) railMeshes.push(c); });
+                    if (railMeshes.length) {
+                        const rb = new THREE.Box3(); railMeshes.forEach(m => rb.expandByObject(m));
+                        const sz = rb.getSize(new THREE.Vector3());
+                        const ax = sz.x >= sz.y && sz.x >= sz.z ? 'x' : (sz.y >= sz.z ? 'y' : 'z');
+                        const modelLen = sz[ax];
+                        // Units guard: 1.6 exports production inches. A rail that does not read as a
+                        // pole length in inches is a foreign model — left alone, never scaled wrong.
+                        const factor = (modelLen > 12 && modelLen < 400) ? wantIn / modelLen : 1;
+                        if (factor > 1.01) {
+                            const c0 = rb.getCenter(new THREE.Vector3())[ax];
+                            const vec = (v) => new THREE.Vector3(ax === 'x' ? v : 0, ax === 'y' ? v : 0, ax === 'z' ? v : 0);
+                            const railMeshSet = new Set(railMeshes);
+                            const applyWorld = (m, xf) => {
+                                const parentInv = new THREE.Matrix4().copy(m.parent ? m.parent.matrixWorld : new THREE.Matrix4()).invert();
+                                m.matrix.copy(parentInv).multiply(xf).multiply(m.matrixWorld);
+                                m.matrixAutoUpdate = false; m.userData.stretched = true;
+                            };
+                            const toC = vec(c0);
+                            clonedScene.traverse(m => {
+                                if (!m.isMesh || !m.visible || isFastener(m) || inClones(m) || !m.userData.originalMatrix?.isMatrix4) return;
+                                if (railMeshSet.has(m)) {
+                                    const sc = new THREE.Matrix4().makeScale(ax === 'x' ? factor : 1, ax === 'y' ? factor : 1, ax === 'z' ? factor : 1);
+                                    const xf = new THREE.Matrix4().makeTranslation(toC.x, toC.y, toC.z).multiply(sc).multiply(new THREE.Matrix4().makeTranslation(-toC.x, -toC.y, -toC.z));
+                                    applyWorld(m, xf);
+                                } else {
+                                    const mc = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3())[ax];
+                                    const d = (factor - 1) * (mc - c0);
+                                    if (Math.abs(d) > 1e-6) { const t = vec(d); applyWorld(m, new THREE.Matrix4().makeTranslation(t.x, t.y, t.z)); }
+                                }
+                            });
+                            clonedScene.updateMatrixWorld(true);
+                        }
+                    }
+                }
+            } catch (e) { console.warn('pole stretch skipped', e); }
+
             // --- Center-bracket cloning ---------------------------------------------------------
             // One source bracket sits at the middle of the pole; clone it N times (count from the
             // flow's "clone along pole" step qty) and space the copies evenly along the pole's long
@@ -468,7 +527,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                 );
             }
         });
-    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, highlightOverridesString, defaultHidden, JSON.stringify(clearNodes)]);
+    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, stretchSpecString, highlightOverridesString, defaultHidden, JSON.stringify(clearNodes)]);
 
     return <primitive object={clonedScene} />;
 };

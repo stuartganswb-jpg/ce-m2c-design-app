@@ -573,18 +573,26 @@ function HardwareConfiguratorInner({
     // nothing. The same spec, from the resolved model: the CENTER bracket pick (and its plate) as
     // the meshes, the bracket alone as the placement anchor, the chosen rod(s) as the rail, the
     // slot's quantity as the count. Count comes from `quantities` — typed, else the span advice.
-    const cloneSpecs = useMemo(() => {
-        const pickOf = (sl) => { const id = livePicks[sl.key]; return id ? (sl.options || []).find(x => x.id === id) || null : null; };
-        // THE RAIL IS THE WHOLE POLE AS DRAWN (Stuart 2026-09-09: "the 1st bracket is no longer in
+    // THE RAIL IS THE WHOLE POLE AS DRAWN (Stuart 2026-09-09: "the 1st bracket is no longer in
         // the center it is off to the left"). A rod slot's pick is ONE piece of a pole modelled in
         // three (LEFT / CENTER / RIGHT), so spacing along the pick alone centred the bracket on a
         // piece. The rail is every rod-role node the render currently shows — all the pieces, and
         // only as long as the ends leave it (a return drops its end piece).
+    const railNames = useMemo(() => {
         const shown = new Set([...resolved.visible].map(n => String(n).toLowerCase()));
-        const railNames = [...new Set((model.choices || [])
+        return [...new Set((model.choices || [])
             .filter(c => ROD_ROLES.includes(c.role))
             .flatMap(c => c.nodes || [])
             .filter(n => shown.has(String(n).toLowerCase())))];
+    }, [resolved, model]);
+    // ── A LONG ORDER RENDERS LONG (Stuart 2026-09-09: "i am working on a long rod of 144in and it
+    // will need 5 center brackets … the 5th overruns the left bracket and right bracket. can you
+    // stretch the rod/pole when they are long?"). DynamicModel scales the pole meshes along their
+    // axis to this length and moves everything else out with the ends; only when the order is
+    // longer than the model, and only where the model reads as inches.
+    const stretchSpec = useMemo(() => (lengthInches > 0 && railNames.length ? { railNames, lengthInches } : null), [railNames, lengthInches]);
+    const cloneSpecs = useMemo(() => {
+        const pickOf = (sl) => { const id = livePicks[sl.key]; return id ? (sl.options || []).find(x => x.id === id) || null : null; };
         const out = [];
         resolved.slots.forEach(sl => {
             if (sl.kind !== 'BRACKET' || String(sl.position || '').toUpperCase() !== 'CENTER') return;
@@ -596,7 +604,7 @@ function HardwareConfiguratorInner({
             out.push({ stepId: sl.key, meshNames: [...o.nodes, ...((plate && plate.nodes) || [])], anchorNames: [...o.nodes], railNames, count });
         });
         return out;
-    }, [resolved, model, livePicks, quantities]);
+    }, [resolved, railNames, livePicks, quantities]);
 
     const finishByCode = useMemo(() => {
         const m = new Map();
@@ -611,7 +619,33 @@ function HardwareConfiguratorInner({
     // config, select again at any part you would like in another finish"). The override is always
     // available — it is not a mode to turn on. A part wears its own finish if one was set for it,
     // and the configuration's otherwise, so the common order is one click and the mixed one is two.
-    const finishFor = useCallback((c) => partFinish[c.id] || globalFinish, [partFinish, globalFinish]);
+    const partFinishByPart = useMemo(() => {
+        const m = {};
+        Object.entries(partFinish).forEach(([id, code]) => {
+            const c = model.choices.find(x => x.id === id);
+            if (c?.partId) m[String(c.partId).toUpperCase()] = code;
+        });
+        return m;
+    }, [partFinish, model]);
+    // ── A PLATE WEARS ITS ARM'S FINISH (Stuart 2026-09-09: "the bracket arm takes a finish code but
+    // the matching backplate/coverplate does not, stays mill finish"). "Just this part" on a bracket
+    // means the bracket AND the plate it sits on — they are one piece of hardware on the wall. A
+    // plate with no finish of its own follows the arm holding the rod at its position: the return
+    // or inside mount when one is chosen there, else the bracket. Its own pick still wins.
+    const armFinishOf = useCallback((c) => {
+        if (!c || c.role !== 'BACKPLATE') return '';
+        const pos = String(c.position || '').toUpperCase();
+        const pickAt = (kind) => {
+            const sl = resolved.slots.find(x => x.kind === kind && String(x.position || '').toUpperCase() === pos);
+            const id = sl ? livePicks[sl.key] : '';
+            return id ? (sl.options || []).find(o => o.id === id) || null : null;
+        };
+        const end = pickAt('END');
+        const arm = (end && ['RETURN', 'INSIDE_MOUNT'].includes(end.role)) ? end : pickAt('BRACKET');
+        if (!arm) return '';
+        return partFinish[arm.id] || partFinishByPart[String(arm.partId || '').toUpperCase()] || '';
+    }, [resolved, livePicks, partFinish, partFinishByPart]);
+    const finishFor = useCallback((c) => partFinish[c.id] || armFinishOf(c) || globalFinish, [partFinish, armFinishOf, globalFinish]);
 
     // ── A CUSTOM-FINISHED TRACK WEARS THE FASCIA'S FINISH (Stuart 2026-08-31) ────────────────
     // "one tick per track and we will need if ticked to associate the same finish color as
@@ -653,14 +687,6 @@ function HardwareConfiguratorInner({
     // left, core, right — so a finish set on the one the customer clicked would leave its own other
     // two segments billing the configuration finish. The exception therefore travels by PART: same
     // part number, same finish, which is what "just this part" means to the person clicking it.
-    const partFinishByPart = useMemo(() => {
-        const m = {};
-        Object.entries(partFinish).forEach(([id, code]) => {
-            const c = model.choices.find(x => x.id === id);
-            if (c?.partId) m[String(c.partId).toUpperCase()] = code;
-        });
-        return m;
-    }, [partFinish, model]);
     // …and the MATERIAL GATE is applied here, exactly as the renderer applies it: a part wears only
     // a finish its material can take, so a wood stain chosen for the configuration does not bill a
     // stained bracket, and clear acrylic bills and sprays as nothing at all.
@@ -673,12 +699,12 @@ function HardwareConfiguratorInner({
         // send the floor an unpaid paint job. Only the upcharge above can paint a track.
         if (choice && choice.role === 'TRACK') return '';
         if (!choice || choice.noFinish) return '';
-        const code = partFinish[choice.id] || partFinishByPart[String(choice.partId || '').toUpperCase()] || globalFinish;
+        const code = partFinish[choice.id] || partFinishByPart[String(choice.partId || '').toUpperCase()] || armFinishOf(choice) || globalFinish;
         if (!code) return '';
         const f = finishByCode.get(String(code).toUpperCase());
         if (!f || !finishesFor(choice, [f]).length) return '';
         return code;
-    }, [partFinish, partFinishByPart, globalFinish, finishByCode, matchFinishOverride]);
+    }, [partFinish, partFinishByPart, armFinishOf, globalFinish, finishByCode, matchFinishOverride]);
 
     // NODE → TEXTURE. A no-finish part is skipped entirely, so the clear rule paints it instead —
     // the collar of a two-part finial takes the finish, the acrylic top never does.
@@ -1272,6 +1298,7 @@ function HardwareConfiguratorInner({
                 textureEntries: Object.entries(textureOverrides || {}).map(([target, url]) => ({ target, url })),
                 visibilityEntries: Object.entries(visibleOverrides || {}).map(([target, visible]) => ({ target, visible })),
                 cloneSpecs,
+                stretchSpec,
                 defaultHidden: true,
                 clearNodes: clearList,
             } : null,
@@ -2057,7 +2084,7 @@ function HardwareConfiguratorInner({
                                         renderScaleOf is 1 on any flow without a size matrix. */}
                                     <group scale={renderScaleOf(flow, sizePick, assembly)}>
                                         <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibleOverrides}
-                                            cloneSpecs={cloneSpecs} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
+                                            cloneSpecs={cloneSpecs} stretchSpec={stretchSpec} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
                                     </group>
                                 </Bounds>
                             </Canvas>

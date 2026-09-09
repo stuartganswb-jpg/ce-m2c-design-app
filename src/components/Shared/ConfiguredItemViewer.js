@@ -237,6 +237,7 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                                                     textureOverrides={texMap}
                                                     visibilityOverrides={visMap}
                                                     cloneSpecs={rs.cloneSpecs}
+                                                    stretchSpec={rs.stretchSpec || null}
                                                     /* ⚠ THE TAG ENGINE RENDERS ADDITIVELY (Stuart
                                                        2026-08-21): nothing is visible until it is
                                                        chosen, so its saved state means "show ONLY
