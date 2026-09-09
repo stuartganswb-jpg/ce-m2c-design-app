@@ -566,6 +566,29 @@ function HardwareConfiguratorInner({
     // 🧊 The clear parts, from the TAG — never from a mesh name. Passing this switches the renderer
     // off its hardcoded acrylic item-code list entirely for this configurator.
     const clearList = useMemo(() => [...resolved.clear].map(n => String(n).toLowerCase()), [resolved]);
+    // ── N CENTRE BRACKETS RENDER AS N (Stuart 2026-09-09: "the old engine used to clone the center
+    // bracket so if we added 2,3 etc the render added them, can we please bring back that feature
+    // on the new engine"). The renderer never lost it — DynamicModel still spaces N copies of a
+    // mesh set along a rail; the old engine fed it from the flow's clone step and this one fed it
+    // nothing. The same spec, from the resolved model: the CENTER bracket pick (and its plate) as
+    // the meshes, the bracket alone as the placement anchor, the chosen rod(s) as the rail, the
+    // slot's quantity as the count. Count comes from `quantities` — typed, else the span advice.
+    const cloneSpecs = useMemo(() => {
+        const pickOf = (sl) => { const id = livePicks[sl.key]; return id ? (sl.options || []).find(x => x.id === id) || null : null; };
+        const railNames = [];
+        resolved.slots.forEach(sl => { if (ROD_ROLES.includes(sl.kind)) { const o = pickOf(sl); if (o) railNames.push(...(o.nodes || [])); } });
+        const out = [];
+        resolved.slots.forEach(sl => {
+            if (sl.kind !== 'BRACKET' || String(sl.position || '').toUpperCase() !== 'CENTER') return;
+            const o = pickOf(sl);
+            if (!o || !(o.nodes || []).length) return;
+            const plateSlot = resolved.slots.find(x => x.kind === 'BACKPLATE' && String(x.position || '').toUpperCase() === 'CENTER');
+            const plate = plateSlot ? pickOf(plateSlot) : null;
+            const count = Number(quantities[o.id]) || 1;
+            out.push({ stepId: sl.key, meshNames: [...o.nodes, ...((plate && plate.nodes) || [])], anchorNames: [...o.nodes], railNames, count });
+        });
+        return out;
+    }, [resolved, livePicks, quantities]);
 
     const finishByCode = useMemo(() => {
         const m = new Map();
@@ -1240,7 +1263,7 @@ function HardwareConfiguratorInner({
                 cadUrl,
                 textureEntries: Object.entries(textureOverrides || {}).map(([target, url]) => ({ target, url })),
                 visibilityEntries: Object.entries(visibleOverrides || {}).map(([target, visible]) => ({ target, visible })),
-                cloneSpecs: [],
+                cloneSpecs,
                 defaultHidden: true,
                 clearNodes: clearList,
             } : null,
@@ -2026,7 +2049,7 @@ function HardwareConfiguratorInner({
                                         renderScaleOf is 1 on any flow without a size matrix. */}
                                     <group scale={renderScaleOf(flow, sizePick, assembly)}>
                                         <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibleOverrides}
-                                            cloneSpecs={[]} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
+                                            cloneSpecs={cloneSpecs} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
                                     </group>
                                 </Bounds>
                             </Canvas>
@@ -2080,7 +2103,9 @@ function HardwareConfiguratorInner({
                                                         const f = l.finishCode ? finishByCode.get(String(l.finishCode).toUpperCase()) : null;
                                                         if (f) return (
                                                             <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--brass)' }}>
-                                                                {`${f.name || f.code}`}<span style={{ color: 'var(--ink-faint)' }}>{` · ${f.code}`}</span>
+                                                                {/* THEIR word for it first (the same 4.5 client mapping the chips use), else
+                                                                    our name — never the code twice (Stuart 2026-09-09: "S11 · S11"). */}
+                                                                {(() => { const theirs = clientFinishName(f); const ours = (f.name && f.name !== f.code) ? f.name : ''; const label = theirs || ours; return label ? <>{label}<span style={{ color: 'var(--ink-faint)' }}>{` · ${f.code}`}</span></> : f.code; })()}
                                                             </span>
                                                         );
                                                         return (
