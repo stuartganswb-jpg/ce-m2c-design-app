@@ -197,6 +197,14 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 4 (S1) e4ab15a pushed 17:30.** `ridesWith: RETURN` pin tag (adapter → normalizeChoice → ridersFor
+  `returnChosen` gate; 1.6 select beside "hide"; both save paths). Proven: 677 engine assertions, runner green, build
+  compiled. Rail read of the one-order change done on all four flows (bd5907e); rod-first then a foreign bracket reseats
+  the rod's copy, nothing silently dropped. Stuart to tag: H1-138 #72 (+ #16/#17, #96/#97/#103/#104 if wanted), H1-1 #31/#32
+  (one pin at #32 has setup blank); H1-75 has no real standoff pins. Defect named: H1-138 #71 standoff pinned as RETURN.
+  Two pre-existing `import/first` lint errors in hardwareAdapter.js (78–79) left as found. Commits staged as HEAD+mine
+  blobs so S5's uncommitted lines in this brief / BRIEF_S5 / the board are NOT carried.
+
 - **2026-09-10 — Issue 3 (S1) bd5907e pushed 15:07.** One step order for every flow (engine rank = SLOT_ORDER; length
   after the rod). Came after the H1 tag audit (`H1_TAG_ALIGNMENT_2026-09-10.md`, three revisions: locators must
   carry BOTH the 1.6 chip `#n · slot` (0-based load order) and the 1.5 list number; the "traverse inside

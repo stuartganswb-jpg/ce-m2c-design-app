@@ -424,6 +424,12 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · e4ab15a (pushed 17:30).** New pin tag `ridesWith: RETURN` (1.6 tag row): a hidden rider reaches the BOM
+  only when a miter / French return is chosen on the order and its rod is on the order. Born from the H1-138 short-rear-rod
+  standoffs (`1.6 #72 / 1.5 #68`) that would otherwise ride every double and confuse the floor. Adds to §2.2: S4 mirrors
+  `ridesWith` + the rank change in `portalEngine.js`. Named for Stuart: H1-138 `#71` has a standoff pinned as a RETURN (not
+  hidden) and offered as an end treatment.
+
 - **2026-09-10 · S3 · f5a6c19 (pushed 15:14).** Stuart's ask: "break apart packs and convert into others so 5 -12pks can
   become 60pcs or 6 10pks", and pairs (HCUDEC1/CP, 2 pc → 1 pair). Shipped the first as **⇄ REPACK** on the WMS RING PACKS
   panel (unbuild then build through the convert RESTlet already deployed; the loose remainder stays in the each bin; a
