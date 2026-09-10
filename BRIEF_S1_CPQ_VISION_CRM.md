@@ -141,6 +141,16 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 ## 6. Hand-offs in
 
+- **From S2, 2026-09-10 — stamp a REFUSED estimate on the job so RTG can show it.** `CPQTab.js` ≈:3338–3347 (and the
+  SALES_ORDER branch ≈:3329): when `queueNsTransaction` returns `ok:false`, nothing is written on the job — only the alert
+  ("push it from Tab 12", which never lists a CONFIGURED quote). ST091026-01 today was exactly this (your HIDDEN- finding,
+  refused before a58d126 was live) and was invisible on RTG, against Stuart's "everything hits RTG". **Ask:** in both
+  branches on `!res.ok` (and in the `catch`), `updateDoc(doc(db,'jobs',targetJobId), { nsTransmitRefusedAt: Date.now(),
+  nsTransmitRefusedCode: res.error.code, nsTransmitRefusedMessage: String(res.error.message).slice(0,500) })`; on a later
+  `res.ok` clear the three (`deleteField()`). S2 then lists `nsTransmitRefusedAt` jobs in RTG's ⇄ Quotes & Sales Orders
+  panel with a "⇄ Queue now" that calls your `queueNsTransaction` and clears the stamp on success. Downstream trace: jobs
+  doc only; no floor doc, no NetSuite write until the person presses Queue now. Optional, yours: tab 12 could list
+  CONFIGURED quotes too, or the alert could stop pointing there.
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-10 · second push (reopen rules corrected after the first dry run) — hard-refresh
   + re-PIN again.** Three rules changed in `Shared/orderLifecycle.reopenPlanFor` before anything was written: (1) on a
   sales order a fin doc with `nsFulfillQueued` / `nsIfTran` is SHIPPED and stays closed (14 July/August Brimar orders
