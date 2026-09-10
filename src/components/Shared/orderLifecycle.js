@@ -508,3 +508,204 @@ export async function confirmNsClosed(ctx, { order, kind, by }) {
     if (links.hq) { await updateDoc(doc(db, links.hq.coll, links.hq.id), patch).catch(() => {}); n++; }
     return n;
 }
+
+// ── REOPENING A BULK CLOSE (Stuart 2026-09-10, S2 Issue 1) ──────────────────────────────────
+// "Close all" on the Board vs Floor panel closed live orders this morning: the FLOOR_DONE finding
+// read ONE floor document's 'Complete' (a finishing job leaving the paint line, a pick-only doc
+// born Complete, a shop half done beside a Painting sibling) as the ORDER being done, and the bulk
+// button trusted it. The closer overwrote currentPhase / pickStatus / sentToPickPack, so a reopen
+// cannot read those back — but every floor stamps FACTS as it works (pickedAt, stagedAt, packedAt,
+// putawayBin, shippedAt, completedAt, the task statuses, startedAt) and the closer touched none of
+// them. Each document is restored FROM ITS OWN STAMPS, never from a guess; a document whose stamps
+// say it was genuinely finished (shipped, put away to a bin) stays closed and says why. Pure, so
+// every rule is in scripts/orderLifecycle.test.mjs; the Firestore writes are applyBulkReopen.
+export const BULK_CLOSE_FROM = 'RTG_RECONCILE_ALL';
+export const REOPEN_FROM = 'RTG_BULK_REOPEN';
+// A field the restore REMOVES (mapped to Firestore's deleteField by the applier) — an absent
+// field is "unknown", which is more honest than a value the closer invented.
+export const DELETE = Object.freeze({ __delete: true });
+const has = (v) => !!v;
+export const toMs = (v) => (v && typeof v.toMillis === 'function') ? v.toMillis() : (typeof v === 'number' ? v : (v ? (Date.parse(v) || 0) : 0));
+export const closedByBulkIn = (d, { since = 0, until = Infinity } = {}) =>
+    !!d && d.closedFrom === BULK_CLOSE_FROM && toMs(d.closedAt) >= since && toMs(d.closedAt) <= until;
+// The WMS stamps pickedAt at pick confirm and stagedAt at the staging match; the latest wins.
+export const pickStatusFromStamps = (d) =>
+    has(d && d.stagedAt) ? 'Staged_Ready_For_Finishing' : has(d && d.pickedAt) ? 'Picked_Awaiting_Staging' : 'Pending';
+const tasksTouched = (d) => Object.values((d && d.tasks) || {}).some(t => t && t.status && t.status !== 'Pending');
+const shopStarted = (s) => !!s && (has(s.startedAt) || has(s.completedAt));
+const CLOSE_STAMPS = ['closedAt', 'closedBy', 'closedFrom', 'closeReason', 'nsWoCloseRequired', 'nsWoCloseRequestedAt', 'nsWoCloseRequestedBy', 'nsWoClosePending'];
+const clearClose = (d) => ({
+    ...Object.fromEntries(CLOSE_STAMPS.map(k => [k, DELETE])),
+    // The close is kept as history on the document, never lost.
+    reopenedFromClose: { closedAt: d.closedAt || null, closedBy: d.closedBy || '', closedFrom: d.closedFrom || '', closeReason: d.closeReason || '' },
+});
+
+/**
+ * One document's reopen decision: KEEP (it was genuinely done — left as the close left it),
+ * RESTORE (with the exact patch), or SKIP (not this close's, or already reopened).
+ * `sibling` is the other floor half (the shop doc for a fin doc, the fin doc for a shop doc) —
+ * it decides whether the small-parts pick had been released and whether the custom half is at
+ * the plater. `live` says whether the restored document is still WORK (drives the record).
+ */
+export function reopenPlanFor({ coll, d, sibling = null }) {
+    const row = { coll, id: d && d.id, closedAt: (d && d.closedAt) || null, closeReason: (d && d.closeReason) || '', live: false };
+    if (!d) return { ...row, action: 'SKIP', why: 'no document' };
+    if (has(d.reopenedAt)) return { ...row, action: 'SKIP', why: `already reopened by ${d.reopenedBy || '?'}` };
+    if (d.closedFrom !== BULK_CLOSE_FROM) return { ...row, action: 'SKIP', why: 'not closed by a bulk close' };
+    // Only a FLOOR_DONE close is suspect. FLOOR_CLOSED means the floor had already closed it;
+    // BOARD_CLOSED means the board had; ORPHAN_FLOOR had no record to reopen into.
+    if (d.closeReason && d.closeReason !== 'FLOOR_DONE') return { ...row, action: 'KEEP', why: `closed as ${d.closeReason} — it was already closed on the other side` };
+
+    if (coll === 'fin_workorders') {
+        if (has(d.shippedAt)) return { ...row, action: 'KEEP', why: 'shipped — it was done' };
+        if (has(d.putawayBin)) return { ...row, action: 'KEEP', why: `put away to ${d.putawayBin} — it was done` };
+        const pickOnly = d.pickOnly === true;
+        const packed = d.packStatus === 'Packed';
+        const complete = pickOnly || packed || has(d.completedAt);
+        const painting = !complete && (tasksTouched(d) || Number(d.currentStepIndex) > 0 || has(d.machineAssigned));
+        const phase = complete
+            ? { currentPhase: 'Complete', stepStatus: 'Complete' }
+            : painting ? { currentPhase: 'Painting', stepStatus: 'Staged' }
+                : { currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0 };
+        // The pick is released at the split for a small-only order, and by the shop STARTING the
+        // custom half for a paired one (releaseSiblingToPickPack) — read off the sibling's stamps.
+        const released = pickOnly || d.hasCustomSibling !== true || shopStarted(sibling);
+        const pickStatus = released ? pickStatusFromStamps(d) : 'Pending';
+        const why = [
+            pickOnly ? 'pick-only' : packed ? 'packed, not put away' : has(d.completedAt) ? 'finished on the floor, not packed' : painting ? 'in Painting' : 'not started',
+            `→ ${phase.currentPhase}`,
+            released ? `WMS ${pickStatus.replace(/_/g, ' ').toLowerCase()}` : 'pick not released (custom half not started)',
+        ].join(' · ');
+        return {
+            ...row, action: 'RESTORE', live: true, why,
+            patch: {
+                ...clearClose(d), status: DELETE, ...phase,
+                sentToPickPack: released, pickStatus,
+                // The WMS is told the pick state was RECONSTRUCTED (a chip S3 shows) unless the
+                // pack had already stamped it.
+                reopenConfirmPick: released && !packed,
+            },
+        };
+    }
+    if (coll === 'shop_custom_orders') {
+        // 'Sent to Plating' lives on the fin sibling's mirror (customFabStatus), which the closer
+        // never touched; the demand flag is the fallback when the sibling is not in the room.
+        const atPlater = (sibling && sibling.customFabStatus === 'Sent to Plating')
+            || (d.isOutsourced === true && has(d.completedAt) && d.platingDemandCreated === true);
+        const status = atPlater ? 'Sent to Plating' : has(d.completedAt) ? 'Completed' : has(d.startedAt) ? 'In Process' : 'Pending';
+        return {
+            ...row, action: 'RESTORE', live: status !== 'Completed', why: `→ ${status}`,
+            patch: { ...clearClose(d), closed: DELETE, status },
+        };
+    }
+    if (coll === 'hq_work_orders') {
+        const dispatched = has(d.dispatchedAt) || d.pushedToFinishing === true || d.pushedToShop === true;
+        const status = dispatched ? 'Dispatched' : 'Approved';
+        return { ...row, action: 'RESTORE', live: true, why: `→ ${status}`, patch: { ...clearClose(d), status } };
+    }
+    if (coll === 'hq_sales_orders') {
+        // A stocked (Order Entry / Quick Ship) order's status IS its pick status — the WMS writes
+        // both together and the closer touched only `status`.
+        const qs = ['Pending', 'Picked', 'Shipped'];
+        const stocked = d.orderClass === 'QUICKSHIP' || (d.autoSplit !== true && qs.includes(String(d.pickStatus || '')));
+        const status = stocked
+            ? (qs.includes(String(d.pickStatus || '')) ? String(d.pickStatus) : 'Pending')
+            : ((has(d.dispatchedAt) || d.autoSplit === true) ? 'Dispatched' : 'Approved');
+        return { ...row, action: 'RESTORE', live: true, why: `→ ${status}`, patch: { ...clearClose(d), status } };
+    }
+    return { ...row, action: 'SKIP', why: `unknown collection ${coll}` };
+}
+
+/**
+ * The whole plan for one bulk close: every document it stamped inside the window, decided by
+ * reopenPlanFor, then the ORDER-level rule — a record is reopened only when at least one of its
+ * floor documents is still work; when every floor document was done, the record and its
+ * finished shop half stay closed (the close was right for that order). Rod cuts the close
+ * cancelled come back OPEN only for reopened orders (a cut for a done order is pieces nobody
+ * wants); queued NetSuite writes it cancelled come back PENDING for EVERY order in the close —
+ * a build for a packed order or a fulfilment for a shipped one was right to post regardless.
+ */
+export function planBulkReopen({ finWos = [], shopJobs = [], hqOrders = [], rodCuts = [], outbox = [], siblings = new Map(), since = 0, until = Infinity }) {
+    const inWin = (d) => closedByBulkIn(d, { since, until });
+    const fin = finWos.filter(inWin), shop = shopJobs.filter(inWin), hq = hqOrders.filter(inWin);
+    const byId = new Map([...finWos, ...shopJobs].map(d => [String(d.id), d]));
+    const sib = (id) => (id && (byId.get(String(id)) || siblings.get(String(id)))) || null;
+    const rows = [
+        ...fin.map(d => ({ ...reopenPlanFor({ coll: 'fin_workorders', d, sibling: sib(d.shopSiblingId) }), d })),
+        ...shop.map(d => ({ ...reopenPlanFor({ coll: 'shop_custom_orders', d, sibling: sib(d.finSiblingId) }), d })),
+    ];
+    // Link floor rows to their record the way the audit does — by the identity set.
+    const byKey = new Map();
+    hq.forEach(o => identityKeysOf(o).forEach(k => byKey.set(k, String(o.id))));
+    const floorOf = new Map();
+    rows.forEach(r => {
+        const pid = identityKeysOf(r.d).map(k => byKey.get(k)).find(Boolean);
+        if (pid) { r.recordId = pid; (floorOf.get(pid) || floorOf.set(pid, []).get(pid)).push(r); }
+    });
+    const keptRecords = new Set();
+    const recordRows = hq.map(d => {
+        // The loader stamps __coll; the fallback is the board's own sales/stock test.
+        const coll = d.__coll || ((d.soId && !d.woId) ? 'hq_sales_orders' : 'hq_work_orders');
+        const plan = reopenPlanFor({ coll, d });
+        const floor = floorOf.get(String(d.id)) || [];
+        if (plan.action !== 'RESTORE') return { ...plan, d };
+        if (!floor.length) { keptRecords.add(String(d.id)); return { ...plan, action: 'KEEP', live: false, why: 'no floor document of this close belongs to it — review by hand', d }; }
+        if (!floor.some(r => r.live)) { keptRecords.add(String(d.id)); return { ...plan, action: 'KEEP', live: false, why: `every floor document was done (${floor.map(r => r.why).join('; ')})`, d }; }
+        return { ...plan, d };
+    });
+    // A finished shop half of a kept order stays as it is.
+    rows.forEach(r => {
+        if (r.action === 'RESTORE' && !r.live && r.recordId && keptRecords.has(r.recordId)) { r.action = 'KEEP'; r.why = `${r.why} — its order stays closed`; delete r.patch; }
+    });
+    const restoredOrderIds = new Set();
+    recordRows.filter(r => r.action === 'RESTORE').forEach(r => identityKeysOf(r.d).forEach(k => restoredOrderIds.add(k)));
+    rows.filter(r => r.action === 'RESTORE').forEach(r => identityKeysOf(r.d).forEach(k => restoredOrderIds.add(k)));
+    const allOrderIds = new Set([...hq, ...fin, ...shop].flatMap(d => identityKeysOf(d)));
+    const cutRows = rodCuts
+        .filter(rc => String(rc.status || '').toUpperCase() === 'CANCELLED' && String(rc.cancelReason || '').includes(`from ${BULK_CLOSE_FROM}`) && toMs(rc.cancelledAt) >= since && toMs(rc.cancelledAt) <= until)
+        .map(rc => {
+            const mine = restoredOrderIds.has(String(rc.finWoId));
+            const base = { coll: 'rod_cut_orders', id: rc.id, closedAt: rc.cancelledAt || null, closeReason: 'cancelled with its order', d: rc, live: mine };
+            if (has(rc.reopenedAt)) return { ...base, action: 'SKIP', why: 'already reopened' };
+            if (!allOrderIds.has(String(rc.finWoId))) return { ...base, action: 'SKIP', why: 'its order is not in this close' };
+            if (!mine) return { ...base, action: 'KEEP', why: 'its order stays closed — the cut is not wanted' };
+            return { ...base, action: 'RESTORE', why: '→ OPEN', patch: { status: 'OPEN', cancelledAt: DELETE, cancelledBy: DELETE, cancelReason: DELETE, reopenedFromCancel: { cancelledAt: rc.cancelledAt || null, cancelledBy: rc.cancelledBy || '', cancelReason: rc.cancelReason || '' } } };
+        });
+    const outboxRows = outbox
+        .filter(e => String(e.status || '').toUpperCase() === 'CANCELLED' && toMs(e.cancelledAt) >= since && toMs(e.cancelledAt) <= until)
+        .map(e => {
+            const m = String(e.cancelReason || '').match(/^order (\S+) closed\b/);
+            const base = { coll: 'ns_outbox', id: e.id, closedAt: e.cancelledAt || null, closeReason: 'cancelled with its order', d: e, live: true };
+            if (!m || !allOrderIds.has(m[1])) return null;
+            if (has(e.reopenedAt)) return { ...base, action: 'SKIP', why: 'already reopened' };
+            return { ...base, action: 'RESTORE', why: `→ PENDING (${e.label || e.kind || e.id})`, patch: { status: 'PENDING', cancelledAt: DELETE, cancelledBy: DELETE, cancelReason: DELETE, reopenedFromCancel: { cancelledAt: e.cancelledAt || null, cancelledBy: e.cancelledBy || '', cancelReason: e.cancelReason || '' } } };
+        })
+        .filter(Boolean);
+    const all = [...recordRows, ...rows, ...cutRows, ...outboxRows];
+    return {
+        rows: all,
+        counts: all.reduce((m, r) => { m[r.action] = (m[r.action] || 0) + 1; return m; }, {}),
+        outsideWindow: [...finWos, ...shopJobs, ...hqOrders].filter(d => d.closedFrom === BULK_CLOSE_FROM && !inWin(d)).length,
+    };
+}
+
+/** Write the plan: every RESTORE row patched and ledgered; a failure is named and skipped. */
+export async function applyBulkReopen(ctx, { plan, by, onProgress }) {
+    const { db, doc, updateDoc, deleteField } = ctx;
+    const runId = `REOPEN-${Date.now()}`;
+    const done = { restored: 0, failed: [], runId };
+    const rows = (plan && plan.rows ? plan.rows : []).filter(r => r.action === 'RESTORE' && r.patch);
+    for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const patch = Object.fromEntries(Object.entries(r.patch).map(([k, v]) => [k, v === DELETE ? deleteField() : v]));
+        try {
+            await updateDoc(doc(db, r.coll, r.id), { ...patch, reopenedAt: Date.now(), reopenedBy: by || '', reopenedFrom: REOPEN_FROM, reopenRunId: runId });
+            done.restored++;
+            try {
+                await recordDeletion(ctx, { collection: r.coll, docId: r.id, record: r.d, kind: 'BULK_CLOSE_REOPEN', mode: 'REOPEN', by, from: REOPEN_FROM, reason: `${runId} · reopened after the ${BULK_CLOSE_FROM} close of ${r.closedAt ? new Date(toMs(r.closedAt)).toLocaleString() : '?'} — ${r.why}` });
+            } catch (e) { console.warn('reopen ledger write failed (document is reopened regardless):', e); }
+        } catch (e) { done.failed.push(`${r.coll}/${r.id}: ${e.message || e}`); }
+        if (onProgress) onProgress(i + 1, rows.length);
+    }
+    return done;
+}

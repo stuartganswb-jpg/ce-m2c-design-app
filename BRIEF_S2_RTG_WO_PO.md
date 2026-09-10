@@ -226,6 +226,9 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 *(newest first; one line per commit or decision, with the hash)*
 
+- 2026-09-10 · Issue 1 built, pending push: `Shared/orderLifecycle` gains `reopenPlanFor` / `planBulkReopen` / `applyBulkReopen` (pure rules, 66 assertions green); RTG Board vs Floor gains **⟲ Reopen a bulk close** (dry run → confirm → write, ledgered as `BULK_CLOSE_REOPEN`). Handed the WMS `reopenConfirmPick` chip to S3 (their § Hand-offs in). Issue 2 (prevention: FLOOR_DONE never bulk-closable, parent reads `floorPhase`, whole-order test, pick-only never done until packed, closer snapshots the pre-close state) is next; until it lands "Close all" on FLOOR_DONE stays a trap — the panel copy says so.
+- 2026-09-10 · Stuart: none of this morning's closed orders were reopened by hand; **go on Issue 1** (the reopen tool, dry run first, restore from stamps only). He holds a hand list of statuses to check the result against. Live read before the plan: bulk close ran ≈08:31 (the one outbox entry it cancelled: NS Fulfillment WO-SO60152, 08:31:06); 148 NS_CLOSE_TODO rows raised, 0 FLOOR_DONE left, 4 FLOOR_CLOSED (SO59732/SO59752) untouched by this issue. Named, not fixed: the closer raises NS_CLOSE_TODO off the hq record's nsWoId without reading nsWoCompletionPosted (WO11529/11588/11593/11594 already built).
+
 ## 8. Opener (paste to start the session)
 
 ```

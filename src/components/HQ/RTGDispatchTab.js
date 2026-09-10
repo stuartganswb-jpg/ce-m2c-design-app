@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { db } from '../../firebase';
-import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, deleteField, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
 import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
@@ -13,7 +13,7 @@ import { planSmallLines } from '../Shared/splitPlan';
 import { coverCodesOf } from '../Shared/backorder';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
-import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState, planBulkReopen, applyBulkReopen, BULK_CLOSE_FROM, toMs } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
 import { isOpenPo, isDraftPo, approvePurchaseOrder, markPoSent, poRef, PO_STATUS } from '../Shared/purchaseOrders';
 import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone, liftPatchFor, wholeOrderWait } from '../Shared/orderStatus';
@@ -2213,6 +2213,112 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
         setBulkClosing(false);
         loadRTGOrders();
     };
+    // ── REOPEN A BULK CLOSE (Stuart 2026-09-10, S2 Issue 1) ─────────────────────────────────
+    // "Close all" on FLOOR_DONE closed live orders this morning (one floor doc's 'Complete' read as
+    // the order done). This is the recovery: read every document that close stamped (today's
+    // window), decide each from its OWN stamps (Shared/orderLifecycle.planBulkReopen — pure,
+    // tested), show the whole list as a DRY RUN, and write only on a second confirm. Documents
+    // whose stamps say they were done (shipped, put away) are KEPT closed and say why.
+    const [bulkReopen, setBulkReopen] = useState(null);
+    const loadBulkReopen = async () => {
+        const start = new Date(); start.setHours(0, 0, 0, 0);
+        const since = start.getTime();
+        setBulkReopen({ since, loading: true });
+        try {
+            const pull = async (coll, cond) => { const snap = await getDocs(query(collection(db, coll), cond)); return snap.docs.map(d => ({ ...d.data(), id: d.id })); };
+            const [fin, shop, wo, so, cuts, ob] = await Promise.all([
+                pull('fin_workorders', where('closedFrom', '==', BULK_CLOSE_FROM)),
+                pull('shop_custom_orders', where('closedFrom', '==', BULK_CLOSE_FROM)),
+                pull('hq_work_orders', where('closedFrom', '==', BULK_CLOSE_FROM)),
+                pull('hq_sales_orders', where('closedFrom', '==', BULK_CLOSE_FROM)),
+                pull('rod_cut_orders', where('status', '==', 'CANCELLED')),
+                pull('ns_outbox', where('status', '==', 'CANCELLED')),
+            ]);
+            // The other half of a pair decides the pick release and the plater state — fetch the
+            // ones the close did not stamp (a shop half that was never dispatched, say).
+            const have = new Set([...fin, ...shop].map(d => String(d.id)));
+            const want = new Map();
+            fin.forEach(d => { if (d.shopSiblingId && !have.has(String(d.shopSiblingId))) want.set(String(d.shopSiblingId), 'shop_custom_orders'); });
+            shop.forEach(d => { if (d.finSiblingId && !have.has(String(d.finSiblingId))) want.set(String(d.finSiblingId), 'fin_workorders'); });
+            const siblings = new Map();
+            await Promise.all([...want].map(async ([id, coll]) => { const snap = await getDoc(doc(db, coll, id)); if (snap.exists()) siblings.set(id, { ...snap.data(), id }); }));
+            const plan = planBulkReopen({
+                finWos: fin, shopJobs: shop,
+                hqOrders: [...wo.map(d => ({ ...d, __coll: 'hq_work_orders' })), ...so.map(d => ({ ...d, __coll: 'hq_sales_orders' }))],
+                rodCuts: cuts, outbox: ob, siblings, since,
+            });
+            setBulkReopen({ since, plan, loading: false });
+        } catch (e) { setBulkReopen(null); alert('Could not read the bulk close: ' + (e.message || e)); }
+    };
+    const applyBulkReopenNow = async () => {
+        const plan = bulkReopen && bulkReopen.plan; if (!plan || bulkReopen.applying) return;
+        const n = plan.rows.filter(r => r.action === 'RESTORE').length;
+        if (!n) return alert('Nothing to restore — every document in this close is kept or already reopened.');
+        if (!window.confirm(`⟲ REOPEN ${n} document(s) from today's bulk close?\n\nEach is restored from its own stamps exactly as listed above — nothing is guessed. KEEP rows stay closed. Reopened rod cuts return to the saw; reopened NetSuite writes post on the worker's next pass. Every write is stamped ${'reopenedBy ' + (currentUser || '?')} and ledgered.`)) return;
+        setBulkReopen(b => ({ ...b, applying: true, progress: 0, total: n }));
+        const res = await applyBulkReopen({ db, doc, updateDoc, deleteField, setDoc }, {
+            plan, by: currentUser || '',
+            onProgress: (i, t) => setBulkReopen(b => ({ ...b, progress: i, total: t })),
+        });
+        addLog(`⟲ Bulk reopen ${res.runId} — ${res.restored} restored, ${res.failed.length} failed.${res.failed.length ? ' ' + res.failed.join(' · ') : ''}`, res.failed.length ? 'warn' : 'success');
+        setBulkReopen(b => ({ ...b, applying: false, result: res }));
+        loadRTGOrders();
+    };
+    const bulkReopenPanel = () => {
+        if (!bulkReopen) return null;
+        const timeStr = (t) => t ? new Date(toMs(t)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+        const collLabel = { fin_workorders: 'FINISHING', shop_custom_orders: 'SHOP', hq_work_orders: 'RTG WO', hq_sales_orders: 'RTG SO', rod_cut_orders: 'ROD CUT', ns_outbox: 'NETSUITE WRITE' };
+        const refOf = (r) => r.coll === 'ns_outbox' ? (r.d.label || r.id) : (r.coll === 'rod_cut_orders' ? r.id : woRefOf(r.d));
+        const order = { RESTORE: 0, KEEP: 1, SKIP: 2 };
+        const rows = bulkReopen.plan ? [...bulkReopen.plan.rows].sort((a, b) => (order[a.action] - order[b.action]) || String(a.recordId || a.id).localeCompare(String(b.recordId || b.id))) : [];
+        const tone = { RESTORE: '#3a7d44', KEEP: 'var(--ink-soft)', SKIP: '#9b968c' };
+        const c = (bulkReopen.plan && bulkReopen.plan.counts) || {};
+        return (
+            <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--line)', background: '#fffdf7' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)', fontWeight: 700 }}>
+                        ⟲ Reopen today's bulk close · {new Date(bulkReopen.since).toLocaleDateString()}
+                    </span>
+                    {bulkReopen.loading && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>reading every document the close stamped…</span>}
+                    {bulkReopen.plan && !bulkReopen.result && (
+                        <>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>
+                                DRY RUN · {c.RESTORE || 0} restore · {c.KEEP || 0} keep · {c.SKIP || 0} skip{bulkReopen.plan.outsideWindow ? ` · ${bulkReopen.plan.outsideWindow} from earlier bulk closes, not touched` : ''}
+                            </span>
+                            <button onClick={applyBulkReopenNow} disabled={bulkReopen.applying || !(c.RESTORE > 0)}
+                                style={{ ...btnStyle, padding: '4px 12px', fontSize: '9px', color: '#fff', background: bulkReopen.applying ? 'var(--ink-soft)' : '#3a7d44', borderColor: '#3a7d44', cursor: bulkReopen.applying ? 'wait' : 'pointer' }}>
+                                {bulkReopen.applying ? `Reopening ${bulkReopen.progress || 0}/${bulkReopen.total || 0}…` : `⟲ Reopen ${c.RESTORE || 0} now`}
+                            </button>
+                        </>
+                    )}
+                    {bulkReopen.result && (
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: bulkReopen.result.failed.length ? '#d9534f' : '#3a7d44' }}>
+                            {bulkReopen.result.runId} · {bulkReopen.result.restored} restored · {bulkReopen.result.failed.length} failed
+                        </span>
+                    )}
+                    {!bulkReopen.applying && <button onClick={() => setBulkReopen(null)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px' }}>✕ Close this list</button>}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--ink-soft)', margin: '4px 0 8px', lineHeight: 1.5 }}>
+                    Every document today's "Close all" stamped, decided from its OWN stamps: shipped or put away → kept closed; packed → Complete with its pack; finished on the floor but not packed → Complete and back in the WMS pick queue, flagged "reopened — confirm pick state"; part-way through its tasks → Painting; nothing started → Setup. A shop half comes back to In Process / Sent to Plating / Completed from its own stamps. A record reopens only when one of its floor documents is still work. Nothing is written until you press Reopen.
+                    <b style={{ color: '#d9534f' }}> Until the prevention fix lands, do not press "Close all" on "Finished on the floor" again.</b>
+                </div>
+                {bulkReopen.result && bulkReopen.result.failed.length > 0 && (
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f', marginBottom: '8px' }}>{bulkReopen.result.failed.map((f, i) => <div key={i}>✗ {f}</div>)}</div>
+                )}
+                {rows.map((r, i) => (
+                    <div key={r.coll + r.id + i} style={{ display: 'flex', alignItems: 'baseline', gap: '10px', padding: '3px 0', fontSize: '0.82rem', flexWrap: 'wrap', borderTop: i ? '1px dotted var(--paper-2)' : 'none' }}>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', fontWeight: 700, color: tone[r.action], minWidth: '52px' }}>{r.action}</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', minWidth: '84px' }}>{collLabel[r.coll] || r.coll}</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{refOf(r)}</span>
+                        {r.d && woItemCodeOf(r.d) && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{woItemCodeOf(r.d)}</span>}
+                        <span style={{ fontSize: '11px', color: 'var(--ink-soft)' }}>{r.why}</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#9b968c', marginLeft: 'auto' }}>closed {timeStr(r.closedAt)}</span>
+                    </div>
+                ))}
+                {bulkReopen.plan && !rows.length && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>No document carries today's bulk-close stamp.</div>}
+            </div>
+        );
+    };
     // The only honest way nsWoClosed becomes true: a person says they did it, with their name on it.
     const markNsClosed = async (f) => {
         const target = f.parent || f.floor;
@@ -2980,7 +3086,14 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: orphanFindings.length ? '#d9534f' : 'var(--ink-soft)' }}>
                                 {orphanFindings.length ? `${orphanFindings.length} disagreement${orphanFindings.length === 1 ? '' : 's'} — RTG is the record; settle them here` : 'this board is the single source of truth'}
                             </span>
+                            {/* The recovery for a "Close all" that closed live orders (2026-09-10): a dry run
+                                of every document today's bulk close stamped, restored from its own stamps. */}
+                            <button onClick={() => bulkReopen ? setBulkReopen(null) : loadBulkReopen()} title="Read every document today's bulk close stamped and show what a reopen would restore (dry run first; nothing is written until you confirm)"
+                                style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>
+                                {bulkReopen ? '⟲ Hide the bulk-close list' : '⟲ Reopen a bulk close'}
+                            </button>
                         </div>
+                        {bulkReopenPanel()}
                         {reconcilePanel()}
                     </div>
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>

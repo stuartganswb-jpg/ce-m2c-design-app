@@ -153,6 +153,22 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 - **From S2:** #16 (retire the Setup Queue re-make for stock); #12 (rod-cut completion → `releaseStockWoToFloor`);
   #32 (delete the outsourced group once S2 says empty). Specs referenced above.
+- **From S2, 2026-09-10 — the bulk-close REOPEN chip (`reopenConfirmPick`).** This morning's "Close all" on
+  Board vs Floor closed live orders; S2's reopen tool (RTG → Board vs Floor → ⟲ Reopen a bulk close) restores
+  each `fin_workorders` doc from its own stamps. The closer had overwritten `pickStatus`, so a reopened doc's
+  pick state is RECONSTRUCTED from `stagedAt` / `pickedAt` (else `'Pending'`) and the doc is stamped
+  `reopenConfirmPick: true`, `reopenedAt`, `reopenedBy`, `reopenedFrom: 'RTG_BULK_REOPEN'`, `reopenRunId`, with
+  the close kept in `reopenedFromClose`. **Ask:** (1) WMS — on the pick queue row / pick detail
+  (`PickPackApp.js` where `isOpenPick`, ~:1162, and the pick-list card) show a red chip "REOPENED — confirm pick
+  state" while `reopenConfirmPick === true`, and clear it (`reopenConfirmPick: false`, `reopenConfirmedBy/At`)
+  when the operator confirms or completes the pick; refuse nothing. (2) Setup Queue / Active Floor — a reopened
+  doc carries its restored `currentPhase` (`Setup` / `Painting` at the recorded `currentStepIndex`, `stepStatus
+  'Staged'`) and needs no new read; only verify on the tablet that a Painting doc reappears on the Active Floor
+  and a Setup doc in the Setup Queue. Downstream trace: work orders unchanged (record back to Dispatched);
+  finishing sees the doc at its recorded step; shop unchanged; WMS sees the pick/pack rows return with the
+  chip; NetSuite: the queued writes the close cancelled return to PENDING (the worker posts them; dedupeKey
+  guards the double post). Nothing else in the WMS needs to change for the chip to be safe to ignore.
+
 - **From S4 (when they start):** ONE guarded mount for the Fulfilment tab in `PickPackApp.js` + a row in
   `Shared/pickTabs.PICK_TABS` (a new tab key is permission identity — an admin ticks it per role).
 
