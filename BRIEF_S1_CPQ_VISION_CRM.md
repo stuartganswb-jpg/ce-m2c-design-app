@@ -256,6 +256,14 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 6 (S1) 9415338 pushed 19:23.** S5's Asks 1 + 2 landed (H1-138TRV explode entry; rules by family in
+  CPQTab + QuickShipTab; `singleProjections(family, style)`). Stuart's rulings in the entry: returns are fees on the end
+  steps (138TRVFR / 138TRVMTR), never exploded; plug = H1-2TRVPLUG placeholder. Tests: 4 ft -4H/P, style V, 12 ft -4VD/EP
+  (2 rods/ft — OPEN vs S5's 12 × rod), motorised = nothing consumed, H1-2TRV unchanged, table == importer export (guarded).
+  Next: the end-to-end read (CPQ kit cover + tab 7 chart) after S5 pushes and Stuart tags Kit Family + runs the 4.6 import.
+  Stuart's open tag list (with both slot numbers) is in the chat log of this session: drive MANUAL (H1-75 4 clusters,
+  H1-1 4, H1-138 17), single returns on a double (decision), carrier #12 vs #43, in-line stragglers H1-138 #51 / H1-75 #46.
+
 - **2026-09-10 — Issue 5 (S1) 6572b6f pushed 18:17.** Parked geometry never rides (normalizeChoice `always` excludes
   parked / HIDDEN- ids). Tag pass verified on live pins (36 `ridesWith` pins across H1-138 / H1-1; shapes table in the
   chat log). Older test fixture `HIDDEN-NUTP` → `NUTP-01` (a HIDDEN- id is the placeholder by rule). Next: S5's H1-138TRV

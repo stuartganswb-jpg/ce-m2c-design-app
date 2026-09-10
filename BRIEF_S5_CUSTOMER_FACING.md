@@ -128,6 +128,13 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · 9415338 pushed at 19:23 EDT (S1 sweeps the served bundle after the deploy
+  and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped (S5's kit hand-off,
+  S1's half): the kit explosion knows the **H1-138TRV** family (rod as the one per-foot part, brackets by style H/V,
+  joiner as the splice, returns stay the fee items on the end steps); CPQ and tab 7 read `system/traverse_rules_<family>`
+  from the flow's / kit's `kitFamily` instead of the fixed H1-2TRV document. H1-2TRV explodes exactly as before.
+  No document or field shape change; the H1-138TRV rules document is S5's importer's to write. Your side: your Ask 1 and Ask 2 are LANDED. The guard test `the explode table and the importer export the SAME codes` runs against your `H1_138TRV_PARTS` (it passed here against your uncommitted file) — push your half and it holds on main. ONE question to settle with Stuart: a 12 ft `-4VD/EP` double explodes TWO rods per foot in my table (the double bracket carries two tracks, as H1-2TRV's track-front double consumes two tracks); your fixture note said 12 × rod. Rules-doc reads are by `kitFamily` now, so `traverse_rules_H1-138TRV` is read as soon as your import writes it.
+
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · 6572b6f pushed at 18:17 EDT (S1 sweeps the served bundle after the deploy
   and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: tag engine —
   **parked geometry never rides**: a pin with no item number (`parked`, or a `HIDDEN-<node>` id) is no longer a rider, so

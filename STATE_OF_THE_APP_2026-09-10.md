@@ -424,6 +424,11 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · 9415338 (pushed 19:23).** S5's kit hand-off, S1's half: `TRAVERSE_FAMILY_PARTS['H1-138TRV']` (rod as
+  the per-foot part, brackets by style, joiner splice, placeholder plug, returns = fees, mainline finish) and the rules
+  document read by `kitFamily` in CPQ and tab 7. Explosion tests + a guard that the table equals S5's importer export.
+  Open: S5's push; Stuart's Kit Family tag + 4.6 import; the double's rod count (2/ft here vs 12 × rod in S5's note).
+
 - **2026-09-10 · S1 · 6572b6f (pushed 18:17).** Parked geometry never rides (option 2 over tagging four pins): a pin with no
   item number is neither a question nor a BOM line — the source of every `HIDDEN-…` $0 breakdown line. Stuart's
   `ridesWith` tag pass verified on the live pins: H1-138 and H1-1 return standoffs ride only with a return, none on a
