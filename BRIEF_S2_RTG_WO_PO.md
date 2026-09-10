@@ -220,6 +220,17 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · 1259391 pushed at 10:56 EDT (S1 sweeps the served bundle after the
+  deploy and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped:
+  the CRM (tab 10) **Modify Quote / Job** modal now edits the whole checkout header — order sidemark, PO #,
+  internal memo, need-by, production notes, ship-to (saved NetSuite address or custom drop-ship), shipping
+  charge — through `Shared/salesOrderHeader.jobHeaderPatchOf` (the field set CPQ's finalize writes). Docs it
+  touches: `jobs` (those header fields + `headerEditedAt/By`); `hq_sales_orders/SO-APP-<quoteNo>` when it
+  exists and is not QUICKSHIP — header rebuilt through `soHeaderOf` (`sidemark, customerPo, internalMemo,
+  needBy` + aliases, `productionNotes, shipTo[], shippingMethod/AddressId, customShippingAddress,
+  shippingAmount, memo` + `headerEditedAt/By`; `readyDate`, recipe, `status`, `createdBy` untouched). NetSuite
+  is NOT updated by the edit. Your side: the board reads the edited header live; a fin/shop doc already split keeps the sidemark / need-by it was split with — no re-stamp built, named for you.
+
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · a58d126 is LIVE (verified in the served `main.d8130142.js`; it
   rode S2's 10:07 deploy).** What shipped: `Shared/nsTransmit`'s TAGS branch now SKIPS a parked-geometry line
   (partId `HIDDEN-<node>`, no money) instead of refusing the whole transaction as LINES_UNRESOLVED; the
@@ -234,7 +245,7 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 *(newest first; one line per commit or decision, with the hash)*
 
-- 2026-09-10 · **Stuart's decision on the packed orders:** SO59051, SO59176, SO59592, SO59618, SO59619, SO59620, SO59727, SO59728, SO59754, SO59789, SO60104, SO60105 stay CLOSED ("run during the troubled period in the app"); **SO60151 and SO60152 reopen.** Built as a per-row operator override on the dry-run list (`planBulkReopen({ overrides })`, `reopenOverride` stamped on the doc; 76 assertions); pushed with 9ddef72 on his "you can push".
+- 2026-09-10 · **Stuart's decision on the packed orders:** SO59051, SO59176, SO59592, SO59618, SO59619, SO59620, SO59727, SO59728, SO59754, SO59789, SO60104, SO60105 stay CLOSED ("run during the troubled period in the app"); **SO60151 and SO60152 reopen.** Built as a per-row operator override on the dry-run list (`planBulkReopen({ overrides })`, `reopenOverride` stamped on the doc; 76 assertions); pushed as **553272b** with 9ddef72 on his "you can push" (carried S1's 1259391).
 - 2026-09-10 · First live dry run (88 restore · 286 keep · 6 skip) caught three rule gaps BEFORE any write: packed sales orders with the fulfilment queued/posted (= shipped) were listed to restore; Livio's six hand-reopened shop halves were skipped although the bulk close's `closed: true` still hides them (the shop's Reopen never clears that flag — named to S3); failed NetSuite writes were going back to PENDING (a retry) instead of FAILED. Fixed in `reopenPlanFor` (71 assertions), panel + guide copy updated; second push pending Stuart's go.
 - 2026-09-10 · **6c72e80** (pushed on Stuart's "push", carried S1's a58d126 with it) · Issue 1: `Shared/orderLifecycle` gains `reopenPlanFor` / `planBulkReopen` / `applyBulkReopen` (pure rules, 66 assertions green); RTG Board vs Floor gains **⟲ Reopen a bulk close** (dry run → confirm → write, ledgered as `BULK_CLOSE_REOPEN`). Handed the WMS `reopenConfirmPick` chip to S3 (their § Hand-offs in). Issue 2 (prevention: FLOOR_DONE never bulk-closable, parent reads `floorPhase`, whole-order test, pick-only never done until packed, closer snapshots the pre-close state) is next; until it lands "Close all" on FLOOR_DONE stays a trap — the panel copy says so.
 - 2026-09-10 · Stuart: none of this morning's closed orders were reopened by hand; **go on Issue 1** (the reopen tool, dry run first, restore from stamps only). He holds a hand list of statuses to check the result against. Live read before the plan: bulk close ran ≈08:31 (the one outbox entry it cancelled: NS Fulfillment WO-SO60152, 08:31:06); 148 NS_CLOSE_TODO rows raised, 0 FLOOR_DONE left, 4 FLOOR_CLOSED (SO59732/SO59752) untouched by this issue. Named, not fixed: the closer raises NS_CLOSE_TODO off the hq record's nsWoId without reading nsWoCompletionPosted (WO11529/11588/11593/11594 already built).

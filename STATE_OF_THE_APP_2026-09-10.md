@@ -424,6 +424,13 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · 1259391 (pushed 10:56).** Stuart's ask: edit the checkout header from the CRM instead of
+  re-walking CPQ. The tab-10 Modify modal now carries the checkout's fields; `Shared/salesOrderHeader.jobHeaderPatchOf`
+  is the one field set (19-assertion harness with the `soHeaderOf` round trip); the save patches `jobs` and rebuilds
+  the `hq_sales_orders` header when the job is on the board (ready date / recipe / status / createdBy kept,
+  `headerEditedAt/By` stamped). Named, not built: NetSuite keeps the values it was sent (the modal says so);
+  floor docs already split keep their sidemark / need-by (S2/S3). Issue 1 (a58d126) verified in two served bundles.
+
 - **2026-09-10 · S1 · a58d126 (live, in the 10:07 bundle).** The live pass on Stuart's orders (§2.1 #1/#7)
   ran: ST091026-01 and ST090926-09 (FABRICUT, H1-138) carry a correct header (typed need-by, ready date by
   slowest finish class, recipe/recipes, per-line `finishOutsourced`, snapshots) but had **never queued** their
