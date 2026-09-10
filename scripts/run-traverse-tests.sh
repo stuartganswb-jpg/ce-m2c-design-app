@@ -17,6 +17,7 @@ for f in traverseTags traverseFlow traverseKitImport nodeList priceLevels kitCod
     sed -e "s#from '\./traverseTags'#from './traverseTags.mjs'#" \
         -e "s#from '\./nodeList'#from './nodeList.mjs'#" \
         -e "s#from '\./traverseExplode'#from './traverseExplode.mjs'#" \
+        -e "s#from '\./kitCode'#from './kitCode.mjs'#" \
         "$ROOT/src/components/Shared/$f.js" > "$OUT/$f.mjs"
 done
 # TWO KINDS OF TEST FILE (Brief F, 2026-09-03). The traverse family imports the STAGED copies

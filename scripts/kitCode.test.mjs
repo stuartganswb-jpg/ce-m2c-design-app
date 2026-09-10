@@ -75,3 +75,53 @@ test('matchKit treats a blank frontRail as TRACK — importer and parser agree o
     const single = parsed.kits.find(k => k.code === 'H1-2TRV-4/P');
     assert.ok(matchKit(lib, { ...single.align, frontRail: '' }));
 });
+
+// ── THE SECOND FAMILY: H1-138TRV (Stuart 2026-09-10) ──────────────────────────────────────────
+test('H1-138TRV codes parse: style letter, double, painted or plated — and only those', () => {
+    assert.deepEqual(parseKitCode('H1-138TRV-4H/P'),
+        { family: 'H1-138TRV', align: { setup: 'SINGLE', frontRail: 'TRACK', drive: 'MANUAL', mount: 'WALL', material: 'P', minFeet: 4, rodKind: 'TRAVERSE', bracketStyle: 'H' }, watt: null });
+    assert.deepEqual(parseKitCode('h1-138trv-4vd/ep').align,
+        { setup: 'DOUBLE', frontRail: 'TRACK', drive: 'MANUAL', mount: 'WALL', material: 'EP', minFeet: 4, rodKind: 'TRAVERSE', bracketStyle: 'V' });
+    // a bracket is a component, not a kit; wood, motor and ceiling letters are not this family's
+    assert.equal(parseKitCode('H1-138TRV-H/P'), null);
+    assert.equal(parseKitCode('H1-138TRV-4HD/W'), null);
+    assert.equal(parseKitCode('H1-138TRV-4MH/P'), null);
+    assert.equal(parseKitCode('H1-138TRV-4X/P'), null);
+    assert.equal(parseKitCode('H1-138TRVJNR'), null);
+});
+
+test('the axes key tells H from V, and every H1-2TRV key is unchanged but for an empty last field', () => {
+    assert.notEqual(axesKeyOf(parseKitCode('H1-138TRV-4H/P').align), axesKeyOf(parseKitCode('H1-138TRV-4V/P').align));
+    assert.equal(axesKeyOf(parseKitCode('H1-138TRV-4H/P').align), 'SINGLE|TRACK|MANUAL|WALL|P|H');
+    assert.equal(axesKeyOf(parseKitCode('H1-2TRV-4/P').align), 'SINGLE|TRACK|MANUAL|WALL|P|');
+    // an H1-2TRV record saved before this field existed still matches its own code
+    assert.equal(axesKeyOf({ setup: 'SINGLE', frontRail: 'TRACK', drive: 'MANUAL', mount: 'WALL', material: 'P' }), axesKeyOf(parseKitCode('H1-2TRV-4/P').align));
+});
+
+test('describe names the bracket style, and says nothing about it on an H1-2TRV kit', () => {
+    assert.deepEqual(describeKitAlign(parseKitCode('H1-138TRV-4V/EP').align), ['Single', 'Vertical bracket', 'Manual', 'Wall', 'Plated aluminum', '4ft set minimum']);
+    assert.deepEqual(describeKitAlign(parseKitCode('H1-138TRV-4HD/P').align), ['Double', 'Horizontal bracket', 'Manual', 'Wall', 'Painted aluminum', '4ft set minimum']);
+    assert.ok(!describeKitAlign(parseKitCode('H1-2TRV-4/P').align).some(c => /bracket/i.test(c)));
+});
+
+const f138 = HAVE ? parsed.families.find(f => f.family === 'H1-138TRV') : null;
+const lib138 = HAVE ? f138.kits.map(k => ({ legacyErpId: k.code, itemId: k.code, partClass: 'Kit', manufacturingSpecs: { kitAlign: k.align, kitMotorCodes: k.motorCodes } })) : [];
+
+test('every imported H1-138TRV code parses back to the importer\'s own axes', { skip }, () => {
+    f138.kits.forEach(k => {
+        const p = parseKitCode(k.code);
+        assert.ok(p, `${k.code} did not parse`);
+        assert.equal(p.family, 'H1-138TRV');
+        assert.equal(axesKeyOf(p.align), axesKeyOf(k.align), k.code);
+    });
+});
+
+test('the reverse banner tells the H kit from the V kit, and a typed code resolves to its own record', { skip }, () => {
+    assert.equal(kitCodeFor(lib138, parseKitCode('H1-138TRV-4H/P').align), 'H1-138TRV-4H/P');
+    assert.equal(kitCodeFor(lib138, parseKitCode('H1-138TRV-4V/P').align), 'H1-138TRV-4V/P');
+    assert.equal(kitCodeFor(lib138, parseKitCode('H1-138TRV-4VD/EP').align), 'H1-138TRV-4VD/EP');
+    assert.equal(resolveKitCode(lib138, 'h1-138trv-4hd/p').kit.legacyErpId, 'H1-138TRV-4HD/P');
+    // the two families never resolve into each other
+    assert.equal(resolveKitCode(lib138, 'H1-2TRV-4/P'), null);
+    assert.equal(resolveKitCode(lib, 'H1-138TRV-4H/P'), null);
+});

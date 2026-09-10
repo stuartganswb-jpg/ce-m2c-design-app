@@ -211,6 +211,38 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 
 *(newest first)*
 
+- **2026-09-10 — Issue 1 (S5): the H1-138TRV kits — BUILT, tests green, NOT committed (waits for Stuart's push
+  window; a local commit on main rides the next session's push).** Stuart's Q1 answer replaced §3 #1: "add in the kits
+  for the H1-138TRV kits … same spreadsheet … check the components and pricing are correct and that it will function
+  with the cpq flow just like H1-2TRV does"; data answers: the models workbook `0903/abricut Hardware 2026 Models
+  6.17.26.xlsx` (Models 1–4 = the 1-3/8" traverse: carrier style / draw / hand-drawn / component colours / bracket
+  preference by depth or ceiling / returns as fees), "the exact same carrier usage and carrier options as the H1-2TRV …
+  just the rod and brackets change", "mimic exactly" the H1-2TRV manner, and the ownership split (S5 edits the
+  kit-sheet parser; S1 lands the explosion entry + the two per-family rules reads).
+  Built: `Shared/kitCode.js` (second grammar `H1-138TRV-4(H|V)D?/(P|EP)` → `rodKind: TRAVERSE`, `bracketStyle`;
+  `axesKeyOf` carries the style; describe chips), `Shared/traverseKitImport.js` (tab `H1-138TRV`: 8 kits, 19
+  components; rules doc DERIVED from the H1-2TRV Carrier Usage tab — carriers + configurator verbatim, bracket rows per
+  style with the same counts, splice → `H1-138TRVJNR`, DRTWB dropped and named; `families[]` on the parse result, the
+  top level still H1-2TRV's; `H1_138TRV_PARTS` exported for S1's explosion entry), `Shared/kitSeed.js` (`rodKind` is an
+  axis — first, as the engine asks it; blocked on a solid-only assembly; H1-2TRV kits carry none and are untouched; the
+  bracket style is reported in `missed`, never picked — parity with projection on H1-2TRV), `HQ/CustomerCollectionsTab.js`
+  (apply walks every family: `kitFamily` per entry, one rules doc per family, NO doc for an empty usage table — said in
+  the alert; preview shows family + style + per-family RULES counts with "(derived)"), `scripts/run-traverse-tests.sh`
+  (stages `./kitCode` for the parser). Tests: importer +5 on the REAL sheet, kitCode +5, kitSeed 68 → 80 (a combined
+  fixture that asks Rod Type through the real `resolve()`); five mutations each caught (rodKind axis dropped, style
+  unreported, key blind to style, tab ignored, H1-2TRV codes left in the derived rules). Lint 0 errors; `CI=false build`
+  compiled. Handed S1 (BRIEF_S1 §6): `TRAVERSE_FAMILY_PARTS['H1-138TRV']` (rod H1-138TRV per ft, brackets by style ×
+  projection, splice, no plug/motor — two confirms for Stuart: how the rod's ends close, and that the brackets wear the
+  mainline finish since the sheet prices them /P and /EP), `singleProjections(family, style)`, `CPQTab.js:1070` and
+  `QuickShipTab.js:228` rules reads by family. Until S1's entry lands, an imported H1-138TRV kit lists on tab 7 and seeds
+  in CPQ but explodes nothing (no NetSuite consumption, brackets bill as ADDED) — Stuart told.
+  Stuart's data after the push: 4.6 → Fabricut → ⬆ Import kit sheet (`Fabricut/Aug12/Fabricut_Traverse.xlsx`) → read the
+  preview's NOT IN LIBRARY list (the 19 component codes are matched by exact code, `/P` and `/EP` included) → Apply;
+  tick each kit's finish matrix; tab 11 → the H1-138 flow → Kit Family `H1-138TRV`.
+  Family naming: the kits carry `kitFamily: 'H1-138TRV'` (= the sheet tab = the code prefix the hand-kit rule derives),
+  the rules doc is `system/traverse_rules_H1-138TRV`; the H1-138 flow's tag is the one data step (its assembly code
+  `H1-138` is not the kit codes' prefix, so the picker's fallback cannot find them).
+
 ## 8. Opener (paste to start the session)
 
 ```

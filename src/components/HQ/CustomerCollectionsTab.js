@@ -867,8 +867,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             const batch = writeBatch(db);
             const otherRows = (p) => (p?.clientPricing || []).filter(r =>
                 upper(r?.customerId) !== upper(custId) && upper(r?.customerId) !== upper(customer?.name));
+            // Every family the workbook carries (H1-2TRV, and since 2026-09-10 H1-138TRV) — each
+            // entry says which, so its record and its rules doc are keyed the same way.
+            const families = Array.isArray(parsed.families) && parsed.families.length ? parsed.families : [parsed];
             kitEntries.forEach(k => {
                 const row = kitPricingRow(k, { customerId: custId, customerName: customer?.name, user: currentUser });
+                const fam = k.family || parsed.family;
                 if (k.status === 'NEW') {
                     // Deterministic id — re-importing the sheet UPDATES rather than duplicating.
                     const id = `KIT-${k.code.replace(/[^A-Za-z0-9-]/g, '_')}`;
@@ -877,7 +881,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         brandId: activeBrand, sharedBrands: [activeBrand], partClass: 'Kit', routingType: '',
                         clientPricing: [row],
                         manufacturingSpecs: {
-                            kitFamily: parsed.family, kitAlign: k.align, kitMotorCodes: k.motorCodes,
+                            kitFamily: fam, kitAlign: k.align, kitMotorCodes: k.motorCodes,
                             ...(coll ? { collections: [upper(coll)] } : {}),
                             status: 'APP_ONLY', createdAt: Date.now(), createdBy: String(currentUser || ''),
                         },
@@ -890,7 +894,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         // reaches CPQ's brand-filtered library, which hides the kit picker.
                         brandId: p?.brandId || activeBrand,
                         clientPricing: [...otherRows(p), row],
-                        'manufacturingSpecs.kitFamily': parsed.family,
+                        'manufacturingSpecs.kitFamily': fam,
                         'manufacturingSpecs.kitAlign': k.align,
                         'manufacturingSpecs.kitMotorCodes': k.motorCodes,
                         updatedAt: new Date().toISOString(),
@@ -915,13 +919,22 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             // deploy; system/** is already open to authed staff and is where quick_ship_kits lives.
             // (First import attempt failed exactly there: "Missing or insufficient permissions",
             // 2026-08-13 — the batch is atomic, so the one denied write voided all of it.)
-            batch.set(doc(db, 'system', `traverse_rules_${parsed.family}`), {
-                ...parsed.rules, billableSeed: BILLABLE_ACCESSORY_SEED,
-                updatedAt: Date.now(), updatedBy: String(currentUser || ''),
+            // One rules doc PER FAMILY. A family whose rules carry no usage rows gets NO doc: the
+            // explosion would read an empty table and silently consume two brackets and no
+            // splice at every length — an absent doc is at least named by tab 7's push warning.
+            const rulesWritten = [];
+            const rulesSkipped = [];
+            families.forEach(f => {
+                if (!f.rules || !(f.rules.usage || []).length) { rulesSkipped.push(f.family); return; }
+                batch.set(doc(db, 'system', `traverse_rules_${f.family}`), {
+                    ...f.rules, billableSeed: BILLABLE_ACCESSORY_SEED,
+                    updatedAt: Date.now(), updatedBy: String(currentUser || ''),
+                });
+                rulesWritten.push(f.family);
             });
             await batch.commit();
             const missing = compEntries.filter(c => c.status === 'MISSING');
-            alert(`✅ Applied: ${kitEntries.length} kit(s), ${compByDoc.size} component(s) priced for ${customer?.name}, rules doc written.${missing.length ? `\n\n⚠ ${missing.length} component code(s) not in the library — not created, price them once the items exist:\n${missing.map(m => m.code).join(', ')}` : ''}${parsed.warnings.length ? `\n\nWarnings:\n• ${parsed.warnings.join('\n• ')}` : ''}`);
+            alert(`✅ Applied: ${kitEntries.length} kit(s) (${families.map(f => `${f.family} ${kitEntries.filter(k => (k.family || parsed.family) === f.family).length}`).join(', ')}), ${compByDoc.size} component(s) priced for ${customer?.name}, rules doc written for ${rulesWritten.join(', ') || 'no family'}.${rulesSkipped.length ? `\n\n⚠ No rules doc for ${rulesSkipped.join(', ')} — its usage table was empty; the explosion falls back to defaults until one is imported.` : ''}${missing.length ? `\n\n⚠ ${missing.length} component code(s) not in the library — not created, price them once the items exist:\n${missing.map(m => m.code).join(', ')}` : ''}${parsed.warnings.length ? `\n\nWarnings:\n• ${parsed.warnings.join('\n• ')}` : ''}`);
             setKitImp(null);
         } catch (e) { console.error(e); alert(`Apply failed: ${e?.message || e}`); }
         setBusy('');
@@ -1831,14 +1844,16 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '1000px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: `1px solid ${theme.line}` }}>
                         <div style={{ padding: '20px 26px', borderBottom: `1px solid ${theme.line}`, background: theme.paper2 }}>
                             <div style={{ fontFamily: theme.serif, fontSize: '1.4rem' }}>Kit sheet — what it would do</div>
-                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '4px' }}>{kitImp.fileName} · {customer?.name} · family {kitImp.parsed.family}{coll ? ` · tagged into ${coll}` : ''}</div>
-                            <div style={{ display: 'flex', gap: '18px', marginTop: '12px', fontFamily: theme.mono, fontSize: '11px' }}>
+                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '4px' }}>{kitImp.fileName} · {customer?.name} · {(kitImp.parsed.families || [kitImp.parsed]).length > 1 ? 'families' : 'family'} {(kitImp.parsed.families || [kitImp.parsed]).map(f => f.family).join(' + ')}{coll ? ` · tagged into ${coll}` : ''}</div>
+                            <div style={{ display: 'flex', gap: '18px', marginTop: '12px', fontFamily: theme.mono, fontSize: '11px', flexWrap: 'wrap' }}>
                                 <span style={{ color: theme.green }}>KITS NEW {kitImp.kitEntries.filter(k => k.status === 'NEW').length}</span>
                                 <span style={{ color: theme.brass }}>KITS UPDATE {kitImp.kitEntries.filter(k => k.status === 'UPDATE').length}</span>
                                 <span>MOTOR CODES {kitImp.kitEntries.reduce((s, k) => s + k.motorCodes.length, 0)}</span>
                                 <span style={{ color: theme.brassDark }}>COMPONENTS PRICED {kitImp.compEntries.filter(c => c.status === 'ALIGN').length}</span>
                                 <span style={{ color: theme.red }}>NOT IN LIBRARY {kitImp.compEntries.filter(c => c.status === 'MISSING').length}</span>
-                                <span>RULES: {kitImp.parsed.rules.usage.length} usage · {kitImp.parsed.rules.configurator.length} configurator</span>
+                                {(kitImp.parsed.families || [kitImp.parsed]).map(f => (
+                                    <span key={f.family} title={f.rules?.derivedFrom ? `Derived: ${f.rules.derivedFrom}` : 'Read from the Carrier Usage tab'}>RULES {f.family}: {(f.rules?.usage || []).length} usage · {(f.rules?.configurator || []).length} configurator{f.rules?.derivedFrom ? ' (derived)' : ''}{!(f.rules?.usage || []).length ? ' — NO DOC WILL BE WRITTEN' : ''}</span>
+                                ))}
                             </div>
                         </div>
                         <div style={{ padding: '18px 26px', overflowY: 'auto' }}>
@@ -1848,16 +1863,17 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                 </div>
                             )}
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.84rem' }}>
-                                <thead><tr>{['', 'Kit code', 'Their pattern', 'Net $', '+/ft $', 'Setup · Drive · Mount', 'Motor codes'].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', color: theme.inkSoft }}>{h}</th>)}</tr></thead>
+                                <thead><tr>{['', 'Family', 'Kit code', 'Their pattern', 'Net $', '+/ft $', 'Setup · Drive · Mount', 'Motor codes'].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', color: theme.inkSoft }}>{h}</th>)}</tr></thead>
                                 <tbody>
                                     {kitImp.kitEntries.map(k => (
                                         <tr key={k.code}>
                                             <td style={{ padding: '5px 8px', fontFamily: theme.mono, fontSize: '10px', color: k.status === 'NEW' ? theme.green : theme.brass }}>{k.status}</td>
+                                            <td style={{ padding: '5px 8px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>{k.family || kitImp.parsed.family}</td>
                                             <td style={{ padding: '5px 8px', fontFamily: theme.mono, fontSize: '11px' }}>{k.code}</td>
                                             <td style={{ padding: '5px 8px', fontFamily: theme.mono, fontSize: '11px', color: theme.brassDark }}>{k.fabSku || '—'}</td>
                                             <td style={{ padding: '5px 8px', textAlign: 'right' }}>{k.net ?? '—'}</td>
                                             <td style={{ padding: '5px 8px', textAlign: 'right' }}>{k.perFootNet ?? '—'}</td>
-                                            <td style={{ padding: '5px 8px', color: theme.inkSoft }}>{k.align.setup}{k.align.frontRail === 'RING' ? ' (front ring)' : ''} · {k.align.drive} · {k.align.mount} · /{k.align.material}</td>
+                                            <td style={{ padding: '5px 8px', color: theme.inkSoft }}>{k.align.rodKind ? `${String(k.align.rodKind).toLowerCase()} · ` : ''}{k.align.setup}{k.align.frontRail === 'RING' ? ' (front ring)' : ''}{k.align.bracketStyle ? ` · ${k.align.bracketStyle === 'H' ? 'horizontal' : 'vertical'} bracket` : ''} · {k.align.drive} · {k.align.mount} · /{k.align.material}</td>
                                             <td style={{ padding: '5px 8px', color: theme.inkSoft }}>{k.motorCodes.length || '—'}</td>
                                         </tr>
                                     ))}

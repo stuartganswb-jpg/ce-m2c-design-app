@@ -258,5 +258,46 @@ const kit = (align, code = 'HTS7504F') => ({ legacyErpId: code, partClass: 'Kit'
     eq('a motor line nobody covered bills in full', r2.lines.find(l => l.name === 'motor').total, 300);
 }
 
+// ── THE COMBINED COLLECTION AND THE ROD-TYPE AXIS (H1-138TRV, Stuart 2026-09-10) ─────────────
+// H1-138 holds a solid rod AND the 1-3/8" traverse, so the engine asks Rod Type first. A traverse
+// kit must answer it; an H1-2TRV kit (no rodKind on record) must not start answering it.
+{
+    const combined = [
+        C({ id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'FAS', partId: 'H1-138TRV', role: 'FASCIA', rodKind: 'TRAVERSE', nodes: ['fas'] }),
+        C({ id: 'BKT-S', partId: 'H1-138TRV-H', role: 'BRACKET', position: 'CENTER', setup: 'SINGLE', mount: 'WALL', nodes: ['bs'] }),
+        C({ id: 'BKT-D', partId: 'H1-138TRV-HD', role: 'BRACKET', position: 'CENTER', setup: 'DOUBLE', mount: 'WALL', nodes: ['bd'] }),
+        C({ id: 'MAN', partId: 'PULL', role: 'ACCESSORY', position: 'CENTER', drive: 'MANUAL', nodes: ['man'] }),
+    ];
+    const combinedModel = resolve({ choices: combined, answers: {} });
+    const rk = combinedModel.axes.find(a => a.key === 'rodKind');
+    ok('the fixture asks Rod Type — two worlds', rk && !rk.implied && rk.values.length === 2, JSON.stringify(rk));
+
+    const trv = { setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL', material: 'P', minFeet: 4, rodKind: 'TRAVERSE', bracketStyle: 'H' };
+    const r = seedFromKit({ model: combinedModel, kit: kit(trv, 'H1-138TRV-4H/P') });
+    eq('a traverse kit is buildable here', r.blocked, null);
+    eq('and it answers Rod Type first, then the three', r.answers, { rodKind: 'TRAVERSE', setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL' });
+    ok('the rod type is reported as carried', r.carried.some(c => /traverse rod type/.test(c)));
+    const bs = r.missed.find(m => m.what === 'bracket style');
+    ok('the bracket style is REPORTED, never picked', bs && /horizontal/.test(bs.why) && /H bracket/.test(bs.why), JSON.stringify(r.missed));
+    eq('nothing was picked for it', Object.keys(r.picks), []);
+
+    // the H1-2TRV kit: no rodKind on record → the seeder says nothing about it
+    const r2 = seedFromKit({ model: combinedModel, kit: kit({ setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL', material: 'P', minFeet: 4 }) });
+    eq('an older kit leaves Rod Type to the operator', r2.answers.rodKind, undefined);
+    ok('and reports no bracket style', !r2.missed.some(m => m.what === 'bracket style'));
+
+    // the traverse-only assembly (H1-2TRV): rodKind holds one value, implied — a traverse kit still seeds
+    const r3 = seedFromKit({ model: wallModel, kit: kit(trv) });
+    eq('an implied traverse axis is still an answer', [r3.blocked, r3.answers.rodKind], [null, 'TRAVERSE']);
+
+    // a solid-only assembly: refused, and nothing written
+    const solidOnly = resolve({ choices: combined.filter(c => c.id !== 'FAS'), answers: {} });
+    const r4 = seedFromKit({ model: solidOnly, kit: kit(trv, 'H1-138TRV-4H/P') });
+    ok('a traverse kit on a solid-only assembly is BLOCKED on rod type', r4.blocked && r4.blocked.what === 'rod type', JSON.stringify(r4.blocked));
+    ok('and it names the product and the assembly', /H1-138TRV-4H\/P is a traverse rod type kit/.test(r4.blocked.why) && /offers solid/.test(r4.blocked.why), r4.blocked.why);
+    eq('a refusal writes nothing', [r4.answers, r4.picks], [{}, {}]);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

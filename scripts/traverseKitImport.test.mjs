@@ -100,3 +100,92 @@ test('the pricing row carries the per-foot triple for kits and omits it for comp
     assert.equal(crow.perFootPrice, undefined);
     assert.equal(crow.price, 0.5);
 });
+
+// ── THE SECOND FAMILY: tab H1-138TRV (Stuart 2026-09-10) ───────────────────────────────────────
+const f138 = HAVE ? parsed.families.find(f => f.family === 'H1-138TRV') : null;
+
+test('H1-138TRV rides the same workbook — 8 kits, 19 components — and the H1-2TRV result does not move', { skip }, () => {
+    assert.equal(parsed.families.length, 2);
+    assert.equal(parsed.families[0].family, 'H1-2TRV');
+    assert.equal(parsed.kits.length, 30);                       // the top level is still H1-2TRV's
+    assert.ok(parsed.kits.every(k => !/138TRV/.test(k.code)));   // no 1-3/8" kit leaked into it
+    assert.ok(f138, 'no H1-138TRV family parsed');
+    assert.equal(f138.kits.length, 8);
+    assert.equal(f138.components.length, 19);                   // 9 brackets × /P /EP + the splice
+    assert.ok(f138.kits.every(k => k.motorCodes.length === 0)); // hand-drawn only — no per-motor codes
+    assert.ok(f138.components.some(c => c.code === 'H1-138TRVJNR'));
+    assert.ok(f138.components.some(c => c.code === 'H1-138TRV-VE/EP'));
+    assert.ok(!f138.components.some(c => /^H1-138TRV-4/.test(c.code)), 'a kit code landed among the components');
+});
+
+test('H1-138TRV axes come off the code: style, double, finish, and the two fields this family adds', { skip }, () => {
+    const k = (code) => f138.kits.find(x => x.code === code);
+    assert.deepEqual(k('H1-138TRV-4H/P').align,
+        { setup: 'SINGLE', frontRail: 'TRACK', drive: 'MANUAL', mount: 'WALL', material: 'P', minFeet: 4, rodKind: 'TRAVERSE', bracketStyle: 'H' });
+    assert.deepEqual(k('H1-138TRV-4VD/EP').align,
+        { setup: 'DOUBLE', frontRail: 'TRACK', drive: 'MANUAL', mount: 'WALL', material: 'EP', minFeet: 4, rodKind: 'TRAVERSE', bracketStyle: 'V' });
+    assert.equal(k('H1-138TRV-4H/P').fabSku, 'HTS7500F');
+    assert.equal(k('H1-138TRV-4H/EP').fabSku, 'HTS7500F PREMIUM');
+    assert.deepEqual([k('H1-138TRV-4H/P').net, k('H1-138TRV-4H/P').sales, k('H1-138TRV-4H/P').retail], [136, 272, 544]);
+    assert.deepEqual([k('H1-138TRV-4H/P').perFootNet, k('H1-138TRV-4H/P').perFootSales, k('H1-138TRV-4H/P').perFootRetail], [30, 60, 120]);
+    assert.deepEqual([k('H1-138TRV-4HD/EP').perFootNet, k('H1-138TRV-4HD/EP').perFootSales, k('H1-138TRV-4HD/EP').perFootRetail], [102.5, 187, 374]);
+    // components carry their price and no per-foot triple
+    const v = f138.components.find(c => c.code === 'H1-138TRV-V/P');
+    assert.deepEqual([v.net, v.sales, v.retail], [30, 60, 120]);
+    assert.equal(f138.components.find(c => c.code === 'H1-138TRVJNR').net, 6);
+});
+
+test('H1-138TRV rules are DERIVED from the H1-2TRV usage table: carriers verbatim, brackets re-keyed per style, the joiner as the splice', { skip }, () => {
+    const u = (id) => f138.rules.usage.find(x => x.itemId === id);
+    assert.equal(f138.rules.family, 'H1-138TRV');
+    assert.ok(/H1-2TRV/.test(f138.rules.derivedFrom));
+    // carriers: the same three rows, the same counts
+    assert.equal(u('HTSLNTCAR').byFeet[4], 16);
+    assert.equal(u('HTRF100N-500').byFeet[36], 216);
+    // brackets: one row per STYLE at every depth, H1-2TRV's counts
+    assert.equal(u('H1-138TRV-H').byFeet[10], 4);
+    assert.equal(u('H1-138TRV-V').byFeet[10], 4);
+    assert.equal(u('H1-138TRV-HE').byFeet[4], 2);
+    assert.equal(u('H1-138TRV-V6').byFeet[36], u('HTSLNTCAR') ? parsed.rules.usage.find(x => x.itemId === 'H1-2TRV-6WB').byFeet[36] : -1);
+    assert.equal(u('H1-138TRV-HD').byFeet[10], 4);
+    assert.equal(u('H1-138TRV-VD').derivedFrom, 'H1-2TRV-DWB');
+    // no H1-2TRV code survives in this family's doc, and the ring-front double has no equivalent
+    assert.ok(f138.rules.usage.every(x => !/^H1-2TRV/.test(x.itemId)), 'an H1-2TRV bracket code leaked into the H1-138TRV rules');
+    assert.ok(!f138.rules.usage.some(x => x.derivedFrom === 'H1-2TRV-DRTWB'));
+    assert.ok(f138.warnings.some(w => /DRTWB/.test(w)), 'the dropped row is not named');
+    // the splice: the joiner, same threshold
+    assert.equal(u('H1-138TRVJNR').byFeet[10], 0);
+    assert.equal(u('H1-138TRVJNR').byFeet[11], 1);
+    assert.equal(u('H1-2TRVSPLC'), undefined);
+    // configurator: the same picks and accessories, the splice pick re-keyed
+    const cfg = (id) => f138.rules.configurator.find(x => x.itemId === id);
+    assert.equal(cfg('HMTCL/01').drive, 'MANUAL');
+    assert.equal(cfg('HTTENDSTOP').drive, 'BOTH');
+    assert.equal(cfg('HSOM-40').billable, true);
+    assert.equal(cfg('H1-138TRVJNR').drive, 'BOTH');
+    assert.equal(cfg('H1-2TRVSPLC'), undefined);
+    assert.equal(f138.rules.configurator.length, parsed.rules.configurator.length);
+});
+
+test('diff and pricing rows carry the family, so the apply writes the right kitFamily and rules doc', { skip }, () => {
+    const lib = new Map([['H1-138TRV-4H/P', { id: 'KIT-138' }], ['H1-138TRV-V/P', { id: 'doc-v' }]]);
+    const { kitEntries, compEntries } = diffTraverseKits(parsed, lib);
+    assert.equal(kitEntries.length, 38);                                    // 30 + 8
+    assert.equal(kitEntries.find(k => k.code === 'H1-138TRV-4H/P').status, 'UPDATE');
+    assert.equal(kitEntries.find(k => k.code === 'H1-138TRV-4H/P').family, 'H1-138TRV');
+    assert.equal(kitEntries.find(k => k.code === 'H1-138TRV-4V/P').status, 'NEW');
+    assert.equal(kitEntries.find(k => k.code === 'H1-2TRV-4/P').family, 'H1-2TRV');
+    assert.equal(compEntries.find(c => c.code === 'H1-138TRV-V/P').status, 'ALIGN');
+    assert.equal(compEntries.find(c => c.code === 'H1-138TRV-C/EP').status, 'MISSING');
+    const row = kitPricingRow(f138.kits.find(k => k.code === 'H1-138TRV-4H/P'), { customerId: 'CUST-1', customerName: 'Fabricut', user: 'test' });
+    assert.equal(row.clientSku, 'HTS7500F');
+    assert.deepEqual([row.price, row.clientSalesPrice, row.clientRetailPrice], [136, 272, 544]);
+    assert.deepEqual([row.perFootPrice, row.perFootSales, row.perFootRetail], [30, 60, 120]);
+});
+
+test('a workbook without the H1-138TRV tab parses exactly as before — one family', { skip }, () => {
+    const one = parseTraverseKitSheets(JSON.parse(readFileSync('./kit_sheet.json', 'utf8')).filter(s => s.name !== 'H1-138TRV'));
+    assert.equal(one.families.length, 1);
+    assert.equal(one.kits.length, 30);
+    assert.ok(!one.warnings.some(w => /138TRV/.test(w)));
+});

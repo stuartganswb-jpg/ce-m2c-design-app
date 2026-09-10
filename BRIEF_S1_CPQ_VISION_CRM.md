@@ -188,6 +188,55 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
   restored, `closed` removed), `hq_work_orders` / `hq_sales_orders` (`status` restored, `nsWoCloseRequired`
   removed), `rod_cut_orders` (CANCELLED → OPEN for reopened orders), `ns_outbox` (CANCELLED → PENDING for the
   writes the close cancelled). Nothing in your territory's code changed. The push also carried S1's a58d126.
+- **From S5, 2026-09-10 — the H1-138TRV kits: the explosion entry and two per-family reads (three of your
+  files, small).** Stuart: "add in the kits for the H1-138TRV kits … check the components and pricing are
+  correct and that it will function with the cpq flow just like H1-2TRV does … the exact same carrier usage and
+  carrier options as the H1-2TRV … so just the rod and brackets change." Your tag audit
+  (`H1_TAG_ALIGNMENT_2026-09-10.md` §2G) is the map: the 1-3/8" traverse lives INSIDE the H1-138 collection —
+  rod `H1-138TRV` pinned as the fascia role at 1.6 #19–#21, TRV brackets and plates at #26–#37, return fees
+  138TRVMTR / 138TRVFR at #22 / #23 — which is why H1-138 asks Rod Type.
+  **What S5 built (commit hash in BRIEF_S5 §7 once pushed):** `Shared/kitCode.parseKitCode` reads the second
+  grammar `H1-138TRV-4(H|V)D?/(P|EP)` → `align` gains `rodKind: 'TRAVERSE'` and `bracketStyle: 'H'|'V'`
+  (`axesKeyOf` carries the style — the -4H/P and -4V/P kits share every other axis); `Shared/kitSeed.seedFromKit`
+  checks `rodKind` as an axis (first, as the engine asks it; a traverse kit on a solid-only assembly is BLOCKED;
+  H1-2TRV kits carry no rodKind and are untouched) and REPORTS the bracket style in `missed` the way projection
+  stays asked; the 4.6 kit-sheet import reads tab `H1-138TRV` (8 kits, 19 priced components) and writes
+  `system/traverse_rules_H1-138TRV` DERIVED from the H1-2TRV Carrier Usage tab per Stuart — carriers and the
+  configurator list verbatim, bracket rows re-keyed one per STYLE at every depth with the same counts, the splice
+  row keyed `H1-138TRVJNR` (11 ft first, as H1-2TRV's), DRTWB dropped (no 1-3/8" ring-front double).
+  `H1_138TRV_PARTS` is exported from `Shared/traverseKitImport.js` — the rod, the brackets by style × projection,
+  the double and ceiling brackets, the splice — so the rules doc and your explosion key the SAME codes.
+  **Ask 1 — `Shared/traverseExplode.js`, `TRAVERSE_FAMILY_PARTS['H1-138TRV']`.** Today `explodeTraverse` returns
+  `unknown family — nothing exploded` for these kits: tab 7 consumes NO components in NetSuite and CPQ's
+  "included" cover is empty, so every bracket bills as ADDED. The entry (import `H1_138TRV_PARTS` or copy it):
+  ONE per-foot part — `rod: 'H1-138TRV'` (the rod IS the track; no fascia, no separate track line, role
+  `'rod'` — Stuart's "just the rod and brackets change"); `brackets: { SINGLE: { H: {3.625: H1-138TRV-H,
+  4.625: -HE, 6: -H6}, V: {… -V, -VE, -V6} }, DOUBLE: { H: -HD, V: -VD }, CEILING: -C }` — the single's code is
+  `SINGLE[align.bracketStyle][proj]`, the double's `DOUBLE[align.bracketStyle]`; `splice: 'H1-138TRVJNR'`;
+  `plug: 'H1-2TRVPLUG'` ×2 on a manual rod — **Stuart 2026-09-10: "2 per rod manual for now use the same code as
+  the H1-2trv manual, it will need to be updated but for placement sake it is better than nothing"** (say so in
+  the entry's comment: a placeholder code, not the 1-3/8" part); no `baseMotor` (no motorized kits on the sheet),
+  `frontRingPole` none (no FRT double), `returnArms` none (the 1-3/8" returns are the fee items at #22 / #23, not
+  per-projection arms), `subFinishRoles: []` — **Stuart 2026-09-10: mainline finish** — the sheet prices every
+  H1-138TRV bracket "- PAINTED" / "- PLATED" (/P and /EP), so unlike H1-2TRV's base-colour brackets they go to the
+  floor in the customer's finish code. `singleProjections(family)` must take the style (`brackets.SINGLE[style]`) — tab 7's
+  `trvProjOptions` (`QuickShipTab.js:697`) passes `trvKit.manufacturingSpecs.kitAlign.bracketStyle`. The
+  `scripts/traverseExplode.test.mjs` fixture: a 4 ft H1-138TRV-4H/P set = 4 × H1-138TRV, 2 × H1-138TRV-H, no
+  splice; a 12 ft -4VD/EP = 12 × rod, 5 × H1-138TRV-VD, 1 × H1-138TRVJNR.
+  **Ask 2 — the rules doc is read by family in two places that still hard-code H1-2TRV:** `CPQTab.js:1070`
+  (`onSnapshot(doc(db,'system','traverse_rules_H1-2TRV'))` → `trvRules` → `HardwareConfigurator`'s kit cover and
+  the components chart) and `QuickShipTab.js:228` (the configurator offer). Under an H1-138TRV kit those read
+  H1-2TRV's rows: carriers match by id, the bracket and splice rows do not → 2 brackets and no splice at every
+  length in CPQ and in tab 7's chart. Subscribe by the kit's / flow's `kitFamily` (tab 7's push at `:1245`
+  already reads `traverse_rules_${fam}` per kit — the same rule, one screen earlier).
+  **Data, Stuart's, named here so you see it:** tab 11 → the H1-138 flow → Kit Family `H1-138TRV` (the picker
+  matches `kitFamily` tag-first; the assembly code `H1-138` is not the prefix of `H1-138TRV-4H/P`, so without the
+  tag the picker's super-admin diagnostic names the mismatch and lists nothing). Then in 4.6: apply the import,
+  tick each kit's finish matrix (P kits paints, EP kits plated).
+  **Downstream trace:** tab 7 → `hq_sales_orders` (QUICKSHIP) → WMS STOCK pick of the exploded components →
+  NetSuite SO consumption lines + the $-holder; CPQ → kit line `noNs`, components at $0 → rollup; the pick list
+  reads `pricingBreakdown` (nothing removed). RTG, finishing, shop untouched. Until Ask 1 lands, an H1-138TRV kit
+  is listable on tab 7 and seedable in CPQ but consumes nothing and covers nothing — Stuart is told.
 - **From S2 (to land when S2 is next in `StockViewTab` / `LibraryTab`):** nothing owed to you today.
 - **To S4 (you write it into `BRIEF_S4` §6):** `portalMyOrders` date read → `so.needBy || so.readyDate ||
   so.createdDate`; the portal request functions accept `needBy` + `productionNotes` (E8 field list in

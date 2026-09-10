@@ -23,7 +23,21 @@
 //                     aligns the customer's sku/pricing onto it, never creates it.
 // Tab "Carrier Parts": more component alignment rows. Tab "Carrier Usage": per-length included
 // quantities (TOTALS at each length, not increments) + the configurator item list below row 15.
-// Tabs H1-138TRV and Discards are ignored by instruction.
+// Tab "Discards" is ignored by instruction.
+//
+// TAB H1-138TRV (Stuart 2026-09-10 — "it is time to get these in"): the 1-3/8" traverse, a product
+// inside the H1-138 collection. Eleven columns and no header row: A = family label, B = our code,
+// C = their pattern, D/E/F = net / wholesale / retail, G = description, H = the word INCREMENT,
+// I/J/K = the additional-foot triple. No category column — a row is a KIT when its code parses as
+// one (kitCode's grammar, H1-138TRV-4(H|V)D?/(P|EP)) and a COMPONENT otherwise (the H / V brackets
+// at three depths, the doubles, the ceiling bracket, the splice). There is no usage table for this
+// family and Stuart says there need not be: "the exact same carrier usage and carrier options as the
+// H1-2TRV … so just the rod and brackets change." So its rules doc is DERIVED from the H1-2TRV
+// Carrier Usage tab — carriers and the configurator list verbatim, the bracket rows re-keyed to this
+// family's bracket codes (one row per style, same counts), the splice row re-keyed to its joiner —
+// and says so on the doc (`derivedFrom`).
+
+import { parseKitCode } from './kitCode';
 
 const S = (v) => String(v ?? '').trim();
 const U = (v) => S(v).toUpperCase();
@@ -46,9 +60,87 @@ const materialOf = (code) => { const m = U(code).match(/\/(EP|P|W)(?:-|$)/); ret
 
 const axesKey = (k) => [k.setup, k.frontRail, k.drive, k.mount, k.material].join('|');
 
+// THE 1-3/8" TRAVERSE FAMILY'S PARTS — read off tab H1-138TRV and S1's tag audit of 2026-09-10 (the
+// rod H1-138TRV is pinned as the fascia role at 1.6 #19–#21; brackets and plates at #26–#37).
+// Exported so the explosion's family table (Shared/traverseExplode, S1's) and the rules doc built
+// here key the SAME bracket codes — a bracket the explosion names must be a row the rules doc has.
+// Unlike H1-2TRV this family has ONE per-foot part (the rod IS the track), brackets in two STYLES
+// at every depth, and no fascia, plug or base motor.
+export const H1_138TRV_PARTS = {
+    rod: 'H1-138TRV',
+    brackets: {
+        SINGLE: {
+            H: { '3.625': 'H1-138TRV-H', '4.625': 'H1-138TRV-HE', '6': 'H1-138TRV-H6' },
+            V: { '3.625': 'H1-138TRV-V', '4.625': 'H1-138TRV-VE', '6': 'H1-138TRV-V6' },
+        },
+        DOUBLE: { H: 'H1-138TRV-HD', V: 'H1-138TRV-VD' },
+        CEILING: 'H1-138TRV-C',
+    },
+    splice: 'H1-138TRVJNR',
+};
+
+// How an H1-2TRV usage row maps onto this family — the SAME counts, this family's codes. A row this
+// table does not name (DRTWB, the ring-front double: no 1-3/8" equivalent) is dropped, and said so.
+const H1_138TRV_FROM_H1_2TRV = {
+    'H1-2TRV-WB': ['H1-138TRV-H', 'H1-138TRV-V'],
+    'H1-2TRV-EWB': ['H1-138TRV-HE', 'H1-138TRV-VE'],
+    'H1-2TRV-6WB': ['H1-138TRV-H6', 'H1-138TRV-V6'],
+    'H1-2TRV-DWB': ['H1-138TRV-HD', 'H1-138TRV-VD'],
+    'H1-2TRVSPLC': ['H1-138TRVJNR'],
+};
+
+/** Tab H1-138TRV → { family, kits, components, rules, warnings }. `baseRules` = the H1-2TRV rules doc. */
+function parseH1138Tab(sheet, baseRules) {
+    const family = 'H1-138TRV';
+    const warnings = [];
+    const kits = [];
+    const components = [];
+    (sheet?.grid || []).forEach((row, i) => {
+        const [, code, fabSku, net, sales, retail, name, , ftNet, ftSales, ftRetail] = row;
+        if (!S(code)) return;
+        const parsed = parseKitCode(code);
+        if (parsed && parsed.family === family) {
+            if (money(ftNet) === null) warnings.push(`Row ${i + 1} (${U(code)}): a kit row with no additional-foot price`);
+            kits.push({
+                code: U(code), fabSku: S(fabSku), name: S(name), align: parsed.align,
+                net: money(net), sales: money(sales), retail: money(retail),
+                perFootNet: money(ftNet), perFootSales: money(ftSales), perFootRetail: money(ftRetail),
+                motorCodes: [],
+            });
+        } else {
+            components.push({ code: U(code), fabSku: S(fabSku), net: money(net), sales: money(sales), retail: money(retail), name: S(name) });
+        }
+    });
+    if (!kits.length) warnings.push('H1-138TRV tab: no kit rows recognised — is the code column B?');
+
+    // ── the rules doc, derived (see the header) ─────────────────────────────────────────────
+    const rules = { family, usage: [], configurator: [], updatedFrom: 'Fabricut_Traverse.xlsx', derivedFrom: 'H1-2TRV Carrier Usage (Stuart 2026-09-10: same carrier usage and options — only the rod and brackets change)' };
+    if (baseRules && baseRules.usage.length) {
+        const dropped = [];
+        baseRules.usage.forEach(u => {
+            const id = U(u.itemId);
+            if (/CARRIER/i.test(S(u.label))) { rules.usage.push({ ...u, byFeet: { ...u.byFeet } }); return; }
+            const to = H1_138TRV_FROM_H1_2TRV[id];
+            if (!to) { dropped.push(id); return; }
+            to.forEach(code => rules.usage.push({ itemId: code, fabSku: '', label: S(u.label).replace(/H1-2TRV\S*/g, code), byFeet: { ...u.byFeet }, derivedFrom: id }));
+        });
+        baseRules.configurator.forEach(c => {
+            const id = U(c.itemId);
+            const to = H1_138TRV_FROM_H1_2TRV[id];
+            if (to) to.forEach(code => rules.configurator.push({ ...c, itemId: code, fabSku: '', derivedFrom: id }));
+            else rules.configurator.push({ ...c });
+        });
+        if (dropped.length) warnings.push(`H1-138TRV rules: no 1-3/8" equivalent for ${dropped.join(', ')} — row(s) not carried`);
+    } else warnings.push('H1-138TRV rules: no Carrier Usage tab to derive from — rules not imported');
+    return { family, kits, components, rules, warnings };
+}
+
 /**
  * Parse the traverse kit workbook. `sheets` = [{ name, grid: [[cell,…],…] }] (the same shape
- * customerControlFile's loader emits). Returns { family, kits, components, rules, warnings }.
+ * customerControlFile's loader emits). Returns { family, kits, components, rules, warnings,
+ * families } — the top-level fields are the H1-2TRV tab's (every reader since 08-12 expects them
+ * there); `families` lists every family the workbook carries, H1-2TRV first, each in the same
+ * shape, and is what the 4.6 import walks.
  */
 export function parseTraverseKitSheets(sheets) {
     const warnings = [];
@@ -141,7 +233,15 @@ export function parseTraverseKitSheets(sheets) {
         });
     } else warnings.push('No Carrier Usage tab — rules not imported');
 
-    return { family, kits, components, rules, warnings };
+    // ── the second family, when the workbook carries its tab ────────────────────────────────
+    const families = [{ family, kits, components, rules, warnings }];
+    const t138 = byName.get('H1-138TRV');
+    if (t138) {
+        const f = parseH1138Tab(t138, rules);
+        families.push(f);
+        f.warnings.forEach(w => warnings.push(w));
+    }
+    return { family, kits, components, rules, warnings, families };
 }
 
 /**
@@ -149,14 +249,17 @@ export function parseTraverseKitSheets(sheets) {
  * `libByCode` = Map(code → { id, hasKitAlign, row }) where row = the customer's clientPricing row.
  */
 export function diffTraverseKits(parsed, libByCode) {
-    const kitEntries = parsed.kits.map(k => {
+    // Every family the workbook carries, each entry stamped with its family so the apply writes
+    // the right kitFamily and rules doc. A parse result from before `families` existed is one family.
+    const fams = Array.isArray(parsed.families) && parsed.families.length ? parsed.families : [parsed];
+    const kitEntries = fams.flatMap(f => f.kits.map(k => {
         const hit = libByCode.get(k.code);
-        return { ...k, status: hit ? 'UPDATE' : 'NEW', docId: hit ? hit.id : null };
-    });
-    const compEntries = parsed.components.map(c => {
+        return { ...k, family: f.family, status: hit ? 'UPDATE' : 'NEW', docId: hit ? hit.id : null };
+    }));
+    const compEntries = fams.flatMap(f => f.components.map(c => {
         const hit = libByCode.get(c.code);
-        return { ...c, status: hit ? 'ALIGN' : 'MISSING', docId: hit ? hit.id : null };
-    });
+        return { ...c, family: f.family, status: hit ? 'ALIGN' : 'MISSING', docId: hit ? hit.id : null };
+    }));
     return { kitEntries, compEntries };
 }
 

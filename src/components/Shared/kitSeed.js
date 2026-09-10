@@ -46,10 +46,15 @@
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 
 /** The alignment fields a kit record carries, and the engine axis each one answers. */
-const AXIS_OF = { setup: 'setup', drive: 'drive', mount: 'mount' };
+// rodKind first, because the engine asks it first: a combined collection (H1-138 holds the 1-3/8"
+// traverse beside its solid rods) opens on Rod Type, and a traverse kit that did not answer it
+// would seed setup and drive onto a SOLID order — four confident lines and one quiet one again.
+// The H1-2TRV kits carry no rodKind (their assembly holds one world, the axis is implied) and are
+// untouched: a field the kit does not carry is not our business, exactly as before.
+const AXIS_OF = { rodKind: 'rodKind', setup: 'setup', drive: 'drive', mount: 'mount' };
 
 /** Human words for the refusal, so it names the product rather than the field. */
-const SAYS = { setup: 'setup', drive: 'drive', mount: 'mount' };
+const SAYS = { rodKind: 'rod type', setup: 'setup', drive: 'drive', mount: 'mount' };
 
 /**
  * What an assembly can actually be built as, on one axis.
@@ -169,6 +174,14 @@ export function seedFromKit({ model, kit }) {
         const say = mat === 'W' ? 'a wood stain' : mat === 'EP' ? 'a plated finish' : 'a painted finish';
         missed.push({ what: 'finish', why: `${code} is sold in ${say} — pick the exact code` });
     }
+
+    // ── THE BRACKET STYLE (H1-138TRV: H horizontal / V vertical) ─────────────────────────────
+    // Reported, never chosen, for the same reason projection stays asked on H1-2TRV: the style is
+    // not an axis but a PART (H1-138TRV-H and -V exist at every depth), and the depth is the
+    // operator's measurement. The kit says which of the two families of bracket it was sold with;
+    // the operator picks that bracket at the measured projection and the bill covers it.
+    const style = { H: 'horizontal', V: 'vertical' }[U(align.bracketStyle)];
+    if (style) missed.push({ what: 'bracket style', why: `${code} is sold with ${style} brackets — pick the ${U(align.bracketStyle)} bracket at the measured projection` });
 
     return { answers, picks, lengthInches, carried, missed, blocked: null };
 }
