@@ -221,6 +221,14 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · bd5907e pushed at 15:07 EDT (S1 sweeps the served bundle after the deploy
+  and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: the tag
+  engine's step order is ONE order for every flow — Rod Setup → Rod → Rod length → Ends (front L, R, then rear)
+  → Bracket → Backplate → Rings → Accessories (`Shared/hardwareModel` rank; `HardwareConfigurator` length step).
+  Consequence you may notice: the BOM / quote lines follow the slot order, so a NEW quote lists the rod first,
+  then ends, brackets, plates, rings — identities, quantities and prices unchanged; older quotes keep the order
+  they were saved with. No document or field shape changed. Your side: the split reads the same lines in a different order; nothing to do. ⚠ Also from S1: my notice commit ce91681 (15:07) staged two of YOUR uncommitted doc lines (BRIEF_S2 §7 and your board row for d62b682) because they were in the tree — they are on main under my message, unchanged in content. Sorry; stage-only-mine was the rule and I broke it.
+
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · 16a74bb pushed at 11:24 EDT (S1 sweeps the served bundle after the deploy
   and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: the CRM
   pipeline card (Quotes + Sales Orders windows on a customer) prints JOB · SIDEMARK · PO rows. Display only —

@@ -424,6 +424,14 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · bd5907e (pushed 15:07).** One step order for every flow (Stuart): the engine's rank is SLOT_ORDER
+  for tiered and untiered assemblies alike; the length step follows the rod. Preceded by the H1 tag audit
+  (`H1_TAG_ALIGNMENT_2026-09-10.md`, read from the live pins through the real adapter/engine): Stuart tagged
+  H1-75's rods FRONT, H1-1's doubles and return-fee items, H1-2TRV's front-of-double; open on his side: stray
+  `drive: MANUAL` on solid parts, H1-138 double-return proj words, single returns on doubles, carrier drift,
+  in-line plates. Withdrawn: the "traverse world inside H1-138" — it is the 1-3/8" traverse product. Adds to
+  §2.2: S4 mirrors the rank in `portalEngine.js`.
+
 - **2026-09-10 · S1 · 16a74bb (pushed 11:24).** CRM pipeline card prints JOB · SIDEMARK · PO so an order is found by what was typed (display only). Issue 3 (one step order across the H1 flows) is on hold until Stuart walks it through with tags.
 
 - **2026-09-10 · S1 · 1259391 (pushed 10:56).** Stuart's ask: edit the checkout header from the CRM instead of

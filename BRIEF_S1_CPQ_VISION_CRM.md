@@ -189,6 +189,14 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 3 (S1) bd5907e pushed 15:07.** One step order for every flow (engine rank = SLOT_ORDER; length
+  after the rod). Came after the H1 tag audit (`H1_TAG_ALIGNMENT_2026-09-10.md`, three revisions: locators must
+  carry BOTH the 1.6 chip `#n · slot` (0-based load order) and the 1.5 list number; the "traverse inside
+  H1-138" is the 1-3/8" traverse product, withdrawn). Stuart's tag pass verified in the pins. Audit tool:
+  scratchpad `h1audit.mjs` over a clipboard dump of the live pins (Firestore reached through the page's webpack
+  registry — module 565 = firestore fns, 5042 = app). Handed S4: mirror the rank in `portalEngine.js`.
+  ⚠ My notice commit ce91681 staged two of S2's uncommitted doc lines (their tree edits) — reported in BRIEF_S2 §6.
+
 - **2026-09-10 — Issue 2b (S1) 16a74bb pushed 11:24.** CRM pipeline card prints JOB · SIDEMARK · PO (Stuart's ask after
   trying the header modal: "the modify works well"). Issue 2 (1259391) went live at 10:30 inside S2's push —
   a local commit on main is a push in waiting; from now on S1 commits only once Stuart has cleared the push.
