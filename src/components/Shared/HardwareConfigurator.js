@@ -2067,25 +2067,10 @@ function HardwareConfiguratorInner({
                             but it is not an ending — so the last step's button becomes the ending it
                             already was, and adds the configuration to the quote. The strip above
                             keeps the same action for anyone who finished early and wants out. */}
-                        {/* THE LAST QUESTION OF THE WALK (Stuart 2026-08-26): how many of this
-                            exact configuration. Asked here — where the walk ends — so it cannot be
-                            skipped, and phrased so 2 reads as TWO COMPLETE BUILDS, not two feet. */}
-                        {ix >= steps.length - 1 && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', border: `1px solid ${cfgQtyN > 1 ? 'var(--brass)' : 'var(--line)'}`, background: cfgQtyN > 1 ? '#fdf8ef' : 'var(--paper-2)' }}>
-                                <div style={{ flex: 1 }}>
-                                    <div style={{ ...mono, fontSize: '8.5px' }}>Quantity of this configuration</div>
-                                    <div style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', marginTop: '2px' }}>
-                                        {cfgQtyN > 1
-                                            ? <b style={{ color: 'var(--brass)', fontWeight: 600 }}>{cfgQtyN} complete identical builds — every part below × {cfgQtyN}. Not a length.</b>
-                                            : 'How many complete, identical sets of this exact configuration.'}
-                                    </div>
-                                </div>
-                                <input type="number" min="1" step="1" value={cfgQty}
-                                    onChange={e => setCfgQty(e.target.value)}
-                                    onBlur={() => setCfgQty(String(cfgQtyN))}
-                                    style={{ width: '64px', padding: '8px 6px', border: `1px solid ${cfgQtyN > 1 ? 'var(--brass)' : 'var(--line)'}`, fontFamily: 'var(--mono)', fontSize: '14px', textAlign: 'center', background: '#fff', color: 'var(--ink)', fontWeight: cfgQtyN > 1 ? 700 : 400 }} />
-                            </div>
-                        )}
+                        {/* The configuration quantity lives in the header beside "Add configuration" only
+                            (Stuart 2026-09-09). It used to repeat here on the last step — on H1-138 that is
+                            the ring step, which asks its own "how many", and a 50 typed into the wrong box
+                            quoted fifty complete builds. One box, one meaning. */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', paddingTop: '3px' }}>
                             <button onClick={() => setStepIx(Math.max(0, ix - 1))} disabled={ix === 0}
                                 style={{ ...chip(false), opacity: ix === 0 ? .35 : 1, cursor: ix === 0 ? 'not-allowed' : 'pointer' }}>Back</button>
