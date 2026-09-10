@@ -256,6 +256,12 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 7 (S1) bb5b5e1 pushed 19:48.** Plate follows its arm (reseatPicks). Also on Stuart's ask S1 WROTE
+  production tags through the app session (module 565 setDoc=`BN`, doc=`H9`, merge): tier FRONT on 8 double-return fee
+  pins (H1-75 1.6 #18/#19, H1-1 1.6 #31/#32), setup DOUBLE on 40 H1-75 plate pins with proj 6.5 (1.6 #37/#38/#40/#41/#42);
+  read back 8/8 + 40/40; pin ids in scratchpad `tagplan.json`. Preview findings: double-return back-end suppression fires on
+  all three flows on today's pins; 6.5 on a single = the 40 plates (fixed by the tag).
+
 - **2026-09-10 — Issue 6 (S1) 9415338 pushed 19:23.** S5's Asks 1 + 2 landed (H1-138TRV explode entry; rules by family in
   CPQTab + QuickShipTab; `singleProjections(family, style)`). Stuart's rulings in the entry: returns are fees on the end
   steps (138TRVFR / 138TRVMTR), never exploded; plug = H1-2TRVPLUG placeholder. Tests: 4 ft -4H/P, style V, 12 ft -4VD/EP

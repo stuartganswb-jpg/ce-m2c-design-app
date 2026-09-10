@@ -424,6 +424,11 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · bb5b5e1 (pushed 19:48).** A backplate follows its arm (reseatPicks: twin only while an arm is chosen at
+  the position). Stuart's preview items: the double-return back-end suppression already fires on today's pins (his proj-word
+  fix); 6.5" on an H1-75 single was 40 plate pins missing `setup: double` (S1 tagged, on his ask); the plate-after-return
+  was the twin rule on shared plate codes. Adds a fourth S4 mirror line.
+
 - **2026-09-10 · S1 · 9415338 (pushed 19:23).** S5's kit hand-off, S1's half: `TRAVERSE_FAMILY_PARTS['H1-138TRV']` (rod as
   the per-foot part, brackets by style, joiner splice, placeholder plug, returns = fees, mainline finish) and the rules
   document read by `kitFamily` in CPQ and tab 7. Explosion tests + a guard that the table equals S5's importer export.

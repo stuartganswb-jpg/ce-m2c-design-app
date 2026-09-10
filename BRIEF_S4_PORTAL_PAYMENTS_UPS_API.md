@@ -131,6 +131,12 @@ owed (`h2-simple-elegance-flow` memory).
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · bb5b5e1 pushed at 19:48 EDT (S1 sweeps the served bundle after the deploy
+  and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: tag engine —
+  **a backplate follows its arm**: un-picking the return (or any arm) at a position drops the plate chosen for it
+  instead of re-seating it under a bracket nobody has chosen; changing bracket still keeps the plate. No document or
+  field shape change. Your side, the FOURTH mirror line for `functions/portalEngine.js`: `reseatPicks` re-seats a BACKPLATE onto a twin only while an arm is chosen at its position (with bd5907e rank, e4ab15a ridesWith, 6572b6f parked-never-rides).
+
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · 9415338 pushed at 19:23 EDT (S1 sweeps the served bundle after the deploy
   and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped (S5's kit hand-off,
   S1's half): the kit explosion knows the **H1-138TRV** family (rod as the one per-foot part, brackets by style H/V,
