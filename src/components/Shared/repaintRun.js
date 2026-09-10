@@ -33,7 +33,13 @@ export const releaseRunToFloor = async ({
         id: woId, woId, woDisplayId: woId,
         partErpId: erp, rootItem: erp,
         brand, customer: 'Internal Stock',
-        hqJobId: part.id, totalParts: Math.max(1, Math.floor(Number(qty) || 1)),
+        // NULL, NEVER UNDEFINED (Stuart 2026-09-10, live): Firestore refuses a document containing
+        // undefined anywhere and blames the field, which is how a repaint of HWMMB35/N66 died with
+        // "Unsupported field value: undefined … hqJobId". The Master Library door always passes a
+        // real library part, so it never showed; the Snapshot passes a bare {legacyErpId, itemName}
+        // for an item the app was never taught — which is precisely the case a paint run exists for.
+        // Same `|| null` convention buildStockFinPayload already uses for this field.
+        hqJobId: (part && part.id) || null, totalParts: Math.max(1, Math.floor(Number(qty) || 1)),
         reqDate, type: 'Stock Build', recipe: recipe || finishLabel || 'PENDING-RECIPE',
         finishLabel: finishLabel || '',
         memo: note || '', createdAt: now,

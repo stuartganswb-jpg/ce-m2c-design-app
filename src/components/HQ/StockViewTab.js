@@ -2240,6 +2240,20 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
     };
 
+    // Esc closes the Snapshot — the deliberate keyboard exit, now that a stray click no longer is
+    // one. Bound only while it is open, and it never fires while a nested modal is up: closing the
+    // report out from under the rod-cut or repaint tool would take their half-entered work with it.
+    useEffect(() => {
+        if (!salesHist) return undefined;
+        const onKey = (e) => {
+            if (e.key !== 'Escape') return;
+            if (cutModal || snapRepaint || backorders || poReview || stockReview || onOrdModal || openWos) return;
+            setSalesHist(null);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [salesHist, cutModal, snapRepaint, backorders, poReview, stockReview, onOrdModal, openWos]);
+
     // ── 1 · WHO IS ACTUALLY WAITING (Stuart 2026-09-09) ────────────────────────────────────────
     // "add a qty column next to available for backorder, currently we have no visibility when
     //  there are actually people waiting."
@@ -3142,8 +3156,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const totOnOrd = rows.reduce((s, r) => s + (r.onOrd || 0), 0);
                 const numTd = { padding: '7px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', borderBottom: '1px solid var(--paper-2)' };
                 const monthTh = { padding: '8px 6px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)', whiteSpace: 'nowrap' };
+        // ── NO BACKDROP-CLOSE (Stuart 2026-09-10: "when i go back and change that item, it
+        // crashes the whole pop up screen"). It was never crashing — it was being
+        // DISMISSED. The panel is 97vw wide but its HEIGHT follows its content and it is
+        // vertically centred, so filtering hundreds of rows down to three shrinks it and
+        // re-centres it under the pointer; the next click, going back to the search box,
+        // lands on backdrop that was panel a moment ago. "Sometimes after the first
+        // change, sometimes after more" is exactly that — it depends where you click
+        // relative to a panel whose size keeps moving.
+        // This screen holds typed state nobody can get back — the search, ROP edits,
+        // order quantities — so a stray click must not discard it. × and Esc close it,
+        // both deliberate. The heavy panels on this screen (the stock review gate, the
+        // Backorders board, the PO review) already behave this way; the Snapshot was the
+        // outlier. The small glance-and-dismiss popups keep their backdrop click.
                 return (
-                    <div onClick={() => setSalesHist(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '28px 32px', width: '97vw', maxWidth: '1900px', maxHeight: '94vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
                                 <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Stocked Items — Sales Snapshot</h2>
