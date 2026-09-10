@@ -1,0 +1,156 @@
+# Brief S5 — customer-facing: spec sheets · 4.6 Customer Collections and kits · marketing · guide books · assets
+
+*Written 2026-09-10 by the communicator session. Starts when Stuart opens it. Read, in order: `CLAUDE.md`,
+`SESSION_COMMS_2026-09-10.md`, `STATE_OF_THE_APP_2026-09-10.md` (your items: §1 F, §2.4 #46 (the kit half), #49,
+#50–51), then the memories `spec-sheet-generator` (trusted over every spec-sheet brief), `spec-sheet-cpq-contract`,
+`brief-f-decisions-2026-09-03`, `quick-ship-stocked-items` (the kit model), `onboarding-xlsx-export`,
+`guide-builder`, `asset-gallery-fabricut-combo`, `canonical-tag-spec`; then `BRIEF_F_KITS_SPEC_SHEETS.md` §2–§4 (F2,
+F4, F6, F9 are yours), `KIT_CPQ_ALIGNMENT_BRIEF.md` (for why; the CPQ half is gone), `SPEC_SHEET_CPQ_TIEIN_BRIEF.md`
+Part 3 (the offline replay harness), `ASSET_GALLERY_PRINTS_SPEC.md`. Older spec-sheet briefs are history where
+they conflict with the memory.*
+
+## ⛔ Working agreement + standing rules
+
+Plan first and WAIT. Requested scope only. No temporary fixes. Trace downstream: a kit record feeds S1's engine
+seed and tab 7's counter; a 4.6 row save rewrites part of the item's Fabricut pricing box (one way, on purpose
+— Stuart chose A: keep it one-way and show the before/after tier numbers in the confirm); a spec sheet reads the
+same pins the CPQ reads. One issue at a time. **Tags before code** — a wrong page on a sheet is almost always a
+wrong tag in 1.6 (S1's file; hand them the tag, never draw around it). **Never filter the answer you asked for;
+one code can be two pins; read subjects by role, not slot kind; fixtures use the prod shape; a fixture that
+cannot fail is decoration** (the spec-sheet traps, all still live).
+
+## 0. Operating
+
+- The spec sheet opens from 📐 in BOM Engine (tab 3); 4.6 is Customer Collections; kits live in 4.6 → KITS and
+  `system/quick_ship_kits`; guide books in tab 1; assets in 14 / 14.5 / 14.6; marketing in tab 5.
+- **The fast loop:** `node scripts/specSheetPages.test.mjs`, `specSheetRows`, `kitSeed` (68), `kitCode`,
+  `feeRules`, `priceLevels`, `customerDocLines`, `tagSheetImport`; the **offline replay harness** for sheets
+  (`SPEC_SHEET_CPQ_TIEIN_BRIEF.md` Part 3: pull the pins + clusters dump via the console recipe keeping
+  `passing`, `legacyErpId`, `returnOnly`; `curl` the assembly's `cadUrl`; strip textures; replay
+  `choicesFromAssembly → specPages → buildPageSvg` headless). The scratchpad dies daily — rebuild it in minutes.
+  Fit percentages are stated, never screenshot-looped.
+- **Driving a 4.6 save from the browser tools:** the client-row save gates on `window.confirm` — stub both
+  `confirm` and `alert`, read the confirm text back (it states what else the save touches).
+- Deploy-verify: `CustomerCollectionsTab`, the SpecSheet modal, `AssetGalleryTab`, the batch processors are lazy
+  chunks; sweep `asset-manifest.json`.
+
+## 1. Territory
+
+**Own:** `SpecSheet/*` and `system/spec_sheet_config`; `HQ/CustomerCollectionsTab.js` (4.6: COLLECTION, FEES,
+KITS, CHECKOUT, PLATES, ARMS); `Shared/kitSeed`, `kitCode`, `customerControlFile`, `clientPricing`, `priceLevels`,
+`feeRules`, `itemStarterXlsx`, the onboarding xlsx export (BOM Engine's Generate Excel); `system/quick_ship_kits`;
+`HQ/GuideBuilder`, `guideCapture`; `Shared/AssetGalleryTab`, `BatchImageProcessor`, `BatchTextureProcessor`; tab 5
+Marketing.
+
+**Read-only:** S1's engine and 1.6 (you *read* pins; a tag change is a hand-off with the slot #), S1's
+`hardwareHandoff` (the line contract — a kit-seeded configuration must hand it the same `partId / legacyErpId /
+partHandling / finishCode` as a hand-built one), S1's documents (`printForm`, `FormPreview`, `customerDocLines` —
+you may propose; they edit), S2's spine, S3's floors, S4's portal (which mirrors `priceLevels` / `sizeMatrix`
+by hand — tell S4 when a pricing rule changes).
+
+## 2. What is live (do not rebuild)
+
+The spec-sheet generator rebuilt on the tag engine (one page per leaf × subject from `activeAxes()`, measured
+grid, one true scale, "REDUCED n%" honest, 8.5×11 binder, doubles by rod selection, returns as plan view,
+ceiling pages by drop, one unioned catalog, `auditPages` scoping guarantee). 4.6 as the guide describes it
+(pickers, grid, P/EP editor, checkout items two homes, fees, kits as real item records with a finish matrix,
+plates & arms, control-file and kit-sheet imports with a full diff). Kits: `kitSeed.seedFromKit` writes
+`answers` + `picks` and refuses (`blocked`) when the assembly cannot honour a defining choice; F2's F half
+(`applyKitPricing`: `billGroup` 1–4, included at $0, motor folded at the per-motor code); `kitFamily` tag match;
+the kit picker shows the customer's kit code. Guide books (8.5×11 pages, pin/leader/text notes, CPQ "Send to
+Guide"). Asset gallery Fabricut combo tagging, bulk re-tag, crop per folder.
+
+## 3. The work, in order — Stuart picks
+
+**Kits (Stuart's decision of 09-03: ONE kit bill shape on both doors)**
+1. **#46, your half:** confirm `applyKitPricing`'s output is what S1's push and documents expect (kit + first
+   4 ft with the motor folded · extra feet · added parts · included at $0), with prod-shaped fixtures; hand S1
+   the `billGroup` contract in writing (it is in `kitSeed.js` — quote it into `BRIEF_S1` §6). S1 owns the
+   NetSuite side (all $0 + one holder line) and the document order.
+2. The 30 `H1-2TRV-4*` kit records: 4.6 `frontRail` must be set on the -4D / -4DC / -4MD / -4MDC (TRACK) and
+   -4FRT / -4MFRT (RING) records for the seed to answer `frontLayer` (Stuart's data; you run the sitting).
+3. F2's remaining questions (`KIT_CPQ_ALIGNMENT_BRIEF.md` §3.4, answered 09-03): projection stays asked; seed,
+   never lock; the kit-matched configuration bills the KIT shape above; the motor as tab 7 does. Build the
+   CPQ kit strip's "seeded / missed / blocked" report if it is not complete (check `HardwareConfigurator` —
+   S1's file; spec to them).
+4. Kit sheet imports beyond H1-2TRV (the pending list in `CPQ_ORDERENTRY_TAB11_BRIEF.md` §2).
+
+**Spec sheets (F4 — the memory's stated NEXT)**
+5. **#50** the text and measurement pass on the harness first: the type scale was sized for a 64% reduction that
+   no longer happens; text is most of the fixed overhead; callouts on row 1 only; the footer's REDUCED line kept
+   honest. Then the two repeated right-hand columns on return pages — **French Return** and **Passing Support
+   Arm** — the row builder makes detail/front/profile only. Stuart's Q4 (09-03): the 4-row plate sheet is NOT
+   to be touched; H1-138 is at 2 rows per sheet and he is content.
+6. Verify `H1-138D`'s two-step dimension reads wall → 3¼ → 5¼ on paper (the memory says every placement
+   measured 0.00 on the harness; it was never confirmed on paper).
+7. H1-2TRV sheets (fascia + stationary front = ring AND carrier on one page) — the declared next stop.
+8. PDF download is a 300 dpi raster embed; the print window is the true-vector path. Only if Stuart asks.
+
+**Data with Stuart (the spec-sheet share of §2.3 #28):** S72 rear-pole `returnOnly` re-ticked and saved (it
+did not persist); FR/MTR double return pins' proj as `FRONT:8.5, BACK:3.25`; the 6" single returns'
+`feeItemNo`; the wood singles' untagged pin copy; the two NEW-SLOT finial sections → `rod: front`; prices for
+`H1-138AR`, `H1-138D`, `H1-DBLMR` in 4.6. Each is a tag or a price in S1's 1.6 or your 4.6 — cite the slot #.
+
+**4.6 and pricing**
+9. The 4.6 row → tier coupling confirm shows before/after tier numbers (Stuart's answer A, 09-03) — verify it
+   does; if not, one small change in your file.
+10. Fabricut price levels, the H1-75 depth audit, per-foot $0 quotes reopening once — the `fabricut-h1-rollout`
+    memory's open list; ask which still matter.
+
+**Marketing, guide books, assets**
+11. Tab 5 Marketing — the communicator has not read it; survey it and report what it is before proposing.
+12. `ASSET_GALLERY_PRINTS_SPEC.md` (program prints from the gallery, "Print" resolving by program name) — status
+    unknown; check against `Shared/programPrints.js` (S3's) and the gallery before proposing.
+13. The onboarding price-list xlsx and the customer control file — keep them reading `clientPricing` through
+    the one matcher (`Shared/clientPricing.js`, yours).
+
+**Guide (S2 rule) — #49:** no section exists for kits ("a kit is a configuration in another spelling; what seeds,
+what refuses"), spec sheets ("what a page is, the paper, why a sheet says REDUCED"), or 4.6's KITS / CHECKOUT
+views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before editing `UserGuideTab.js`
+(`git status --short` it first).
+
+## 4. Acceptance
+
+| run | expect |
+|---|---|
+| a kit code entered in CPQ (with S1) | seeds axes; strip shows seeded / missed / blocked; a blocked kit does not open; the breakdown carries the full line contract in `billGroup` order |
+| the same kit on tab 7 and in CPQ, on paper | identical line order; tab 12 shows one holder line at the configuration total and N lines at $0 |
+| H1-138 return page | French Return + Passing Support Arm columns present; the footer's REDUCED figure equals the harness's |
+| H1-138D on paper | wall → 3¼ → 5¼ |
+| a 4.6 client-row save | the confirm states the tier numbers before and after; the tiers survive |
+| `sh scripts/run-traverse-tests.sh` | every suite green; new assertions mutation-tested |
+
+## 5. Questions for Stuart
+
+1. Which first: the kit contract with S1 (#1), or the spec-sheet text pass (#5)?
+2. Tab 5 Marketing — what does he want it to become? (Survey first, then ask.)
+3. When does the data sitting happen (the kit `frontRail` records; the spec-sheet tags)?
+
+## 6. Hand-offs in
+
+*(none yet)*
+
+## 7. Status log
+
+*(newest first)*
+
+## 8. Opener (paste to start the session)
+
+```
+You are the S5 session — customer-facing: spec sheets · 4.6 Customer Collections and kits · marketing · guide
+books · assets. Read, in order: CLAUDE.md (the working agreement binds you), SESSION_COMMS_2026-09-10.md (the
+map, file ownership, hand-off protocol — briefs are the channel), STATE_OF_THE_APP_2026-09-10.md,
+BRIEF_S5_CUSTOMER_FACING.md (your brief), then the memories spec-sheet-generator (trusted over every spec-sheet
+brief), spec-sheet-cpq-contract, brief-f-decisions-2026-09-03, quick-ship-stocked-items, onboarding-xlsx-export,
+guide-builder, asset-gallery-fabricut-combo, canonical-tag-spec; then BRIEF_F_KITS_SPEC_SHEETS.md §2–§4 and
+SPEC_SHEET_CPQ_TIEIN_BRIEF.md Part 3 (the offline harness). Rules: tags before code — a wrong page is a wrong tag
+in 1.6 (S1's file; hand them the slot #); never filter the answer you asked for; one code can be two pins; read
+subjects by role; fixtures use the prod shape; a fix is proven on the harness or in a node test before a
+screen; the 4.6 row save rewrites the item's Fabricut tiers one way, on purpose. Other sessions: S1 (CPQ/engine/
+1.6 — consumes your kit records through the engine mount; owns the documents), S2 (RTG), S3 (floors/WMS), S4
+(portal — mirrors priceLevels/sizeMatrix by hand; tell them when a pricing rule changes). Cross a line: stop,
+patch spec into THEIR brief's § Hand-offs in, log it in yours. Git: never switch branches, stage only your
+files, pull --rebase --autostash, safe-push check, eslint 0 errors, sweep asset-manifest.json. Plan first and
+wait — every time. One issue at a time. First: ask Stuart BRIEF_S5 §5 Q1, then plan that one issue. Identify
+as "(S5)" in every commit.
+```
