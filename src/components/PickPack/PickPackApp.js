@@ -1973,6 +1973,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [breakToCore, setBreakToCore] = useState(false); // chain a second unbuild: eaches -> raw core
     const [breakCoreScan, setBreakCoreScan] = useState(""); // bin the raw core goes into
     const [packDiag, setPackDiag] = useState(null);       // what NetSuite says the BOM actually sources
+    // REPACK (Stuart 2026-09-10: "break apart packs and convert into others so 5 -12pks can become
+    // 60pcs or 6 10pks"): one flow, TWO NetSuite records — the unbuild BREAK posts, then the build
+    // BUILD posts, on the same eaches in the same bin. Nothing new reaches NetSuite; the operator
+    // stops doing it as two operations with a bin scan in between.
+    const [repackTargetId, setRepackTargetId] = useState("");   // the pack size being built from the broken eaches
+    const [repackPackQty, setRepackPackQty] = useState("");     // how many of the target to build (defaults to the most the eaches allow)
+    const [repackEachScan, setRepackEachScan] = useState("");   // bin the eaches pass through (the loose remainder stays there)
+    const [repackDestScan, setRepackDestScan] = useState("");   // bin the new packs go into
+    const repackPostingRef = useRef(false);                     // STOP MECHANISM: a double-tap must not post the pair twice
     const [diagNames, setDiagNames] = useState({}); // NetSuite id -> { code, name } for unmapped components (BOTH diagnostics)
     const [cartDiag, setCartDiag] = useState(null);  // { lineId, res } — the same BOM check, for one conversion-cart line
     // ── ISSUE A CUT FROM THE BENCH (Eric 2026-08-21: "would be good and simple to have this
@@ -4005,6 +4014,81 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         } finally { setIsSyncing(false); }
     };
 
+    // ---- REPACK derived. The target is another pack size built from the SAME finished each — the
+    // library's other pack SKUs whose each matches (HCUSR15/BL-12 → HCUSR15/BL-10, /BL-7). The eaches
+    // the unbuild returns are what the build consumes, so they pass through ONE bin: the each's home
+    // bin by default, and whatever does not fit a whole pack stays there as loose stock.
+    const repackSiblings = packTarget && packExpectedEach
+        ? hqParts.filter(p => p.id !== packTarget.id && isPackCode(erpOf(p)) && eachForPack(erpOf(p)) === packExpectedEach)
+            .sort((a, b) => packSizeOf(erpOf(a)) - packSizeOf(erpOf(b)))
+        : [];
+    const repackTarget = repackTargetId ? repackSiblings.find(p => p.id === repackTargetId) || null : null;
+    const repackSize = repackTarget ? packSizeOf(erpOf(repackTarget)) : 0;
+    const repackEaches = breakEachesBack;                                            // what the unbuild returns
+    const repackMaxPacks = repackSize > 0 ? Math.floor(repackEaches / repackSize) : 0; // the most the eaches allow
+    const repackPacksNum = repackPackQty === '' ? repackMaxPacks : (parseInt(repackPackQty) || 0);
+    const repackLoose = repackEaches - repackPacksNum * repackSize;                  // stays in the each bin
+    const repackEachBin = repackEachScan.trim() || breakDestBin;                     // same default as BREAK
+    const repackDestOptions = repackTarget && binOf(repackTarget) !== 'UNASSIGNED'
+        ? String(binOf(repackTarget)).split(',').map(x => x.trim()).filter(Boolean) : [];
+    const repackDestBin = repackDestScan.trim() || repackDestOptions[0] || '';
+    const repackReady = !!packTarget && !!repackTarget && packQtyNum > 0
+        && !!packTarget.netSuiteInternalId && !!repackTarget.netSuiteInternalId
+        && !!breakSrcBin && packQtyNum <= breakSrcQty
+        && repackPacksNum >= 1 && repackPacksNum <= repackMaxPacks && repackLoose >= 0
+        && !!repackEachBin && !!repackDestBin;
+
+    const pushPackRepack = async () => {
+        if (!repackReady || repackPostingRef.current) return;
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        const packCode = erpOf(packTarget);
+        const targetCode = erpOf(repackTarget);
+        const eachCode = packComponent ? erpOf(packComponent) : eachForPack(packCode);
+        const srcBin = String(breakSrcBin.bin).trim().toUpperCase();
+        const eachBin = String(repackEachBin).trim().toUpperCase();
+        const destBin = String(repackDestBin).trim().toUpperCase();
+        const by = operator?.name || 'Unknown';
+        const memoTail = packMemo.trim() ? ` — ${packMemo.trim()}` : '';
+        if (!window.confirm(`Repack ${packQtyNum} × ${packCode} into ${repackPacksNum} × ${targetCode}?\n\n1) ${packQtyNum} × ${packCode} from ${srcBin} → ${repackEaches} × ${eachCode} into ${eachBin}\n2) ${repackPacksNum * repackSize} × ${eachCode} from ${eachBin} → ${repackPacksNum} × ${targetCode} into ${destBin}${repackLoose > 0 ? `\n\n${repackLoose} × ${eachCode} stay loose in ${eachBin}.` : ''}\n\nTWO separate NetSuite records — if the second fails the first still stands, and you'll be told exactly where it stopped.`)) return;
+        repackPostingRef.current = true;
+        try {
+            setIsSyncing(true);
+            const asm = await resolveItemDetail(packCode);
+            if (!asm) return alert(`Couldn't find ${packCode} in NetSuite.`);
+            const first = await postConvertBuild({
+                mode: 'unbuild', itemId: asm.id, quantity: packQtyNum,
+                subsidiary: nsConfig.subsidiary, location: nsConfig.location,
+                bin: srcBin, toBin: eachBin,
+                memo: nsMemo(`Repack by ${by}: break ${packCode} for ${targetCode}${memoTail}`),
+            });
+            writeLog(`Repack step 1 (break): -${packQtyNum} ${packCode} / +${repackEaches} ${eachCode} (into ${eachBin}).`, 'wms');
+            // Second leg: the build. A failure here is an HONEST partial state — the eaches ARE in
+            // stock in the each bin, and BUILD PACKS finishes the job from there.
+            try {
+                const targetAsm = await resolveItemDetail(targetCode);
+                if (!targetAsm) throw new Error(`${targetCode} not found in NetSuite by item id`);
+                if (targetAsm.type && !/assembl/i.test(targetAsm.type)) throw new Error(`${targetCode} is type "${targetAsm.type}" in NetSuite, not an Assembly`);
+                const second = await postConvertBuild({
+                    itemId: targetAsm.id, quantity: repackPacksNum,
+                    subsidiary: nsConfig.subsidiary, location: nsConfig.location,
+                    bin: eachBin, toBin: destBin,
+                    memo: nsMemo(`Repack by ${by}: build ${targetCode} from ${packCode}${memoTail}`),
+                });
+                writeLog(`Repack step 2 (build): +${repackPacksNum} ${targetCode} / -${repackPacksNum * repackSize} ${eachCode} (from ${eachBin} into ${destBin})${repackLoose > 0 ? `; ${repackLoose} ${eachCode} left loose in ${eachBin}` : ''}.`, 'wms');
+                alert(`✅ Both posted: unbuild #${first.id || ''} (${packQtyNum} × ${packCode} → ${repackEaches} × ${eachCode}) and build #${second.id || ''} (${repackPacksNum} × ${targetCode} into ${destBin}).${repackLoose > 0 ? `\n\n${repackLoose} × ${eachCode} are loose in ${eachBin}.` : ''}`);
+            } catch (e2) {
+                writeLog(`Repack step 2 FAILED: ${repackEaches} ${eachCode} sit in ${eachBin}; build of ${repackPacksNum} ${targetCode} not posted — ${(e2 && e2.message) || e2}`, 'wms');
+                alert(`⚠ HALF DONE.\n\n✅ Step 1 posted: ${packQtyNum} × ${packCode} → ${repackEaches} × ${eachCode}, now sitting in ${eachBin}.\n\n❌ Step 2 (${repackPacksNum} × ${targetCode}) failed:\n${(e2 && e2.message) || e2}\n\nThe eaches ARE in stock. Switch to BUILD PACKS, pick ${targetCode}, and build ${repackPacksNum} from ${eachBin} when the cause is fixed. Do NOT repeat the repack — the packs are already broken.`);
+            }
+            setPackQty(""); setBreakSrcScan(""); setRepackTargetId(""); setRepackPackQty(""); setRepackEachScan(""); setRepackDestScan(""); setPackMemo("");
+            pullNetSuiteStock();
+        } catch (e) {
+            console.error("Repack (unbuild leg) failed:", e);
+            alert("❌ NetSuite rejected the unbuild — nothing was posted:\n\n" + (e.message || e));
+        } finally { setIsSyncing(false); repackPostingRef.current = false; }
+    };
+
     // ROD CUTS derived: validate the source (8 ft) bin against LIVE per-bin stock when we have it;
     // dest bin is free-form (created in NetSuite if new — and it may legitimately equal the source bin,
     // since the cut-down rods are a DIFFERENT item). Same live-bin principle as Transfer/Convert.
@@ -5537,13 +5621,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div style={{ display: 'flex', gap: '8px' }}>
                                         {/* 🖨 Pack labels — the qty being built (Eric 2026-08-12 App Imp). */}
                                         <button onClick={() => { const n = packQtyNum || parseInt(window.prompt(`How many ${erpOf(packTarget)} labels?`, '1')) || 0; if (n > 0) printStockItemLabels({ itemId: erpOf(packTarget), itemName: packTarget.itemName || '', uom: 'PACK', woNum: '', copies: Math.min(50, n) }); }} title="Print an item label per pack being built (uses the qty entered below, or asks)" style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.brass}`, color: theme.brass, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 LABELS{packQtyNum ? ` ×${packQtyNum}` : ''}</button>
-                                        <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackDiag(null); setDiagNames({}); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
+                                        <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setRepackTargetId(""); setRepackPackQty(""); setRepackEachScan(""); setRepackDestScan(""); setPackDiag(null); setDiagNames({}); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
                                     </div>
                                 </div>
 
                                 {/* BUILD or BREAK — the reversal shares the pack picker above. */}
                                 <div style={{ display: 'flex', gap: '8px' }}>
-                                    {[['BUILD', '⬡ BUILD PACKS'], ['BREAK', '⤺ BREAK APART']].map(([m, label]) => (
+                                    {[['BUILD', '⬡ BUILD PACKS'], ['BREAK', '⤺ BREAK APART'], ['REPACK', '⇄ REPACK']].map(([m, label]) => (
                                         <button key={m} onClick={() => { setPackOp(m); setPackDiag(null); }} style={{ flex: 1, padding: '10px', background: packOp === m ? theme.ink : 'transparent', color: packOp === m ? '#fff' : theme.inkSoft, border: `1px solid ${packOp === m ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}>{label}</button>
                                     ))}
                                 </div>
@@ -5608,7 +5692,115 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <button onClick={pushPackBreak} disabled={!breakReady || isSyncing} style={{ padding: '18px', background: breakReady && !isSyncing ? theme.ink : theme.paper, color: breakReady && !isSyncing ? '#fff' : theme.inkSoft, border: `1px solid ${breakReady && !isSyncing ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '12px', letterSpacing: '.15em', textTransform: 'uppercase', cursor: breakReady && !isSyncing ? 'pointer' : 'not-allowed' }}>
                                             {isSyncing ? 'POSTING…' : breakToCore ? `BREAK ${packQtyNum || ''} PACK${packQtyNum === 1 ? '' : 'S'} → CORE` : `BREAK ${packQtyNum || ''} PACK${packQtyNum === 1 ? '' : 'S'} APART`}
                                         </button>
-                                        <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textAlign: 'center' }}>Re-packing into another size? Break apart, then switch to BUILD PACKS and build the size you want from the loose eaches.</div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textAlign: 'center' }}>Re-packing into another size? Use ⇄ REPACK — it breaks the packs and builds the new size in one go.</div>
+                                    </div>
+                                )}
+
+                                {/* ⇄ REPACK — break N packs, build the other size from the eaches, in ONE flow. */}
+                                {packOp === 'REPACK' && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                                            <div style={{ flex: '0 0 160px' }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>1 · Packs to break</div>
+                                                <input value={packQty} onChange={e => { setPackQty(e.target.value.replace(/[^0-9]/g, '')); setRepackPackQty(""); }} placeholder="0" inputMode="numeric" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            </div>
+                                            <div style={{ flex: 1, minWidth: '240px', fontFamily: theme.mono, fontSize: '12px', color: packQtyNum > 0 ? theme.ink : theme.inkSoft, paddingBottom: '12px' }}>
+                                                {packQtyNum > 0
+                                                    ? <><b>{packQtyNum}</b> × {erpOf(packTarget)} → <b>{repackEaches}</b> × {packExpectedEach || 'eaches'}</>
+                                                    : 'enter how many packs to take apart'}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>2 · The pack size to build from them</div>
+                                            {repackSiblings.length === 0 ? (
+                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f' }}>✗ No other pack size of {packExpectedEach || packRoot} in this brand's library — there is nothing to repack into. (Use BREAK APART to return the eaches to stock.)</div>
+                                            ) : (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                    {repackSiblings.map(p => { const sel = repackTargetId === p.id; return (
+                                                        <button key={p.id} onClick={() => { setRepackTargetId(p.id); setRepackPackQty(""); setRepackDestScan(""); }} style={{ padding: '8px 12px', fontFamily: theme.mono, fontSize: '11px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>
+                                                            {erpOf(p)} <span style={{ color: theme.inkSoft }}>· {packSizeOf(erpOf(p))}-PACK · OH {ohOf(p)}</span>
+                                                        </button>
+                                                    ); })}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {repackTarget && (
+                                            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                                                <div style={{ flex: '0 0 160px' }}>
+                                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>3 · New packs to build</div>
+                                                    <input value={repackPackQty === '' ? String(repackMaxPacks || '') : repackPackQty} onChange={e => setRepackPackQty(e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `1px solid ${repackPacksNum > repackMaxPacks ? '#d9534f' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                                </div>
+                                                <div style={{ flex: 1, minWidth: '240px', fontFamily: theme.mono, fontSize: '12px', color: repackMaxPacks > 0 ? theme.ink : theme.inkSoft, paddingBottom: '12px' }}>
+                                                    {packQtyNum <= 0 ? 'enter the packs to break first'
+                                                        : repackMaxPacks <= 0 ? <span style={{ color: '#d9534f' }}>✗ {repackEaches} eaches do not make even one {repackSize}-pack</span>
+                                                        : repackPacksNum > repackMaxPacks ? <span style={{ color: '#d9534f' }}>✗ {repackEaches} eaches make at most {repackMaxPacks} × {erpOf(repackTarget)}</span>
+                                                        : repackPacksNum < 1 ? <span style={{ color: '#d9534f' }}>✗ build at least one — or use BREAK APART</span>
+                                                        : <>builds <b>{repackPacksNum}</b> × {erpOf(repackTarget)} <span style={{ color: theme.inkSoft }}>(most possible: {repackMaxPacks})</span>{repackLoose > 0 ? <> · <b>{repackLoose}</b> × {packExpectedEach || 'eaches'} stay loose</> : <> · nothing left loose</>}</>}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>4 · Bin the PACKS come out of</div>
+                                            {breakSrcBins.length > 0 && (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                                                    {breakSrcBins.slice().sort((a, b) => b.qty - a.qty).map(b => { const sel = breakSrcScan.trim().toUpperCase() === String(b.bin).toUpperCase(); return (
+                                                        <button key={b.bin} onClick={() => setBreakSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                    ); })}
+                                                </div>
+                                            )}
+                                            <input value={breakSrcScan} onChange={e => setBreakSrcScan(e.target.value)} placeholder="scan the pack's bin" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${breakSrcScan.trim() ? (breakSrcBin ? '#7dbb81' : '#d9534f') : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', textAlign: 'center', marginTop: '4px', color: !breakSrcScan.trim() ? theme.inkSoft : !breakSrcBin ? '#d9534f' : (packQtyNum > breakSrcQty ? '#d9534f' : '#7dbb81') }}>
+                                                {!breakSrcScan.trim() ? (breakSrcBins.length ? 'pick or scan one of the bins above' : 'no packs stocked in any bin — nothing to break apart')
+                                                    : !breakSrcBin ? '✗ no packs in this bin'
+                                                    : packQtyNum > breakSrcQty ? `✗ only ${breakSrcQty} packs in this bin` : `✓ ${breakSrcQty} packs in this bin`}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>5 · Bin the EACHES pass through</div>
+                                            <input value={repackEachScan} onChange={e => setRepackEachScan(e.target.value)} placeholder={repackEachBin || 'scan the each bin'} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${repackEachBin ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', textAlign: 'center', marginTop: '4px', color: repackEachBin ? '#7dbb81' : '#d9534f' }}>
+                                                {repackEachBin ? `✓ the eaches land in ${repackEachBin}; the build consumes from there${repackLoose > 0 ? `; ${repackLoose} stay loose there` : ''}` : '✗ scan where the loose eaches go'}
+                                            </div>
+                                        </div>
+
+                                        {repackTarget && (
+                                            <div>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>6 · Bin the NEW packs go into</div>
+                                                {repackDestOptions.length > 0 && (
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                                                        {repackDestOptions.map(b => { const sel = repackDestBin.toUpperCase() === b.toUpperCase(); return (
+                                                            <button key={b} onClick={() => setRepackDestScan(b)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b}</button>
+                                                        ); })}
+                                                        <span style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, alignSelf: 'center' }}>home bin{repackDestOptions.length > 1 ? 's' : ''} — pick ONE</span>
+                                                    </div>
+                                                )}
+                                                <input value={repackDestScan} onChange={e => setRepackDestScan(e.target.value)} placeholder={repackDestOptions[0] ? `${repackDestOptions[0]} (home bin)` : 'scan destination bin'} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${repackDestBin ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', textAlign: 'center', marginTop: '4px', color: repackDestBin ? '#7dbb81' : '#d9534f' }}>
+                                                    {repackDestBin ? `✓ ${repackPacksNum} × ${erpOf(repackTarget)} into ${repackDestBin}` : `✗ ${erpOf(repackTarget)} has no home bin — scan where it goes`}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <input value={packMemo} onChange={e => setPackMemo(e.target.value)} placeholder="memo (optional)" style={{ width: '100%', padding: '10px 12px', fontFamily: theme.mono, fontSize: '11px', border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+
+                                        {((!packTarget.netSuiteInternalId) || (repackTarget && !repackTarget.netSuiteInternalId)) && (
+                                            <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f' }}>✗ {!packTarget.netSuiteInternalId ? erpOf(packTarget) : erpOf(repackTarget)} has no NetSuite Internal ID — map it first (HQ → ERP Mapping Audit).</div>
+                                        )}
+
+                                        <div style={{ display: 'flex', gap: '8px', alignItems: 'stretch' }}>
+                                            <button onClick={pushPackRepack} disabled={!repackReady || isSyncing} style={{ flex: 1, padding: '18px', background: repackReady && !isSyncing ? theme.ink : theme.paper, color: repackReady && !isSyncing ? '#fff' : theme.inkSoft, border: `1px solid ${repackReady && !isSyncing ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '12px', letterSpacing: '.15em', textTransform: 'uppercase', cursor: repackReady && !isSyncing ? 'pointer' : 'not-allowed' }}>
+                                                {isSyncing ? 'POSTING…' : repackTarget && repackPacksNum > 0 && packQtyNum > 0 ? `REPACK ${packQtyNum} → ${repackPacksNum} × ${packSizeOf(erpOf(repackTarget))}-PACK` : 'REPACK'}
+                                            </button>
+                                            {/* Labels for the packs being MADE — the new size, the new count. */}
+                                            {repackTarget && repackPacksNum > 0 && (
+                                                <button onClick={() => printStockItemLabels({ itemId: erpOf(repackTarget), itemName: repackTarget.itemName || '', uom: 'PACK', woNum: '', copies: Math.min(50, repackPacksNum) })} title={`Print ${repackPacksNum} item label(s) for ${erpOf(repackTarget)}`} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.brass}`, color: theme.brass, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer', whiteSpace: 'nowrap' }}>🖨 {repackPacksNum} LABEL{repackPacksNum === 1 ? '' : 'S'}</button>
+                                            )}
+                                        </div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textAlign: 'center' }}>Posts TWO NetSuite records — the unbuild, then the build. If the build fails the eaches are already in stock in the each bin: finish on BUILD PACKS, never repeat the repack.</div>
                                     </div>
                                 )}
 
