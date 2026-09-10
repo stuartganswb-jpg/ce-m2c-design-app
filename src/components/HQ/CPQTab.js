@@ -355,25 +355,33 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                 onVisAudit([...visTokens].filter(t => !hitTokens.has(t)).sort());
             }
 
-            // --- Pole stretch (Stuart 2026-09-09: "can you stretch the rod/pole when they are long?") ---
-            // The .glb pole is one modelled length; a 144" order with five centre brackets crowds the
-            // clones onto the end brackets. When the order is LONGER than the model, the pole meshes
-            // are scaled along their long axis about the pole's centre to the ordered length, and
-            // every other visible mesh is MOVED (never scaled) by the same ratio about that centre —
-            // ends land at the new pole ends, rings spread evenly, the centre bracket stays put.
-            // Every mesh keeps its original matrix, so each pass starts from the model and a finish
-            // or count change never compounds the stretch. Fully graceful: no rail, no inches, no
-            // stretch. Runs BEFORE the clones so they space along the stretched rail.
+            // --- Pole stretch (Stuart 2026-09-09) ------------------------------------------------------
+            // "go back to no scale, then set a new stretch scale of only 20% length when the rod length is
+            //  over 72", so it just stretches longer to one longer length no matter 72" or 144" … just
+            //  stretch the rod/pole and traverse … only scale in the center area, the outer brackets
+            //  rendering should stay towards the outer edge of the pole."
+            // A drawing, not a measurement: an order over 72" draws the rail 20% longer than modelled
+            // — one fixed step, enough room for five centre brackets — and the extra length is put into
+            // the MIDDLE half of the rail only, so the ends of the pole (ferrules, threads, whatever the
+            // model carries there) keep their shape and the end hardware rides out with them. Rail
+            // meshes are re-shaped vertex by vertex from their untouched original geometry each pass;
+            // everything else is moved by the same mapping of its centre. Model units do not matter:
+            // the trigger is the ordered inches, the stretch is a ratio of the model's own length.
             try {
                 clonedScene.traverse(c => { if (c.isMesh && !c.userData.originalMatrix) c.userData.originalMatrix = c.matrix.clone(); });
-                clonedScene.traverse(c => { if (c.isMesh && c.userData.stretched && c.userData.originalMatrix?.isMatrix4) { c.matrix.copy(c.userData.originalMatrix); c.userData.stretched = false; } });
+                clonedScene.traverse(c => {
+                    if (!c.isMesh) return;
+                    if (c.userData.stretched && c.userData.originalMatrix?.isMatrix4) { c.matrix.copy(c.userData.originalMatrix); c.userData.stretched = false; }
+                    if (c.userData.originalGeometry && c.geometry !== c.userData.originalGeometry) { c.geometry = c.userData.originalGeometry; }
+                });
                 clonedScene.updateMatrixWorld(true);
-                // Last pass's clones are still in the tree here (the clone block below rebuilds them);
-                // they are never moved, and they never keep a real original matrix to reset from.
-                const inClones = (m) => { let nd = m; while (nd) { if (nd.name === '__centerClones') return true; nd = nd.parent; } return false; };
+                const inClones = (m) => { let nd = m; while (nd) { if (nd.name === '__centerClones' || nd.name === '__spliceMarks') return true; nd = nd.parent; } return false; };
                 const wantIn = Number(stretchSpec?.lengthInches) || 0;
                 const railList = Array.isArray(stretchSpec?.railNames) ? stretchSpec.railNames : [];
-                if (wantIn > 0 && railList.length) {
+                const STRETCH_OVER_IN = 72;      // shorter orders draw as modelled
+                const STRETCH_K = 1.2;           // longer orders draw the rail 20% longer, whatever the length
+                const BAND = 0.5;                // the middle half of the rail takes all of the extra
+                if (wantIn > STRETCH_OVER_IN && railList.length) {
                     const railSet = new Set(railList.map(s => String(s).trim().toLowerCase()));
                     const onRail = (mesh) => { let nd = mesh; while (nd) { if (nd.name && railSet.has(nd.name.toLowerCase())) return true; nd = nd.parent; } return false; };
                     const railMeshes = []; clonedScene.traverse(c => { if (c.isMesh && c.visible && !isFastener(c) && !inClones(c) && onRail(c)) railMeshes.push(c); });
@@ -382,50 +390,47 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         const sz = rb.getSize(new THREE.Vector3());
                         const ax = sz.x >= sz.y && sz.x >= sz.z ? 'x' : (sz.y >= sz.z ? 'y' : 'z');
                         const modelLen = sz[ax];
-                        // ANYTHING AS LONG AS THE RAIL IS RAIL (Stuart 2026-09-09, the traverse: the
-                        // F-clip strip and a companion mesh imported beside the track were as long
-                        // as the track, named for another slot, and so were MOVED, not scaled — the
-                        // track stretched and they did not, which reads as a track too short). A
-                        // visible mesh spanning 80% of the rail's length is not a bracket; it
-                        // stretches with the rail whatever it is called.
+                        // ANYTHING AS LONG AS THE RAIL IS RAIL — the F-clip strip and a companion mesh beside
+                        // the track are rail-length and stretch with it, whatever they are called.
                         clonedScene.traverse(c => {
                             if (!c.isMesh || !c.visible || isFastener(c) || inClones(c) || railMeshes.includes(c)) return;
-                            const mb = new THREE.Box3().setFromObject(c); const ms = mb.getSize(new THREE.Vector3());
+                            const ms = new THREE.Box3().setFromObject(c).getSize(new THREE.Vector3());
                             if (ms[ax] >= 0.8 * modelLen) railMeshes.push(c);
                         });
-                        // Units guard: 1.6 exports production inches. A rail that does not read as a
-                        // pole length in inches is a foreign model — left alone, never scaled wrong.
-                        const trueFactor = (modelLen > 12 && modelLen < 400) ? wantIn / modelLen : 1;
-                        // THE STRETCH IS A PICTURE, NOT A MEASUREMENT (Stuart 2026-09-09: "the pole stretch
-                        // is a bit too much … i would lower the stretch amount by 30%, a 144" pole should once
-                        // stretched cover 60% of the width of the window"). True scale ran a long order off
-                        // the pane; the extra length is drawn at 70% so the eye reads "longer" without
-                        // losing the ends. Cut lengths, clone spacing and the splice line all follow this
-                        // drawn rail, so the picture stays proportional to itself.
-                        // True scale, and it may run past the pane on a long order — Stuart 2026-09-09:
-                        // "just let it overscale". (A 20 ft frame reference was tried and emptied the
-                        // pane on models not built in inches; reverted the same hour.)
-                        const factor = trueFactor;
-                        if (factor > 1.01) {
+                        if (modelLen > 0) {
                             const c0 = rb.getCenter(new THREE.Vector3())[ax];
-                            const vec = (v) => new THREE.Vector3(ax === 'x' ? v : 0, ax === 'y' ? v : 0, ax === 'z' ? v : 0);
+                            const delta = (STRETCH_K - 1) * modelLen;      // the extra length drawn
+                            const half = (BAND * modelLen) / 2;             // half the band that takes it
+                            // Along-axis mapping about the rail's centre: the band stretches, the ends slide.
+                            const mapU = (u) => (Math.abs(u) <= half ? u * (1 + delta / (2 * half)) : u + Math.sign(u) * delta / 2);
                             const railMeshSet = new Set(railMeshes);
-                            const applyWorld = (m, xf) => {
-                                const parentInv = new THREE.Matrix4().copy(m.parent ? m.parent.matrixWorld : new THREE.Matrix4()).invert();
-                                m.matrix.copy(parentInv).multiply(xf).multiply(m.matrixWorld);
-                                m.matrixAutoUpdate = false; m.userData.stretched = true;
-                            };
-                            const toC = vec(c0);
+                            const v = new THREE.Vector3();
                             clonedScene.traverse(m => {
                                 if (!m.isMesh || !m.visible || isFastener(m) || inClones(m) || !m.userData.originalMatrix?.isMatrix4) return;
                                 if (railMeshSet.has(m)) {
-                                    const sc = new THREE.Matrix4().makeScale(ax === 'x' ? factor : 1, ax === 'y' ? factor : 1, ax === 'z' ? factor : 1);
-                                    const xf = new THREE.Matrix4().makeTranslation(toC.x, toC.y, toC.z).multiply(sc).multiply(new THREE.Matrix4().makeTranslation(-toC.x, -toC.y, -toC.z));
-                                    applyWorld(m, xf);
+                                    // Re-shape from the untouched original: to world, map along the axis, back.
+                                    if (!m.userData.originalGeometry) m.userData.originalGeometry = m.geometry;
+                                    const src = m.userData.originalGeometry;
+                                    const g = src.clone();
+                                    const pos = g.getAttribute('position');
+                                    const inv = new THREE.Matrix4().copy(m.matrixWorld).invert();
+                                    for (let k = 0; k < pos.count; k++) {
+                                        v.fromBufferAttribute(pos, k).applyMatrix4(m.matrixWorld);
+                                        v[ax] = c0 + mapU(v[ax] - c0);
+                                        v.applyMatrix4(inv);
+                                        pos.setXYZ(k, v.x, v.y, v.z);
+                                    }
+                                    pos.needsUpdate = true; g.computeBoundingBox(); g.computeBoundingSphere();
+                                    m.geometry = g;
                                 } else {
                                     const mc = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3())[ax];
-                                    const d = (factor - 1) * (mc - c0);
-                                    if (Math.abs(d) > 1e-6) { const t = vec(d); applyWorld(m, new THREE.Matrix4().makeTranslation(t.x, t.y, t.z)); }
+                                    const d = mapU(mc - c0) - (mc - c0);
+                                    if (Math.abs(d) > 1e-6) {
+                                        const t = new THREE.Vector3(ax === 'x' ? d : 0, ax === 'y' ? d : 0, ax === 'z' ? d : 0);
+                                        const parentInv = new THREE.Matrix4().copy(m.parent ? m.parent.matrixWorld : new THREE.Matrix4()).invert();
+                                        m.matrix.copy(parentInv).multiply(new THREE.Matrix4().makeTranslation(t.x, t.y, t.z)).multiply(m.matrixWorld);
+                                        m.matrixAutoUpdate = false; m.userData.stretched = true;
+                                    }
                                 }
                             });
                             clonedScene.updateMatrixWorld(true);
