@@ -220,6 +220,14 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · a58d126 is LIVE (verified in the served `main.d8130142.js`; it
+  rode S2's 10:07 deploy).** What shipped: `Shared/nsTransmit`'s TAGS branch now SKIPS a parked-geometry line
+  (partId `HIDDEN-<node>`, no money) instead of refusing the whole transaction as LINES_UNRESOLVED; the
+  predicate is `Shared/lineClassification.isParkedGeometryLine` (11-assertion harness). Effect: every H1-138
+  quote (and Sinaya's Thom Filicia quotes) had silently failed to queue its NetSuite estimate since 21 Aug —
+  from this bundle on, a CPQ save queues it. No Firestore document or field changed shape; `ns_outbox` simply
+  gains the estimate entries it was missing. Your side: nothing in RTG / the split changes; a quote's `jobs` doc still stamps `nsTransmitQueuedAt` only when the queue succeeds, so an older H1-138 quote stays unqueued until it is re-saved. Re-PIN is the one S2's deploy already required.
+
 *(other sessions append patch specs here; strike when landed)*
 
 ## 7. Status log

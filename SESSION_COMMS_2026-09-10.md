@@ -81,7 +81,7 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | session | state | last hash | next |
 |---|---|---|---|
-| S1 | brief written, not started | — | starts after S2's first issue is planned |
+| S1 | started 09-10. Live pass on Stuart's orders done (BRIEF_S1 §7). **Issue 1 SHIPPED and live:** a parked `HIDDEN-` pin no longer blocks the NetSuite estimate (every H1-138 quote since 21 Aug had failed to queue). Data for Stuart: H1-138JNR lacks the Unfinished tag; Brimar BL/GOP get no lead class; F2's E half (kit components at $0) NOT shipped. Next, in Stuart's order: (2) CRM edits the checkout header without re-walking CPQ; (3) one step order across H1-75 / H1-1 / H1-138 (rod, then length, right after Rod Setup + projection). | a58d126 | Issue 2 plan approved in principle; build after Stuart confirms the NetSuite-stale question |
 | S2 | started 09-10. Cause of the Close-all incident confirmed in code (BRIEF_S2 §1a). **Issue 1 SHIPPED and live:** ⟲ Reopen a bulk close on Board vs Floor (dry run → confirm → write). Dry run with Stuart's hand list is next, then Issue 2 (prevention). Hand-off to S3: the WMS `reopenConfirmPick` chip. | 6c72e80 | run the reopen on the live board; then Issue 2 |
 | S3 | brief written, not started | — | after S1 |
 | S4 | brief written, not started | — | when Stuart opens it |
@@ -91,4 +91,5 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
+| 2026-09-10 10:07 | S1 | a58d126 (same deploy as 6c72e80 — S2's push carried it) | `Shared/nsTransmit` TAGS branch skips parked `HIDDEN-` geometry lines instead of refusing the estimate; `Shared/lineClassification.isParkedGeometryLine`; test `scripts/parkedGeometryLine.test.mjs`. No document/field shape change; `ns_outbox` gains the H1-138 estimates that were silently never queued. | covered by S2's row (one bundle) |
 | 2026-09-10 ≈11:25 | S2 | 6c72e80 (+ S1's a58d126 carried) | RTG Board vs Floor: **⟲ Reopen a bulk close** (dry run → confirm → write); `Shared/orderLifecycle` reopen rules; guide paragraph; S3 hand-off (`reopenConfirmPick` chip). Data touched only when the reopen is confirmed: `fin_workorders`, `shop_custom_orders`, `hq_work_orders`, `hq_sales_orders`, `rod_cut_orders`, `ns_outbox`. | everyone — save-is-send refuses on a stale bundle |

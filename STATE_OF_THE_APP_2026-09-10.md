@@ -424,6 +424,25 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · a58d126 (live, in the 10:07 bundle).** The live pass on Stuart's orders (§2.1 #1/#7)
+  ran: ST091026-01 and ST090926-09 (FABRICUT, H1-138) carry a correct header (typed need-by, ready date by
+  slowest finish class, recipe/recipes, per-line `finishOutsourced`, snapshots) but had **never queued** their
+  NetSuite estimate — nor had any H1-138 quote since 21 Aug (ten) nor Sinaya's two 09-09 quotes. Cause: the
+  engine hands over parked-geometry lines (`HIDDEN-<node>`, $0, hidden); `nsTransmit`'s TAGS branch had no
+  skip for them, recorded a hard unresolved line and refused (LINES_UNRESOLVED); the alert sent the operator to
+  tab 12, which never lists a CONFIGURED quote. Fixed with one pure predicate + one skip; a `HIDDEN-` line
+  carrying money still refuses. Verified posted correctly the day before: QUO141 (ST090926-07), SO60339 /
+  SO60341 (BRIMAR) — totals equal the quotes, fees on the rollup, joiner its own line. **Closes nothing in §2
+  by number; adds to §2.3:** `CE-INV-57732` H1-138JNR has no Unfinished tag (its line carries EP5 +
+  `finishOutsourced: true`, so an order would send a joiner to plating); Brimar codes BL / GOP match no lead
+  class → no ready date (Stuart to rule). **Adds to §2.4 (S1):** #46 confirmed NOT shipped (QUO141's kit
+  components carry standard rates); the CRM quotation prints the doc id not the short number, the sidemark in
+  the P.O. slot, and a date one day early (`docDate` parses `dateSaved` as UTC); the cart's literal
+  "No Sidemark" reaches NetSuite `custcol3`. **New items from Stuart (S1, in this order):** the CRM Modify modal
+  edits the whole checkout header (ship-to, sidemark, memo, PO, need-by, notes) and rebuilds the SO header
+  through `soHeaderOf`; one step order for every H1 flow — Rod Setup → Rod → Rod length → Ends → Bracket →
+  Backplate → … (today a tiered assembly ranks ends/bracket/plate ahead of the rod, the 20 Aug rule).
+
 - **2026-09-10 · S2 · 6c72e80 (live).** The Close-all incident (BRIEF_S2 §1): cause confirmed in code — the
   FLOOR_DONE finding reads ONE floor document's `Complete` as the order being done, `isDoneState(parent)` never
   reads the propagated `floorPhase`, pick-only docs are born Complete, and `reconcileAll` was offered on that
