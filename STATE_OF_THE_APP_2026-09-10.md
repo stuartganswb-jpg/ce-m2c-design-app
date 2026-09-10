@@ -424,6 +424,8 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · 16a74bb (pushed 11:24).** CRM pipeline card prints JOB · SIDEMARK · PO so an order is found by what was typed (display only). Issue 3 (one step order across the H1 flows) is on hold until Stuart walks it through with tags.
+
 - **2026-09-10 · S1 · 1259391 (pushed 10:56).** Stuart's ask: edit the checkout header from the CRM instead of
   re-walking CPQ. The tab-10 Modify modal now carries the checkout's fields; `Shared/salesOrderHeader.jobHeaderPatchOf`
   is the one field set (19-assertion harness with the `soHeaderOf` round trip); the save patches `jobs` and rebuilds

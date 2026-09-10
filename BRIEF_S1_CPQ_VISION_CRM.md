@@ -170,6 +170,12 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 2b (S1) 16a74bb pushed 11:24.** CRM pipeline card prints JOB · SIDEMARK · PO (Stuart's ask after
+  trying the header modal: "the modify works well"). Issue 2 (1259391) went live at 10:30 inside S2's push —
+  a local commit on main is a push in waiting; from now on S1 commits only once Stuart has cleared the push.
+  1259391 verified in `967.b8687f3c.chunk.js` (4a05e85 build, 38/38). Issue 3 on hold: Stuart walks the step
+  order through with tags before anything moves.
+
 - **2026-09-10 — Issue 2 (S1) built, committed locally, push held for Stuart's window.** CRM "Modify Quote /
   Job" now edits the WHOLE checkout header: order sidemark (the typed `orderSidemark`), PO #, internal memo,
   need-by, production notes, ship-to (saved address from the customer's CRM record or custom drop-ship) and the
