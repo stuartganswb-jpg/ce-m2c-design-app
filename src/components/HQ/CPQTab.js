@@ -806,6 +806,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // interposes on Add to Quote Cart for traverse flows; its lines ride the cart item.
   const [trvCfgOpen, setTrvCfgOpen] = useState(false);
   const [trvRules, setTrvRules] = useState(null);
+  // ── THE RULES DOCUMENT FOLLOWS THE FLOW'S KIT FAMILY (S5 hand-off, 2026-09-10) ──────────
+  // system/traverse_rules_<family> feeds the kit cover and the components chart. Fixed to H1-2TRV
+  // it read H1-2TRV's bracket and splice rows under an H1-138TRV kit. The family is the flow's
+  // kitFamily tag (tab 11, the same tag the kit picker matches first); H1-2TRV when untagged.
+  const trvFamily = String((cpqFlows.find(f => f.id === activeFlowId) || {}).kitFamily || '').trim().toUpperCase() || 'H1-2TRV';
+  useEffect(() => {
+      const unsub = onSnapshot(doc(db, "system", `traverse_rules_${trvFamily}`), (snap) => setTrvRules(snap.exists() ? snap.data() : null), () => {});
+      return () => unsub();
+  }, [trvFamily]);
   const trvPendingRef = useRef(null);   // null = not asked yet; [] = skipped; [lines] = chosen
   const [pricingBreakdown, setPricingBreakdown] = useState([]);
   // ── EDIT IN PLACE (Stuart 2026-09-09: "i did reopen, then clicked at top to select a line then
@@ -1067,7 +1076,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       // resolves a customer's discountCode (e.g. D20) to its percent at quote time.
       const unsubDiscounts = onSnapshot(doc(db, "system", "crm_discounts"), (snap) => setCrmDiscounts((snap.exists() && snap.data().list) || []));
       const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (snap) => { if(snap.exists() && snap.data().finishes) setGlobalFinishes(snap.data().finishes); });
-      const unsubTrvRules = onSnapshot(doc(db, "system", "traverse_rules_H1-2TRV"), (snap) => setTrvRules(snap.exists() ? snap.data() : null), () => {});
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
@@ -1080,7 +1088,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           setLiveCustomers(customers);
       });
 
-      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); unsubDiscounts(); unsubLogos(); unsubTrvRules(); };
+      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); unsubDiscounts(); unsubLogos();  };
   }, [activeBrand]);
 
   // Brand isolation: the CPQ customer dropdown is ONLY this brand's crm_records

@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { explodeTraverse, usageAt, singleProjections, projLabel } from './traverseExplode.mjs';
 import { parseTraverseKitSheets } from './traverseKitImport.mjs';
+import * as KI from './traverseKitImport.mjs';
+import { TRAVERSE_FAMILY_PARTS } from './traverseExplode.mjs';
 
 const HAVE = existsSync('./kit_sheet.json');
 const skip = HAVE ? false : 'Fabricut/Aug12/Fabricut_Traverse.xlsx not present';
@@ -128,4 +130,66 @@ test('a splice below the chart\'s first length is not consumed — optional up t
 test('the motor is not a painted part', { skip }, () => {
     const r = explodeTraverse({ align: A({ drive: 'MOTORIZED' }), feet: 4, motorItem: 'HSOM-20', rules });
     assert.equal(r.lines.find(l => l.code === 'HSOM-20').subFinish, false);
+});
+
+
+// ── THE 1-3/8" TRAVERSE (S5 hand-off, Stuart 2026-09-10) ─────────────────────────────────────
+// "just the rod and brackets change": the rod IS the track (one per-foot part), brackets come in
+// two styles at every depth, returns are the fee items on the end steps (never exploded), the
+// plug is the H1-2TRV code as a placeholder. Counts here are a fixture in the rules-doc shape;
+// the real document is S5's 4.6 import (derived from the H1-2TRV Carrier Usage tab, re-keyed).
+const R138 = { usage: [
+    { itemId: 'H1-138TRV-H', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
+    { itemId: 'H1-138TRV-V', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
+    { itemId: 'H1-138TRV-VD', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
+    { itemId: 'H1-138TRVJNR', byFeet: { 11: 1, 20: 1 } },
+] };
+const A138 = (over = {}) => ({ setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL', material: 'P', minFeet: 4, rodKind: 'TRAVERSE', bracketStyle: 'H', ...over });
+
+test('H1-138TRV: a 4 ft -4H/P set = 4 × rod, 2 × H1-138TRV-H, 2 plugs, no splice, no fascia, no track', () => {
+    const r = explodeTraverse({ family: 'H1-138TRV', align: A138(), feet: 4, rules: R138, proj: '3.625' });
+    assert.equal(q(r, 'H1-138TRV'), 4);
+    assert.equal(q(r, 'H1-138TRV-H'), 2);
+    assert.equal(q(r, 'H1-2TRVPLUG'), 2);
+    assert.equal(q(r, 'H1-138TRVJNR'), undefined);
+    assert.ok(!r.lines.some(l => l.role === 'fascia' || l.role === 'track'), 'no fascia / track line');
+    assert.equal(r.lines.find(l => l.code === 'H1-138TRV').role, 'rod');
+    assert.ok(r.lines.every(l => l.subFinish === false), 'mainline finish — nothing wears the base colour');
+});
+
+test('H1-138TRV: the bracket follows the STYLE and the depth', () => {
+    const v = explodeTraverse({ family: 'H1-138TRV', align: A138({ bracketStyle: 'V' }), feet: 4, rules: R138, proj: '4.625' });
+    assert.equal(q(v, 'H1-138TRV-VE'), 2);
+    assert.equal(q(v, 'H1-138TRV-H'), undefined);
+    assert.deepEqual(singleProjections('H1-138TRV', 'V').map(p => p.code), ['H1-138TRV-V', 'H1-138TRV-VE', 'H1-138TRV-V6']);
+    assert.deepEqual(singleProjections('H1-138TRV').map(p => p.code), ['H1-138TRV-H', 'H1-138TRV-HE', 'H1-138TRV-H6'], 'no style → the first style');
+    assert.ok(singleProjections('H1-138TRV').every(p => p.returnArm === ''), 'returns are fee items on the end steps, never arms here');
+});
+
+test('H1-138TRV: a 12 ft -4VD/EP double = two rods per ft, 5 × H1-138TRV-VD, 1 × H1-138TRVJNR', () => {
+    const r = explodeTraverse({ family: 'H1-138TRV', align: A138({ setup: 'DOUBLE', bracketStyle: 'V', material: 'EP' }), feet: 12, rules: R138 });
+    assert.equal(q(r, 'H1-138TRV'), 24);
+    assert.equal(q(r, 'H1-138TRV-VD'), 5);
+    assert.equal(q(r, 'H1-138TRVJNR'), 1);
+    assert.equal(q(r, 'H1-2TRVPLUG'), 2);
+});
+
+test('H1-138TRV: motorised has no base motor on the sheet — nothing consumed, and it says so', () => {
+    const r = explodeTraverse({ family: 'H1-138TRV', align: A138({ drive: 'MOTORIZED' }), feet: 4, rules: R138 });
+    assert.ok(!r.lines.some(l => l.role === 'motor' || l.role === 'plug'));
+    assert.ok(r.skipped.some(x => /no base motor/.test(x)));
+});
+
+test('H1-138TRV: the explode table and the importer export the SAME codes', { skip: KI.H1_138TRV_PARTS ? false : 'importer export not on this checkout yet' }, () => {
+    const mine = TRAVERSE_FAMILY_PARTS['H1-138TRV'];
+    assert.equal(mine.rod, KI.H1_138TRV_PARTS.rod);
+    assert.equal(mine.splice, KI.H1_138TRV_PARTS.splice);
+    assert.deepEqual(mine.brackets, KI.H1_138TRV_PARTS.brackets);
+});
+
+test('H1-2TRV is untouched by the style-aware table', { skip }, () => {
+    const r = explodeTraverse({ align: A({ setup: 'DOUBLE' }), feet: 12, rules });
+    assert.equal(q(r, 'H1-2TRVTRK/C'), 24);
+    assert.equal(q(r, 'H1-2TRV-DWB') > 0, true);
+    assert.deepEqual(singleProjections().map(p => p.code), ['H1-2TRV-WB', 'H1-2TRV-EWB', 'H1-2TRV-6WB']);
 });

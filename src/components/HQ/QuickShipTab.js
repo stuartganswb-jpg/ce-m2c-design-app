@@ -225,9 +225,6 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             const arr = (s.exists() && s.data().finishes) || [];
             setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false, subFinishCode: String(f.subFinishCode || '').toUpperCase() })), ...prev.filter(p => p.outsourced)]);
         }, e => console.warn('Quick Ship finishes listen failed', e));
-        const unsubTrvRules = onSnapshot(doc(db, "system", "traverse_rules_H1-2TRV"), (s) => {
-            setTrvRules(s.exists() ? s.data() : null);
-        }, e => console.warn('Quick Ship traverse rules listen failed', e));
         const unsubOut = onSnapshot(collection(db, "hq_outsource_finishes"), (s) => {
             // code falls back to NAME (the finishText convention) — EP3–EP6 are stored name-only
             const arr = s.docs.map(d => d.data()).filter(f => f && (f.code || f.name));
@@ -237,7 +234,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (s) => {
             setRushTypes(s.exists() ? (s.data().rushFeeTypes || []) : []);
         }, e => console.warn('Quick Ship master lists listen failed', e));
-        return () => { unsubParts(); unsubCrm(); unsubKits(); unsubFin(); unsubOut(); unsubLists(); unsubTrvRules(); };
+        return () => { unsubParts(); unsubCrm(); unsubKits(); unsubFin(); unsubOut(); unsubLists();  };
     }, [activeBrand]);
 
     // Strictly-stocked: only items flagged isStocked feed quick-add + the part dropdowns.
@@ -660,6 +657,17 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             .sort((x, y) => rank(x) - rank(y));
     }, [allItems, customerId]); // eslint-disable-line react-hooks/exhaustive-deps
     const trvKit = trvKits.find(k => k.id === trvKitId) || null;
+    // ── THE RULES DOCUMENT FOLLOWS THE KIT'S FAMILY (S5 hand-off, 2026-09-10) ──────────────
+    // system/traverse_rules_<family>: bracket and splice counts by length. This read was fixed to
+    // H1-2TRV, so an H1-138TRV kit's chart showed H1-2TRV's rows — 2 brackets and no splice at every
+    // length. The push already reads per kit; the offer now does too. One rule, one screen earlier.
+    const trvFamily = String(trvKit?.manufacturingSpecs?.kitFamily || '').trim().toUpperCase() || 'H1-2TRV';
+    useEffect(() => {
+        const unsub = onSnapshot(doc(db, "system", `traverse_rules_${trvFamily}`), (s) => {
+            setTrvRules(s.exists() ? s.data() : null);
+        }, e => console.warn('Quick Ship traverse rules listen failed', e));
+        return () => unsub();
+    }, [trvFamily]);
     const trvResolve = (code) => {
         setTrvCode(code);
         const c = String(code || '').trim().toUpperCase();
@@ -694,7 +702,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // part is tagged proj:any. So the question appears on singles and nowhere else.
     const trvIsSingle = !!trvKit && String(trvKit.manufacturingSpecs?.kitAlign?.setup || '').toUpperCase() !== 'DOUBLE';
     const trvProjOptions = useMemo(
-        () => (trvIsSingle ? singleProjections(trvKit?.manufacturingSpecs?.kitFamily || 'H1-2TRV') : []),
+        () => (trvIsSingle ? singleProjections(trvKit?.manufacturingSpecs?.kitFamily || 'H1-2TRV', trvKit?.manufacturingSpecs?.kitAlign?.bracketStyle || '') : []),
         [trvIsSingle, trvKit]);
 
     // ── THE TRACK'S OWN COLOUR (Stuart 2026-08-22) ───────────────────────────────────────────────

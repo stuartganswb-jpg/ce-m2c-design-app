@@ -42,6 +42,45 @@ export const TRAVERSE_FAMILY_PARTS = {
         splice: 'H1-2TRVSPLC',
         frontRingPole: 'H1-2RCTPR',
     },
+    // ── THE 1-3/8" TRAVERSE (Stuart 2026-09-10, via S5's kit hand-off) ──────────────────────
+    // "the exact same carrier usage and carrier options as the H1-2TRV … so just the rod and
+    // brackets change." The rod IS the track — one per-foot part, no fascia, no separate track
+    // line. Brackets come in two STYLES (H / V) at every depth, so the single's table is keyed by
+    // style first; the double likewise. Codes are the ones S5's importer exports as
+    // H1_138TRV_PARTS (Shared/traverseKitImport) — the test asserts the two tables agree.
+    'H1-138TRV': {
+        rod: 'H1-138TRV',
+        brackets: {
+            SINGLE: {
+                H: { '3.625': 'H1-138TRV-H', '4.625': 'H1-138TRV-HE', '6': 'H1-138TRV-H6' },
+                V: { '3.625': 'H1-138TRV-V', '4.625': 'H1-138TRV-VE', '6': 'H1-138TRV-V6' },
+            },
+            DOUBLE: { H: 'H1-138TRV-HD', V: 'H1-138TRV-VD' },
+            CEILING: 'H1-138TRV-C',
+        },
+        splice: 'H1-138TRVJNR',
+        // ⚠ PLACEHOLDER (Stuart 2026-09-10): "2 per rod manual for now use the same code as the
+        // H1-2trv manual, it will need to be updated but for placement sake it is better than
+        // nothing." Not the 1-3/8" part — swap the code here when it exists.
+        plug: 'H1-2TRVPLUG',
+        // No motorised kits on the sheet (no baseMotor); no ring-front double (no frontRingPole).
+        // Returns are NOT in the kit and are not exploded (Stuart 2026-09-10): "only miter and
+        // french returns as fees are available … as an additional charge with the fee items
+        // 138TRVFR or 138TRVMTR as usual on the end treatment selections." No returnArms here.
+        // The sheet prices every bracket "- PAINTED" / "- PLATED": mainline finish, no sub-finish
+        // roles (unlike H1-2TRV's base-colour track and brackets).
+        subFinishRoles: [],
+    },
+};
+
+// A family's single-bracket table is keyed by depth (H1-2TRV) or by STYLE then depth (H1-138TRV:
+// H / V). Answer the one asked for; with no style, the first style — the same restraint as "no
+// projection = the standard depth" below, so an untagged kit still explodes.
+const singleTableOf = (family, style = '') => {
+    const S = TRAVERSE_FAMILY_PARTS[family]?.brackets?.SINGLE || {};
+    const styled = Object.values(S).some(v => v && typeof v === 'object');
+    if (!styled) return S;
+    return S[U(style)] || S[Object.keys(S)[0]] || {};
 };
 
 // A decimal projection in the language the shop and the sheet use: 3.625 → 3-5/8". Generic to
@@ -62,7 +101,7 @@ export const projLabel = (v) => {
  * here and not a change to any screen. `standard` marks the shallowest — the one the sheet calls
  * STANDARD and the one an order falls back to when nobody asked.
  */
-export const singleProjections = (family = 'H1-2TRV') => Object.entries(TRAVERSE_FAMILY_PARTS[family]?.brackets?.SINGLE || {})
+export const singleProjections = (family = 'H1-2TRV', style = '') => Object.entries(singleTableOf(family, style))
     .map(([inches, code]) => ({ inches, code, label: projLabel(inches), returnArm: TRAVERSE_FAMILY_PARTS[family]?.returnArms?.[inches] || '' }))
     .sort((a, b) => parseFloat(a.inches) - parseFloat(b.inches))
     .map((p, i) => ({ ...p, standard: i === 0 }));
@@ -98,18 +137,29 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
         if (code && qty > 0) lines.push({ code: U(code), qty, why, role, subFinish: subRoles.includes(role) });
     };
 
-    add(P.fascia[U(align.material)] || P.fascia.P, ft, 'fascia (per ft)', 'fascia');
-    add(P.track, ft * (setup === 'DOUBLE' && !ring ? 2 : 1), setup === 'DOUBLE' && !ring ? 'two tracks (per ft)' : 'track (per ft)', 'track');
-    if (ring) { add(P.frontRingPole, 1, 'front ring pole', 'ringPole'); skipped.push('ring COUNT rides the configurator — front pole consumed, rings not yet'); }
+    // A family whose rod IS the track (H1-138TRV) consumes one per-foot part — a double is two of
+    // them; the fascia-and-track families explode exactly as they always have.
+    if (P.rod) {
+        add(P.rod, ft * (setup === 'DOUBLE' ? 2 : 1), setup === 'DOUBLE' ? 'two rods (per ft)' : 'rod (per ft)', 'rod');
+    } else {
+        add(P.fascia[U(align.material)] || P.fascia.P, ft, 'fascia (per ft)', 'fascia');
+        add(P.track, ft * (setup === 'DOUBLE' && !ring ? 2 : 1), setup === 'DOUBLE' && !ring ? 'two tracks (per ft)' : 'track (per ft)', 'track');
+        if (ring) { add(P.frontRingPole, 1, 'front ring pole', 'ringPole'); skipped.push('ring COUNT rides the configurator — front pole consumed, rings not yet'); }
+    }
 
     // The single's bracket follows the PROJECTION sold. No projection given = the standard depth,
     // which is what every order consumed before the question was asked — so an older caller, and a
     // cart line saved before this existed, still explode exactly as they did.
-    const singles = singleProjections(family);
+    // The bracket STYLE (H1-138TRV: H / V) rides the kit's alignment; a family with one style ignores it.
+    const style = U(align.bracketStyle);
+    const singles = singleProjections(family, style);
     const singleHit = singles.find(p => p.inches === String(proj ?? '').trim()) || singles[0];
     const singleCode = singleHit ? singleHit.code : '';
+    const doubleCode = (P.brackets.DOUBLE && typeof P.brackets.DOUBLE === 'object')
+        ? (P.brackets.DOUBLE[style] || P.brackets.DOUBLE[Object.keys(P.brackets.DOUBLE)[0]] || '')
+        : (ring ? P.brackets.DOUBLE_RING : P.brackets.DOUBLE_TRACK);
     const bracketCode = U(align.mount) === 'CEILING' ? P.brackets.CEILING
-        : setup === 'DOUBLE' ? (ring ? P.brackets.DOUBLE_RING : P.brackets.DOUBLE_TRACK)
+        : setup === 'DOUBLE' ? doubleCode
         : singleCode;
     const bracketRow = (rules?.usage || []).find(u => U(u.itemId) === U(bracketCode))
         || (rules?.usage || []).find(u => U(u.itemId) === U(singleCode));
@@ -128,8 +178,10 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
     const splices = (spliceRow && ft >= spliceFirstFt) ? usageAt(spliceRow, ft) : 0;
     if (splices > 0) add(P.splice, splices, 'splices (count table)', 'splice');
 
-    if (U(align.drive) === 'MOTORIZED') add(U(motorItem) || P.baseMotor, 1, 'motor', 'motor');
-    else add(P.plug, 2, 'end plugs (manual, both ends)', 'plug');
+    if (U(align.drive) === 'MOTORIZED') {
+        if (U(motorItem) || P.baseMotor) add(U(motorItem) || P.baseMotor, 1, 'motor', 'motor');
+        else skipped.push('motorised — this family has no base motor on its sheet; nothing consumed');
+    } else add(P.plug, 2, 'end plugs (manual, both ends)', 'plug');
 
     skipped.push('carriers + configurator items consume when the configurator ships');
     return { lines, skipped };
