@@ -424,6 +424,16 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S5 · 09104cf (pushed ~17:50).** Stuart's first S5 ask replaced §2.4 #46's S5 half: "add in the kits for the
+  H1-138TRV kits … same spreadsheet … check the components and pricing … function with the cpq flow just like H1-2TRV." The
+  1-3/8" traverse is the product inside the H1-138 collection (S1's tag audit §2G: rod `H1-138TRV` at 1.6 #19–#21, brackets
+  #26–#37). Shipped: a second kit grammar (`rodKind`, `bracketStyle`), the seeder answering Rod Type as an axis, the 4.6
+  kit-sheet import reading tab H1-138TRV (8 kits, 19 priced components) with a rules doc DERIVED from the H1-2TRV usage table
+  (Stuart: "exact same carrier usage and carrier options … just the rod and brackets change"). Adds to §2.2: S1 owes
+  `TRAVERSE_FAMILY_PARTS['H1-138TRV']` + per-family rules reads at `CPQTab.js:1070` / `QuickShipTab.js:228` (BRIEF_S1 §6) —
+  until then an imported H1-138TRV kit explodes nothing. Adds to §2.3: Stuart applies the import, ticks each kit's finish
+  matrix, tags the H1-138 flow Kit Family `H1-138TRV`; the plug code is a placeholder he will replace.
+
 - **2026-09-10 · S1 · e4ab15a (pushed 17:30).** New pin tag `ridesWith: RETURN` (1.6 tag row): a hidden rider reaches the BOM
   only when a miter / French return is chosen on the order and its rod is on the order. Born from the H1-138 short-rear-rod
   standoffs (`1.6 #72 / 1.5 #68`) that would otherwise ride every double and confuse the floor. Adds to §2.2: S4 mirrors

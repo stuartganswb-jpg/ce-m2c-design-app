@@ -211,6 +211,8 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 
 *(newest first)*
 
+- **2026-09-10 — Issue 1 (S5) 09104cf pushed 17:46.** The H1-138TRV kits (the entry below). Safe-push check: one commit, mine; the rebase carried S1's e4ab15a + 8f91be8 (already on origin). Deploy notices written into BRIEF_S1–S4 §6, the board's Deploys row and status. Stuart's two confirms folded into the S1 spec: rod ends = `H1-2TRVPLUG` ×2 on a manual rod as a placeholder ("it will need to be updated but for placement sake it is better than nothing"); brackets wear the MAINLINE finish (`subFinishRoles: []`). Served-bundle sweep: VERIFIED — stamp 1789075982080 → 1789076872496, 38 assets; `Horizontal bracket` + `bracket at the measured projection` in `main.641da7e6.js` (kitCode / kitSeed), `NO DOC WILL BE WRITTEN` + `no 1-3/8" equivalent for` in `606.23d79921.chunk.js` (the parser + the 4.6 preview). Hard-refresh + re-PIN.
+
 - **2026-09-10 — Issue 1 (S5): the H1-138TRV kits — BUILT, tests green, NOT committed (waits for Stuart's push
   window; a local commit on main rides the next session's push).** Stuart's Q1 answer replaced §3 #1: "add in the kits
   for the H1-138TRV kits … same spreadsheet … check the components and pricing are correct and that it will function
