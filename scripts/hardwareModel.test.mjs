@@ -2408,5 +2408,38 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('the real standoff still does', m.bom.some(l => l.partId === 'CE-INV-57731'));
 }
 
+// ── A PLATE FOLLOWS ITS ARM (Stuart 2026-09-10) ───────────────────────────────────────────────
+// Un-pick the return and its backplate goes too — even where the return plates share their codes
+// with the plain plates (H1-138), so the twin rule cannot quietly keep the plate under a bracket
+// nobody has chosen. Change from one bracket to another and the plate is kept (the arm is there).
+{
+    const N = (cs) => applyFitsDefaults(cs.map(normalizeChoice));
+    const settle = (cs, answers, picks) => {
+        let sel = Object.values(picks).filter(Boolean); let m = resolve({ choices: N(cs), answers, selectedIds: sel });
+        for (let i = 0; i < 4; i++) { const next = Object.values(reseatPicks(m, picks)); if (next.length === sel.length && next.every(x => sel.includes(x))) break; sel = next; m = resolve({ choices: N(cs), answers, selectedIds: sel }); }
+        return { m, picks: reseatPicks(m, picks) };
+    };
+    // H1-138 shape: the return plate and the plain plate are the SAME code on different pins.
+    const cs = [
+        C({ id: 'R', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['r'] }),
+        C({ id: 'RET', partId: 'H1-FRPF', role: 'RETURN', proj: '6', position: 'LEFT', nodes: ['ret'] }),
+        C({ id: 'BK6', partId: 'H1-138B6', role: 'BRACKET', proj: '6', position: 'LEFT', nodes: ['bk6'] }),
+        C({ id: 'BKE', partId: 'H1-138BE', role: 'BRACKET', proj: '4-5/8', position: 'LEFT', nodes: ['bke'] }),
+        C({ id: 'PL-RTN', partId: 'H1-138BP-R', role: 'BACKPLATE', returnOnly: true, proj: '6', position: 'LEFT', nodes: ['plr'] }),
+        C({ id: 'PL-6', partId: 'H1-138BP-R', role: 'BACKPLATE', proj: '6', position: 'LEFT', nodes: ['pl6'] }),
+        C({ id: 'PL-E', partId: 'H1-138BP-R', role: 'BACKPLATE', proj: '4-5/8', position: 'LEFT', nodes: ['ple'] }),
+    ];
+    const keys = (m) => ({ end: m.slots.find(s => s.kind === 'END' && s.position === 'LEFT').key, bk: m.slots.find(s => s.kind === 'BRACKET' && s.position === 'LEFT').key, pl: m.slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT').key });
+    const k = keys(resolve({ choices: N(cs), answers: { proj: 6 }, selectedIds: [] }));
+    const withReturn = settle(cs, { proj: 6 }, { [k.end]: 'RET', [k.pl]: 'PL-RTN' });
+    eq('return + its plate hold', Object.values(withReturn.picks).sort(), ['PL-RTN', 'RET']);
+    const afterUnpick = settle(cs, { proj: 6 }, { [k.pl]: 'PL-RTN' });
+    eq('un-pick the return: the plate is dropped, not re-seated on its plain twin', Object.values(afterUnpick.picks), []);
+    const bracketSwap = settle(cs, { proj: 6 }, { [k.bk]: 'BKE', [k.pl]: 'PL-6' });
+    ok('change the bracket: the plate is KEPT (same code, whichever pin the new bracket offers)', ['PL-6', 'PL-E'].includes(bracketSwap.picks[k.pl]), JSON.stringify(bracketSwap.picks));
+    const bracketOnly = settle(cs, { proj: 6 }, { [k.bk]: 'BK6', [k.pl]: 'PL-6' });
+    eq('a plain bracket + its plate hold', Object.values(bracketOnly.picks).sort(), ['BK6', 'PL-6']);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

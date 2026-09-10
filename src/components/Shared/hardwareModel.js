@@ -734,10 +734,23 @@ export function ridersFor(choices, answers = {}, selectedIds = []) {
  */
 export function reseatPicks(model, picks = {}) {
     const out = {};
+    // ⚠ A PLATE FOLLOWS ITS ARM (Stuart 2026-09-10: "when we choose a miter or french return as end
+    // treatment, then change our mind and click it again, it clears but no longer auto clears the
+    // associated backplate"). A backplate is chosen FOR an arm — the return, or the bracket. When
+    // the arm is un-picked the plate's pin leaves the slot, and the twin rule below would seat it
+    // on the same code in the plain pool, under a bracket nobody has chosen yet. On H1-75 the
+    // return plates are their own codes (RBP / RCP) so there is no twin and the plate dropped; on
+    // H1-138 the return-backplate clusters carry the same eight codes as the plain plates, so it
+    // stayed. One rule for both: a plate is re-seated only while an arm is chosen at its position;
+    // with no arm there, the plate is dropped and the step asks again. Changing from one bracket to
+    // another keeps the plate (the arm is still there) — which is what the twin rule was for.
+    const selected = model?.selected || [];
+    const armAt = (pos) => selected.some(c => (c.role === 'BRACKET' || BRACKET_REPLACING_ROLES.includes(c.role)) && (c.position || '') === (pos || ''));
     (model?.slots || []).forEach(slot => {
         const want = picks[slot.key];
         if (!want) return;
         if (slot.options.some(o => o.id === want)) { out[slot.key] = want; return; }
+        if (slot.kind === 'BACKPLATE' && !armAt(slot.position)) return;
         const had = (model.choices || []).find(c => c.id === want);
         const twin = had && had.partId && slot.options.find(o => o.partId === had.partId);
         if (twin) out[slot.key] = twin.id;
