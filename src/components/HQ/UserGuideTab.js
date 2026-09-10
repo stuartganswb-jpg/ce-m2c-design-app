@@ -191,16 +191,18 @@ const OrdersCustomersGuide = () => (
         <h2 style={S.h2}>8 · CPQ Configurator <span style={S.tabno}>(custom orders)</span></h2>
         <Screen title="The flow, start to saved" tag="configure · price · quote">
             <Path name="1 · Customer bar first">Pick the <b>Active Customer</b> before configuring — it drives every price. Set the order <b>Sidemark</b> (prints on the quote, SO and packing slip) and the <b>Price Level</b> (Standard, or the Fabricut tiers for customers set up that way in 4.6 — items keep the level they were added at).</Path>
-            <Path name="2 · Pick a flow">Choose the collection/flow; families that come in several rod diameters ask for the diameter first. ↺ Reset clears the flow and starts fresh.</Path>
+            <Path name="2 · Pick a flow">Choose the collection/flow; families that come in several rod diameters ask for the diameter first. ↺ Reset clears the flow and starts fresh. The <b>🔎 Look up</b> bar under the flow row takes a part number — ours or the customer's — and tells you which flow it lives in and what its tags say; it never changes the order. On a traverse flow, <b>Start from a kit</b> fills the opening answers from a kit (ours and the customer's kit codes are both listed) — everything stays editable.</Path>
             <Path name="3 · Walk the steps">Framing questions (rod type, single/double, drive, mount, projection) → picture cards for ends, brackets, rings — with matching backplates nested under the arm. Quantity boxes appear only where the count is a real decision, pre-filled with the recommendation. The <b>length step</b> shows billed feet (rounded up) and asks the <b>splice question</b> over the one-piece limit: default location is CENTER; note the exact spot if different — Vision draws it where the note says. "why not the other N?" explains any option that was filtered away.</Path>
-            <Path name="4 · Finish">The Finish column applies one finish to the whole configuration; per-part exceptions go under the chosen item. Every priced line prints its finish.</Path>
+            <Path name="4 · Finish">The Finish column sets a default for the whole configuration — <b>one per material</b>: pick a stain under WOOD and a paint or plating under METAL and both stay lit, each part wearing the one its material can take (a wood gem finial takes the stain, its metal collar the paint). Per-part exceptions go under the chosen item ("just this part") and always win; a backplate follows its arm's finish unless given its own. Every priced line prints the finish with the <b>customer's own colour name</b> beside our code where 4.5 has one. A traverse <b>track</b> is never painted: it is made in the bronze or champagne aligned to the order's finish and the line says so ("stock colour"); the paint-to-match upcharge is the only way to paint it.</Path>
             <Path name="5 · Notes">The <b>Note</b> box rides to the shop; the <b>Config memo</b> ("Living Room 1") prints on the quote line, router and floor card.</Path>
-            <Path name="6 · Quantity — the last question">The final step asks <b>Quantity of this configuration</b>: how many complete, identical builds of the exact config. Entering 2 doubles <i>every part</i> — two poles at the same cut length, two of each bracket, two of everything — <b>never a dimension</b>. The floor cards, pick screen and router all print it as "2 × 7 = 14" style so a doubled count reads as two builds, and NetSuite bills every line × the quantity (per-foot rod bills feet × quantity; the cut length stays per-piece).</Path>
-            <Path name="7 · Cart">Add to quote, then configure the next room — each line keeps its own sidemark and qty; <b>Edit</b> reopens a line, trade discounts (from the customer's CRM discount code, Standard level only, items only) show per line.</Path>
+            <Path name="6 · Quantity of this configuration">The <b>Qty of this config</b> box in the header beside Add configuration is the one place this is asked: how many complete, identical builds of the exact config. Entering 2 doubles <i>every part</i> — two poles at the same cut length, two of each bracket, two of everything — <b>never a dimension</b>, and never a ring count (rings and centre brackets have their own "How many" on their step). The floor cards, pick screen and router print it as "2 × 7 = 14" style, and NetSuite bills every line × the quantity (per-foot rod bills feet × quantity; the cut length stays per-piece).</Path>
+            <Path name="The picture">The 3D pane draws what is chosen: centre brackets repeat along the pole to the count you enter; an order over 72" draws the pole longer through its middle so five centre brackets have room (a drawing, not a measurement — cut lengths never come from it); a splice draws as a thin pencil line at the centre, or where a Vision drawing placed it. <b>Add configuration</b> also takes a picture of the pane, and that picture prints on the quotation and the sales order.</Path>
+            <Path name="7 · Cart">Add to quote, then configure the next room — each line keeps its own sidemark and qty; trade discounts (from the customer's CRM discount code, Standard level only, items only) show per line. <b>Edit</b> opens a line in the configurator while the cart <i>keeps it</i> (the row reads "Editing…"); <b>Add configuration</b> replaces that line in place. Checking out with a line still open asks first — the cart saves the line as it was, not the changes on screen. Only <b>Remove</b> takes a line out.</Path>
             <Path name="8 · Checkout">Verify customer → shipping (saved NetSuite address or custom drop-ship, optional shipping $ that lands on the NetSuite header) → job name, sidemark, customer PO #, internal memo (never customer-facing) → <b>Need-by date</b> (the customer's date, optional — leave it blank if none was given; the app never invents one) and <b>Production notes</b> (ride to the floor and the pack station, never to the customer) → <b>Add-ons &amp; fees</b> (rush, packaging, strike-offs — each becomes its own line; percentage fees compute off the configured subtotal, so they never compound). The 🗓 <b>ready date</b> beneath the fields is what the finish class promises: a <b>painted</b> finish (P codes) is 4 weeks, a <b>plated</b> finish (EP / MEP) is 6; ticking the <b>Rush</b> fee shortens them to 2 and 4. A need-by earlier than the ready date without the Rush fee is flagged red and asks before saving.</Path>
             <Path name="9 · Save = send" goes="CRM pipeline · RTG board · NetSuite — automatically"><b>💾 Save as Quote</b> puts it on the customer's pipeline and queues the NetSuite estimate; <b>🛒 Save as Sales Order</b> also puts it on the RTG board and queues the NetSuite SO. The real numbers write back onto the record within ~a minute. No approve-then-push relay — saving is sending. Whichever door an order comes through — CPQ, Order Entry, or Approve in the CRM — the sales order carries <b>one header</b>: customer, PO, sidemark, need-by, ready date, ship-to, production notes, and the <b>finish recipe stamped at save</b> (the floor reads it straight off the order; it says PENDING only when the quote carries no finish at all). Every line that carries a finish also says whether that finish is <b>outsourced</b>, which is what routes a plated part to WMS Plating instead of the finishing floor.</Path>
-            <Path name="10 · Documents">A print window opens with the Quotation, the Factory Router (BOM), and one Engineering Drawing page per Vision drawing. Drawings also file to the customer's CRM record.</Path>
-            <Path name="Reopening">From the CRM card, <b>Reopen CPQ</b> restores the whole session — cart, customer, sidemark, PO, need-by, production notes, shipping (a quote saved before 3 Sep 2026 reopens with need-by and notes blank — never with a made-up date). Re-finalizing merges into the SAME quote. If it already reached NetSuite, re-pushing creates a NEW estimate — close the old one there.</Path>
+            <Path name="10 · Documents">Nothing prints at save — the page resets to a fresh CPQ once the "Saved" pop-up closes. The Quotation, Sales Order, Factory Router and Engineering Drawings print from the customer's CRM card (<b>DOCS</b>); the money documents carry the customer's part numbers and colour names, the pictures taken at Add configuration, and a per-foot pole as feet × unit. <b>View Item</b> shows the live 3D render with their part number beside ours.</Path>
+            <Path name="Reopening">From the CRM card, <b>Reopen CPQ</b> restores the whole session — every cart line, customer, sidemark, PO, need-by, production notes, shipping (a quote saved before 3 Sep 2026 reopens with need-by and notes blank — never with a made-up date). Edit a line, Add configuration puts it back in its place, re-finalize merges into the SAME quote and fills in the customer colour names and track colours on lines saved before those existed (a picture needs the line added again). If it already reached NetSuite, re-pushing creates a NEW estimate — close the old one there.</Path>
+            <Path name="From a Vision drawing" goes="9. Client Vision → Push configs → CPQ 'Lines Awaiting Configuration' → Configure">Vision's Fabrication Settings ask the same framing questions CPQ does — <b>Rod Type</b>, <b>Single or Double</b>, <b>Front of the Double</b>, <b>Drive Type</b> — and only the parts that fit those answers and the projection are offered; the drive ends (plugs, motor pulleys) follow the Drive Type and are never picked as an end style. A traverse's <b>Shop Floor BOM &amp; Raw Cuts</b> lists the fascia, track and F-clip cuts by drive (track −½" manual / −2" motorized; F-clip −1" / −3"). Pushed to CPQ, the line lands with step 1 answered from the drawing, the brackets, ends and plates carried over, and anything the drawing could not say listed under "missed".</Path>
         </Screen>
 
         <h2 style={S.h2}>7 · Quick Ship / Order Entry <span style={S.tabno}>(stocked orders — flat lines, no BOM)</span></h2>
@@ -560,6 +562,8 @@ const WmsGuide = () => (
                     <tr><td style={S.td}>Turn raw stock into phosphated /P stock</td><td style={S.td}><b>Convert</b></td></tr>
                     <tr><td style={S.td}>Cut an 8 ft rod down, or build a ring pack</td><td style={S.td}><b>Rod Cuts &amp; Ring Packs</b></td></tr>
                     <tr><td style={S.td}>Count a bin, or move stock between bins</td><td style={S.td}><b>Bin Count</b> / <b>Transfer</b></td></tr>
+                    <tr><td style={S.td}>Take in a delivery from a vendor</td><td style={S.td}><b>Receiving (PO)</b></td></tr>
+                    <tr><td style={S.td}>Print any label — item, bin, work order, sales order, pack</td><td style={S.td}><b>Labels</b></td></tr>
                     <tr><td style={S.td}>Find out where something is</td><td style={S.td}><b>Where is it?</b> in the header — a work order, a sales order or an item</td></tr>
                 </tbody>
             </table>
@@ -658,6 +662,63 @@ const WmsGuide = () => (
             The bin is not looked up, it is where you <i>put</i> them. That is why the build waits for the scan.
         </Path>
 
+        <h2 style={S.h2}>Which pole is this? <span style={S.tabno}>(pick and pack cards)</span></h2>
+        <p style={S.p}>A pole with its label knocked off looks like every other pole of the same
+        finish. So the card carries what identifies it: the <b>length</b>, the <b>quantity</b> and
+        the <b>sidemark</b>. Check the pole against those three before it goes in the tube.</p>
+        <Path name="Two lengths, two units — read the unit" goes="96&quot; is a CUT length in inches; 8 ft is a stocked pole from its own code">
+            A cut-to-order pole is measured in <b>inches</b>; a stocked pole's length comes from its
+            item code and is in <b>feet</b>. They never appear without the unit, because a bare "4"
+            beside a bare "96" is how the wrong pole goes in a box.
+        </Path>
+        <Path name="&quot;No cut length recorded&quot;" goes="ask — do not measure and assume">
+            The shop order carries no cut list for that order. A blank means nobody wrote it down;
+            it never guesses a length, because a guessed number reads as a checked one.
+        </Path>
+
+        <h2 style={S.h2}>Receiving a vendor delivery <span style={S.tabno}>(Receiving (PO))</span></h2>
+        <p style={S.p}>The same five steps as a plating pallet, because it is the same job with a
+        different supplier: <b>find</b> the purchase order, <b>scan</b> the item, receive it to a
+        <b> cart</b>, print its <b>labels</b>, then scan it <b>away</b> to its bin.</p>
+        <Path name="The PO is not in our list" goes="that is normal — it is fetched from NetSuite and recorded">
+            Plenty of purchase orders are raised straight in NetSuite. Finding one there is the
+            ordinary case, not an error.
+        </Path>
+        <Path name="Something arrives that an order was waiting for" goes="the screen offers it to that order, oldest need first">
+            The same question the plating dock asks. Say yes and each order's share goes to its
+            committed bin; say no and it all goes to stock, which is recorded either way.
+        </Path>
+
+        <h2 style={S.h2}>Labels <span style={S.tabno}>(Labels)</span></h2>
+        <p style={S.p}>Every label the floors, the shop or the warehouse need, in one place: the
+        <b> item</b>, a <b>bin</b>, a <b>work order</b>, a <b>sales order</b>, and a <b>pack</b>.</p>
+        <Screen title="The pack label, and why the barcode matters" tag="7PK (7 pcs)">
+            <p style={S.p}>Pick the item, pick the unit, say how many labels. The label prints the
+            unit with its true piece count beside it — <b>7PK (7 pcs)</b>, <b>PR (2 pcs)</b> — and
+            the screen shows you the arithmetic before you print: <i>3 labels · each one is 7 pieces
+            · 21 pieces in total</i>.</p>
+            <p style={S.p}><b>One label is one pack.</b> Three labels on the shelf means three packs
+            of seven, not three rings.</p>
+            <p style={S.p}>The piece count is also inside the <b>barcode</b>, which is the point of
+            it. Until now a seven-pack and a single scanned identically, so a screen counted one
+            piece while you were holding fourteen. Now a scan knows, and a screen can tell you
+            "you scanned 2 × 7PK — that is 14, this order needs 4".</p>
+        </Screen>
+        <Path name="The unit you want is not in the list" goes="it is added in 4.5 Mass Update, not in code">
+            The units are a master list. A new pack size is a data entry, and it carries its own
+            count — "BAKERS DOZEN - 13" tells the label it means thirteen.
+        </Path>
+        <Path name="A unit worth one piece prints a plain label" goes="correct — a single is just the item">
+            EA prints an ordinary item label with an ordinary barcode. Only a real pack carries the
+            extra information, because only a real pack can be miscounted.
+        </Path>
+
+        <h2 style={S.h2}>Finishing early, on purpose</h2>
+        <p style={S.p}>Normally every part of an order waits and the whole order is finished
+        together. Occasionally the last parts will be late and it saves time to finish what is here
+        first. That is the <b>Finish as available</b> switch on the SO Pack card — the exception,
+        never the default. It asks why, and records who turned it on and when.</p>
+
         <h2 style={S.h2}>Edges worth knowing</h2>
         <div style={{ overflowX: 'auto' }}>
             <table style={S.table}>
@@ -669,6 +730,8 @@ const WmsGuide = () => (
                     <tr><td style={S.td}>A bin the screen does not recognise</td><td style={S.td}>Scan the bin label rather than typing it. A bin NetSuite does not have makes the whole posting fail, and the stock would go missing on paper.</td></tr>
                     <tr><td style={S.td}>A put-away bin that looks like an item code</td><td style={S.td}>You scanned the item label instead of the bin. The screen refuses it.</td></tr>
                     <tr><td style={S.td}>A stale order nobody will ship</td><td style={S.td}><b>Close order</b> on its SO Pack card, with a reason. It also has to be closed in NetSuite, or its stock stays promised to it.</td></tr>
+                    <tr><td style={S.td}>A pole row with no length</td><td style={S.td}>No cut list was recorded on the shop order. Ask; do not measure and assume.</td></tr>
+                    <tr><td style={S.td}>A pack label that scans as one piece</td><td style={S.td}>It is a single (EA). Only a real pack carries its count in the barcode.</td></tr>
                 </tbody>
             </table>
         </div>
