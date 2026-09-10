@@ -1172,9 +1172,10 @@ eq('nonsense is null', measureOf('n/a'), null);
         eq('…and you can still change your mind where you chose', bk(['BD']).join(), 'H1-138BD,H1-138DD');
     }
 
-    // …and the bracket is asked before the rods whose geometry it decides.
+    // …and from 2026-09-10 the ROD is asked before the bracket (Stuart: one order for every flow);
+    // the bracket still decides the rear rod's depth — a rod it cannot carry is rejected below.
     const order = slots(N, {}, []).map(s => s.kind);
-    ok('bracket is asked before the rods', order.indexOf('BRACKET') < order.indexOf('ROD'));
+    ok('the rod is asked before the bracket', order.indexOf('ROD') < order.indexOf('BRACKET'));
 
     // The rejection says which bracket the part was cut for.
     const why = slots(N, {}, ['BD']).find(s => s.kind === 'ROD' && s.tier === 'BACK')
@@ -1657,15 +1658,19 @@ eq('nonsense is null', measureOf('n/a'), null);
     const seq = slots(dbl, {}, []).map(s => [s.kind, s.tier, s.position].filter(Boolean).join(':'));
     const at = (x) => seq.indexOf(x);
 
-    ok('front left end leads', at('END:FRONT:LEFT') === 0);
-    ok('then front right', at('END:FRONT:RIGHT') === 1);
+    // 2026-09-10 (Stuart, one order for every flow): the RODS lead, then the ends exactly as the
+    // 08-20 reshuffle placed them — front left, front right, then the rear pair — then the bracket,
+    // its plate, the rings.
+    ok('the front rod leads', at('ROD:FRONT') === 0);
+    ok('then the back rod', at('ROD:BACK') === 1);
+    ok('then the front left end', at('END:FRONT:LEFT') === 2);
+    ok('then front right', at('END:FRONT:RIGHT') === 3);
     // the rear ends follow their own front ones, with no rule of their own
-    ok('then back left', at('END:BACK:LEFT') === 2);
-    ok('then back right', at('END:BACK:RIGHT') === 3);
+    ok('then back left', at('END:BACK:LEFT') === 4);
+    ok('then back right', at('END:BACK:RIGHT') === 5);
     ok('the bracket comes after every end', at('BRACKET:CENTER') > at('END:BACK:RIGHT'));
     ok('its plate after it', at('BACKPLATE:CENTER') > at('BRACKET:CENTER'));
-    ok('the rods after the mounting', at('ROD:FRONT') > at('BACKPLATE:CENTER'));
-    ok('and the rings last of all', at('RING:FRONT') > at('ROD:FRONT'));
+    ok('and the rings last of all', at('RING:FRONT') > at('BACKPLATE:CENTER'));
 }
 
 // ── A PIN THAT DECLARES ITS TIER BEATS ONE THAT DOES NOT ──────────────────────────────────────
@@ -2277,6 +2282,77 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('the lines follow the slots, which are the steps', order.length, 4);
     ok('…and the ring, asked last, is billed last', order[order.length - 1] === 'H1-138RING');
     ok('the slot order is the one the walk shows', slotOrder.indexOf('ROD') < slotOrder.indexOf('RING'));
+}
+
+// ── ONE ORDER FOR EVERY FLOW (Stuart 2026-09-10) ─────────────────────────────────────────────
+// "Rod Setup → Rod → Rod length → Ends (front left, front right, then rear) → Bracket → Backplate →
+//  Rings → Accessories … even the H1-2TRV should follow the same order." Read on the live pins that
+// day: H1-1, H1-138 and H1-2TRV asked for the rod after the plates (the 2026-08-20 tiered rule) and
+// H1-75 asked first only because its rods were untiered. The rank is now SLOT_ORDER for every
+// assembly, tiered or not. Three shapes, one expectation.
+{
+    const N = (cs) => applyFitsDefaults(cs.map(normalizeChoice));
+    const askedKinds = (cs, answers) => slots(N(cs), answers, []).filter(s => s.options.length).map(s => `${s.kind}${s.tier ? ':' + s.tier : ''}${s.position ? ':' + s.position : ''}`);
+    const rankOf = (k) => ['ROD', 'FASCIA', 'TRACK', 'END', 'BRACKET', 'BACKPLATE', 'RING', 'ACCESSORY'].indexOf(k.split(':')[0]);
+    const monotone = (ks) => ks.every((k, i) => i === 0 || rankOf(k) >= rankOf(ks[i - 1]));
+
+    // 1 · an untiered single (H1-75 before the tag pass)
+    const single = [
+        C({ id: 'R', partId: 'H1-75R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['r'] }),
+        C({ id: 'FL', partId: 'FIN', role: 'FINIAL', position: 'LEFT', nodes: ['fl'] }),
+        C({ id: 'FR', partId: 'FIN', role: 'FINIAL', position: 'RIGHT', nodes: ['fr'] }),
+        C({ id: 'BL', partId: 'BK', role: 'BRACKET', proj: '3-5/8', position: 'LEFT', nodes: ['bl'] }),
+        C({ id: 'BC', partId: 'BK', role: 'BRACKET', proj: '3-5/8', position: 'CENTER', nodes: ['bc'] }),
+        C({ id: 'BR', partId: 'BK', role: 'BRACKET', proj: '3-5/8', position: 'RIGHT', nodes: ['br'] }),
+        C({ id: 'PL', partId: 'BP', role: 'BACKPLATE', position: 'LEFT', nodes: ['pl'] }),
+        C({ id: 'RG', partId: 'RING', role: 'RING', nodes: ['rg'] }),
+    ];
+    const s1 = askedKinds(single, { proj: 3.625 });
+    eq('untiered single: rod, ends L/R, brackets L/C/R, plate, rings', s1, ['ROD', 'END:LEFT', 'END:RIGHT', 'BRACKET:LEFT', 'BRACKET:CENTER', 'BRACKET:RIGHT', 'BACKPLATE:LEFT', 'RING']);
+
+    // 2 · a tiered double family (H1-138 / H1-1 / H1-75 after the tag pass)
+    const dbl = [
+        C({ id: 'RF', partId: 'FR', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', nodes: ['fr'] }),
+        C({ id: 'RB', partId: 'BR', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', setup: 'DOUBLE', nodes: ['br'] }),
+        C({ id: 'EFL', partId: 'FIN', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['efl'] }),
+        C({ id: 'EFR', partId: 'FIN', role: 'FINIAL', tier: 'FRONT', position: 'RIGHT', nodes: ['efr'] }),
+        C({ id: 'EBL', partId: 'FIN', role: 'FINIAL', tier: 'BACK', setup: 'DOUBLE', position: 'LEFT', nodes: ['ebl'] }),
+        C({ id: 'EBR', partId: 'FIN', role: 'FINIAL', tier: 'BACK', setup: 'DOUBLE', position: 'RIGHT', nodes: ['ebr'] }),
+        C({ id: 'BKT', partId: 'DA', role: 'BRACKET', position: 'CENTER', setup: 'DOUBLE', proj: 'FRONT:6, BACK:3-5/8', nodes: ['ba'] }),
+        C({ id: 'BKS', partId: 'SA', role: 'BRACKET', position: 'CENTER', setup: 'SINGLE', proj: '6', nodes: ['bs'] }),
+        C({ id: 'PL', partId: 'BP', role: 'BACKPLATE', position: 'CENTER', nodes: ['pl'] }),
+        C({ id: 'RG', partId: 'RING', role: 'RING', nodes: ['rg'] }),
+    ];
+    const s2 = askedKinds(dbl, { setup: 'DOUBLE' });
+    eq('tiered double: front rod, back rod, ends front L/R then back L/R, bracket, plate, rings', s2,
+        ['ROD:FRONT', 'ROD:BACK', 'END:FRONT:LEFT', 'END:FRONT:RIGHT', 'END:BACK:LEFT', 'END:BACK:RIGHT', 'BRACKET:CENTER', 'BACKPLATE:CENTER', 'RING:FRONT', 'RING:BACK']);
+    const s2s = askedKinds(dbl, { setup: 'SINGLE' });
+    ok('the same family on a single still leads with the rod', s2s[0] === 'ROD:FRONT' && monotone(s2s), s2s.join(' → '));
+
+    // 3 · a traverse (H1-2TRV shape): fascia and track are the rod-kind and lead the same way
+    const trv = [
+        C({ id: 'FA', partId: 'FAS', role: 'FASCIA', rodKind: 'TRAVERSE', nodes: ['fa'] }),
+        C({ id: 'TR', partId: 'TRK', role: 'TRACK', rodKind: 'TRAVERSE', nodes: ['tr'] }),
+        C({ id: 'EL', partId: 'RA', role: 'RETURN', fits: ['TRAVERSE'], proj: '6', position: 'LEFT', nodes: ['el'] }),
+        C({ id: 'ER', partId: 'RA', role: 'RETURN', fits: ['TRAVERSE'], proj: '6', position: 'RIGHT', nodes: ['er'] }),
+        C({ id: 'BC', partId: 'WB', role: 'BRACKET', fits: ['TRAVERSE'], proj: '6', position: 'CENTER', nodes: ['bc'] }),
+        C({ id: 'RG', partId: 'RING', role: 'RING', nodes: ['rg'] }),
+    ];
+    const s3 = askedKinds(trv, { rodKind: 'TRAVERSE', setup: 'SINGLE', proj: 6 });
+    ok('traverse: fascia and track lead, then ends, then the bracket', s3[0] === 'FASCIA' && s3[1] === 'TRACK' && s3.indexOf('END:LEFT') < s3.indexOf('BRACKET:CENTER') && monotone(s3), s3.join(' → '));
+
+    // The bracket still decides the rear rod. A rod cut for bracket A, then bracket B chosen: the
+    // rod is rejected with the pairs named — never silently kept.
+    const cut = [
+        C({ id: 'RF', partId: 'FR', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', nodes: ['fr'] }),
+        C({ id: 'RB-A', partId: 'BR', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', setup: 'DOUBLE', proj: 'FRONT:6, BACK:3-5/8', nodes: ['bra'] }),
+        C({ id: 'RB-B', partId: 'BR', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', setup: 'DOUBLE', proj: 'FRONT:8, BACK:4-5/8', nodes: ['brb'] }),
+        C({ id: 'BK-A', partId: 'DA', role: 'BRACKET', position: 'CENTER', setup: 'DOUBLE', proj: 'FRONT:6, BACK:3-5/8', nodes: ['ba'] }),
+        C({ id: 'BK-B', partId: 'DB', role: 'BRACKET', position: 'CENTER', setup: 'DOUBLE', proj: 'FRONT:8, BACK:4-5/8', nodes: ['bb'] }),
+    ];
+    const afterB = slots(N(cut), { setup: 'DOUBLE' }, ['RB-A', 'BK-B']).find(s => s.kind === 'ROD' && s.tier === 'BACK');
+    ok('rod asked first, then a bracket it was not cut for: the rod is rejected, not kept', !afterB.options.some(o => o.id === 'RB-A') && afterB.rejected.some(r => r.choice.id === 'RB-A'), JSON.stringify((afterB.rejected || []).map(r => r.choice.id)));
+    ok('the rod for the chosen bracket is what remains', afterB.options.map(o => o.id).join() === 'RB-B', afterB.options.map(o => o.id).join());
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);

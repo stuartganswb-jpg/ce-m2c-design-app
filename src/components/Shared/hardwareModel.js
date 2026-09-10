@@ -1476,33 +1476,28 @@ export function slots(choices, answers = {}, selectedIds = []) {
     const rank = (s) => {
         let k = SLOT_ORDER.indexOf(s.kind === 'END' ? 'FINIAL' : s.kind);
         if (k < 0) k = 99;                          // a kind nothing knows about sorts last
-        // On a tiered assembly the bracket carries each rod's depth, so it must be answered BEFORE
-        // the ends that depth gates — otherwise an end is chosen against no constraint and a later
-        // bracket silently invalidates it. On a single nothing moves: projection is still its own
-        // question, asked first, exactly as it always has been.
-        // …and before the RODS too, once a rear rod can be cut for a particular bracket: the
-        // bracket decides which rod geometry exists, so asking for the rod first asks a question
-        // whose answer set is not yet known.
-        // ── PHASE 1 OF THE RESHUFFLE (Stuart 2026-08-20) ────────────────────────────────
-        // "move the front left and right end selections to be the next selections after bracket
-        //  projection. remember to move the rear options as well if it is double selected."
+        // ── ONE ORDER FOR EVERY FLOW (Stuart 2026-09-10) ──────────────────────────────────
+        // "Rod Setup (type, single/double, front, drive, mount, projection) → Rod → Rod length →
+        //  Ends (front left, front right, then rear) → Bracket → Backplate → Rings → Accessories …
+        //  even the H1-2TRV should follow the same order."
         //
-        // The ends go first, then the bracket, then its plate — everything else keeps the place it
-        // already had. The rear ends need no rule of their own: within a kind the sort already runs
-        // FRONT before BACK, so a double gets front left, front right, back left, back right in
-        // that order for free.
+        // That is SLOT_ORDER as it stands, so the rank is the kind's place in it and nothing else.
+        // Within a kind the sort below runs FRONT before BACK and LEFT, CENTER, RIGHT — which is
+        // exactly "front left, front right, then rear" for the ends and "front rod, back rod" for
+        // a double. The rod-length step is the configurator's and sits right after the rods.
         //
-        // ⚠ THIS IS THE SAME RANK CHANGE THAT BROKE H1-138 ON TUESDAY, and it is worth being
-        // honest about why it is being made again. It was not the ordering that broke: it was that
-        // moving the ends to the FRONT exposed two bugs sitting underneath them — an untiered
-        // return suppressed the very end step it had been chosen in (30804a9), and a pick outlived
-        // the arm that justified it (e96131c). Both are fixed and tested now, so the ends can lead
-        // without opening on a step that answers "not asked". Tagged engine-good-2026-08-20 first.
-        if (allTiers.length) {
-            if (s.kind === 'END') k = -2;
-            else if (s.kind === 'BRACKET') k = -1;
-            else if (s.kind === 'BACKPLATE') k = -0.9;
-        }
+        // HISTORY. From 2026-08-20 to 2026-09-10 a tiered assembly (one whose rods carry FRONT /
+        // BACK) ranked its ENDS, then the BRACKET, then its BACKPLATE ahead of everything — "move
+        // the front left and right end selections to be the next selections after bracket
+        // projection" — with the reasoning that the bracket decides the rear rod's geometry, so
+        // it should be answered before the rods. Read on the live pins on 2026-09-10 that rule
+        // made H1-1, H1-138 and H1-2TRV ask for the rod after the plates while H1-75 (whose
+        // rods were then untiered) asked for it first; the moment H1-75's rods were tagged
+        // correctly it fell in line with the others, and the brackets were being rendered against
+        // a pole nobody had chosen yet. Stuart chose the rod first for every flow. The bracket
+        // still decides the rear rod's depth: a rod picked first that a later bracket cannot
+        // carry is REJECTED by that bracket's pair (`rejected` names both pairs) and the settle
+        // drops the pick, so the rod step re-asks instead of keeping a wrong rod.
         const t = TIER_POSITIONS.indexOf(s.tier);
         const p = POSITION_ORDER.indexOf(s.position);
         return k * 10000 + (t < 0 ? 0 : t) * 100 + (p < 0 ? 99 : p);

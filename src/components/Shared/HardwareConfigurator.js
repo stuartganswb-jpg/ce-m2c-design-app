@@ -1164,13 +1164,20 @@ function HardwareConfiguratorInner({
         // number of arms than 6.5 ft of sheer, and the span advice from 6.5 cannot say so until it
         // knows the length. Asked afterwards, the advice arrived when the decision was already made.
         //
-        // Placed by the ENDS rather than by a fixed index, so it lands correctly whatever the
-        // collection offers: right after the last end treatment, or at the back if a collection has
-        // no end steps at all.
+        // ── …AND FROM 2026-09-10 RIGHT AFTER THE ROD (Stuart: "right after rod choice should
+        // be rod length that is just more natural, then carry on as is with the order"). Placed
+        // by the ROD-kind steps (rod, fascia, track) rather than by a fixed index, so it lands
+        // correctly whatever the collection offers; a collection with no rod step at all gets
+        // it right after the Rod Setup axes, still before the ends.
         const lengthStep = { kind: 'LENGTH', key: 'length', label: 'Pole length' };
-        let lastEnd = -1;
-        out.forEach((st, i) => { if (st.kind === 'SLOT' && st.slot.kind === 'END') lastEnd = i; });
-        if (lastEnd >= 0) out.splice(lastEnd + 1, 0, lengthStep); else out.push(lengthStep);
+        let lastRod = -1, lastAxis = -1;
+        out.forEach((st, i) => {
+            if (st.kind === 'SLOT' && ROD_ROLES.includes(st.slot.kind)) lastRod = i;
+            if (st.kind === 'AXIS') lastAxis = i;
+        });
+        if (lastRod >= 0) out.splice(lastRod + 1, 0, lengthStep);
+        else if (lastAxis >= 0) out.splice(lastAxis + 1, 0, lengthStep);
+        else out.push(lengthStep);
         // ── WHAT RIDES ON THE ROD IS ONE QUESTION (Stuart 2026-08-21) ───────────────────────
         // "if the selection for front track is track then the carriers should be presented at 13,
         // if the front is omitted then rings should be presented … it could made in one step since
