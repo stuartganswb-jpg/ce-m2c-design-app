@@ -377,7 +377,13 @@ export function normalizeChoice(input = {}) {
         // Under the segment rule that tag is already redundant: the centre piece renders whenever
         // the rod is chosen, which is exactly what "always shown" was trying to say. So a rod is
         // always a CHOICE, whatever it is tagged, and no retagging is needed to fix this.
-        always: (input.always === true || RIDER_ROLES.includes(role)) && !ROD_ROLES.includes(role),
+        // ⚠ …AND PARKED GEOMETRY NEVER RIDES EITHER (Stuart 2026-09-10, option 2). A pin with no item
+        // number (`parked`, or the minted HIDDEN-<node> id) was already never a question, but it was
+        // still a rider — so every H1 breakdown carried $0 "HIDDEN-832316L91375A189" placeholder
+        // lines, and the NetSuite push had to learn to skip them. Nothing to build, bill or pick
+        // is nothing to ride: the geometry is the render's business alone.
+        always: (input.always === true || RIDER_ROLES.includes(role)) && !ROD_ROLES.includes(role)
+            && !(input.parked === true || /^HIDDEN-/i.test(String(input.partId || ''))),
         // A COLLAR IS NOT A CHOICE — it is the companion of the finial that requires it. Two-part
         // acrylic finials are a metal collar plus an acrylic top; the customer picks the finial and
         // the collar comes with it, always the matching one.

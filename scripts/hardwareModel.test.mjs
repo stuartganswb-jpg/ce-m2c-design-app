@@ -1456,13 +1456,16 @@ eq('nonsense is null', measureOf('n/a'), null);
 // ── A HIDDEN PART REACHES THE BOM AND STOPS THERE ─────────────────────────────────────────────
 // "only included in the shop floor bom". The flag was read off the pin correctly and then dropped
 // at normalization, so every customer-facing surface saw hidden:false.
+// (2026-09-10: the fixture's nut plate carries a REAL id now. A `HIDDEN-<node>` id is the minted
+//  placeholder for geometry with no item number, and since option 2 such geometry never rides —
+//  the block further down proves that half.)
 {
     const cs = applyFitsDefaults([
         C({ id: 'ROD', partId: 'R1', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
-        C({ id: 'NUT', partId: 'HIDDEN-NUTP', name: 'NUTP', role: 'ACCESSORY', hidden: true, always: true, nodes: [] }),
+        C({ id: 'NUT', partId: 'NUTP-01', name: 'NUTP', role: 'ACCESSORY', hidden: true, always: true, nodes: [] }),
     ].map(normalizeChoice));
     const m = resolve({ choices: cs, answers: {}, selectedIds: ['ROD'] });
-    const nut = m.bom.find(l => l.partId === 'HIDDEN-NUTP');
+    const nut = m.bom.find(l => l.partId === 'NUTP-01');
     ok('the hidden part is in the bill of materials', !!nut);
     ok('and it is marked hidden there', nut.hidden === true);
     ok('a normal part is not', m.bom.find(l => l.partId === 'R1').hidden === false);
@@ -2380,6 +2383,29 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('a double with the return but no back rod chosen yet: they wait for the rod', riders({ setup: 'DOUBLE' }, ['RF', 'DBL-MTR-L']), ['SO-F']);
     eq('the tag survives normalisation', N(fam).find(c => c.id === 'SO-1').ridesWith, 'RETURN');
     ok('…and is never a question', !slots(N(fam), { setup: 'DOUBLE' }, []).some(s => s.options.some(o => o.id === 'SO-1')));
+}
+
+// ── PARKED GEOMETRY NEVER RIDES (Stuart 2026-09-10, option 2) ────────────────────────────────
+// A pin with no item number was never a question but still rode as a $0 hidden placeholder line
+// on every order. Now it is neither: the render owns it, the BOM never sees it.
+{
+    const N = (cs) => applyFitsDefaults(cs.map(normalizeChoice));
+    const cs = [
+        C({ id: 'RF', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', nodes: ['rf'] }),
+        C({ id: 'FIN', partId: 'H1-138KF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['fl'] }),
+        // the real standoff: hidden, has an item — rides as before
+        C({ id: 'SO', partId: 'CE-INV-57731', role: 'FINIAL', tier: 'FRONT', hidden: true, always: true, nodes: [] }),
+        // parked geometry by the minted id, flagged hidden + always-shown exactly as 1.6 writes it
+        C({ id: 'GEO-1', partId: 'HIDDEN-832316L91375A189', role: 'FINIAL', tier: 'FRONT', hidden: true, always: true, nodes: [] }),
+        // parked by the flag alone
+        C({ id: 'GEO-2', partId: 'PENDING', parked: true, role: 'FINIAL', tier: 'FRONT', hidden: true, always: true, nodes: [] }),
+    ];
+    const r = ridersFor(N(cs), { setup: 'SINGLE' }, ['RF', 'FIN']).map(c => c.id).sort();
+    eq('the real hidden standoff rides; the parked geometry does not', r, ['SO']);
+    ok('parked geometry is still not a question', !slots(N(cs), { setup: 'SINGLE' }, []).some(s => s.options.some(o => /^GEO/.test(o.id))));
+    const m = resolve({ choices: cs, answers: { setup: 'SINGLE' }, selectedIds: ['RF', 'FIN'] });
+    ok('…and never reaches the BOM', !m.bom.some(l => /^HIDDEN-/.test(String(l.partId))), m.bom.map(l => l.partId).join(','));
+    ok('the real standoff still does', m.bom.some(l => l.partId === 'CE-INV-57731'));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
