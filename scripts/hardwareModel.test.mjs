@@ -2355,5 +2355,32 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('the rod for the chosen bracket is what remains', afterB.options.map(o => o.id).join() === 'RB-B', afterB.options.map(o => o.id).join());
 }
 
+// ── A RIDER THAT COMES WITH THE RETURN (Stuart 2026-09-10) ───────────────────────────────────
+// H1-138's standoffs hold the short rear rod that terminates into a double return's bend. Tagged
+// `ridesWith: RETURN` they reach the BOM only on an order with a miter / French return — never on
+// a plain double, never on a single (no back rod), and sides do not matter. An untagged rider is
+// exactly as it was.
+{
+    const N = (cs) => applyFitsDefaults(cs.map(normalizeChoice));
+    const fam = [
+        C({ id: 'RF', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', nodes: ['rf'] }),
+        C({ id: 'RB', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', setup: 'DOUBLE', nodes: ['rb'] }),
+        C({ id: 'FIN-L', partId: 'H1-138KF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['fl'] }),
+        C({ id: 'DBL-MTR-L', partId: 'H1-DBLMR', role: 'RETURN', tier: 'FRONT', setup: 'DOUBLE', position: 'LEFT', proj: 'FRONT:8.5, BACK:3.25', nodes: ['ml'] }),
+        // the standoffs: hidden riders on the back rod, tagged to ride with a return
+        C({ id: 'SO-1', partId: 'H1-138STDOFF', role: 'FINIAL', tier: 'BACK', setup: 'DOUBLE', hidden: true, always: true, ridesWith: 'RETURN', nodes: [] }),
+        C({ id: 'SO-2', partId: 'H1-138STDOFF', role: 'FINIAL', tier: 'BACK', setup: 'DOUBLE', hidden: true, always: true, ridesWith: 'RETURN', nodes: [] }),
+        // an ordinary hidden rider on the front rod, untagged — rides as it always has
+        C({ id: 'SO-F', partId: 'H1-138STDOFF', role: 'FINIAL', tier: 'FRONT', hidden: true, always: true, nodes: [] }),
+    ];
+    const riders = (answers, sel) => ridersFor(N(fam), answers, sel).map(c => c.id).sort();
+    eq('a plain double: the front standoff rides, the return standoffs do not', riders({ setup: 'DOUBLE' }, ['RF', 'RB', 'FIN-L']), ['SO-F']);
+    eq('a double WITH a miter return: all three ride', riders({ setup: 'DOUBLE' }, ['RF', 'RB', 'DBL-MTR-L']), ['SO-1', 'SO-2', 'SO-F']);
+    eq('a single with a return: no back rod, so the return standoffs stay off', riders({ setup: 'SINGLE' }, ['RF', 'DBL-MTR-L']), ['SO-F']);
+    eq('a double with the return but no back rod chosen yet: they wait for the rod', riders({ setup: 'DOUBLE' }, ['RF', 'DBL-MTR-L']), ['SO-F']);
+    eq('the tag survives normalisation', N(fam).find(c => c.id === 'SO-1').ridesWith, 'RETURN');
+    ok('…and is never a question', !slots(N(fam), { setup: 'DOUBLE' }, []).some(s => s.options.some(o => o.id === 'SO-1')));
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

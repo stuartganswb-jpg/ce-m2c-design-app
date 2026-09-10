@@ -204,6 +204,11 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         isBasic: !!(pin.isBasic || cluster?.isBasic),
         // NO PLATE — the traverse returns clamp to the fascia; the solid ones bolt to the wall.
         noBackplate: !!(pin.noBackplate || cluster?.noBackplate),
+        // RIDES WITH — a hidden rider that comes only with a chosen end of a kind (Stuart 2026-09-10:
+        // the H1-138 standoffs "only arrive on the BOM when a double miter return is ordered … it
+        // will confuse the floor if they arrive for a typical double pole order"). Blank = rides the
+        // rod as every rider always has. Read on the pin or the cluster, like every other flag.
+        ridesWith: U(pin.ridesWith || cluster?.ridesWith),
         // END RETURN ARM — the 1.6 / 1.5 tag. It has been written for a long time and read only by
         // the OLD configurator, so on a tag-engine flow it did nothing at all. Carried here so the
         // one rule that needs it (a decorative end arm keeps its bracket — see slots()) can see it.

@@ -401,6 +401,9 @@ export function normalizeChoice(input = {}) {
         isBasic: input.isBasic === true,
         // "this end treatment mounts without a backplate" — see the plate pairing in slots().
         noBackplate: input.noBackplate === true,
+        // RIDES WITH: a rider that comes only when an end of this kind is chosen ('RETURN' = a
+        // miter or French return anywhere on the order). Blank = rides its rod, as always.
+        ridesWith: U(input.ridesWith),
         // END RETURN ARM: this part IS the end treatment. Paired with noBackplate it means the
         // DECORATIVE kind, which supports nothing — see the bracket-replacing rule in slots().
         isReturnArm: input.isReturnArm === true,
@@ -695,7 +698,17 @@ export function ridersFor(choices, answers = {}, selectedIds = []) {
     // rider — so single-rod collections read exactly as before.
     // And a carrier or clip rides a TRACK, never a fascia: the fascia is the front layer's rod on a
     // fascia-front double, and it carries rings, not carriers.
-    return choices.filter(c => c.always && admits(c, ctx).ok && chosenRods.some(r =>
+    // ── A RIDER THAT COMES WITH THE RETURN (Stuart 2026-09-10) ──────────────────────────────
+    // "we need a tag for those standoffs to only arrive on the BOM when a double miter return is
+    //  ordered as that is what they are used for and it will confuse the floor if they arrive for
+    //  a typical double pole order." A rider tagged ridesWith RETURN still needs its rod (so it
+    // never rides a single, whose back rod is not on the order) AND a chosen return. The double
+    // returns are FRONT-tier parts that span both rods while the standoff rides the BACK rod, so
+    // the return is matched on the ORDER, not on the rider's tier; sides do not matter (Stuart).
+    const returnChosen = choices.some(c => want.has(c.id) && c.role === 'RETURN' && admits(c, ctx).ok);
+    return choices.filter(c => c.always && admits(c, ctx).ok
+        && (c.ridesWith !== 'RETURN' || returnChosen)
+        && chosenRods.some(r =>
         c.fits.includes(r.rodKind)
         && (!c.tier || !r.tier || (r.tier || '') === c.tier)
         && (!RIDER_ROLES.includes(c.role) || r.role !== 'FASCIA')));
