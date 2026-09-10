@@ -424,6 +424,21 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S3 · f5a6c19 (pushed 15:14).** Stuart's ask: "break apart packs and convert into others so 5 -12pks can
+  become 60pcs or 6 10pks", and pairs (HCUDEC1/CP, 2 pc → 1 pair). Shipped the first as **⇄ REPACK** on the WMS RING PACKS
+  panel (unbuild then build through the convert RESTlet already deployed; the loose remainder stays in the each bin; a
+  build failure after the unbuild is an honest partial state, never repeated). Pairs wait on Eric: the RESTlet builds by
+  BOM, so pair items must exist in NetSuite as assemblies of 2 × the each, and the pack grammar (`-<n>` + `-EA`) must
+  learn the pair suffix once its shape is known. **Adds to §2.1 #2 (the plating round trip) — found by reading before
+  running:** `PickPackApp.js` "📥 Into OB Plating" (`:1621`) writes the shipment line WITHOUT `finSiblingId / orderKey /
+  soAppId / shopOrderId` (the stock pull spreads them in at `:2787`), and receive (`:3017`) / put-away (`:3296`) act only
+  `if (line.finSiblingId)` — so D1's mirror to 'Complete' + 'Plated' cannot fire for a custom line, the order reads "At
+  the plater" forever, and put-away step 1 posts an adjustment against `netSuiteInternalId: null` (NetSuite rejects;
+  nothing moves). Fix planned in S3's file; waits on Stuart: fix before the live run, and what NetSuite should receive
+  for a custom-fabricated plated pole (receipt only, recommended, vs a build of `<base>/EPn`). **Named, not fixed:** the
+  SO pick step's pack-build queue (`PickPackApp.js:4455`) recognises only `-<digits>` codes with an `-EA` sibling, so a
+  pair line on a sold order would get no build.
+
 - **2026-09-10 · S1 · bd5907e (pushed 15:07).** One step order for every flow (Stuart): the engine's rank is SLOT_ORDER
   for tiered and untiered assemblies alike; the length step follows the rod. Preceded by the H1 tag audit
   (`H1_TAG_ALIGNMENT_2026-09-10.md`, read from the live pins through the real adapter/engine): Stuart tagged

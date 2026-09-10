@@ -237,6 +237,29 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-10 — f5a6c19 pushed 15:14 EDT (S3): ⇄ REPACK on RING PACKS.** Plan A approved by Stuart in-session
+  ("go ahead with Plan A for the ring break, the pairs needs to wait on information from eric"). Break N packs → eaches →
+  build the sibling size, one flow, two NetSuite records via the convert RESTlet (unbuild, then build); the operator may
+  build fewer and keep the rest loose; a build failure after the unbuild reports the bin the eaches are in and says to
+  finish on BUILD PACKS, never repeat; double-tap guarded by a ref; labels for the new size and count. Lint 0 errors,
+  full build passed, safe-push check = one commit. Deploy notice written into S1/S2/S4/S5 §6, the board's Deploys
+  row, state doc §6. **Sweep 15:17 EDT:** stamp 1789067831208 (after the push); `asset-manifest.json` = 38 JS assets,
+  all fetched with `curl -sf` (8,406,465 bytes, 0 failures); marker `never repeat the repack` ×1 in `main.49b6a398.js`
+  (`Repack step 2 FAILED` ×1 there too); the retired BREAK footer string ×0 everywhere. **LIVE.** Not yet run by an
+  operator on real packs — the first REPACK on the floor is the acceptance run (two NetSuite records, watch 11.1 is
+  not involved: both post synchronously through the RESTlet).
+- **2026-09-10 — decisions and the queue.** (1) **Pairs wait on Eric**: the pair item ids in NetSuite (assemblies whose
+  BOM is 2 × the each, e.g. `HCUDEC1/CP-PR`?) — then the pack grammar learns the suffix and BUILD / BREAK / REPACK apply.
+  (2) **Plating round trip — parked on two answers** (asked 15:0x, unanswered): fix the custom line's dropped links + the
+  custom-aware put-away BEFORE the run; NetSuite at return = receipt only (recommended) or a build of `<base>/EPn`. The
+  finding: `PickPackApp.js` OB scan-in (`:1621`) writes no `finSiblingId / orderKey / soAppId / shopOrderId`; receive
+  (`:3017`) and put-away (`:3296`) act only on `finSiblingId`; put-away step 1 adjusts against a null item. (3) From S2,
+  acknowledged and queued: the `reopenConfirmPick` chip on the pick queue/pick detail (spec in §6); `ShopFloor.js
+  undoComplete` never clears `closed: true` (defect, mine); S2's question "did any WMS/finishing screen rely on
+  'Complete = done' via the audit?" — **no**: the WMS gates on `customPartsReady` / `pickStatus` / `packStatus` and the
+  finishing screens on `currentPhase`; nothing of mine reads `isDoneState` or a FLOOR_DONE finding. (4) Named, not
+  fixed: the SO pick's pack-build queue (`:4455`) will not recognise a pair line.
+
 ## 8. Opener (paste to start the session)
 
 ```
