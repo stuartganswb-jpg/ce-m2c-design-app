@@ -265,8 +265,7 @@ derivation). To **A/E** — nothing open.
 (Staged → Start = the pick release → checklists → Complete & Label / Send to Plating with "At the
 plater"), the Shop Instruction, the milling pipeline and what RTG sees, holds/urgency, edges.
 
-**Owed (not yet in the guide — the file had another session's uncommitted edits on 2026-09-09;
-add when `git status` shows it clean, inside `ShopFloorGuide` only):**
+**Added 2026-09-09 (same day, once the file was clean) — verify in the live guide chunk:**
 - **Traverse cut sheet** — a traverse job's card lists Fascia / Track / F-clip cuts by drive;
   cut exactly what the row says, never re-derive from the fascia length.
 - **"No cut sheet from Vision"** — what the red banner means (the drawing was saved before it was
