@@ -256,6 +256,11 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 5 (S1) 6572b6f pushed 18:17.** Parked geometry never rides (normalizeChoice `always` excludes
+  parked / HIDDEN- ids). Tag pass verified on live pins (36 `ridesWith` pins across H1-138 / H1-1; shapes table in the
+  chat log). Older test fixture `HIDDEN-NUTP` → `NUTP-01` (a HIDDEN- id is the placeholder by rule). Next: S5's H1-138TRV
+  kit hand-off (§6).
+
 - **2026-09-10 — Issue 4 (S1) e4ab15a pushed 17:30.** `ridesWith: RETURN` pin tag (adapter → normalizeChoice → ridersFor
   `returnChosen` gate; 1.6 select beside "hide"; both save paths). Proven: 677 engine assertions, runner green, build
   compiled. Rail read of the one-order change done on all four flows (bd5907e); rod-first then a foreign bracket reseats

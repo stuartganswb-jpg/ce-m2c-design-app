@@ -424,6 +424,12 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · 6572b6f (pushed 18:17).** Parked geometry never rides (option 2 over tagging four pins): a pin with no
+  item number is neither a question nor a BOM line — the source of every `HIDDEN-…` $0 breakdown line. Stuart's
+  `ridesWith` tag pass verified on the live pins: H1-138 and H1-1 return standoffs ride only with a return, none on a
+  plain double or a single with a finial; the H1-138 `#71` standoff-as-return defect closed by his re-tag. S4 mirror list
+  is now three lines (rank, ridesWith, parked-never-rides).
+
 - **2026-09-10 · S5 · 09104cf (pushed ~17:50).** Stuart's first S5 ask replaced §2.4 #46's S5 half: "add in the kits for the
   H1-138TRV kits … same spreadsheet … check the components and pricing … function with the cpq flow just like H1-2TRV." The
   1-3/8" traverse is the product inside the H1-138 collection (S1's tag audit §2G: rod `H1-138TRV` at 1.6 #19–#21, brackets
