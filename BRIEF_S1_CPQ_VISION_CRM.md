@@ -167,6 +167,18 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 2 (S1) built, committed locally, push held for Stuart's window.** CRM "Modify Quote /
+  Job" now edits the WHOLE checkout header: order sidemark (the typed `orderSidemark`), PO #, internal memo,
+  need-by, production notes, ship-to (saved address from the customer's CRM record or custom drop-ship) and the
+  shipping charge. `Shared/salesOrderHeader.jobHeaderPatchOf` = the one field set CPQ's finalize writes
+  (`scripts/jobHeaderPatch.test.mjs`, 19 assertions incl. the soHeaderOf round trip); the save patches the
+  jobs doc, then, when `hq_sales_orders/SO-APP-<quoteNo>` exists (and is not QUICKSHIP), rebuilds the SO
+  header through `soHeaderOf` from the patched job (ready date / recipe kept; `createdBy` kept;
+  `headerEditedAt/By` stamped on both). NetSuite is NOT updated (outbox creates only) — the modal says so when
+  an estimate / SO number exists. Named for S2/S3: floor docs already split keep the sidemark / need-by they
+  were split with (no re-stamp built). Issue 1's deploy (a58d126) verified in `main.d8130142` and again in
+  `main.d7d368f0` (4000ea4, docs push, 38/38 assets).
+
 - **2026-09-10 — Issue 1 (S1) built, committed locally, push held for Stuart's window.** Live pass on his
   orders (ST091026-01, ST090926-09, QUO141, SO60339/60341) found that NO H1-138 quote had queued its
   NetSuite estimate since 21 Aug: the engine hands over `HIDDEN-<node>` parked-geometry lines ($0, hidden)

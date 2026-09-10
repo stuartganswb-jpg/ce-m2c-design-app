@@ -19,7 +19,7 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
 import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
 import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
-import { soHeaderOf } from '../Shared/salesOrderHeader';
+import { soHeaderOf, jobHeaderPatchOf, EMPTY_SHIP_ADDRESS } from '../Shared/salesOrderHeader';
 import { printForm } from '../Shared/printForm';
 
 const printStyles = `
@@ -810,7 +810,12 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
 
   // --- JOB MODIFICATION STATE ---
   const [showEditJobModal, setShowEditJobModal] = useState(false);
-  const [editJobForm, setEditJobForm] = useState({ id: '', jobName: '', sidemark: '', status: '' });
+  // The Modify modal edits the WHOLE checkout header (Stuart 2026-09-10): the same fields CPQ's
+  // checkout collects, so a ship-to / sidemark / memo / PO change never needs the configurator.
+  const EMPTY_EDIT_FORM = { id: '', jobName: '', sidemark: '', status: '', poNumber: '', internalMemo: '', needBy: '', productionNotes: '',
+      shippingMethod: 'SAVED', shippingAddressId: '', customShippingAddress: { ...EMPTY_SHIP_ADDRESS }, shippingAmount: '',
+      customerId: '', nsRef: '' };
+  const [editJobForm, setEditJobForm] = useState(EMPTY_EDIT_FORM);
 
   useEffect(() => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { 
@@ -973,25 +978,59 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
 
   const openEditJobModal = (job) => {
       setEditJobForm({
+          ...EMPTY_EDIT_FORM,
           id: job.id,
           jobName: job.jobName || '',
-          sidemark: job.sidemark || '',
-          status: job.status || ''
+          // The TYPED sidemark (orderSidemark), never the fallback chain — the same rule reopen uses.
+          sidemark: job.orderSidemark || '',
+          status: job.status || '',
+          poNumber: job.poNumber || '',
+          internalMemo: job.internalMemo || '',
+          needBy: job.needBy || '',
+          productionNotes: job.productionNotes || '',
+          shippingMethod: job.shippingMethod === 'CUSTOM' ? 'CUSTOM' : 'SAVED',
+          shippingAddressId: job.shippingAddressId || '',
+          customShippingAddress: { ...EMPTY_SHIP_ADDRESS, ...(job.customShippingAddress || {}) },
+          shippingAmount: (parseFloat(job.shippingAmount) || 0) > 0 ? String(job.shippingAmount) : '',
+          customerId: job.customer?.id || '',
+          nsRef: job.netsuiteSalesOrderNo || job.netsuiteSalesOrderId ? `Sales Order ${job.netsuiteSalesOrderNo || job.netsuiteSalesOrderId}`
+              : (job.netsuiteEstimateNo || job.netsuiteEstimateId ? `estimate ${job.netsuiteEstimateNo || job.netsuiteEstimateId}` : ''),
       });
       setShowEditJobModal(true);
   };
 
+  // ── SAVE THE HEADER EDIT (Stuart 2026-09-10) ─────────────────────────────────────────────
+  // One patch on the jobs doc (Shared/salesOrderHeader.jobHeaderPatchOf — the field set CPQ's
+  // finalize writes), then, when this job already IS a sales order on the RTG board, the SO
+  // header is rebuilt through soHeaderOf from the patched job — so RTG, the WMS and the floors'
+  // next split read the edited ship-to / sidemark / need-by, not a stale copy. The ready date and
+  // the recipe are kept (the finishes did not change; soHeaderOf keeps a job's own promise).
+  // NetSuite is NOT updated from here: the outbox only creates; a posted estimate / SO keeps the
+  // values it was sent with, and the modal says so.
   const handleSaveJobEdit = async () => {
       try {
-          await updateDoc(doc(db, "jobs", editJobForm.id), {
-              jobName: editJobForm.jobName,
-              sidemark: editJobForm.sidemark,
-              status: editJobForm.status
-          });
+          const patch = jobHeaderPatchOf(editJobForm);
+          const stamp = { headerEditedAt: Date.now(), headerEditedBy: currentUser || '' };
+          await updateDoc(doc(db, "jobs", editJobForm.id), { ...patch, status: editJobForm.status, ...stamp });
+          // The board record, if there is one — same id rule as CPQ's save-as-SO and Approve.
+          const job = allBrandJobs.find(j => j.id === editJobForm.id) || null;
+          if (job) {
+              const soDocId = `SO-APP-${String(job.quoteNo || job.jobId || job.id).replace(/[^A-Za-z0-9-]/g, '')}`;
+              const soSnap = await getDoc(doc(db, 'hq_sales_orders', soDocId));
+              if (soSnap.exists() && soSnap.data().source !== 'QUICKSHIP') {
+                  const [mf, os] = await Promise.all([getDoc(doc(db, 'system', 'master_finishes')), getDocs(collection(db, 'hq_outsource_finishes'))]);
+                  const outsourceFinishes = os.docs.map(d => ({ id: d.id, ...d.data() }));
+                  const finishes = [...((mf.exists() && mf.data().finishes) || []), ...outsourceFinishes];
+                  const custRec = { ...(crmData[job.customer?.id] || {}), id: job.customer?.id || '', name: job.customer?.name || '' };
+                  // createdBy stays the saver's; the edit is stamped beside it.
+                  const { createdBy, ...header } = soHeaderOf({ door: soSnap.data().source || 'CPQ', job: { ...job, ...patch }, customer: custRec, finishes, outsourceFinishes, by: currentUser || '' });
+                  await setDoc(doc(db, 'hq_sales_orders', soDocId), { ...header, ...stamp }, { merge: true });
+              }
+          }
           setShowEditJobModal(false);
       } catch (err) {
           console.error("Error updating job:", err);
-          alert("Failed to update job details.");
+          alert("Failed to update job details: " + (err.message || err));
       }
   };
 
@@ -2298,9 +2337,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
       {/* --- EDIT JOB MODAL --- */}
       {showEditJobModal && (
           <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-              <div style={{ background: '#fff', border: '1px solid var(--line)', width: '400px', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px' }}>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', width: '620px', maxHeight: '92vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 48px rgba(0,0,0,0.1)', borderRadius: '2px' }}>
                   <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
-                      <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Modify Quote / Job</h2>
+                      <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Modify Quote / Job · checkout header</h2>
                       <button onClick={() => setShowEditJobModal(false)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
                   </div>
                   <div style={{ padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -2309,9 +2348,72 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                           <input value={editJobForm.jobName} onChange={e => setEditJobForm({...editJobForm, jobName: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                       </div>
                       <div>
-                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Global Sidemark</label>
-                          <input value={editJobForm.sidemark} onChange={e => setEditJobForm({...editJobForm, sidemark: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Order Sidemark</label>
+                          <input value={editJobForm.sidemark} onChange={e => setEditJobForm({...editJobForm, sidemark: e.target.value})} title="Prints at the header of the quote, sales order and packing slip; the RTG card and the NetSuite memo read it." style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }} />
                       </div>
+                      {/* ── THE CHECKOUT HEADER (Stuart 2026-09-10): the same fields CPQ's checkout collects,
+                          editable here so a ship-to / PO / memo change never needs the configurator. ── */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                          <div>
+                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Customer PO #</label>
+                              <input value={editJobForm.poNumber} onChange={e => setEditJobForm({...editJobForm, poNumber: e.target.value})} placeholder="e.g. PO-48213" style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }} />
+                          </div>
+                          <div>
+                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Internal Memo</label>
+                              <input value={editJobForm.internalMemo} onChange={e => setEditJobForm({...editJobForm, internalMemo: e.target.value})} placeholder="Internal only — never on customer documents" style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }} />
+                          </div>
+                          <div>
+                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Need-by date (customer's)</label>
+                              <input type="date" value={editJobForm.needBy} onChange={e => setEditJobForm({...editJobForm, needBy: e.target.value})} title="Blank = none given; the app never invents one." style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }} />
+                          </div>
+                          <div>
+                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Production notes (to the floors)</label>
+                              <input value={editJobForm.productionNotes} onChange={e => setEditJobForm({...editJobForm, productionNotes: e.target.value})} placeholder="e.g. match sample on file · ship complete" style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }} />
+                          </div>
+                      </div>
+                      <div>
+                          <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Ship to</label>
+                          <div style={{ display: 'flex', gap: '12px', marginBottom: '12px' }}>
+                              <button onClick={() => setEditJobForm({ ...editJobForm, shippingMethod: 'SAVED', shippingAddressId: editJobForm.shippingAddressId || ((crmData[editJobForm.customerId]?.shippingAddresses || [])[0]?.addressBookId || '') })}
+                                  style={{ flex: 1, padding: '10px', background: editJobForm.shippingMethod === 'SAVED' ? 'var(--ink)' : '#fff', color: editJobForm.shippingMethod === 'SAVED' ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Saved Addresses</button>
+                              <button onClick={() => setEditJobForm({ ...editJobForm, shippingMethod: 'CUSTOM', shippingAddressId: '' })}
+                                  style={{ flex: 1, padding: '10px', background: editJobForm.shippingMethod === 'CUSTOM' ? 'var(--ink)' : '#fff', color: editJobForm.shippingMethod === 'CUSTOM' ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Custom Drop-Ship</button>
+                          </div>
+                          {editJobForm.shippingMethod === 'SAVED' ? (
+                              (crmData[editJobForm.customerId]?.shippingAddresses || []).length === 0 ? (
+                                  <div style={{ color: 'var(--ink-soft)', fontSize: '0.9rem', fontStyle: 'italic', padding: '12px', background: 'var(--paper)', border: '1px solid var(--line)' }}>No synced NetSuite addresses on this customer — use Custom Drop-Ship.</div>
+                              ) : (
+                                  <select value={editJobForm.shippingAddressId} onChange={e => setEditJobForm({...editJobForm, shippingAddressId: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: '#fff' }}>
+                                      <option value="">-- Select Saved Address --</option>
+                                      {(crmData[editJobForm.customerId]?.shippingAddresses || []).map(addr => (
+                                          <option key={addr.addressBookId} value={addr.addressBookId}>{addr.label} - {addr.addr1}, {addr.city} {addr.state}</option>
+                                      ))}
+                                  </select>
+                              )
+                          ) : (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                                  {[['attention', 'Attention / Contact Name'], ['addressee', 'Addressee / Company Name'], ['addr1', 'Street Address 1'], ['addr2', 'Street Address 2 (Suite, Unit, etc.)']].map(([k, ph]) => (
+                                      <div key={k} style={{ gridColumn: 'span 2' }}>
+                                          <input placeholder={ph} value={editJobForm.customShippingAddress[k] || ''} onChange={e => setEditJobForm({ ...editJobForm, customShippingAddress: { ...editJobForm.customShippingAddress, [k]: e.target.value } })} style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }} />
+                                      </div>
+                                  ))}
+                                  <div style={{ gridColumn: 'span 2', display: 'flex', gap: '10px' }}>
+                                      {[['city', 'City', 2], ['state', 'State', '0 0 84px'], ['zip', 'Zip', 1]].map(([k, ph, fl]) => (
+                                          <input key={k} placeholder={ph} value={editJobForm.customShippingAddress[k] || ''} onChange={e => setEditJobForm({ ...editJobForm, customShippingAddress: { ...editJobForm.customShippingAddress, [k]: e.target.value } })} style={{ flex: fl, minWidth: 0, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }} />
+                                      ))}
+                                  </div>
+                              </div>
+                          )}
+                          <div style={{ marginTop: '12px' }}>
+                              <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Shipping charge ($, optional)</label>
+                              <input type="number" min="0" step="0.01" placeholder="0.00" value={editJobForm.shippingAmount} onChange={e => setEditJobForm({...editJobForm, shippingAmount: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', boxSizing: 'border-box' }} />
+                          </div>
+                      </div>
+                      {editJobForm.nsRef && (
+                          <div style={{ padding: '10px 12px', background: 'var(--paper-2)', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.03em', color: '#8a4b2a' }}>
+                              ⚠ NetSuite {editJobForm.nsRef} was sent with the previous header. Saving here updates the CRM, the RTG board and the documents — NetSuite keeps the values it was sent; change them there or re-push.
+                          </div>
+                      )}
                       <div>
                           <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Pipeline Status</label>
                           <select value={editJobForm.status} onChange={e => setEditJobForm({...editJobForm, status: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>

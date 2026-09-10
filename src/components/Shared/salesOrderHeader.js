@@ -293,5 +293,44 @@ export function soHeaderOf({ door, job = null, form = null, customer = null, by 
  * Lines without a finish are left untouched — absence means mill, and a false flag would read as
  * "in-house" on a line that was never finished at all.
  */
+// ── THE CHECKOUT HEADER, EDITED AFTER THE SAVE (Stuart 2026-09-10, S1) ───────────────────
+// "in the CRM we need a button to edit the checkout/header information (shipping address,
+//  sidemark, memo, po#) — right now we have to go back thru the entire cpq to change anything
+//  like that." This is the field set CPQ's finalize writes on the jobs doc for that header, as ONE
+// function, so the CRM edit and a future door cannot drift from what the checkout wrote:
+//   orderSidemark = exactly what was typed (reopen restores it); sidemark keeps the historical
+//   fallback chain (jobName → 'Multi-Room Project') because CRM cards, RTG notes and the NetSuite
+//   memo read it; PO / internal memo / need-by / production notes are written as typed — an EDIT
+//   that clears a field clears it (finalize only writes a PO when typed, because a reopen may come
+//   back blank; an edit is a decision); shipping follows the method (a SAVED address id, or the
+//   custom drop-ship block, never both); the shipping charge is a number.
+// The sales-order header is NOT built here — after this patch lands on the job, soHeaderOf reads
+// the job and rebuilds hq_sales_orders exactly as the save did.
+export const EMPTY_SHIP_ADDRESS = { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '' };
+
+export function jobHeaderPatchOf(form = {}) {
+    const f = form || {};
+    const typed = str(f.sidemark);
+    const jobName = str(f.jobName);
+    const method = up(f.shippingMethod) === 'CUSTOM' ? 'CUSTOM' : 'SAVED';
+    const c = f.customShippingAddress || {};
+    const needBy = /^\d{4}-\d{2}-\d{2}$/.test(str(f.needBy)) ? str(f.needBy) : '';
+    return {
+        jobName,
+        orderSidemark: typed || null,
+        sidemark: typed || jobName || 'Multi-Room Project',
+        poNumber: str(f.poNumber),
+        internalMemo: str(f.internalMemo),
+        needBy,
+        productionNotes: str(f.productionNotes).slice(0, 2000),
+        shippingMethod: method,
+        shippingAddressId: method === 'SAVED' ? (str(f.shippingAddressId) || null) : null,
+        customShippingAddress: method === 'CUSTOM'
+            ? Object.fromEntries(Object.keys(EMPTY_SHIP_ADDRESS).map(k => [k, str(c[k])]))
+            : null,
+        shippingAmount: parseFloat(f.shippingAmount) || 0,
+    };
+}
+
 export const stampLineFinishRouting = (lines = [], outsourceFinishes = []) =>
     (lines || []).map(l => (l && l.finishCode) ? { ...l, finishOutsourced: isFinishOutsourced(l.finishCode, outsourceFinishes) } : l);
