@@ -550,15 +550,25 @@ const clearClose = (d) => ({
 export function reopenPlanFor({ coll, d, sibling = null }) {
     const row = { coll, id: d && d.id, closedAt: (d && d.closedAt) || null, closeReason: (d && d.closeReason) || '', live: false };
     if (!d) return { ...row, action: 'SKIP', why: 'no document' };
-    if (has(d.reopenedAt)) return { ...row, action: 'SKIP', why: `already reopened by ${d.reopenedBy || '?'}` };
+    if (d.reopenedFrom === REOPEN_FROM) return { ...row, action: 'SKIP', why: `already reopened by this tool (${d.reopenedBy || '?'})` };
     if (d.closedFrom !== BULK_CLOSE_FROM) return { ...row, action: 'SKIP', why: 'not closed by a bulk close' };
+    // A hand reopen AFTER the close (the shop's Reopen button stamps reopenedAt but never clears the
+    // `closed` flag the bulk close set, so the job stays hidden from its queue).
+    const handReopened = has(d.reopenedAt) && toMs(d.reopenedAt) > toMs(d.closedAt);
     // Only a FLOOR_DONE close is suspect. FLOOR_CLOSED means the floor had already closed it;
     // BOARD_CLOSED means the board had; ORPHAN_FLOOR had no record to reopen into.
     if (d.closeReason && d.closeReason !== 'FLOOR_DONE') return { ...row, action: 'KEEP', why: `closed as ${d.closeReason} — it was already closed on the other side` };
 
     if (coll === 'fin_workorders') {
+        const when = (t) => t ? new Date(toMs(t)).toLocaleDateString() : '';
+        // On a SALES order the shipment IS the NetSuite fulfilment: the WMS queues it the moment the
+        // pack completes (nsFulfillQueued) and nsIfTran lands when it posts. There is no shippedAt on
+        // a finishing doc — reading "packed, no shippedAt" as unshipped would reopen every order
+        // ever packed (the 14 July/August Brimar orders in the first dry run).
+        if (has(d.nsIfTran)) return { ...row, action: 'KEEP', why: `shipped — fulfilment ${d.nsIfTran} posted${d.packedAt ? `, packed ${when(d.packedAt)}` : ''}` };
+        if (d.nsFulfillQueued === true) return { ...row, action: 'KEEP', why: `shipped — packed ${when(d.packedAt) || '?'}, fulfilment queued (see 11.1 if it has not posted)` };
         if (has(d.shippedAt)) return { ...row, action: 'KEEP', why: 'shipped — it was done' };
-        if (has(d.putawayBin)) return { ...row, action: 'KEEP', why: `put away to ${d.putawayBin} — it was done` };
+        if (has(d.putawayBin)) return { ...row, action: 'KEEP', why: `put away to ${d.putawayBin}${d.packedAt ? ` ${when(d.packedAt)}` : ''} — it was done` };
         const pickOnly = d.pickOnly === true;
         const packed = d.packStatus === 'Packed';
         const complete = pickOnly || packed || has(d.completedAt);
@@ -572,9 +582,9 @@ export function reopenPlanFor({ coll, d, sibling = null }) {
         const released = pickOnly || d.hasCustomSibling !== true || shopStarted(sibling);
         const pickStatus = released ? pickStatusFromStamps(d) : 'Pending';
         const why = [
-            pickOnly ? 'pick-only' : packed ? 'packed, not put away' : has(d.completedAt) ? 'finished on the floor, not packed' : painting ? 'in Painting' : 'not started',
+            pickOnly ? 'pick-only' : packed ? `packed ${when(d.packedAt)}, no fulfilment` : has(d.completedAt) ? `finished on the floor ${when(d.completedAt)}, not packed` : painting ? 'in Painting' : 'not started',
             `→ ${phase.currentPhase}`,
-            released ? `WMS ${pickStatus.replace(/_/g, ' ').toLowerCase()}` : 'pick not released (custom half not started)',
+            released ? `WMS ${pickStatus.replace(/_/g, ' ').toLowerCase()}${has(d.pickedAt) ? ` (picked ${when(d.pickedAt)})` : ''}` : 'pick not released (custom half not started)',
         ].join(' · ');
         return {
             ...row, action: 'RESTORE', live: true, why,
@@ -592,6 +602,11 @@ export function reopenPlanFor({ coll, d, sibling = null }) {
         // never touched; the demand flag is the fallback when the sibling is not in the room.
         const atPlater = (sibling && sibling.customFabStatus === 'Sent to Plating')
             || (d.isOutsourced === true && has(d.completedAt) && d.platingDemandCreated === true);
+        if (handReopened) {
+            // Livio's Reopen set the status he wanted; the bulk close's `closed: true` still hides it.
+            const status = String(d.status || 'In Process');
+            return { ...row, action: 'RESTORE', live: status !== 'Completed', why: `hand-reopened by ${d.reopenedBy || '?'} → ${status} — the closed flag is removed so it shows again`, patch: { ...clearClose(d), closed: DELETE } };
+        }
         const status = atPlater ? 'Sent to Plating' : has(d.completedAt) ? 'Completed' : has(d.startedAt) ? 'In Process' : 'Pending';
         return {
             ...row, action: 'RESTORE', live: status !== 'Completed', why: `→ ${status}`,
@@ -678,7 +693,13 @@ export function planBulkReopen({ finWos = [], shopJobs = [], hqOrders = [], rodC
             const base = { coll: 'ns_outbox', id: e.id, closedAt: e.cancelledAt || null, closeReason: 'cancelled with its order', d: e, live: true };
             if (!m || !allOrderIds.has(m[1])) return null;
             if (has(e.reopenedAt)) return { ...base, action: 'SKIP', why: 'already reopened' };
-            return { ...base, action: 'RESTORE', why: `→ PENDING (${e.label || e.kind || e.id})`, patch: { status: 'PENDING', cancelledAt: DELETE, cancelledBy: DELETE, cancelReason: DELETE, reopenedFromCancel: { cancelledAt: e.cancelledAt || null, cancelledBy: e.cancelledBy || '', cancelReason: e.cancelReason || '' } } };
+            // Back to where it WAS: an entry with a recorded error had failed and sat in 11.1 with its
+            // Retry button — it goes back to FAILED, never auto-posted by this tool; a clean entry
+            // goes back to PENDING and the worker posts it.
+            const hadFailed = has(e.lastError) || Number(e.attempts) > 0;
+            const status = hadFailed ? 'FAILED' : 'PENDING';
+            const err = hadFailed ? ` — last error: ${String(e.lastError || '').slice(0, 140)}` : '';
+            return { ...base, action: 'RESTORE', why: `→ ${status}${hadFailed ? ' (had failed; retry by hand in 11.1)' : ' (the worker posts it)'}${err}`, patch: { status, cancelledAt: DELETE, cancelledBy: DELETE, cancelReason: DELETE, reopenedFromCancel: { cancelledAt: e.cancelledAt || null, cancelledBy: e.cancelledBy || '', cancelReason: e.cancelReason || '' } } };
         })
         .filter(Boolean);
     const all = [...recordRows, ...rows, ...cutRows, ...outboxRows];

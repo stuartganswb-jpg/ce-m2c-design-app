@@ -70,7 +70,9 @@ const fin = (x) => reopenPlanFor({ coll: 'fin_workorders', d: { id: 'WO-1', ...b
 eq('fin: shipped stays closed', fin({ shippedAt: 5 }).action, 'KEEP');
 eq('fin: put away stays closed', fin({ putawayBin: 'M E7-N3-R2', packStatus: 'Packed' }).action, 'KEEP');
 eq('fin: FLOOR_CLOSED close is kept (floor had closed it)', fin({ closeReason: 'FLOOR_CLOSED' }).action, 'KEEP');
-eq('fin: already reopened → skip', fin({ reopenedAt: 9 }).action, 'SKIP');
+eq('fin: reopened by this tool → skip', fin({ reopenedAt: 9, reopenedFrom: 'RTG_BULK_REOPEN' }).action, 'SKIP');
+eq('fin: packed, fulfilment posted → shipped, kept', fin({ packStatus: 'Packed', packedAt: 3, nsIfTran: 'IF22120' }).action, 'KEEP');
+eq('fin: packed, fulfilment queued (stuck or not) → shipped, kept', fin({ packStatus: 'Packed', packedAt: 3, nsFulfillQueued: true }).action, 'KEEP');
 eq('fin: not a bulk close → skip', fin({ closedFrom: 'RTG' }).action, 'SKIP');
 let r = fin({ packStatus: 'Packed', packedAt: 3, pickedAt: 1, stagedAt: 2 });
 eq('fin: packed, not put away → Complete, staged, no confirm chip', [r.action, r.patch.currentPhase, r.patch.sentToPickPack, r.patch.pickStatus, r.patch.reopenConfirmPick], ['RESTORE', 'Complete', true, 'Staged_Ready_For_Finishing', false]);
@@ -93,6 +95,9 @@ r = shopd({ completedAt: 3, startedAt: 1 });
 eq('shop: completed stays Completed, closed flag removed, not live', [r.action, r.patch.status, r.patch.closed, r.live], ['RESTORE', 'Completed', DELETE, false]);
 eq('shop: started → In Process, live', [shopd({ startedAt: 1 }).patch.status, shopd({ startedAt: 1 }).live], ['In Process', true]);
 eq('shop: nothing → Pending', shopd({}).patch.status, 'Pending');
+r = shopd({ completedAt: null, startedAt: 1, status: 'In Process', reopenedAt: T + 3600000, reopenedBy: 'Livio' });
+eq('shop: hand-reopened after the close → status untouched, closed flag removed, live', [r.action, r.patch.status, r.patch.closed, r.live], ['RESTORE', undefined, DELETE, true]);
+eq('shop: a reopen BEFORE the close is history, not a hand reopen', shopd({ completedAt: 3, reopenedAt: T - 3600000 }).patch.status, 'Completed');
 eq('shop: sibling says at the plater → Sent to Plating', shopd({ completedAt: 3 }, { customFabStatus: 'Sent to Plating' }).patch.status, 'Sent to Plating');
 eq('shop: no sibling, outsourced + demand raised → Sent to Plating', shopd({ completedAt: 3, isOutsourced: true, platingDemandCreated: true }).patch.status, 'Sent to Plating');
 
@@ -116,7 +121,8 @@ const cutB = { id: 'RC-B', status: 'CANCELLED', finWoId: 'WO-SOB', cancelledAt: 
 const cutHand = { id: 'RC-H', status: 'CANCELLED', finWoId: 'WO-SOA', cancelledAt: T + 5, cancelReason: 'cancelled at the saw' };
 const obB = { id: 'ob1', status: 'CANCELLED', label: 'NS Fulfillment — WO-SOB', cancelledAt: T + 6, cancelReason: 'order WO-SOB closed — FLOOR_DONE — queued write cancelled' };
 const obOther = { id: 'ob2', status: 'CANCELLED', cancelledAt: T + 6, cancelReason: 'order WO-ELSE closed — FLOOR_DONE — queued write cancelled' };
-const plan = planBulkReopen({ finWos: [finA, finB], shopJobs: [shopB], hqOrders: [recA, recB, recOld], rodCuts: [cutA, cutB, cutHand], outbox: [obB, obOther], since: T - 1000, until: T + 60000 });
+const obFailed = { id: 'ob3', status: 'CANCELLED', label: 'NS Fulfillment — WO-SOA', cancelledAt: T + 6, attempts: 4, lastError: 'Please enter value(s) for: Class', cancelReason: 'order WO-SOA closed — FLOOR_DONE — queued write cancelled' };
+const plan = planBulkReopen({ finWos: [finA, finB], shopJobs: [shopB], hqOrders: [recA, recB, recOld], rodCuts: [cutA, cutB, cutHand], outbox: [obB, obOther, obFailed], since: T - 1000, until: T + 60000 });
 const rowOf = (coll, id) => plan.rows.find(r => r.coll === coll && r.id === id);
 eq('plan: live order → record restored', rowOf('hq_work_orders', 'WO-SOA').action, 'RESTORE');
 eq('plan: done order → record kept', rowOf('hq_work_orders', 'WO-SOB').action, 'KEEP');
@@ -125,10 +131,11 @@ eq('plan: the live fin doc restores', rowOf('fin_workorders', 'WO-SOA').action, 
 eq('plan: cut for the live order → OPEN', rowOf('rod_cut_orders', 'RC-A').action, 'RESTORE');
 eq('plan: cut for the done order stays cancelled', rowOf('rod_cut_orders', 'RC-B').action, 'KEEP');
 ok('plan: a cut cancelled by hand is not in the plan', !rowOf('rod_cut_orders', 'RC-H'));
-eq('plan: a queued write comes back PENDING even for the done order', rowOf('ns_outbox', 'ob1').action, 'RESTORE');
+eq('plan: a queued write comes back PENDING even for the done order', [rowOf('ns_outbox', 'ob1').action, rowOf('ns_outbox', 'ob1').patch.status], ['RESTORE', 'PENDING']);
+eq('plan: a write that had FAILED goes back to FAILED, not retried', rowOf('ns_outbox', 'ob3').patch.status, 'FAILED');
 ok('plan: another order\'s cancelled write is untouched', !rowOf('ns_outbox', 'ob2'));
 ok('plan: the earlier bulk close is outside the window and counted', !rowOf('hq_work_orders', 'WO-OLD') && plan.outsideWindow === 1);
-eq('plan: counts (kept: put-away fin, its record, its shop half, its cut)', plan.counts, { RESTORE: 4, KEEP: 4 });
+eq('plan: counts (kept: put-away fin, its record, its shop half, its cut)', plan.counts, { RESTORE: 5, KEEP: 4 });
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
