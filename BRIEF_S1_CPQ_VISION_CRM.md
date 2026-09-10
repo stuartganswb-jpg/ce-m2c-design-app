@@ -150,6 +150,20 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 1 (S1) built, committed locally, push held for Stuart's window.** Live pass on his
+  orders (ST091026-01, ST090926-09, QUO141, SO60339/60341) found that NO H1-138 quote had queued its
+  NetSuite estimate since 21 Aug: the engine hands over `HIDDEN-<node>` parked-geometry lines ($0, hidden)
+  and `nsTransmit`'s TAGS branch refused them as hard-unresolved (LINES_UNRESOLVED; the alert pointed at
+  tab 12, which never lists a CONFIGURED quote). Fix: `Shared/lineClassification.isParkedGeometryLine`
+  (HIDDEN- prefix AND no money) + one skip in the resolver; `scripts/parkedGeometryLine.test.mjs` (11).
+  Data for Stuart from the same pass: `CE-INV-57732` H1-138JNR lacks the Unfinished tag (its line carries
+  EP5 + finishOutsourced); Brimar BL/GOP get no lead class (asked, not derived); QUO141 shows F2's E half
+  (kit components at $0) NOT shipped; "No Sidemark" literal reaches NetSuite custcol3; the CRM quotation's
+  date shifts a day (`docDate` parses `dateSaved` as UTC) and prints the doc id, not the short number.
+  Queue after this, in Stuart's order: (2) CRM button to edit the checkout header (ship-to, sidemark, memo,
+  PO) without re-walking CPQ — reopen AT the checkout; (3) H1 step order aligned across H1-75 / H1-1 /
+  H1-138: rod choice right after rod setup + projection, then rod length, then the rest.
+
 ## 8. Opener (paste to start the session)
 
 ```

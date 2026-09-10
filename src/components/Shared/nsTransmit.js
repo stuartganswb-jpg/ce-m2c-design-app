@@ -22,6 +22,7 @@ import { aliasTargetIdOf } from './aliasIdentity';
 import { nsProxyFetch } from './nsProxy';
 import { enqueueNsWrite } from './nsOutbox';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
+import { isParkedGeometryLine } from './lineClassification';
 
 // A finish's code is the assembly suffix (base + CODE -> base/CODE). Some finish docs carry the
 // identifier in `name` with `code` blank, so fall back to name.
@@ -163,6 +164,11 @@ export function resolveJobLines(job, data) {
                   // The traverse components have their own loop below — they are on the breakdown
                   // for the documents, and pushing them from both places would double the order.
                   if (l.trvComponent) return;
+                  // Parked geometry (a `HIDDEN-<node>` pin with no item and no money) is not a
+                  // line NetSuite can take, and it is not a data error either — it is the render's
+                  // business. Skipped here exactly as the documents and the pick list skip it; a
+                  // HIDDEN- line that DOES carry money falls through to the hard-unresolved refusal.
+                  if (isParkedGeometryLine(l)) return;
                   let qty = Number(l.qty) > 0 ? Number(l.qty) : 1;
                   // ── ROD STOCK CONSUMES BY THE FOOT (Stuart 2026-08-25, first Brimar orders) ──
                   // The engine prices per-foot lines with qty pinned at 1 (one pole on the router)

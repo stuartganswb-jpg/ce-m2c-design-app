@@ -33,6 +33,26 @@ export function isDisplayOnlyLine(line) {
     return noPart && noMoney && titleColonShape;
 }
 
+// ── PARKED GEOMETRY IS NOT A LINE NETSUITE CAN TAKE (S1, 2026-09-10) ─────────────────────
+// A 1.6 pin with no item number is saved under a synthetic `HIDDEN-<node>` id: geometry the
+// render needs and nobody can buy (Shared/assemblyTags, hardwareModel `parked`). The engine still
+// hands it over as a $0 hidden line, and every reader but one already treats the prefix as "no
+// real part" (classifyLine, pickLines, the money documents). The NetSuite resolver did not: it
+// tried to match the id to a library item, failed, and refused the whole transaction as a hard
+// unresolved line — so no H1-138 quote had queued its estimate since 21 Aug (ten quotes), and the
+// save alert pointed at tab 12, which never lists a CONFIGURED quote.
+//
+// The rule is narrow on purpose: a parked id carrying NO money is skipped; one carrying money is
+// still a real line the resolver must refuse, because those dollars would otherwise ride the
+// rollup unnamed (the SO60147–SO60170 joiner incident). A hidden REAL part (a standoff) is not
+// parked — it has an item and it pushes.
+export const isParkedGeometryLine = (line) => {
+    if (!line) return false;
+    const id = String(line.partId || line.legacyErpId || '');
+    if (!/^HIDDEN-/i.test(id)) return false;
+    return !(Number(line.total) > 0) && !(Number(line.price) > 0);
+};
+
 // ── WHAT A CUSTOMER MAY SEE (Stuart 2026-08-22) ──────────────────────────────────────────────
 // "hidden go to all shop doc's just not customer docs."
 //
