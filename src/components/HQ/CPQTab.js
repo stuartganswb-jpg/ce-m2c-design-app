@@ -379,7 +379,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                 const wantIn = Number(stretchSpec?.lengthInches) || 0;
                 const railList = Array.isArray(stretchSpec?.railNames) ? stretchSpec.railNames : [];
                 const STRETCH_OVER_IN = 72;      // shorter orders draw as modelled
-                const STRETCH_K = 1.2;           // longer orders draw the rail 20% longer, whatever the length
+                const STRETCH_K = 1.4;           // longer orders draw the rail 40% longer, whatever the length (Stuart 2026-09-09: 20% read too subtle — "go 20% more")
                 const BAND = 0.5;                // the middle half of the rail takes all of the extra
                 if (wantIn > STRETCH_OVER_IN && railList.length) {
                     const railSet = new Set(railList.map(s => String(s).trim().toLowerCase()));
