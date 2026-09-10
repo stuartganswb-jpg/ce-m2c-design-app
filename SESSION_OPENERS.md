@@ -72,6 +72,9 @@ First: plan B5 and B2 (they need nothing from anyone) and wait. When you stop: B
 
 ## C — Shop Floor
 
+**Superseded 2026-09-09 — use the opener in `SHOP_FLOOR_CONTINUATION_BRIEF.md §10`.** The text
+below is the original 09-02 opener, kept for the record.
+
 ```
 You are the BRIEF C session. Read, in this order, before doing anything: CLAUDE.md (the working
 agreement at the top binds you), SYSTEM_FLOW_AUDIT.md (§7, §8, §10, §13 g), then

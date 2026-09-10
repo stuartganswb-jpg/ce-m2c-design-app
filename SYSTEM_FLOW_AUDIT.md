@@ -224,8 +224,15 @@ poleSpray,poleBake,hand,poleHand}`. Every writer now uses `makeFullTasks()` — 
 (00b26f3 put that on every writer).
 
 **Shop Floor** reads `shop_custom_orders`; Custom tab excludes `MILLING`/`isStock`. START mirrors
-`customFabStatus` and releases the sibling pick; COMPLETE mirrors `'Complete'` and, for an
-outsourced recipe, writes a `plating_demand` (`ShopFloor.js:1254-1271`).
+`customFabStatus 'In Process'` and releases the sibling pick (the FINISHING message only when a
+sibling exists). **Updated 2026-09-09 (Brief C, 9ef3331 / b313082):** COMPLETE mirrors
+`'Complete'` for an in-house finish and **`'Sent to Plating'`** for an outsourced one (the ONE
+shared test, `finishRouteOf`), raising one `plating_demand` that carries `finSiblingId /
+orderKey / salesOrderId / shopOrderId`; the finishing floor is never told about a plated part.
+Undo cancels that demand through D's `cancelPlatingDemand` and is refused once the parts have
+shipped. The milling tracker's finalize stamps the RTG record through `propagateFloorState`
+(`floorPhase` Complete/Failed + `millGoodQty`…); a zero-good op no longer marks the spine
+Completed. Full state: `SHOP_FLOOR_CONTINUATION_BRIEF.md §2`.
 
 **WMS** reads `fin_workorders where sentToPickPack` **and** `hq_sales_orders QUICKSHIP`. Pack gate
 refuses while `hasCustomSibling && customFabStatus !== 'Complete'` (`PickPackApp.js:2658`).
@@ -271,12 +278,15 @@ accumulating. **Question 1, §10.**
 holds 9 failures in three classes (multi-location, already-closed, missing Class) — documented in
 `POLE_ROUTING_HANDOFF_BRIEF.md §4`, unchanged, two of the three need Eric.
 
-**Plating is fire-and-forget.** `plating_demand` is written by six places, deleted by the WMS when
-the pull to OB PLATING posts (`PickPackApp.js:2133`). Nothing gates on it (`grep awaitingPlating` →
-nothing). And the shop's COMPLETE mirrors `customFabStatus: 'Complete'` onto the finishing sibling
-**whether or not it went to plating** (`ShopFloor.js:1256`, before the `toPlating` branch). The pack
-gate reads exactly that field. So a plated custom order's small parts can be packed as complete while
-the custom parts are at the plater. **Question 2, §10.**
+**Plating is fire-and-forget.** ~~`plating_demand` is written by six places, deleted by the WMS when
+the pull to OB PLATING posts. And the shop's COMPLETE mirrors `customFabStatus: 'Complete'` onto the
+finishing sibling **whether or not it went to plating**. So a plated custom order's small parts can
+be packed as complete while the custom parts are at the plater.~~ **CLOSED 2026-09-09 (P0 #3, both
+sides).** The custom half now has four states (B5 `3133aba`): the shop mirrors **`'Sent to
+Plating'`** at send (C1 `9ef3331`), the pack gate (`customPartsReady`) waits on it, and only D's
+receiving-station build-back mirrors `'Complete'` and propagates `'Plated'` (D1, live). The demand
+carries the order's ids back; the shop's Undo cancels it (D's `cancelPlatingDemand`) or is refused
+once shipped. **Still owed: the live end-to-end run** (`SHOP_FLOOR_CONTINUATION_BRIEF.md §9`).
 
 ---
 
