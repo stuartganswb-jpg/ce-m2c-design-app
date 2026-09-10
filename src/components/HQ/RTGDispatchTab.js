@@ -2124,7 +2124,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         FLOOR_CLOSED:   { label: 'Closed on the floor, open here',  why: 'The floor finished with it; the board still lists it as live work.' },
         BOARD_CLOSED:   { label: 'Closed here, still live on the floor', why: 'The board closed it; the floor never heard, so it is still queued or being worked.' },
         NS_CLOSE_TODO:  { label: 'Close the balance in NetSuite', why: 'Closed in the app. A non-WIP work order cannot be closed through the API — its Close button is a client-side call, not an endpoint — so the balance has to be closed on the NetSuite transaction, then confirmed here.' },
-        FLOOR_DONE:     { label: 'Finished on the floor, still live here', why: 'The floor completed or packed it; the board still lists it as live work. Close it everywhere to settle the record.' },
+        FLOOR_DONE:     { label: 'Finished on the floor, still live here', why: 'EVERY floor document of this order is packed or built, and the record neither is closed nor carries the floor\'s report. Close it from its row, one order at a time — there is no Close all for this group (2026-09-10: a Close all here closed orders still in packing).' },
         DEMAND_ORPHAN:  { label: 'Demand for an order that no longer lives', why: 'A convert/plating to-do whose work order or sales order is gone or closed — it gates nothing and sits on a WMS tab forever. Delete it.' },
         RODCUT_ORPHAN:  { label: 'Open rod cut for a dead order', why: 'An open cut whose work order is gone or closed — cutting it would make pieces nothing is waiting for. Cancel it.' },
         STRANDED_GATE:  { label: 'Held at a gate nothing can lift', why: 'A live order waiting on a cut, a convert, a component order or a purchase order that has been cancelled or deleted — nothing is coming to clear it. Lift the gate (the order stays parked; release it from its detail view) or close the order.' },
@@ -2366,7 +2366,9 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>
                                 {ORPHAN_COPY[type].label} · {list.length}
                             </span>
-                            {!['NS_CLOSE_TODO', 'DEMAND_ORPHAN', 'RODCUT_ORPHAN', 'STRANDED_GATE', 'NS_POSTED_AFTER_CLOSE'].includes(type) && list.length > 1 && (
+                            {/* FLOOR_DONE is never bulk-closable (Stuart 2026-09-10): a finished order is closed
+                                by put-away / shipment, or by a person one row at a time. */}
+                            {!['NS_CLOSE_TODO', 'DEMAND_ORPHAN', 'RODCUT_ORPHAN', 'STRANDED_GATE', 'NS_POSTED_AFTER_CLOSE', 'FLOOR_DONE'].includes(type) && list.length > 1 && (
                                 <button onClick={() => reconcileAll(type, list)} disabled={bulkClosing}
                                     style={{ ...btnStyle, padding: '4px 12px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f', cursor: bulkClosing ? 'wait' : 'pointer' }}>
                                     {bulkClosing ? 'Closing…' : `⇄ Close all ${list.length}`}
@@ -2381,6 +2383,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                 <div key={(t && t.id) + i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 0', fontSize: '0.85rem', flexWrap: 'wrap' }}>
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{(f.floor && woRefOf(f.floor)) || (t && woRefOf(t))}</span>
                                     {code && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{code}</span>}
+                                    {type === 'FLOOR_DONE' && Array.isArray(f.floors) && f.floors.length > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>all {f.floors.length} floor docs done</span>}
                                     {f.coll && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{({ fin_workorders: 'FINISHING', shop_custom_orders: 'SHOP', convert_demand: 'WMS CONVERT', plating_demand: 'WMS PLATING', rod_cut_orders: 'WMS ROD CUTS' })[f.coll] || f.coll}</span>}
                                     {['DEMAND_ORPHAN', 'RODCUT_ORPHAN'].includes(type) && (
                                         <>

@@ -5,7 +5,7 @@
 // library part id — so the hq record was never in the key set and the shop could not tell RTG
 // anything. This pins that the id convention is a key, from either side.
 
-import { identityKeysOf, isClosedState, isDoneState, auditOrphans, queuedWriteTargets, orderDocIdsOf, entryNamesOrder, reopenPlanFor, planBulkReopen, pickStatusFromStamps, closedByBulkIn, DELETE, BULK_CLOSE_FROM } from '../src/components/Shared/orderLifecycle.js';
+import { identityKeysOf, isClosedState, isDoneState, auditOrphans, queuedWriteTargets, orderDocIdsOf, entryNamesOrder, reopenPlanFor, planBulkReopen, pickStatusFromStamps, closedByBulkIn, DELETE, BULK_CLOSE_FROM, recordKnowsDone } from '../src/components/Shared/orderLifecycle.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
@@ -29,6 +29,29 @@ ok('closed: status Closed', isClosedState({ status: 'Closed' }));
 ok('closed: soft-deleted counts', isClosedState({ deleted: true }));
 ok('done: packed counts', isDoneState({ packStatus: 'Packed' }));
 ok('not done: Setup', !isDoneState({ currentPhase: 'Setup' }));
+// ── DONE means packed / put away / built / closed — never "off the paint line" (2026-09-10) ──
+ok('not done: a Complete finishing doc that is not packed (still in packing)', !isDoneState({ currentPhase: 'Complete', completedAt: 1 }));
+ok('not done: a pick-only doc born Complete', !isDoneState({ currentPhase: 'Complete', pickOnly: true }));
+ok('done: a pick-only doc once packed', isDoneState({ currentPhase: 'Complete', pickOnly: true, packStatus: 'Packed' }));
+ok('done: a shop half Completed', isDoneState({ status: 'Completed' }));
+ok('record knows: floorPhase Complete', recordKnowsDone({ status: 'Dispatched', floorPhase: 'Complete' }));
+ok('record knows: floorPhase Packed', recordKnowsDone({ status: 'Dispatched', floorPhase: 'Packed' }));
+ok('record does not know: no floorPhase', !recordKnowsDone({ status: 'Dispatched' }));
+// ── FLOOR_DONE is a whole-order finding against what the record knows ──
+const fd = (hq, fins, shops = []) => auditOrphans({ hqOrders: [hq], finWos: fins, shopJobs: shops }).filter(x => x.type === 'FLOOR_DONE');
+const P = { id: 'WO-P', status: 'Dispatched' };
+eq('no finding: Complete finishing doc, not packed (still in packing)', fd(P, [{ id: 'WO-P', currentPhase: 'Complete', completedAt: 1 }]).length, 0);
+eq('no finding: pick-only doc born Complete, WMS still picking', fd(P, [{ id: 'WO-P', currentPhase: 'Complete', pickOnly: true }]).length, 0);
+eq('no finding: shop half Completed beside a Painting finishing doc', fd(P, [{ id: 'WO-P', currentPhase: 'Painting', shopSiblingId: 'SHOP-WO-P' }], [{ id: 'SHOP-WO-P', status: 'Completed', finSiblingId: 'WO-P' }]).length, 0);
+eq('no finding: packed, and the record already carries floorPhase Packed', fd({ ...P, floorPhase: 'Packed' }, [{ id: 'WO-P', currentPhase: 'Complete', packStatus: 'Packed' }]).length, 0);
+const one = fd(P, [{ id: 'WO-P', currentPhase: 'Complete', packStatus: 'Packed', shopSiblingId: 'SHOP-WO-P' }], [{ id: 'SHOP-WO-P', status: 'Completed', finSiblingId: 'WO-P' }]);
+eq('ONE finding: every floor doc done and the record does not know — with both docs named', [one.length, one[0] && one[0].floors.length], [1, 2]);
+eq('no finding: the record is closed (that is BOARD_CLOSED territory)', fd({ ...P, status: 'Closed' }, [{ id: 'WO-P', packStatus: 'Packed' }]).length, 0);
+// ── the closer's snapshot restores exactly ──
+const snapFin = reopenPlanFor({ coll: 'fin_workorders', d: { id: 'WO-S', closedFrom: BULK_CLOSE_FROM, closedAt: 5, closeReason: 'FLOOR_DONE', completedAt: 1, stateBeforeClose: { currentPhase: 'Painting', stepStatus: 'Staged', status: null, sentToPickPack: true, pickStatus: 'Picked_Awaiting_Staging', currentStepIndex: 1 } } });
+eq('snapshot: the fin doc goes back to exactly what it was', [snapFin.action, snapFin.patch.currentPhase, snapFin.patch.stepStatus, snapFin.patch.status, snapFin.patch.sentToPickPack, snapFin.patch.pickStatus, snapFin.patch.currentStepIndex, snapFin.patch.stateBeforeClose], ['RESTORE', 'Painting', 'Staged', DELETE, true, 'Picked_Awaiting_Staging', 1, DELETE]);
+const snapShop = reopenPlanFor({ coll: 'shop_custom_orders', d: { id: 'SHOP-WO-S', closedFrom: BULK_CLOSE_FROM, closedAt: 5, closeReason: 'FLOOR_DONE', status: 'Completed', closed: true, stateBeforeClose: { status: 'In Process', closed: null } } });
+eq('snapshot: the shop doc goes back to In Process with no closed flag, live', [snapShop.patch.status, snapShop.patch.closed, snapShop.live], ['In Process', DELETE, true]);
 
 // the audit still sees a shop job whose hq parent is gone, and is quiet when it is alive
 const orphans = auditOrphans({ hqOrders: [], shopJobs: [{ id: 'SHOP-WO-GONE', status: 'Pending' }] });

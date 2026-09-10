@@ -44,10 +44,19 @@ export const isClosedState = (d) => !!d && (
     // orphan audit instead of tripping it.
     d.deleted === true || d.status === 'Deleted' || d.status === 'CANCELLED'
 );
+// DONE means the work left the building's hands (Stuart 2026-09-10, after "Close all" closed orders
+// still in packing): a finishing job's `currentPhase 'Complete'` is "off the paint line" — the WMS
+// still has to pick, pack and put it away — and a pick-only doc is BORN Complete. So Complete is not
+// done; PACKED (which is also the stock put-away) is, a shop half's Completed is, a build is, a
+// close is.
 export const isDoneState = (d) => !!d && (
-    isClosedState(d) || d.currentPhase === 'Complete' || d.packStatus === 'Packed' ||
+    isClosedState(d) || d.packStatus === 'Packed' ||
     d.status === 'Completed' || d.status === 'Built'
 );
+// What the RECORD already knows from the floor (propagateFloorState stamps it at every completion,
+// pack and put-away). The audit compares the floor to THIS, not to a status the record never carries.
+export const FLOOR_REPORTED_DONE = ['Complete', 'Packed', 'Shelved', 'Plated'];
+export const recordKnowsDone = (p) => !!p && (isDoneState(p) || FLOOR_REPORTED_DONE.includes(String(p.floorPhase || '')));
 
 /**
  * Find every document belonging to one order, starting from ANY of them.
@@ -162,22 +171,27 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
     };
     const done = { fin: 0, shop: 0, hq: 0, ns: null };
 
-    for (const [id] of links.fin) {
+    // THE STATE BEFORE THE CLOSE RIDES ON THE DOCUMENT (2026-09-10): the bulk close overwrote
+    // currentPhase / pickStatus / sentToPickPack and the reopen had to reconstruct them from stamps.
+    // Now every close keeps what it replaced, so a reopen restores exactly, never infers.
+    const snap = (d, keys) => Object.fromEntries(keys.map(k => [k, d && d[k] !== undefined ? d[k] : null]));
+    for (const [id, d] of links.fin) {
         // Clearing the PICK fields is part of closing — a job with only its phase stamped stayed in
         // the WMS pick queue afterwards (Sandra 2026-08-17).
         await updateDoc(doc(db, 'fin_workorders', id), {
             currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed',
             sentToPickPack: false, pickStatus: 'Closed', ...stamp,
+            stateBeforeClose: snap(d, ['currentPhase', 'stepStatus', 'status', 'sentToPickPack', 'pickStatus', 'currentStepIndex']),
         });
         done.fin++;
     }
-    for (const [id] of links.shop) {
+    for (const [id, d] of links.shop) {
         // The shop queues exit on 'Completed'; `closed: true` records it was closed, not built.
-        await updateDoc(doc(db, 'shop_custom_orders', id), { status: 'Completed', closed: true, ...stamp });
+        await updateDoc(doc(db, 'shop_custom_orders', id), { status: 'Completed', closed: true, ...stamp, stateBeforeClose: snap(d, ['status', 'closed']) });
         done.shop++;
     }
     if (links.hq) {
-        await updateDoc(doc(db, links.hq.coll, links.hq.id), { status: 'Closed', ...stamp });
+        await updateDoc(doc(db, links.hq.coll, links.hq.id), { status: 'Closed', ...stamp, stateBeforeClose: snap(links.hq.data, ['status']) });
         done.hq++;
     }
 
@@ -292,6 +306,13 @@ export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], conver
         ...finWos.map(d => ({ d, coll: 'fin_workorders' })),
         ...shopJobs.map(d => ({ d, coll: 'shop_custom_orders' })),
     ];
+    // FLOOR_DONE IS A WHOLE-ORDER FINDING (Stuart 2026-09-10: "Close all" on it closed orders still
+    // in packing and in finishing). It is raised ONCE per record, only when EVERY linked floor
+    // document is done (packed / shop Completed — a Completed shop half beside a Painting finishing
+    // doc is normal work) and the record neither is closed nor already carries the floor's report
+    // (`floorPhase`, which propagateFloorState stamps). The record was right this morning; the test
+    // was wrong.
+    const floorByParent = new Map();
     floorJobs.forEach(({ d, coll }) => {
         const parent = parentOf(d);
         if (!parent) {
@@ -299,10 +320,16 @@ export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], conver
             return;
         }
         if (isClosedState(d) && !isClosedState(parent)) out.push({ type: 'FLOOR_CLOSED', coll, floor: d, parent });
-        // Finished (packed/complete/built) but the board still lists it as live work — the exact
-        // stale-dispatched problem propagateFloorState was written for, now audited too.
-        else if (isDoneState(d) && !isClosedState(parent) && !isDoneState(parent)) out.push({ type: 'FLOOR_DONE', coll, floor: d, parent });
         else if (isClosedState(parent) && !isDoneState(d)) out.push({ type: 'BOARD_CLOSED', coll, floor: d, parent });
+        const pid = String(parent.id);
+        if (!floorByParent.has(pid)) floorByParent.set(pid, { parent, docs: [] });
+        floorByParent.get(pid).docs.push({ d, coll });
+    });
+    floorByParent.forEach(({ parent, docs }) => {
+        if (isClosedState(parent) || recordKnowsDone(parent)) return;
+        if (!docs.every(({ d }) => isDoneState(d))) return;
+        const first = docs[0];
+        out.push({ type: 'FLOOR_DONE', coll: first.coll, floor: first.d, parent, floors: docs.map(x => x.d) });
     });
     hqOrders.forEach(o => {
         // Not an error — a job someone still has to do in NetSuite by hand (Eric's Option 3).
@@ -562,6 +589,13 @@ export function reopenPlanFor({ coll, d, sibling = null, force = null }) {
     if (force === 'KEEP') return { ...row, action: 'KEEP', override: 'KEEP', why: 'OVERRIDE — kept closed by the operator' };
     if (force !== 'REOPEN' && d.closeReason && d.closeReason !== 'FLOOR_DONE') return { ...row, action: 'KEEP', why: `closed as ${d.closeReason} — it was already closed on the other side` };
 
+    // A close made after 2026-09-10 kept the state it replaced — restore it exactly.
+    if (d.stateBeforeClose && force !== 'KEEP' && (coll === 'fin_workorders' || coll === 'shop_custom_orders' || coll === 'hq_work_orders' || coll === 'hq_sales_orders')) {
+        const sb = d.stateBeforeClose;
+        const patch = Object.fromEntries(Object.entries(sb).map(([k, v]) => [k, v === null ? DELETE : v]));
+        const live = coll === 'shop_custom_orders' ? sb.status !== 'Completed' : true;
+        return { ...row, action: 'RESTORE', live, why: `restored from the snapshot the closer kept (${Object.entries(sb).filter(([, v]) => v !== null).map(([k, v]) => `${k} ${v}`).join(', ') || 'empty'})`, patch: { ...clearClose(d), ...patch, stateBeforeClose: DELETE, ...(coll === 'shop_custom_orders' ? { closed: sb.closed === true ? true : DELETE } : {}) } };
+    }
     if (coll === 'fin_workorders') {
         const when = (t) => t ? new Date(toMs(t)).toLocaleDateString() : '';
         // On a SALES order the shipment IS the NetSuite fulfilment: the WMS queues it the moment the
