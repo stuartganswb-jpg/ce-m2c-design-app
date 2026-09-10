@@ -1886,7 +1886,28 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                                               {job.portalDeletedReason ? <div style={{ marginTop: '4px', fontStyle: 'italic', color: 'var(--ink)' }}>"{job.portalDeletedReason}"</div> : null}
                                                           </div>
                                                       )}
-                                                      <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '8px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                                      {/* FIND IT BY WHAT WAS TYPED (Stuart 2026-09-10): job name, the typed order
+                                                          sidemark and the customer PO on the card, each only when it has a value. A
+                                                          quote saved before `orderSidemark` existed shows its old `sidemark` — unless
+                                                          that is just the job-name fallback, which would print the name twice. */}
+                                                      {(() => {
+                                                          const jobName = String(job.jobName || '').trim();
+                                                          const typed = String(job.orderSidemark || '').trim()
+                                                              || (String(job.sidemark || '').trim() !== jobName ? String(job.sidemark || '').trim() : '');
+                                                          const po = String(job.poNumber || '').trim();
+                                                          const rows = [['Job', jobName], ['Sidemark', typed], ['PO', po]].filter(([, v]) => v);
+                                                          if (!rows.length) return <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '8px' }}>{job.note || 'No description'}</div>;
+                                                          return (
+                                                              <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                                                  {rows.map(([k, v]) => (
+                                                                      <div key={k} style={{ fontSize: '0.85rem', color: 'var(--ink)', display: 'flex', gap: '8px', alignItems: 'baseline', minWidth: 0 }}>
+                                                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--ink-soft)', flex: '0 0 62px' }}>{k}</span>
+                                                                          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v}>{v}</span>
+                                                                      </div>
+                                                                  ))}
+                                                              </div>
+                                                          );
+                                                      })()}
                                                       {quoteAuthorLine(job) && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.03em' }}>{quoteAuthorLine(job)}</div>}
                                                       {job.cpqData?.totalPrice && <div style={{ fontSize: '0.9rem', fontWeight: 500, marginTop: '8px', color: 'var(--ink)' }}>Est: ${job.cpqData.totalPrice.toFixed(2)}</div>}
 
