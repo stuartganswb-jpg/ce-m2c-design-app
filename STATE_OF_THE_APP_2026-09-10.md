@@ -419,3 +419,19 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
   release describes the intended state, not the code (items 11–12).
 
 *Stopping here, per the brief. Nothing edited, shipped or changed in production; this file is uncommitted.*
+
+---
+
+## 6. Changes since this report (each session appends; newest first)
+
+- **2026-09-10 · S2 · 6c72e80 (live).** The Close-all incident (BRIEF_S2 §1): cause confirmed in code — the
+  FLOOR_DONE finding reads ONE floor document's `Complete` as the order being done, `isDoneState(parent)` never
+  reads the propagated `floorPhase`, pick-only docs are born Complete, and `reconcileAll` was offered on that
+  finding. Recovery shipped: `Shared/orderLifecycle.reopenPlanFor / planBulkReopen / applyBulkReopen` (pure, 66
+  assertions) + RTG Board vs Floor **⟲ Reopen a bulk close** (dry run, confirm, ledgered write; every restore
+  from the document's own stamps — shipped / put away stay closed). Live read before the fix: the close ran
+  ≈08:31, cancelled one queued write (NS Fulfillment WO-SO60152), raised 148 NS_CLOSE_TODO rows. Named, not
+  fixed: the closer raises NS_CLOSE_TODO off the hq record's `nsWoId` without reading `nsWoCompletionPosted`.
+  Next: the reopen run against Stuart's hand list, then Issue 2 (FLOOR_DONE never bulk-closable; parent reads
+  `floorPhase`; whole-order test; pick-only never done until packed; closer snapshots the pre-close state).
+  Adds to §2.2 as a hand-off: S3 shows the `reopenConfirmPick` chip in the WMS (BRIEF_S3 §6).

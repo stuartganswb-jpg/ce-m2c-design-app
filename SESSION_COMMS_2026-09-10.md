@@ -13,6 +13,15 @@ and what Stuart has decided. Every session reads it at start and whenever a hand
 - **The communicator session routes.** Approvals and answers come from Stuart in the working session or
   through the communicator ("relayed approvals count", 09-03). Cross-territory asks go through briefs, not
   edits in another session's file.
+- **Stuart answers each session directly, in that session.** Do not route your questions through the
+  communicator. Keep the communicator informed by appending to your brief's **§ Status log** (hash + one
+  line) after every commit and every decision Stuart gives you.
+- **Anything that falls under none of S1–S5 goes to the communicator session**, which handles it directly
+  with Stuart.
+- **Every push is announced (Stuart, 2026-09-10, to S2).** The session that pushes writes a DEPLOY NOTICE into
+  every other session's brief under **§ 6 Hand-offs in** (hash, what shipped, which documents/fields changed,
+  "hard-refresh + re-PIN") and a row in the **Deploys** table below — before it asks Stuart for anything else.
+  Then it updates this board (its own Status row) so the communicator's orientation stays current.
 - **Order of starts:** S2 (RTG / WO / PO) first — it has an immediate problem — then S1 (CPQ / Vision /
   CRM), then S3, S4, S5 as Stuart opens them.
 - **One issue at a time per session** (09-03 rule, unchanged). Plan → wait → edit → lint → commit →
@@ -73,7 +82,13 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 | session | state | last hash | next |
 |---|---|---|---|
 | S1 | brief written, not started | — | starts after S2's first issue is planned |
-| S2 | brief written, not started — **immediate problem stated: "Close all" on Board vs Floor closed live orders this morning; cause and recovery plan in BRIEF_S2 §1** | — | first — Issue 1 reopen, Issue 2 prevention |
+| S2 | started 09-10. Cause of the Close-all incident confirmed in code (BRIEF_S2 §1a). **Issue 1 SHIPPED and live:** ⟲ Reopen a bulk close on Board vs Floor (dry run → confirm → write). Dry run with Stuart's hand list is next, then Issue 2 (prevention). Hand-off to S3: the WMS `reopenConfirmPick` chip. | 6c72e80 | run the reopen on the live board; then Issue 2 |
 | S3 | brief written, not started | — | after S1 |
 | S4 | brief written, not started | — | when Stuart opens it |
 | S5 | brief written, not started | — | when Stuart opens it |
+
+## Deploys (every session appends a row when it pushes; newest first)
+
+| when | session | hash | what changed in production | who must re-PIN |
+|---|---|---|---|---|
+| 2026-09-10 ≈11:25 | S2 | 6c72e80 (+ S1's a58d126 carried) | RTG Board vs Floor: **⟲ Reopen a bulk close** (dry run → confirm → write); `Shared/orderLifecycle` reopen rules; guide paragraph; S3 hand-off (`reopenConfirmPick` chip). Data touched only when the reopen is confirmed: `fin_workorders`, `shop_custom_orders`, `hq_work_orders`, `hq_sales_orders`, `rod_cut_orders`, `ns_outbox`. | everyone — save-is-send refuses on a stale bundle |
