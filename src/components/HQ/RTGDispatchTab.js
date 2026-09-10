@@ -2242,13 +2242,24 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
             shop.forEach(d => { if (d.finSiblingId && !have.has(String(d.finSiblingId))) want.set(String(d.finSiblingId), 'fin_workorders'); });
             const siblings = new Map();
             await Promise.all([...want].map(async ([id, coll]) => { const snap = await getDoc(doc(db, coll, id)); if (snap.exists()) siblings.set(id, { ...snap.data(), id }); }));
-            const plan = planBulkReopen({
+            const raw = {
                 finWos: fin, shopJobs: shop,
                 hqOrders: [...wo.map(d => ({ ...d, __coll: 'hq_work_orders' })), ...so.map(d => ({ ...d, __coll: 'hq_sales_orders' }))],
                 rodCuts: cuts, outbox: ob, siblings, since,
-            });
-            setBulkReopen({ since, plan, loading: false });
+            };
+            setBulkReopen({ since, raw, overrides: new Map(), plan: planBulkReopen(raw), loading: false });
         } catch (e) { setBulkReopen(null); alert('Could not read the bulk close: ' + (e.message || e)); }
+    };
+    // THE OPERATOR'S WORD ON ONE ORDER (Stuart 2026-09-10: of the packed orders "keep open only
+    // SO60151, SO60152") — a per-row override, keyed by the document's id (its order's other
+    // documents follow through the identity set), replanned from the documents already read.
+    const toggleReopenOverride = (r, mode) => {
+        setBulkReopen(b => {
+            if (!b || !b.raw || b.applying || b.result) return b;
+            const overrides = new Map(b.overrides || []);
+            if (overrides.get(r.id) === mode) overrides.delete(r.id); else overrides.set(r.id, mode);
+            return { ...b, overrides, plan: planBulkReopen({ ...b.raw, overrides }) };
+        });
     };
     const applyBulkReopenNow = async () => {
         const plan = bulkReopen && bulkReopen.plan; if (!plan || bulkReopen.applying) return;
@@ -2283,7 +2294,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     {bulkReopen.plan && !bulkReopen.result && (
                         <>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>
-                                DRY RUN · {c.RESTORE || 0} restore · {c.KEEP || 0} keep · {c.SKIP || 0} skip{bulkReopen.plan.outsideWindow ? ` · ${bulkReopen.plan.outsideWindow} from earlier bulk closes, not touched` : ''}
+                                DRY RUN · {c.RESTORE || 0} restore · {c.KEEP || 0} keep · {c.SKIP || 0} skip{bulkReopen.overrides && bulkReopen.overrides.size ? ` · ${bulkReopen.overrides.size} operator override${bulkReopen.overrides.size === 1 ? '' : 's'}` : ''}{bulkReopen.plan.outsideWindow ? ` · ${bulkReopen.plan.outsideWindow} from earlier bulk closes, not touched` : ''}
                             </span>
                             <button onClick={applyBulkReopenNow} disabled={bulkReopen.applying || !(c.RESTORE > 0)}
                                 style={{ ...btnStyle, padding: '4px 12px', fontSize: '9px', color: '#fff', background: bulkReopen.applying ? 'var(--ink-soft)' : '#3a7d44', borderColor: '#3a7d44', cursor: bulkReopen.applying ? 'wait' : 'pointer' }}>
@@ -2311,8 +2322,15 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', minWidth: '84px' }}>{collLabel[r.coll] || r.coll}</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{refOf(r)}</span>
                         {r.d && woItemCodeOf(r.d) && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{woItemCodeOf(r.d)}</span>}
-                        <span style={{ fontSize: '11px', color: 'var(--ink-soft)' }}>{r.why}</span>
+                        <span style={{ fontSize: '11px', color: r.override ? 'var(--brass)' : 'var(--ink-soft)' }}>{r.why}</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#9b968c', marginLeft: 'auto' }}>closed {timeStr(r.closedAt)}</span>
+                        {['fin_workorders', 'shop_custom_orders'].includes(r.coll) && r.action !== 'SKIP' && !bulkReopen.result && !bulkReopen.applying && (
+                            (bulkReopen.overrides && bulkReopen.overrides.has(r.id))
+                                ? <button onClick={() => toggleReopenOverride(r, bulkReopen.overrides.get(r.id))} style={{ ...btnStyle, padding: '2px 8px', fontSize: '8px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>↺ undo override</button>
+                                : r.action === 'KEEP'
+                                    ? <button onClick={() => toggleReopenOverride(r, 'REOPEN')} title="The operator says this order is still work — reopen it regardless of its stamps (recorded on the document)" style={{ ...btnStyle, padding: '2px 8px', fontSize: '8px' }}>⟲ reopen anyway</button>
+                                    : <button onClick={() => toggleReopenOverride(r, 'KEEP')} title="The operator says this order was done — keep it closed (its record and siblings follow)" style={{ ...btnStyle, padding: '2px 8px', fontSize: '8px' }}>✕ keep closed</button>
+                        )}
                     </div>
                 ))}
                 {bulkReopen.plan && !rows.length && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>No document carries today's bulk-close stamp.</div>}

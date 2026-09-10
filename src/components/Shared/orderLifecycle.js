@@ -547,7 +547,9 @@ const clearClose = (d) => ({
  * it decides whether the small-parts pick had been released and whether the custom half is at
  * the plater. `live` says whether the restored document is still WORK (drives the record).
  */
-export function reopenPlanFor({ coll, d, sibling = null }) {
+// `force`: 'REOPEN' overrides a KEEP (the operator says it is still work — e.g. Stuart 2026-09-10:
+// "keep open only SO60151, SO60152" of the packed orders), 'KEEP' overrides a RESTORE. Recorded.
+export function reopenPlanFor({ coll, d, sibling = null, force = null }) {
     const row = { coll, id: d && d.id, closedAt: (d && d.closedAt) || null, closeReason: (d && d.closeReason) || '', live: false };
     if (!d) return { ...row, action: 'SKIP', why: 'no document' };
     if (d.reopenedFrom === REOPEN_FROM) return { ...row, action: 'SKIP', why: `already reopened by this tool (${d.reopenedBy || '?'})` };
@@ -557,7 +559,8 @@ export function reopenPlanFor({ coll, d, sibling = null }) {
     const handReopened = has(d.reopenedAt) && toMs(d.reopenedAt) > toMs(d.closedAt);
     // Only a FLOOR_DONE close is suspect. FLOOR_CLOSED means the floor had already closed it;
     // BOARD_CLOSED means the board had; ORPHAN_FLOOR had no record to reopen into.
-    if (d.closeReason && d.closeReason !== 'FLOOR_DONE') return { ...row, action: 'KEEP', why: `closed as ${d.closeReason} — it was already closed on the other side` };
+    if (force === 'KEEP') return { ...row, action: 'KEEP', override: 'KEEP', why: 'OVERRIDE — kept closed by the operator' };
+    if (force !== 'REOPEN' && d.closeReason && d.closeReason !== 'FLOOR_DONE') return { ...row, action: 'KEEP', why: `closed as ${d.closeReason} — it was already closed on the other side` };
 
     if (coll === 'fin_workorders') {
         const when = (t) => t ? new Date(toMs(t)).toLocaleDateString() : '';
@@ -565,10 +568,12 @@ export function reopenPlanFor({ coll, d, sibling = null }) {
         // pack completes (nsFulfillQueued) and nsIfTran lands when it posts. There is no shippedAt on
         // a finishing doc — reading "packed, no shippedAt" as unshipped would reopen every order
         // ever packed (the 14 July/August Brimar orders in the first dry run).
-        if (has(d.nsIfTran)) return { ...row, action: 'KEEP', why: `shipped — fulfilment ${d.nsIfTran} posted${d.packedAt ? `, packed ${when(d.packedAt)}` : ''}` };
-        if (d.nsFulfillQueued === true) return { ...row, action: 'KEEP', why: `shipped — packed ${when(d.packedAt) || '?'}, fulfilment queued (see 11.1 if it has not posted)` };
-        if (has(d.shippedAt)) return { ...row, action: 'KEEP', why: 'shipped — it was done' };
-        if (has(d.putawayBin)) return { ...row, action: 'KEEP', why: `put away to ${d.putawayBin}${d.packedAt ? ` ${when(d.packedAt)}` : ''} — it was done` };
+        if (force !== 'REOPEN') {
+            if (has(d.nsIfTran)) return { ...row, action: 'KEEP', why: `shipped — fulfilment ${d.nsIfTran} posted${d.packedAt ? `, packed ${when(d.packedAt)}` : ''}` };
+            if (d.nsFulfillQueued === true) return { ...row, action: 'KEEP', why: `shipped — packed ${when(d.packedAt) || '?'}, fulfilment queued (see 11.1 if it has not posted)` };
+            if (has(d.shippedAt)) return { ...row, action: 'KEEP', why: 'shipped — it was done' };
+            if (has(d.putawayBin)) return { ...row, action: 'KEEP', why: `put away to ${d.putawayBin}${d.packedAt ? ` ${when(d.packedAt)}` : ''} — it was done` };
+        }
         const pickOnly = d.pickOnly === true;
         const packed = d.packStatus === 'Packed';
         const complete = pickOnly || packed || has(d.completedAt);
@@ -587,7 +592,7 @@ export function reopenPlanFor({ coll, d, sibling = null }) {
             released ? `WMS ${pickStatus.replace(/_/g, ' ').toLowerCase()}${has(d.pickedAt) ? ` (picked ${when(d.pickedAt)})` : ''}` : 'pick not released (custom half not started)',
         ].join(' · ');
         return {
-            ...row, action: 'RESTORE', live: true, why,
+            ...row, action: 'RESTORE', live: true, why: force === 'REOPEN' ? `OVERRIDE — reopened by the operator · ${why}` : why, ...(force === 'REOPEN' ? { override: 'REOPEN' } : {}),
             patch: {
                 ...clearClose(d), status: DELETE, ...phase,
                 sentToPickPack: released, pickStatus,
@@ -640,14 +645,17 @@ export function reopenPlanFor({ coll, d, sibling = null }) {
  * wants); queued NetSuite writes it cancelled come back PENDING for EVERY order in the close —
  * a build for a packed order or a fulfilment for a shipped one was right to post regardless.
  */
-export function planBulkReopen({ finWos = [], shopJobs = [], hqOrders = [], rodCuts = [], outbox = [], siblings = new Map(), since = 0, until = Infinity }) {
+// `overrides`: Map<orderKey, 'REOPEN'|'KEEP'> — any identity key of the order (SO60151, WO-SO60151,
+// SHOP-SO60151 …) selects every FLOOR document of that order; the record then follows its floor.
+export function planBulkReopen({ finWos = [], shopJobs = [], hqOrders = [], rodCuts = [], outbox = [], siblings = new Map(), since = 0, until = Infinity, overrides = new Map() }) {
     const inWin = (d) => closedByBulkIn(d, { since, until });
     const fin = finWos.filter(inWin), shop = shopJobs.filter(inWin), hq = hqOrders.filter(inWin);
     const byId = new Map([...finWos, ...shopJobs].map(d => [String(d.id), d]));
     const sib = (id) => (id && (byId.get(String(id)) || siblings.get(String(id)))) || null;
+    const forceOf = (d) => { for (const k of identityKeysOf(d)) { if (overrides.has(k)) return overrides.get(k); } return null; };
     const rows = [
-        ...fin.map(d => ({ ...reopenPlanFor({ coll: 'fin_workorders', d, sibling: sib(d.shopSiblingId) }), d })),
-        ...shop.map(d => ({ ...reopenPlanFor({ coll: 'shop_custom_orders', d, sibling: sib(d.finSiblingId) }), d })),
+        ...fin.map(d => ({ ...reopenPlanFor({ coll: 'fin_workorders', d, sibling: sib(d.shopSiblingId), force: forceOf(d) }), d })),
+        ...shop.map(d => ({ ...reopenPlanFor({ coll: 'shop_custom_orders', d, sibling: sib(d.finSiblingId), force: forceOf(d) }), d })),
     ];
     // Link floor rows to their record the way the audit does — by the identity set.
     const byKey = new Map();
@@ -720,7 +728,7 @@ export async function applyBulkReopen(ctx, { plan, by, onProgress }) {
         const r = rows[i];
         const patch = Object.fromEntries(Object.entries(r.patch).map(([k, v]) => [k, v === DELETE ? deleteField() : v]));
         try {
-            await updateDoc(doc(db, r.coll, r.id), { ...patch, reopenedAt: Date.now(), reopenedBy: by || '', reopenedFrom: REOPEN_FROM, reopenRunId: runId });
+            await updateDoc(doc(db, r.coll, r.id), { ...patch, reopenedAt: Date.now(), reopenedBy: by || '', reopenedFrom: REOPEN_FROM, reopenRunId: runId, ...(r.override ? { reopenOverride: r.override, reopenOverrideBy: by || '' } : {}) });
             done.restored++;
             try {
                 await recordDeletion(ctx, { collection: r.coll, docId: r.id, record: r.d, kind: 'BULK_CLOSE_REOPEN', mode: 'REOPEN', by, from: REOPEN_FROM, reason: `${runId} · reopened after the ${BULK_CLOSE_FROM} close of ${r.closedAt ? new Date(toMs(r.closedAt)).toLocaleString() : '?'} — ${r.why}` });

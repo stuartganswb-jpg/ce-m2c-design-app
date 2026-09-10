@@ -73,6 +73,11 @@ eq('fin: FLOOR_CLOSED close is kept (floor had closed it)', fin({ closeReason: '
 eq('fin: reopened by this tool → skip', fin({ reopenedAt: 9, reopenedFrom: 'RTG_BULK_REOPEN' }).action, 'SKIP');
 eq('fin: packed, fulfilment posted → shipped, kept', fin({ packStatus: 'Packed', packedAt: 3, nsIfTran: 'IF22120' }).action, 'KEEP');
 eq('fin: packed, fulfilment queued (stuck or not) → shipped, kept', fin({ packStatus: 'Packed', packedAt: 3, nsFulfillQueued: true }).action, 'KEEP');
+const ov1 = reopenPlanFor({ coll: 'fin_workorders', d: { id: 'WO-SO60151', ...bulk, packStatus: 'Packed', packedAt: 3, nsFulfillQueued: true, pickedAt: 1 }, force: 'REOPEN' });
+eq('fin: operator override REOPEN beats the shipped rule, recorded', [ov1.action, ov1.override, ov1.patch.currentPhase, ov1.patch.pickStatus], ['RESTORE', 'REOPEN', 'Complete', 'Picked_Awaiting_Staging']);
+const ov2 = reopenPlanFor({ coll: 'fin_workorders', d: { id: 'WO-X', ...bulk, completedAt: 4 }, force: 'KEEP' });
+eq('fin: operator override KEEP beats a restore', [ov2.action, ov2.override], ['KEEP', 'KEEP']);
+ok('fin: a tool-reopened doc is skipped even under an override', fin({ reopenedFrom: 'RTG_BULK_REOPEN' }).action === 'SKIP');
 eq('fin: not a bulk close → skip', fin({ closedFrom: 'RTG' }).action, 'SKIP');
 let r = fin({ packStatus: 'Packed', packedAt: 3, pickedAt: 1, stagedAt: 2 });
 eq('fin: packed, not put away → Complete, staged, no confirm chip', [r.action, r.patch.currentPhase, r.patch.sentToPickPack, r.patch.pickStatus, r.patch.reopenConfirmPick], ['RESTORE', 'Complete', true, 'Staged_Ready_For_Finishing', false]);
@@ -135,6 +140,11 @@ eq('plan: a queued write comes back PENDING even for the done order', [rowOf('ns
 eq('plan: a write that had FAILED goes back to FAILED, not retried', rowOf('ns_outbox', 'ob3').patch.status, 'FAILED');
 ok('plan: another order\'s cancelled write is untouched', !rowOf('ns_outbox', 'ob2'));
 ok('plan: the earlier bulk close is outside the window and counted', !rowOf('hq_work_orders', 'WO-OLD') && plan.outsideWindow === 1);
+// overrides by ORDER key: the record and the cut follow the floor doc's forced decision
+const ov = planBulkReopen({ finWos: [finA, finB], shopJobs: [shopB], hqOrders: [recA, recB], rodCuts: [cutA, cutB], outbox: [], since: T - 1000, until: T + 60000, overrides: new Map([['SOB', 'REOPEN'], ['WO-SOA', 'KEEP']]) });
+const ovRow = (c, id) => ov.rows.find(r => r.coll === c && r.id === id);
+eq('override REOPEN on a put-away order: fin restores, record restores, cut reopens', [ovRow('fin_workorders', 'WO-SOB').action, ovRow('hq_work_orders', 'WO-SOB').action, ovRow('rod_cut_orders', 'RC-B').action], ['RESTORE', 'RESTORE', 'RESTORE']);
+eq('override KEEP on a live order: fin kept, record kept, cut stays cancelled', [ovRow('fin_workorders', 'WO-SOA').action, ovRow('hq_work_orders', 'WO-SOA').action, ovRow('rod_cut_orders', 'RC-A').action], ['KEEP', 'KEEP', 'KEEP']);
 eq('plan: counts (kept: put-away fin, its record, its shop half, its cut)', plan.counts, { RESTORE: 5, KEEP: 4 });
 
 console.log(`${pass} passed, ${fail} failed`);
