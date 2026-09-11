@@ -9,6 +9,8 @@ import { projLabel } from '../Shared/traverseExplode';
 import { splitNodesLower } from '../Shared/nodeList';
 import { platePoolFrom, plateStillOffered } from '../Shared/platePool';
 import { computeBayMath } from '../Shared/bayMath';
+import { visionPickers, engDataFromPickers, enginePicksForDraft } from '../Shared/visionEngine';
+import { droppedPicks, mergeDrops, unacknowledged } from '../Shared/pickDrops';
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
   // Default to TAKEOFF as Step 1
@@ -70,6 +72,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const [quoteFlowId, setQuoteFlowId] = useState("");
   const [quoteSelections, setQuoteSelections] = useState({ collection: '' });
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
+  // ── VISION ON THE ENGINE (Stuart 2026-09-10/11, Phase 1b) ─────────────────────────────────
+  // Where the flow has a pinned assembly the hardware pickers come from the engine's own slots
+  // (Shared/visionEngine) — the same walk CPQ shows, with the engine's locks and reasons — and
+  // the picks live HERE, keyed by the engine's slot. Flows with no pins keep the old flow-step
+  // pickers (dynamicConfigParams) untouched. The board, placement and cut sheet are not involved.
+  const [enginePicks, setEnginePicks] = useState({});   // slot key -> choice (pin) id
+  const [vDrops, setVDrops] = useState([]);              // what a later choice removed (Shared/pickDrops)
   const [flowPins, setFlowPins] = useState([]);
 
   const defaultEngData = {
@@ -493,6 +502,45 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       proj: engineProj != null ? engineProj : (framing.ctx.proj != null ? framing.ctx.proj : undefined),
   };
   const realIdOf = (v) => v && v !== 'N/A' && v !== 'PENDING';
+  const useEngine = engineChoices.length > 0;
+  // A library part, by any of its ids — the label Vision has always printed ("name - code").
+  const libPartOf = (k) => (k ? libraryParts.find(p => p.id === k || p.itemId === k || p.legacyErpId === k) : null) || null;
+  const engineNameOf = (partId) => { const p = libPartOf(partId); return p ? `${p.itemName}${p.legacyErpId && p.legacyErpId !== 'PENDING' ? ` - ${p.legacyErpId}` : ''}` : null; };
+  const pk = useMemo(() => {
+      if (!useEngine) return null;
+      const answers = { ...framing.answers, ...(engineProj != null ? { proj: engineProj } : {}) };
+      return visionPickers({ choices: engineChoices, answers, picks: enginePicks, nameOf: engineNameOf });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useEngine, engineChoices, framing.answers, engineProj, enginePicks, libraryParts]);
+  const pickEngine = (slotKey, choiceId) => setEnginePicks(prev => { const n = { ...prev }; if (choiceId) n[slotKey] = choiceId; else delete n[slotKey]; return n; });
+  // What a later choice removed — named, never silent (the #45 rule, here as in CPQ).
+  useEffect(() => {
+      if (!pk) { setVDrops([]); return; }
+      const labelOf = (sl) => [sl.tier && sl.tier !== 'FRONT' ? sl.tier : '', sl.position, sl.kind === 'END' ? 'End' : sl.kind].filter(Boolean).map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
+      const now = droppedPicks(pk.model, enginePicks, pk.live, { labelOf });
+      setVDrops(prev => { const next = mergeDrops(prev, now); const same = next.length === prev.length && next.every((d, i) => d.key === prev[i].key && d.acked === prev[i].acked); return same ? prev : next; });
+  }, [pk, enginePicks]);
+  const vPending = unacknowledged(vDrops);
+  // The fabrication math reads the engine's picks (bracket / plate ids, end styles, INSIDE mount) —
+  // one-way, as the old step effect wrote them; a locked place clears its id.
+  useEffect(() => {
+      if (!pk) return;
+      const want = engDataFromPickers(pk, { libraryIdOf: (partId) => (libPartOf(partId) || {}).id || '' });
+      setEngData(prev => { let ch = false; const u = { ...prev }; Object.entries(want).forEach(([k, v]) => { if ((prev[k] || '') !== (v || '')) { u[k] = v; ch = true; } }); return ch ? u : prev; });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pk]);
+  // One <select> per engine picker — the options, the lock and its reason are the engine's.
+  const engineSelect = (picker, placeholder, extraStyle = {}) => {
+      if (!picker) return <select disabled style={{ ...fieldStyle, opacity: 0.6, ...extraStyle }}><option value="">— not on this order —</option></select>;
+      const depth = (o) => (o.projTiers ? Object.entries(o.projTiers).map(([t, v]) => `${t.toLowerCase()} ${projLabel(v)}`).join(' / ') : (o.depths && o.depths.length ? projLabel(o.depths[0]) : ''));
+      return (
+          <select value={picker.chosen || ''} disabled={picker.locked || !picker.options.length} title={picker.locked ? picker.lockedReason : undefined}
+              onChange={e => pickEngine(picker.key, e.target.value)} style={{ ...fieldStyle, opacity: picker.locked ? 0.55 : 1, ...extraStyle }}>
+              <option value="">{picker.locked ? `— ${picker.lockedReason || 'not asked'} —` : !picker.options.length ? '— nothing offered here —' : placeholder}</option>
+              {picker.options.map(o => <option key={o.id} value={o.id}>{o.name}{o.twice && depth(o) ? ` · ${depth(o)}` : ''}</option>)}
+          </select>
+      );
+  };
   const choicesOfOpt = (o) => {
       const p = partOfOpt(o);
       if (!p) return [];
@@ -685,7 +733,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
 
   // Seed step selections from restored engData part ids (drafts saved before the flow-driven pickers).
   useEffect(() => {
-      if (!flowDriven) return;
+      if (!flowDriven || useEngine) return;
       setDynamicConfigParams(prev => {
           const next = { ...prev }; let ch = false;
           [[stepBrL, engData.bracketId], [stepBrR, engData.bracketIdRight], [stepBrC, engData.bracketIdCenter]].forEach(([st, pid]) => {
@@ -700,8 +748,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
 
   // CPQ-mirror auto-clear: return greys+clears the bracket; basic bracket clears the plate; a plate
   // from the wrong mode (return ↔ regular) clears on flip.
+  // (On the engine the settle IS the sweep — Shared/visionEngine — so this stays with the old steps.)
   useEffect(() => {
-      if (!flowDriven) return;
+      if (!flowDriven || useEngine) return;
       setDynamicConfigParams(prev => {
           let changed = false; const next = { ...prev };
           // Size rule: flipping Projection to 3-5/8" removes return availability — clear a selected
@@ -769,9 +818,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   }, [dynamicConfigParams, activeFlow, effRodKind, engineProj, engineChoices, engineProjs]);
 
   // Derive engData (fab math inputs) FROM the step selections: part ids for dims, end styles, and
-  // the INSIDE mount flip for inside-mount ends.
+  // the INSIDE mount flip for inside-mount ends. (On the engine: engDataFromPickers above.)
   useEffect(() => {
-      if (!flowDriven) return;
+      if (!flowDriven || useEngine) return;
       setEngData(prev => {
           const u = { ...prev }; let ch = false;
           // One-way writes: a step SELECTION sets the engData part id; NO selection leaves engData
@@ -1232,8 +1281,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       setSidemark(cfg.sidemark || '');
       const flowId = cfg.flowId || cfg.linkedCpqFlowId || cfg.cpqFlowId;
       if (flowId) setQuoteFlowId(flowId);
-      const { engineeringNotes: _en, collection: savedCollection, bracketId: _bid, rodKind: _rk, setup: _su, frontLayer: _fl, drive: _dr, ...stepParams } = cfg.specs || {};
+      const { engineeringNotes: _en, collection: savedCollection, bracketId: _bid, rodKind: _rk, setup: _su, frontLayer: _fl, drive: _dr, enginePicks: savedPicks, ...stepParams } = cfg.specs || {};
       setDynamicConfigParams(stepParams || {});
+      setEnginePicks(Array.isArray(savedPicks) ? Object.fromEntries(savedPicks.filter(x => x && x.slotKey && x.choiceId).map(x => [x.slotKey, x.choiceId])) : {});
       setQuoteSelections({ collection: savedCollection || '' });
       setEditingDraftId(cfg.id);
       setViewMode('ENGINEERING');
@@ -1243,6 +1293,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       if (!activeSession?.quoteId) return alert("Please select a customer in the main header to initialize a session.");
       if (!sidemark) return alert("Please enter a Sidemark for this specific item.");
       if (!quoteFlowId) return alert("Please select a CPQ Flow in Step 1.");
+      if (vPending.length) return alert(`${vPending.length} selection${vPending.length === 1 ? ' was' : 's were'} removed by a later choice — read the strip under the hardware pickers and press Understood on each before pushing.`);
       // NO bracket requirement here (removed 2026-07-08 per Stuart): a french/miter return or an
       // end-return arm ACTS as the bracket, and short poles (<60") may legitimately skip a center —
       // demanding engData.bracketId blocked every return-end line. The save-gate button already
@@ -1327,7 +1378,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                   // measurements must be added to the shop floor bom and raw cuts").
                   ...(traverseCuts ? { traverseCuts, rodKind: framing.ctx.rodKind || '', setup: framing.ctx.setup || '', frontLayer: framing.ctx.frontLayer || '', drive: framing.ctx.drive || '' } : {})
               },
-              ...dynamicConfigParams
+              ...dynamicConfigParams,
+              // Vision on the engine (Phase 1b): the parts by number, per slot — CPQ seeds from these.
+              ...(pk ? { enginePicks: enginePicksForDraft(pk) } : {}),
           }, 
           spatialData: { ...engData, attachments, shopNotes }, 
           author: currentUser, createdAt: serverTimestamp() 
@@ -1345,7 +1398,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           setAttachments([]);
           setShopNotes([]);
           setQuoteFlowId('');
-          setDynamicConfigParams({});
+          setDynamicConfigParams({}); setEnginePicks({});
           setQuoteSelections({ collection: '' });
           setEngData(defaultEngData);
           setShowQuotePanel(false);
@@ -1389,7 +1442,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                             </div>
                             <div>
                                 <label style={labelStyle}>* Assign Hardware Collection (CPQ)</label>
-                                <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); setEngData(prev => ((prev.rodKind || prev.setup || prev.frontLayer || prev.drive) ? { ...prev, rodKind: '', setup: '', frontLayer: '', drive: '' } : prev)); /* the framing answers are this flow's, not the last one's */ }} style={fieldStyle}>
+                                <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); setEnginePicks({}); setEngData(prev => ((prev.rodKind || prev.setup || prev.frontLayer || prev.drive) ? { ...prev, rodKind: '', setup: '', frontLayer: '', drive: '' } : prev)); /* the framing answers are this flow's, not the last one's */ }} style={fieldStyle}>
                                     <option value="">-- SELECT MATCHING CPQ FLOW --</option>
                                     {(() => {
                                         // 🎯 Single-assembly siblings (H2 pivot): flows stamped sizeGroupLabel
@@ -1508,7 +1561,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                             <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Left End Bracket{leftMount ? ` · ${leftMount}` : ''} (Auto-Syncs Dims)</label>
-                                    {stepBrL ? (
+                                    {useEngine ? engineSelect(pk.at('BRACKET', 'LEFT'), '-- Select --') : stepBrL ? (
                                         <select value={dynamicConfigParams[stepBrL.id] || ''} disabled={brLockedAt(stepBrL, 'LEFT')} onChange={e => pickStep(stepBrL.id, e.target.value)} style={{ ...fieldStyle, opacity: brLockedAt(stepBrL, 'LEFT') ? 0.45 : 1 }}>
                                             <option value="">{brLockedAt(stepBrL, 'LEFT') ? '— replaced by the return —' : '-- Select --'}</option>
                                             {brOptsFor(stepBrL).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabelIn(o, brOptsFor(stepBrL))}</option>)}
@@ -1522,7 +1575,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                 </div>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Right End Bracket{rightMount ? ` · ${rightMount}` : ''}</label>
-                                    {stepBrR ? (
+                                    {useEngine ? engineSelect(pk.at('BRACKET', 'RIGHT'), '-- Select --') : stepBrR ? (
                                         <select value={dynamicConfigParams[stepBrR.id] || ''} disabled={brLockedAt(stepBrR, 'RIGHT')} onChange={e => pickStep(stepBrR.id, e.target.value)} style={{ ...fieldStyle, opacity: brLockedAt(stepBrR, 'RIGHT') ? 0.45 : 1 }}>
                                             <option value="">{brLockedAt(stepBrR, 'RIGHT') ? '— replaced by the return —' : '-- Select --'}</option>
                                             {brOptsFor(stepBrR).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabelIn(o, brOptsFor(stepBrR))}</option>)}
@@ -1536,7 +1589,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                 </div>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>Center Bracket · passing</label>
-                                    {stepBrC ? (
+                                    {useEngine ? engineSelect(pk.at('BRACKET', 'CENTER'), '-- Select Center Style --') : stepBrC ? (
                                         <select value={dynamicConfigParams[stepBrC.id] || ''} onChange={e => pickStep(stepBrC.id, e.target.value)} style={fieldStyle}>
                                             <option value="">-- Select Center Style --</option>
                                             {brOptsFor(stepBrC).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabelIn(o, brOptsFor(stepBrC))}</option>)}
@@ -1556,7 +1609,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                 {[['Left Backplate', stepBrL, 'LEFT', 'backplateIdLeft'], ['Right Backplate', stepBrR, 'RIGHT', 'backplateIdRight'], ['Center Backplate', stepBrC, 'CENTER', 'backplateIdCenter']].map(([lbl, st, pos, legacyKey]) => (
                                     <div key={lbl} style={{ flex: 1 }}>
                                         <label style={labelStyle}>{lbl}</label>
-                                        {st ? (() => {
+                                        {useEngine ? engineSelect(pk.at('BACKPLATE', pos), '-- Select Backplate --') : st ? (() => {
                                             const basic = basicSelAt(st);
                                             const pool = subPoolAt(st, pos);
                                             const none = !(st.subOptions || []).length;
@@ -1575,6 +1628,29 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     </div>
                                 ))}
                             </div>
+                            {/* ── THE REAR ROD'S PLACES (Vision on the engine): a double asks its own ends and brackets. ── */}
+                            {useEngine && pk && pk.pickers.some(x => x.tier === 'BACK' && (x.kind === 'END' || x.kind === 'BRACKET')) && (
+                                <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+                                    {[['Back Left End', 'END', 'LEFT'], ['Back Right End', 'END', 'RIGHT']].map(([lbl, kind, pos]) => (
+                                        <div key={lbl} style={{ flex: 1 }}><label style={labelStyle}>{lbl}</label>{engineSelect(pk.at(kind, pos, 'BACK'), '-- Choose End Treatment --')}</div>
+                                    ))}
+                                </div>
+                            )}
+                            {useEngine && vDrops.length > 0 && (
+                                <div style={{ border: `1px solid ${vPending.length ? '#b00020' : 'var(--line)'}`, background: vPending.length ? '#fff5f5' : 'var(--paper)', padding: '8px 12px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: vPending.length ? '#b00020' : 'var(--ink-soft)', marginBottom: '4px' }}>
+                                        {vPending.length ? `⚠ Removed by a later choice — ${vPending.length} to acknowledge before pushing` : 'Removed by a later choice — acknowledged'}
+                                    </div>
+                                    {vDrops.map(d => (
+                                        <div key={d.key} style={{ display: 'flex', gap: '10px', alignItems: 'baseline', padding: '3px 0', opacity: d.acked ? 0.55 : 1, fontSize: '0.85rem' }}>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', flex: '0 0 auto' }}>{d.step}</span>
+                                            <span style={{ fontWeight: 500, flex: '0 0 auto' }}>{d.partName}</span>
+                                            <span style={{ color: 'var(--ink-soft)', flex: '1 1 auto', minWidth: 0 }}>— {d.reason}</span>
+                                            {!d.acked && <button onClick={() => setVDrops(prev => prev.map(x => x.key === d.key ? { ...x, acked: true } : x))} style={{ fontFamily: 'var(--mono)', fontSize: '9px', padding: '3px 8px', border: '1px solid #b00020', background: '#fff', color: '#b00020', cursor: 'pointer', flex: '0 0 auto' }}>Understood</button>}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                             {sessionDrafts.length > 0 && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                     <div style={{ display: 'flex', gap: '8px' }}>
@@ -1595,7 +1671,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                 </div>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>End Style · Left{stepEndL ? ' · from flow' : ''}</label>
-                                    {stepEndL ? (
+                                    {useEngine ? engineSelect(pk.at('END', 'LEFT', 'FRONT') || pk.at('END', 'LEFT', ''), '-- Choose End Treatment --') : stepEndL ? (
                                         <select value={dynamicConfigParams[stepEndL.id] || ''} disabled={armChosenAt('LEFT')} onChange={e => pickStep(stepEndL.id, e.target.value)} style={{ ...fieldStyle, opacity: armChosenAt('LEFT') ? 0.45 : 1 }}>
                                             <option value="">{armChosenAt('LEFT') ? '— end return arm selected —' : '-- Choose End Treatment --'}</option>
                                             {endOptsFor(stepEndL).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabelIn(o, endOptsFor(stepEndL))}</option>)}
@@ -1611,7 +1687,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                 </div>
                                 <div style={{ flex: 1 }}>
                                     <label style={labelStyle}>End Style · Right{stepEndR ? ' · from flow' : ''}</label>
-                                    {stepEndR ? (
+                                    {useEngine ? engineSelect(pk.at('END', 'RIGHT', 'FRONT') || pk.at('END', 'RIGHT', ''), '-- Choose End Treatment --') : stepEndR ? (
                                         <select value={dynamicConfigParams[stepEndR.id] || ''} disabled={armChosenAt('RIGHT')} onChange={e => pickStep(stepEndR.id, e.target.value)} style={{ ...fieldStyle, opacity: armChosenAt('RIGHT') ? 0.45 : 1 }}>
                                             <option value="">{armChosenAt('RIGHT') ? '— end return arm selected —' : '-- Choose End Treatment --'}</option>
                                             {endOptsFor(stepEndR).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabelIn(o, endOptsFor(stepEndR))}</option>)}
