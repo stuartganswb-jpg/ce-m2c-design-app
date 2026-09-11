@@ -282,6 +282,8 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 
 *(newest first)*
 
+- **2026-09-11 — Issue 1 (S5) chain COMPLETE and live: S1 landed 38b1ba6 (explosion re-keyed to arms SBA/EBA/6BA/DBA/CBA + plates BP-H/V/C, a plate line per bracket, guard test green on main; runner green on the merged tree). Stuart applied the import last night (preview: 8 NEW + 30 UPDATE kits, 104 components priced, 0 not in library, rules docs for both families). The tab-7 order hold is LIFTED. Remaining = Stuart's data (finish matrix optional — material fallback exists; H1-138 flow Kit Family `H1-138TRV` in tab 11 required for the CPQ picker) and the acceptance run: one H1-138TRV-4H/P kit on tab 7 (contents 4 × rod, 2 × SBA, 2 × BP-H, 2 plugs, no splice) and in CPQ (Start from a kit → carried traverse/single/manual/wall/4 ft; missed finish + bracket style), same bill both doors (kit 136, +30/ft above 4, included at $0).**
+
 - **2026-09-10 — Issue 1 correction (S5) 105b29c pushed, SWEPT: stamp 1789084309360 → 1789086883805, 38 assets; `Fabricut bracket codes are arm + plate here` + `included with the arm` in `606.9fbe4164.chunk.js` (4.6 + the parser); main static/js/main.777877ed.js carries the seeder literal 'the arm follows the measured projection' (the earlier 'H backplate' marker was an interpolation, not a literal). Deploy notices in BRIEF_S1–S4 §6, board Deploys row + status, state doc §6. Hard-refresh + re-PIN.**
 
 - **2026-09-10 evening — Issue 1 (S5) CORRECTION built, tests green but for S1's guard test (by design), push pending.**
