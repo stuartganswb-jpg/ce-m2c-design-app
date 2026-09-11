@@ -1,6 +1,6 @@
 // Harness for Shared/displayBom.js — the bill of a sales display board.
 //   node scripts/displayBom.test.mjs
-import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout } from '../src/components/Shared/displayBom.js';
+import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay } from '../src/components/Shared/displayBom.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -171,7 +171,9 @@ const cartBaseFront3 = {
     if (!sheets) { console.log('  (tracker xlsx not present or openpyxl missing — seed tests skipped)'); }
     else {
         const tt = displayFromTracker(sheets['Tabletop Display Board Tracker'], { boards: 50, style: 'TABLETOP', name: 'Fabricut H1 Tabletop' });
-        eq('tabletop: nine positions, the bases as an extra', [tt.rows.map(r => r.label), tt.extras.length], [['Top Row 1', 'Top Row 2', 'Base Front 1', 'Base Front 2', 'Base Front 3', 'Base Front 4', 'Base Back 1', 'Base Back 2', 'Base Back 3'], 1]);
+        eq('tabletop: nine positions; the sheet\'s "Tabletop Bases" line becomes the style\'s two parts (base + board) as extras', [tt.rows.map(r => r.label), tt.extras.map(e => e.text.split(' — ')[0])], [['Top Row 1', 'Top Row 2', 'Base Front 1', 'Base Front 2', 'Base Front 3', 'Base Front 4', 'Base Back 1', 'Base Back 2', 'Base Back 3'], ['Base', 'Board']]);
+        ok('the bases line is named in the warnings, not lost', tt.warnings.some(w => /Tabletop Bases/.test(w)), tt.warnings.join(' | '));
+        eq('top rows are HORIZONTAL, base rows are VERTICAL poles', tt.rows.map(r => r.orientation), ['H', 'H', 'V', 'V', 'V', 'V', 'V', 'V', 'V']);
         const tr1 = tt.rows[0];
         eq('Top Row 1: the rod is 2 ft cut at 16.75, EP4, one per board; the backplates are two per board', [tr1.lines[0].code, tr1.lines[0].feet, tr1.lines[0].cutLength, tr1.lines[0].finishCode, tr1.lines[0].qty, tr1.lines[2].qty], ['H1-1R/EP', 2, 16.75, 'EP4', 1, 2]);
         eq('"Top Row1" (no space) joins Top Row 1', tr1.lines.length, 4);
@@ -186,16 +188,44 @@ const cartBaseFront3 = {
         ok('the code-less "Mitered Return" line is skipped and named', wl.warnings.some(w => /Mitered Return/.test(w)), wl.warnings.join(' | '));
         eq('the wall tab\'s narrower columns are read (no plater column)', wl.rows[1].lines.map(l => l.code), ['H1-1R/EP', 'H1-1FR/EP', 'H1-1FRRC/EP', 'H1-1BR/EP']);
 
-        // the seeded rows land as evenly spaced bands inside the face
-        const lay = seededRowsLayout(tt.rows, { widthIn: 24, heightIn: 24 });
-        ok('nine bands inside a 24 × 24 face, none overlapping', lay.every(r => r.x >= 0 && r.y >= 0 && r.x + r.w <= 2400 && r.y + r.h <= 2400) && lay.every((r, i) => i === 0 || r.y >= lay[i - 1].y + lay[i - 1].h), JSON.stringify(lay.map(r => [r.y, r.h])));
+        // the layout: two bands on the board, seven poles standing in the 2.5" base, F B F B F B F across
+        const lay = seededRowsLayout(tt.rows, { widthIn: 24, heightIn: 24, baseIn: 2.5 });
+        const byLabel = Object.fromEntries(lay.map(r => [r.label, r]));
+        const baseTop = 2400 - 60 - 250;
+        ok('every row inside the face', lay.every(r => r.x >= 0 && r.y >= 0 && r.x + r.w <= 2400 && r.y + r.h <= 2400), JSON.stringify(lay.map(r => [r.label, r.x, r.y, r.w, r.h])));
+        eq('front poles stand on the base top; back poles are taller and raised behind', [byLabel['Base Front 1'].y + byLabel['Base Front 1'].h, byLabel['Base Back 1'].y + byLabel['Base Back 1'].h, byLabel['Base Back 1'].h > byLabel['Base Front 1'].h], [baseTop, baseTop - 60, true]);
+        ok('poles interleave front / back left to right', byLabel['Base Front 1'].x < byLabel['Base Back 1'].x && byLabel['Base Back 1'].x < byLabel['Base Front 2'].x && byLabel['Base Back 3'].x < byLabel['Base Front 4'].x);
+        ok('the two board rows sit above the poles and do not overlap them', byLabel['Top Row 2'].y + byLabel['Top Row 2'].h < byLabel['Base Back 1'].y && byLabel['Top Row 1'].y + byLabel['Top Row 1'].h <= byLabel['Top Row 2'].y);
+        eq('a wall board (no base) keeps every row horizontal, full-width bands', seededRowsLayout(wl.rows, { widthIn: 24, heightIn: 30 }).map(r => r.w === Math.round(2400 * 0.84)), [true, true, true, true, true, true]);
+        eq('the rows come back in the order given', lay.map(r => r.label), tt.rows.map(r => r.label));
         // the seeded display bills like a cart-built one: boardBom reads the same line shape
         const d = newDisplay({ id: 'T', name: tt.name, style: 'TABLETOP' });
         d.faces[0].rows = lay.map((r, i) => ({ id: `s${i}`, label: r.label, config: { assemblyName: r.label, finishLabel: '', lines: r.lines.map(l => ({ partId: l.code, legacyErpId: l.code, name: l.name, qty: l.qty, perFoot: l.perFoot, feet: l.feet, cutLength: l.cutLength, finishCode: l.finishCode })) } }));
         d.extras = tt.extras;
         const bom = orderBom(boardBom(d, []), 50);
+        eq('fifty boards need fifty bases and fifty boards', bom.extras.map(e => e.qty), [50, 50]);
         eq('fifty boards: 100 vertical backplates, 50 rings, 100 ft of EP4 rod — the tracker\'s numbers', [bom.parts.find(p => p.code === 'H1-1FRVC/EP').qty, bom.parts.find(p => p.code === 'H1-1BR/EP').qty, bom.parts.find(p => p.code === 'H1-1R/EP' && p.finishCode === 'EP4').feet], [150, 50, 100]);
     }
+}
+
+// ── 8. CHIPS FOLLOW THE FLOW'S TAGGED FINISHES ───────────────────────────────────────────────
+{
+    const finishes = [
+        { id: 'FIN-1', code: 'P06', name: 'Gild Gold' }, { id: 'FIN-2', code: 'P30', name: 'Silver' }, { id: 'FIN-3', code: 'S04', name: 'Natural Oak' },
+        { id: 'OUT-1', code: 'EP4', name: 'Satin Gold', outsourced: true }, { id: 'OUT-2', code: 'EP2', name: 'Polished Nickel', outsourced: true },
+    ];
+    const flow = { id: 'F-H1', name: 'H1-138 — GENERATED', defaultFinishOptions: ['FIN-1', 'ep4'], steps: [{ finishAllowedOptions: ['FIN-3'], styleOptions: [{ finishAllowedOptions: ['fin-2'] }] }] };
+    eq('the flow\'s keys: defaults + step + option options, upper-cased, by id or code', [...flowFinishKeys(flow)].sort(), ['EP4', 'FIN-1', 'FIN-2', 'FIN-3']);
+    const d = newDisplay({ id: 'D', style: 'TABLETOP' });
+    const all = chipsForDisplay(d, finishes, [flow]);
+    eq('no flow picked → every finish, and it says so', [all.chips.length, all.restricted], [5, false]);
+    d.finishFlowId = 'F-H1';
+    const some = chipsForDisplay(d, finishes, [flow]);
+    eq('the flow picked → only its four (id match FIN-1/2/3, code match EP4); EP2 is not on the flow', [some.chips.map(c => c.code), some.restricted, some.flow.id], [['EP4', 'P06', 'P30', 'S04'], true, 'F-H1']);
+    eq('the bill\'s chip count follows the flow too', boardBom(d, finishes, [flow]).chips.length, 4);
+    eq('an unknown flow id → nothing restricted (all), not zero chips', chipsForDisplay({ ...d, finishFlowId: 'gone' }, finishes, [flow]).chips.length, 5);
+    eq('a flow with nothing tagged → all', chipsForDisplay(d, finishes, [{ id: 'F-H1', steps: [] }]).restricted, false);
+    eq('a tabletop is born with its two parts, a wall board with its two boards', [newDisplay({ id: 'a', style: 'TABLETOP' }).extras.length, newDisplay({ id: 'b', style: 'WALL' }).extras.map(e => e.text.split(' — ')[0])], [2, ['Product board', 'Chip board']]);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

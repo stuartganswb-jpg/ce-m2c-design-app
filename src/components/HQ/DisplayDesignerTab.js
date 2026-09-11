@@ -20,7 +20,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, query, where } from 'firebase/firestore';
-import { DISPLAY_STYLES, UNITS_PER_INCH, newDisplay, chipLines, chipFaceLayout, boardBom, orderBom, bomCsv, rowConfigFromCartItem, displayFromTracker, seededRowsLayout } from '../Shared/displayBom';
+import { DISPLAY_STYLES, UNITS_PER_INCH, newDisplay, chipsForDisplay, chipFaceLayout, boardBom, orderBom, bomCsv, rowConfigFromCartItem, displayFromTracker, seededRowsLayout } from '../Shared/displayBom';
 import { saveGuideCapture } from '../Shared/guideCapture';
 import { workbookFileToSheets } from '../Shared/customerControlFile';
 import DisplayBuildsPanel from './DisplayBuildsPanel';
@@ -39,6 +39,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
     const [dirty, setDirty] = useState(false);
     const [faceIx, setFaceIx] = useState(0);
     const [finishes, setFinishes] = useState({ inHouse: [], outsourced: [] });
+    const [flows, setFlows] = useState([]);          // cpq_flows (brand) — a display picks the flow whose tagged finishes make its chip board
     const [busy, setBusy] = useState('');
     const [boards, setBoards] = useState(1);         // the BOM multiplier, preview only
     const [newForm, setNewForm] = useState(null);    // { name, style }
@@ -55,10 +56,12 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
         }, () => {});
         const u2 = onSnapshot(doc(db, 'system', 'master_finishes'), s => setFinishes(f => ({ ...f, inHouse: (s.exists() && Array.isArray(s.data().finishes)) ? s.data().finishes : [] })), () => {});
         const u3 = onSnapshot(collection(db, 'hq_outsource_finishes'), s => setFinishes(f => ({ ...f, outsourced: s.docs.map(d => ({ id: d.id, ...d.data(), outsourced: true })) })), () => {});
-        return () => { u1(); u2(); u3(); };
+        const u4 = onSnapshot(collection(db, 'cpq_flows'), s => setFlows(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => !activeBrand || !f.brandId || f.brandId === activeBrand).sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))), () => {});
+        return () => { u1(); u2(); u3(); u4(); };
     }, [activeBrand]);
     const finishList = useMemo(() => [...finishes.inHouse, ...finishes.outsourced], [finishes]);
-    const chips = useMemo(() => chipLines(finishList), [finishList]);
+    const chipSet = useMemo(() => chipsForDisplay(draft, finishList, flows), [draft, finishList, flows]);
+    const chips = chipSet.chips;
 
     const open = (d) => { setOpenId(d.id); setDraft(JSON.parse(JSON.stringify(d))); setDirty(false); setFaceIx(0); };
     const close = () => { if (dirty && !window.confirm('Discard unsaved changes to this display?')) return; setOpenId(null); setDraft(null); setDirty(false); };
@@ -134,11 +137,11 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
         const id = `DSP-${name.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Date.now().toString().slice(-5)}`;
         const d = newDisplay({ id, name, style, brandId: activeBrand || '' });
         const rowsFace = d.faces.find(f => f.kind === 'ROWS');
-        const laid = seededRowsLayout(parsed.rows, { widthIn: rowsFace.widthIn, heightIn: rowsFace.heightIn });
+        const laid = seededRowsLayout(parsed.rows, { widthIn: rowsFace.widthIn, heightIn: rowsFace.heightIn, baseIn: rowsFace.baseIn || 0 });
         rowsFace.rows = laid.map((r, i) => {
             const fins = [...new Set(r.lines.map(l => l.finishCode).filter(Boolean))];
             return {
-                id: `seed${i + 1}`, label: r.label, x: r.x, y: r.y, w: r.w, h: r.h, imageUrl: '', hiResUrl: '',
+                id: `seed${i + 1}`, label: r.label, orientation: r.orientation || 'H', x: r.x, y: r.y, w: r.w, h: r.h, imageUrl: '', hiResUrl: '',
                 config: {
                     cartId: '', assemblyId: '', assemblyName: r.label, flowId: '', finishLabel: fins.join(' / '), finishes: fins,
                     lengthInches: (r.lines.find(l => l.perFoot) || {}).cutLength || 0, memo: r.note || '', seededFrom: seed.fileName || 'tracker',
@@ -172,7 +175,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
             const w = Math.round(W * 0.82);
             const h = Math.round(w / 4);
             const below = (face.rows || []).reduce((m, r) => Math.max(m, r.y + r.h), 0.6 * UNITS_PER_INCH);
-            const row = { id: uid(), label, x: Math.round((W - w) / 2), y: Math.round(below + 0.4 * UNITS_PER_INCH), w, h, imageUrl, hiResUrl, config: rowConfigFromCartItem(it) };
+            const row = { id: uid(), label, orientation: 'H', x: Math.round((W - w) / 2), y: Math.round(below + 0.4 * UNITS_PER_INCH), w, h, imageUrl, hiResUrl, config: rowConfigFromCartItem(it) };
             mutateFace(f => ({ ...f, rows: [...(f.rows || []), row] }));
         } catch (e) { alert('Could not place the row: ' + (e?.message || e)); }
         setBusy('');
@@ -199,7 +202,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
     };
 
     // ── the bill ─────────────────────────────────────────────────────────────────────────────
-    const bom = useMemo(() => (draft ? boardBom(draft, finishList) : { parts: [], chips: [], extras: [] }), [draft, finishList]);
+    const bom = useMemo(() => (draft ? boardBom(draft, finishList, flows) : { parts: [], chips: [], extras: [] }), [draft, finishList, flows]);
     const order = useMemo(() => orderBom(bom, boards), [bom, boards]);
     const copyCsv = async () => { try { await navigator.clipboard.writeText(bomCsv(bom, boards)); alert(`Copied the bill for ${boards} board(s) as CSV.`); } catch { alert('Copy failed — click the page first, then try again.'); } };
 
@@ -325,10 +328,17 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                                 <input type="number" min="6" max="96" step="0.5" value={f.widthIn} onClick={e => e.stopPropagation()} onChange={e => mutate(d => ({ ...d, faces: d.faces.map((x, j) => (j === i ? { ...x, widthIn: Number(e.target.value) || x.widthIn } : x)) }))} style={{ ...inp, width: '58px', padding: '3px 6px', fontSize: '0.8rem' }} />
                                 ×
                                 <input type="number" min="6" max="96" step="0.5" value={f.heightIn} onClick={e => e.stopPropagation()} onChange={e => mutate(d => ({ ...d, faces: d.faces.map((x, j) => (j === i ? { ...x, heightIn: Number(e.target.value) || x.heightIn } : x)) }))} style={{ ...inp, width: '58px', padding: '3px 6px', fontSize: '0.8rem' }} />
-                                in · {f.kind === 'CHIPS' ? `${chips.length} chips` : `${(f.rows || []).length} rows`}
+                                in{f.kind === 'ROWS' && f.baseIn !== undefined ? <> · base <input type="number" min="0" max="12" step="0.5" value={f.baseIn} onClick={e => e.stopPropagation()} onChange={e => mutate(d => ({ ...d, faces: d.faces.map((x, j) => (j === i ? { ...x, baseIn: Math.max(0, Number(e.target.value) || 0) } : x)) }))} style={{ ...inp, width: '50px', padding: '3px 6px', fontSize: '0.8rem' }} title="Height of the base band the vertical poles stand in" /></> : null} · {f.kind === 'CHIPS' ? `${chips.length} chips` : `${(f.rows || []).length} rows`}
                             </div>
                         </div>
                     ))}
+
+                    <div style={{ ...mono, marginTop: '18px' }}>Sample chips — finishes tagged on the flow</div>
+                    <select value={draft.finishFlowId || ''} onChange={e => mutate(d => ({ ...d, finishFlowId: e.target.value }))} style={{ ...inp, width: '100%', marginTop: '6px' }} title="The chip board carries only the finishes tagged on this CPQ flow (its default finishes plus every step's allowed finishes) — the same set the onboarding price list prints">
+                        <option value="">— every finish ({chips.length}) — pick the flow —</option>
+                        {flows.map(f => <option key={f.id} value={f.id}>{f.name || f.id}</option>)}
+                    </select>
+                    <div style={{ ...mono, marginTop: '4px', color: chipSet.restricted ? 'var(--ink-soft)' : '#b02d20' }}>{chipSet.restricted ? `${chips.length} chips from ${chipSet.flow?.name || 'the flow'}` : 'no flow picked — every finish is on the chip board'}</div>
 
                     {face?.kind === 'ROWS' && (
                         <>
@@ -338,7 +348,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                                 <div key={r.id} style={{ padding: '8px 10px', margin: '6px 0', border: '1px solid var(--line)' }}>
                                     <input value={r.label} onChange={e => mutateFace(f => ({ ...f, rows: f.rows.map(x => (x.id === r.id ? { ...x, label: e.target.value } : x)) }))} style={{ ...inp, width: '100%', padding: '4px 6px', fontSize: '0.85rem' }} />
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px' }}>{r.config?.assemblyName}{r.config?.lengthInches ? ` · ${r.config.lengthInches}"` : ''}{r.config?.finishLabel ? ` · ${r.config.finishLabel}` : ''}</div>
-                                    <div style={{ ...mono, marginTop: '4px' }}>{(r.config?.lines || []).filter(l => !l.hidden && !l.noNs).length} lines · <span onClick={() => mutateFace(f => ({ ...f, rows: f.rows.filter(x => x.id !== r.id) }))} style={{ color: '#b02d20', cursor: 'pointer' }}>remove</span></div>
+                                    <div style={{ ...mono, marginTop: '4px' }}>{(r.config?.lines || []).filter(l => !l.hidden && !l.noNs).length} lines · <span onClick={() => mutateFace(f => ({ ...f, rows: f.rows.map(x => (x.id === r.id ? { ...x, orientation: x.orientation === 'V' ? 'H' : 'V', w: x.h, h: x.w } : x)) }))} style={{ cursor: 'pointer', color: 'var(--brass)' }} title="Horizontal = mounted across the board · Vertical = a pole standing in the base">{r.orientation === 'V' ? '↕ vertical' : '↔ horizontal'}</span> · <span onClick={() => mutateFace(f => ({ ...f, rows: f.rows.filter(x => x.id !== r.id) }))} style={{ color: '#b02d20', cursor: 'pointer' }}>remove</span></div>
                                 </div>
                             ))}
                         </>
@@ -360,13 +370,21 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                     <div style={mono}>{face?.label} · {face?.widthIn}" × {face?.heightIn}" · drawn to scale{chipLayout?.overflow ? ' · ⚠ the chips do not fit this height' : ''}</div>
                     <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ background: '#fff', boxShadow: '0 3px 18px rgba(0,0,0,0.14)', width: `min(100%, ${Math.round(760 * (W / Math.max(W, H)))}px)`, height: 'auto', touchAction: 'none' }}>
                         <rect x="0" y="0" width={W} height={H} fill="#fbfaf7" stroke="var(--line)" />
+                        {face?.kind === 'ROWS' && (face.baseIn || 0) > 0 && (
+                            <g>
+                                <rect x={0.3 * UNITS_PER_INCH} y={H - 0.6 * UNITS_PER_INCH - face.baseIn * UNITS_PER_INCH} width={W - 0.6 * UNITS_PER_INCH} height={face.baseIn * UNITS_PER_INCH} fill="#4a3526" opacity=".85" />
+                                <text x={W / 2} y={H - 0.6 * UNITS_PER_INCH - face.baseIn * UNITS_PER_INCH / 2 + 8} textAnchor="middle" fontSize={Math.round(UNITS_PER_INCH * 0.18)} fontFamily="var(--mono)" fill="#fff" opacity=".8" style={{ pointerEvents: 'none' }}>BASE — the vertical poles stand here · {face.baseIn}"</text>
+                            </g>
+                        )}
                         {face?.kind === 'ROWS' && (face.rows || []).map(r => (
                             <g key={r.id}>
                                 {r.imageUrl
                                     ? <image href={r.hiResUrl || r.imageUrl} x={r.x} y={r.y} width={r.w} height={r.h} preserveAspectRatio="xMidYMid meet" onPointerDown={e => startDrag(e, 'move', r.id, { ox: r.x, oy: r.y })} style={{ cursor: 'move' }} />
-                                    : <rect x={r.x} y={r.y} width={r.w} height={r.h} fill="var(--paper-2)" stroke="var(--line)" onPointerDown={e => startDrag(e, 'move', r.id, { ox: r.x, oy: r.y })} style={{ cursor: 'move' }} />}
+                                    : <rect x={r.x} y={r.y} width={r.w} height={r.h} fill={r.orientation === 'V' ? '#e9e2d3' : 'var(--paper-2)'} stroke="var(--line)" onPointerDown={e => startDrag(e, 'move', r.id, { ox: r.x, oy: r.y })} style={{ cursor: 'move' }} />}
                                 <rect x={r.x} y={r.y} width={r.w} height={r.h} fill="none" stroke="var(--brass)" strokeWidth="2" strokeDasharray="8 5" style={{ pointerEvents: 'none' }} />
-                                <text x={r.x + 10} y={r.y - 8} fontSize={Math.round(UNITS_PER_INCH * 0.18)} fontFamily="var(--mono)" fill="var(--ink-soft)" style={{ pointerEvents: 'none' }}>{r.label} — {r.config?.assemblyName}{r.config?.finishLabel ? ` · ${r.config.finishLabel}` : ''}</text>
+                                {r.orientation === 'V'
+                                    ? <text transform={`translate(${r.x + r.w / 2 + 6} ${r.y + r.h - 12}) rotate(-90)`} fontSize={Math.round(UNITS_PER_INCH * 0.16)} fontFamily="var(--mono)" fill="var(--ink-soft)" style={{ pointerEvents: 'none' }}>{r.label}{r.config?.finishLabel ? ` · ${r.config.finishLabel}` : ''}</text>
+                                    : <text x={r.x + 10} y={r.y - 8} fontSize={Math.round(UNITS_PER_INCH * 0.18)} fontFamily="var(--mono)" fill="var(--ink-soft)" style={{ pointerEvents: 'none' }}>{r.label} — {r.config?.assemblyName}{r.config?.finishLabel ? ` · ${r.config.finishLabel}` : ''}</text>}
                                 <rect x={r.x + r.w - 18} y={r.y + r.h - 18} width="36" height="36" fill="var(--brass)" stroke="#fff" strokeWidth="2" onPointerDown={e => startDrag(e, 'resize', r.id, { ow: r.w, oh: r.h })} style={{ cursor: 'nwse-resize' }} />
                             </g>
                         ))}

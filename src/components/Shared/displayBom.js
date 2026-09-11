@@ -27,8 +27,15 @@ export const DISPLAY_STYLES = {
     TABLETOP: {
         label: 'Tabletop',
         faces: [
-            { key: 'FRONT', label: 'Front — products', kind: 'ROWS', widthIn: 24, heightIn: 24 },
+            // A tabletop's front is a BOARD (horizontal rows mounted on it) standing in a BASE the
+            // vertical poles stand in — one face, two zones; `baseIn` is the base band's height.
+            { key: 'FRONT', label: 'Front — products', kind: 'ROWS', widthIn: 24, heightIn: 24, baseIn: 2.5 },
             { key: 'BACK', label: 'Back — sample chips', kind: 'CHIPS', widthIn: 24, heightIn: 24 },
+        ],
+        // The two parts every tabletop is built from (Stuart 2026-09-11) — seeded, editable.
+        extras: [
+            { text: 'Base — sits flat on the table; the vertical poles stand in it', qty: 1 },
+            { text: 'Board — attached to the base; the top rows on the front, the sample chips on the back', qty: 1 },
         ],
     },
     WALL: {
@@ -36,6 +43,10 @@ export const DISPLAY_STYLES = {
         faces: [
             { key: 'PRODUCT', label: 'Product board', kind: 'ROWS', widthIn: 24, heightIn: 30 },
             { key: 'CHIPS', label: 'Chip board', kind: 'CHIPS', widthIn: 24, heightIn: 30 },
+        ],
+        extras: [
+            { text: 'Product board — the horizontal rows mount on it', qty: 1 },
+            { text: 'Chip board — the sample chips mount on it', qty: 1 },
         ],
     },
 };
@@ -46,8 +57,35 @@ export function newDisplay({ id, name = '', style = 'TABLETOP', brandId = '' } =
     return {
         id, name, style, brandId, customerId: '',
         faces: def.faces.map(f => ({ ...f, rows: [] })),
-        extras: [],
+        // The chips face carries only the finishes TAGGED on this flow (Stuart 2026-09-11: "it
+        // should only be the finishes tagged on the cpq flow for H1") — picked on the display.
+        finishFlowId: '',
+        extras: (def.extras || []).map(e => ({ ...e })),
     };
+}
+
+// ── WHICH FINISHES A DISPLAY SHOWS: the CPQ flow's tagged set ────────────────────────────────
+// The same union the onboarding price list uses (BOMTab): the flow's defaultFinishOptions plus
+// every step's / option's finishAllowedOptions. Those are finish IDs (the 4.5 record's `id`) or
+// codes — match either. An empty set means "nothing restricted" → every finish, and the screen
+// says so.
+export function flowFinishKeys(flow) {
+    const keys = new Set();
+    if (!flow) return keys;
+    (flow.defaultFinishOptions || []).forEach(v => keys.add(U(v)));
+    (flow.steps || []).forEach(s => {
+        (s.finishAllowedOptions || []).forEach(v => keys.add(U(v)));
+        (s.styleOptions || []).forEach(o => (o.finishAllowedOptions || []).forEach(v => keys.add(U(v))));
+    });
+    keys.delete('');
+    return keys;
+}
+
+/** The chips a display shows: its flow's tagged finishes, or every finish when no flow is picked. */
+export function chipsForDisplay(display, finishes = [], flows = []) {
+    const flow = display?.finishFlowId ? (flows || []).find(f => f && f.id === display.finishFlowId) : null;
+    const keys = flowFinishKeys(flow);
+    return { chips: chipLines(finishes, keys.size ? keys : null), restricted: keys.size > 0, flow };
 }
 
 // ── CHIPS ────────────────────────────────────────────────────────────────────────────────────
@@ -74,13 +112,14 @@ const codeOrder = (code) => { const m = U(code).match(/(\d+)/); return m ? parse
  * One chip per sellable finish. `finishes` = the 4.5 in-house list + the outsourced list, each
  * { code, name, material?, isSubFinish?, outsourced?, textureUrl? }. Duplicate codes collapse.
  */
-export function chipLines(finishes = []) {
+export function chipLines(finishes = [], allowed = null) {
     const seen = new Set();
     const out = [];
     finishes.forEach(f => {
         if (!f || f.isSubFinish) return;
         const code = U(f.code || f.name);
         if (!code || seen.has(code)) return;
+        if (allowed && allowed.size && !allowed.has(code) && !allowed.has(U(f.id))) return;
         const group = chipGroupOf(f);
         if (!group) return;
         seen.add(code);
@@ -152,7 +191,7 @@ export function rowBomLines(row) {
  * finish on every chips face, and the extras. `finishes` feeds the chip faces.
  * Returns { parts:[…], chips:[…], extras:[…] }.
  */
-export function boardBom(display, finishes = []) {
+export function boardBom(display, finishes = [], flows = []) {
     const byKey = new Map();
     (display?.faces || []).forEach(face => {
         if (face.kind !== 'ROWS') return;
@@ -167,7 +206,7 @@ export function boardBom(display, finishes = []) {
     });
     const parts = [...byKey.values()].map(l => { const { row, ...rest } = l; return rest; });
     const chipFaces = (display?.faces || []).filter(f => f.kind === 'CHIPS').length;
-    const chips = chipFaces ? chipLines(finishes).map(c => ({ ...c, qty: c.qty * chipFaces })) : [];
+    const chips = chipFaces ? chipsForDisplay(display, finishes, flows).chips.map(c => ({ ...c, qty: c.qty * chipFaces })) : [];
     const extras = (display?.extras || []).filter(e => e && String(e.text || '').trim()).map(e => ({ text: String(e.text).trim(), qty: N(e.qty, 1) > 0 ? N(e.qty, 1) : 1 }));
     return { parts, chips, extras };
 }
@@ -214,8 +253,8 @@ export function rowConfigFromCartItem(it) {
 // without changing what this one has already pulled — and can be re-taken on purpose.
 
 /** The bill of one board as order lines: per-board quantities, the tracker's columns blank. */
-export function buildLinesFrom(display, finishes = []) {
-    const bom = boardBom(display, finishes);
+export function buildLinesFrom(display, finishes = [], flows = []) {
+    const bom = boardBom(display, finishes, flows);
     const parts = bom.parts.map(l => ({
         key: `${l.code}|${l.finishCode}`,
         partId: l.partId, code: l.code, billedId: U(l.billedId || ''), name: l.name, role: l.role, finishCode: l.finishCode,
@@ -317,12 +356,14 @@ export function displayFromTracker(grid, { boards, style = 'TABLETOP', name = ''
         const position = String(pos || '').trim().replace(/\s+/g, ' ');
         if (!position || /^Position on Board$/i.test(position) || /Display Tracker/i.test(String(r[1] || ''))) return;
         const codeU = U(code);
-        if (/BASES?$/i.test(position) && !codeU) { extras.push({ text: `${position} (sheet: ${N(qtyNeeded)} for the order)`, qty: 1 }); return; }
+        if (/BASES?$/i.test(position) && !codeU) { warnings.push(`row ${i + 1}: "${position}" (${N(qtyNeeded)} on the sheet) — the display's own parts are seeded as Board extras instead`); return; }
         if (!codeU) { warnings.push(`row ${i + 1} (${position}): no item code — "${String(desc || '').trim()}" skipped`); return; }
         const label = position.replace(/Row(\d)/i, 'Row $1');
         if (!current || current.label.toUpperCase() !== label.toUpperCase()) {
             current = rows.find(x => x.label.toUpperCase() === label.toUpperCase()) || null;
-            if (!current) { current = { label, lines: [], note: '' }; rows.push(current); }
+            // A "Base …" position is a pole standing in the base: one end, no brackets — drawn
+            // VERTICAL. Everything else mounts across the board — HORIZONTAL.
+            if (!current) { current = { label, lines: [], note: '', orientation: /^BASE\b/i.test(label) ? 'V' : 'H' }; rows.push(current); }
             rowNote = '';
         }
         if (notes && String(notes).trim()) { rowNote = String(notes).trim(); if (!current.note) current.note = rowNote; }
@@ -338,15 +379,42 @@ export function displayFromTracker(grid, { boards, style = 'TABLETOP', name = ''
         if (current.lines.some(l => l.code === codeU)) warnings.push(`row ${i + 1} (${label}): ${codeU} appears twice in this row — "${line.name}" — check the sheet's coding`);
         current.lines.push(line);
     });
+    const def = DISPLAY_STYLES[style] || DISPLAY_STYLES.TABLETOP;
+    (def.extras || []).forEach(e => extras.push({ ...e }));
     return { name: name || (style === 'WALL' ? 'Wall display' : 'Tabletop display'), style, boards: n, rows, extras, warnings };
 }
 
-/** Lay seeded rows on a ROWS face: evenly spaced full-width bands, top to bottom. */
-export function seededRowsLayout(rows, { widthIn = 24, heightIn = 24 } = {}) {
+/**
+ * Lay seeded rows on a ROWS face. Horizontal rows are evenly spaced full-width bands on the
+ * board; vertical rows (the base poles) stand on the base band at the bottom, spread across it,
+ * "Base Front n" and "Base Back n" interleaved as they stand on the real base, the back poles a
+ * little taller and raised so they read as behind. A face with no base (a wall board) keeps
+ * every row horizontal.
+ */
+export function seededRowsLayout(rows, { widthIn = 24, heightIn = 24, baseIn = 0 } = {}) {
     const W = widthIn * UNITS_PER_INCH, H = heightIn * UNITS_PER_INCH;
-    const k = Math.max(1, rows.length);
     const margin = 0.6 * UNITS_PER_INCH;
-    const band = (H - 2 * margin) / k;
+    const base = Math.max(0, N(baseIn)) * UNITS_PER_INCH;
+    const vert = base > 0 ? rows.filter(r => r.orientation === 'V') : [];
+    const horiz = rows.filter(r => !vert.includes(r));
+    const out = [];
+    // the poles: front ones on the base's top edge, back ones behind — interleaved F B F B …
+    const frontH = 6 * UNITS_PER_INCH, backH = 8 * UNITS_PER_INCH, poleW = 1.6 * UNITS_PER_INCH;
+    const fronts = vert.filter(r => !/BACK/i.test(r.label)), backs = vert.filter(r => /BACK/i.test(r.label));
+    const order = []; for (let i = 0; i < Math.max(fronts.length, backs.length); i++) { if (fronts[i]) order.push(fronts[i]); if (backs[i]) order.push(backs[i]); }
+    const baseTop = H - margin - base;
+    const slot = order.length ? (W - 2 * margin) / order.length : 0;
+    order.forEach((r, i) => {
+        const isBack = backs.includes(r);
+        const h = isBack ? backH : frontH;
+        const y = isBack ? baseTop - 0.6 * UNITS_PER_INCH - h : baseTop - h;
+        out.push({ ...r, x: Math.round(margin + i * slot + (slot - poleW) / 2), y: Math.round(y), w: Math.round(poleW), h: Math.round(h) });
+    });
+    // the board rows above them
+    const boardBottom = order.length ? baseTop - backH - 0.6 * UNITS_PER_INCH - 0.4 * UNITS_PER_INCH : H - margin;
+    const k = Math.max(1, horiz.length);
+    const band = Math.max(0, boardBottom - margin) / k;
     const w = Math.round(W * 0.84), h = Math.round(Math.min(band * 0.7, 3.5 * UNITS_PER_INCH));
-    return rows.map((r, i) => ({ ...r, x: Math.round((W - w) / 2), y: Math.round(margin + i * band + (band - h) / 2), w, h }));
+    horiz.forEach((r, i) => out.push({ ...r, x: Math.round((W - w) / 2), y: Math.round(margin + i * band + (band - h) / 2), w, h }));
+    return rows.map(r => out.find(o => o.label === r.label));
 }

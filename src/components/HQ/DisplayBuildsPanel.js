@@ -36,6 +36,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     const [displays, setDisplays] = useState([]);
     const [finishes, setFinishes] = useState({ inHouse: [], outsourced: [] });
     const [customers, setCustomers] = useState([]);
+    const [flows, setFlows] = useState([]);         // the display's flow decides its chip set
     const [draft, setDraft] = useState(null);
     const [dirty, setDirty] = useState(false);
     const [busy, setBusy] = useState('');
@@ -48,7 +49,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         const u3 = onSnapshot(doc(db, 'system', 'master_finishes'), s => setFinishes(f => ({ ...f, inHouse: (s.exists() && Array.isArray(s.data().finishes)) ? s.data().finishes : [] })), () => {});
         const u4 = onSnapshot(collection(db, 'hq_outsource_finishes'), s => setFinishes(f => ({ ...f, outsourced: s.docs.map(d => ({ id: d.id, ...d.data(), outsourced: true })) })), () => {});
         const u5 = onSnapshot(query(collection(db, 'crm_records'), where('type', '==', 'CUSTOMER')), s => setCustomers(s.docs.map(d => ({ id: d.id, name: d.data().companyName || d.data().name || d.id })).sort((a, b) => a.name.localeCompare(b.name))), () => {});
-        return () => { u1(); u2(); u3(); u4(); u5(); };
+        const u6 = onSnapshot(collection(db, 'cpq_flows'), s => setFlows(s.docs.map(d => ({ id: d.id, ...d.data() }))), () => {});
+        return () => { u1(); u2(); u3(); u4(); u5(); u6(); };
     }, [activeBrand]);
     const finishList = useMemo(() => [...finishes.inHouse, ...finishes.outsourced], [finishes]);
 
@@ -76,7 +78,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             name: `${disp.name} × ${qty}${cust ? ` — ${cust.name}` : ''}`,
             customerId: cust?.id || '', customerName: cust?.name || '', soNumber: String(newForm.soNumber || '').trim(), poNumber: String(newForm.poNumber || '').trim(),
             qty, built: 0, status: 'PLANNED', shipPlan: [], notes: '',
-            lines: buildLinesFrom(disp, finishList), snapshotAt: Date.now(),
+            lines: buildLinesFrom(disp, finishList, flows), snapshotAt: Date.now(),
             createdAt: Date.now(), createdBy: String(currentUser || ''), updatedAt: Date.now(), updatedBy: String(currentUser || ''),
         };
         setBusy('Opening the order…');
@@ -104,7 +106,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         const disp = displays.find(d => d.id === draft?.displayId);
         if (!disp) return alert('The display this order was opened from no longer exists.');
         if (!window.confirm('Re-take the bill from the display as it is now? Typed work-order numbers, plater status and notes stay on lines that still exist; lines the design no longer has are dropped.')) return;
-        mutate(d => ({ ...d, lines: resnapshotLines(d.lines, buildLinesFrom(disp, finishList)), snapshotAt: Date.now() }));
+        mutate(d => ({ ...d, lines: resnapshotLines(d.lines, buildLinesFrom(disp, finishList, flows)), snapshotAt: Date.now() }));
     };
     const fillPlan = () => {
         const plan = shipPlanFill({ qty: draft.qty, perShip: fill.perShip, start: fill.start, everyDays: fill.everyDays });
