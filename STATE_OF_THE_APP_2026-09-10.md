@@ -424,6 +424,15 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 · S3 · 47c2b6b (pushed 12:25).** Stuart: "yes fix the plating links" + the Convert tab cannot scroll to the
+  manual add area. Shipped: the OB scan-in copies the demand's `finSiblingId / orderKey / soAppId / shopOrderId` onto the
+  plating line (the gap found 09-10 that made D1 dead code for custom orders); put-away on a `custom: true` line posts no
+  NetSuite build or adjustment (assumption stated to Stuart before the push: the plater PO + item receipt are the whole
+  NetSuite record for a custom-fabricated pole), stamps `nsBuildSkipped`, mirrors Complete, propagates 'Plated', commits to
+  the order's bin, refuses a short count; the Convert column no longer pins to the viewport (its raw-item list had been
+  squeezed to zero by the growing to-do panel). **§2.1 #2 (the plating round trip) is now runnable end to end** on Stuart's
+  /EP order. Named, not fixed: a custom line short at the plater has no path but "receive the rest or RTG re-makes".
+
 - **2026-09-11 · S1 · 2b164a5 (pushed 09:59).** Vision Phase 2: the bridge runs both ways (CPQ line → Vision board; a Vision re-save
   replaces its line on Resume via `Shared/visionHandoff`). Phase 1b live-read ✓ on H1-138 (return locks its bracket with the
   engine's reason, plate pool follows, fab math reads RETURN MITER, removals strip), Brimar (one-piece plate lock), H1-2TRV

@@ -325,6 +325,14 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-11 — 47c2b6b pushed 12:25 EDT (S3): the plating links + custom put-away, and the Convert scroll.** Stuart:
+  "yes fix the plating links" (approval of the 09-10 plan); the NetSuite-at-return question answered by assumption (a)
+  stated before the push and not contradicted: no build for a custom-fabricated pole. Built: OB scan-in carries the links;
+  `putAwayFromCart` custom branch (no reversal / scrap / build; `nsBuildSkipped: 'custom-fab'`; mirror + propagate +
+  commitToOrder; short = refusal; unlinked legacy line = put away + loud "order not told"). Convert: `height: 100%` off
+  the tab column, list `maxHeight 70vh`. Lint 0, build passed, safe-push = one commit (autostash carried S5's uncommitted
+  board row and put it back). Notices in S1/S2/S4/S5 §6, board, state doc §6. **Sweep:** next line.
+
 - **2026-09-11 — e2cef1f pushed 08:42 EDT (S3): the two S2 hand-offs.** Stuart: "check if this is still needed, if yes go
   ahead and build but check with me before push" → re-checked (both still needed), built, committed, checked, pushed on
   his "push". (1) WMS `ReopenedChip` beside `isOpenPick` (`PickPackApp.js`): red chip + ✓ confirmed on the queue row and
