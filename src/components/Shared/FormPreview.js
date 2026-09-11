@@ -43,6 +43,14 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
   // no Unit/Amount columns, no totals block, a banner says why (matches the portal's own
   // "SENT — AWAITING PRICING" card for the same quote).
   const showMoney = !isPacking && type !== 'WORK_ORDER' && type !== 'FACTORY_ROUTER' && !d.unpriced;
+  // ── THE PACKING LIST: ORDERED BESIDE SHIPPED (S2's design, Stuart approved 2026-09-11) ──────
+  // `data.packing` = Shared/packingList.packingListOf's answer: the SAME header as the sales order
+  // plus Ship date and Tracking (blank until UPS), columns Item · Description · Finish · Qty
+  // ordered · Qty shipped, no money, a red mark on any line whose status ≠ MATCH, and a footer
+  // line counting them. Without `packing` a PACKING_SLIP renders as it always has (the admin sample).
+  const packing = isPacking && d.packing && Array.isArray(d.packing.lines) ? d.packing : null;
+  const fmtDate = (v) => { const t = v && typeof v.toMillis === 'function' ? v.toMillis() : (typeof v === 'number' ? v : (v ? Date.parse(v) : 0)); return t > 0 ? new Date(t).toLocaleDateString() : '—'; };
+  const STATUS_WORD = { MATCH: '', SHORT: 'SHORT', OVER: 'OVER', NOT_PACKED: 'NOT PACKED', NOT_ORDERED: 'NOT ON ORDER' };
 
   const billTo = (d.billTo && d.billTo.length) ? d.billTo : (isSample ? SAMPLE_BILL : ['—']);
   const shipTo = (d.shipTo && d.shipTo.length) ? d.shipTo : (isSample ? SAMPLE_SHIP : ['—']);
@@ -97,6 +105,8 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
             <div><span style={{ color: 'var(--ink-soft)' }}>DATE</span> {date}</div>
             <div><span style={{ color: 'var(--ink-soft)' }}>P.O.</span> {po}</div>
             <div><span style={{ color: 'var(--ink-soft)' }}>TERMS</span> {termsLabel}</div>
+            {packing && <div><span style={{ color: 'var(--ink-soft)' }}>SHIP DATE</span> {fmtDate(packing.shipDate)}</div>}
+            {packing && <div><span style={{ color: 'var(--ink-soft)' }}>TRACKING</span> {(packing.tracking || []).length ? packing.tracking.join(', ') : '—'}</div>}
           </div>
         </div>
       </div>
@@ -113,8 +123,47 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
         </div>
       )}
 
+      {/* The packing list's own table: what was ordered beside what was packed, by item code. */}
+      {packing && (
+        <>
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '4px' }}>
+            <thead>
+              <tr style={{ background: 'var(--paper-2)' }}>
+                <th style={{ ...th, textAlign: 'left' }}>Item</th>
+                <th style={{ ...th, textAlign: 'left' }}>Description</th>
+                <th style={{ ...th, textAlign: 'left' }}>Finish</th>
+                <th style={{ ...th, textAlign: 'center' }}>Qty ordered</th>
+                <th style={{ ...th, textAlign: 'center' }}>Qty shipped</th>
+              </tr>
+            </thead>
+            <tbody>
+              {packing.lines.length === 0 && (
+                <tr><td colSpan={5} style={{ ...cell, color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center', padding: '18px 12px' }}>No line items.</td></tr>
+              )}
+              {packing.lines.map((l, i) => {
+                const off = l.status && l.status !== 'MATCH';
+                return (
+                  <tr key={i} style={{ borderBottom: '1px solid var(--line)', background: off ? '#fbeeee' : 'transparent' }}>
+                    <td style={{ ...cell, fontFamily: 'var(--mono)', fontSize: '11px', color: off ? '#a33' : 'var(--ink)' }}>{off ? '● ' : ''}{l.code}</td>
+                    <td style={cell}>{l.name}{off && STATUS_WORD[l.status] ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', color: '#a33', marginLeft: '8px' }}>{STATUS_WORD[l.status]}</span> : null}</td>
+                    <td style={{ ...cell, fontSize: '11px' }}>{l.finish || ''}</td>
+                    <td style={{ ...cell, textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.qtyOrdered}</td>
+                    <td style={{ ...cell, textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: off ? 600 : 400, color: off ? '#a33' : 'var(--ink)' }}>{l.qtyShipped}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {(packing.flagged || []).length > 0 && (
+            <div style={{ marginTop: '12px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.08em', textTransform: 'uppercase', color: '#a33' }}>
+              ● {packing.flagged.length} line{packing.flagged.length === 1 ? '' : 's'} differ{packing.flagged.length === 1 ? 's' : ''} from the order
+            </div>
+          )}
+        </>
+      )}
+
       {/* Line items — grey-shaded column header */}
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '4px' }}>
+      {!packing && <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '4px' }}>
         <thead>
           <tr style={{ background: 'var(--paper-2)' }}>
             <th style={{ ...th, textAlign: 'left' }}>Item</th>
@@ -143,7 +192,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
             </tr>
           ))}
         </tbody>
-      </table>
+      </table>}
 
       {/* Awaiting pricing — where the totals would sit, so nobody hunts for a number that
           deliberately is not on the page. */}

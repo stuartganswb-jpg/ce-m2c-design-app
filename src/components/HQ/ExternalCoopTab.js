@@ -16,7 +16,9 @@ import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { reopenQuoteInCpq, reopenQuoteInVision, reopenQuoteInOrderEntry } from '../Shared/reopenQuote';
 import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
 import OrderStatusChips from '../Shared/OrderStatusChips';
-import { orderStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
+import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction } from '../Shared/orderStatus';
+import { packingListOf } from '../Shared/packingList';
+import { invoiceDocOf } from '../Shared/invoiceMath';
 import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
 import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { soHeaderOf, jobHeaderPatchOf, EMPTY_SHIP_ADDRESS } from '../Shared/salesOrderHeader';
@@ -610,8 +612,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
   // ── ORDER ENTRY SO: EDIT / CLOSE FROM THE CRM (Stuart 2026-08-30: "no way to edit or close a
   // sales order … once a work order is issued it should block us and bring up an additional
   // warning that work orders exist and only manager can close at this point") ──────────────────
-  const OE_MANAGER_ROLES = ['admin', 'superadmin', 'manager', 'executive'];
-  const oeIsManager = OE_MANAGER_ROLES.includes(String(userRole || '').toLowerCase());
+  // ONE manager list, S2's (Shared/orderStatus.CAN_REOPEN_IN_PRODUCTION) — the same roles that may
+  // reopen an order in production from the card.
+  const oeIsManager = canReopenInProduction(userRole);
   const oeLiveWosOf = async (so) => {
       const snap = await getDocs(query(collection(db, 'hq_work_orders'), where('soAppId', '==', so.id)));
       const wos = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -785,6 +788,25 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
       return () => unsub();
       // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCrmRecord?.id, activeSubTab]);
+  // The customer's SALES-ORDER records (hq_sales_orders, both doors — soHeaderOf writes customerId):
+  // the card reads `inProduction` / `packedStateOf` off the record, never off the job (S2, 2026-09-11).
+  const [custSos, setCustSos] = useState([]);
+  useEffect(() => {
+      const id = activeCrmRecord?.id;
+      setCustSos([]);
+      if (!id || activeSubTab !== 'CUSTOMERS') return;
+      const unsub = onSnapshot(query(collection(db, 'hq_sales_orders'), where('customerId', '==', id)),
+          snap => setCustSos(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+          err => console.warn('hq_sales_orders pipeline listener:', err));
+      return () => unsub();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCrmRecord?.id, activeSubTab]);
+  // A CPQ job's sales-order record: SO-APP-<quoteNo> (approveToSalesOrder / CPQ save-as-SO) or by hqJobId.
+  const soRecordOf = (job) => {
+      const ids = [job.id, job.jobId].filter(Boolean).map(String);
+      const soDocId = `SO-APP-${String(job.quoteNo || job.jobId || job.id).replace(/[^A-Za-z0-9-]/g, '')}`;
+      return custSos.find(s => s.id === soDocId || ids.includes(String(s.hqJobId || ''))) || null;
+  };
   useEffect(() => {
       const unsub = onSnapshot(collection(db, 'fin_recipes'),
           snap => { const r = {}; snap.docs.forEach(d => { r[d.id] = d.data(); }); setFinRecipes(r); },
@@ -1331,6 +1353,42 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
               .map(it => ({ src: it.renderSnapshot, caption: it.sidemark || it.memo || it.assemblyName || '' })),
       };
 
+      // ── PACKING LIST + INVOICE (S2's design, Stuart approved 2026-09-11) ─────────────────────
+      // ORDERED = the order's customer lines through the non-money reader (a packing list is a
+      // contents document: hidden parts are in the box; a pole is one piece); PACKED = the order's
+      // pack documents (fin_workorders for a CPQ order, the SO doc itself for an Order Entry one).
+      // The invoice = the money reader's lines × the shipped quantities (Shared/invoiceMath).
+      const isQsDoc = activeDocJob.orderClass === 'QUICKSHIP';
+      const docOpts = {
+          findPart: (id) => docPartIndex.get(String(id || '').trim().toUpperCase()) || null,
+          custKeys: customerKeys(activeDocJob.customer?.id || '', jobCrm || { name: activeDocJob.customer?.name || activeDocJob.clientName || '' }),
+      };
+      const packDocs = isQsDoc ? [activeDocJob] : finWosForJob(activeDocJob);
+      const orderedLines = isQsDoc
+          ? (activeDocJob.lines || []).map(l => ({ erp: l.erp, legacyErpId: l.erp, name: l.name, qty: l.qty, finishLabel: l.finishCode || '' }))
+          // a traverse KIT row is the priced parent of its components (inKit rows) — the components are what is packed
+          : customerDocLines(activeDocJob.cpqData?.breakdown || [], 'PACKING_SLIP', cartFinishLabelOf(activeDocJob.cpqData), docOpts).filter(l => !l.isKit);
+      const packingList = (activeDocType === 'PACKING_SLIP' || activeDocType === 'INVOICE') ? packingListOf({ ordered: orderedLines, packDocs }) : null;
+      const packingFormData = packingList ? {
+          billTo: quoteFormData.billTo, shipTo: quoteFormData.shipTo, date: quoteFormData.date, po: quoteFormData.po, termsLabel: quoteFormData.termsLabel, lines: [],
+          packing: { shipDate: packingList.shipDate, tracking: packingList.tracking, lines: packingList.lines, flagged: packingList.flagged, packed: packingList.packed },
+      } : null;
+      const docRow = (b) => ({
+          item: b.isHeader ? '▶' : (b.legacyErpId || ''), desc: b.name,
+          qty: (b.isDiscount || b.isNetLine || b.isHeader) ? '' : b.qty,
+          price: (b.isDiscount || b.isNetLine || b.isHeader || b.qty == null || !b.qty) ? null : b.price,
+          amount: b.amount != null ? b.amount : b.total, cut: b.cutLength || null, bold: !!b.isNetLine || !!b.isHeader,
+      });
+      const invoiceDoc = (activeDocType === 'INVOICE' && packingList && !isQsDoc)
+          ? invoiceDocOf({ priced: customerDocLines(activeDocJob.cpqData?.breakdown || [], 'INVOICE', cartFinishLabelOf(activeDocJob.cpqData), docOpts), packingList, shippingAmount: shippingAmt, orderedTotal: activeDocJob.cpqData?.totalPrice || 0 })
+          : null;
+      const invoiceFormData = invoiceDoc ? {
+          ...quoteFormData, images: [],
+          lines: [...invoiceDoc.rows.map(docRow), ...(shippingAmt > 0 ? [{ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt }] : [])],
+          tax: 0, total: invoiceDoc.total,
+      } : null;
+      const soDocNumber = isQsDoc ? (activeDocJob.soId || activeDocJob.id) : quoteDisplayNo(activeDocJob);
+
       let mathSection = '';
       if (activeDocJob.engineeringNotes) {
           const notes = activeDocJob.engineeringNotes;
@@ -1467,6 +1525,19 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                   <div style={{ flex: 1, borderTop: '1px solid var(--line)', paddingTop: '8px', fontSize: '10px', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Fabrication Sign-Off</div>
                                   <div style={{ width: '200px', borderTop: '1px solid var(--line)', paddingTop: '8px', fontSize: '10px', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Date</div>
                               </div>
+                          </div>
+                      )}
+
+                      {/* PACKING LIST — ordered beside shipped (S2's builder, this form) */}
+                      {activeDocType === 'PACKING_SLIP' && packingFormData && (
+                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.45in 0.35in', boxSizing: 'border-box', boxShadow: '0 12px 48px rgba(0,0,0,0.05)' }}>
+                              <FormPreview type="PACKING_SLIP" brand={activeBrand} logoUrl={logoUrl} header={(formTemplates['PACKING_SLIP'] || template).header} footer={(formTemplates['PACKING_SLIP'] || template).footer} terms={(formTemplates['PACKING_SLIP'] || template).terms} docNumber={soDocNumber} data={packingFormData} />
+                          </div>
+                      )}
+                      {/* INVOICE — the sales order's prices at the shipped quantities (Shared/invoiceMath) */}
+                      {activeDocType === 'INVOICE' && invoiceFormData && (
+                          <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.45in 0.35in', boxSizing: 'border-box', boxShadow: '0 12px 48px rgba(0,0,0,0.05)' }}>
+                              <FormPreview type="INVOICE" brand={activeBrand} logoUrl={logoUrl} header={invoiceDoc.note || (formTemplates['INVOICE'] || template).header} footer={(formTemplates['INVOICE'] || template).footer} terms={(formTemplates['INVOICE'] || template).terms} docNumber={soDocNumber} data={invoiceFormData} />
                           </div>
                       )}
 
@@ -1868,6 +1939,17 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                           // order group at APPROVED — the same threshold the dashboard's "active" counter
                                           // uses. Archived states never reach here (getCrmActivePipeline excludes them).
                                           const isOrder = (j) => ['APPROVED', 'IN_PRODUCTION', 'SO_CONFIRMED'].includes(j.status) || !!j.netsuiteSalesOrderId;
+                                          // IN PRODUCTION = read-only from the card unless a manager (S2's rule, Stuart 2026-09-11):
+                                          // the hq_sales_orders record says so and the four edit doors grey with the reason; the
+                                          // packing list and the invoice appear once every pack document is packed.
+                                          const cardLock = (job, isOrderCard) => {
+                                              const so = isOrderCard ? soRecordOf(job) : null;
+                                              const inProd = !!so && inProduction(so);
+                                              const sinceMs = so ? (so.dispatchedAt && typeof so.dispatchedAt.toMillis === 'function' ? so.dispatchedAt.toMillis() : (Number(so.dispatchedAt) || 0)) : 0;
+                                              const since = sinceMs > 0 ? new Date(sinceMs).toLocaleDateString() : '';
+                                              const ps = isOrderCard ? packedStateOf(so || { status: job.status }, finWosForJob(job)) : { packed: false };
+                                              return { so, inProd, locked: inProd && !canReopenInProduction(userRole), why: `in production${since ? ` since ${since}` : ''} — a manager can reopen`, packed: !!ps.packed };
+                                          };
                                           const groupHead = (label, n) => (
                                               <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px dashed var(--line)', paddingBottom: '6px', marginTop: label === 'Sales Orders' ? '10px' : 0 }}>{label} ({n})</div>
                                           );
@@ -1955,6 +2037,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                                           );
                                                       })()}
 
+                                                      {(() => { const lk = cardLock(job, isOrderCard); const lockStyle = lk.locked ? { opacity: 0.45, cursor: 'not-allowed' } : {}; return (
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
                                                           <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>🔍 View Item</button>
                                                           {job.status === 'CONFIGURED' && (
@@ -1962,17 +2045,26 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                                           )}
                                                           <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${quoteDisplayNo(job)} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Email</button>
                                                           <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
-                                                          <button onClick={() => openEditJobModal(job)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Modify</button>
-                                                          <button onClick={() => reopenQuoteInCpq(job)} title="Reopen this quote's configuration in the CPQ Configurator" style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer' }}>Reopen CPQ</button>
-                                                          <button onClick={() => reopenQuoteInVision(job)} title="Reopen this quote's session on the Vision Hardware board — dimensions, bracket/splice placement, and shop notes live there (Engineering view → Load saved line)" style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--ink)', color: 'var(--ink)', cursor: 'pointer' }}>Reopen Vision</button>
+                                                          <button onClick={() => openEditJobModal(job)} disabled={lk.locked} title={lk.locked ? lk.why : 'Edit the checkout header — shipping, sidemark, memo, PO'} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', ...lockStyle }}>Modify</button>
+                                                          <button onClick={() => reopenQuoteInCpq(job)} disabled={lk.locked} title={lk.locked ? lk.why : "Reopen this quote's configuration in the CPQ Configurator"} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', ...lockStyle }}>Reopen CPQ</button>
+                                                          <button onClick={() => reopenQuoteInVision(job)} disabled={lk.locked} title={lk.locked ? lk.why : "Reopen this quote's session on the Vision Hardware board — dimensions, bracket/splice placement, and shop notes live there (Engineering view → Load saved line)"} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--ink)', color: 'var(--ink)', cursor: 'pointer', ...lockStyle }}>Reopen Vision</button>
                                                           {/* THE THIRD DOOR, BESIDE THE OTHER TWO (Stuart 2026-08-31). A quote
                                                               written in Order Entry has no flow and no cartItems, so Reopen CPQ
                                                               cannot open one — it reopens from the cart stored on the job. All
                                                               three always show: each declines on its own terms when it has
                                                               nothing to open, and none of them gates the others. */}
-                                                          <button onClick={() => reopenQuoteInOrderEntry(job)} title="Reopen this quote's cart in Order Entry (tab 7) — kits, footage, components and per-line memos come back as they were typed. Saving there creates the corrected quote and supersedes this one." style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer' }}>Reopen Order Entry</button>
+                                                          <button onClick={() => reopenQuoteInOrderEntry(job)} disabled={lk.locked} title={lk.locked ? lk.why : "Reopen this quote's cart in Order Entry (tab 7) — kits, footage, components and per-line memos come back as they were typed. Saving there creates the corrected quote and supersedes this one."} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', ...lockStyle }}>Reopen Order Entry</button>
+                                                          {/* PACKED → the packing list (ordered beside shipped) and OUR invoice (SO prices × shipped
+                                                              qty) — the app's own, from the same builder the WMS prints (Shared/packingList). */}
+                                                          {lk.packed && (
+                                                              <>
+                                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('PACKING_SLIP'); }} title="Packing list — what was ordered beside what was packed, with ship date and tracking" style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', border: '1px solid var(--ink)', color: '#fff', cursor: 'pointer' }}>📦 Packing list</button>
+                                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('INVOICE'); }} title="Invoice — the sales order's prices at the shipped quantities" style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', border: '1px solid var(--ink)', color: '#fff', cursor: 'pointer' }}>🧾 Invoice</button>
+                                                              </>
+                                                          )}
                                                           <button onClick={() => handleDeleteJob(job)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
                                                       </div>
+                                                      ); })()}
                                                   </div>
                                           );
                                           const qJobs = act.filter(j => !isOrder(j));
@@ -2047,6 +2139,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid var(--line)', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{state}</span>
                                                           {fulfilled && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid', borderColor: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', color: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', whiteSpace: 'nowrap' }}>{o.nsInvoiceNo ? `INV ${o.nsInvoiceNo}` : 'NO NS INV #'}</span>}
                                                           <button onClick={() => setQsInvoice(o)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>{fulfilled ? '🧾 Invoice' : '📄 Order'}</button>
+                                                          {/* The packing list for an Order Entry order: its own SO doc is the pack document (lines[] dialect). */}
+                                                          {packedStateOf(o).packed && (
+                                                              <button onClick={() => { setActiveDocJob({ ...o, jobId: o.soId || o.id, customer: { id: o.customerId, name: o.customer } }); setActiveDocType('PACKING_SLIP'); }} title="Packing list — what was ordered beside what was packed, with ship date and tracking" style={{ padding: '8px 12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>📦 Packing list</button>
+                                                          )}
                                                           {!fulfilled && String(o.status || '') !== 'Closed' && (
                                                               <>
                                                                   <button onClick={() => editOeSo(o)} title="Reopen this order's lines in Order Entry (tab 7) for editing — pushing the edited cart supersedes this SO. Blocked once work orders exist." style={{ padding: '8px 12px', background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>✎ Edit</button>
