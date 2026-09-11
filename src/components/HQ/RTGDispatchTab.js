@@ -13,6 +13,7 @@ import { planSmallLines } from '../Shared/splitPlan';
 import { coverCodesOf } from '../Shared/backorder';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
+import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState, planBulkReopen, applyBulkReopen, BULK_CLOSE_FROM, toMs } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
 import { isOpenPo, isDraftPo, approvePurchaseOrder, markPoSent, poRef, PO_STATUS } from '../Shared/purchaseOrders';
@@ -147,12 +148,71 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         if (!activeBrand) return;
         const unsub = onSnapshot(query(collection(db, 'jobs'), where('brandId', '==', activeBrand)),
             snap => setTxJobs(snap.docs.map(d => ({ id: d.id, ...d.data() }))
-                .filter(j => !j.deleted && (j.nsTransmitQueuedAt || j.netsuiteEstimateId || j.netsuiteSalesOrderId))
-                .sort((a, b) => (b.nsTransmitQueuedAt || b.createdAt?.seconds * 1000 || 0) - (a.nsTransmitQueuedAt || a.createdAt?.seconds * 1000 || 0))
+                // A REFUSED queue is listed too (2026-09-11, "everything hits RTG"): CPQ's save stamps
+                // nsTransmitRefusedAt/Code/Message when the NetSuite build refuses (S1, 2c61b3e), and
+                // clears them on a later success — so a quote saved anywhere is never invisible here.
+                .filter(j => !j.deleted && (j.nsTransmitQueuedAt || j.netsuiteEstimateId || j.netsuiteSalesOrderId || j.nsTransmitRefusedAt))
+                .sort((a, b) => (b.nsTransmitQueuedAt || b.nsTransmitRefusedAt || b.createdAt?.seconds * 1000 || 0) - (a.nsTransmitQueuedAt || a.nsTransmitRefusedAt || a.createdAt?.seconds * 1000 || 0))
                 .slice(0, 40)),
             () => {});
         return () => unsub();
     }, [activeBrand]);
+
+    // ⇄ QUEUE NOW for a refused quote (S2, 2026-09-11). The same call CPQ's save and tab 12 make
+    // (Shared/nsTransmit.queueNsTransaction) with the same parts universe tab 12 reads (the whole
+    // library), fetched once per session on the first press — this board holds no CPQ data of its
+    // own. A sales-order save (job.status APPROVED, SO-APP-<quoteNo> on the board) re-queues as a
+    // SALES ORDER with the board write-back; anything else as an ESTIMATE. On success the refusal
+    // stamp is cleared in the write that stamps nsTransmitQueuedAt (S1's contract); on a fresh
+    // refusal the stamp is renewed so the row says the CURRENT reason. Jobs document only.
+    const txDataRef = useRef(null);
+    const [queueingJobId, setQueueingJobId] = useState(null);
+    const loadTxData = async () => {
+        if (txDataRef.current) return txDataRef.current;
+        const [parts, flows, outs, fin] = await Promise.all([
+            getDocs(collection(db, 'Approved_Designs')), getDocs(collection(db, 'cpq_flows')),
+            getDocs(collection(db, 'hq_outsource_finishes')), getDoc(doc(db, 'system', 'master_finishes')),
+        ]);
+        txDataRef.current = {
+            libraryParts: parts.docs.map(d => ({ id: d.id, ...d.data() })),
+            cpqFlows: flows.docs.map(d => ({ id: d.id, ...d.data() })),
+            outsourceFinishes: outs.docs.map(d => ({ id: d.id, ...d.data() })),
+            globalFinishes: fin.exists() && fin.data().finishes ? fin.data().finishes : [],
+        };
+        return txDataRef.current;
+    };
+    const queueRefusedNow = async (j) => {
+        if (queueingJobId) return;
+        if (j.netsuiteEstimateId || j.netsuiteSalesOrderId) return alert(`${j.quoteNo || j.id} is already in NetSuite.`);
+        const soDocId = `SO-APP-${String(j.quoteNo || j.id).replace(/[^A-Za-z0-9-]/g, '')}`;
+        const asOrder = String(j.status || '') === 'APPROVED';
+        if (!window.confirm(`⇄ Queue ${j.quoteNo || j.id} to NetSuite now as ${asOrder ? 'a SALES ORDER' : 'an ESTIMATE'}?\n\nLast refusal (${j.nsTransmitRefusedCode || '?'}): ${j.nsTransmitRefusedMessage || ''}\n\nThe build runs again against the library as it is now; if it still refuses, the reason is updated here and nothing is sent.`)) return;
+        setQueueingJobId(j.id);
+        try {
+            const data = await loadTxData();
+            const ctx = { db, doc, getDoc };
+            let writeBacks = [jobsEstimateWriteBack(j.id)], asType = 'estimate';
+            if (asOrder) {
+                const soSnap = await getDoc(doc(db, 'hq_sales_orders', soDocId));
+                asType = 'salesorder';
+                writeBacks = soSnap.exists() ? [jobsSalesOrderWriteBack(j.id), boardSalesOrderWriteBack(soDocId)] : [jobsSalesOrderWriteBack(j.id)];
+                if (!soSnap.exists()) addLog(`⚠ ${j.quoteNo || j.id}: no ${soDocId} on the board — the SO # will land on the job only.`, 'warn');
+            }
+            const res = await queueNsTransaction({ job: j, asType, brand: activeBrand, data, ctx, by: currentUser || '', writeBacks, log: (m, t) => addLog(m, t) });
+            if (!res.ok) {
+                await updateDoc(doc(db, 'jobs', j.id), { nsTransmitRefusedAt: Date.now(), nsTransmitRefusedCode: String(res.error?.code || 'ERROR'), nsTransmitRefusedMessage: String(res.error?.message || '').slice(0, 500) });
+                addLog(`✗ ${j.quoteNo || j.id} refused again (${res.error?.code}): ${res.error?.message}`, 'error');
+                alert(`Still refused (${res.error?.code}):\n\n${res.error?.message}`);
+                return;
+            }
+            await updateDoc(doc(db, 'jobs', j.id), {
+                nsTransmitQueuedAt: Date.now(), nsTransmitOutboxId: res.outboxId,
+                nsTransmitRefusedAt: deleteField(), nsTransmitRefusedCode: deleteField(), nsTransmitRefusedMessage: deleteField(),
+            });
+            addLog(`⇄ ${j.quoteNo || j.id} queued → NetSuite ${asType === 'salesorder' ? 'sales order' : 'estimate'} (outbox ${res.outboxId}); posts within ~1 min.`, 'success');
+        } catch (e) { alert('Queue failed: ' + (e.message || e)); }
+        finally { setQueueingJobId(null); }
+    };
 
     // The master DELETION LEDGER (Stuart 2026-08-25): every delete anywhere in the app — soft
     // tombstone or hard destroy — lands here, append-only, and THIS board is where it is reviewed.
@@ -3212,9 +3272,10 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                 <div style={{ maxHeight: '340px', overflowY: 'auto' }}>
                     {txJobs.length === 0 && <div style={{ padding: '18px 24px', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Nothing transmitted yet — quotes and orders appear here the moment a CPQ or Quick Ship save queues them.</div>}
                     {txJobs.map(j => {
-                        const queued = j.nsTransmitQueuedAt && !j.netsuiteEstimateId && !j.netsuiteSalesOrderId;
-                        const stateTone = j.netsuiteSalesOrderId ? '#3a7d44' : (j.netsuiteEstimateId ? '#3f7fc4' : 'var(--brass)');
-                        const stateLabel = j.netsuiteSalesOrderId ? `SO ${j.netsuiteSalesOrderNo || j.netsuiteSalesOrderId}` : (j.netsuiteEstimateId ? `EST ${j.netsuiteEstimateNo || j.netsuiteEstimateId}` : 'QUEUED — posting…');
+                        const refused = !!j.nsTransmitRefusedAt && !j.netsuiteEstimateId && !j.netsuiteSalesOrderId;
+                        const queued = !refused && j.nsTransmitQueuedAt && !j.netsuiteEstimateId && !j.netsuiteSalesOrderId;
+                        const stateTone = j.netsuiteSalesOrderId ? '#3a7d44' : (j.netsuiteEstimateId ? '#3f7fc4' : (refused ? '#d9534f' : 'var(--brass)'));
+                        const stateLabel = j.netsuiteSalesOrderId ? `SO ${j.netsuiteSalesOrderNo || j.netsuiteSalesOrderId}` : (j.netsuiteEstimateId ? `EST ${j.netsuiteEstimateNo || j.netsuiteEstimateId}` : (refused ? `REFUSED — ${j.nsTransmitRefusedCode || '?'}` : 'QUEUED — posting…'));
                         return (
                             <div key={j.id} style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap', padding: '10px 24px', borderBottom: '1px solid var(--paper-2)', fontSize: '0.85rem' }}>
                                 <b style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{j.quoteNo || j.jobId || j.id}</b>
@@ -3223,6 +3284,17 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: stateTone, whiteSpace: 'nowrap' }}>{stateLabel}</span>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint, var(--ink-soft))', whiteSpace: 'nowrap' }}>{String(j.status || '').replace(/_/g, ' ')}</span>
                                 {queued && <span title="Waiting on the staged sync (~1 min). If it sits here, check the Transmit Log below / 11.1 Sync Queue." style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>⏳</span>}
+                                {refused && (
+                                    <>
+                                        <button onClick={() => queueRefusedNow(j)} disabled={!!queueingJobId} title={j.nsTransmitRefusedMessage || ''}
+                                            style={{ ...btnStyle, padding: '3px 10px', fontSize: '9px', color: '#fff', background: queueingJobId === j.id ? 'var(--ink-soft)' : '#d9534f', borderColor: '#d9534f', cursor: queueingJobId ? 'wait' : 'pointer' }}>
+                                            {queueingJobId === j.id ? 'Queueing…' : '⇄ Queue now'}
+                                        </button>
+                                        <div style={{ flexBasis: '100%', fontSize: '11px', color: '#d9534f', lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>
+                                            NetSuite refused this save {j.nsTransmitRefusedAt ? new Date(j.nsTransmitRefusedAt).toLocaleString() : ''}: {String(j.nsTransmitRefusedMessage || '').slice(0, 400)}
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         );
                     })}
