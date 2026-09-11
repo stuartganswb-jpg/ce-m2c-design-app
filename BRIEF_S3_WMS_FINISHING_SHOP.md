@@ -331,7 +331,11 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
   `putAwayFromCart` custom branch (no reversal / scrap / build; `nsBuildSkipped: 'custom-fab'`; mirror + propagate +
   commitToOrder; short = refusal; unlinked legacy line = put away + loud "order not told"). Convert: `height: 100%` off
   the tab column, list `maxHeight 70vh`. Lint 0, build passed, safe-push = one commit (autostash carried S5's uncommitted
-  board row and put it back). Notices in S1/S2/S4/S5 §6, board, state doc §6. **Sweep:** next line.
+  board row and put it back). Notices in S1/S2/S4/S5 §6, board, state doc §6. **Sweep 12:29 EDT:** stamp
+  1789144119612 (after the push); 38 JS assets, all fetched with `curl -sf` (8,439,428 bytes, 0 failures); `nsBuildSkipped`
+  ×1, `custom fab for WO` ×1 and `70vh` ×1 in `main.5994ffbe.js` (the baseline main had 0 of all three; the extra
+  `nsBuildSkipped` hits in chunks 483/920 are this commit's own message in the in-app changelog chunk, the `70vh` hits in
+  639/922 are other tabs' CSS). **LIVE.** Next: the plating round trip on Stuart's /EP order, pinned in.
 
 - **2026-09-11 — e2cef1f pushed 08:42 EDT (S3): the two S2 hand-offs.** Stuart: "check if this is still needed, if yes go
   ahead and build but check with me before push" → re-checked (both still needed), built, committed, checked, pushed on
