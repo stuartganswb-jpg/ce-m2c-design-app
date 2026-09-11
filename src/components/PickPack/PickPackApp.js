@@ -2875,6 +2875,144 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // --- PHASE 3: SHIP THE WEEKLY PLATING PALLET ---
     // Bundles the staged plating lines into a shipment: a NetSuite PO to the plater (vendor 83361) with one
     // summary "Weekly Plating Shipment" service line (item 61947) at the total plating cost, a detailed app-side
+    // ── THE PLATER PO AND ITS NETSUITE NUMBER (2026-09-11, the SO60420 round trip) ──────────────
+    // The PO POST comes back without the new record's id (the proxy does not forward the Location
+    // header) and the ONE immediate SuiteQL lookup by memo found nothing on the first live custom
+    // shipment — so the shipment was saved with `nsPoId: null`, Receive refused ("no NetSuite PO id
+    // on file") and nothing ever looked again. Three answers, all here: the ship step RETRIES the
+    // lookup; a shipment still without a number says so loudly (never "pending sync") and carries
+    // `nsPoPending`; and ⟳ FIND NETSUITE PO on the Out-at-plater row re-runs the lookup at any later
+    // time — and only after a fresh lookup finds nothing may the PO be posted again. The description
+    // and payload builders are shared by the ship and the re-post, so the two can never differ.
+    const buildPlatingPoDescription = ({ shipId, lines, finishSummary, pcs }) => {
+        const detailLines = lines.map(l => {
+            const wo = l.woNum ? ` · WO# ${l.woNum}` : '';
+            const tgt = l.targetErpId ? ` → ${l.targetErpId}` : '';
+            const finx = l.finishCode ? ` · FINISH ${l.finishCode}` : '';
+            return `• ${l.itemName || 'Item'} [${l.erpId || ''}${tgt}]${finx} — qty ${parseInt(l.qty) || 0}${wo}`;
+        });
+        // NetSuite caps a transaction line `description` at 4000 chars. Keep the header + as many
+        // detail lines as fit, and point to the printed packing list for the rest (it has them all).
+        const descHeader = `Weekly Plating Shipment (${shipId})${finishSummary ? ` — finish ${finishSummary}` : ''} — ${lines.length} item${lines.length === 1 ? '' : 's'}, ${pcs} pcs:`;
+        let descBody = '', shownLines = 0;
+        for (const dl of detailLines) {
+            if (descHeader.length + descBody.length + dl.length + 2 > 3850) break;
+            descBody += `\n${dl}`; shownLines++;
+        }
+        const lineDescription = descHeader + descBody + (shownLines < detailLines.length ? `\n…+${detailLines.length - shownLines} more line${detailLines.length - shownLines === 1 ? '' : 's'} — see packing list ${shipId}` : '');
+        return lineDescription;
+    };
+    const buildPlatingPoPayload = ({ shipId, nsVendorId, nsConfig, total, lineDescription }) => {
+        const payload = {
+            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
+            method: 'POST',
+            payload: {
+                customForm: { id: "272" }, // "LG - Purchase Order Form" (matches the working manual PO)
+                entity: { id: nsVendorId }, // plater INTERNAL id from the finish's NS-synced vendor (NOT the entityid/vendor#); default 42036 (Dayton Grey)
+                // SUBSIDIARY IS EXPLICIT, AND MUST PRECEDE LOCATION (Eric, 2026-08-15). Omitting it
+                // worked here only by luck: Dayton Grey's primary subsidiary happens to BE CE (2),
+                // which matches location 17. Any plater whose primary sits in another subsidiary —
+                // or any M2C plating run — hit "Invalid Field Value <loc> for the following field:
+                // location", because setting the entity defaults the subsidiary to the VENDOR's,
+                // and the location then belongs to the wrong one.
+                ...(nsConfig.subsidiary
+                    ? { subsidiary: { id: String(nsConfig.subsidiary) }, location: { id: String(nsConfig.location) } }
+                    : {}),
+                memo: nsMemo(`Weekly Plating Shipment ${shipId}`),
+                item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), description: lineDescription }] }
+            }
+        };
+        return payload;
+    };
+    const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+    const suiteql = async (q) => {
+        const r = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } });
+        const b = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
+        return Array.isArray(b.items) ? b.items : [];
+    };
+    // The PO by its memo (the shipment id is unique). `attempts` > 1 waits between tries — NetSuite
+    // does not always answer a query for a record it accepted a second ago.
+    const lookupPlatingPo = async (shipId, { attempts = 1, delayMs = 0 } = {}) => {
+        const key = String(shipId || '').toUpperCase().replace(/'/g, "''");
+        for (let i = 0; i < attempts; i++) {
+            try {
+                const rows = await suiteql(`SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND UPPER(memo) LIKE '%${key}%'`);
+                if (rows[0] && rows[0].id) return { id: String(rows[0].id), tranid: rows[0].tranid ? String(rows[0].tranid) : null };
+            } catch (e) { console.warn('PO lookup attempt failed:', e); }
+            if (i < attempts - 1) await sleepMs(delayMs);
+        }
+        return null;
+    };
+    // Every PO this plater got in the last few days — the operator's second chance to recognise the one
+    // the memo lookup could not find (a memo edited in NetSuite, a different memo grammar).
+    const vendorPosRecent = (nsVendorId, days = 3) =>
+        suiteql(`SELECT id, tranid, memo, foreigntotal, trandate FROM transaction WHERE type = 'PurchOrd' AND entity = ${parseInt(nsVendorId, 10) || 0} AND trandate >= TRUNC(SYSDATE) - ${days} ORDER BY id DESC`);
+    const stampPlatingPo = async ({ shipmentId, lineIds, nsPoId, nsPoTran }) => {
+        await Promise.all((lineIds || []).map(id => updateDoc(doc(db, 'plating_shipments', id), { nsPoId, nsPoTran: nsPoTran || null, nsPoPending: false }).catch(() => {})));
+        const poSnap = await getDocs(query(collection(db, 'hq_purchase_orders'), where('poId', '==', shipmentId)));
+        await Promise.all(poSnap.docs.map(d => updateDoc(d.ref, { nsPoId, nsPoTran: nsPoTran || null, nsPoPending: false }).catch(() => {})));
+    };
+    // ⟳ FIND NETSUITE PO — for a shipped group with no number. Lookup by memo first; then the vendor's
+    // recent POs for the operator to pick from; only when BOTH find nothing is a re-post offered.
+    const findPlatingPoNow = async (g) => {
+        if (!g || !g.shipmentId) return;
+        const lineIds = g.lines.map(l => l.id);
+        try {
+            setIsSyncing(true);
+            const hit = await lookupPlatingPo(g.shipmentId, { attempts: 2, delayMs: 1500 });
+            if (hit) {
+                await stampPlatingPo({ shipmentId: g.shipmentId, lineIds, nsPoId: hit.id, nsPoTran: hit.tranid });
+                writeLog(`Plating shipment ${g.shipmentId}: NetSuite PO ${hit.tranid || hit.id} found by memo and stamped.`, 'wms');
+                return alert(`✅ Found it — NetSuite ${hit.tranid || `#${hit.id}`} carries the memo for ${g.shipmentId}. Stamped on the shipment; Receive is open.`);
+            }
+            const poSnap = await getDocs(query(collection(db, 'hq_purchase_orders'), where('poId', '==', g.shipmentId)));
+            const poDoc = poSnap.docs[0] ? { id: poSnap.docs[0].id, ...poSnap.docs[0].data() } : null;
+            const vendorId = (poDoc && poDoc.nsVendorId) || g.lines.find(l => l.nsVendorId)?.nsVendorId || '42036';
+            const recent = await vendorPosRecent(vendorId, 3);
+            if (recent.length) {
+                const menu = recent.slice(0, 12).map(r => `${r.tranid || r.id} · ${r.trandate || ''} · $${r.foreigntotal ?? '?'} · ${String(r.memo || '').slice(0, 60)}`).join('\n');
+                const typed = window.prompt(`No PO carries the memo "Weekly Plating Shipment ${g.shipmentId}".\n\nThis vendor's POs in the last 3 days:\n${menu}\n\nType the PO number that IS this shipment (${poDoc ? `$${Number(poDoc.total || 0).toFixed(2)}` : ''}) to stamp it — or leave blank if none of them is.`, '');
+                const pick = typed && recent.find(r => String(r.tranid || '').toUpperCase() === String(typed).trim().toUpperCase() || String(r.id) === String(typed).trim());
+                if (typed && !pick) return alert(`"${typed}" is not one of the POs listed — nothing stamped.`);
+                if (pick) {
+                    await stampPlatingPo({ shipmentId: g.shipmentId, lineIds, nsPoId: String(pick.id), nsPoTran: pick.tranid ? String(pick.tranid) : null });
+                    writeLog(`Plating shipment ${g.shipmentId}: NetSuite PO ${pick.tranid || pick.id} picked by ${operator?.name || 'operator'} from the vendor's recent POs and stamped.`, 'wms');
+                    return alert(`✅ ${pick.tranid || pick.id} stamped on ${g.shipmentId}. Receive is open.`);
+                }
+            }
+            // Nothing in NetSuite matches — the PO was never created. Offer to post it again, once.
+            if (!poDoc) return alert(`NetSuite has no PO for ${g.shipmentId} and the app has no purchase-order record to re-post from. Tell Stuart.`);
+            if (!window.confirm(`NetSuite has NO purchase order for ${g.shipmentId} (memo lookup and the vendor's last 3 days both empty).\n\nPost the plater PO again now? "Weekly Plating Shipment" $${Number(poDoc.total || 0).toFixed(2)} to vendor ${poDoc.vendor || vendorId}.\n\nOnly say OK if you have checked NetSuite yourself — a second PO cannot be un-posted from here.`)) return;
+            await repostPlatingPo(g, poDoc, vendorId);
+        } catch (e) {
+            alert('Could not look the PO up: ' + (e.message || e));
+        } finally { setIsSyncing(false); }
+    };
+    const repostPlatingPo = async (g, poDoc, vendorId) => {
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert('NetSuite routing configuration missing for this brand.');
+        const pl = poDoc.packingList || {};
+        const lines = Array.isArray(pl.lines) && pl.lines.length ? pl.lines : (poDoc.items || []).map(i => ({ erpId: i.itemId, itemName: i.description, finishCode: i.finishCode, targetErpId: i.targetErpId, woNum: i.woNum, qty: i.quantity }));
+        const pcs = lines.reduce((a, l) => a + (parseInt(l.qty) || 0), 0);
+        const total = Number(poDoc.total || 0);
+        const lineDescription = buildPlatingPoDescription({ shipId: g.shipmentId, lines, finishSummary: poDoc.finishSummary || '', pcs });
+        const payload = buildPlatingPoPayload({ shipId: g.shipmentId, nsVendorId: String(vendorId), nsConfig, total, lineDescription });
+        const response = await nsProxyFetch(payload);
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
+        let nsPoId = result.id ? String(result.id) : null;
+        let nsPoTran = result.tranId ? String(result.tranId) : null;
+        if (!nsPoId) { const hit = await lookupPlatingPo(g.shipmentId, { attempts: 5, delayMs: 2000 }); if (hit) { nsPoId = hit.id; nsPoTran = hit.tranid; } }
+        if (!nsPoId) {
+            writeLog(`⚠ Plating shipment ${g.shipmentId}: PO posted AGAIN, NetSuite answered ok, and the number was still not recovered — do not post a third time.`, 'alert');
+            return alert(`⚠ NetSuite accepted the PO again but its number still could not be recovered. Do NOT post again — find it in NetSuite by memo "Weekly Plating Shipment ${g.shipmentId}" and tell Stuart.`);
+        }
+        await stampPlatingPo({ shipmentId: g.shipmentId, lineIds: g.lines.map(l => l.id), nsPoId, nsPoTran });
+        writeLog(`Plating shipment ${g.shipmentId}: plater PO re-posted → NetSuite ${nsPoTran || nsPoId} (the first post left no record).`, 'wms');
+        alert(`✅ PO re-posted — NetSuite ${nsPoTran || `#${nsPoId}`} stamped on ${g.shipmentId}. Receive is open.`);
+    };
+
     // PO (hq_purchase_orders) for the plater, a pallet label, then flips the staged lines to 'shipped'.
     const pushPlatingShipment = async () => {
         const lines = platingStaged;
@@ -2917,40 +3055,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             // working manual PO. Item 61947 IS already the internal id of "Weekly Plating Shipment" (Service).
             // The single summary line carries the actual plated parts as a TEXT reference in its description (like the
             // CPQ push) so the PO itself shows what's on the pallet — item, qty, finish/WO — without separate item lines.
-            const detailLines = lines.map(l => {
-                const wo = l.woNum ? ` · WO# ${l.woNum}` : '';
-                const tgt = l.targetErpId ? ` → ${l.targetErpId}` : '';
-                const finx = l.finishCode ? ` · FINISH ${l.finishCode}` : '';
-                return `• ${l.itemName || 'Item'} [${l.erpId || ''}${tgt}]${finx} — qty ${parseInt(l.qty) || 0}${wo}`;
-            });
-            // NetSuite caps a transaction line `description` at 4000 chars. Keep the header + as many
-            // detail lines as fit, and point to the printed packing list for the rest (it has them all).
-            const descHeader = `Weekly Plating Shipment (${shipId})${finishSummary ? ` — finish ${finishSummary}` : ''} — ${lines.length} item${lines.length === 1 ? '' : 's'}, ${pcs} pcs:`;
-            let descBody = '', shownLines = 0;
-            for (const dl of detailLines) {
-                if (descHeader.length + descBody.length + dl.length + 2 > 3850) break;
-                descBody += `\n${dl}`; shownLines++;
-            }
-            const lineDescription = descHeader + descBody + (shownLines < detailLines.length ? `\n…+${detailLines.length - shownLines} more line${detailLines.length - shownLines === 1 ? '' : 's'} — see packing list ${shipId}` : '');
-            const payload = {
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
-                method: 'POST',
-                payload: {
-                    customForm: { id: "272" }, // "LG - Purchase Order Form" (matches the working manual PO)
-                    entity: { id: nsVendorId }, // plater INTERNAL id from the finish's NS-synced vendor (NOT the entityid/vendor#); default 42036 (Dayton Grey)
-                    // SUBSIDIARY IS EXPLICIT, AND MUST PRECEDE LOCATION (Eric, 2026-08-15). Omitting it
-                    // worked here only by luck: Dayton Grey's primary subsidiary happens to BE CE (2),
-                    // which matches location 17. Any plater whose primary sits in another subsidiary —
-                    // or any M2C plating run — hit "Invalid Field Value <loc> for the following field:
-                    // location", because setting the entity defaults the subsidiary to the VENDOR's,
-                    // and the location then belongs to the wrong one.
-                    ...(nsConfig.subsidiary
-                        ? { subsidiary: { id: String(nsConfig.subsidiary) }, location: { id: String(nsConfig.location) } }
-                        : {}),
-                    memo: nsMemo(`Weekly Plating Shipment ${shipId}`),
-                    item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), description: lineDescription }] }
-                }
-            };
+            const lineDescription = buildPlatingPoDescription({ shipId, lines, finishSummary, pcs });
+            const payload = buildPlatingPoPayload({ shipId, nsVendorId, nsConfig, total, lineDescription });
             const response = await nsProxyFetch(payload);
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
@@ -2958,22 +3064,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             // doesn't forward), so result.id is usually empty. Recover the PO's internal id via SuiteQL by its unique
             // memo (shipId) — Phase 4a receive needs this id to transform the PO into an item receipt.
             let nsPoId = result.id ? String(result.id) : null;
-            let nsPoTran = result.tranId || null; // human-readable PO number, e.g. "PO2179"
+            let nsPoTran = result.tranId ? String(result.tranId) : null; // human-readable PO number, e.g. "PO2179"
             if (!nsPoId || !nsPoTran) {
-                try {
-                    const lookup = await nsProxyFetch({
-                        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                        method: 'POST',
-                        payload: { q: `SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND UPPER(memo) LIKE '%${shipId.toUpperCase()}%'` }
-                    });
-                    const lr = await lookup.json().catch(() => ({}));
-                    if (lr.items && lr.items[0]) {
-                        if (lr.items[0].id) nsPoId = String(lr.items[0].id);
-                        if (lr.items[0].tranid) nsPoTran = String(lr.items[0].tranid);
-                    }
-                } catch (lookupErr) { console.warn("PO id lookup failed (PO still created):", lookupErr); }
+                // RETRY the memo lookup over ~10 s — on the first live custom shipment (SO60420,
+                // 2026-09-11) one immediate lookup found nothing and the number was lost.
+                const hit = await lookupPlatingPo(shipId, { attempts: 5, delayMs: 2000 });
+                if (hit) { nsPoId = nsPoId || hit.id; nsPoTran = nsPoTran || hit.tranid; }
             }
-            const nsPoLabel = nsPoTran || nsPoId || '(pending sync)';
+            const nsPoPending = !nsPoId;
+            const nsPoLabel = nsPoTran || nsPoId || 'NUMBER NOT RECOVERED';
 
             // 2) Detailed app-side PO for the plater (only reached after the NS PO succeeded). Store a
             // self-contained `packingList` snapshot + vendorCrmId + expectedReceiveDate so the vendor
@@ -2987,7 +3086,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             await addDoc(collection(db, "hq_purchase_orders"), {
                 poId: shipId, brand: activeBrand, vendor: vendorName, nsVendorId, vendorCrmId: `VEND-${nsVendorId}`,
                 status: "Sent to Plater", kind: "plating", finishSummary, expectedReceiveDate: null,
-                nsPoId, nsPoTran, shipmentId: shipId,
+                nsPoId, nsPoTran, nsPoPending, shipmentId: shipId,
                 items: lines.map(l => ({ itemId: l.erpId, description: l.itemName, finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', quantity: parseInt(l.qty) || 0, rate: rateOf(l), woNum: l.woNum || '', platingBin: l.platingBin })),
                 packingList,
                 total: Number(total.toFixed(2)), pcs, createdBy: operator?.name || 'Unknown', createdAt: serverTimestamp()
@@ -2995,14 +3094,18 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
             // 3) Flip the staged lines to 'shipped' (Phase 4 receives against this shipment).
             await Promise.all(lines.map(l => updateDoc(doc(db, "plating_shipments", l.id), {
-                status: 'shipped', shipmentId: shipId, nsPoId, nsPoTran, platingRate: rateOf(l), shippedAt: serverTimestamp()
+                status: 'shipped', shipmentId: shipId, nsPoId, nsPoTran, nsPoPending, platingRate: rateOf(l), shippedAt: serverTimestamp()
             }).catch(() => {})));
 
             // 4) Pallet/shipment label (Zebra) + an 8.5×11 laser packing list for the plater.
             printShipmentLabel({ shipId, vendor: vendorName, pcs, lineCount: lines.length, total, finishes: finishSummary });
             printPlatingPackingList(packingList);
 
-            alert(`✅ Plating shipment ${shipId} created — NetSuite ${nsPoLabel} ("Weekly Plating Shipment" $${total.toFixed(2)}), ${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs shipped, label spooled.`);
+            if (nsPoPending) {
+                alert(`⚠ Plating shipment ${shipId} SHIPPED (${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs, "Weekly Plating Shipment" $${total.toFixed(2)}) — but the plater PO's NetSuite NUMBER WAS NOT RECOVERED.\n\nNetSuite answered the post; the record may exist without our knowing its number. Do NOT Reset and do NOT ship again — on the Out-at-plater row press ⟳ FIND NETSUITE PO. Receive needs the number.`);
+            } else {
+                alert(`✅ Plating shipment ${shipId} created — NetSuite ${nsPoLabel} ("Weekly Plating Shipment" $${total.toFixed(2)}), ${lines.length} line${lines.length === 1 ? '' : 's'} / ${pcs} pcs shipped, label spooled.`);
+            }
             writeLog(`Plating shipment ${shipId}: NS PO ${nsPoLabel}, $${total.toFixed(2)}, ${lines.length} lines / ${pcs} pcs.`, 'wms');
             setShipCosts({}); setShowShipModal(false);
             pullNetSuiteStock();
@@ -3081,7 +3184,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (!shipmentId) return;
         const role = String(operator?.role || '').toLowerCase().replace(/[^a-z]/g, '');
         if (!(operator?.superAdmin === true || role === 'admin' || role === 'superadmin')) return alert("⚠️ Reset is restricted to Admin or higher.");
-        if (!window.confirm(`⚠️ RESET shipment ${shipmentId}?\n\nIts line(s) go back to "staged" so they can be re-shipped. (The WIP-Plating inventory move stays as-is.)\n\nAre you sure?`)) return;
+        // A reset followed by a re-ship posts a SECOND plater PO. With a number on file the PO is real:
+        // receive it or void it in NetSuite, never reset. Without one, the PO may still exist — find it first.
+        const resetLines = platingShipped.filter(l => (lineIds || []).includes(l.id));
+        const knownPo = resetLines.find(l => l.nsPoId);
+        if (knownPo) return alert(`⛔ ${shipmentId} has NetSuite PO ${knownPo.nsPoTran || knownPo.nsPoId} on file. Resetting it and shipping again would post a SECOND PO to the plater.\n\nReceive it, or void the PO in NetSuite first — nothing was changed.`);
+        if (!window.confirm(`⚠️ RESET shipment ${shipmentId}?\n\nIts line(s) go back to "staged" so they can be re-shipped. (The WIP-Plating inventory move stays as-is.)\n\nThis shipment has NO NetSuite PO number on file — press ⟳ FIND NETSUITE PO first; if a PO exists in NetSuite and you reset, the re-ship will post a second one.\n\nAre you sure?`)) return;
         try {
             setIsSyncing(true);
             await Promise.all((lineIds || []).map(id => updateDoc(doc(db, "plating_shipments", id), {
@@ -6669,6 +6777,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         <button onClick={() => printPlatingPackingList(shipmentPrintData(g))} title="Print the plating PO / packing list (item · finish · returns-as · qty)" style={{ padding: '10px 12px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>🖨 Print</button>
                                                         <button onClick={async () => { try { const fn = await downloadPlatingOrderPdf(shipmentPrintData(g)); if (fn) alert(`⬇ ${fn} downloaded — attach it to your email to the plater.`); } catch (e) { alert('PDF failed: ' + (e.message || e)); } }} title="Save the plating PO as a PDF to email the vendor" style={{ padding: '10px 12px', background: 'transparent', color: theme.brass, border: `1px solid ${theme.brass}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>⬇ PDF</button>
                                                         {isPlatingAdmin && <button onClick={() => resetPlatingShipment(g.shipmentId, g.lines.map(l => l.id))} disabled={isSyncing} title="Admin only — sends the shipment back to staged" style={{ padding: '10px 12px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Reset</button>}
+                                                        {!g.nsPoId && <button onClick={() => findPlatingPoNow(g)} disabled={isSyncing} title="This shipment has no NetSuite PO number on file. Look it up by memo, pick it from the vendor's recent POs, or — only when NetSuite truly has none — post it again." style={{ padding: '10px 12px', background: '#c0392b', color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>⟳ Find NetSuite PO</button>}
                                                         <button onClick={() => pushPlatingReceive(g.shipmentId, g.nsPoId, g.lines.map(l => l.id))} disabled={isSyncing} style={{ padding: '10px 16px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Receive PO → Item Receipt</button>
                                                     </div>
                                                 </div>
