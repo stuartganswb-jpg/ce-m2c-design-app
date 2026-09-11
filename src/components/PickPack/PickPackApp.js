@@ -1651,6 +1651,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 finishCode: d.finishCode || '', finishName: d.finishName || '', targetErpId: d.targetErpId || '',
                 vendorCrmId, nsVendorId, vendorName: (fin && fin.vendor) || '',
                 qty: Number(d.qty) || 1, fromBin: 'CUSTOM FAB', platingBin: 'OB PLATING', woNum: d.woNum || '',
+                // THE LOOP BACK TO THE ORDER (2026-09-11, read before the round trip ran): the shop's demand
+                // carries finSiblingId / orderKey / salesOrderId / shopOrderId (Brief C, 2026-09-03) and the
+                // stock pull copies them onto its line (platingDemandLink) — this path dropped them, so the
+                // receipt's 'Plating Received' and the put-away's 'Complete' + 'Plated' (D1) never fired for
+                // the ONLY lines that carry a sibling, and a plated custom order read "At the plater" forever.
+                soAppId: d.soAppId || d.salesOrderId || null, soRef: d.soRef || d.soId || null,
+                orderKey: d.orderKey || null, finSiblingId: d.finSiblingId || null,
+                shopOrderId: d.shopOrderId || null, demandWoNum: d.woNum || '',
                 operator: operator?.name || 'Unknown', createdAt: serverTimestamp()
             });
             printPlatingLabel({ erpId: d.baseErpId || 'CUSTOM', itemName: d.finishName || 'Custom plated part', qty: Number(d.qty) || 1, woNum: d.woNum || '', platingBin: 'OB PLATING', finishCode: d.finishCode || '', finishName: d.finishName || '', targetErpId: d.targetErpId || '' });
@@ -3257,6 +3265,55 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         for (const p of bins) {
             const chk = await platingBinCheck(p.bin);
             if (!chk.ok) return alert(chk.hard ? chk.msg : 'Nothing was posted.');
+        }
+        // ── A CUSTOM-FABRICATED PIECE HAS NO NETSUITE INVENTORY (2026-09-11) ────────────────────
+        // The OB scan-in moved nothing in NetSuite ("custom fab isn't stocked inventory"), so there
+        // is no WIP-Plating to reverse, no raw to consume and no assembly to build — the plater PO
+        // and its item receipt (queued at Receive) are the whole NetSuite record. The generic path
+        // below posted an adjustment against `netSuiteInternalId: null`, NetSuite refused it, and
+        // a custom line could never be put away. What a custom put-away DOES do is tell the order
+        // its parts are back: the sibling flips to Complete, RTG reads 'Plated', the pack gate opens.
+        if (line.custom === true) {
+            // SHORT IS A REFUSAL, NOT AN ADJUSTMENT: a custom order cannot ship short and there is
+            // no stock to scrap the missing pieces against. Nothing posts; the order stays at the
+            // plater until the rest come back or RTG re-makes them.
+            if (scrap > 0) return alert(`⛔ ${scrap} pc(s) of ${target} did NOT come back — a custom order cannot ship short, and there is no stock to scrap them against.\n\nNothing was posted. Receive the full count when the plater returns the rest, or tell RTG (re-make). The order stays "At the plater" until then.`);
+            if (!window.confirm(`Put away ${got} × ${target} — custom fab for WO ${line.woNum || line.demandWoNum || '?'}?\n\n${bins.map(p => `   ${p.qty} → ${p.bin}`).join('\n')}\n\nNo NetSuite build: a custom-fabricated piece is not stocked inventory — the plater PO receipt is the NetSuite record. This tells the ORDER its plated parts are back so it can be packed.`)) return;
+            try {
+                setIsSyncing(true);
+                await updateDoc(doc(db, 'plating_shipments', line.id), {
+                    status: 'built', builtAt: serverTimestamp(), builtAssemblyId: null, nsBuildSkipped: 'custom-fab',
+                    binPlacements: bins, putAwayAt: Date.now(), putAwayBy: operator?.name || '',
+                }).catch(() => {});
+                writeLog(`Plating put-away (custom fab): ${got} × ${target} for WO ${line.woNum || ''} into ${bins.map(p => `${p.qty}@${p.bin}`).join(' + ')} by ${operator?.name || 'Unknown'} — no NetSuite build (${line.cartLabel || 'cart'}, ${line.shipmentId || line.id}).`, 'wms');
+                if (line.finSiblingId) {
+                    try {
+                        await mirrorCustomStatusToSibling({ finSiblingId: line.finSiblingId }, 'Complete');
+                        await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                            { finWo: { id: line.finSiblingId, salesOrderId: line.soAppId || null, orderKey: line.orderKey || null }, phase: 'Plated', by: operator?.name || '' });
+                        writeLog(`Plated custom parts back on ${line.finSiblingId} — custom half Complete, pack gate open (${target} ×${got}).`, 'wms');
+                    } catch (e) {
+                        console.warn('sibling/board update failed (the put-away stands):', e);
+                        alert(`⚠ ${target} put away, but the ORDER was not told.\n\n${e.message || e}\n\nThe pack gate may still refuse. Tell Stuart rather than working around it.`);
+                    }
+                } else {
+                    // A line staged before this fix carries no link — say so, never guess the order.
+                    writeLog(`⚠ Plating put-away (custom fab): ${target} for WO ${line.woNum || ''} carries no finSiblingId — the order was NOT told (line staged before the link fix). Tell RTG.`, 'wms');
+                    alert(`⚠ ${target} put away, but this line carries no link to its order (it was scanned into OB Plating before the link fix).\n\nThe order still reads "At the plater" — tell Stuart / RTG which order these are for.`);
+                }
+                const soId = line.soAppId || null;
+                const forOrder = soId ? quickShipOrders.find(o => o.id === soId || String(o.soId || '') === String(soId)) : null;
+                if (forOrder) {
+                    const oline = (forOrder.lines || []).find(l => String(l.erp || '').toUpperCase() === String(target).toUpperCase());
+                    await commitToOrder(forOrder, { code: target, qty: got, ordered: Number(oline && oline.qty) || 0 });
+                } else if (soId) {
+                    writeLog(`⚠ Plating put-away (custom fab): ${target} carries sales order ${soId} but no matching order is open in this brand — left in ${bins.map(p => p.bin).join(', ')}.`, 'wms');
+                }
+                setPaLineId(null); setPaBins([{ bin: '', qty: '' }]); setPaMulti(false);
+            } catch (e) {
+                alert('❌ Custom put-away failed:\n\n' + (e.message || e));
+            } finally { setIsSyncing(false); }
+            return;
         }
         if (!window.confirm(`Put away ${got} × ${target}?\n\n${bins.map(p => `   ${p.qty} → ${p.bin}`).join('\n')}${scrap > 0 ? `\n\n⚠ ${scrap} pc(s) did NOT come back and will be SCRAPPED out of WIP-Plating.` : ''}\n\nThis posts to NetSuite: the plated raw returns to Good${scrap > 0 ? ', the short pieces are adjusted out' : ''}, and the finished assembly is built into the bin(s) above.`)) return;
         try {
@@ -5254,7 +5311,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                 {/* 🔁 TAB: CONVERT (raw -> in-house phosphated assembly build) */}
                 {activeTab === 'CONVERT' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
+                    // NO height:100% HERE (Stuart 2026-09-11: "we can no longer scroll down the side of the
+                    // page to reach the area where we can manually add items"). The column was pinned to the
+                    // viewport, so once the Needs Phosphating to-dos grew the raw-item list — a flex:1 scroll
+                    // box whose min-height is 0 — was squeezed to nothing and the page had nothing to scroll
+                    // to. The column now grows with its content and <main> scrolls; the list below keeps its
+                    // own bounded scroller so a long library does not become a mile of page.
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
 
                         {/* NEEDS PHOSPHATING — to-dos routed from HQ Stock View (3-Tier): the /P ran low,
                             pull that many raw cores and convert them. Clicking one opens the convert modal
@@ -5552,8 +5615,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             </button>
                         </div>
 
-                        {/* INVENTORY TABLE */}
-                        <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, overflowY: 'auto' }}>
+                        {/* INVENTORY TABLE — bounded, its own scroller (see the note at the top of this tab) */}
+                        <div style={{ maxHeight: '70vh', minHeight: '240px', background: '#fff', border: `1px solid ${theme.line}`, overflowY: 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead style={{ background: theme.paper2, position: 'sticky', top: 0, zIndex: 10 }}>
                                     <tr>
