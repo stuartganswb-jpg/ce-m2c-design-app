@@ -424,6 +424,10 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · 38b1ba6 (pushed 22:08).** H1-138TRV explosion re-keyed to S5's correction (105b29c): arm by depth +
+  backplate by orientation per bracket, both at the chart count; the guard test (red on main since S5's push) is green and
+  now covers `plates`. Remaining for the end-to-end kit run: Stuart's Kit Family tag on the H1-138 flow + the 4.6 import.
+
 - **2026-09-10 · S5 · 105b29c (pushed 20:29).** Before Stuart re-applied the kit sheet, S5 read the live records (console recipe, read-only):
   every H1-2TRV kit and component row would be rewritten identical. Found that the 18 "not in library" H1-138TRV codes are
   Fabricut combos — the H1-138 pins carry arms by depth (SBA/EBA/6BA/DBA/CBA) and backplates by orientation (BP-H/V/C) —

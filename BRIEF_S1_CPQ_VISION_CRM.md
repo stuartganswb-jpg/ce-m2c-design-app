@@ -294,6 +294,12 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 8 (S1) 38b1ba6 pushed 22:08.** S5's correction landed: `TRAVERSE_FAMILY_PARTS['H1-138TRV']` = arm by
+  depth + `plates` by orientation; explode adds the plate line (role 'plate') at the plate row's count; string DOUBLE.
+  Guard test compares brackets + plates (was red on main after 105b29c). Fixtures per S5's note (4 ft -4H/P; 12 ft -4VD/EP =
+  24 rods, Stuart confirmed). Still on my desk from S2: stamp `nsTransmitRefusedAt/Code/Message` on the job when the
+  queue refuses, clear on success (BRIEF_S1 §6) — plan next.
+
 - **2026-09-10 — Issue 7 (S1) bb5b5e1 pushed 19:48.** Plate follows its arm (reseatPicks). Also on Stuart's ask S1 WROTE
   production tags through the app session (module 565 setDoc=`BN`, doc=`H9`, merge): tier FRONT on 8 double-return fee
   pins (H1-75 1.6 #18/#19, H1-1 1.6 #31/#32), setup DOUBLE on 40 H1-75 plate pins with proj 6.5 (1.6 #37/#38/#40/#41/#42);
