@@ -424,6 +424,11 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 · S1 · 2b164a5 (pushed 09:59).** Vision Phase 2: the bridge runs both ways (CPQ line → Vision board; a Vision re-save
+  replaces its line on Resume via `Shared/visionHandoff`). Phase 1b live-read ✓ on H1-138 (return locks its bracket with the
+  engine's reason, plate pool follows, fab math reads RETURN MITER, removals strip), Brimar (one-piece plate lock), H1-2TRV
+  (arms, no drive ends, miter listed once). Open: Phase 2 live read; Phase 3 generator.
+
 - **2026-09-11 · S3 · e2cef1f (pushed 08:42).** S2's two hand-offs, re-checked against the code after a day of other
   sessions' pushes — both still needed: `orderLifecycle.reopenPlanFor` still stamps `reopenConfirmPick` and nothing in the
   WMS read it; the closer still stamps `closed: true` on the shop half and Undo left it there. Shipped: the chip on the

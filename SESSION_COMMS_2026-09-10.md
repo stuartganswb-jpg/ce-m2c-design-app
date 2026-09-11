@@ -81,7 +81,7 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | session | state | last hash | next |
 |---|---|---|---|
-| S1 | started 09-10. **Live:** a58d126; 1259391; 16a74bb; bd5907e; e4ab15a; 6572b6f; 9415338; bb5b5e1; 38b1ba6; 2c61b3e; 26f45de; b180339 (Vision 0); 21bea0f (Vision 1a); 3c0e101 (Vision 1b — the mount). **Next:** live read of 1b with Stuart (Brimar / H1-138 / H1-2TRV), then Phase 2 (open/reopen both ways), Phase 3 (generator). | 3c0e101 | Vision 1b live read |
+| S1 | started 09-10. **Live:** a58d126; 1259391; 16a74bb; bd5907e; e4ab15a; 6572b6f; 9415338; bb5b5e1; 38b1ba6; 2c61b3e; 26f45de; b180339 (Vision 0); 21bea0f + 3c0e101 (Vision 1, live-read ✓ on H1-138 / Brimar / H1-2TRV); 2b164a5 (Vision 2). **Next:** live read of Phase 2 with Stuart, then Phase 3 (generator stops emitting TRV END steps). | 2b164a5 | Vision 2 live read; Phase 3 |
 | S2 | started 09-10. Issue 1 DONE: reopen tool shipped (6c72e80 → 553272b), run REOPEN-1789057501646 = 52 restored / 0 failed on Stuart's list. Issue 2 (prevention) built + tested, push pending. Hand-offs out: S3 `reopenConfirmPick` chip; S1 refused-estimate stamp. Named: refused quotes invisible on RTG (S2 row queued). | 553272b | push Issue 2; then the refused-quotes row; then §3 #1 live pass |
 | S3 | started 09-10. Live: f5a6c19 (RING PACKS ⇄ REPACK); e2cef1f (S2's two hand-offs — the `reopenConfirmPick` chip; the shop Undo refuses on a closed doc). **Pairs wait on Eric** (pair item ids). **Plating round trip parked on Stuart's two answers** (fix the OB scan-in's dropped `finSiblingId / orderKey / shopOrderId` + custom-aware put-away before the run; NetSuite at return = receipt only vs a build). Handed S2: a per-order reopen on RTG, if wanted. | e2cef1f | sweep e2cef1f; then whichever Stuart sets |
 | S4 | brief written, not started | — | when Stuart opens it |
@@ -91,6 +91,7 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
+| 2026-09-11 09:59 | S1 | 2b164a5 | Vision Phase 2: CPQ line → Vision board ("Vision" button on tag-engine cart lines); a Vision re-save replaces its CPQ line on Resume. `cpq_drafts` +`cartItemId`; cart lines +`visionDraftId`. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-11 08:42 | S3 | e2cef1f | WMS pick queue: red "⟲ REOPENED — confirm pick state" chip (+ ✓ confirmed; cleared at pick complete) on docs RTG's bulk reopen restored with a reconstructed pick state. Shop: Undo REFUSES on a doc the closer stamped `closed: true` (names who/when/why, points at RTG). No NetSuite write. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-11 08:33 | S1 | 3c0e101 | Vision Phase 1b: hardware pickers from the engine's slots on pinned flows (locks + reasons, rear ends on a double, removals strip, `specs.enginePicks` on saved lines). Old path for unpinned flows untouched. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-10 23:40 | S1 | 21bea0f | Vision Phase 1a (pure): `Shared/visionEngine.js` + bridge `enginePicks` read + `endTreatment` on the choice. No screen change. | everyone — save-is-send refuses on a stale bundle |

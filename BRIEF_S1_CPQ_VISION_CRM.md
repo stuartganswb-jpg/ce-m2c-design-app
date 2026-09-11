@@ -303,6 +303,13 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-11 — Vision Phase 2 (S1) 2b164a5 pushed 09:59.** `Shared/visionHandoff` (draftFromCartLine / cartLineForDraft,
+  11 assertions); CPQ: `visionDraftId` on lines from a drawing, "Vision" button → draft + REOPEN_QUOTE_IN_VISION with
+  `loadDraftId`; Resume sets `editingCartId` to the owning line (replace, never add); ClientVision session carries
+  `loadDraftId` (consumed once); VisionHardware auto-loads it and keeps `cartItemId` through a re-save. Phase 1b live read
+  done (H1-138 / Brimar / H1-2TRV — all as designed; the H1-75 size-matrix edge not yet read). NEXT: live read of Phase 2;
+  Phase 3 = `Shared/traverseFlow.js` generator stops emitting TRV END steps (both engines skip them).
+
 - **2026-09-11 — Vision Phase 1b (S1) 3c0e101 pushed 08:33.** The mount in VisionHardware.js per the 1a plan (steps 1–7 all
   landed; `git diff -w` = six branch heads + three effect guards + the save/load lines). NOT yet: the live read on Stuart's
   tab; the sheet-2D / size-matrix filters Vision applied on the old steps are NOT applied on the engine path (the engine
