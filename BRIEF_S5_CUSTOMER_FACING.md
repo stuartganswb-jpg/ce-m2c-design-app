@@ -230,6 +230,8 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 
 *(newest first)*
 
+- **2026-09-10 — Issue 1 correction (S5) 105b29c pushed, SWEPT: stamp 1789084309360 → 1789086883805, 38 assets; `Fabricut bracket codes are arm + plate here` + `included with the arm` in `606.9fbe4164.chunk.js` (4.6 + the parser); main static/js/main.777877ed.js carries the seeder literal 'the arm follows the measured projection' (the earlier 'H backplate' marker was an interpolation, not a literal). Deploy notices in BRIEF_S1–S4 §6, board Deploys row + status, state doc §6. Hard-refresh + re-PIN.**
+
 - **2026-09-10 evening — Issue 1 (S5) CORRECTION built, tests green but for S1's guard test (by design), push pending.**
   Stuart asked for a read of the live H1-2TRV records before re-applying the sheet ("i dont want to overwrite anything").
   Read via the console recipe (module 565 = firestore fns, 5042 = app `db`; reads work behind the PIN): all 30 H1-2TRV kits

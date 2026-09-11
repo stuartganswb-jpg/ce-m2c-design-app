@@ -424,6 +424,13 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S5 · 105b29c (pushed 20:29).** Before Stuart re-applied the kit sheet, S5 read the live records (console recipe, read-only):
+  every H1-2TRV kit and component row would be rewritten identical. Found that the 18 "not in library" H1-138TRV codes are
+  Fabricut combos — the H1-138 pins carry arms by depth (SBA/EBA/6BA/DBA/CBA) and backplates by orientation (BP-H/V/C) —
+  so the afternoon mapping (and S1's 9415338 entry) keyed non-items. Corrected: rules rows to arms + plates, combo prices on
+  the arms (H pattern), $0 plate rows; Stuart accepted the splice zeros at 2–10 ft. Adds to §2.2: S1 re-keys the explosion
+  and adds the plate line (guard test red on main until then).
+
 - **2026-09-10 · S1 · bb5b5e1 (pushed 19:48).** A backplate follows its arm (reseatPicks: twin only while an arm is chosen at
   the position). Stuart's preview items: the double-return back-end suppression already fires on today's pins (his proj-word
   fix); 6.5" on an H1-75 single was 40 plate pins missing `setup: double` (S1 tagged, on his ask); the plate-after-return
