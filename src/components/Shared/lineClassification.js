@@ -113,7 +113,7 @@ const withLineFinish = (l, fallback) => {
 // Both optional: callers that pass neither (the floors, RTG) behave exactly as before.
 const NAME_PREFIX_RE = /^(\s*[-–—]\s*)(.*)$/;   // "  - H21INPOLELEFT" → indent survives, label is replaced
 const reResolve = (l, findPart, custKeys) => {
-    if (typeof findPart !== 'function' || l.isHeader) return l;
+    if (typeof findPart !== 'function' || l.isHeader || l.isDiscount || l.isNetLine) return l;   // a money row has no part to re-resolve to
     const part = findPart(l.partId) || findPart(l.legacyErpId);
     if (!part) return l;
     const out = { ...l };
@@ -132,9 +132,15 @@ const reResolve = (l, findPart, custKeys) => {
 
 export const customerDocLines = (lines = [], docType = '', finishFallback = '', opts = {}) => {
     const { findPart = null, custKeys = null } = opts || {};
-    const real = (lines || []).filter(l => !isDisplayOnlyLine(l))
+    const money = MONEY_DOC_TYPES.includes(String(docType || '').toUpperCase());
+    // ── THE PAPER HAS TO ADD UP (Stuart 2026-09-11) ──────────────────────────────────────────
+    // The discount / net rows are display-only for the FLOORS (never work) — but on a MONEY
+    // document they are the arithmetic: without them a discounted quote printed every line at
+    // gross and a total that was less, and nothing on the page said why. Money documents keep
+    // them (the CRM print already renders them: no qty, no unit, the amount, net in bold).
+    const real = (lines || []).filter(l => !isDisplayOnlyLine(l) || (money && l && (l.isDiscount || l.isNetLine)))
         .map(l => withLineFinish(reResolve(l, findPart, custKeys), finishFallback));
-    if (!MONEY_DOC_TYPES.includes(String(docType || '').toUpperCase())) return real;
+    if (!money) return real;
     // ── A POLE IS SOLD BY THE FOOT AND SHIPPED AS ONE PIECE (Stuart 2026-08-25) ──────────────
     // The engine pins a per-foot line's qty at 1 (one pole on the router) and multiplies the money
     // by the feet — so a money document printed "1 × $9.00 = $72.00", which reads as an error and

@@ -10,6 +10,7 @@
 import {
     canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount,
     cartHasLineDiscounts, discountModeOf, lineDiscountRows, netFactorOf, orderDiscountStamp,
+    orderPercentRate, orderPercentInfoRow,
 } from '../src/components/Shared/lineDiscount.js';
 import { isDisplayOnlyLine } from '../src/components/Shared/lineClassification.js';
 
@@ -91,6 +92,15 @@ eq('LINES', orderDiscountStamp({ mode: 'LINES', percent: 10, code: 'D20', by: 'S
 eq('ORDER_PERCENT keeps the percent, drops the code', orderDiscountStamp({ mode: 'ORDER_PERCENT', percent: '12.5', code: 'D20' }), { mode: 'ORDER_PERCENT', percent: 12.5, code: '', by: '' });
 eq('CODE keeps both', orderDiscountStamp({ mode: 'CODE', percent: 20, code: 'd20' }), { mode: 'CODE', percent: 20, code: 'D20', by: '' });
 eq('unknown → NONE', orderDiscountStamp({ mode: 'x' }), { mode: 'NONE', percent: null, code: '', by: '' });
+
+// ── tab 7: a set % on the rates ──────────────────────────────────────────────────────────────
+eq('20% off 12.50 → 10.00', orderPercentRate(12.5, 20), 10);
+eq('15% off 2.60 rounds to cents (2.21)', orderPercentRate(2.6, 15), 2.21);
+eq('blank / 0 / 101% → the rate as is', [orderPercentRate(9.99, ''), orderPercentRate(9.99, 0), orderPercentRate(9.99, 101)], [9.99, 9.99, 9.99]);
+eq('a string percent works (the input is a string)', orderPercentRate(100, '12.5'), 87.5);
+const info = orderPercentInfoRow({ percent: '20', saved: 33.333 });
+eq('the info row bills nothing and is display-only', [info.price, info.total, info.isDiscount, info.isOrderDiscount, isDisplayOnlyLine(info)], [0, 0, true, true, true]);
+eq('…and says the saving', info.name.trim(), 'Order Discount - (20%) · item prices above are net of it · saved $33.33');
 
 console.log(`\nlineDiscount: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

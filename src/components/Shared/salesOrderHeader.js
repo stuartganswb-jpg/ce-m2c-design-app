@@ -36,6 +36,7 @@
 // hq_outsource_finishes list; this module only CALLS it).
 
 import { isOutsourcedFinishCode, isAppliedFinishCode, isWoodStainCode } from './finishRouting.js';
+import { orderDiscountStamp } from './lineDiscount.js';
 
 const str = (v) => String(v == null ? '' : v).trim();
 const up = (v) => str(v).toUpperCase();
@@ -251,6 +252,9 @@ export function soHeaderOf({ door, job = null, form = null, customer = null, by 
             recipeSource: codes.length === 1 ? 'lineCode' : (codes.length ? 'mixed' : 'none'),
             recipes: codes,
             ...readyDateOf({ codes, rush, from: now }),
+            // ONE FIELD, BOTH DOORS (Stuart 2026-09-11, S5's display orders): how this order was
+            // discounted. Tab 7 knows only a set % at checkout, applied to the item rates.
+            orderDiscount: orderDiscountStamp({ mode: (parseFloat(ex.orderDiscountPercent) || 0) > 0 ? 'ORDER_PERCENT' : 'NONE', percent: ex.orderDiscountPercent, by }),
             source: 'QUICKSHIP', hqJobId: null, appCreated: true,
         };
     } else {
@@ -270,6 +274,9 @@ export function soHeaderOf({ door, job = null, form = null, customer = null, by 
             ...(j.readyDate !== undefined
                 ? { leadBasis: j.leadBasis || null, leadWeeks: j.leadWeeks || null, readyDate: str(j.readyDate), rushApplied: !!j.rushApplied }
                 : readyDateOf({ codes, rush: !!j.rushApplied, from: now })),
+            // The CPQ save stamps `orderDiscount` on the job (LINES / ORDER_PERCENT / CODE / NONE);
+            // it rides the SO as saved. A job from before the field reads NONE.
+            orderDiscount: (j.orderDiscount && typeof j.orderDiscount === 'object') ? orderDiscountStamp(j.orderDiscount) : orderDiscountStamp({ mode: 'NONE' }),
             source: d, hqJobId: j.id || j.jobId || null, appCreated: true,
         };
     }

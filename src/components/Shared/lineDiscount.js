@@ -121,6 +121,23 @@ export function netFactorOf(item) {
     return d.net / d.gross;
 }
 
+// ── TAB 7 (Order Entry): a set % at checkout, applied to every item line's RATE ───────────────
+// Tab 7 has no customer code and no rollup line, so the discount lives on the rates themselves:
+// each priced non-fee line's rate is rounded to cents, and every total downstream (the cart, the
+// quote's breakdown, the invoice, the NetSuite lines) is the sum of those — the paper and the ERP
+// agree to the cent by construction. The gross rate rides beside it (`grossRate`) for the screen.
+export const orderPercentRate = (rate, percent) => {
+    const r = num(rate) || 0, p = num(percent);
+    if (!(p > 0) || p > 100) return round2(r);
+    return round2(r * (1 - p / 100));
+};
+
+/** One informational row for the documents: the item prices above are already net of it. */
+export function orderPercentInfoRow({ percent, saved }) {
+    const p = num(percent) || 0, s = round2(saved);
+    return { name: `  Order Discount - (${p}%) · item prices above are net of it · saved $${s.toFixed(2)}`, qty: 1, price: 0, total: 0, isDiscount: true, isOrderDiscount: true, partHandling: '', partId: null };
+}
+
 /** The header stamp on the job: which way this quote was discounted, for the record and for S5's display orders. */
 export function orderDiscountStamp({ mode, percent = null, code = '', by = '' } = {}) {
     const m = ['LINES', 'ORDER_PERCENT', 'CODE', 'NONE'].includes(mode) ? mode : 'NONE';

@@ -4,6 +4,7 @@ import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
+import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp } from '../Shared/lineDiscount';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
@@ -160,7 +161,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // NetSuite header fields (Stuart 2026-08-13, from the failed SO push — the exact alignment
     // list): PO# → otherrefnum, sidemark → mainline memo + every line's Tag (custcol3), internal
     // memo → custbody_bit_internalmemo. Form/class/status ride the payload, not fields here.
-    const [soExtras, setSoExtras] = useState({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '' });
+    // orderDiscountPercent (Stuart 2026-09-11): a set % at checkout on every item line's rate — rides
+    // quickShipExtras like the rest, so an edit / reopen brings it back typed.
+    const [soExtras, setSoExtras] = useState({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '', orderDiscountPercent: '' });
     // The components configurator (required at checkout): opens right after a kit lands in the
     // cart, offering the rules doc's carrier styles / included picks / billable accessories.
     const [trvCfg, setTrvCfg] = useState(null);          // { drive, feet, kitCode, finish } while open
@@ -1094,7 +1097,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // THAT order goes.
     const resetOrderEntry = () => {
         setCart([]); setJobName('');
-        setSoExtras({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '' });
+        setSoExtras({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '', orderDiscountPercent: '' });
         setShip({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
         setTrvCfg(null); setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
         setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setQuickQty('');
@@ -1153,16 +1156,33 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         // fees and before shipping), read through the same Shared/feeRules arithmetic, so 25% means
         // the same number whichever door the order came through. Two percentage fees on one order
         // therefore never compound, and a $100 floor still holds on a small one.
+        const isFeeLine = (l) => !!l.feeRule || (() => { const it = itemById(l.itemId); return !!it && isFeeItemRecord(it); })();
+        // ── A SET % AT CHECKOUT (Stuart 2026-09-11): on every item line's RATE, fees untouched ──
+        // Applied before the percentage fees (they price off the order as the customer pays it)
+        // and rounded to cents per line — so the cart, the quote's breakdown, the invoice and the
+        // NetSuite lines are all the same sum. The gross rate rides beside it for the screen.
+        const grossMap = new Map();
+        const odp = parseFloat(soExtras.orderDiscountPercent) || 0;
+        if (odp > 0 && odp <= 100) {
+            cart.forEach(l => {
+                if (isFeeLine(l) || l.rateOverride != null) return;
+                const g = rateMap.get(l.key) ?? 0;
+                grossMap.set(l.key, g);
+                rateMap.set(l.key, orderPercentRate(g, odp));
+            });
+        }
         const pct = cart.filter(l => l.feeRule && l.feeRule.mode === 'PERCENT');
         if (pct.length) {
-            const isFeeLine = (l) => !!l.feeRule || (() => { const it = itemById(l.itemId); return !!it && isFeeItemRecord(it); })();
             const base = cart.filter(l => !isFeeLine(l))
                 .reduce((sum, l) => sum + (rateMap.get(l.key) || 0) * Math.max(1, eachQtyOf(l)), 0);
             pct.forEach(l => rateMap.set(l.key, computeFee({ rule: l.feeRule, qty: 1, configSubtotal: base }).amount));
         }
-        return cart.map(l => ({ ...l, rate: rateMap.get(l.key) ?? 0, eachQty: eachQtyOf(l) }));
-    }, [cart, customerId, kits, allItems]); // eslint-disable-line react-hooks/exhaustive-deps
+        return cart.map(l => ({ ...l, rate: rateMap.get(l.key) ?? 0, eachQty: eachQtyOf(l), ...(grossMap.has(l.key) ? { grossRate: grossMap.get(l.key) } : {}) }));
+    }, [cart, customerId, kits, allItems, soExtras.orderDiscountPercent]); // eslint-disable-line react-hooks/exhaustive-deps
     const cartTotal = pricedCart.reduce((s, l) => s + l.rate * l.eachQty, 0);
+    const cartGross = pricedCart.reduce((s, l) => s + (l.grossRate ?? l.rate) * l.eachQty, 0);
+    const orderDiscountSaved = Math.round((cartGross - cartTotal) * 100) / 100;
+    const orderDiscountPct = parseFloat(soExtras.orderDiscountPercent) || 0;
 
     const myKits = kits.filter(k => k.brand === activeBrand);
     // Collections this customer is entitled to in the PORTAL (CRM → Portal Access). Surfaced here
@@ -1377,6 +1397,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             // every other push — staged, serial, retried, on RTG's Transmit Log — and the
             // writeBack stamps the returned NetSuite ids onto the local doc when it posts.
             const stamp = Date.now();
+            // The one discount field, both doors (Stuart 2026-09-11): a set % here lives on the
+            // item rates above (NetSuite receives the net rates; no rollup, no discount line).
+            const orderDiscount = orderDiscountStamp({ mode: orderDiscountPct > 0 ? 'ORDER_PERCENT' : 'NONE', percent: orderDiscountPct, by: currentUser || '' });
+            if (orderDiscountPct > 0) addLog(`Order discount ${orderDiscountPct}% applied to every item line's rate (fees excluded) — saves $${orderDiscountSaved.toFixed(2)}; NetSuite receives the net rates.`, 'info');
             if (asType === 'estimate') {
                 // A Quick Ship QUOTE now leaves a real record: a jobs doc on the customer's CRM
                 // pipeline. (It used to exist ONLY in NetSuite — zero local persistence.)
@@ -1393,6 +1417,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     shippingMethod: ship.method || 'SAVED', shippingAddressId: ship.addressId || null,
                     customShippingAddress: ship.method === 'CUSTOM' ? (ship.custom || null) : null, shippingAmount: parseFloat(ship.amount) || 0,
                     createdBy: { name: currentUser || '', via: 'QUICKSHIP' },
+                    orderDiscount,
                     cpqData: {
                         totalPrice: lines.reduce((sum, l) => sum + l.rate * l.eachQty, 0) + trvPushLines.reduce((sum, t) => sum + ((t.rate || 0) * (t.quantity || 1)), 0),
                         // ── WHAT THE CLIENT HAS TO BE ABLE TO CHECK (Stuart 2026-08-31) ─────────
@@ -1429,6 +1454,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             });
                             trvDocLines.filter(d => d.kind === 'FEET' && !d.ofKey).forEach(d => rows.push(feetRow(d)));
                             lines.filter(l => !used.has(l.key)).forEach(l => rows.push(cartRow(l, '')));
+                            // The item prices above are already net of the set % — one display-only
+                            // row says so (isDiscount: every floor consumer skips it).
+                            if (orderDiscountPct > 0) rows.push(orderPercentInfoRow({ percent: orderDiscountPct, saved: orderDiscountSaved }));
                             return rows;
                         })(),
                         cartItems: [],
@@ -1536,6 +1564,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     // price, with the each count kept for reference. qty stays the each count so an
                     // older invoice reader (which knows nothing about packs) still totals correctly.
                     lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', packSize: l.packSize || 1, rate: l.rate, total: l.rate * l.eachQty, note: l.note || '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) }));
+                    // The set % is already in every rate above — the invoice says so on one $0 row.
+                    if (orderDiscountPct > 0) out.push({ type: 'ITEM', erp: '', realErp: '', name: `Order Discount (${orderDiscountPct}%) — item prices are net of it · saved $${orderDiscountSaved.toFixed(2)}`, qty: 1, packs: null, packUom: '', packSize: 1, rate: 0, total: 0, note: '', isDiscount: true });
                     return out;
                 })(),
                 invoiceTotal: lines.reduce((s, l) => s + l.rate * l.eachQty, 0),
@@ -2198,6 +2228,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 card — the manufacturing side reads them everywhere the order goes. */}
                             <div><span style={lbl}>Need-by date (production)</span><input type="date" value={soExtras.needBy} onChange={e => setSoExtras(p2 => ({ ...p2, needBy: e.target.value }))} style={{ ...inp, width: '100%' }} /></div>
                             <div><span style={lbl}>Production notes (rides to the floor)</span><input value={soExtras.prodNotes} onChange={e => setSoExtras(p2 => ({ ...p2, prodNotes: e.target.value }))} placeholder="e.g. match sample on file · ship complete" style={{ ...inp, width: '100%' }} /></div>
+                            {/* A SET % FOR THE WHOLE ORDER (Stuart 2026-09-11): every item line's rate,
+                                fees untouched — the same field CPQ's checkout writes (orderDiscount). */}
+                            <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <span style={{ ...lbl, marginBottom: 0 }}>Order discount %</span>
+                                <input type="number" min="0" max="100" step="0.5" value={soExtras.orderDiscountPercent ?? ''} onChange={e => setSoExtras(p2 => ({ ...p2, orderDiscountPercent: e.target.value }))} placeholder="none" style={{ ...inp, width: '90px', textAlign: 'right' }} />
+                                <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{orderDiscountPct > 0 ? `applied to every item line's price (kits included, fees excluded) — saves $${orderDiscountSaved.toFixed(2)}` : 'blank = no discount; applies to every item line, not to fees'}</span>
+                            </div>
                         </div>
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
                             <span style={{ ...lbl, marginBottom: 0, flex: 1 }}>Shipping</span>
@@ -2241,7 +2278,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Est. Total</span>
-                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>${cartTotal.toFixed(2)}</span>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>
+                                {orderDiscountSaved > 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', textDecoration: 'line-through', marginRight: '10px' }}>${cartGross.toFixed(2)}</span>}
+                                {orderDiscountSaved > 0 && <span style={{ fontSize: '0.8rem', color: 'var(--brass)', marginRight: '10px' }}>Order Discount ({orderDiscountPct}%): -${orderDiscountSaved.toFixed(2)}</span>}
+                                ${cartTotal.toFixed(2)}
+                            </span>
                         </div>
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <button onClick={() => pushToNetSuite('salesorder')} disabled={pushing || cart.length === 0}

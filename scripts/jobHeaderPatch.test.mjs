@@ -51,5 +51,18 @@ const FORM = { id: 'QUOTE-1789044572972', jobName: 'Room Right', sidemark: ' HP 
     eq('SO header: shipping amount', h.shippingAmount, 12.5);
 }
 
+{
+    // ONE DISCOUNT FIELD, BOTH DOORS (Stuart 2026-09-11)
+    const qs = (ex) => soHeaderOf({ door: 'QUICKSHIP', form: { soExtras: ex, ship: {}, jobName: 'J', lines: [] }, by: 'Stuart' }).orderDiscount;
+    eq('tab 7: a set % rides the SO header', qs({ orderDiscountPercent: '20' }), { mode: 'ORDER_PERCENT', percent: 20, code: '', by: 'Stuart' });
+    eq('tab 7: blank = NONE', qs({}), { mode: 'NONE', percent: null, code: '', by: 'Stuart' });
+    eq('tab 7: 0 = NONE', qs({ orderDiscountPercent: '0' }), { mode: 'NONE', percent: null, code: '', by: 'Stuart' });
+    const cpq = (od) => soHeaderOf({ door: 'CPQ', job: { jobName: 'J', ...(od !== undefined ? { orderDiscount: od } : {}) } }).orderDiscount;
+    eq('CPQ: the job\'s stamp rides as saved', cpq({ mode: 'LINES', percent: null, code: '', by: 'M' }), { mode: 'LINES', percent: null, code: '', by: 'M' });
+    eq('CPQ: a code stamp keeps percent + code', cpq({ mode: 'CODE', percent: 20, code: 'D20', by: '' }), { mode: 'CODE', percent: 20, code: 'D20', by: '' });
+    eq('CPQ: a job from before the field → NONE', cpq(undefined), { mode: 'NONE', percent: null, code: '', by: '' });
+    eq('CPQ: garbage → NONE', cpq('yes'), { mode: 'NONE', percent: null, code: '', by: '' });
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);
