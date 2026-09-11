@@ -139,37 +139,49 @@ test('the motor is not a painted part', { skip }, () => {
 // plug is the H1-2TRV code as a placeholder. Counts here are a fixture in the rules-doc shape;
 // the real document is S5's 4.6 import (derived from the H1-2TRV Carrier Usage tab, re-keyed).
 const R138 = { usage: [
-    { itemId: 'H1-138TRV-H', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
-    { itemId: 'H1-138TRV-V', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
-    { itemId: 'H1-138TRV-VD', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
+    { itemId: 'H1-138TRVSBA', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
+    { itemId: 'H1-138TRVEBA', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
+    { itemId: 'H1-138TRVDBA', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
+    { itemId: 'H1-138TRVBP-H', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
+    { itemId: 'H1-138TRVBP-V', byFeet: { 4: 2, 6: 3, 8: 4, 12: 5 } },
     { itemId: 'H1-138TRVJNR', byFeet: { 11: 1, 20: 1 } },
 ] };
 const A138 = (over = {}) => ({ setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL', material: 'P', minFeet: 4, rodKind: 'TRAVERSE', bracketStyle: 'H', ...over });
 
-test('H1-138TRV: a 4 ft -4H/P set = 4 × rod, 2 × H1-138TRV-H, 2 plugs, no splice, no fascia, no track', () => {
+// S5 + Stuart 2026-09-10: Fabricut's "bracket" is our ARM (by depth) plus our BACKPLATE (by
+// orientation), one of each per bracket position, both at the chart count.
+test('H1-138TRV: a 4 ft -4H/P set = 4 × rod, 2 × SBA arm, 2 × BP-H plate, 2 plugs, no splice, no fascia, no track', () => {
     const r = explodeTraverse({ family: 'H1-138TRV', align: A138(), feet: 4, rules: R138, proj: '3.625' });
     assert.equal(q(r, 'H1-138TRV'), 4);
-    assert.equal(q(r, 'H1-138TRV-H'), 2);
+    assert.equal(q(r, 'H1-138TRVSBA'), 2);
+    assert.equal(q(r, 'H1-138TRVBP-H'), 2);
     assert.equal(q(r, 'H1-2TRVPLUG'), 2);
     assert.equal(q(r, 'H1-138TRVJNR'), undefined);
     assert.ok(!r.lines.some(l => l.role === 'fascia' || l.role === 'track'), 'no fascia / track line');
     assert.equal(r.lines.find(l => l.code === 'H1-138TRV').role, 'rod');
+    assert.equal(r.lines.find(l => l.code === 'H1-138TRVBP-H').role, 'plate');
     assert.ok(r.lines.every(l => l.subFinish === false), 'mainline finish — nothing wears the base colour');
+    assert.ok(!r.lines.some(l => /^H1-138TRV-/.test(l.code)), 'no sheet combo code is ever consumed');
 });
 
-test('H1-138TRV: the bracket follows the STYLE and the depth', () => {
+test('H1-138TRV: the arm follows the depth, the plate follows the orientation', () => {
     const v = explodeTraverse({ family: 'H1-138TRV', align: A138({ bracketStyle: 'V' }), feet: 4, rules: R138, proj: '4.625' });
-    assert.equal(q(v, 'H1-138TRV-VE'), 2);
-    assert.equal(q(v, 'H1-138TRV-H'), undefined);
-    assert.deepEqual(singleProjections('H1-138TRV', 'V').map(p => p.code), ['H1-138TRV-V', 'H1-138TRV-VE', 'H1-138TRV-V6']);
-    assert.deepEqual(singleProjections('H1-138TRV').map(p => p.code), ['H1-138TRV-H', 'H1-138TRV-HE', 'H1-138TRV-H6'], 'no style → the first style');
+    assert.equal(q(v, 'H1-138TRVEBA'), 2);
+    assert.equal(q(v, 'H1-138TRVBP-V'), 2);
+    assert.equal(q(v, 'H1-138TRVBP-H'), undefined);
+    assert.deepEqual(singleProjections('H1-138TRV').map(p => p.code), ['H1-138TRVSBA', 'H1-138TRVEBA', 'H1-138TRV6BA']);
+    assert.deepEqual(singleProjections('H1-138TRV', 'V').map(p => p.code), ['H1-138TRVSBA', 'H1-138TRVEBA', 'H1-138TRV6BA'], 'a style argument is harmless — the arm table is by depth');
     assert.ok(singleProjections('H1-138TRV').every(p => p.returnArm === ''), 'returns are fee items on the end steps, never arms here');
+    const c = explodeTraverse({ family: 'H1-138TRV', align: A138({ mount: 'CEILING' }), feet: 4, rules: R138 });
+    assert.equal(q(c, 'H1-138TRVCBA'), 2);
+    assert.equal(q(c, 'H1-138TRVBP-C'), 2, 'the ceiling arm takes the ceiling plate');
 });
 
-test('H1-138TRV: a 12 ft -4VD/EP double = two rods per ft, 5 × H1-138TRV-VD, 1 × H1-138TRVJNR', () => {
+test('H1-138TRV: a 12 ft -4VD/EP double = two rods per ft, 5 × DBA, 5 × BP-V, 1 × joiner', () => {
     const r = explodeTraverse({ family: 'H1-138TRV', align: A138({ setup: 'DOUBLE', bracketStyle: 'V', material: 'EP' }), feet: 12, rules: R138 });
     assert.equal(q(r, 'H1-138TRV'), 24);
-    assert.equal(q(r, 'H1-138TRV-VD'), 5);
+    assert.equal(q(r, 'H1-138TRVDBA'), 5);
+    assert.equal(q(r, 'H1-138TRVBP-V'), 5);
     assert.equal(q(r, 'H1-138TRVJNR'), 1);
     assert.equal(q(r, 'H1-2TRVPLUG'), 2);
 });
@@ -185,6 +197,7 @@ test('H1-138TRV: the explode table and the importer export the SAME codes', { sk
     assert.equal(mine.rod, KI.H1_138TRV_PARTS.rod);
     assert.equal(mine.splice, KI.H1_138TRV_PARTS.splice);
     assert.deepEqual(mine.brackets, KI.H1_138TRV_PARTS.brackets);
+    assert.deepEqual(mine.plates, KI.H1_138TRV_PARTS.plates);
 });
 
 test('H1-2TRV is untouched by the style-aware table', { skip }, () => {

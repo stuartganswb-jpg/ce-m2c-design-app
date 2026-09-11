@@ -50,14 +50,19 @@ export const TRAVERSE_FAMILY_PARTS = {
     // H1_138TRV_PARTS (Shared/traverseKitImport) — the test asserts the two tables agree.
     'H1-138TRV': {
         rod: 'H1-138TRV',
+        // ⚠ FABRICUT'S "BRACKET" IS TWO OF OUR ITEMS (S5 + Stuart, read from the live pins and the
+        // library 2026-09-10 evening): the ARM by depth — SBA 3-5/8", EBA 4-5/8", 6BA 6", DBA double,
+        // CBA ceiling — and the BACKPLATE by orientation — BP-H / BP-V, BP-C under the ceiling arm.
+        // The sheet's combo codes (H1-138TRV-H/P, -HE, -VD, -C …) are not items; the combo price sits
+        // on the arm's Fabricut row, the plates are $0 with their own patterns. One of each per
+        // bracket position, both at the chart count. Codes are S5's H1_138TRV_PARTS export
+        // (Shared/traverseKitImport) — the test asserts the two tables agree, plates included.
         brackets: {
-            SINGLE: {
-                H: { '3.625': 'H1-138TRV-H', '4.625': 'H1-138TRV-HE', '6': 'H1-138TRV-H6' },
-                V: { '3.625': 'H1-138TRV-V', '4.625': 'H1-138TRV-VE', '6': 'H1-138TRV-V6' },
-            },
-            DOUBLE: { H: 'H1-138TRV-HD', V: 'H1-138TRV-VD' },
-            CEILING: 'H1-138TRV-C',
+            SINGLE: { '3.625': 'H1-138TRVSBA', '4.625': 'H1-138TRVEBA', '6': 'H1-138TRV6BA' },
+            DOUBLE: 'H1-138TRVDBA',
+            CEILING: 'H1-138TRVCBA',
         },
+        plates: { H: 'H1-138TRVBP-H', V: 'H1-138TRVBP-V', CEILING: 'H1-138TRVBP-C' },
         splice: 'H1-138TRVJNR',
         // ⚠ PLACEHOLDER (Stuart 2026-09-10): "2 per rod manual for now use the same code as the
         // H1-2trv manual, it will need to be updated but for placement sake it is better than
@@ -155,15 +160,28 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
     const singles = singleProjections(family, style);
     const singleHit = singles.find(p => p.inches === String(proj ?? '').trim()) || singles[0];
     const singleCode = singleHit ? singleHit.code : '';
-    const doubleCode = (P.brackets.DOUBLE && typeof P.brackets.DOUBLE === 'object')
-        ? (P.brackets.DOUBLE[style] || P.brackets.DOUBLE[Object.keys(P.brackets.DOUBLE)[0]] || '')
-        : (ring ? P.brackets.DOUBLE_RING : P.brackets.DOUBLE_TRACK);
+    // A double's bracket: one code (H1-138TRV's DBA arm), a per-style table, or H1-2TRV's
+    // track-front / ring-front pair.
+    const doubleCode = typeof P.brackets.DOUBLE === 'string' ? P.brackets.DOUBLE
+        : (P.brackets.DOUBLE && typeof P.brackets.DOUBLE === 'object')
+            ? (P.brackets.DOUBLE[style] || P.brackets.DOUBLE[Object.keys(P.brackets.DOUBLE)[0]] || '')
+            : (ring ? P.brackets.DOUBLE_RING : P.brackets.DOUBLE_TRACK);
     const bracketCode = U(align.mount) === 'CEILING' ? P.brackets.CEILING
         : setup === 'DOUBLE' ? doubleCode
         : singleCode;
     const bracketRow = (rules?.usage || []).find(u => U(u.itemId) === U(bracketCode))
         || (rules?.usage || []).find(u => U(u.itemId) === U(singleCode));
-    add(bracketCode, bracketRow ? usageAt(bracketRow, ft) : 2, 'brackets (count table)', 'bracket');
+    const bracketQty = bracketRow ? usageAt(bracketRow, ft) : 2;
+    add(bracketCode, bracketQty, 'brackets (count table)', 'bracket');
+    // ── ONE BACKPLATE PER BRACKET (S5 + Stuart 2026-09-10) ──────────────────────────────────
+    // A family whose arms mount on a separate plate (H1-138TRV) consumes a plate per bracket, by
+    // the kit's orientation (H / V) or the ceiling plate under a ceiling arm — the same count as
+    // the arm. The rules doc carries a row per plate code; read it, else the bracket's count.
+    if (P.plates) {
+        const plateCode = U(align.mount) === 'CEILING' ? P.plates.CEILING : (P.plates[style] || P.plates.H || Object.values(P.plates)[0]);
+        const plateRow = (rules?.usage || []).find(u => U(u.itemId) === U(plateCode));
+        add(plateCode, plateRow ? usageAt(plateRow, ft) : bracketQty, 'backplates (one per bracket)', 'plate');
+    }
     if (U(align.mount) === 'CEILING' && !(rules?.usage || []).some(u => U(u.itemId) === U(P.brackets.CEILING)))
         skipped.push('ceiling bracket count uses the standard table — confirm when ceiling lands in the flow');
     if (setup === 'SINGLE' && !String(proj ?? '').trim())
