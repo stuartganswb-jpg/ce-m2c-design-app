@@ -319,6 +319,18 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-11 — e2cef1f pushed 08:42 EDT (S3): the two S2 hand-offs.** Stuart: "check if this is still needed, if yes go
+  ahead and build but check with me before push" → re-checked (both still needed), built, committed, checked, pushed on
+  his "push". (1) WMS `ReopenedChip` beside `isOpenPick` (`PickPackApp.js`): red chip + ✓ confirmed on the queue row and
+  the active pick header; `completePick` merges the confirm patch when the flag is set. (2) `ShopFloor.js undoComplete`
+  refuses on `order.closed` naming `closedBy / closedAt / closeReason` and RTG. Design call: refusal, not clearing —
+  a floor reopen of a closed order forks the spine; a per-order RTG reopen handed to S2 (§6 of their brief). Lint 0,
+  full build passed, safe-push = one commit. Notices in S1/S2/S4/S5 §6, board, state doc §6. **Sweep 08:46 EDT:** stamp
+  1789130752152 (after the push); 38 JS assets, all fetched with `curl -sf` (8,432,401 bytes, 0 failures); `confirm pick
+  state` ×1 and `cannot reopen a closed order` ×1 in `main.3168d841.js` (the chip phrase also sits in chunks 483/514/920 —
+  S2's RTG reopen wording and the guide, pre-existing). **LIVE.** Not yet seen by an operator: the first reopened doc
+  Sandra picks is the acceptance run for the chip; the first Undo on a closed shop card is the refusal's.
+
 - **2026-09-10 — f5a6c19 pushed 15:14 EDT (S3): ⇄ REPACK on RING PACKS.** Plan A approved by Stuart in-session
   ("go ahead with Plan A for the ring break, the pairs needs to wait on information from eric"). Break N packs → eaches →
   build the sibling size, one flow, two NetSuite records via the convert RESTlet (unbuild, then build); the operator may

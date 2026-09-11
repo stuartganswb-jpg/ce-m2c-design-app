@@ -128,6 +128,15 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-11 · e2cef1f pushed at 08:42 EDT (S3 sweeps every served asset after the deploy
+  and records it in BRIEF_S3 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: (1) WMS pick queue —
+  a finishing doc RTG's bulk reopen restored with a reconstructed pick state (`reopenConfirmPick: true`) shows a red
+  "⟲ REOPENED — confirm pick state" chip on its queue row and the active pick header, with ✓ confirmed; completing the
+  pick clears it too (`reopenConfirmPick: false, reopenConfirmedBy/At`); refuses nothing. (2) Shop floor — Undo on a doc
+  the closer stamped `closed: true` now REFUSES, naming who/when/why and pointing at RTG (before: status went back to In
+  Process with the closed flag left, so the card vanished). No NetSuite write; no shape change beyond the three confirm
+  fields S2 specified. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-11 · 3c0e101 pushed at 08:33 EDT.** Hard-refresh + re-PIN before your next save.
   What shipped (Vision Phase 1b): on a flow with a pinned assembly, Vision Hardware's hardware pickers (ends, brackets,
   plates; rear ends on a double) come from the engine's slots with the engine's locks and reasons; a saved line carries

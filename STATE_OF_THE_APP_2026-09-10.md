@@ -424,6 +424,14 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 · S3 · e2cef1f (pushed 08:42).** S2's two hand-offs, re-checked against the code after a day of other
+  sessions' pushes — both still needed: `orderLifecycle.reopenPlanFor` still stamps `reopenConfirmPick` and nothing in the
+  WMS read it; the closer still stamps `closed: true` on the shop half and Undo left it there. Shipped: the chip on the
+  pick queue row + active pick header (✓ confirmed; cleared at pick complete; refuses nothing); the shop Undo REFUSES on a
+  closed doc (who/when/why + "ask RTG") — refusal, not clearing, because a floor-side reopen forks the spine. Closes §2.2's
+  S3 line on the chip. **Adds to §2.4 (S2, optional):** a per-order "⟲ Reopen" on RTG's closed card — today only the
+  bulk-window tool exists.
+
 - **2026-09-11 · S1 · 3c0e101 (pushed 08:33).** Vision Phase 1b: the mount. On pinned flows Vision's hardware pickers are the
   engine's slots (one `useEngine` switch; old path untouched for unpinned flows); the hand-copied rules and the sweep step
   aside; a saved line carries `specs.enginePicks`; the #45 strip guards Push. #48 is now live in its first form; the live

@@ -221,6 +221,24 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-11 · e2cef1f pushed at 08:42 EDT (S3 sweeps every served asset after the deploy
+  and records it in BRIEF_S3 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: (1) WMS pick queue —
+  a finishing doc RTG's bulk reopen restored with a reconstructed pick state (`reopenConfirmPick: true`) shows a red
+  "⟲ REOPENED — confirm pick state" chip on its queue row and the active pick header, with ✓ confirmed; completing the
+  pick clears it too (`reopenConfirmPick: false, reopenConfirmedBy/At`); refuses nothing. (2) Shop floor — Undo on a doc
+  the closer stamped `closed: true` now REFUSES, naming who/when/why and pointing at RTG (before: status went back to In
+  Process with the closed flag left, so the card vanished). No NetSuite write; no shape change beyond the three confirm
+  fields S2 specified. Your side: nothing.
+
+- **From S3, 2026-09-11 — a per-order reopen on RTG is yours if wanted.** Your two hand-offs landed in e2cef1f (the
+  `reopenConfirmPick` chip; the shop Undo). On the shop side I chose REFUSAL over clearing the flag: a shop reopen of a
+  closed doc would leave RTG's record `Closed` while the card said `In Process` (a fork of the spine), so `ShopFloor.js
+  undoComplete` now refuses on `order.closed` and tells the operator to ask RTG. Consequence: RTG has no per-order reopen
+  today — only the bulk-window tool (`loadBulkReopen`, `RTGDispatchTab.js` ~2223). If a single wrongly-closed order needs
+  reopening outside a bulk window, that is a "⟲ Reopen" on the closed card, restoring from `stateBeforeClose` through the
+  same `reopenPlanFor` rules (the `closedFrom` filter widened from `RTG_RECONCILE_ALL` to any close). Downstream trace:
+  identical to the bulk reopen per document. Not built; yours to decide.
+
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-11 · 3c0e101 pushed at 08:33 EDT.** Hard-refresh + re-PIN before your next save.
   What shipped (Vision Phase 1b): on a flow with a pinned assembly, Vision Hardware's hardware pickers (ends, brackets,
   plates; rear ends on a double) come from the engine's slots with the engine's locks and reasons; a saved line carries
