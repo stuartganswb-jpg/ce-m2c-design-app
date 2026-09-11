@@ -1162,6 +1162,32 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const isOpenPick = (j) => j.pickStatus === 'Pending'
         && j.currentPhase !== 'Closed' && j.stepStatus !== 'Closed' && j.status !== 'Closed';
 
+    // ── REOPENED — CONFIRM PICK STATE (S2 hand-off, 2026-09-10) ──────────────────────────────
+    // RTG's "⟲ Reopen a bulk close" restores a finishing doc from its own stamps and, where the
+    // pick was released but nothing had packed, RECONSTRUCTS the pick state (Shared/orderLifecycle
+    // reopenPlanFor → `reopenConfirmPick: true`). The shelf may disagree with the reconstruction —
+    // parts already pulled, or staged — so the picker is TOLD, and clears the flag once they have
+    // looked. Refuses nothing: the chip is information, and completing the pick clears it too.
+    const needsReopenConfirm = (j) => !!j && j.reopenConfirmPick === true;
+    const reopenConfirmPatch = () => ({ reopenConfirmPick: false, reopenConfirmedBy: operator?.name || '', reopenConfirmedAt: Date.now() });
+    const confirmReopenedPick = async (job, how) => {
+        if (!needsReopenConfirm(job)) return;
+        try {
+            await updateDoc(doc(db, 'fin_workorders', job.id), reopenConfirmPatch());
+            writeLog(`Reopened pick state confirmed on ${packRef(job)} (${how}) — was restored ${job.reopenedFrom || ''} ${job.reopenRunId ? `run ${job.reopenRunId}` : ''}`.trim(), 'wms');
+        } catch (e) { alert('Could not record the confirmation: ' + (e.message || e)); }
+    };
+    const ReopenedChip = ({ job, big }) => needsReopenConfirm(job) ? (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginTop: big ? '10px' : '6px' }}>
+            <span title={`Restored by RTG's reopen${job.reopenedBy ? ` (${job.reopenedBy})` : ''}${job.reopenRunId ? ` · run ${job.reopenRunId}` : ''}. The pick state was reconstructed from the document's stamps — check the shelf before trusting it.`}
+                style={{ fontFamily: theme.mono, fontSize: big ? '11px' : '9px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 700, color: '#fff', background: '#c0392b', padding: big ? '5px 10px' : '3px 7px', whiteSpace: 'nowrap' }}>
+                ⟲ REOPENED — confirm pick state
+            </span>
+            <button onClick={(e) => { e.stopPropagation(); if (window.confirm(`${packRef(job)} was reopened by RTG and its pick state reconstructed as "${String(job.pickStatus || '').replace(/_/g, ' ')}".\n\nHave you checked the shelf and is that right?`)) confirmReopenedPick(job, 'operator confirmed'); }}
+                style={{ padding: big ? '5px 12px' : '3px 9px', background: 'transparent', border: '1px solid #c0392b', color: '#c0392b', fontFamily: theme.mono, fontSize: big ? '10px' : '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>✓ confirmed</button>
+        </div>
+    ) : null;
+
     // The way out of a pole match that cannot be satisfied, for the order that has no poles. It is a
     // STATEMENT, not a bypass: the reason is required, and it lands on the order and in the log next
     // to the packer's name, so a box that closed without the match can always be accounted for.
@@ -3421,6 +3447,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         setShowNacho(true);
         setTimeout(async () => {
             const patch = { pickStatus: 'Picked_Awaiting_Staging', pickInProgress: null, pickedBy: operator?.name || '', pickedAt: Date.now() };
+            // A completed pick IS the confirmation of a reconstructed pick state (S2 hand-off).
+            if (needsReopenConfirm(jobs.find(j => j.id === activePickJob.id) || activePickJob)) Object.assign(patch, reopenConfirmPatch());
             if (skips && skips.length) { patch.pickSkips = skips; patch.pickHadSkips = true; }
             if (shorts && shorts.length) { patch.pickShorts = shorts; patch.pickHadShorts = true; }
             await updateDoc(doc(db, "fin_workorders", activePickJob.id), patch);
@@ -4140,7 +4168,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         return (
             <div style={{ position: 'fixed', inset: 0, backgroundColor: theme.paper, color: theme.ink, zIndex: 9999, display: 'flex', flexDirection: 'column', padding: '40px', fontFamily: theme.sans }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: `1px solid ${theme.line}`, paddingBottom: '20px', marginBottom: '40px' }}>
-                    <h1 title={activePickJob.id} style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {packRef(activePickJob)}{pickSkips.length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '0.9rem', color: '#d9534f', marginLeft: '16px' }}>⚠ {pickSkips.length} SKIPPED</span>}</h1>
+                    <h1 title={activePickJob.id} style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {packRef(activePickJob)}<ReopenedChip job={jobs.find(j => j.id === activePickJob.id) || activePickJob} big />{pickSkips.length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '0.9rem', color: '#d9534f', marginLeft: '16px' }}>⚠ {pickSkips.length} SKIPPED</span>}</h1>
                     <button onClick={() => { releaseClaim(activePickJob, 'pick'); setActivePickJob(null); setPickSkips([]); setPickShorts([]); setValidation({ bin: '', qty: '' }); }} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
                 </div>
 
@@ -4349,6 +4377,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <div style={{ minWidth: 0 }}>
                                                 <h3 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.2rem', fontWeight: 500 }}>
                                                     <span style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '0.9rem', marginRight: '8px' }}>{expandedJob === job.id ? '▾' : '▸'}</span><span title={job.id}>{packRef(job)}</span>
+                                                    <ReopenedChip job={job} />
                                                 </h3>
                                                 {customer && <div style={{ color: theme.ink, fontFamily: theme.sans, fontSize: '0.95rem', fontWeight: 500, marginTop: '5px' }}>{customer}</div>}
                                                 {/* THE ITEM, ON THE CARD (Stuart 2026-08-17: "no pattern# nothing").

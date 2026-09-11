@@ -1254,6 +1254,15 @@ const ShopFloor = () => {
             .sort((a, b) => (b.completedAt?.toMillis ? b.completedAt.toMillis() : b.completedAt || 0) - (a.completedAt?.toMillis ? a.completedAt.toMillis() : a.completedAt || 0))
             .slice(0, 10);
         const undoComplete = async (order) => {
+            // A doc RTG CLOSED is not the shop's to reopen (S2 hand-off, 2026-09-10: Undo put the
+            // status back but left `closed: true`, so the card vanished from every list — Livio's
+            // six). Reopening it here would also fork the spine: RTG's record would still say
+            // Closed while the shop said In Process. RTG is the single source of truth; the
+            // reopen happens there, and the card returns with the closed flag cleared.
+            if (order.closed) {
+                const when = order.closedAt ? new Date(order.closedAt?.toMillis ? order.closedAt.toMillis() : order.closedAt).toLocaleString() : '';
+                return alert(`⛔ ${order.woNum} was CLOSED on RTG${order.closedBy ? ` by ${order.closedBy}` : ''}${when ? ` on ${when}` : ''}${order.closeReason ? ` (${order.closeReason})` : ''}.\n\nThe shop cannot reopen a closed order — that would leave RTG saying Closed while this card said In Process. Ask RTG to reopen it (Board vs Floor); the card comes back here when it does.`);
+            }
             if (!window.confirm(`↩ Put ${order.woNum} BACK INTO PRODUCTION?\n\n• Shop status returns to "In Process"\n• Finishing/staging is told the custom parts are NOT complete (the staging handshake blocks again until re-completed)${order.platingDemandId ? '\n• Its OB PLATING demand is cancelled — a second Complete raises a fresh one' : ''}\n\nUse this when Complete was hit by mistake.`)) return;
             try {
                 // A PLATED order's reopen ends the demand it raised (B's sweep 2026-09-04, D's
