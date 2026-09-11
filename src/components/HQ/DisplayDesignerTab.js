@@ -45,6 +45,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
     const [newForm, setNewForm] = useState(null);    // { name, style }
     const [view, setView] = useState('DESIGNS');     // DESIGNS | BUILDS — piece 2 lives on the same tab
     const [seed, setSeed] = useState(null);          // tracker seed preview { sheets, tabIx, boards, name, parsed, resolved, missing }
+    const [placing, setPlacing] = useState(null);    // the cart line whose Place is open: which row takes it?
     const svgRef = useRef(null);
     const dragRef = useRef(null);
     const seedFileRef = useRef(null);
@@ -161,21 +162,36 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
     // The cart line is CPQ's own hand-off: its breakdown becomes the row's lines, its render (the
     // JPEG CPQ keeps for the documents) is filed in the gallery as a DISPLAY CAPTURE. No render on
     // the line (an old-engine item, or an assembly with no .glb) = a labelled box, still a row.
-    const addRowFromCart = async (it) => {
+    // Place asks WHICH row takes the configuration (Stuart 2026-09-11: "rather than asking me
+    // which row to put the item"): an existing row — typically one seeded from the tracker — keeps
+    // its label, place, size and orientation and takes the configuration's lines and picture
+    // (the CPQ lines are the truth; the seeded lines were the placeholder); or a new row.
+    const addRowFromCart = async (it, targetRowId = null) => {
         if (!face || face.kind !== 'ROWS') return alert('Open a products face first — chips faces lay themselves out.');
+        setPlacing(null);
         setBusy('Placing the row…');
         try {
-            const label = `Row ${(face.rows || []).length + 1}`;
+            const target = targetRowId ? (face.rows || []).find(r => r.id === targetRowId) : null;
+            const label = target ? target.label : `Row ${(face.rows || []).length + 1}`;
             let imageUrl = '', hiResUrl = '';
-            if (it.renderSnapshot && /^data:image/.test(it.renderSnapshot)) {
-                const a = await saveGuideCapture({ dataUrl: it.renderSnapshot, name: `${draft.name} ${label}`, code: it.assemblyName || '', brandId: activeBrand || '', user: currentUser, kind: 'DISPLAY' });
+            // The picture: the view the operator FRAMED at Add configuration (`displaySnapshot`,
+            // S1's hand-off — transparent, the camera as left) when the cart line carries one;
+            // else the documents' auto-front JPEG (`renderSnapshot`).
+            const shot = (it.displaySnapshot && /^data:image/.test(it.displaySnapshot)) ? it.displaySnapshot : ((it.renderSnapshot && /^data:image/.test(it.renderSnapshot)) ? it.renderSnapshot : '');
+            if (shot) {
+                const a = await saveGuideCapture({ dataUrl: shot, name: `${draft.name} ${label}`, code: it.assemblyName || '', brandId: activeBrand || '', user: currentUser, kind: 'DISPLAY' });
                 imageUrl = a.thumbnailUrl; hiResUrl = a.originalUrl;
+            }
+            const config = rowConfigFromCartItem(it);
+            if (target) {
+                mutateFace(f => ({ ...f, rows: f.rows.map(r => (r.id === target.id ? { ...r, imageUrl, hiResUrl, config: { ...config, replacedSeed: r.config?.seededFrom || '' }, replacedAt: Date.now() } : r)) }));
+                return setBusy('');
             }
             const W = (face.widthIn || 24) * UNITS_PER_INCH;
             const w = Math.round(W * 0.82);
             const h = Math.round(w / 4);
             const below = (face.rows || []).reduce((m, r) => Math.max(m, r.y + r.h), 0.6 * UNITS_PER_INCH);
-            const row = { id: uid(), label, orientation: 'H', x: Math.round((W - w) / 2), y: Math.round(below + 0.4 * UNITS_PER_INCH), w, h, imageUrl, hiResUrl, config: rowConfigFromCartItem(it) };
+            const row = { id: uid(), label, orientation: 'H', x: Math.round((W - w) / 2), y: Math.round(below + 0.4 * UNITS_PER_INCH), w, h, imageUrl, hiResUrl, config };
             mutateFace(f => ({ ...f, rows: [...(f.rows || []), row] }));
         } catch (e) { alert('Could not place the row: ' + (e?.message || e)); }
         setBusy('');
@@ -411,14 +427,33 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                     {cartLines.length === 0 && <div style={{ fontSize: '0.84rem', color: 'var(--ink-soft)', fontStyle: 'italic', margin: '8px 0 14px' }}>The cart is empty. Configure the row on 8. CPQ Configurator, Add configuration, and come back — the cart travels between tabs.</div>}
                     {cartLines.map(it => (
                         <div key={it.id} style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '8px 10px', margin: '6px 0', border: '1px solid var(--line)' }}>
-                            {it.renderSnapshot ? <img src={it.renderSnapshot} alt="" style={{ width: '64px', height: '40px', objectFit: 'contain', background: 'var(--paper-2)' }} /> : <div style={{ width: '64px', height: '40px', background: 'var(--paper-2)' }} />}
+                            {(it.displaySnapshot || it.renderSnapshot) ? <img src={it.displaySnapshot || it.renderSnapshot} alt="" title={it.displaySnapshot ? 'the view framed at Add configuration' : 'the documents\' auto-front view — S1 is adding a framed capture'} style={{ width: '64px', height: '40px', objectFit: 'contain', background: 'var(--paper-2)' }} /> : <div style={{ width: '64px', height: '40px', background: 'var(--paper-2)' }} />}
                             <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.assemblyName || it.name || 'Configured item'}</div>
                                 <div style={{ ...mono }}>{it.finishLabel || ''}{it.engineConfig?.lengthInches ? ` · ${it.engineConfig.lengthInches}"` : ''}{it.qty > 1 ? ` · qty ${it.qty}` : ''}</div>
                             </div>
-                            <button onClick={() => addRowFromCart(it)} disabled={!!busy || face?.kind !== 'ROWS'} style={btn(false)}>Place</button>
+                            <button onClick={() => setPlacing(placing === it.id ? null : it.id)} disabled={!!busy || face?.kind !== 'ROWS'} style={btn(placing === it.id)}>Place…</button>
                         </div>
                     ))}
+                    {placing && cartLines.some(it => it.id === placing) && (() => {
+                        const it = cartLines.find(x => x.id === placing);
+                        const rowsHere = face?.rows || [];
+                        return (
+                            <div style={{ border: '1px solid var(--brass)', background: 'var(--paper-2)', padding: '10px 12px', margin: '4px 0 12px' }}>
+                                <div style={mono}>Which row takes <b style={{ color: 'var(--ink)' }}>{it.assemblyName || it.name || 'this configuration'}</b>?</div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+                                    {rowsHere.map(r => (
+                                        <button key={r.id} onClick={() => addRowFromCart(it, r.id)} disabled={!!busy} style={btn(false)} title={r.config?.seededFrom ? 'A row seeded from the tracker — its placeholder lines are replaced by this configuration; its place, size and orientation stay' : 'Replace this row\'s configuration and picture; its place, size and orientation stay'}>
+                                            {r.orientation === 'V' ? '↕' : '↔'} {r.label}{r.config?.seededFrom ? ' · seeded' : r.config?.assemblyName ? ` · ${r.config.assemblyName}` : ''}
+                                        </button>
+                                    ))}
+                                    <button onClick={() => addRowFromCart(it, null)} disabled={!!busy} style={btn(true)}>+ New row</button>
+                                    <button onClick={() => setPlacing(null)} style={btn(false)}>Cancel</button>
+                                </div>
+                                <div style={{ ...mono, marginTop: '6px' }}>Picking a row keeps its label, place, size and orientation; the row's lines and picture become this configuration's.</div>
+                            </div>
+                        );
+                    })()}
 
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginTop: '22px' }}>
                         <div style={mono}>Bill of one board</div>
