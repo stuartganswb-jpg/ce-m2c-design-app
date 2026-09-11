@@ -351,6 +351,20 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-11 — e9dfc1c (S1) pushed 16:51, SWEPT: version stamp 1789160062006; tab 7 literal in `main.5a35f100.js` (tab 7 lives in main), lineClassification in the same bundle (no new literal of its own), CRM `967.8c7b9ed6.chunk.js`.**
+  Stuart: "carry on with those remaining issues". (a) **Vision Phase 2 live read ✓** on my PIN: CPQ line (H1-138, FABRICUT) → Vision button →
+  board opened on the line → sidemark 'P2 ROUND TRIP', Save Line → CPQ 'Lines Awaiting Configuration' → Configure (= Resume, the cart row read
+  EDITING…) → Add configuration → cart stayed at ONE line, replaced (sidemark + 80" + `visionDraftId` carried; `engineConfig.extras: []` live).
+  Clear All; the draft deleted through the app session (module 565 `kd` = deleteDoc, guarded on id + sidemark + masterQuoteId); no jobs doc
+  ever existed for the minted quote. Trick: override `window.alert/confirm` in the page BEFORE Save Line — the native alert froze CDP last time.
+  (b) **Tab 7 set % at checkout** — `soExtras.orderDiscountPercent`; `pricedCart` scales every non-fee rate (`orderPercentRate`, cents) BEFORE
+  the percentage fees; `grossRate` rides for the screen (struck gross + 'Order Discount (x%): −$y' on Est. Total); jobs quote doc + SO header
+  carry `orderDiscount` (`soHeaderOf` both doors; +7 assertions in jobHeaderPatch); breakdown + invoiceLines gain one $0 info row
+  (`orderPercentInfoRow`, isDiscount). NetSuite receives the net rates — no rollup on tab 7, no discount line. (c) **Money documents add up**
+  — `customerDocLines` keeps isDiscount / isNetLine rows for QUOTE / SALES_ORDER / INVOICE (`scripts/customerDocLines.test.mjs`, 8); `reResolve`
+  never renames a money row. S2 told (RTG's SALES_ORDER print shares the helper). Not screen-verified for (b)/(c) — Stuart's next tab-7 order /
+  CRM print is the proof; my tab can read tab 7 after the deploy without saving.
+
 - **2026-09-11 — 7d3f594 (S1) pushed 16:28, SWEPT: version stamp 1789158660457; `Line discounts are applied in the cart` + `Line discounts from the cart` in `main.74cee60a.js`; Vision chunk `104.74c087bc.chunk.js`.** Three things in one push (Stuart: 'go build both' + the discount redesign):
   (1) **Discounts, the cart or the checkout, never both** — Stuart replaced S5's order-level ask: `Shared/lineDiscount` (48 assertions) = who may
   (admin/superadmin/manager/executive + super-admin flag), `lineDiscountOf` (PERCENT / NET, gross never overwritten), `discountModeOf`

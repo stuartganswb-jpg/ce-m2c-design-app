@@ -424,6 +424,12 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 · S1 · e9dfc1c (pushed 16:51).** Tab 7 takes a set % at checkout (every item line's rate net of it, fees excluded, cents per
+  line — cart, breakdown, invoice and NetSuite lines are one sum); `orderDiscount` is written by `soHeaderOf` for BOTH doors (CPQ's stamp rides
+  as saved; tab 7 = ORDER_PERCENT / NONE). Money documents (QUOTE / SALES_ORDER / INVOICE) keep the discount / net rows again, so a discounted
+  quote's paper adds up; floors and non-money documents unchanged. Vision Phase 2 round trip live-read ✓ (line → board → re-save → Resume → Add
+  replaces; nothing saved).
+
 - **2026-09-11 · S1 · 7d3f594 (pushed 16:28).** DISCOUNTS: the cart or the checkout, never both — a manager or higher ticks CPQ cart lines and applies a % off or
   sets a net unit price (`Shared/lineDiscount`; the gross unit price is never overwritten); at checkout a set % replaces the customer's code for that
   order; the job header carries `orderDiscount { mode, percent, code, by }`; a cart-discounted line lands in NetSuite at its own lower rates
