@@ -177,11 +177,11 @@ export function seedFromKit({ model, kit }) {
 
     // ── THE BRACKET STYLE (H1-138TRV: H horizontal / V vertical) ─────────────────────────────
     // Reported, never chosen, for the same reason projection stays asked on H1-2TRV: the style is
-    // not an axis but a PART (H1-138TRV-H and -V exist at every depth), and the depth is the
-    // operator's measurement. The kit says which of the two families of bracket it was sold with;
-    // the operator picks that bracket at the measured projection and the bill covers it.
+    // not an axis but a PART — the BACKPLATE (H1-138TRVBP-H / BP-V, read from the pins 2026-09-10);
+    // the arm follows the depth, which is the operator's measurement. The kit says which plate it
+    // was sold with; the operator picks it, the arm at the measured projection, and the bill covers both.
     const style = { H: 'horizontal', V: 'vertical' }[U(align.bracketStyle)];
-    if (style) missed.push({ what: 'bracket style', why: `${code} is sold with ${style} brackets — pick the ${U(align.bracketStyle)} bracket at the measured projection` });
+    if (style) missed.push({ what: 'bracket style', why: `${code} is sold with ${style} backplates — pick the ${U(align.bracketStyle)} backplate; the arm follows the measured projection` });
 
     return { answers, picks, lengthInches, carried, missed, blocked: null };
 }

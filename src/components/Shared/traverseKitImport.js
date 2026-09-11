@@ -66,28 +66,48 @@ const axesKey = (k) => [k.setup, k.frontRail, k.drive, k.mount, k.material].join
 // here key the SAME bracket codes — a bracket the explosion names must be a row the rules doc has.
 // Unlike H1-2TRV this family has ONE per-foot part (the rod IS the track), brackets in two STYLES
 // at every depth, and no fascia, plug or base motor.
+// ⚠ FABRICUT'S "BRACKET" IS TWO OF OUR ITEMS (read from the live pins and library, 2026-09-10
+// evening — Stuart confirmed). The sheet sells H1-138TRV-H / -V ("horizontal / vertical bracket")
+// at three depths, a double and a ceiling; the H1-138 assembly pins bracket ARMS by depth
+// (H1-138TRVSBA 3-5/8", EBA 4-5/8", 6BA 6", DBA double, CBA ceiling — traverseRole TRV_BRACKET) and
+// BACKPLATES by orientation (H1-138TRVBP-H, BP-V, BP-C — TRV_BACKPLATE), each in /P, /EP1–6, /P25.
+// So a sheet "bracket" = the arm at the sold depth + the plate in the sold orientation, one of each
+// per bracket position. The STYLE letter keys the PLATE; the depth keys the ARM.
 export const H1_138TRV_PARTS = {
     rod: 'H1-138TRV',
     brackets: {
-        SINGLE: {
-            H: { '3.625': 'H1-138TRV-H', '4.625': 'H1-138TRV-HE', '6': 'H1-138TRV-H6' },
-            V: { '3.625': 'H1-138TRV-V', '4.625': 'H1-138TRV-VE', '6': 'H1-138TRV-V6' },
-        },
-        DOUBLE: { H: 'H1-138TRV-HD', V: 'H1-138TRV-VD' },
-        CEILING: 'H1-138TRV-C',
+        SINGLE: { '3.625': 'H1-138TRVSBA', '4.625': 'H1-138TRVEBA', '6': 'H1-138TRV6BA' },
+        DOUBLE: 'H1-138TRVDBA',
+        CEILING: 'H1-138TRVCBA',
     },
+    // One plate per bracket, by the kit's bracketStyle (H / V); the ceiling arm takes the ceiling plate.
+    plates: { H: 'H1-138TRVBP-H', V: 'H1-138TRVBP-V', CEILING: 'H1-138TRVBP-C' },
     splice: 'H1-138TRVJNR',
 };
 
-// How an H1-2TRV usage row maps onto this family — the SAME counts, this family's codes. A row this
-// table does not name (DRTWB, the ring-front double: no 1-3/8" equivalent) is dropped, and said so.
+// How an H1-2TRV usage row maps onto this family — the SAME counts, this family's codes. The single
+// and double bracket rows become ARM rows; the plates ride the standard-depth row's counts (a plate
+// per bracket at any depth). A row this table does not name (DRTWB, the ring-front double: no 1-3/8"
+// equivalent) is dropped, and said so.
 const H1_138TRV_FROM_H1_2TRV = {
-    'H1-2TRV-WB': ['H1-138TRV-H', 'H1-138TRV-V'],
-    'H1-2TRV-EWB': ['H1-138TRV-HE', 'H1-138TRV-VE'],
-    'H1-2TRV-6WB': ['H1-138TRV-H6', 'H1-138TRV-V6'],
-    'H1-2TRV-DWB': ['H1-138TRV-HD', 'H1-138TRV-VD'],
+    'H1-2TRV-WB': ['H1-138TRVSBA', 'H1-138TRVBP-H', 'H1-138TRVBP-V'],
+    'H1-2TRV-EWB': ['H1-138TRVEBA'],
+    'H1-2TRV-6WB': ['H1-138TRV6BA'],
+    'H1-2TRV-DWB': ['H1-138TRVDBA'],
     'H1-2TRVSPLC': ['H1-138TRVJNR'],
 };
+
+// A sheet combo code → the arm and the plate it stands for. `H1-138TRV-(H|V)(E|6|D)?` and the
+// ceiling `H1-138TRV-C`; the finish suffix (/P, /EP) is the TIER the price belongs to.
+const COMBO_ARM = { '': 'H1-138TRVSBA', E: 'H1-138TRVEBA', '6': 'H1-138TRV6BA', D: 'H1-138TRVDBA' };
+export function splitComboCode(code) {
+    const c = U(code);
+    let m = c.match(/^H1-138TRV-([HV])(E|6|D)?\/(P|EP)$/);
+    if (m) return { arm: COMBO_ARM[m[2] || ''], plate: H1_138TRV_PARTS.plates[m[1]], style: m[1], depth: m[2] || '', tier: m[3] };
+    m = c.match(/^H1-138TRV-C\/(P|EP)$/);
+    if (m) return { arm: H1_138TRV_PARTS.brackets.CEILING, plate: H1_138TRV_PARTS.plates.CEILING, style: 'C', depth: 'C', tier: m[1] };
+    return null;
+}
 
 /** Tab H1-138TRV → { family, kits, components, rules, warnings }. `baseRules` = the H1-2TRV rules doc. */
 function parseH1138Tab(sheet, baseRules) {
@@ -113,6 +133,32 @@ function parseH1138Tab(sheet, baseRules) {
     });
     if (!kits.length) warnings.push('H1-138TRV tab: no kit rows recognised — is the code column B?');
 
+    // ── the combo codes → arm + plate rows (Stuart 2026-09-10: "on the arm; plates $0") ──────────
+    // The ARM carries the combo's price with the H pattern as its SKU; each PLATE gets a $0 row
+    // carrying its own pattern (the standard-depth combo's — a plate is not depth-specific), so a
+    // typed Fabricut pattern still resolves to an item. `finishTier` says which variants the row
+    // belongs to (diffTraverseKits expands it against the library: /P, or every /EPn and /P25).
+    const mapped = [];
+    const combos = components.filter(c => splitComboCode(c.code));
+    const plain = components.filter(c => !splitComboCode(c.code));
+    const armRows = new Map();     // arm|tier → entry (from the H combo; V must agree on price)
+    const plateRows = new Map();   // plate|tier → entry (first = standard depth)
+    // The sheet lists the V rows before the H rows — walk the H (and ceiling) combos first so the
+    // arm's row is the H combo's whatever the sheet's order, then let each V combo check the price.
+    const ordered = [...combos.filter(c => splitComboCode(c.code).style !== 'V'), ...combos.filter(c => splitComboCode(c.code).style === 'V')];
+    ordered.forEach(c => {
+        const x = splitComboCode(c.code);
+        const armKey = `${x.arm}|${x.tier}`;
+        const h = armRows.get(armKey);
+        if (!h) armRows.set(armKey, { code: x.arm, finishTier: x.tier, fabSku: c.fabSku, net: c.net, sales: c.sales, retail: c.retail, name: c.name, derivedFrom: c.code });
+        else if (x.style === 'V' && (h.net !== c.net || h.sales !== c.sales || h.retail !== c.retail)) warnings.push(`${c.code}: the V combo prices differently from the H combo (${c.net} vs ${h.net}) — the arm carries the H price; check the sheet`);
+        const plateKey = `${x.plate}|${x.tier}`;
+        if (!plateRows.has(plateKey)) plateRows.set(plateKey, { code: x.plate, finishTier: x.tier, fabSku: c.fabSku, net: 0, sales: 0, retail: 0, name: `${c.name} (plate — included with the arm)`, derivedFrom: c.code });
+        mapped.push({ from: c.code, arm: x.arm, plate: x.plate, tier: x.tier });
+    });
+    components.length = 0;
+    components.push(...plain, ...armRows.values(), ...plateRows.values());
+
     // ── the rules doc, derived (see the header) ─────────────────────────────────────────────
     const rules = { family, usage: [], configurator: [], updatedFrom: 'Fabricut_Traverse.xlsx', derivedFrom: 'H1-2TRV Carrier Usage (Stuart 2026-09-10: same carrier usage and options — only the rod and brackets change)' };
     if (baseRules && baseRules.usage.length) {
@@ -122,7 +168,11 @@ function parseH1138Tab(sheet, baseRules) {
             if (/CARRIER/i.test(S(u.label))) { rules.usage.push({ ...u, byFeet: { ...u.byFeet } }); return; }
             const to = H1_138TRV_FROM_H1_2TRV[id];
             if (!to) { dropped.push(id); return; }
-            to.forEach(code => rules.usage.push({ itemId: code, fabSku: '', label: S(u.label).replace(/H1-2TRV\S*/g, code), byFeet: { ...u.byFeet }, derivedFrom: id }));
+            to.forEach(code => rules.usage.push({
+                itemId: code, fabSku: '',
+                label: /BP-/.test(code) ? `Backplates (${code}) — one per bracket` : S(u.label).replace(/H1-2TRV\S*/g, code),
+                byFeet: { ...u.byFeet }, derivedFrom: id,
+            }));
         });
         baseRules.configurator.forEach(c => {
             const id = U(c.itemId);
@@ -132,7 +182,19 @@ function parseH1138Tab(sheet, baseRules) {
         });
         if (dropped.length) warnings.push(`H1-138TRV rules: no 1-3/8" equivalent for ${dropped.join(', ')} — row(s) not carried`);
     } else warnings.push('H1-138TRV rules: no Carrier Usage tab to derive from — rules not imported');
-    return { family, kits, components, rules, warnings };
+    return { family, kits, components, rules, warnings, mapped };
+}
+
+// The library codes a tiered component row belongs to: /P → the shared paint item; EP → every
+// plated variant that exists (/EP1…/EPn and /P25, the plated tier by the same rule 4.6's control
+// file uses). `libCodes` = every code the library carries. Empty = nothing to align to.
+export function tierTargets(base, tier, libCodes) {
+    const b = U(base); const t = U(tier);
+    if (!t) return libCodes.has(b) ? [b] : [];
+    if (t === 'P') return libCodes.has(`${b}/P`) ? [`${b}/P`] : [];
+    const out = [];
+    libCodes.forEach(c => { if (c.startsWith(`${b}/`) && /^(EP\d*|P25)$/.test(c.slice(b.length + 1))) out.push(c); });
+    return out.sort();
 }
 
 /**
@@ -256,9 +318,17 @@ export function diffTraverseKits(parsed, libByCode) {
         const hit = libByCode.get(k.code);
         return { ...k, family: f.family, status: hit ? 'UPDATE' : 'NEW', docId: hit ? hit.id : null };
     }));
-    const compEntries = fams.flatMap(f => f.components.map(c => {
+    const libCodes = new Set([...libByCode.keys()].map(U));
+    const compEntries = fams.flatMap(f => f.components.flatMap(c => {
+        if (c.finishTier) {
+            // A tiered row lands on every variant of its tier that exists; none = MISSING, named
+            // by the combo it came from so the operator sees Fabricut's code, not ours.
+            const targets = tierTargets(c.code, c.finishTier, libCodes);
+            if (!targets.length) return [{ ...c, code: c.derivedFrom || c.code, family: f.family, status: 'MISSING', docId: null }];
+            return targets.map(code => ({ ...c, code, family: f.family, status: 'ALIGN', docId: libByCode.get(code).id }));
+        }
         const hit = libByCode.get(c.code);
-        return { ...c, family: f.family, status: hit ? 'ALIGN' : 'MISSING', docId: hit ? hit.id : null };
+        return [{ ...c, family: f.family, status: hit ? 'ALIGN' : 'MISSING', docId: hit ? hit.id : null }];
     }));
     return { kitEntries, compEntries };
 }

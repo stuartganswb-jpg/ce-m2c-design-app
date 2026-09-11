@@ -198,6 +198,35 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
   restored, `closed` removed), `hq_work_orders` / `hq_sales_orders` (`status` restored, `nsWoCloseRequired`
   removed), `rod_cut_orders` (CANCELLED → OPEN for reopened orders), `ns_outbox` (CANCELLED → PENDING for the
   writes the close cancelled). Nothing in your territory's code changed. The push also carried S1's a58d126.
+- **From S5, 2026-09-10 evening — CORRECTION to the H1-138TRV explosion entry (your 9415338): Fabricut's "bracket" is
+  TWO of our items, and `scripts/traverseExplode.test.mjs` "the explode table and the importer export the SAME codes" is
+  RED on main from S5's push until you re-key.** Read from the live pins and library with Stuart (2026-09-10, read-only):
+  the H1-138 assembly pins bracket ARMS by depth — `H1-138TRVSBA` 3-5/8", `EBA` 4-5/8", `6BA` 6", `DBA` double, `CBA`
+  ceiling (`traverseRole: TRV_BRACKET`, `projInches` tagged) — and BACKPLATES by orientation — `H1-138TRVBP-H`, `BP-V`,
+  `BP-C` (`TRV_BACKPLATE`, pinned per depth). Every one exists in /P, /EP1–6, /P25. The sheet's `H1-138TRV-H/P`
+  ("horizontal bracket") = SBA + BP-H; `-HE` = EBA + BP-H; `-H6` = 6BA + BP-H; `-HD` = DBA + BP-H; `-V…` the same arms with
+  BP-V; `-C` = CBA + BP-C. None of the 18 combo codes is an item. **Stuart confirmed: arm + plate, one of each per bracket
+  position, both at the chart count; the combo price sits on the ARM's Fabricut row (H pattern), plates $0 with their own
+  patterns.** S5's export is now:
+  `H1_138TRV_PARTS = { rod: 'H1-138TRV', brackets: { SINGLE: { '3.625': 'H1-138TRVSBA', '4.625': 'H1-138TRVEBA', '6':
+  'H1-138TRV6BA' }, DOUBLE: 'H1-138TRVDBA', CEILING: 'H1-138TRVCBA' }, plates: { H: 'H1-138TRVBP-H', V: 'H1-138TRVBP-V',
+  CEILING: 'H1-138TRVBP-C' }, splice: 'H1-138TRVJNR' }` — the single table is by DEPTH again (no style level), DOUBLE is
+  a string, and `plates` is new. The derived rules doc now carries usage rows for SBA / EBA / 6BA / DBA (H1-2TRV's
+  counts) and for BP-H / BP-V ("one per bracket", the standard row's counts), plus the joiner.
+  **Ask (your `traverseExplode.js`):** (1) the H1-138TRV entry = the object above (import it: `import { H1_138TRV_PARTS }
+  from './traverseKitImport'`, or copy — the guard test compares `brackets`; extend it to `plates`); (2) the single
+  bracket = `brackets.SINGLE[proj]` (your `singleTableOf` already falls through to a depth-keyed table; `style` no longer
+  selects the arm), the double = `brackets.DOUBLE` when it is a string (your `doubleCode` currently falls to
+  `DOUBLE_TRACK`/`DOUBLE_RING` → undefined for this family); (3) NEW: after the bracket line, add the PLATE line —
+  `P.plates[mount === CEILING ? 'CEILING' : (U(align.bracketStyle) || 'H')]` at the SAME quantity as the bracket, role
+  `'plate'`, why `'backplates (one per bracket)'`; the rules doc has a row per plate code so `usageAt` reads it directly;
+  (4) `singleProjections(family)` — a style argument is harmless but unused for this family now; tab 7's call may drop it.
+  Fixture for the test: 4 ft -4H/P with rules = 4 × H1-138TRV, 2 × H1-138TRVSBA, 2 × H1-138TRVBP-H, 2 × H1-2TRVPLUG, no
+  splice; 12 ft -4VD/EP = 24 × rod (two rods per foot — Stuart confirmed), 5 × H1-138TRVDBA, 5 × H1-138TRVBP-V, 1 ×
+  H1-138TRVJNR. **Downstream:** the plate line reaches tab 7's NetSuite consumption and the WMS pick (one plate per
+  bracket was silently missing before) and CPQ's kit cover (the engine's TRV_BACKPLATE pick is now covered at $0 instead
+  of billing as ADDED). Until you land it: tab 7 consumes non-existent combo codes for the brackets (they would fail item
+  resolution at push) and CPQ covers neither arm nor plate.
 - **From S5, 2026-09-10 — the H1-138TRV kits: the explosion entry and two per-family reads (three of your
   files, small).** Stuart: "add in the kits for the H1-138TRV kits … check the components and pricing are
   correct and that it will function with the cpq flow just like H1-2TRV does … the exact same carrier usage and

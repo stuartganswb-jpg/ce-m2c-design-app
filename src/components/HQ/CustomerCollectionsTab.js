@@ -934,7 +934,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             });
             await batch.commit();
             const missing = compEntries.filter(c => c.status === 'MISSING');
-            alert(`✅ Applied: ${kitEntries.length} kit(s) (${families.map(f => `${f.family} ${kitEntries.filter(k => (k.family || parsed.family) === f.family).length}`).join(', ')}), ${compByDoc.size} component(s) priced for ${customer?.name}, rules doc written for ${rulesWritten.join(', ') || 'no family'}.${rulesSkipped.length ? `\n\n⚠ No rules doc for ${rulesSkipped.join(', ')} — its usage table was empty; the explosion falls back to defaults until one is imported.` : ''}${missing.length ? `\n\n⚠ ${missing.length} component code(s) not in the library — not created, price them once the items exist:\n${missing.map(m => m.code).join(', ')}` : ''}${parsed.warnings.length ? `\n\nWarnings:\n• ${parsed.warnings.join('\n• ')}` : ''}`);
+            alert(`✅ Applied: ${kitEntries.length} kit(s) (${families.map(f => `${f.family} ${kitEntries.filter(k => (k.family || parsed.family) === f.family).length}`).join(', ')}), ${compByDoc.size} component(s) priced for ${customer?.name}, rules doc written for ${rulesWritten.join(', ') || 'no family'}.${rulesSkipped.length ? `\n\n⚠ No rules doc for ${rulesSkipped.join(', ')} — its usage table was empty; the explosion falls back to defaults until one is imported.` : ''}${missing.length ? `\n\n⚠ ${missing.length} component code(s) not in the library — not created, price them once the items exist:\n${[...new Set(missing.map(m => m.code))].join(', ')}` : ''}${parsed.warnings.length ? `\n\nWarnings:\n• ${parsed.warnings.join('\n• ')}` : ''}`);
             setKitImp(null);
         } catch (e) { console.error(e); alert(`Apply failed: ${e?.message || e}`); }
         setBusy('');
@@ -1850,7 +1850,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                 <span style={{ color: theme.brass }}>KITS UPDATE {kitImp.kitEntries.filter(k => k.status === 'UPDATE').length}</span>
                                 <span>MOTOR CODES {kitImp.kitEntries.reduce((s, k) => s + k.motorCodes.length, 0)}</span>
                                 <span style={{ color: theme.brassDark }}>COMPONENTS PRICED {kitImp.compEntries.filter(c => c.status === 'ALIGN').length}</span>
-                                <span style={{ color: theme.red }}>NOT IN LIBRARY {kitImp.compEntries.filter(c => c.status === 'MISSING').length}</span>
+                                <span style={{ color: theme.red }}>NOT IN LIBRARY {new Set(kitImp.compEntries.filter(c => c.status === 'MISSING').map(c => c.code)).size}</span>
                                 {(kitImp.parsed.families || [kitImp.parsed]).map(f => (
                                     <span key={f.family} title={f.rules?.derivedFrom ? `Derived: ${f.rules.derivedFrom}` : 'Read from the Carrier Usage tab'}>RULES {f.family}: {(f.rules?.usage || []).length} usage · {(f.rules?.configurator || []).length} configurator{f.rules?.derivedFrom ? ' (derived)' : ''}{!(f.rules?.usage || []).length ? ' — NO DOC WILL BE WRITTEN' : ''}</span>
                                 ))}
@@ -1879,10 +1879,16 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     ))}
                                 </tbody>
                             </table>
+                            {(kitImp.parsed.families || []).filter(f => (f.mapped || []).length).map(f => (
+                                <div key={f.family} style={{ marginTop: '14px', fontSize: '0.85rem', color: theme.inkSoft }}>
+                                    <b>{f.family}: {f.mapped.length} Fabricut bracket codes are arm + plate here</b> — the arm's row carries the price (H pattern), the plate's row is $0 with its own pattern; each lands on the /P item or every plated variant:{' '}
+                                    <span style={{ fontFamily: theme.mono, fontSize: '11px' }}>{f.mapped.map(m => `${m.from} → ${m.arm} + ${m.plate}`).join(' · ')}</span>
+                                </div>
+                            ))}
                             {kitImp.compEntries.filter(c => c.status === 'MISSING').length > 0 && (
                                 <div style={{ marginTop: '14px', fontSize: '0.85rem', color: theme.inkSoft }}>
                                     <b style={{ color: theme.red }}>Not in the library</b> (aligned once the items exist — never auto-created):{' '}
-                                    <span style={{ fontFamily: theme.mono, fontSize: '11px' }}>{kitImp.compEntries.filter(c => c.status === 'MISSING').map(c => c.code).join(' · ')}</span>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '11px' }}>{[...new Set(kitImp.compEntries.filter(c => c.status === 'MISSING').map(c => c.code))].join(' · ')}</span>
                                 </div>
                             )}
                         </div>

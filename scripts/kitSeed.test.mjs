@@ -279,7 +279,7 @@ const kit = (align, code = 'HTS7504F') => ({ legacyErpId: code, partClass: 'Kit'
     eq('and it answers Rod Type first, then the three', r.answers, { rodKind: 'TRAVERSE', setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL' });
     ok('the rod type is reported as carried', r.carried.some(c => /traverse rod type/.test(c)));
     const bs = r.missed.find(m => m.what === 'bracket style');
-    ok('the bracket style is REPORTED, never picked', bs && /horizontal/.test(bs.why) && /H bracket/.test(bs.why), JSON.stringify(r.missed));
+    ok('the bracket style is REPORTED, never picked — it names the BACKPLATE', bs && /horizontal backplates/.test(bs.why) && /H backplate/.test(bs.why) && /arm follows/.test(bs.why), JSON.stringify(r.missed));
     eq('nothing was picked for it', Object.keys(r.picks), []);
 
     // the H1-2TRV kit: no rodKind on record → the seeder says nothing about it

@@ -111,11 +111,32 @@ test('H1-138TRV rides the same workbook — 8 kits, 19 components — and the H1
     assert.ok(parsed.kits.every(k => !/138TRV/.test(k.code)));   // no 1-3/8" kit leaked into it
     assert.ok(f138, 'no H1-138TRV family parsed');
     assert.equal(f138.kits.length, 8);
-    assert.equal(f138.components.length, 19);                   // 9 brackets × /P /EP + the splice
     assert.ok(f138.kits.every(k => k.motorCodes.length === 0)); // hand-drawn only — no per-motor codes
     assert.ok(f138.components.some(c => c.code === 'H1-138TRVJNR'));
-    assert.ok(f138.components.some(c => c.code === 'H1-138TRV-VE/EP'));
     assert.ok(!f138.components.some(c => /^H1-138TRV-4/.test(c.code)), 'a kit code landed among the components');
+    // FABRICUT'S BRACKET IS TWO OF OUR ITEMS: the 18 combo codes become 10 arm rows (5 arms × P/EP)
+    // and 6 plate rows (3 plates × P/EP) — no combo code survives as a component of its own
+    assert.equal(f138.mapped.length, 18);
+    assert.ok(!f138.components.some(c => /^H1-138TRV-[HVC]/.test(c.code)), 'a combo code survived as a component');
+    const arms = f138.components.filter(c => /BA$/.test(c.code)); const plates = f138.components.filter(c => /BP-/.test(c.code));
+    assert.equal(arms.length, 10); assert.equal(plates.length, 6);
+    assert.equal(f138.components.length, 17);                   // 10 arms + 6 plates + the splice
+});
+
+test('H1-138TRV: the arm carries the combo price with the H pattern; the plates carry $0 and their own patterns', { skip }, () => {
+    const c = (code, tier) => f138.components.find(x => x.code === code && x.finishTier === tier);
+    assert.deepEqual([c('H1-138TRVSBA', 'P').net, c('H1-138TRVSBA', 'P').fabSku, c('H1-138TRVSBA', 'P').derivedFrom], [30, 'H3628F', 'H1-138TRV-H/P']);
+    assert.deepEqual([c('H1-138TRVSBA', 'EP').net, c('H1-138TRVSBA', 'EP').fabSku], [40, 'H3628F PREMIUM']);
+    assert.deepEqual([c('H1-138TRVEBA', 'P').net, c('H1-138TRV6BA', 'P').net, c('H1-138TRVDBA', 'P').net, c('H1-138TRVCBA', 'P').net], [32, 34, 36, 32]);
+    assert.deepEqual([c('H1-138TRVDBA', 'P').fabSku, c('H1-138TRVCBA', 'EP').fabSku], ['H3632F', 'H3633F PREMIUM']);
+    // the plates: $0, the standard-depth pattern of their own orientation
+    assert.deepEqual([c('H1-138TRVBP-V', 'P').net, c('H1-138TRVBP-V', 'P').fabSku, c('H1-138TRVBP-V', 'P').derivedFrom], [0, 'H3625F', 'H1-138TRV-V/P']);
+    assert.deepEqual([c('H1-138TRVBP-H', 'EP').net, c('H1-138TRVBP-H', 'EP').fabSku], [0, 'H3628F PREMIUM']);
+    assert.deepEqual([c('H1-138TRVBP-C', 'P').net, c('H1-138TRVBP-C', 'P').fabSku], [0, 'H3633F']);
+    // H and V price alike on the sheet, so no disagreement warning
+    assert.ok(!f138.warnings.some(w => /prices differently/.test(w)), f138.warnings.join('; '));
+    // the splice is a plain component, no tier
+    assert.equal(f138.components.find(x => x.code === 'H1-138TRVJNR').finishTier, undefined);
 });
 
 test('H1-138TRV axes come off the code: style, double, finish, and the two fields this family adds', { skip }, () => {
@@ -129,9 +150,9 @@ test('H1-138TRV axes come off the code: style, double, finish, and the two field
     assert.deepEqual([k('H1-138TRV-4H/P').net, k('H1-138TRV-4H/P').sales, k('H1-138TRV-4H/P').retail], [136, 272, 544]);
     assert.deepEqual([k('H1-138TRV-4H/P').perFootNet, k('H1-138TRV-4H/P').perFootSales, k('H1-138TRV-4H/P').perFootRetail], [30, 60, 120]);
     assert.deepEqual([k('H1-138TRV-4HD/EP').perFootNet, k('H1-138TRV-4HD/EP').perFootSales, k('H1-138TRV-4HD/EP').perFootRetail], [102.5, 187, 374]);
-    // components carry their price and no per-foot triple
-    const v = f138.components.find(c => c.code === 'H1-138TRV-V/P');
-    assert.deepEqual([v.net, v.sales, v.retail], [30, 60, 120]);
+    // components carry their price and no per-foot triple (the arm row stands for the combo)
+    const v = f138.components.find(c => c.code === 'H1-138TRVSBA' && c.finishTier === 'P');
+    assert.deepEqual([v.net, v.sales, v.retail, v.perFootNet], [30, 60, 120, undefined]);
     assert.equal(f138.components.find(c => c.code === 'H1-138TRVJNR').net, 6);
 });
 
@@ -142,13 +163,15 @@ test('H1-138TRV rules are DERIVED from the H1-2TRV usage table: carriers verbati
     // carriers: the same three rows, the same counts
     assert.equal(u('HTSLNTCAR').byFeet[4], 16);
     assert.equal(u('HTRF100N-500').byFeet[36], 216);
-    // brackets: one row per STYLE at every depth, H1-2TRV's counts
-    assert.equal(u('H1-138TRV-H').byFeet[10], 4);
-    assert.equal(u('H1-138TRV-V').byFeet[10], 4);
-    assert.equal(u('H1-138TRV-HE').byFeet[4], 2);
-    assert.equal(u('H1-138TRV-V6').byFeet[36], u('HTSLNTCAR') ? parsed.rules.usage.find(x => x.itemId === 'H1-2TRV-6WB').byFeet[36] : -1);
-    assert.equal(u('H1-138TRV-HD').byFeet[10], 4);
-    assert.equal(u('H1-138TRV-VD').derivedFrom, 'H1-2TRV-DWB');
+    // brackets: the ARM rows by depth with H1-2TRV's counts, and a PLATE row per orientation
+    assert.equal(u('H1-138TRVSBA').byFeet[10], 4);
+    assert.equal(u('H1-138TRVEBA').byFeet[4], 2);
+    assert.equal(u('H1-138TRV6BA').byFeet[36], parsed.rules.usage.find(x => x.itemId === 'H1-2TRV-6WB').byFeet[36]);
+    assert.equal(u('H1-138TRVDBA').derivedFrom, 'H1-2TRV-DWB');
+    assert.equal(u('H1-138TRVBP-H').byFeet[10], 4);
+    assert.equal(u('H1-138TRVBP-V').byFeet[10], 4);
+    assert.ok(/one per bracket/.test(u('H1-138TRVBP-V').label));
+    assert.equal(u('H1-138TRV-H'), undefined, 'a combo code is not a usage row');
     // no H1-2TRV code survives in this family's doc, and the ring-front double has no equivalent
     assert.ok(f138.rules.usage.every(x => !/^H1-2TRV/.test(x.itemId)), 'an H1-2TRV bracket code leaked into the H1-138TRV rules');
     assert.ok(!f138.rules.usage.some(x => x.derivedFrom === 'H1-2TRV-DRTWB'));
@@ -168,15 +191,29 @@ test('H1-138TRV rules are DERIVED from the H1-2TRV usage table: carriers verbati
 });
 
 test('diff and pricing rows carry the family, so the apply writes the right kitFamily and rules doc', { skip }, () => {
-    const lib = new Map([['H1-138TRV-4H/P', { id: 'KIT-138' }], ['H1-138TRV-V/P', { id: 'doc-v' }]]);
+    // the library as it stands: arms and plates in /P, /EP1…/EP6, /P25 (read live 2026-09-10) — a
+    // slice of it here, with the ceiling plate deliberately absent
+    const lib = new Map([['H1-138TRV-4H/P', { id: 'KIT-138' }],
+        ['H1-138TRVSBA/P', { id: 'sba-p' }], ['H1-138TRVSBA/EP1', { id: 'sba-ep1' }], ['H1-138TRVSBA/EP2', { id: 'sba-ep2' }], ['H1-138TRVSBA/P25', { id: 'sba-p25' }], ['H1-138TRVSBA', { id: 'sba' }],
+        ['H1-138TRVBP-V/P', { id: 'bpv-p' }], ['H1-138TRVBP-V/EP1', { id: 'bpv-ep1' }], ['H1-138TRVJNR', { id: 'jnr' }]]);
     const { kitEntries, compEntries } = diffTraverseKits(parsed, lib);
     assert.equal(kitEntries.length, 38);                                    // 30 + 8
     assert.equal(kitEntries.find(k => k.code === 'H1-138TRV-4H/P').status, 'UPDATE');
     assert.equal(kitEntries.find(k => k.code === 'H1-138TRV-4H/P').family, 'H1-138TRV');
     assert.equal(kitEntries.find(k => k.code === 'H1-138TRV-4V/P').status, 'NEW');
     assert.equal(kitEntries.find(k => k.code === 'H1-2TRV-4/P').family, 'H1-2TRV');
-    assert.equal(compEntries.find(c => c.code === 'H1-138TRV-V/P').status, 'ALIGN');
+    // /P → the one paint item; EP → every plated variant that exists, P25 included, the base never
+    const sba = compEntries.filter(c => /^H1-138TRVSBA/.test(c.code));
+    assert.deepEqual(sba.map(c => [c.code, c.status, c.net]).sort(), [['H1-138TRVSBA/EP1', 'ALIGN', 40], ['H1-138TRVSBA/EP2', 'ALIGN', 40], ['H1-138TRVSBA/P', 'ALIGN', 30], ['H1-138TRVSBA/P25', 'ALIGN', 40]]);
+    assert.equal(compEntries.find(c => c.code === 'H1-138TRVBP-V/P').net, 0);
+    assert.equal(compEntries.find(c => c.code === 'H1-138TRVBP-V/EP1').status, 'ALIGN');
+    // nothing to land on → MISSING, named by FABRICUT's code so the operator recognises it
     assert.equal(compEntries.find(c => c.code === 'H1-138TRV-C/EP').status, 'MISSING');
+    assert.equal(compEntries.find(c => c.code === 'H1-138TRV-HE/P').status, 'MISSING');
+    assert.ok(!compEntries.some(c => c.code === 'H1-138TRVBP-C/P'));
+    assert.equal(compEntries.find(c => c.code === 'H1-138TRVJNR').status, 'ALIGN');
+    // and the H1-2TRV components diff exactly as before
+    assert.equal(compEntries.find(c => c.code === 'HSOM-41').status, 'MISSING');
     const row = kitPricingRow(f138.kits.find(k => k.code === 'H1-138TRV-4H/P'), { customerId: 'CUST-1', customerName: 'Fabricut', user: 'test' });
     assert.equal(row.clientSku, 'HTS7500F');
     assert.deepEqual([row.price, row.clientSalesPrice, row.clientRetailPrice], [136, 272, 544]);

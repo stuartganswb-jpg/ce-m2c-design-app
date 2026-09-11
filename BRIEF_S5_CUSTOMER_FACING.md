@@ -230,6 +230,22 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 
 *(newest first)*
 
+- **2026-09-10 evening — Issue 1 (S5) CORRECTION built, tests green but for S1's guard test (by design), push pending.**
+  Stuart asked for a read of the live H1-2TRV records before re-applying the sheet ("i dont want to overwrite anything").
+  Read via the console recipe (module 565 = firestore fns, 5042 = app `db`; reads work behind the PIN): all 30 H1-2TRV kits
+  and 40 component rows would be rewritten IDENTICAL (every Fabricut row still `KIT_IMPORT` at the 13 Aug stamp); finish
+  matrices / contents / collections outside the import; the rules doc differs only by explicit splice zeros at 2–10 ft
+  (Stuart accepted: the components popup pre-sets 0 below 11 ft, his 9 Sep rule). FOUND: the 18 "not in library" codes are
+  Fabricut COMBOS — the H1-138 assembly pins arms by depth (SBA/EBA/6BA/DBA/CBA) + backplates by orientation (BP-H/V/C), each
+  in /P, /EP1–6, /P25 — so my afternoon mapping (and S1's 9415338 entry) keyed codes no item carries. Stuart: arm + plate,
+  one each per bracket at the chart count; price on the ARM (H pattern), plates $0 with their own patterns. Built:
+  `H1_138TRV_PARTS` re-keyed (arms by depth, DOUBLE/CEILING strings, new `plates`), rules rows for arms + plates,
+  `splitComboCode` + combo → arm/plate rows with `finishTier`, `tierTargets` (P → `/P`; EP → every `/EPn` + `/P25` that
+  exists, never the base) applied in `diffTraverseKits`, preview lists the 18 mappings, MISSING de-duplicated, seeder
+  wording = backplate. Tests: importer +1 (16 combos → 10 arm + 6 plate rows, prices/patterns, tier expansion against a
+  library slice), three mutations caught. Corrected hand-off in BRIEF_S1 §6 (plate line at the bracket count; their guard
+  test red until re-keyed).
+
 - **2026-09-10 — Issue 1 (S5) COMPLETE on main: S1 landed both asks in 9415338 (explosion entry `TRAVERSE_FAMILY_PARTS['H1-138TRV']`, rules doc read by `kitFamily` in CPQ + tab 7, `singleProjections(family, style)`); the guard test ties their table to my `H1_138TRV_PARTS`; runner green on the merged tree (fail 0). My derived rules rows key exactly the codes their explosion looks up (H/V at three depths, -HD/-VD, `H1-138TRVJNR`). OPEN for Stuart: S1 explodes a DOUBLE as TWO rods per foot (front + rear rod); my spec said one — S1's reading is the physical one and is what is live; the kit's double additional-foot price (63.5 vs 30) already prices both rods. Next = Stuart's data (4.6 import → finish matrix → H1-138 flow Kit Family `H1-138TRV`), then the acceptance run: one H1-138TRV kit on tab 7 and in CPQ, same bill.
 
 - **2026-09-10 — Issue 1 (S5) 09104cf pushed 17:46.** The H1-138TRV kits (the entry below). Safe-push check: one commit, mine; the rebase carried S1's e4ab15a + 8f91be8 (already on origin). Deploy notices written into BRIEF_S1–S4 §6, the board's Deploys row and status. Stuart's two confirms folded into the S1 spec: rod ends = `H1-2TRVPLUG` ×2 on a manual rod as a placeholder ("it will need to be updated but for placement sake it is better than nothing"); brackets wear the MAINLINE finish (`subFinishRoles: []`). Served-bundle sweep: VERIFIED — stamp 1789075982080 → 1789076872496, 38 assets; `Horizontal bracket` + `bracket at the measured projection` in `main.641da7e6.js` (kitCode / kitSeed), `NO DOC WILL BE WRITTEN` + `no 1-3/8" equivalent for` in `606.23d79921.chunk.js` (the parser + the 4.6 preview). Hard-refresh + re-PIN.
