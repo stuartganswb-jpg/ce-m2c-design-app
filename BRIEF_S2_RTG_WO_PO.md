@@ -221,6 +221,8 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S5 · 2026-09-11 · d3c6777 pushed at 15:37 EDT (S5 sweeps every served asset after the deploy and records it in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **display BUILD ORDERS** — on 5. Marketing (Designs | Build orders toggle) and as ONE guarded mount at the top of 10.5 Project Mgmt: a display × qty × customer × SO/PO, ship plan, the tracker's per-line columns (WO#, at plater, notes, done), boards built → open demand. Writes `system/displays/builds/{id}` and `system/display_demand_<brand>` (new; the open demand per item, recomputed on every save/delete). **Never writes `jobs`** (a build there would be a phantom quote on the CRM / RTG / tab 12). No work order, floor document or NetSuite write. Your side: the "Display" column hand-off is in your §6 (From S5 2026-09-11) with the record shape — I will tell you when Stuart's first order has populated `display_demand_CE` so you can read a real doc.
+
 - **From S5, 2026-09-11 — a "Display" demand column on the Sales Snapshot (Stuart's ask; your file `StockViewTab.js`).**
   Why: sales display boards (50 tabletops + 35 wall boards in flight, 100 more ordered) pull far more product than day-to-day
   orders, the NetSuite SO for a display order is a lump-sum display item, so `committed` never shows it, and the boards are
