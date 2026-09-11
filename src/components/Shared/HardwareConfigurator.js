@@ -10,6 +10,7 @@ import { traverseAnswersMissing, drawLabel } from './traverseDraw';
 import { seedFromVision } from './visionBridge';
 import { seedFromKit, applyKitPricing } from './kitSeed';
 import { explodeTraverse } from './traverseExplode';
+import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
 import { parseKitCode } from './kitCode';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
@@ -139,6 +140,12 @@ function HardwareConfiguratorInner({
     const [showDiag, setShowDiag] = useState(false);
     const [showGeo, setShowGeo] = useState(false);   // the untagged-node list, behind its count
     const [whySlot, setWhySlot] = useState(null);   // slot key whose exclusions are being read
+    // ── WHAT A LATER CHOICE REMOVED (Stuart 2026-09-10: "never a silent clear … refuse add until
+    // acknowledged"). The picks are filtered through the live options (no sweep — see the model
+    // memo), so a pick a later answer invalidates simply stops showing. This list is the reader
+    // that says so: one entry per removal with the engine's reason; the strip under the rail shows
+    // it, and "+ Add configuration" refuses while any entry is unacknowledged.
+    const [drops, setDrops] = useState([]);
     // ── ONE DEFAULT PER MATERIAL (Stuart 2026-09-09: "when i just selected finish for the metal
     // center bracket it removed my finish selection of the wood components"). The rail still sets a
     // default for every step at once — that is the typical order — but a stain and a paint are two
@@ -382,6 +389,20 @@ function HardwareConfiguratorInner({
         // An operator's own pick still wins, so nothing here can overwrite an answer.
         return { ...auto, ...resolvePicks(model, picks) };
     }, [model, picks, resolvePicks, settledKeys, trackAuto]);
+    useEffect(() => {
+        const now = droppedPicks(model, picks, livePicks, { labelOf: slotLabel });
+        setDrops(prev => {
+            const next = mergeDrops(prev, now);
+            const same = next.length === prev.length && next.every((d, i) => d.key === prev[i].key && d.acked === prev[i].acked && d.reason === prev[i].reason);
+            return same ? prev : next;
+        });
+    }, [model, picks, livePicks]);
+    const pendingDrops = useMemo(() => unacknowledged(drops), [drops]);
+    const ackDrop = (key) => setDrops(prev => prev.map(d => d.key === key ? { ...d, acked: true } : d));
+    // The one sentence every refusal says — the same words on the button and in the strip.
+    const dropRefusal = pendingDrops.length
+        ? `${pendingDrops.length} selection${pendingDrops.length === 1 ? ' was' : 's were'} removed by a later choice — read the strip under the rail and press Understood on each before adding.`
+        : '';
 
 
     // ── A VISION DRAWING ARRIVES AS ANSWERS (Stuart 2026-08-21) ──────────────────────────────
@@ -1312,6 +1333,9 @@ function HardwareConfiguratorInner({
     const [saved, setSaved] = useState([]);
     const addConfiguration = () => {
         if (!priced.lines.length) return;
+        // ⚠ NEVER ADD SHORT (Stuart 2026-09-10). A removal nobody has acknowledged is an order that
+        // would leave here missing a part the operator chose. The strip names it; Add waits.
+        if (pendingDrops.length) return;
         // THE HANDOFF IS BUILT HERE, in the shape CPQ has always written — so the shop floor, the
         // finishing floor, RTG, the ERP push and the CRM documents all keep working without
         // knowing which engine produced the order. onAdd is what puts it in the cart; without one
@@ -1366,7 +1390,7 @@ function HardwareConfiguratorInner({
         if (typeof onAdd === 'function') onAdd(item);
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
-        setStepNotes({}); setExtras([]); setDrawnSplices([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0);
+        setStepNotes({}); setExtras([]); setDrawnSplices([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]);
     };
 
     const railCell = (st, i) => {
@@ -1725,8 +1749,9 @@ function HardwareConfiguratorInner({
                         onBlur={() => setCfgQty(String(cfgQtyN))}
                         style={{ width: '52px', padding: '6px 6px', border: `1px solid ${cfgQtyN > 1 ? 'var(--brass)' : 'var(--line)'}`, fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'center', background: '#fff', color: 'var(--ink)', fontWeight: cfgQtyN > 1 ? 700 : 400 }} />
                 </label>
-                <button onClick={addConfiguration} disabled={!priced.lines.length}
-                    style={{ ...mono, padding: '7px 12px', cursor: priced.lines.length ? 'pointer' : 'not-allowed', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', opacity: priced.lines.length ? 1 : .4 }}>
+                <button onClick={addConfiguration} disabled={!priced.lines.length || !!pendingDrops.length}
+                    title={dropRefusal || undefined}
+                    style={{ ...mono, padding: '7px 12px', cursor: (priced.lines.length && !pendingDrops.length) ? 'pointer' : 'not-allowed', border: `1px solid ${pendingDrops.length ? '#b00020' : 'var(--line)'}`, background: '#fff', color: pendingDrops.length ? '#b00020' : 'var(--ink)', opacity: priced.lines.length ? 1 : .4 }}>
                     + Add configuration{cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}
                 </button>
                 {/* CHECKOUT IS A JOB-LEVEL ACT, so it sits with the configurations rather than at
@@ -1734,8 +1759,8 @@ function HardwareConfiguratorInner({
                     next room, and the way out cannot be a button that only exists on step 10. It is
                     the SAME cart the header counts — one door, shown in two places. */}
                 {typeof onCheckout === 'function' && (
-                    <button onClick={onCheckout} disabled={!cartCount}
-                        title={cartCount ? 'Fees, add-ons and the quote documents' : 'Add a configuration first — the cart is empty'}
+                    <button onClick={onCheckout} disabled={!cartCount || !!pendingDrops.length}
+                        title={pendingDrops.length ? dropRefusal : (cartCount ? 'Fees, add-ons and the quote documents' : 'Add a configuration first — the cart is empty')}
                         style={{ ...mono, padding: '7px 12px', cursor: cartCount ? 'pointer' : 'not-allowed', border: `1px solid ${cartCount ? 'var(--brass)' : 'var(--line)'}`, background: cartCount ? 'var(--brass)' : '#fff', color: cartCount ? '#fff' : 'var(--ink-soft)', opacity: cartCount ? 1 : .5 }}>
                         Checkout ({cartCount})
                     </button>
@@ -1746,6 +1771,27 @@ function HardwareConfiguratorInner({
             <div style={{ display: 'flex', border: '1px solid var(--line)', background: '#fff', overflowX: 'auto', maxWidth: '100%', minWidth: 0 }}>
                 {steps.map(railCell)}
             </div>
+            {/* ── REMOVED BY A LATER CHOICE (Stuart 2026-09-10) ──────────────────────────────
+                Every pick a later answer took off the order, with the engine's own reason, until
+                the operator says Understood. Add and Checkout wait for it. Acknowledged entries
+                fade but stay readable until the pick comes back or the configuration is added. */}
+            {drops.length > 0 && (
+                <div style={{ border: `1px solid ${pendingDrops.length ? '#b00020' : 'var(--line)'}`, background: pendingDrops.length ? '#fff5f5' : 'var(--paper-2)', padding: '8px 12px' }}>
+                    <div style={{ ...mono, fontSize: '9px', color: pendingDrops.length ? '#b00020' : 'var(--ink-soft)', marginBottom: '4px' }}>
+                        {pendingDrops.length ? `⚠ Removed by a later choice — ${pendingDrops.length} to acknowledge before adding` : 'Removed by a later choice — acknowledged'}
+                    </div>
+                    {drops.map(d => (
+                        <div key={d.key} style={{ display: 'flex', gap: '10px', alignItems: 'baseline', padding: '3px 0', opacity: d.acked ? 0.55 : 1, fontSize: '0.85rem' }}>
+                            <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)', flex: '0 0 auto' }}>{d.step}</span>
+                            <span style={{ fontWeight: 500, flex: '0 0 auto' }}>{d.partName}{d.partCode && d.partCode !== d.partName ? <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)', marginLeft: '6px' }}>{d.partCode}</span> : null}</span>
+                            <span style={{ color: 'var(--ink-soft)', flex: '1 1 auto', minWidth: 0 }}>— {d.reason}</span>
+                            {!d.acked && (
+                                <button onClick={() => ackDrop(d.key)} style={{ ...mono, fontSize: '9px', padding: '3px 8px', border: '1px solid #b00020', background: '#fff', color: '#b00020', cursor: 'pointer', flex: '0 0 auto' }}>Understood</button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px,390px) minmax(0, 1fr)', gap: '14px', alignItems: 'start', maxWidth: '100%' }}>
 
