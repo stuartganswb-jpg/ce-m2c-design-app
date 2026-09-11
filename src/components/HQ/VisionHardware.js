@@ -1580,7 +1580,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     <div style={{ display: 'flex', gap: '8px' }}>
                                         <select value={loadDraftPick} onChange={e => setLoadDraftPick(e.target.value)} style={{ ...fieldStyle, flex: 1 }}>
                                             <option value="">Load saved line… ({sessionDrafts.length})</option>
-                                            {sessionDrafts.map(c => <option key={c.id} value={c.id}>{(c.sidemark || c.jobName || c.id)}{editingDraftId === c.id ? ' · editing' : ''}</option>)}
+                                            {sessionDrafts.map(c => <option key={c.id} value={c.id}>{(c.sidemark || c.jobName || c.id)}{c.status === 'FINALIZED' ? ' · in the saved quote' : ''}{editingDraftId === c.id ? ' · editing' : ''}</option>)}
                                         </select>
                                         <button onClick={() => loadDraftPick && handleLoadDraft(loadDraftPick)} disabled={!loadDraftPick} title="Restore this saved line's dimensions, bracket/splice placements, and shop notes onto the board for editing" style={{ padding: '12px 18px', background: loadDraftPick ? 'var(--ink)' : 'var(--paper-2)', color: loadDraftPick ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: loadDraftPick ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Load</button>
                                     </div>

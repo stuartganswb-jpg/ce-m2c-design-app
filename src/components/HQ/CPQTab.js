@@ -1946,7 +1946,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const handleClearAllDrafts = async () => {
       if (window.confirm("⚠️ WARNING: This will permanently delete ALL abandoned drafts in the system. Are you sure?")) {
           try {
-              const deletePromises = previousDrafts.map(d => deleteDoc(doc(db, "cpq_drafts", d.id)));
+              // A FINALIZED draft is a saved quote's drawing, not an abandoned draft — never wiped here.
+              const deletePromises = previousDrafts.filter(d => d.status !== 'FINALIZED').map(d => deleteDoc(doc(db, "cpq_drafts", d.id)));
               await Promise.all(deletePromises);
               alert("✅ All drafts have been wiped from the system.");
           } catch(err) { console.error(err); }
@@ -3388,11 +3389,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               await Promise.all(svgPromises);
           }
           
-          // Clean up all the staging drafts that belonged to this Master Quote
+          // ── THE DRAWINGS SURVIVE THE SAVE (Stuart 2026-09-10, Vision Phase 0) ─────────────
+          // This used to delete EVERY cpq_drafts doc of the master quote as "staging clean-up" —
+          // and a Vision drawing IS a cpq_drafts doc (spatialData = the board: dimensions, bracket
+          // and splice placement, shop notes). So every saved quote lost its editable board, and
+          // CRM → Reopen Vision opened an empty session ("Reopen-in-Vision does nothing", 09-03).
+          // A draft that carries board data is now KEPT and marked FINALIZED with the job it went
+          // into; the CPQ-only staging drafts (no board) are deleted as before. Every reader that
+          // lists pending lines excludes FINALIZED; Vision's "Load saved line" includes it.
           if (activeMasterQuoteId) {
-              const draftsToDelete = previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId);
-              for (const d of draftsToDelete) {
-                  await deleteDoc(doc(db, "cpq_drafts", d.id));
+              const quoteDrafts = previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId);
+              for (const d of quoteDrafts) {
+                  if (d.spatialData) await setDoc(doc(db, "cpq_drafts", d.id), { status: 'FINALIZED', finalizedJobId: targetJobId, finalizedAt: Date.now(), finalizedBy: currentUser || '' }, { merge: true });
+                  else await deleteDoc(doc(db, "cpq_drafts", d.id));
               }
           }
 
@@ -4359,11 +4368,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           there; it could only be reached through the header RESUME DRAFT modal. Same panel, same
           filter, same handler; it just sits above the row now, where both engines can show it. */}
               {/* QUEUED LINES PANEL */}
-      {activeMasterQuoteId && previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).length > 0 && (
+      {activeMasterQuoteId && previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId && d.status !== 'FINALIZED').length > 0 && (
           <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '20px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
               <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', color: 'var(--ink)' }}>Lines Awaiting Configuration</h3>
               <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                  {previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).map(draft => (
+                  {previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId && d.status !== 'FINALIZED').map(draft => (
                       <div key={draft.id} style={{ border: `1px solid ${draft.status === 'CONFIGURED' ? '#4CAF50' : 'var(--line)'}`, padding: '12px', background: draft.status === 'CONFIGURED' ? '#f0fdf4' : 'var(--paper-2)', flex: 1, minWidth: '140px' }}>
                           <div style={{ fontWeight: 500, marginBottom: '8px', fontSize: '0.9rem', color: draft.status === 'CONFIGURED' ? '#166534' : 'var(--ink)' }}>
                               {draft.sidemark || 'Unnamed Line'}
@@ -5374,10 +5383,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                     <button onClick={() => setShowCloneModal(false)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
                 </div>
                 <div style={{ padding: '20px 30px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {previousDrafts.length === 0 && (
+                    {previousDrafts.filter(d => d.status !== 'FINALIZED').length === 0 && (
                         <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic', padding: '20px 0', textAlign: 'center' }}>No saved drafts for this brand.</div>
                     )}
-                    {[...previousDrafts]
+                    {/* A FINALIZED draft is inside a saved quote already — it is Vision's to reopen, not a line to resume here. */}
+                    {[...previousDrafts.filter(d => d.status !== 'FINALIZED')]
                         .sort((a, b) => (a.status === 'CONFIGURED' ? 1 : 0) - (b.status === 'CONFIGURED' ? 1 : 0))
                         .map(draft => {
                             const isConfigured = draft.status === 'CONFIGURED';

@@ -136,7 +136,8 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
   }, [activeBrand]);
 
   // Derive queued lines for the active session to display the count
-  const queuedLines = visionConfigs.filter(c => c.masterQuoteId === sessionQuoteId);
+  // FINALIZED lines are already inside the saved quote (Vision Phase 0) — not queued for a push.
+  const queuedLines = visionConfigs.filter(c => c.masterQuoteId === sessionQuoteId && c.status !== 'FINALIZED');
 
   const handlePushToCPQ = () => {
       if (!sessionQuoteId) return;
