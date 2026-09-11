@@ -27,6 +27,8 @@ import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isRe
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf, customerPriceLevel } from '../Shared/priceLevels';
 import { priceChoice } from '../Shared/hardwarePricing';
 import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, checkoutAssignmentOf } from '../Shared/feeRules';
+import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
+import { extrasFromSavedItem } from '../Shared/extrasRestore';
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
@@ -750,7 +752,7 @@ export const EngineeringSpecsStrip = ({ draft, notes, parts, hideHangers }) => {
     );
 };
 
-const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false }) => {
+const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false, userRole = '' }) => {
   const [liveAssemblies, setLiveAssemblies] = useState([]);
   const [liveCustomers, setLiveCustomers] = useState([]);
   const [crmDiscounts, setCrmDiscounts] = useState([]);
@@ -779,6 +781,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // ADD-ONS AT CHECKOUT (Stuart 2026-07-30): fees picked at the END of the quote rather than built
   // into a flow — { [feeDocId]: qty | true }. Percentage fees are on/off; the rest take a quantity.
   const [addOnSel, setAddOnSel] = useState({});
+  // Cart line discounts (manager+, Stuart 2026-09-11): the ticked lines and the tool's mode/value.
+  const [discSel, setDiscSel] = useState([]);
+  const [discTool, setDiscTool] = useState({ mode: 'PERCENT', value: '' });
   const [dynamicAssets, setDynamicAssets] = useState([]);
 
   const [productType, setProductType] = useState(''); 
@@ -1033,6 +1038,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       shippingMethod: reopen.shippingMethod || 'SAVED',
                       shippingAddressId: reopen.shippingAddressId || '',
                       shippingAmount: reopen.shippingAmount || '',
+                      orderDiscountPercent: reopen.orderDiscountPercent || '',
                       customShippingAddress: reopen.customShippingAddress || prev.customShippingAddress
                   }));
                   // Portal checkout add-ons ride the reopen session pre-ticked (see
@@ -1223,13 +1229,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // lines that resolve to no physical item are never discounted. Evaluated against the CURRENT
   // customer at display/finalize time (not stamped at add-to-cart, so items added before the
   // customer was picked still discount). Returns per-unit figures, or null when not applicable.
+  // ── ONE WAY, NEVER TWO (Stuart 2026-09-11, Shared/lineDiscount) ──────────────────────────
+  // LINES: a manager discounted lines in the cart → this checkout discount is OFF entirely.
+  // ORDER_PERCENT: a % typed at checkout REPLACES the customer's code, on the same base, through
+  // the same rows and the same push. CODE: the customer's standing code, exactly as before.
+  const canDiscount = canLineDiscount(userRole, isSuperAdmin);
+  const customerDiscountCode = String((combinedCustomers.find(c => c.id === jobData.customerId) || {}).discountCode || '').trim();
+  const codePercent = parseFloat((crmDiscounts.find(d => String(d.code || '').trim().toUpperCase() === customerDiscountCode.toUpperCase()) || {}).percent) || 0;
+  const discountMode = discountModeOf({ cart, orderPercent: jobData.orderDiscountPercent, customerCode: customerDiscountCode });
+  const discountLabel = discountMode === 'ORDER_PERCENT' ? 'Order Discount' : 'Trade Discount';
   const tradeDiscountFor = (item) => {
       if (!item || (item.priceLevel || 'STANDARD') !== 'STANDARD') return null;
-      const custRec = combinedCustomers.find(c => c.id === jobData.customerId);
-      const code = String(custRec?.discountCode || '').trim();
-      if (!code) return null;
-      const disc = crmDiscounts.find(d => String(d.code || '').trim().toUpperCase() === code.toUpperCase());
-      const percent = disc ? parseFloat(disc.percent) : 0;
+      if (discountMode !== 'ORDER_PERCENT' && discountMode !== 'CODE') return null;
+      const code = discountMode === 'ORDER_PERCENT' ? 'ORDER' : customerDiscountCode;
+      const percent = discountMode === 'ORDER_PERCENT' ? (parseFloat(jobData.orderDiscountPercent) || 0) : codePercent;
       if (!(percent > 0)) return null;
       // Pre-isFee cart items (older localStorage carts) lack the flag — the CE-FEE id guard and
       // the physical-item requirement still keep fees out of the base.
@@ -1929,13 +1942,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               qty: item.qty,
               sidemark: (!item.sidemark || item.sidemark === 'No Sidemark') ? '' : item.sidemark,
               globalFinish: item.engineConfig?.globalFinish || item.finishes?.[0]?.code || '',
-              // Hand-added extras (splices, odd rings) live as flagged breakdown rows — but the
-              // engineConfig's own extras are the exact state (slot-scoped per-track fees
-              // included), so where the save carried them they win over the reconstruction.
-              extras: (item.engineConfig?.extras || []).length
-                  ? item.engineConfig.extras
-                  : (item.pricingBreakdown || []).filter(l => l.addedByHand)
-                      .map(l => ({ code: l.partId, qty: String(l.qty || 1), note: l.customNote || '' })),
+              // Hand-added extras: the saved list as typed (the handoff writes it since 2026-09-11),
+              // else the addedByHand rows under OUR number, merged one row per item — never one row
+              // per breakdown line by doc id, which is how QUO147's one splice became three
+              // (Shared/extrasRestore).
+              extras: extrasFromSavedItem(item),
           });
           setEditingCartId(itemId);
           if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -3145,8 +3156,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       }));
       cartForSave.forEach((item) => {
           const disc = tradeDiscountFor(item);
+          const lineDisc = lineDiscountOf(item);   // the cart's own discount on this line (LINES mode; null otherwise)
           const grossTotal = item.pricing.finalPrice * item.qty;
-          const discTotal = disc ? disc.amount * item.qty : 0;
+          const discTotal = (disc ? disc.amount * item.qty : 0) + (lineDisc ? lineDisc.amount * item.qty : 0);
           grandTotal += grossTotal - discTotal;
 
           Object.assign(mergedConfiguration, item.dynamicConfigParams || {});
@@ -3215,9 +3227,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           // rows: flagged so BOM/dispatch/packing consumers skip them, and nothing ever sums
           // breakdown totals (the quote total is cpqData.totalPrice, already net).
           if (disc) {
-              mergedBreakdown.push({ name: `  Trade Discount - (${disc.percent}%)`, qty: 1, price: -disc.amount, total: -discTotal, isDiscount: true, partHandling: '', partId: null });
+              mergedBreakdown.push({ name: `  ${discountLabel} - (${disc.percent}%)`, qty: 1, price: -disc.amount, total: -discTotal, isDiscount: true, partHandling: '', partId: null });
               mergedBreakdown.push({ name: `  Net Line Total`, qty: 1, price: item.pricing.finalPrice - disc.amount, total: grossTotal - discTotal, isNetLine: true, partHandling: '', partId: null });
           }
+          // A line discounted in the cart (manager+): the same two-row shape, flagged isLineDiscount.
+          lineDiscountRows(item, lineDisc, item.qty).forEach(r => mergedBreakdown.push(r));
 
           if (!mergedNotesObj && item.engineeringNotes) mergedNotesObj = item.engineeringNotes;
           
@@ -3279,6 +3293,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           // Shipping charge rides OUTSIDE cpqData.totalPrice: the push writes it to the NetSuite
           // estimate header (shippingcost), never a line — keeps the rollup balance math intact.
           shippingAmount: parseFloat(jobData.shippingAmount) || 0,
+          // THE ONE WAY THIS QUOTE WAS DISCOUNTED (Stuart 2026-09-11): LINES / ORDER_PERCENT / CODE /
+          // NONE — for the record, the Transmit Log, the CRM reopen, and S5's display orders. The
+          // per-line stamps ride cartItems[].lineDiscount; the gross unit price is never overwritten.
+          orderDiscount: orderDiscountStamp({ mode: discountMode, percent: discountMode === 'ORDER_PERCENT' ? jobData.orderDiscountPercent : codePercent, code: customerDiscountCode, by: currentUser || '' }),
           // THE ONE HEADER (Brief E, Q9): the customer's date and the production notes, under the
           // names Order Entry already uses; the ready date the finish class promises (Q1 answer,
           // 2026-09-03). Written every save — a cleared date is a cleared date.
@@ -4338,6 +4356,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {cart.map(item => (
               <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', border: '1px solid var(--line)', background: 'var(--paper-2)', borderRadius: '2px' }}>
+                {canDiscount && (
+                    <input type="checkbox" checked={discSel.includes(item.id)} onChange={e => setDiscSel(s => e.target.checked ? [...s, item.id] : s.filter(x => x !== item.id))}
+                        disabled={discountMode === 'ORDER_PERCENT'}
+                        title={discountMode === 'ORDER_PERCENT' ? 'A set % is typed at checkout — clear it there to discount lines here' : 'Tick to discount this line'}
+                        style={{ width: '16px', height: '16px', cursor: discountMode === 'ORDER_PERCENT' ? 'not-allowed' : 'pointer', flexShrink: 0 }} />
+                )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontFamily: 'var(--serif)', fontSize: '0.98rem', color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {item.assemblyName || 'Configured Item'} <span style={{ color: 'var(--ink-soft)' }}>[{item.sidemark || 'No Sidemark'}]</span>
@@ -4346,7 +4370,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                     Qty {item.qty} · ${((item.pricing?.finalPrice || 0) * (item.qty || 1)).toFixed(2)}
                     {(() => {
                         const d = tradeDiscountFor(item);
-                        return d ? <span style={{ color: 'var(--brass)' }}> · Trade Discount - ({d.percent}%): -${(d.amount * (item.qty || 1)).toFixed(2)} · Net ${(((item.pricing?.finalPrice || 0) - d.amount) * (item.qty || 1)).toFixed(2)}</span> : null;
+                        if (d) return <span style={{ color: 'var(--brass)' }}> · {discountLabel} - ({d.percent}%): -${(d.amount * (item.qty || 1)).toFixed(2)} · Net ${(((item.pricing?.finalPrice || 0) - d.amount) * (item.qty || 1)).toFixed(2)}</span>;
+                        const ld = lineDiscountOf(item);
+                        if (ld) return <span style={{ color: 'var(--brass)' }}> · {ld.mode === 'NET' ? `Price set to $${ld.netPrice.toFixed(2)}` : `Line Discount - (${ld.percent}%)`}: {ld.amount < 0 ? '+' : '-'}${Math.abs(ld.amount * (item.qty || 1)).toFixed(2)} · Net ${(ld.net * (item.qty || 1)).toFixed(2)}{ld.by ? ` · by ${ld.by}` : ''}</span>;
+                        return null;
                     })()}
                   </div>
                 </div>
@@ -4361,6 +4388,35 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               </div>
             ))}
           </div>
+          {/* LINE DISCOUNTS, IN THE CART (Stuart 2026-09-11): a manager or higher ticks lines and
+              applies a % off or sets a net unit price. Doing so switches the checkout discount off
+              — one way or the other, never both (Shared/lineDiscount.discountModeOf). */}
+          {canDiscount && (() => {
+              const selIds = discSel.filter(id => cart.some(it => it.id === id));
+              const blocked = discountMode === 'ORDER_PERCENT';
+              const stamp = lineDiscountStamp({ mode: discTool.mode, value: discTool.value, by: currentUser || '' });
+              const lbl = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
+              const inp = { padding: '8px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none', background: blocked ? 'var(--paper-2)' : '#fff' };
+              const btn = (on) => ({ padding: '8px 14px', background: on ? 'var(--ink)' : 'var(--paper)', color: on ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: on ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' });
+              return (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '10px', marginTop: '12px', paddingTop: '12px', borderTop: '1px dashed var(--line)', flexWrap: 'wrap' }}>
+                    <span style={lbl}>Line discount · {selIds.length} selected</span>
+                    <select value={discTool.mode} onChange={e => setDiscTool(t => ({ ...t, mode: e.target.value }))} disabled={blocked} style={inp}>
+                        <option value="PERCENT">% off</option>
+                        <option value="NET">Net unit price $</option>
+                    </select>
+                    <input type="number" min="0" step="0.01" value={discTool.value} onChange={e => setDiscTool(t => ({ ...t, value: e.target.value }))} disabled={blocked}
+                        placeholder={discTool.mode === 'NET' ? '0.00' : '0'} style={{ ...inp, width: '110px', textAlign: 'right' }} />
+                    <button disabled={blocked || !stamp || !selIds.length} onClick={() => { setCart(applyLineDiscount(cart, selIds, stamp)); setDiscSel([]); }} style={btn(!blocked && !!stamp && selIds.length > 0)}>Apply</button>
+                    <button disabled={blocked || !selIds.length} onClick={() => { setCart(clearLineDiscount(cart, selIds)); setDiscSel([]); }} style={btn(!blocked && selIds.length > 0)}>Clear</button>
+                    <span style={{ ...lbl, textTransform: 'none', letterSpacing: 0, flexBasis: '100%', textAlign: 'right' }}>
+                        {blocked ? 'A set % is typed at checkout — clear it there to discount lines here (one or the other, never both).'
+                          : discountMode === 'LINES' ? `Line discounts are on · the checkout discount${customerDiscountCode ? ` (code ${customerDiscountCode})` : ''} is off for this quote.`
+                          : 'Tick lines, then apply a % off or set a net unit price. Doing so switches the checkout discount off.'}
+                    </span>
+                </div>
+              );
+          })()}
         </div>
       )}
 
@@ -5371,7 +5427,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                           return d ? (
                               <div style={{ borderTop: '1px solid var(--line)', marginTop: '8px', paddingTop: '8px', fontSize: '0.85rem' }}>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', color: 'var(--brass)' }}>
-                                      <span>Trade Discount - ({d.percent}%)</span><span>-${d.amount.toFixed(2)}</span>
+                                      <span>{discountLabel} - ({d.percent}%)</span><span>-${d.amount.toFixed(2)}</span>
                                   </div>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', color: 'var(--ink)', fontWeight: 500, marginTop: '4px' }}>
                                       <span>Net Unit Total</span><span>${(pricing.finalPrice - d.amount).toFixed(2)}</span>
@@ -5458,18 +5514,36 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                     
                     {(() => {
                         const gross = cart.reduce((sum, item) => sum + (item.pricing.finalPrice * item.qty), 0);
-                        const discTotal = cart.reduce((sum, item) => { const d = tradeDiscountFor(item); return sum + (d ? d.amount * item.qty : 0); }, 0);
+                        const discTotal = cart.reduce((sum, item) => { const d = tradeDiscountFor(item); const ld = lineDiscountOf(item); return sum + (d ? d.amount * item.qty : 0) + (ld ? ld.amount * item.qty : 0); }, 0);
+                        const discWord = discountMode === 'LINES' ? 'Line discounts'
+                            : discountMode === 'ORDER_PERCENT' ? `Order Discount (${parseFloat(jobData.orderDiscountPercent) || 0}%)`
+                            : `Trade Discount${customerDiscountCode ? ` (${customerDiscountCode})` : ''}`;
                         return (
                             <div style={{ padding: '24px', background: 'var(--paper)', border: '1px solid var(--line)', textAlign: 'center' }}>
                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '8px' }}>Cart Total ({cart.length} Items)</div>
-                                {discTotal > 0 && (
+                                {discTotal !== 0 && (
                                     <div style={{ fontSize: '0.9rem', marginBottom: '6px' }}>
                                         <span style={{ color: 'var(--ink-soft)', textDecoration: 'line-through', marginRight: '10px' }}>${gross.toFixed(2)}</span>
-                                        <span style={{ color: 'var(--brass)' }}>Trade Discount: -${discTotal.toFixed(2)}</span>
+                                        <span style={{ color: 'var(--brass)' }}>{discWord}: {discTotal < 0 ? '+' : '-'}${Math.abs(discTotal).toFixed(2)}</span>
                                     </div>
                                 )}
                                 <div style={{ fontFamily: 'var(--serif)', fontSize: '2.4rem', fontWeight: 500, color: 'var(--ink)' }}>
                                     ${(gross - discTotal).toFixed(2)}
+                                </div>
+                                {/* THE CHECKOUT DISCOUNT (Stuart 2026-09-11): the customer's code, OR a set % in its
+                                    place — never both; and never while lines are discounted in the cart. */}
+                                <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '10px', fontSize: '0.85rem', color: 'var(--ink-soft)', flexWrap: 'wrap' }}>
+                                    {discountMode === 'LINES' ? (
+                                        <span>Line discounts are applied in the cart · the checkout discount{customerDiscountCode ? ` (code ${customerDiscountCode})` : ''} is off for this quote.</span>
+                                    ) : (<>
+                                        <span>Set order discount %</span>
+                                        <input type="number" min="0" max="100" step="0.5" value={jobData.orderDiscountPercent ?? ''} onChange={e => setJobData({ ...jobData, orderDiscountPercent: e.target.value })}
+                                            placeholder={customerDiscountCode ? `code ${customerDiscountCode}` : 'none'}
+                                            style={{ width: '90px', padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', textAlign: 'right', outline: 'none', background: '#fff' }} />
+                                        <span>{discountMode === 'ORDER_PERCENT'
+                                            ? `replaces the customer's ${customerDiscountCode ? `code ${customerDiscountCode}` : 'standing discount'} for this order`
+                                            : customerDiscountCode ? `blank = the customer's code ${customerDiscountCode} (${codePercent}%) applies` : 'blank = no discount'}</span>
+                                    </>)}
                                 </div>
                             </div>
                         );
@@ -5620,7 +5694,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                         catalog={addOnCatalog}
                         selections={addOnSel}
                         onChange={setAddOnSel}
-                        configSubtotal={cart.reduce((s, it) => { const d = tradeDiscountFor(it); return s + ((it.pricing?.finalPrice || 0) - (d ? d.amount : 0)) * (it.qty || 1); }, 0)}
+                        configSubtotal={cart.reduce((s, it) => { const d = tradeDiscountFor(it); const ld = lineDiscountOf(it); return s + ((it.pricing?.finalPrice || 0) - (d ? d.amount : 0) - (ld ? ld.amount : 0)) * (it.qty || 1); }, 0)}
                         title="Add-ons & fees — added as their own lines"
                         note={`Percentages are worked out from the configured subtotal (${cart.length} item${cart.length === 1 ? '' : 's'}, before fees and shipping). Fees a flow already bills are untouched — this is for the ones that aren't steps.`}
                     />

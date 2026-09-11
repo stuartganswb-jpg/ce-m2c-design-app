@@ -23,6 +23,7 @@ import { nsProxyFetch } from './nsProxy';
 import { enqueueNsWrite } from './nsOutbox';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { isParkedGeometryLine } from './lineClassification';
+import { netFactorOf } from './lineDiscount';
 
 // A finish's code is the assembly suffix (base + CODE -> base/CODE). Some finish docs carry the
 // identifier in `name` with `code` blank, so fall back to name.
@@ -124,7 +125,13 @@ export function resolveJobLines(job, data) {
               // with "this quote has no CPQ configuration data attached", which is true of the map
               // it was looking for and false of the quote.
               engine: String(ci.engine || '').toUpperCase(),
-              breakdown: Array.isArray(ci.pricingBreakdown) ? ci.pricingBreakdown : []
+              breakdown: Array.isArray(ci.pricingBreakdown) ? ci.pricingBreakdown : [],
+              // ── A LINE DISCOUNTED IN THE CART DROPS ON ITS OWN (Stuart 2026-09-11, S1) ────
+              // net ÷ gross for THIS cart item (Shared/lineDiscount). Every line it produces
+              // carries it, so buildNsTransaction lowers that item's rates and leaves the other
+              // lines alone — instead of the whole-quote scale spreading one line's discount
+              // across every item. 1 when the line carries no discount.
+              netFactor: netFactorOf(ci)
             }))
           : [{
               config: job.cpqData.configuration || {},
@@ -141,6 +148,7 @@ export function resolveJobLines(job, data) {
       const rawLines = []; // per-assembly lines, aggregated by NetSuite item at the end
 
       carts.forEach(cart => {
+          const firstLineOfCart = rawLines.length; // every line this cart item emits gets its netFactor (below)
           // ── THE TAG ENGINE HANDS OVER A FINISHED BOM ─────────────────────────────────────────
           // Everything the step walk below works out — which part a selection means, which size it
           // resolves to, what it is finished in — the engine has already worked out, and its answer
@@ -405,6 +413,9 @@ export function resolveJobLines(job, data) {
                   ...(cart.sidemark ? { sidemark: cart.sidemark } : {}),
               });
           });
+          if (cart.netFactor && cart.netFactor !== 1) {
+              for (let i = firstLineOfCart; i < rawLines.length; i++) rawLines[i].netFactor = cart.netFactor;
+          }
       });
 
       // CHECKOUT ADD-ON ITEMS (Eric 2026-08-13: "the order came in without the Wand item on a
@@ -438,7 +449,8 @@ export function resolveJobLines(job, data) {
           const unmapped = (l.nsId === 'UNMAPPED' || l.nsId === 'PENDING');
           // Sidemark is part of line identity: two rooms ordering the same pole stay TWO lines,
           // each carrying its own Tag (custcol3) — merging them would blank the room attribution.
-          const key = `${l.nsId}|${l.finishedErpId}|${l.finishNote || ''}|${l.projection}|${l.sidemark || ''}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}`;
+          // A discounted cart line never merges with a full-price twin of the same item (its rate differs).
+          const key = `${l.nsId}|${l.finishedErpId}|${l.finishNote || ''}|${l.projection}|${l.sidemark || ''}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}|${(l.netFactor && l.netFactor !== 1) ? l.netFactor : ''}`;
           const cur = agg.get(key);
           if (cur) cur.qty += l.qty;
           else agg.set(key, { ...l });
@@ -499,6 +511,7 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
 
     const lineItems = [];
     let physicalItemsTotal = 0;
+    let lineDiscounted = 0;
     const unmappedNames = [];
     // THE SAME MATCHER CPQ PRICED WITH — resolve the CRM record once so line rates match the quote.
     let custRec = null;
@@ -514,6 +527,13 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
             let itemRate = parseFloat(line.masterPart.manufacturingSpecs?.basePrice || 0) || 0;
             const cpPrice = clientPriceFor(line.masterPart.clientPricing, custKeys);
             if (cpPrice != null) itemRate = cpPrice;
+            // A cart line discounted in CPQ (percent off / net price set by a manager) lands in
+            // NetSuite as ITS OWN lower rates — the other lines keep theirs. Floored to cents;
+            // the rollup line absorbs the residue as it always has.
+            if (line.netFactor && line.netFactor !== 1) {
+                itemRate = Math.floor(itemRate * line.netFactor * 100) / 100;
+                lineDiscounted++;
+            }
             physicalItemsTotal += itemRate * line.qty;
             const linePayload = {
                 item: { id: line.nsId.toString() },
@@ -543,6 +563,13 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     }
 
     const cpqGrandTotal = parseFloat(job.cpqData.totalPrice || 0);
+    // THE ONE WAY THIS QUOTE WAS DISCOUNTED (Shared/lineDiscount.orderDiscountStamp on the job):
+    // LINES = the discounted lines above carry their own rates; ORDER_PERCENT / CODE = the
+    // whole-quote scale below lands the transaction at the net. Named here so the Transmit Log reads it.
+    const od = job.orderDiscount && typeof job.orderDiscount === 'object' ? job.orderDiscount : null;
+    if (lineDiscounted) log(`Line discounts from the cart: ${lineDiscounted} line(s) pushed at their own discounted rates${od?.by ? ` (set by ${od.by})` : ''}.`, 'info');
+    else if (od && od.mode === 'ORDER_PERCENT') log(`Order discount ${od.percent}% set at checkout (in place of the customer's code).`, 'info');
+    else if (od && od.mode === 'CODE') log(`Customer discount code ${od.code} (${od.percent}%).`, 'info');
     let silentFeeBalance = Math.max(0, cpqGrandTotal - physicalItemsTotal);
     // Discounted quotes net BELOW the items' standard-rate sum — scale rates down so the
     // transaction lands exactly at the quoted total (rollup absorbs rounding, never negative).

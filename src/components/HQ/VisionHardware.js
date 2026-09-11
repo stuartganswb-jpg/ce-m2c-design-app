@@ -9,7 +9,7 @@ import { projLabel } from '../Shared/traverseExplode';
 import { splitNodesLower } from '../Shared/nodeList';
 import { platePoolFrom, plateStillOffered } from '../Shared/platePool';
 import { computeBayMath } from '../Shared/bayMath';
-import { visionPickers, engDataFromPickers, enginePicksForDraft } from '../Shared/visionEngine';
+import { visionPickers, engDataFromPickers, enginePicksForDraft, engineEndSettled } from '../Shared/visionEngine';
 import { droppedPicks, mergeDrops, unacknowledged } from '../Shared/pickDrops';
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
@@ -2144,7 +2144,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                           // demanding engData.bracketId then would block every french-return line forever.
                           const leftSettled = !!engData.bracketId
                               || !!(stepBrL && dynamicConfigParams[stepBrL.id])
-                              || returnChosenAt('LEFT') || armChosenAt('LEFT');
+                              || returnChosenAt('LEFT') || armChosenAt('LEFT')
+                              // On the engine the step selections above are empty and a return LOCKS the
+                              // bracket (its id is cleared on purpose) — read the engine's own pickers
+                              // (Stuart 2026-09-11, QUO142 with miter returns: "keeps asking for a bracket").
+                              || (useEngine && engineEndSettled(pk, 'LEFT'));
                           const blocked = isPushingToCPQ || !activeFlow || !leftSettled;
                           return (
                               <button onClick={handlePushToCPQ} disabled={blocked} style={{ width: '100%', padding: '16px', background: blocked ? 'var(--paper)' : 'var(--ink)', color: blocked ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: blocked ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>

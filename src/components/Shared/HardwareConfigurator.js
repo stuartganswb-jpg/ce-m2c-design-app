@@ -11,6 +11,7 @@ import { seedFromVision } from './visionBridge';
 import { seedFromKit, applyKitPricing } from './kitSeed';
 import { explodeTraverse } from './traverseExplode';
 import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
+import { normalizeExtras } from './extrasRestore';
 import { parseKitCode } from './kitCode';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
@@ -238,11 +239,18 @@ function HardwareConfiguratorInner({
     const spliceCode = spliceCodes.length === 1 ? spliceCodes[0] : null;
     const spliceOverIn = Number(flow?.spliceOverInches) > 0 ? Number(flow.spliceOverInches) : 120;
     const spliceNeeded = spliceCodes.length > 0 && !!lengthInches && lengthInches > spliceOverIn;
-    const spliceSatisfied = spliceCodes.some(c => extras.some(x => x.code === c && Number(x.qty) > 0));
+    // The same ITEM under any of its names (our number, the doc id) — never a string compare alone,
+    // which is what let a doc-id row and a code row both stand for one joiner (QUO147).
+    const sameItemCode = useCallback((a, b) => {
+        if (String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase()) return true;
+        const pa = findPart(a), pb = findPart(b);
+        return !!(pa && pb && pa.id && pa.id === pb.id);
+    }, [findPart]);
+    const spliceSatisfied = spliceCodes.some(c => extras.some(x => sameItemCode(x.code, c) && Number(x.qty) > 0));
     useEffect(() => {
         if (!spliceNeeded || !spliceCode) return;   // several candidates → the operator picks
-        setExtras(a => (a.some(x => x.code === spliceCode && Number(x.qty) > 0) ? a : [...a.filter(x => x.code !== spliceCode), { code: spliceCode, qty: '1', note: '' }]));
-    }, [spliceNeeded, spliceCode, extras]);
+        setExtras(a => (a.some(x => sameItemCode(x.code, spliceCode) && Number(x.qty) > 0) ? a : [...a.filter(x => !sameItemCode(x.code, spliceCode)), { code: spliceCode, qty: '1', note: '' }]));
+    }, [spliceNeeded, spliceCode, extras, sameItemCode]);
     // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
     // id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
     // the app's own record id and means nothing off this screen. A pin can be tagged with either, so
@@ -1254,7 +1262,10 @@ function HardwareConfiguratorInner({
         setPartFinish({ ...(s.partFinish || {}) });
         setStepNotes({ ...(s.stepNotes || {}) });
         setStepQty({ ...(s.stepQty || {}) });   // operator-typed counts (rings, centre brackets) — defaults otherwise
-        setExtras(Array.isArray(s.extras) ? s.extras : []);
+        // Restored rows are re-keyed to the code THIS flow's add-by-hand list uses for the same
+        // part, and duplicates merge — so the splice check below can never miss its twin and add
+        // another (QUO147: one splice → three, Stuart 2026-09-11; Shared/extrasRestore).
+        setExtras(normalizeExtras(Array.isArray(s.extras) ? s.extras : [], extraItems, findPart));
         if (s.globalFinishes && typeof s.globalFinishes === 'object') setGlobalFinishes({ ...s.globalFinishes });
         else if (s.globalFinish) setGlobalFinish(s.globalFinish);
         if (Number(s.lengthInches) > 0) {

@@ -6,7 +6,7 @@
 // the bracket, a decorative end keeps it, the plate follows the arm holding the rod, a basic bracket
 // takes no plate, a drive end is never an End Style, a double asks the rear places too.
 
-import { visionPickers, engDataFromPickers, enginePicksForDraft, endStyleOf, chosenRods } from '../src/components/Shared/visionEngine.js';
+import { visionPickers, engDataFromPickers, enginePicksForDraft, endStyleOf, chosenRods, engineEndSettled } from '../src/components/Shared/visionEngine.js';
 import { visionPartIds } from '../src/components/Shared/visionBridge.js';
 
 let pass = 0, fail = 0;
@@ -86,6 +86,19 @@ const nameOf = (id) => ({ 'H1-MRPF': 'MITER RETURN - H1-MRPF' })[id] || null;
 }
 {
     eq('endStyleOf on a bare choice', [endStyleOf({ role: 'RETURN', endTreatment: 'FRENCH_RETURN' }), endStyleOf({ role: 'FINIAL' }), endStyleOf(null)], ['RETURN_BEND', 'FINIAL', '']);
+}
+
+{
+    // THE SAVE LINE GATE ON THE ENGINE (Stuart 2026-09-11, QUO142 re-entered in Vision with miter
+    // returns: "it keeps asking to make a bracket selection")
+    eq('nothing chosen → the left end is not settled', engineEndSettled(visionPickers({ choices: FAM, answers: SINGLE, picks: {} })), false);
+    eq('a miter return at LEFT locks the bracket → settled', engineEndSettled(visionPickers({ choices: FAM, answers: SINGLE, picks: { 'END|FRONT|LEFT': 'MTR-L' } })), true);
+    eq('a french return → settled', engineEndSettled(visionPickers({ choices: FAM, answers: SINGLE, picks: { 'END|FRONT|LEFT': 'FR-L' } })), true);
+    eq('an inside mount → settled', engineEndSettled(visionPickers({ choices: FAM, answers: SINGLE, picks: { 'END|FRONT|LEFT': 'IM-L' } })), true);
+    eq('a bracket picked → settled', engineEndSettled(visionPickers({ choices: FAM, answers: SINGLE, picks: { 'BRACKET||LEFT': 'BK-L' } })), true);
+    eq('a finial alone leaves the bracket open → not settled', engineEndSettled(visionPickers({ choices: FAM, answers: SINGLE, picks: { 'END|FRONT|LEFT': 'FIN-L' } })), false);
+    eq('the right end is asked separately', engineEndSettled(visionPickers({ choices: FAM, answers: SINGLE, picks: { 'END|FRONT|LEFT': 'MTR-L' } }), 'RIGHT'), false);
+    eq('no pickers → false', engineEndSettled(null), false);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

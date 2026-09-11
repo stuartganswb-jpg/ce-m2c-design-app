@@ -249,6 +249,11 @@ export function handoffItem(resolved, ctx = {}) {
             // line fell back to the recommendations — 20 rings restored as the chart's 50
             // (Stuart 2026-08-28, first live heal). Defaults stay defaults: only typed counts save.
             stepQty: ctx.stepQty || {},
+            // Hand-added extras AS TYPED (code / qty / note / slot). Without them a reopen rebuilt
+            // the list from the addedByHand rows — by doc id, which the length step did not
+            // recognise as its joiner, so it added one more on every cycle (QUO147: 1 → 3,
+            // Stuart 2026-09-11). Shared/extrasRestore reads this first.
+            extras: (Array.isArray(extras) ? extras : []).filter(x => x && x.code).map(x => ({ code: String(x.code), qty: String(Number(x.qty) > 0 ? Number(x.qty) : 1), note: String(x.note || ''), ...(x.slot ? { slot: String(x.slot) } : {}) })),
             lengthInches, lengthFeet,
             stepNotes,
             memo,

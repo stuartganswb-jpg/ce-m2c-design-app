@@ -80,6 +80,9 @@ export const reopenQuoteInCpq = (job) => {
                 shippingMethod: job.shippingMethod || 'SAVED',
                 shippingAddressId: job.shippingAddressId || '',
                 shippingAmount: (parseFloat(job.shippingAmount) || 0) > 0 ? String(job.shippingAmount) : '',
+                // A set % typed at checkout comes back typed (Stuart 2026-09-11); cart line discounts
+                // ride cartItems[].lineDiscount above; the customer's code re-resolves live as always.
+                orderDiscountPercent: (job.orderDiscount && job.orderDiscount.mode === 'ORDER_PERCENT' && Number(job.orderDiscount.percent) > 0) ? String(job.orderDiscount.percent) : '',
                 customShippingAddress: job.customShippingAddress || null
             }
         }

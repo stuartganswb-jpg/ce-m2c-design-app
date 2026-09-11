@@ -111,6 +111,19 @@ export function engDataFromPickers(pk, { libraryIdOf = (partId) => partId } = {}
     return out;
 }
 
+/**
+ * Is an end "settled" for the Save Line gate on the engine path? (Stuart 2026-09-11: a miter
+ * return locked the left bracket, the gate read the OLD step selections — empty on the engine —
+ * and refused with "Pick a Left bracket OR a return/arm end first".) Settled = the bracket place
+ * has a choice (a bracket, or an end arm that IS the end), or is LOCKED because a return / inside
+ * mount carries the rod there. No bracket place asked at all → not this rule's call (false).
+ */
+export function engineEndSettled(pk, position = 'LEFT') {
+    if (!pk || typeof pk.at !== 'function') return false;
+    const p = pk.at('BRACKET', position, 'FRONT') || pk.at('BRACKET', position, '');
+    return !!(p && (p.chosen || p.locked));
+}
+
 /** What a saved line carries so CPQ (visionBridge.visionPartIds) seeds by part, no flow lookup. */
 export function enginePicksForDraft(pk) {
     return pk.pickers.filter(p => p.chosen).map(p => {
