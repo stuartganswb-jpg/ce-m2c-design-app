@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, writeBatch, serverTimestamp } from "firebase/firestore";
+import DisplayBuildsPanel from './DisplayBuildsPanel';   // sales display build orders — ONE guarded mount (S5, 2026-09-11); never a `jobs` doc
 
 const ProjectManagementTab = ({ currentUser, activeBrand }) => {
     const [projects, setProjects] = useState([]);
@@ -103,8 +104,10 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
                 </div>
             </div>
 
+            {activeBrand && <DisplayBuildsPanel currentUser={currentUser} activeBrand={activeBrand} embedded />}
+
             <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start', flex: 1 }}>
-                
+
                 {/* LEFT: PROJECT LIST QUEUE */}
                 <div style={{ width: '380px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', flexShrink: 0 }}>
                     <div style={{ padding: '20px 24px', background: 'var(--paper-2)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

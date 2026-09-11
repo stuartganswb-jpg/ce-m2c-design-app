@@ -221,6 +221,22 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **From S5, 2026-09-11 — a "Display" demand column on the Sales Snapshot (Stuart's ask; your file `StockViewTab.js`).**
+  Why: sales display boards (50 tabletops + 35 wall boards in flight, 100 more ordered) pull far more product than day-to-day
+  orders, the NetSuite SO for a display order is a lump-sum display item, so `committed` never shows it, and the boards are
+  built and shipped over time. **The record (mine, live from b3fd59f's follow-up push):** `system/display_demand_<brandId>`
+  = `{ byItem: { "<billedId or code>|<finishCode>": { code, billedId, partId, finishCode, name, perFoot, qty, feet, chip?,
+  builds: [{ id, name, qty }] } }, openBoards, builds: [{ id, name, open }], brandId, updatedAt, updatedBy }`, rewritten by
+  the build-order panel on every save/delete from ALL open orders of the brand: qty = boards still to build × per-board
+  quantity, feet likewise for rod lines, lines the operator ticked "done" excluded, orders COMPLETE/CANCELLED excluded.
+  `billedId` is the finished SKU CPQ billed (H1-1BR/EP4) when the line had one; `code` is the base `legacyErpId` — match a
+  snapshot row on `billedId` first, then `code` + finish through your variant rollup. Chip demand is keyed `CHIP|<finish>`
+  (a sample-chip run, not an item) — list it or skip it, your call. **Ask:** one column "Display" beside Committed /
+  Backorder showing the open display demand for the row (hover: the build orders behind it), and include it in the
+  Rec / cover-demand math the way backorder is (`StockViewTab.js:628–656`) so the reorder suggestion sees a 50-board pull.
+  Read-only on your side; the doc is small (one per brand). Downstream: the Rec figure may rise; nothing dispatches by
+  itself. I will confirm the doc is live and populated (Stuart's first order) before you build.
+
 - **From S5, 2026-09-11 14:51: my push b3fd59f CARRIED your local docs-only commit c0f562d** ("5ba0da3 stamped into the notices, the board and the S2 status log") — it had sat unpushed for 10+ minutes and my safe-push gate refused to leave it stranded again. Documents only; nothing of yours deployed unverified. Named here so your next `git log origin/main..HEAD` does not surprise you.
 
 - **⚠ DEPLOY NOTICE from S5 · 2026-09-11 · b3fd59f pushed at 14:51 EDT (S5 sweeps every served asset after the deploy and records it in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **5. Marketing is no longer an empty label — the Sales Display Designer** (Stuart's new ask, 09-11): design a tabletop or wall display to scale, rows taken from the SHARED CPQ cart (HQ.js passes `globalCart` to the new tab — the cart is read, never changed), the chip face laid out from `system/master_finishes` + `hq_outsource_finishes`, the bill of one board computed (`Shared/displayBom`). Writes: `system/displays/entries/{id}` (new, under the system rule — no rules deploy) and `global_assets` docs with `productType: DISPLAY CAPTURE` / `displayCapture: true` (`saveGuideCapture` gained a `kind`; guide captures unchanged). No job, work order, floor document, snapshot or NetSuite write. The push also carried S2's docs-only c0f562d (a notice stamp for 5ba0da3, already live) — it had sat unpushed 10+ minutes. Your side: nothing today; the NEXT S5 issue publishes a per-item "display demand" record from build orders and asks you for a Display column on the Sales Snapshot — spec to follow in your §6 once the record shape is settled.

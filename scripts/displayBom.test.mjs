@@ -1,6 +1,6 @@
 // Harness for Shared/displayBom.js — the bill of a sales display board.
 //   node scripts/displayBom.test.mjs
-import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH } from '../src/components/Shared/displayBom.js';
+import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards } from '../src/components/Shared/displayBom.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -113,6 +113,48 @@ const cartBaseFront3 = {
     ok('the first row starts at the margin and inside the board', lay.chips[0].x >= 0 && lay.chips[0].x + lay.chips[0].w <= 24 * UNITS_PER_INCH);
     eq('45 chips fit a 24 × 24 board', lay.overflow, false);
     eq('…and not a 24 × 10 one', chipFaceLayout(chips, { widthIn: 24, heightIn: 10 }).overflow, true);
+}
+
+// ── 6. BUILD ORDERS: snapshot lines, re-snapshot keeps the typed columns, demand, ship plan ────
+{
+    const d = newDisplay({ id: 'D1', name: 'Tabletop', style: 'TABLETOP' });
+    d.faces[0].rows = [
+        { id: 'r1', label: 'Top Row 1', config: rowConfigFromCartItem({ ...cartTopRow1, pricingBreakdown: cartTopRow1.pricingBreakdown.map(l => (l.legacyErpId === 'H1-1BR' ? { ...l, billedId: 'H1-1BR/EP4' } : l)) }) },
+        { id: 'r2', label: 'Base Front 3', config: rowConfigFromCartItem(cartBaseFront3) },
+    ];
+    d.extras = [{ text: 'Walnut base', qty: 1 }];
+    const finishes = [{ code: 'P06', name: 'Gild Gold' }, { code: 'EP4', name: 'Satin Gold', outsourced: true }];
+    const lines = buildLinesFrom(d, finishes);
+    const ring = lines.parts.find(l => l.code === 'H1-1BR' && l.finishCode === 'EP4');
+    eq('a build line carries per-board qty, the finished SKU, its rows and blank tracker columns', [ring.qtyPerBoard, ring.billedId, ring.rows, ring.woNumber, ring.atPlater, ring.done], [2, 'H1-1BR/EP4', ['Top Row 1', 'Base Front 3'], '', '', false]);
+    eq('a rod line carries feet per board', lines.parts.find(l => l.code === 'H1-1R' && l.finishCode === 'EP4').feetPerBoard, 2);
+    eq('chips and extras are lines too', [lines.chips.length, lines.extras[0].qtyPerBoard], [2, 1]);
+
+    // re-snapshot after the design changed: typed columns survive on lines that still exist, a new line is blank, a gone line goes
+    const typed = { ...lines, parts: lines.parts.map(l => (l.code === 'H1-1BR' ? { ...l, woNumber: 'WO10441', atPlater: 'Completed', done: true } : l)) };
+    d.faces[0].rows = d.faces[0].rows.slice(0, 1);   // Base Front 3 removed → the EP2 rod and ball finial go, the ring drops to qty 1
+    const fresh = resnapshotLines(typed, buildLinesFrom(d, finishes));
+    const ring2 = fresh.parts.find(l => l.code === 'H1-1BR');
+    eq('the ring keeps its WO#, plater status and done flag, and takes the NEW per-board qty', [ring2.woNumber, ring2.atPlater, ring2.done, ring2.qtyPerBoard], ['WO10441', 'Completed', true, 1]);
+    eq('the removed row\'s lines are gone', fresh.parts.some(l => l.code === 'H1-1BF'), false);
+
+    // demand across two orders: open boards × per-board, done lines and complete orders excluded, keyed by the finished SKU
+    const b1 = { id: 'B1', name: 'Fabricut 50', qty: 50, built: 10, status: 'IN_PRODUCTION', lines: typed };
+    const b2 = { id: 'B2', name: 'Fabricut 100', qty: 100, built: 0, status: 'PLANNED', lines: buildLinesFrom(d, finishes) };
+    const b3 = { id: 'B3', name: 'old', qty: 35, built: 0, status: 'COMPLETE', lines: buildLinesFrom(d, finishes) };
+    eq('open boards', [openBoards(b1), openBoards(b2), openBoards(b3)], [40, 100, 35]);
+    const dem = displayDemandFrom([b1, b2, b3]);
+    eq('the ring is keyed by its finished SKU; B1 marked it done so only B2 counts: 100 × 1', [dem.byItem['H1-1BR/EP4|EP4'].qty, dem.byItem['H1-1BR/EP4|EP4'].builds.map(x => x.id)], [100, ['B2']]);
+    eq('the EP4 rod: B1 40 boards × 2 ft + B2 100 × 2 ft = 280 ft, pieces 140', [dem.byItem['H1-1R|EP4'].feet, dem.byItem['H1-1R|EP4'].qty], [280, 140]);
+    eq('a complete order adds nothing; open boards total 140 across two orders', [dem.openBoards, dem.builds.map(x => x.id)], [140, ['B1', 'B2']]);
+    eq('chips are demand too, by finish', dem.byItem['CHIP|EP4'].qty, 140);
+    eq('nothing when every order is complete', Object.keys(displayDemandFrom([b3]).byItem).length, 0);
+
+    // ship plan: 50 boards, 10 a week from a date → five drops, the last one partial when needed
+    const plan = shipPlanFill({ qty: 50, perShip: 10, start: '2026-09-14', everyDays: 7 });
+    eq('five weekly drops of ten', [plan.length, plan[0].date, plan[4].date, plan.reduce((s, p) => s + p.qty, 0)], [5, '2026-09-14', '2026-10-12', 50]);
+    eq('a partial last drop', shipPlanFill({ qty: 35, perShip: 10, start: '2026-09-14' }).map(p => p.qty), [10, 10, 10, 5]);
+    eq('no plan without a start date or a rate', [shipPlanFill({ qty: 35, perShip: 0, start: '2026-09-14' }).length, shipPlanFill({ qty: 35, perShip: 10, start: '' }).length], [0, 0]);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

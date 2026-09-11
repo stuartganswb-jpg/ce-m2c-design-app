@@ -22,6 +22,7 @@ import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore';
 import { DISPLAY_STYLES, UNITS_PER_INCH, newDisplay, chipLines, chipFaceLayout, boardBom, orderBom, bomCsv, rowConfigFromCartItem } from '../Shared/displayBom';
 import { saveGuideCapture } from '../Shared/guideCapture';
+import DisplayBuildsPanel from './DisplayBuildsPanel';
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -40,6 +41,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
     const [busy, setBusy] = useState('');
     const [boards, setBoards] = useState(1);         // the BOM multiplier, preview only
     const [newForm, setNewForm] = useState(null);    // { name, style }
+    const [view, setView] = useState('DESIGNS');     // DESIGNS | BUILDS — piece 2 lives on the same tab
     const svgRef = useRef(null);
     const dragRef = useRef(null);
 
@@ -147,9 +149,14 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                         <h2 style={{ margin: '4px 0 0', fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Sales Display Designer</h2>
                         <div style={{ color: 'var(--ink-soft)', fontSize: '0.88rem', marginTop: '6px', maxWidth: '760px' }}>A display is one or two boards. Configure each product row in CPQ and add it to the cart, then place it here; the chip board lays itself out from the finish list. The bill of one board is computed from the rows, never typed.</div>
                     </div>
-                    <button onClick={() => setNewForm({ name: '', style: 'TABLETOP' })} style={btn(true)}>+ New display</button>
+                    <div style={{ display: 'flex' }}>
+                        <button onClick={() => setView('DESIGNS')} style={btn(view === 'DESIGNS')}>Designs</button>
+                        <button onClick={() => setView('BUILDS')} style={btn(view === 'BUILDS', { borderLeft: 'none' })}>Build orders</button>
+                    </div>
+                    {view === 'DESIGNS' && <button onClick={() => setNewForm({ name: '', style: 'TABLETOP' })} style={btn(true)}>+ New display</button>}
                 </div>
-                {newForm && (
+                {view === 'BUILDS' && <DisplayBuildsPanel currentUser={currentUser} activeBrand={activeBrand} />}
+                {view === 'DESIGNS' && newForm && (
                     <div style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '14px', border: '1px solid var(--line)', background: '#fff', marginBottom: '18px', flexWrap: 'wrap' }}>
                         <input autoFocus value={newForm.name} onChange={e => setNewForm({ ...newForm, name: e.target.value })} placeholder="Display name, e.g. Fabricut H1 Tabletop" style={{ ...inp, width: '320px' }} />
                         <select value={newForm.style} onChange={e => setNewForm({ ...newForm, style: e.target.value })} style={inp}>
@@ -159,7 +166,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                         <button onClick={() => setNewForm(null)} style={btn(false)}>Cancel</button>
                     </div>
                 )}
-                <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', border: '1px solid var(--line)' }}>
+                {view === 'DESIGNS' && <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', border: '1px solid var(--line)' }}>
                     <thead><tr>{['Display', 'Style', 'Faces', 'Rows', 'Updated', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
                     <tbody>
                         {displays.length === 0 && <tr><td colSpan={6} style={{ ...td, padding: '28px', textAlign: 'center', fontStyle: 'italic', color: 'var(--ink-soft)' }}>No displays yet — create the first one.</td></tr>}
@@ -174,7 +181,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                             </tr>
                         ))}
                     </tbody>
-                </table>
+                </table>}
             </div>
         );
     }

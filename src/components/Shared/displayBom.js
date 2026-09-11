@@ -134,6 +134,7 @@ export function rowBomLines(row) {
     return lines.filter(isItemLine).map(l => ({
         partId: String(l.partId),
         code: U(l.legacyErpId || l.billedId || l.partId),
+        billedId: U(l.billedId || ''),
         name: l.name || '',
         role: l.role || '',
         finishCode: U(l.finishCode),
@@ -204,4 +205,82 @@ export function rowConfigFromCartItem(it) {
         memo: it?.engineConfig?.memo || it?.sidemark || '',
         lines: lines.map(l => Object.fromEntries(keep.filter(k => l[k] !== undefined).map(k => [k, l[k]]))),
     };
+}
+
+// ── BUILD ORDERS (piece 2, 2026-09-11) ───────────────────────────────────────────────────────
+// A build order is a display, a quantity, the customer, their PO and our SO, a ship plan (boards
+// leave over time, not at once), and the tracker's per-line columns. Its lines are a SNAPSHOT of
+// the display's bill taken when the order is opened — the design can move on for the next order
+// without changing what this one has already pulled — and can be re-taken on purpose.
+
+/** The bill of one board as order lines: per-board quantities, the tracker's columns blank. */
+export function buildLinesFrom(display, finishes = []) {
+    const bom = boardBom(display, finishes);
+    const parts = bom.parts.map(l => ({
+        key: `${l.code}|${l.finishCode}`,
+        partId: l.partId, code: l.code, billedId: U(l.billedId || ''), name: l.name, role: l.role, finishCode: l.finishCode,
+        rows: l.rows || [], perFoot: !!l.perFoot, qtyPerBoard: l.qty, feetPerBoard: l.perFoot ? l.feet : 0,
+        woNumber: '', atPlater: '', notes: '', done: false,
+    }));
+    const chips = bom.chips.map(c => ({ key: `CHIP|${c.code}`, code: c.code, name: c.name, group: c.group, finishCode: c.code, qtyPerBoard: c.qty, woNumber: '', notes: '', done: false }));
+    const extras = bom.extras.map((e, i) => ({ key: `EXTRA|${i}`, text: e.text, qtyPerBoard: e.qty, notes: '', done: false }));
+    return { parts, chips, extras };
+}
+
+/** Merge a fresh snapshot over an order's lines, keeping the tracker columns typed on lines that still exist. */
+export function resnapshotLines(oldLines, fresh) {
+    const keep = (olds, news) => news.map(n => { const o = (olds || []).find(x => x.key === n.key); return o ? { ...n, woNumber: o.woNumber || '', atPlater: o.atPlater || '', notes: o.notes || '', done: !!o.done } : n; });
+    return { parts: keep(oldLines?.parts, fresh.parts), chips: keep(oldLines?.chips, fresh.chips), extras: keep(oldLines?.extras, fresh.extras) };
+}
+
+/** Boards still to build on an order. */
+export const openBoards = (b) => Math.max(0, N(b?.qty, 0) - N(b?.built, 0));
+
+/**
+ * The open DISPLAY DEMAND per item across every order that is not complete — what the Sales
+ * Snapshot's "Display" column reads (S2). Keyed by the finished SKU CPQ billed where there is
+ * one, else the base code + finish. Quantities are (boards still to build) × per-board; feet the
+ * same. Chips are listed by finish so a chip run can be sized. Nothing here is a NetSuite commit.
+ */
+export function displayDemandFrom(builds = []) {
+    const byItem = {};
+    const add = (key, seed, qty, feet, b) => {
+        if (!(qty > 0)) return;
+        const cur = byItem[key] || { ...seed, qty: 0, feet: 0, builds: [] };
+        cur.qty += qty; cur.feet += feet;
+        cur.builds.push({ id: b.id, name: b.name || b.displayName || b.id, qty });
+        byItem[key] = cur;
+    };
+    builds.forEach(b => {
+        if (!b || b.status === 'COMPLETE' || b.status === 'CANCELLED') return;
+        const open = openBoards(b);
+        if (!open) return;
+        (b.lines?.parts || []).forEach(l => {
+            if (l.done) return;
+            const key = `${l.billedId || l.code}|${l.finishCode || ''}`;
+            add(key, { code: l.code, billedId: l.billedId || '', partId: l.partId || '', finishCode: l.finishCode || '', name: l.name || '', perFoot: !!l.perFoot }, N(l.qtyPerBoard) * open, N(l.feetPerBoard) * open, b);
+        });
+        (b.lines?.chips || []).forEach(c => {
+            if (c.done) return;
+            add(`CHIP|${c.code}`, { code: `CHIP ${c.code}`, billedId: '', partId: '', finishCode: c.code, name: c.name || '', perFoot: false, chip: true }, N(c.qtyPerBoard) * open, 0, b);
+        });
+    });
+    return { byItem, openBoards: builds.reduce((s, b) => s + ((b && b.status !== 'COMPLETE' && b.status !== 'CANCELLED') ? openBoards(b) : 0), 0), builds: builds.filter(b => b && b.status !== 'COMPLETE' && b.status !== 'CANCELLED' && openBoards(b) > 0).map(b => ({ id: b.id, name: b.name || b.id, open: openBoards(b) })) };
+}
+
+/** A ship plan: `perShip` boards every `everyDays` from `start` until `qty` is covered. Dates as YYYY-MM-DD. */
+export function shipPlanFill({ qty, perShip, start, everyDays = 7 }) {
+    const n = N(qty, 0), per = N(perShip, 0), step = Math.max(1, N(everyDays, 7));
+    if (!(n > 0) || !(per > 0) || !start) return [];
+    const d0 = new Date(`${start}T00:00:00`);
+    if (Number.isNaN(d0.getTime())) return [];
+    const out = [];
+    let left = n, i = 0;
+    while (left > 0) {
+        const d = new Date(d0.getTime() + i * step * 86400000);
+        const q = Math.min(per, left);
+        out.push({ date: d.toISOString().slice(0, 10), qty: q, shipped: 0 });
+        left -= q; i++;
+    }
+    return out;
 }
