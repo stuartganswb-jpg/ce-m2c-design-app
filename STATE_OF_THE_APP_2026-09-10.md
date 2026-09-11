@@ -424,6 +424,8 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 · S5 · b3fd59f (pushed 14:51).** Stuart's new ask: a management tool for the production of sales display boards (tabletop = product front + chip back; wall = product board + chip board; 50 + 35 in flight from a spreadsheet tracker, 100 more ordered; H2/H3/H4 displays coming). Piece 1 shipped: the **Sales Display Designer** on the empty 5. Marketing label — rows from the shared CPQ cart, chip face from the finish lists, the bill of one board computed (`Shared/displayBom`, 36 assertions). Adds to §2.4: S5 Issue 3 = build orders (→ 10.5 project lines, ship-over-time) + a per-item display-demand record; S2 owes a "Display" column on the Sales Snapshot (spec to follow); S1 owes ORDER-LEVEL DISCOUNT on both doors (BRIEF_S1 §6) — today only the customer trade code exists and tab 7 has none. Decision pending with Eric: the display SO as a lump-sum item (Stuart leaning yes) with component relief at build.
+
 - **2026-09-11 · S3 · 47c2b6b (pushed 12:25).** Stuart: "yes fix the plating links" + the Convert tab cannot scroll to the
   manual add area. Shipped: the OB scan-in copies the demand's `finSiblingId / orderKey / soAppId / shopOrderId` onto the
   plating line (the gap found 09-10 that made D1 dead code for custom orders); put-away on a `custom: true` line posts no
