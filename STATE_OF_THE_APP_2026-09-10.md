@@ -424,6 +424,11 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · b180339 (pushed 23:32).** Vision Phase 0. Re-verified #44 against code + live: the no-O2O guard was never
+  built and the floors now cover it (RTG `cutSheetMissing/visionUsed`, shop banner) — not building; "Reopen-in-Vision does
+  nothing" = CPQ's save deleted every Vision draft of the quote (0 drafts on all three recent quotes) — fixed: drafts with
+  board data are kept FINALIZED. #48 (Vision on the engine) is now Stuart's project in four phases (BRIEF_S1 §7).
+
 - **2026-09-10 · S1 · 26f45de (pushed 23:04).** §2.4 #45 closed on the engine's terms: the 09-03 path no longer fires on the
   new engine (projection asked first; returns keep at every depth on the live pins), and the silent class is closed —
   `Shared/pickDrops` names every pick a later answer removes, the configurator shows it, and Add / Checkout refuse until

@@ -131,6 +131,12 @@ owed (`h2-simple-elegance-flow` memory).
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · b180339 pushed at 23:32 EDT (S1 sweeps the served bundle after the deploy
+  and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped (Vision Phase 0): CPQ's
+  save no longer deletes a quote's Vision drawings — `cpq_drafts` docs with `spatialData` are kept and marked
+  `status: 'FINALIZED'` (+ `finalizedJobId/At/By`); pending-line readers exclude them; Vision's "Load saved line…" lists
+  them. So CRM → Reopen Vision on a saved quote has its lines again. Jobs / floors / NetSuite untouched. Your side: `portalVisionDraft` writes cpq_drafts in Vision's shape — unchanged; a portal draft that reaches a saved quote is now kept FINALIZED instead of deleted. If the portal lists a customer's drafts anywhere, exclude `status === 'FINALIZED'` from "pending".
+
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · 26f45de pushed at 23:04 EDT (S1 sweeps the served bundle after the deploy
   and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: CPQ (tag engine
   configurator) — a selection a later choice removes is listed in a strip under the step rail with the engine's reason,

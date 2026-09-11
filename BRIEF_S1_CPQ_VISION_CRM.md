@@ -294,6 +294,15 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Vision Phase 0 (S1) b180339 pushed 23:32.** Stuart: "fix vision … runs on new engine and can open and reopen
+  with no problems" → the #48 project, in HIS order: **0** drawings survive the save (this commit: finalize marks
+  spatialData drafts FINALIZED instead of deleting; pending readers exclude; Vision Load-saved-line includes, labelled);
+  **1** Vision's pickers from the engine's `slots()` via a pure module (`Shared/visionEngine.js`, node-proven on the live
+  pins) — the board / placement / cut sheet untouched (Stuart confirmed); flows with no pinned assembly keep the old path;
+  **2** open + reopen both ways (CPQ → Vision write-back; Vision re-save replaces the cart line in place — today a
+  re-saved FINALIZED line becomes DRAFT_FROM_VISION and a RESUME would ADD a second line — named); **3** the generator
+  stops emitting TRV END steps. #44 re-verified: guard not needed (floors cover it); reopen = the deletion above.
+
 - **2026-09-10 — Issue 10 (S1) 26f45de pushed 23:04 — §3 #45.** `Shared/pickDrops` (droppedPicks / mergeDrops / unacknowledged,
   16 assertions) + the strip under the rail + Add/Checkout refusal until acknowledged. Diagnosis: ends-then-rod keeps
   the returns at every depth on H1-75 / H1-1 / H1-138 today (fee returns carry no `projs` into the engine — the fee is one
