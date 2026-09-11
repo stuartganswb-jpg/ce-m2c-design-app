@@ -351,6 +351,21 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-11 — 7d3f594 (S1) pushed 16:28, SWEPT: version stamp 1789158660457; `Line discounts are applied in the cart` + `Line discounts from the cart` in `main.74cee60a.js`; Vision chunk `104.74c087bc.chunk.js`.** Three things in one push (Stuart: 'go build both' + the discount redesign):
+  (1) **Discounts, the cart or the checkout, never both** — Stuart replaced S5's order-level ask: `Shared/lineDiscount` (48 assertions) = who may
+  (admin/superadmin/manager/executive + super-admin flag), `lineDiscountOf` (PERCENT / NET, gross never overwritten), `discountModeOf`
+  (LINES > ORDER_PERCENT > CODE > NONE), rows (`isDiscount`+`isLineDiscount` / `isNetLine`), `netFactorOf`, `orderDiscountStamp`. CPQ: tick boxes +
+  tool under the cart (manager+), checkout 'Set order discount %' replacing the code, exclusivity messages both places, rows + `orderDiscount`
+  header at save, reopen carries the set % (`reopenQuote`), HQ.js passes `userRole` (one attribute). `nsTransmit`: each cart item's lines carry
+  `netFactor`, never merge with a full-price twin, push at their own rates; log names the mode (15 assertions through the REAL resolver — new
+  `scripts/_lib` loader resolves extension-less imports + stubs `../../firebase`). (2) **QUO147 splice 1→3** (`Shared/extrasRestore`, 14):
+  the handoff saves `engineConfig.extras` as typed; a legacy line reopens from its addedByHand rows under `legacyErpId`, merged; the configurator
+  re-keys restored rows to the flow's code by identity and the splice auto-add compares by the part. QUO147 reopens as ONE row of 3 → set to 1
+  once. (3) **QUO142 Vision gate** (`visionEngine.engineEndSettled`, +8): on the engine path the Save Line gate reads the engine's left bracket
+  picker (chosen or locked by a return / inside mount). Not screen-verified (PIN gate) — Stuart's next reopen / Vision line / discounted quote is
+  the proof. Named, not fixed: CRM money documents print gross lines + net total; tab 7 has no discount (offered as the next issue). Vision
+  Phase 2 live read still to restart (my tab lost the CPQ cart to the WMS page). S5's settled field is in BRIEF_S5 §6; S4 has a portal mirror note.
+
 - **2026-09-11 — Vision Phase 2 (S1) 2b164a5 pushed 09:59.** `Shared/visionHandoff` (draftFromCartLine / cartLineForDraft,
   11 assertions); CPQ: `visionDraftId` on lines from a drawing, "Vision" button → draft + REOPEN_QUOTE_IN_VISION with
   `loadDraftId`; Resume sets `editingCartId` to the owning line (replace, never add); ClientVision session carries

@@ -424,6 +424,13 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 · S1 · 7d3f594 (pushed 16:28).** DISCOUNTS: the cart or the checkout, never both — a manager or higher ticks CPQ cart lines and applies a % off or
+  sets a net unit price (`Shared/lineDiscount`; the gross unit price is never overwritten); at checkout a set % replaces the customer's code for that
+  order; the job header carries `orderDiscount { mode, percent, code, by }`; a cart-discounted line lands in NetSuite at its own lower rates
+  (`nsTransmit` per-item `netFactor`), the set % / code ride the whole-quote scale as before. Also: QUO147's reopened splice 1→3 loop (extras now
+  saved as typed, `Shared/extrasRestore`) and Vision's Save Line gate on the engine (a miter return counts as a settled end). Named, not fixed:
+  CRM money documents print gross lines + a net total; tab 7 has no discount yet.
+
 - **2026-09-11 · S5 · d3c6777 (pushed 15:37).** Display program piece 2: BUILD ORDERS (5. Marketing toggle + one guarded mount on 10.5) — display × qty × customer × SO/PO, ship-over-time plan, the tracker's columns, open demand published to `system/display_demand_<brand>`. Deliberately NOT a `jobs` doc (phantom-quote risk on CRM/RTG/tab 12). Adds to §2.2: S2 owes the Sales Snapshot "Display" column + Rec math (BRIEF_S2 §6, record shape stated). Still open: the lump-sum display SO and component relief at build (Eric), the order-level discount (S1).
 
 - **2026-09-11 · S5 · b3fd59f (pushed 14:51).** Stuart's new ask: a management tool for the production of sales display boards (tabletop = product front + chip back; wall = product board + chip board; 50 + 35 in flight from a spreadsheet tracker, 100 more ordered; H2/H3/H4 displays coming). Piece 1 shipped: the **Sales Display Designer** on the empty 5. Marketing label — rows from the shared CPQ cart, chip face from the finish lists, the bill of one board computed (`Shared/displayBom`, 36 assertions). Adds to §2.4: S5 Issue 3 = build orders (→ 10.5 project lines, ship-over-time) + a per-item display-demand record; S2 owes a "Display" column on the Sales Snapshot (spec to follow); S1 owes ORDER-LEVEL DISCOUNT on both doors (BRIEF_S1 §6) — today only the customer trade code exists and tab 7 has none. Decision pending with Eric: the display SO as a lump-sum item (Stuart leaning yes) with component relief at build.
