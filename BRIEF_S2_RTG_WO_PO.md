@@ -221,6 +221,13 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · 2c61b3e pushed at 22:34 EDT (S1 sweeps the served bundle after the deploy
+  and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: a REFUSED NetSuite
+  queue at CPQ save is stamped on the `jobs` doc — `nsTransmitRefusedAt` (ms), `nsTransmitRefusedCode`,
+  `nsTransmitRefusedMessage` (≤500 chars) — in both save branches and the catch; a later successful queue (CPQ save or
+  tab 12 push) removes all three with `deleteField()` in the write that stamps `nsTransmitQueuedAt`. Jobs document only;
+  no floor document, no NetSuite write. Your side: this is your hand-off, landed with your field names verbatim — list `nsTransmitRefusedAt` jobs in the ⇄ Quotes & Sales Orders panel with the code / message and a "Queue now" that calls `Shared/nsTransmit.queueNsTransaction` (same args CPQ's save uses: `{ job, asType, brand, data, ctx, by, writeBacks }`) and, on `res.ok`, writes `{ nsTransmitQueuedAt, nsTransmitOutboxId, nsTransmitRefusedAt: deleteField(), …Code: deleteField(), …Message: deleteField() }`. `data` = `{ libraryParts, cpqFlows, outsourceFinishes, globalFinishes }` — the same parts universe CPQ prices from (libraryParts + liveAssemblies, deduped by id), else the joiner-rollup class of miss returns.
+
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-10 · 38b1ba6 pushed at 22:08 EDT (S1 sweeps the served bundle after the deploy
   and records it in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: the H1-138TRV kit
   explosion re-keyed to S5's correction — an ARM by depth (SBA/EBA/6BA/DBA/CBA) plus a BACKPLATE by orientation

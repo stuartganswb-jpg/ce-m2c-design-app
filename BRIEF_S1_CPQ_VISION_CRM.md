@@ -294,6 +294,10 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 9 (S1) 2c61b3e pushed 22:34.** S2's refused-queue stamp: `refusedStamp` / `queuedStamp` helpers in
+  CPQTab's finalize (both branches + catch); tab 12's manual push clears the three too. Field names per S2 verbatim.
+  Handed S2 the exact `queueNsTransaction` args + the parts-universe rule for its Queue now (BRIEF_S2 §6).
+
 - **2026-09-10 — Issue 8 (S1) 38b1ba6 pushed 22:08.** S5's correction landed: `TRAVERSE_FAMILY_PARTS['H1-138TRV']` = arm by
   depth + `plates` by orientation; explode adds the plate line (role 'plate') at the plate row's count; string DOUBLE.
   Guard test compares brackets + plates (was red on main after 105b29c). Fixtures per S5's note (4 ft -4H/P; 12 ft -4VD/EP =

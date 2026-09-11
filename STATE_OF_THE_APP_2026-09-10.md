@@ -424,6 +424,11 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · 2c61b3e (pushed 22:34).** S2's hand-off landed: a refused NetSuite queue at CPQ save stamps
+  `nsTransmitRefusedAt/Code/Message` on the job (both branches + the catch); a later success clears the three in the same
+  write as `nsTransmitQueuedAt` (CPQ save and tab 12). Closes the "invisible refused quote" half of this morning's
+  ST091026-01 finding; S2 lists the stamp on RTG with Queue now next.
+
 - **2026-09-10 · S1 · 38b1ba6 (pushed 22:08).** H1-138TRV explosion re-keyed to S5's correction (105b29c): arm by depth +
   backplate by orientation per bracket, both at the chart count; the guard test (red on main since S5's push) is green and
   now covers `plates`. Remaining for the end-to-end kit run: Stuart's Kit Family tag on the H1-138 flow + the 4.6 import.
