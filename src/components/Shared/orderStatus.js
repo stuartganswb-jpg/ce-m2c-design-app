@@ -391,3 +391,36 @@ export const wholeOrderWait = (wo, siblings = [], so = null) => {
     if (!notReady.length) return { wait: false, reason: '' };
     return { wait: true, reason: `waiting for the rest of the order — ${notReady.length} other line${notReady.length === 1 ? '' : 's'} not ready (${notReady.map(w => gateSummary(w) || 'not ready').join('; ')}); flag "Finish as available" on the sales order to send this line now` };
 };
+
+// ── IN PRODUCTION · PACKED · WHO MAY REOPEN (Stuart 2026-09-11) ─────────────────────────────
+// "Once we start we start": from RTG's dispatch of a SALES ORDER (never a quote) the CRM card's
+// Reopen CPQ / Reopen Vision / Reopen Order Entry / Modify are no longer valid — greyed, with a
+// manager-and-above override. A stocked (QUICKSHIP) order is in production once the WMS has it in
+// hand. `packedStateOf` is what turns the Packing List (and later the Invoice) button on — the
+// CRM (S1) and the WMS pack screen (S3) ask HERE so the two never disagree.
+export const CAN_REOPEN_IN_PRODUCTION = ['admin', 'superadmin', 'manager', 'executive'];
+export const canReopenInProduction = (role) => CAN_REOPEN_IN_PRODUCTION.includes(String(role || '').toLowerCase());
+export const inProduction = (so) => {
+    if (!so) return false;
+    if (so.orderClass === 'QUICKSHIP') {
+        const st = String(so.status || so.pickStatus || '');
+        return st === 'Picked' || st === 'Shipped' || so.packStatus === 'Packed' || !!(so.pickInProgress && so.pickInProgress.by) || !!(so.packInProgress && so.packInProgress.by);
+    }
+    const st = String(so.status || '');
+    return st === 'Dispatched' || st === 'Closed' || so.pushedToFinishing === true || so.pushedToShop === true || !!so.dispatchedAt;
+};
+const _ms = (v) => (v && typeof v.toMillis === 'function') ? v.toMillis() : (typeof v === 'number' ? v : (v ? (Date.parse(v) || 0) : 0));
+export const packedStateOf = (so, packDocs = []) => {
+    if (!so) return { packed: false, packedAt: null, shipped: false, tracking: [] };
+    if (so.orderClass === 'QUICKSHIP') {
+        return { packed: so.packStatus === 'Packed', packedAt: so.packedAt || null, shipped: String(so.status || '') === 'Shipped' || !!so.nsIfTran, tracking: so.trackingNumbers || [] };
+    }
+    const docs = (packDocs || []).filter(Boolean);
+    const packed = docs.length > 0 && docs.every(d => d.packStatus === 'Packed');
+    return {
+        packed,
+        packedAt: packed ? (docs.reduce((m, d) => Math.max(m, _ms(d.packedAt)), 0) || null) : null,
+        shipped: packed && docs.some(d => d.nsIfTran || d.shippedAt),
+        tracking: [...new Set(docs.flatMap(d => d.trackingNumbers || []))],
+    };
+};

@@ -141,6 +141,33 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 ## 6. Hand-offs in
 
+- **From S2, 2026-09-11 — the PACKING LIST and the INVOICE on the sales-order card (Stuart's design, approved):**
+  NetSuite keeps quote → sales order → fulfilments → invoice on one stream; ours lives on the CRM sales-order card.
+  S2 shipped the shared half: `Shared/packingList.js` (`packingListOf({ ordered, packDocs, shipDate?, tracking? })` →
+  `{ lines:[{code,name,finish,qtyOrdered,qtyShipped,status MATCH|SHORT|OVER|NOT_PACKED|NOT_ORDERED}], shipDate,
+  tracking, packed, complete, flagged, totals }` and `invoiceLinesOf({ priced, packingList })` = the SO's priced
+  lines with each physical line's qty → shipped and amount re-multiplied, paper rows passed through) and, in
+  `Shared/orderStatus`, `inProduction(so)` (Dispatched/Closed/pushed, or a QUICKSHIP the WMS has in hand),
+  `packedStateOf(so, packDocs)` → `{ packed, packedAt, shipped, tracking }`, `CAN_REOPEN_IN_PRODUCTION` +
+  `canReopenInProduction(role)`. 31 assertions in `scripts/packingList.test.mjs`. **Ask (your files):**
+  (1) `Shared/FormPreview` PACKING_SLIP: title "PACKING LIST", the SAME header as SALES_ORDER (bill-to, ship-to, PO,
+  SO #, date) plus **Ship date** and **Tracking #** (blank until UPS), line columns Item · Description · Finish ·
+  **Qty ordered** · **Qty shipped** (no unit, no amount, no totals block), a red mark on any line whose status ≠ MATCH
+  and a footer line "n line(s) differ from the order" when `flagged.length`. `ordered` = `customerDocLines(job.cpqData.
+  breakdown, 'PACKING_SLIP', …)` — tell S2 the kit-parent flag if a kit header line carries qty, so the builder can
+  skip it (today it skips isHeader/isFee/isDiscount/isNetLine/isDisplayOnly). (2) `ExternalCoopTab` sales-order card:
+  when `inProduction(soRecord)` — the `hq_sales_orders/SO-APP-<quoteNo>` doc — grey **Modify / Reopen CPQ / Reopen
+  Vision / Reopen Order Entry** with the tooltip "in production since <dispatchedAt> — a manager can reopen"; enabled
+  again only for `canReopenInProduction(currentRole)` (same list as your OE_MANAGER_ROLES — import S2's so there is
+  one). Add **📦 Packing list** when `packedStateOf(so, finDocs).packed` (finDocs = the order's `fin_workorders` by
+  orderKey — the same query the card's live floor status uses) rendering FormPreview PACKING_SLIP from
+  `packingListOf`; add **🧾 Invoice** beside it (type INVOICE, docNumber the SO #) rendering `customerDocLines(…,
+  'INVOICE')` passed through `invoiceLinesOf` — the app generates its own invoice (Stuart: NetSuite's will not look
+  right with how we populate items); the discount / net rows' arithmetic on a shipped-qty invoice is yours (the
+  builder passes them through untouched). QUICKSHIP orders: `packDocs = [soDoc]` (the builder reads the `lines[]`
+  dialect). Downstream trace: reads only — no job, floor doc or NetSuite write; the greying changes nothing on the
+  floors. S3 owns the packer's per-line count (their § Hand-offs in) and the WMS print button; until their count
+  lands the builder falls back to line-less-short for a ticked line.
 - **⚠ DEPLOY NOTICE from S5 · 2026-09-11 · d3c6777 pushed at 15:37 EDT (S5 sweeps every served asset after the deploy and records it in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **display BUILD ORDERS** — on 5. Marketing (Designs | Build orders toggle) and as ONE guarded mount at the top of 10.5 Project Mgmt: a display × qty × customer × SO/PO, ship plan, the tracker's per-line columns (WO#, at plater, notes, done), boards built → open demand. Writes `system/displays/builds/{id}` and `system/display_demand_<brand>` (new; the open demand per item, recomputed on every save/delete). **Never writes `jobs`** (a build there would be a phantom quote on the CRM / RTG / tab 12). No work order, floor document or NetSuite write. Your side: nothing in code; the display SO itself will be entered through one of your doors once the order-level discount (your §6, From S5) exists.
 
 - **⚠ DEPLOY NOTICE from S5 · 2026-09-11 · b3fd59f pushed at 14:51 EDT (S5 sweeps every served asset after the deploy and records it in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **5. Marketing is no longer an empty label — the Sales Display Designer** (Stuart's new ask, 09-11): design a tabletop or wall display to scale, rows taken from the SHARED CPQ cart (HQ.js passes `globalCart` to the new tab — the cart is read, never changed), the chip face laid out from `system/master_finishes` + `hq_outsource_finishes`, the bill of one board computed (`Shared/displayBom`). Writes: `system/displays/entries/{id}` (new, under the system rule — no rules deploy) and `global_assets` docs with `productType: DISPLAY CAPTURE` / `displayCapture: true` (`saveGuideCapture` gained a `kind`; guide captures unchanged). No job, work order, floor document, snapshot or NetSuite write. The push also carried S2's docs-only c0f562d (a notice stamp for 5ba0da3, already live) — it had sat unpushed 10+ minutes. Your side: the new tab reads your cart items' `pricingBreakdown` / `renderSnapshot` / `engineConfig.lengthInches` / `finishLabel` as they are today — if a cart line's shape changes, the designer's `rowConfigFromCartItem` (S5) needs the same change; and the ORDER-LEVEL DISCOUNT hand-off in your §6 (From S5 2026-09-11) is the sales-side piece this program needs next.
