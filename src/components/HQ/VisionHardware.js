@@ -35,6 +35,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const [showEngOverlay, setShowEngOverlay] = useState(false);
   const [showManualFab, setShowManualFab] = useState(false); // collapsed by default: dims auto-fill from the selected bracket; open only for one-off custom overrides
   const [editingDraftId, setEditingDraftId] = useState(null); // a saved session line loaded for editing — Save Line updates it IN PLACE
+  const [editingCartItemId, setEditingCartItemId] = useState(null); // the CPQ cart line this draft belongs to (CPQ → Vision, Phase 2) — a re-save keeps it so CPQ replaces that line
   const [loadDraftPick, setLoadDraftPick] = useState('');
   const [engOverlayPos, setEngOverlayPos] = useState({ x: 500, y: 400 });
   const [perspectiveStretch, setPerspectiveStretch] = useState({ L: 0, R: 0 }); 
@@ -1286,8 +1287,23 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       setEnginePicks(Array.isArray(savedPicks) ? Object.fromEntries(savedPicks.filter(x => x && x.slotKey && x.choiceId).map(x => [x.slotKey, x.choiceId])) : {});
       setQuoteSelections({ collection: savedCollection || '' });
       setEditingDraftId(cfg.id);
+      setEditingCartItemId(cfg.cartItemId || null);
       setViewMode('ENGINEERING');
   };
+  // ── CPQ → VISION (Phase 2): a line opened from the CPQ cart lands on the board on arrival. ──
+  // The session carries the draft id once; when the drafts feed holds it, load it and clear the
+  // hand-off so a later visit does not reload it over the operator's work.
+  const autoLoadedRef = useRef(null);
+  useEffect(() => {
+      const want = activeSession?.loadDraftId;
+      if (!want || autoLoadedRef.current === want) return;
+      const cfg = (visionConfigs || []).find(c => c.id === want);
+      if (!cfg) return;
+      autoLoadedRef.current = want;
+      handleLoadDraft(want);
+      if (typeof activeSession?.clearLoadDraftId === 'function') activeSession.clearLoadDraftId();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSession?.loadDraftId, visionConfigs]);
 
   const handlePushToCPQ = async () => {
       if (!activeSession?.quoteId) return alert("Please select a customer in the main header to initialize a session.");
@@ -1358,6 +1374,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           flowId: activeFlow?.id || null,          
           cpqFlowId: activeFlow?.id || null, 
           masterQuoteId: activeSession.quoteId,      
+          // The CPQ line this draft came from (Phase 2) — kept through a re-save so CPQ's Resume replaces it.
+          ...(editingCartItemId ? { cartItemId: editingCartItemId } : {}),
           specs: {
               collection: quoteSelections.collection,
               // The framing this drawing was engineered in — CPQ's step-1 answers (visionBridge).
@@ -1398,7 +1416,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           setAttachments([]);
           setShopNotes([]);
           setQuoteFlowId('');
-          setDynamicConfigParams({}); setEnginePicks({});
+          setDynamicConfigParams({}); setEnginePicks({}); setEditingCartItemId(null);
           setQuoteSelections({ collection: '' });
           setEngData(defaultEngData);
           setShowQuotePanel(false);

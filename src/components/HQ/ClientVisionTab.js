@@ -73,6 +73,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
   const [sessionCustomerId, setSessionCustomerId] = useState('');
   const [sessionJobName, setSessionJobName] = useState('');
   const [sessionQuoteId, setSessionQuoteId] = useState(null);
+  const [sessionLoadDraftId, setSessionLoadDraftId] = useState(null);   // CPQ → Vision: the line to put on the board on arrival
 
   // Reopen-in-Vision handoff (CRM "Reopen Vision" → HQ.js stashes hq_vision_reopen → we restore
   // the quote's session here). One-shot: consumed and removed on mount. With the session set to
@@ -88,6 +89,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
           setSessionCustomerId(s.customerId || '');
           setSessionJobName(s.jobName || '');
           setSessionQuoteId(s.jobId);
+          if (s.loadDraftId) setSessionLoadDraftId(String(s.loadDraftId));
       } catch (e) { /* malformed handoff — start with a clean session */ }
   }, []);
 
@@ -152,7 +154,10 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
   const activeSession = {
       quoteId: sessionQuoteId,
       customerId: sessionCustomerId,
-      jobName: sessionJobName
+      jobName: sessionJobName,
+      // CPQ → Vision (Phase 2): consumed once by Vision Hardware, then cleared.
+      loadDraftId: sessionLoadDraftId,
+      clearLoadDraftId: () => setSessionLoadDraftId(null),
   };
 
   return (

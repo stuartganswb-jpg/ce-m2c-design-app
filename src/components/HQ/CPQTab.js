@@ -18,6 +18,7 @@ import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDoc, getDocs, updateDoc, serverTimestamp, query, where, deleteField } from "firebase/firestore";
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { soHeaderOf, stampLineFinishRouting, readyDateOf, leadText, isRushFeeItem } from '../Shared/salesOrderHeader';
+import { draftFromCartLine, cartLineForDraft } from '../Shared/visionHandoff';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
@@ -1741,6 +1742,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const handleResumeDraft = (draftId) => {
       const draft = previousDrafts.find(d => d.id === draftId);
       if (!draft) return;
+      // ── A RE-SAVED DRAWING REPLACES ITS LINE (Vision Phase 2) ─────────────────────────────
+      // A line that came from this drawing (or was opened into it) is already in the cart; the
+      // Add that follows this Resume replaces it in place — never a second line for the same window.
+      const owner = cartLineForDraft(cart, draft);
+      setEditingCartId(owner ? owner.id : null);
 
       let targetFlow = null;
       if (draft.category === 'PILLOW') targetFlow = cpqFlows.find(f => (f.name || '').includes("PILLOW"));
@@ -1879,6 +1885,27 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // The TAGS engine's restore payload — set by Edit on a TAGS cart line, consumed once by the
   // configurator (keyed, so re-renders never re-apply it).
   const [engineSeed, setEngineSeed] = useState(null);
+  // ── OPEN A CART LINE IN VISION (Stuart 2026-09-10/11, Phase 2) ───────────────────────────
+  // The other direction of the bridge: the line's engine picks, framing and length become a
+  // draft in the Phase 1 shape, the line remembers it, and Vision opens with it on the board.
+  // Nothing is quoted or sent here; a Vision re-save comes back through Resume and replaces
+  // this line. The session quote id is minted here if the cart has none yet — the same id the
+  // save will use, exactly as a Vision-first session does.
+  const handleOpenInVision = async (itemId) => {
+      const item = cart.find(c => c.id === itemId);
+      if (!item || item.engine !== 'TAGS') return;
+      const quoteId = item.masterQuoteId || activeMasterQuoteId || cart.find(c => c.masterQuoteId)?.masterQuoteId || `QUOTE-${Date.now()}`;
+      if (!activeMasterQuoteId) setActiveMasterQuoteId(quoteId);
+      const cust = combinedCustomers.find(c => c.id === jobData.customerId) || null;
+      const draft = draftFromCartLine(item, { quoteId, customerId: jobData.customerId || '', jobName: jobData.jobName || '', brandId: activeBrand, by: currentUser || '' });
+      if (!draft) return;
+      try {
+          await setDoc(doc(db, 'cpq_drafts', draft.id), draft, { merge: true });
+          setCart(prev => prev.map(c => (c.id === itemId ? { ...c, masterQuoteId: c.masterQuoteId || quoteId, visionDraftId: draft.id } : c)));
+          window.dispatchEvent(new CustomEvent('REOPEN_QUOTE_IN_VISION', { detail: { session: { jobId: quoteId, customerId: jobData.customerId || '', jobName: jobData.jobName || (cust && cust.name) || '', loadDraftId: draft.id } } }));
+      } catch (e) { alert(`Could not open this line in Vision: ${e.message || e}`); }
+  };
+
   const handleEditCartItem = (itemId) => {
       const item = cart.find(c => c.id === itemId);
       if (!item) return;
@@ -2954,6 +2981,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // The tag engine builds its own item and would otherwise drop every one of these silently, which
   // is the worst way to lose an engineering note.
   const visionFieldsOf = (draft, svg) => ({
+      // The line remembers its drawing (Vision Phase 2): a Vision re-save comes back to REPLACE this line.
+      visionDraftId: draft?.id || null,
       engineeringNotes: draft ? draft.specs?.engineeringNotes : null,
       // Only the flat Vision part-pick ids the viewer needs — the full spatialData blob carries
       // canvas structures (nested arrays) that Firestore rejects as "invalid nested entity".
@@ -4322,6 +4351,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   </div>
                 </div>
                 <button onClick={() => handleEditCartItem(item.id)} title={editingCartId === item.id ? 'Open in the configurator — Add configuration replaces this line; the cart still holds it as it was' : 'Open this line in the configurator'} style={{ padding: '8px 16px', background: editingCartId === item.id ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{editingCartId === item.id ? 'Editing…' : 'Edit'}</button>
+                {item.engine === 'TAGS' && (
+                    <button onClick={() => handleOpenInVision(item.id)} title="Open this line on the Vision Hardware board — dimensions, bracket and splice placement, the cut sheet. A Vision re-save comes back to replace this line."
+                        style={{ padding: '8px 12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px' }}>
+                        Vision
+                    </button>
+                )}
                 <button onClick={() => handleRemoveCartItem(item.id)} title="Remove from cart" style={{ padding: '8px 12px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>✕</button>
               </div>
             ))}
