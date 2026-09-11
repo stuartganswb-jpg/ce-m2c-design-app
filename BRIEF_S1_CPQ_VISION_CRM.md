@@ -294,6 +294,13 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Issue 10 (S1) 26f45de pushed 23:04 — §3 #45.** `Shared/pickDrops` (droppedPicks / mergeDrops / unacknowledged,
+  16 assertions) + the strip under the rail + Add/Checkout refusal until acknowledged. Diagnosis: ends-then-rod keeps
+  the returns at every depth on H1-75 / H1-1 / H1-138 today (fee returns carry no `projs` into the engine — the fee is one
+  item at any depth; the render copy follows the cut); what still removes silently = rodKind / setup / projection
+  changes and anything a reopen or Vision seed no longer fits. Engine note: `resolve()` re-normalizes, so a normalized
+  choice fed back in loses `projs` — harnesses must pass raw rows (not changed). Rail read owed after re-PIN.
+
 - **2026-09-10 — Issue 9 (S1) 2c61b3e pushed 22:34.** S2's refused-queue stamp: `refusedStamp` / `queuedStamp` helpers in
   CPQTab's finalize (both branches + catch); tab 12's manual push clears the three too. Field names per S2 verbatim.
   Handed S2 the exact `queueNsTransaction` args + the parts-universe rule for its Queue now (BRIEF_S2 §6).

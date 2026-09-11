@@ -424,6 +424,12 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · 26f45de (pushed 23:04).** §2.4 #45 closed on the engine's terms: the 09-03 path no longer fires on the
+  new engine (projection asked first; returns keep at every depth on the live pins), and the silent class is closed —
+  `Shared/pickDrops` names every pick a later answer removes, the configurator shows it, and Add / Checkout refuse until
+  acknowledged (Stuart's choice). Named, not changed: resolve() re-normalizes its input, and a normalized choice
+  re-normalized loses its projection (harness fixtures must be raw rows).
+
 - **2026-09-10 · S1 · 2c61b3e (pushed 22:34).** S2's hand-off landed: a refused NetSuite queue at CPQ save stamps
   `nsTransmitRefusedAt/Code/Message` on the job (both branches + the catch); a later success clears the three in the same
   write as `nsTransmitQueuedAt` (CPQ save and tab 12). Closes the "invisible refused quote" half of this morning's
