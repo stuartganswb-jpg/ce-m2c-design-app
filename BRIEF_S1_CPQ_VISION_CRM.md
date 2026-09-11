@@ -294,6 +294,12 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-11 — Vision Phase 1b (S1) 3c0e101 pushed 08:33.** The mount in VisionHardware.js per the 1a plan (steps 1–7 all
+  landed; `git diff -w` = six branch heads + three effect guards + the save/load lines). NOT yet: the live read on Stuart's
+  tab; the sheet-2D / size-matrix filters Vision applied on the old steps are NOT applied on the engine path (the engine
+  has its own size handling via projs) — read on H1-75 first. Phase 2 next: CPQ → Vision write-back + re-save replaces
+  the cart line; Phase 3: generator stops emitting TRV END steps.
+
 - **2026-09-10 — Vision Phase 1a (S1) 21bea0f pushed 23:40.** `Shared/visionEngine.js`: `settleVision` (CPQ's loop),
   `visionPickers` → `{ live, pickers[{key,kind,tier,position,options,chosen,locked,lockedBy,lockedReason}], at(kind,pos,tier), model }`,
   `engDataFromPickers` (bracketId/Right/Center, backplateId*, endStyle/Right, mountLeft/Right), `enginePicksForDraft`,

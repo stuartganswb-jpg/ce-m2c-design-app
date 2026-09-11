@@ -424,6 +424,11 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 · S1 · 3c0e101 (pushed 08:33).** Vision Phase 1b: the mount. On pinned flows Vision's hardware pickers are the
+  engine's slots (one `useEngine` switch; old path untouched for unpinned flows); the hand-copied rules and the sweep step
+  aside; a saved line carries `specs.enginePicks`; the #45 strip guards Push. #48 is now live in its first form; the live
+  read with Stuart is the proof owed.
+
 - **2026-09-10 · S1 · 21bea0f (pushed 23:40).** Vision Phase 1a: the pure module that turns the engine's slots into Vision's
   pickers (settle, locks with reasons, end styles for the fab math, `enginePicks` for the saved line); no screen change.
   Phase 1b (the mount in `VisionHardware.js`: engine-backed pickers where the flow has a pinned assembly, old steps

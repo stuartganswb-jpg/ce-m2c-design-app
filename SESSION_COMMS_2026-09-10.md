@@ -81,7 +81,7 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | session | state | last hash | next |
 |---|---|---|---|
-| S1 | started 09-10. **Live:** a58d126; 1259391; 16a74bb; bd5907e; e4ab15a; 6572b6f; 9415338; bb5b5e1; 38b1ba6; 2c61b3e; 26f45de; b180339 (Vision Phase 0); 21bea0f (Vision Phase 1a, pure). **Vision on the engine** in flight: 1b = the VisionHardware mount (plan in BRIEF_S1 §7, awaiting Stuart's build), then 2 (open/reopen both ways), 3 (generator). Open on Stuart's side unchanged. | 21bea0f | Vision Phase 1b mount |
+| S1 | started 09-10. **Live:** a58d126; 1259391; 16a74bb; bd5907e; e4ab15a; 6572b6f; 9415338; bb5b5e1; 38b1ba6; 2c61b3e; 26f45de; b180339 (Vision 0); 21bea0f (Vision 1a); 3c0e101 (Vision 1b — the mount). **Next:** live read of 1b with Stuart (Brimar / H1-138 / H1-2TRV), then Phase 2 (open/reopen both ways), Phase 3 (generator). | 3c0e101 | Vision 1b live read |
 | S2 | started 09-10. Issue 1 DONE: reopen tool shipped (6c72e80 → 553272b), run REOPEN-1789057501646 = 52 restored / 0 failed on Stuart's list. Issue 2 (prevention) built + tested, push pending. Hand-offs out: S3 `reopenConfirmPick` chip; S1 refused-estimate stamp. Named: refused quotes invisible on RTG (S2 row queued). | 553272b | push Issue 2; then the refused-quotes row; then §3 #1 live pass |
 | S3 | started 09-10. Read done; the plating round trip traced in code before running it — **finding:** the WMS OB scan-in drops the demand's `finSiblingId / orderKey / shopOrderId` and the put-away is not custom-aware, so D1's loop-back can never fire for the only lines that carry a sibling (fix planned in `PickPackApp.js`, parked on Stuart's two answers: fix before the run; NetSuite shape at return = receipt only vs a build). Stuart then set the issue: **Ring Packs REPACK** — shipped f5a6c19; **pairs wait on Eric** (pair item ids in NetSuite). Queued from S2: `reopenConfirmPick` chip; `undoComplete` never clears `closed: true`. | f5a6c19 | sweep f5a6c19; then the plating round trip once Stuart answers |
 | S4 | brief written, not started | — | when Stuart opens it |
@@ -91,6 +91,7 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
+| 2026-09-11 08:33 | S1 | 3c0e101 | Vision Phase 1b: hardware pickers from the engine's slots on pinned flows (locks + reasons, rear ends on a double, removals strip, `specs.enginePicks` on saved lines). Old path for unpinned flows untouched. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-10 23:40 | S1 | 21bea0f | Vision Phase 1a (pure): `Shared/visionEngine.js` + bridge `enginePicks` read + `endTreatment` on the choice. No screen change. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-10 23:32 | S1 | b180339 | Vision Phase 0: CPQ save keeps a quote's Vision drawings (`cpq_drafts` FINALIZED, not deleted); Reopen Vision has lines to load. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-10 23:04 | S1 | 26f45de | CPQ: a selection removed by a later choice is listed with its reason; Add / Checkout refuse until acknowledged (#45). `Shared/pickDrops.js`. No document/field shape change. | everyone — save-is-send refuses on a stale bundle |
