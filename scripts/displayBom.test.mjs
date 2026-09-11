@@ -1,6 +1,6 @@
 // Harness for Shared/displayBom.js — the bill of a sales display board.
 //   node scripts/displayBom.test.mjs
-import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards } from '../src/components/Shared/displayBom.js';
+import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout } from '../src/components/Shared/displayBom.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -155,6 +155,47 @@ const cartBaseFront3 = {
     eq('five weekly drops of ten', [plan.length, plan[0].date, plan[4].date, plan.reduce((s, p) => s + p.qty, 0)], [5, '2026-09-14', '2026-10-12', 50]);
     eq('a partial last drop', shipPlanFill({ qty: 35, perShip: 10, start: '2026-09-14' }).map(p => p.qty), [10, 10, 10, 5]);
     eq('no plan without a start date or a rate', [shipPlanFill({ qty: 35, perShip: 0, start: '2026-09-14' }).length, shipPlanFill({ qty: 35, perShip: 10, start: '' }).length], [0, 0]);
+}
+
+// ── 7. SEED FROM THE TRACKER — run against the REAL spreadsheet when it is present ───────────
+{
+    const { execSync } = await import('node:child_process');
+    const { existsSync } = await import('node:fs');
+    const xlsx = '0903/Displays/Tabletop & Wall Display Tracker.xlsx';
+    let sheets = null;
+    if (existsSync(xlsx)) {
+        try {
+            sheets = JSON.parse(execSync(`python3 -c "import openpyxl,json,sys; wb=openpyxl.load_workbook(sys.argv[1],data_only=True); print(json.dumps({ws.title: [[c for c in r] for r in ws.iter_rows(values_only=True)] for ws in wb.worksheets}, default=str))" "${xlsx}"`, { encoding: 'utf8' }));
+        } catch { sheets = null; }
+    }
+    if (!sheets) { console.log('  (tracker xlsx not present or openpyxl missing — seed tests skipped)'); }
+    else {
+        const tt = displayFromTracker(sheets['Tabletop Display Board Tracker'], { boards: 50, style: 'TABLETOP', name: 'Fabricut H1 Tabletop' });
+        eq('tabletop: nine positions, the bases as an extra', [tt.rows.map(r => r.label), tt.extras.length], [['Top Row 1', 'Top Row 2', 'Base Front 1', 'Base Front 2', 'Base Front 3', 'Base Front 4', 'Base Back 1', 'Base Back 2', 'Base Back 3'], 1]);
+        const tr1 = tt.rows[0];
+        eq('Top Row 1: the rod is 2 ft cut at 16.75, EP4, one per board; the backplates are two per board', [tr1.lines[0].code, tr1.lines[0].feet, tr1.lines[0].cutLength, tr1.lines[0].finishCode, tr1.lines[0].qty, tr1.lines[2].qty], ['H1-1R/EP', 2, 16.75, 'EP4', 1, 2]);
+        eq('"Top Row1" (no space) joins Top Row 1', tr1.lines.length, 4);
+        eq('Base Front 3: a plated pole reads its cut despite the word "Plated"', [tt.rows[4].lines[0].code, tt.rows[4].lines[0].feet, tt.rows[4].lines[0].cutLength, tt.rows[4].lines[0].finishCode], ['H1-1R/EP', 1, 7.5, 'EP2']);
+        eq('Base Back 2: the wood pole is 1 ft at 9.25, S08; the collar takes its own P04', [tt.rows[7].lines[0].feet, tt.rows[7].lines[0].cutLength, tt.rows[7].lines[0].finishCode, tt.rows[7].lines[2].finishCode], [1, 9.25, 'S08', 'P04']);
+        eq('Base Back 1: the acrylic row takes the note\'s EP1 where the finish column says Clear Acrylic', tt.rows[6].lines.map(l => l.finishCode), ['EP1', 'EP1', 'EP1']);
+        ok('the sheet\'s doubled codes are named, not silently merged', tt.warnings.some(w => /H1-1FRVC\/EP appears twice/.test(w)) && tt.warnings.some(w => /H1-2TRV-4MR\/W appears twice/.test(w)), tt.warnings.join(' | '));
+        ok('a 100-of-50 quantity is a whole 2 per board, no warning', !tt.warnings.some(w => /not a whole number/.test(w)), tt.warnings.join(' | '));
+
+        const wl = displayFromTracker(sheets['Wall Display Board Tracker'], { boards: 35, style: 'WALL' });
+        eq('wall: six rows; Row 1 = pole 2 ft at 18 + 2 finials + 2 plates + 2 brackets + 1 ring, all P06', [wl.rows.length, wl.rows[0].lines.map(l => l.qty), wl.rows[0].lines.every(l => l.finishCode === 'P06'), wl.rows[0].lines[0].feet, wl.rows[0].lines[0].cutLength], [6, [1, 2, 2, 2, 1], true, 2, 18]);
+        ok('the code-less "Mitered Return" line is skipped and named', wl.warnings.some(w => /Mitered Return/.test(w)), wl.warnings.join(' | '));
+        eq('the wall tab\'s narrower columns are read (no plater column)', wl.rows[1].lines.map(l => l.code), ['H1-1R/EP', 'H1-1FR/EP', 'H1-1FRRC/EP', 'H1-1BR/EP']);
+
+        // the seeded rows land as evenly spaced bands inside the face
+        const lay = seededRowsLayout(tt.rows, { widthIn: 24, heightIn: 24 });
+        ok('nine bands inside a 24 × 24 face, none overlapping', lay.every(r => r.x >= 0 && r.y >= 0 && r.x + r.w <= 2400 && r.y + r.h <= 2400) && lay.every((r, i) => i === 0 || r.y >= lay[i - 1].y + lay[i - 1].h), JSON.stringify(lay.map(r => [r.y, r.h])));
+        // the seeded display bills like a cart-built one: boardBom reads the same line shape
+        const d = newDisplay({ id: 'T', name: tt.name, style: 'TABLETOP' });
+        d.faces[0].rows = lay.map((r, i) => ({ id: `s${i}`, label: r.label, config: { assemblyName: r.label, finishLabel: '', lines: r.lines.map(l => ({ partId: l.code, legacyErpId: l.code, name: l.name, qty: l.qty, perFoot: l.perFoot, feet: l.feet, cutLength: l.cutLength, finishCode: l.finishCode })) } }));
+        d.extras = tt.extras;
+        const bom = orderBom(boardBom(d, []), 50);
+        eq('fifty boards: 100 vertical backplates, 50 rings, 100 ft of EP4 rod — the tracker\'s numbers', [bom.parts.find(p => p.code === 'H1-1FRVC/EP').qty, bom.parts.find(p => p.code === 'H1-1BR/EP').qty, bom.parts.find(p => p.code === 'H1-1R/EP' && p.finishCode === 'EP4').feet], [150, 50, 100]);
+    }
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

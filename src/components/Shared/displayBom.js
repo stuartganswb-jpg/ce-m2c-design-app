@@ -284,3 +284,69 @@ export function shipPlanFill({ qty, perShip, start, everyDays = 7 }) {
     }
     return out;
 }
+
+// ── SEED A DISPLAY FROM THE TRACKER SPREADSHEET (Stuart 2026-09-11) ──────────────────────────
+// "any chance you can create the fabricut tabletop from the spreadsheet" — the tracker's rows are
+// the board: "Position on Board" groups the item rows into a display row; Qty Needed is per ORDER
+// (÷ boards = per board); the notes carry the rod's cut ("16.75\" (2-FT)"); the finish sits in
+// parentheses ("Satin Gold (EP4)"). A seeded row has no render (a labelled box) — replace it from
+// the CPQ cart whenever a real configuration is wanted; the bill is right either way.
+const finishCodeOf = (s) => { const m = String(s || '').match(/\(([A-Z]{1,3}\d{1,2})\)/i); return m ? m[1].toUpperCase() : ''; };
+const cutOf = (note) => {
+    const m = String(note || '').match(/(\d+(?:\.\d+)?)\s*"\s*\((\d+(?:\.\d+)?)\s*-?\s*FT\)/i);
+    return m ? { cutLength: parseFloat(m[1]), feet: parseFloat(m[2]) } : null;
+};
+const isRodish = (code, name) => /R\/|R$|-?R-|TRV$|ROD|POLE|TRACK/i.test(`${code} ${name}`) && !/RING|BRACKET|\bCAP\b|FINIAL|COLLAR|RETURN|BACK ?PLATE|BACKPLATE/i.test(name);
+
+/**
+ * `grid` = the tracker tab as rows of cells (openpyxl / workbookFileToSheets shape). Returns
+ * { name, style, boards, rows:[{ label, lines:[{ code, name, qty, finishCode, perFoot, feet, cutLength }] }],
+ *   extras:[{ text, qty }], warnings[] }. Codes are as typed (trimmed, upper); `partId` is
+ * resolved by the caller against the library.
+ */
+export function displayFromTracker(grid, { boards, style = 'TABLETOP', name = '' } = {}) {
+    const warnings = [];
+    const rows = [];
+    const extras = [];
+    const n = N(boards, 0);
+    if (!(n > 0)) throw new Error('boards must be the order quantity the sheet\'s Qty Needed column is for (50 tabletops, 35 wall boards)');
+    let current = null;
+    let rowNote = '';
+    (grid || []).forEach((r, i) => {
+        const [pos, code, desc, qtyNeeded, plater, finishCol, , notes] = style === 'WALL' ? [r[0], r[1], r[2], r[3], '', r[4], r[5], r[6]] : r;
+        const position = String(pos || '').trim().replace(/\s+/g, ' ');
+        if (!position || /^Position on Board$/i.test(position) || /Display Tracker/i.test(String(r[1] || ''))) return;
+        const codeU = U(code);
+        if (/BASES?$/i.test(position) && !codeU) { extras.push({ text: `${position} (sheet: ${N(qtyNeeded)} for the order)`, qty: 1 }); return; }
+        if (!codeU) { warnings.push(`row ${i + 1} (${position}): no item code — "${String(desc || '').trim()}" skipped`); return; }
+        const label = position.replace(/Row(\d)/i, 'Row $1');
+        if (!current || current.label.toUpperCase() !== label.toUpperCase()) {
+            current = rows.find(x => x.label.toUpperCase() === label.toUpperCase()) || null;
+            if (!current) { current = { label, lines: [], note: '' }; rows.push(current); }
+            rowNote = '';
+        }
+        if (notes && String(notes).trim()) { rowNote = String(notes).trim(); if (!current.note) current.note = rowNote; }
+        const per = N(qtyNeeded, 0) / n;
+        const qty = Math.round(per * 100) / 100;
+        if (!(qty > 0)) { warnings.push(`row ${i + 1} (${codeU}): Qty Needed ${qtyNeeded} — not a positive per-board quantity`); return; }
+        if (Math.abs(qty - Math.round(qty)) > 0.001) warnings.push(`row ${i + 1} (${codeU}): ${qtyNeeded} ÷ ${n} boards = ${qty} — not a whole number per board`);
+        const finishCode = finishCodeOf(finishCol) || finishCodeOf(current.note) || '';
+        const cut = isRodish(codeU, desc) ? cutOf(current.note) : null;
+        const line = { code: codeU, name: String(desc || '').trim(), qty: Math.round(qty), finishCode, perFoot: !!cut, feet: cut ? cut.feet : 0, cutLength: cut ? cut.cutLength : 0, plater: String(plater || '').trim() };
+        // The sheet repeats one code for two parts (H1-1FRVC/EP as both the bend and its backplate,
+        // H1-2TRV-4MR/W as both the kit and its track): keep both lines as written and say so.
+        if (current.lines.some(l => l.code === codeU)) warnings.push(`row ${i + 1} (${label}): ${codeU} appears twice in this row — "${line.name}" — check the sheet's coding`);
+        current.lines.push(line);
+    });
+    return { name: name || (style === 'WALL' ? 'Wall display' : 'Tabletop display'), style, boards: n, rows, extras, warnings };
+}
+
+/** Lay seeded rows on a ROWS face: evenly spaced full-width bands, top to bottom. */
+export function seededRowsLayout(rows, { widthIn = 24, heightIn = 24 } = {}) {
+    const W = widthIn * UNITS_PER_INCH, H = heightIn * UNITS_PER_INCH;
+    const k = Math.max(1, rows.length);
+    const margin = 0.6 * UNITS_PER_INCH;
+    const band = (H - 2 * margin) / k;
+    const w = Math.round(W * 0.84), h = Math.round(Math.min(band * 0.7, 3.5 * UNITS_PER_INCH));
+    return rows.map((r, i) => ({ ...r, x: Math.round((W - w) / 2), y: Math.round(margin + i * band + (band - h) / 2), w, h }));
+}

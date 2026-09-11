@@ -19,9 +19,10 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore';
-import { DISPLAY_STYLES, UNITS_PER_INCH, newDisplay, chipLines, chipFaceLayout, boardBom, orderBom, bomCsv, rowConfigFromCartItem } from '../Shared/displayBom';
+import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, query, where } from 'firebase/firestore';
+import { DISPLAY_STYLES, UNITS_PER_INCH, newDisplay, chipLines, chipFaceLayout, boardBom, orderBom, bomCsv, rowConfigFromCartItem, displayFromTracker, seededRowsLayout } from '../Shared/displayBom';
 import { saveGuideCapture } from '../Shared/guideCapture';
+import { workbookFileToSheets } from '../Shared/customerControlFile';
 import DisplayBuildsPanel from './DisplayBuildsPanel';
 
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -42,8 +43,10 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
     const [boards, setBoards] = useState(1);         // the BOM multiplier, preview only
     const [newForm, setNewForm] = useState(null);    // { name, style }
     const [view, setView] = useState('DESIGNS');     // DESIGNS | BUILDS — piece 2 lives on the same tab
+    const [seed, setSeed] = useState(null);          // tracker seed preview { sheets, tabIx, boards, name, parsed, resolved, missing }
     const svgRef = useRef(null);
     const dragRef = useRef(null);
+    const seedFileRef = useRef(null);
 
     // ── data ─────────────────────────────────────────────────────────────────────────────────
     useEffect(() => {
@@ -86,6 +89,69 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
         if (!window.confirm(`Delete the display "${d.name}"? Its rows and bill go with it; the row images stay in the Asset Gallery.`)) return;
         try { await deleteDoc(doc(db, 'system', 'displays', 'entries', d.id)); if (openId === d.id) { setOpenId(null); setDraft(null); } }
         catch (e) { alert('Delete failed: ' + (e?.message || e)); }
+    };
+
+    // ── SEED A DISPLAY FROM THE TRACKER SPREADSHEET (Stuart 2026-09-11) ──────────────────────
+    // "any chance you can create the fabricut tabletop from the spreadsheet." The tracker's rows
+    // ARE the board (Shared/displayBom.displayFromTracker, tested on the real file). Read →
+    // resolve the codes against the library → show what will be written → Create. A seeded row
+    // has no render (a labelled box) until it is replaced from the CPQ cart; the bill is right
+    // either way. An in-app button, not a script: bulk data goes through the authenticated app.
+    const onSeedFile = async (file) => {
+        if (!file) return;
+        setBusy('Reading the tracker…');
+        try {
+            const sheets = await workbookFileToSheets(file);
+            const tabIx = Math.max(0, sheets.findIndex(s => /tabletop/i.test(s.name)));
+            const s = { sheets, tabIx, boards: /wall/i.test(sheets[tabIx]?.name || '') ? 35 : 50, name: '', fileName: file.name, parsed: null, resolved: {}, missing: [] };
+            setSeed(s);
+            await parseSeed(s);
+        } catch (e) { alert('Could not read that workbook:\n\n' + (e?.message || e)); setSeed(null); }
+        setBusy('');
+    };
+    const parseSeed = async (s) => {
+        const sheet = s.sheets[s.tabIx];
+        const style = /wall/i.test(sheet?.name || '') ? 'WALL' : 'TABLETOP';
+        let parsed;
+        try { parsed = displayFromTracker(sheet.grid, { boards: s.boards, style, name: s.name || `Fabricut H1 ${style === 'WALL' ? 'Wall Board' : 'Tabletop'}` }); }
+        catch (e) { alert(e?.message || String(e)); return; }
+        // Resolve every code to its library doc — the id CPQ lines carry — in chunks of ten.
+        const codes = [...new Set(parsed.rows.flatMap(r => r.lines.map(l => l.code)))];
+        const resolved = {};
+        for (let i = 0; i < codes.length; i += 10) {
+            const chunk = codes.slice(i, i + 10);
+            try {
+                const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', 'in', chunk)));
+                snap.docs.forEach(d => { const x = d.data(); const k = String(x.legacyErpId || '').trim().toUpperCase(); if (!resolved[k] || x.brandId === activeBrand) resolved[k] = { id: d.id, name: x.itemName || '' }; });
+            } catch (e) { console.error(e); }
+        }
+        setSeed(prev => ({ ...(prev || s), parsed, style, resolved, missing: codes.filter(c => !resolved[c]) }));
+    };
+    const createFromSeed = async () => {
+        const { parsed, style, resolved, missing } = seed || {};
+        if (!parsed) return;
+        const name = String(seed.name || parsed.name).trim();
+        const id = `DSP-${name.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Date.now().toString().slice(-5)}`;
+        const d = newDisplay({ id, name, style, brandId: activeBrand || '' });
+        const rowsFace = d.faces.find(f => f.kind === 'ROWS');
+        const laid = seededRowsLayout(parsed.rows, { widthIn: rowsFace.widthIn, heightIn: rowsFace.heightIn });
+        rowsFace.rows = laid.map((r, i) => {
+            const fins = [...new Set(r.lines.map(l => l.finishCode).filter(Boolean))];
+            return {
+                id: `seed${i + 1}`, label: r.label, x: r.x, y: r.y, w: r.w, h: r.h, imageUrl: '', hiResUrl: '',
+                config: {
+                    cartId: '', assemblyId: '', assemblyName: r.label, flowId: '', finishLabel: fins.join(' / '), finishes: fins,
+                    lengthInches: (r.lines.find(l => l.perFoot) || {}).cutLength || 0, memo: r.note || '', seededFrom: seed.fileName || 'tracker',
+                    lines: r.lines.map(l => ({ partId: resolved[l.code]?.id || l.code, legacyErpId: l.code, name: l.name || resolved[l.code]?.name || '', qty: l.qty, perFoot: l.perFoot, feet: l.feet, cutLength: l.cutLength, finishCode: l.finishCode, noFinish: !l.finishCode, ...(resolved[l.code] ? {} : { unresolved: true }) })),
+                },
+            };
+        });
+        d.extras = parsed.extras;
+        Object.assign(d, { seededFrom: { file: seed.fileName || '', tab: seed.sheets[seed.tabIx]?.name || '', boards: parsed.boards, warnings: parsed.warnings, unresolvedCodes: missing }, createdAt: Date.now(), createdBy: String(currentUser || ''), updatedAt: Date.now(), updatedBy: String(currentUser || '') });
+        setBusy('Writing the display…');
+        try { await setDoc(doc(db, 'system', 'displays', 'entries', id), d); setSeed(null); open(d); }
+        catch (e) { alert('Create failed: ' + (e?.message || e)); }
+        setBusy('');
     };
 
     // ── rows from the cart ───────────────────────────────────────────────────────────────────
@@ -153,8 +219,53 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                         <button onClick={() => setView('DESIGNS')} style={btn(view === 'DESIGNS')}>Designs</button>
                         <button onClick={() => setView('BUILDS')} style={btn(view === 'BUILDS', { borderLeft: 'none' })}>Build orders</button>
                     </div>
+                    {view === 'DESIGNS' && <button onClick={() => seedFileRef.current?.click()} disabled={!!busy} style={btn(false)} title="Read a display tracker workbook (Position on Board · Item # · Qty Needed · finish · notes) and create the display from it — every row a labelled box until you replace it from the CPQ cart">⬆ Seed from tracker</button>}
                     {view === 'DESIGNS' && <button onClick={() => setNewForm({ name: '', style: 'TABLETOP' })} style={btn(true)}>+ New display</button>}
+                    <input ref={seedFileRef} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; onSeedFile(f); }} />
                 </div>
+                {busy && <div style={{ ...mono, color: 'var(--brass)', marginBottom: '10px' }}>{busy}</div>}
+                {seed && seed.parsed && (
+                    <div onClick={() => setSeed(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '980px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)' }}>
+                            <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem' }}>Seed from tracker — what it would create</div>
+                                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '10px', flexWrap: 'wrap' }}>
+                                    <select value={seed.tabIx} onChange={e => { const s = { ...seed, tabIx: Number(e.target.value) }; s.boards = /wall/i.test(s.sheets[s.tabIx]?.name || '') ? 35 : 50; setSeed(s); parseSeed(s); }} style={inp}>{seed.sheets.map((s, i) => <option key={i} value={i}>{s.name}</option>)}</select>
+                                    <span style={mono}>Qty Needed is for</span>
+                                    <input type="number" min="1" value={seed.boards} onChange={e => setSeed({ ...seed, boards: Math.max(1, parseInt(e.target.value) || 1) })} onBlur={() => parseSeed(seed)} style={{ ...inp, width: '70px' }} />
+                                    <span style={mono}>boards</span>
+                                    <input value={seed.name} onChange={e => setSeed({ ...seed, name: e.target.value })} placeholder={seed.parsed.name} style={{ ...inp, width: '260px' }} />
+                                    <span style={{ flex: 1 }} />
+                                    <span style={mono}>{seed.parsed.rows.length} rows · {seed.parsed.rows.reduce((s, r) => s + r.lines.length, 0)} lines · {Object.keys(seed.resolved).length} codes in the library{seed.missing.length ? ` · ${seed.missing.length} NOT` : ''}</span>
+                                </div>
+                            </div>
+                            <div style={{ padding: '14px 24px', overflowY: 'auto' }}>
+                                {seed.missing.length > 0 && <div style={{ background: 'rgba(176,45,32,.06)', border: '1px solid #b02d20', padding: '8px 12px', marginBottom: '10px', fontSize: '0.84rem' }}><b>Not in the library</b> (kept as typed — their lines still count, but a build order cannot match them to stock): <span style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{seed.missing.join(' · ')}</span></div>}
+                                {seed.parsed.warnings.length > 0 && <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '8px 12px', marginBottom: '10px', fontSize: '0.84rem' }}>{seed.parsed.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}</div>}
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <thead><tr>{['Row', 'Per board', 'Item', 'Description', 'Finish', 'Cut'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                                    <tbody>
+                                        {seed.parsed.rows.flatMap(r => r.lines.map((l, i) => (
+                                            <tr key={r.label + i}>
+                                                <td style={{ ...td, ...mono }}>{i === 0 ? r.label : ''}</td>
+                                                <td style={{ ...td, textAlign: 'right' }}>{l.qty}</td>
+                                                <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: '11px', color: seed.resolved[l.code] ? 'var(--ink)' : '#b02d20' }}>{l.code}</td>
+                                                <td style={td}>{l.name || seed.resolved[l.code]?.name || ''}</td>
+                                                <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.finishCode || '—'}</td>
+                                                <td style={{ ...td, fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.perFoot ? `${l.cutLength}" · ${l.feet} ft` : ''}</td>
+                                            </tr>
+                                        )))}
+                                        {seed.parsed.extras.map((x, i) => <tr key={'x' + i}><td style={{ ...td, ...mono }}>Board</td><td style={{ ...td, textAlign: 'right' }}>{x.qty}</td><td style={td} /><td style={td}>{x.text}</td><td style={td} /><td style={td} /></tr>)}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div style={{ padding: '14px 24px', borderTop: '1px solid var(--line)', display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                                <button onClick={() => setSeed(null)} style={btn(false)}>Cancel</button>
+                                <button onClick={createFromSeed} disabled={!!busy} style={btn(true)}>Create display →</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 {view === 'BUILDS' && <DisplayBuildsPanel currentUser={currentUser} activeBrand={activeBrand} />}
                 {view === 'DESIGNS' && newForm && (
                     <div style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '14px', border: '1px solid var(--line)', background: '#fff', marginBottom: '18px', flexWrap: 'wrap' }}>
