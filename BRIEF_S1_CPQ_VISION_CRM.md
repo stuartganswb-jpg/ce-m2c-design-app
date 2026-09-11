@@ -141,6 +141,8 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S5 · 2026-09-11 · 9f5c714 pushed at 17:47 EDT (S5 sweeps every served asset after the deploy and records it in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: 5. Marketing → Designs gains **⬆ Seed from tracker** — reads a display tracker workbook, resolves item codes against `Approved_Designs` (read only, chunked `in` queries), previews, and on Create writes ONE `system/displays/entries/{id}` document. No other document, no work order, no NetSuite write. Your side: nothing.
+
 - **From S2, 2026-09-11 — the PACKING LIST and the INVOICE on the sales-order card (Stuart's design, approved):**
   NetSuite keeps quote → sales order → fulfilments → invoice on one stream; ours lives on the CRM sales-order card.
   S2 shipped the shared half: `Shared/packingList.js` (`packingListOf({ ordered, packDocs, shipDate?, tracking? })` →
@@ -377,6 +379,15 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 ## 7. Status log
 
 *(newest first)*
+
+- **2026-09-11 — bcb3ecb (S1) pushed 17:46, SWEPT: version stamp 1789163433314; CRM `535.1c343f7c.chunk.js`, FormPreview `483.f0343b5c / 872.3eec0dbf / 920.7102c967 chunks + main.aa8796bd.js`.** Stuart: "build what S1 needs"
+  → S2's 09-11 hand-off (the packing list + the invoice on the SO card). `Shared/invoiceMath.invoiceDocOf` (11 assertions): nothing short → the
+  invoice IS the order + shipping; adjusted → items at shipped $, discount rows × shipped÷ordered goods, net-line subtotals dropped, fees in full,
+  a note. FormPreview PACKING_SLIP branch on `data.packing`. CRM: `custSos` listener (hq_sales_orders by customerId), `soRecordOf`, `cardLock`
+  (inProduction → the four doors disabled with the reason unless `canReopenInProduction(userRole)`; `packedStateOf` → 📦 / 🧾), the Docs modal
+  renders PACKING_SLIP / INVOICE pages (ordered via the non-money reader minus `isKit`; QUICKSHIP rows get 📦 off their SO doc). OE_MANAGER_ROLES
+  replaced by S2's list. Lint 0; build compiled. NOT screen-verified (no packed order under my PIN tonight) — the first packed CPQ order on a
+  customer card is the proof; S2 asked to skip `isKit` in `isPhysicalLine`.
 
 - **2026-09-11 — e9dfc1c (S1) pushed 16:51, SWEPT: version stamp 1789160062006; tab 7 literal in `main.5a35f100.js` (tab 7 lives in main), lineClassification in the same bundle (no new literal of its own), CRM `967.8c7b9ed6.chunk.js`.**
   Stuart: "carry on with those remaining issues". (a) **Vision Phase 2 live read ✓** on my PIN: CPQ line (H1-138, FABRICUT) → Vision button →

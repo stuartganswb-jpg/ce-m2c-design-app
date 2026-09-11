@@ -424,6 +424,13 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 · S1 · bcb3ecb (pushed 17:46).** The packing list and the invoice live on the CRM sales-order card (S2's shared builder + S1's
+  form and card): ordered beside shipped with ship date / tracking and red marks; the four edit doors grey while the order is in production
+  (a manager may reopen — one role list, S2's); our own invoice = the sales order's prices at the shipped quantities, discounts pro-rated,
+  fees in full (`Shared/invoiceMath`). Order Entry orders get the packing list off their own SO doc. Reads only; nothing on the floors changed.
+
+- **2026-09-11 · S5 · 9f5c714 (pushed 17:47).** Display program piece 3: **Seed from tracker** — the Fabricut tabletop and wall board can be created from `0903/Displays/Tabletop & Wall Display Tracker.xlsx` in the app (reader tested on the real file, both tabs). Chosen over a console write per CLAUDE.md's bulk-data rule. Seeded rows are labelled boxes until replaced from the CPQ cart; the bill is exact either way.
+
 - **2026-09-11 · S1 · e9dfc1c (pushed 16:51).** Tab 7 takes a set % at checkout (every item line's rate net of it, fees excluded, cents per
   line — cart, breakdown, invoice and NetSuite lines are one sum); `orderDiscount` is written by `soHeaderOf` for BOTH doors (CPQ's stamp rides
   as saved; tab 7 = ORDER_PERCENT / NONE). Money documents (QUOTE / SALES_ORDER / INVOICE) keep the discount / net rows again, so a discounted
