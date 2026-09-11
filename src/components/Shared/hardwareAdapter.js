@@ -204,6 +204,10 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         isBasic: !!(pin.isBasic || cluster?.isBasic),
         // NO PLATE — the traverse returns clamp to the fascia; the solid ones bolt to the wall.
         noBackplate: !!(pin.noBackplate || cluster?.noBackplate),
+        // WHICH KIND OF END (Vision Phase 1, 2026-09-10): the role folds every return into RETURN,
+        // but the drawing's fabrication math needs to know a miter from a French bend from an
+        // inside mount. Carried as the pin's own word; the engine's rules never read it.
+        endTreatment: U(pin.endTreatment),
         // RIDES WITH — a hidden rider that comes only with a chosen end of a kind (Stuart 2026-09-10:
         // the H1-138 standoffs "only arrive on the BOM when a double miter return is ordered … it
         // will confuse the floor if they arrive for a typical double pole order"). Blank = rides the

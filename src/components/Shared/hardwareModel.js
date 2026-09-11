@@ -407,6 +407,9 @@ export function normalizeChoice(input = {}) {
         isBasic: input.isBasic === true,
         // "this end treatment mounts without a backplate" — see the plate pairing in slots().
         noBackplate: input.noBackplate === true,
+        // The kind of end this is (MITER_RETURN / FRENCH_RETURN / INSIDE_MOUNT / FINIAL) — read by
+        // Vision's fabrication math (Phase 1), by no rule here.
+        endTreatment: U(input.endTreatment),
         // RIDES WITH: a rider that comes only when an end of this kind is chosen ('RETURN' = a
         // miter or French return anywhere on the order). Blank = rides its rod, as always.
         ridesWith: U(input.ridesWith),

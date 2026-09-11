@@ -65,6 +65,13 @@ export function visionPartIds(draft, flow) {
         return '';
     };
     const specs = draft?.specs || {};
+    // ── A DRAWING MADE ON THE ENGINE SAYS ITS PARTS OUTRIGHT (Vision Phase 1, 2026-09-10) ──
+    // Vision's pickers now come from the engine's own slots, and a saved line carries
+    // `specs.enginePicks` — part id, kind and position per slot — so nothing here has to be looked
+    // up through a flow's option lists. Old drafts (step ids under `specs`) keep the walk below.
+    (Array.isArray(specs.enginePicks) ? specs.enginePicks : []).forEach(p => {
+        if (p && p.partId) push(p.partId, String(p.kind || ''), String(p.position || ''));
+    });
     (flow?.steps || []).forEach(step => {
         const chosen = specs[step.id];
         if (chosen) {
