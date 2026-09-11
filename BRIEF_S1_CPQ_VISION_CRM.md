@@ -311,6 +311,33 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
   NetSuite SO consumption lines + the $-holder; CPQ → kit line `noNs`, components at $0 → rollup; the pick list
   reads `pricingBreakdown` (nothing removed). RTG, finishing, shop untouched. Until Ask 1 lands, an H1-138TRV kit
   is listable on tab 7 and seedable in CPQ but consumes nothing and covers nothing — Stuart is told.
+- **From S5, 2026-09-11 — ORDER-LEVEL DISCOUNT on both doors (Stuart's ask, for the sales display program; a
+  gap, not a rebuild).** Stuart: "these displays are typically discounted the products used, i realize we currently do not
+  have in place an ability to discount an order." What exists today (verified): a CUSTOMER-level trade discount — the CRM
+  record's `discountCode` (D20 …) resolved through `system/crm_discounts` by `CPQTab.tradeDiscountFor` (`CPQTab.js:1226`),
+  per cart item, STANDARD price level only, on the item-priced base (no fees, no CE-FEE, no item-less lines), shown as the
+  three display rows `isDiscount` / `isNetLine` at `:3214`, netted into `cpqData.totalPrice`; the push already scales item
+  rates down so the estimate lands at the quoted total (`nsTransmit.js:547`). Tab 7 has NO discount at all
+  (`cartTotal = Σ rate × eachQty`, `QuickShipTab.js:1165`; `invoiceTotal` at `:1541`).
+  **The gap:** a discount chosen PER ORDER at checkout — a display order for Fabricut is discounted whatever the
+  customer's standing code says, and an ordinary order for the same customer is not. **Ask (your files):**
+  (1) `salesOrderHeader.soHeaderOf` (and `jobHeaderPatchOf`) carry `orderDiscount: { percent, amount, reason, code }` — percent
+  OR a fixed amount, a free-text reason ("Display program · SO53215"), optional code from `crm_discounts`; one field set both
+  doors. (2) CPQ checkout: an "Order discount" control beside the customer's trade line; base rule = the SAME base as
+  `tradeDiscountFor` (item-priced lines only; fees, add-ons, shipping untouched); when both a trade code and an order
+  discount exist, apply the order discount to the base ALREADY net of the trade discount (never compound the other way;
+  say so on screen); one more three-line block (`Order Discount - (x%) · reason` / Net) flagged `isDiscount` so every
+  BOM/dispatch/packing consumer keeps skipping it (they filter the flag today — no floor change). (3) Tab 7 checkout: the
+  same control; applies to every priced line INCLUDING a traverse kit line (the kit is the customer's price) but not to
+  fees; `invoiceTotal` and the SO push net of it. (4) NetSuite: keep the existing rate-scale (the transaction lands at the
+  net) — OR a NetSuite discount item line if Eric prefers one on the SO; either way the `nsTransmit` log line names the
+  order discount and its reason so the Transmit Log reads it. (5) Documents (`customerDocLines` / `printForm`): print the
+  block with the reason. (6) The CRM pipeline card and the RTG board money read `totalPrice` (already net) — no change.
+  **Downstream trace:** header field on `jobs` + `hq_sales_orders`; breakdown gains display-only rows the floors already
+  skip; NetSuite estimate/SO total = net; work orders, finishing, shop, WMS untouched; the Sales Snapshot never reads money.
+  **S5's side:** the display build order (Issue 3, next) will carry the agreed `orderDiscount` shape and hand it to whichever
+  door enters the display SO, so please settle the field name with me before you stamp it. Not urgent for the designer
+  (Issue 2, pushing today); needed before the first display order is entered through the app.
 - **From S2 (to land when S2 is next in `StockViewTab` / `LibraryTab`):** nothing owed to you today.
 - **To S4 (you write it into `BRIEF_S4` §6):** `portalMyOrders` date read → `so.needBy || so.readyDate ||
   so.createdDate`; the portal request functions accept `needBy` + `productionNotes` (E8 field list in

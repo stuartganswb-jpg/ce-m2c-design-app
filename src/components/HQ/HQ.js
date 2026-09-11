@@ -13,6 +13,7 @@ const BOMTab = lazy(() => import('./BOMTab'));
 const LibraryTab = lazy(() => import('./LibraryTab')); 
 const LibraryMassUpdateTab = lazy(() => import('./LibraryMassUpdateTab')); 
 const CustomerCollectionsTab = lazy(() => import('./CustomerCollectionsTab'));
+const DisplayDesignerTab = lazy(() => import('./DisplayDesignerTab'));   // 5. Marketing — sales display boards (S5, 2026-09-11)
 const InstructionsTab = lazy(() => import('./InstructionsTab'));
 const ToolsSpecsTab = lazy(() => import('./ToolsSpecsTab'));
 const PackagingTab = lazy(() => import('./PackagingTab'));
@@ -448,6 +449,7 @@ function HQ() {
             
             {activeTab === '4.5 Mass Update' && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '4.6 Customer Collections' && <CustomerCollectionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '5. Marketing' && <DisplayDesignerTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} />}
             {activeTab === '6. Instructions' && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '6.5 Tools, Specs & FAQs' && <ToolsSpecsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '7. Quick Ship' && <QuickShipTab currentUser={user.name} activeBrand={activeBrand.id} />}

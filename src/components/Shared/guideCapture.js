@@ -58,30 +58,35 @@ async function thumbOf(dataUrl, maxPx = 420) {
  * (AssetGalleryTab writes the same fields) plus `guideCapture: true`.
  * Returns { id, originalUrl, thumbnailUrl }.
  */
-export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '', collection = '', user = '' }) {
+// `kind` (2026-09-11, the Display Designer): 'GUIDE' files the picture for the guide books, as it
+// always has; 'DISPLAY' files a board row's render the same way under its own product type and
+// flag, so the gallery can tell the two apart and neither picker lists the other's captures.
+export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '', collection = '', user = '', kind = 'GUIDE' }) {
+    const isDisplay = String(kind).toUpperCase() === 'DISPLAY';
+    const tag = isDisplay ? 'DISPLAY' : 'GUIDE';
     const safe = String(code || name || 'CAPTURE').toUpperCase().replace(/[^A-Z0-9-]/g, '') || 'CAPTURE';
     const brandFolder = brandId ? String(brandId) : 'global';
     const ts = Date.now();
     const sfx = Math.floor(Math.random() * 10000);
 
     const [hiBlob, thBlob] = await Promise.all([dataUrlToBlob(dataUrl), thumbOf(dataUrl)]);
-    const hiRef = ref(storage, `global_assets/hires/${brandFolder}/GUIDE_${safe}_${ts}_${sfx}.png`);
-    const thRef = ref(storage, `global_assets/thumbs/${brandFolder}/GUIDE_${safe}_${ts}_${sfx}_thumb.png`);
+    const hiRef = ref(storage, `global_assets/hires/${brandFolder}/${tag}_${safe}_${ts}_${sfx}.png`);
+    const thRef = ref(storage, `global_assets/thumbs/${brandFolder}/${tag}_${safe}_${ts}_${sfx}_thumb.png`);
     const [hiUp, thUp] = await Promise.all([uploadBytes(hiRef, hiBlob), uploadBytes(thRef, thBlob)]);
     const [originalUrl, thumbnailUrl] = await Promise.all([getDownloadURL(hiUp.ref), getDownloadURL(thUp.ref)]);
 
-    const id = `ASSET-${brandFolder}-GUIDE-${safe}-${ts}-${sfx}`;
+    const id = `ASSET-${brandFolder}-${tag}-${safe}-${ts}-${sfx}`;
     await setDoc(doc(db, 'global_assets', id), {
         id,
         name: String(name || safe).toUpperCase(),
         collection: collection || '',
-        productType: 'GUIDE CAPTURE',
+        productType: isDisplay ? 'DISPLAY CAPTURE' : 'GUIDE CAPTURE',
         patternId: String(code || '').toUpperCase(),
         finishId: '',
-        customerId: '', clientSku: '', notes: 'Captured from CPQ for guide books',
+        customerId: '', clientSku: '', notes: isDisplay ? 'Captured from CPQ for a sales display board' : 'Captured from CPQ for guide books',
         associatedParts: [], associatedFinishes: [],
         originalUrl, thumbnailUrl, url: thumbnailUrl,
-        guideCapture: true,
+        ...(isDisplay ? { displayCapture: true } : { guideCapture: true }),
         brandId: brandId || 'ALL',
         uploadedBy: user || 'Unknown',
         createdAt: serverTimestamp(),
