@@ -424,6 +424,8 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 · S5 · db928f4 (pushed 18:58).** Stuart's first read of the seeded tabletop: base rows are vertical poles in a base (now drawn so), a tabletop's parts are its extras (seeded), the chip board carries only the CPQ flow's tagged finishes (`finishFlowId`, the BOMTab union rule). Harness 78.
+
 - **2026-09-11 · S1 · bcb3ecb (pushed 17:46).** The packing list and the invoice live on the CRM sales-order card (S2's shared builder + S1's
   form and card): ordered beside shipped with ship date / tracking and red marks; the four edit doors grey while the order is in production
   (a manager may reopen — one role list, S2's); our own invoice = the sales order's prices at the shipped quantities, discounts pro-rated,
