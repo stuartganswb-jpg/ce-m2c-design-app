@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc, setDoc, getDoc, getDocs, query, where } from "firebase/firestore";
+import { collection, onSnapshot, doc, updateDoc, setDoc, getDoc, getDocs, query, where, deleteField } from "firebase/firestore";
 import { softDeleteOrder } from "../Shared/orderLifecycle";
 import { reopenQuoteInCpq } from '../Shared/reopenQuote';
 import { resolveJobLines, buildNsTransaction, queueNsTransaction, jobsEstimateWriteBack } from '../Shared/nsTransmit';
@@ -90,7 +90,9 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               by: currentUser || '', writeBacks: [jobsEstimateWriteBack(job.id)], log: addLog,
           });
           if (!res.ok) throw new Error(res.error?.message || res.error?.code || 'queue failed');
-          await updateDoc(doc(db, "jobs", job.id), { nsTransmitQueuedAt: Date.now(), nsTransmitOutboxId: res.outboxId });
+          // A successful queue clears the save-time refusal stamp (S2's hand-off, 2026-09-10) — the
+          // same write that stamps nsTransmitQueuedAt, here as on the CPQ save.
+          await updateDoc(doc(db, "jobs", job.id), { nsTransmitQueuedAt: Date.now(), nsTransmitOutboxId: res.outboxId, nsTransmitRefusedAt: deleteField(), nsTransmitRefusedCode: deleteField(), nsTransmitRefusedMessage: deleteField() });
           addLog(`✅ Queued to NetSuite (outbox ${res.outboxId}) — rollup $${res.meta.silentFeeBalance.toFixed(2)}, ${res.meta.lineCount} line(s). The estimate # lands on the quote when it posts; watch RTG's Transmit Log.`, 'success');
           setActiveJob(null);
       } catch (error) {
