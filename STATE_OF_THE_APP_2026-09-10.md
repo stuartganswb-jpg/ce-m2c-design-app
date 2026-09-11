@@ -424,6 +424,11 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-10 · S1 · 21bea0f (pushed 23:40).** Vision Phase 1a: the pure module that turns the engine's slots into Vision's
+  pickers (settle, locks with reasons, end styles for the fab math, `enginePicks` for the saved line); no screen change.
+  Phase 1b (the mount in `VisionHardware.js`: engine-backed pickers where the flow has a pinned assembly, old steps
+  otherwise; the hand-copied rules and the sweep retire) awaits Stuart's build.
+
 - **2026-09-10 · S1 · b180339 (pushed 23:32).** Vision Phase 0. Re-verified #44 against code + live: the no-O2O guard was never
   built and the floors now cover it (RTG `cutSheetMissing/visionUsed`, shop banner) — not building; "Reopen-in-Vision does
   nothing" = CPQ's save deleted every Vision draft of the quote (0 drafts on all three recent quotes) — fixed: drafts with

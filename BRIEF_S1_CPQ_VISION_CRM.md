@@ -294,6 +294,20 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-10 — Vision Phase 1a (S1) 21bea0f pushed 23:40.** `Shared/visionEngine.js`: `settleVision` (CPQ's loop),
+  `visionPickers` → `{ live, pickers[{key,kind,tier,position,options,chosen,locked,lockedBy,lockedReason}], at(kind,pos,tier), model }`,
+  `engDataFromPickers` (bracketId/Right/Center, backplateId*, endStyle/Right, mountLeft/Right), `enginePicksForDraft`,
+  `chosenRods`, `endStyleOf`. Bridge: `visionPartIds` reads `specs.enginePicks` first. Adapter + engine: `endTreatment`
+  passthrough. 19 assertions. **Phase 1b mount plan (VisionHardware.js):** (1) `useEngine = engineChoices.length > 0`;
+  (2) `enginePicks` state `{slotKey: choiceId}` replaces `dynamicConfigParams` for the five hardware pickers when
+  `useEngine`; `pk = visionPickers({choices: engineChoices, answers: framing.answers + proj, picks: enginePicks, nameOf})`;
+  (3) the five selects (End L/R, Bracket L/R/C) and the three plate selects read `pk.at(...)` — options/locked/reason from
+  the picker, the old `stepEndL…` branches kept behind `!useEngine`; (4) the engData effect reads `engDataFromPickers(pk,
+  libraryIdOf)` when `useEngine`; (5) the sweep effect is skipped when `useEngine` (the settle IS the sweep) and the
+  removals strip from #45 is mounted under the pickers; (6) save writes `specs.enginePicks` + keeps `specs` framing;
+  `handleLoadDraft` restores `enginePicks` when present; (7) `git diff -w` proves the old path is untouched. Bridge
+  `seedFromVision` already resolves by part. Live read on Brimar + H1-138 + H1-2TRV drafts with Stuart.
+
 - **2026-09-10 — Vision Phase 0 (S1) b180339 pushed 23:32.** Stuart: "fix vision … runs on new engine and can open and reopen
   with no problems" → the #48 project, in HIS order: **0** drawings survive the save (this commit: finalize marks
   spatialData drafts FINALIZED instead of deleting; pending readers exclude; Vision Load-saved-line includes, labelled);
