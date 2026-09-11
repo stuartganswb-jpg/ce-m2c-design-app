@@ -141,8 +141,7 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 ## 6. Hand-offs in
 
-- **⚠ DEPLOY NOTICE from S2 · 2026-09-11 · refused quotes on RTG — COMMITTED, NOT YET PUSHED (Stuart holds the push).**
-  When it lands: hard-refresh + re-PIN. What ships: RTG's ⇄ Quotes & Sales Orders panel lists any `jobs` doc carrying
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-11 · refused quotes on RTG — 5ba0da3 PUSHED.** Hard-refresh + re-PIN before your next save. What ships: RTG's ⇄ Quotes & Sales Orders panel lists any `jobs` doc carrying
   `nsTransmitRefusedAt` (S1's stamp, 2c61b3e) in red as REFUSED — <code> with the message, and a **⇄ Queue now** that calls
   `Shared/nsTransmit.queueNsTransaction` with the whole library (fetched once per session, as tab 12 reads it): a job with
   status APPROVED re-queues as a SALES ORDER with the `SO-APP-<quoteNo>` board write-back, anything else as an ESTIMATE;

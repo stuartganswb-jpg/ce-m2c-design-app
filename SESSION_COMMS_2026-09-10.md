@@ -91,7 +91,7 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
-| 2026-09-11 (committed, push held by Stuart) | S2 | (hash in BRIEF_S2 §7) | RTG ⇄ Quotes & Sales Orders lists REFUSED quotes (S1's stamp) with ⇄ Queue now; guide paragraph. Jobs doc only. | everyone, once pushed |
+| 2026-09-11 | S2 | 5ba0da3 | RTG ⇄ Quotes & Sales Orders lists REFUSED quotes (S1's stamp) with ⇄ Queue now; guide paragraph. Jobs doc only. | everyone, once pushed |
 | 2026-09-11 12:25 | S3 | 47c2b6b | WMS Plating: a custom (shop-raised) plating line now carries its order links, so Receive → 'Plating Received' and put-away → sibling 'Complete' + RTG 'Plated' fire for custom orders; custom put-away posts NO NetSuite build (custom fab is not stocked inventory), short count refuses. WMS Convert: the tab scrolls again (manual add-to-cart reachable). | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-11 09:59 | S1 | 2b164a5 | Vision Phase 2: CPQ line → Vision board ("Vision" button on tag-engine cart lines); a Vision re-save replaces its CPQ line on Resume. `cpq_drafts` +`cartItemId`; cart lines +`visionDraftId`. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-11 08:42 | S3 | e2cef1f | WMS pick queue: red "⟲ REOPENED — confirm pick state" chip (+ ✓ confirmed; cleared at pick complete) on docs RTG's bulk reopen restored with a reconstructed pick state. Shop: Undo REFUSES on a doc the closer stamped `closed: true` (names who/when/why, points at RTG). No NetSuite write. | everyone — save-is-send refuses on a stale bundle |
