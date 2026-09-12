@@ -91,6 +91,7 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
+| 2026-09-12 pm | S2 | 60af70a $H | One brand map (Shared/brandNetsuite everywhere); the stock pre-check treats a missing NetSuite row as UNKNOWN, not short. | everyone |
 | 2026-09-12 | S2 | eee33a3 f9affc2 43d5ea9 65fb699 | Six items: ⟲ Reopen one order; Snapshot Display column; transmit panel FAILED; no close to-do when built; `linkedDocsOf` finds SO-APP records (floorPhase now reaches CPQ orders); three writers onto the shared builders + convert hook releases stock (Route A) + Reset tells the record + PO ✎ lock. | everyone |
 | 2026-09-11 | S2 | d50cce1 | Packing list / invoice SHARED HALF: `Shared/packingList` builder + `orderStatus` inProduction / packedStateOf / reopen roles. No screen change until S1 + S3 wire it. | everyone |
 | 2026-09-12 17:13 | S3 | 6ac41ac | HQ 15. Packaging: a real Standard boxes section (list / add / load / delete the box sizes the WMS pack screen offers; old blind Save → Save as box). `HQ/PackagingTab.js` only; `standard_boxes` shape unchanged. | everyone — save-is-send refuses on a stale bundle |

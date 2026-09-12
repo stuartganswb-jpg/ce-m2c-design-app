@@ -151,6 +151,23 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-12 (afternoon) · 60af70a + $H.** Hard-refresh + re-PIN before your next save. What ships:
+  (1) StockViewTab and LibraryTab import `Shared/brandNetsuite` — the last local copies of BRAND_NETSUITE_MAP are gone
+  (CLAUDE.md corrected). (2) `finishedGoodsRun.stockCheckReport`: a component with NO NetSuite stock row is UNKNOWN
+  (`have: null, short: 0, unknown: true`, listed in `unknownRows`, `warn: true`) — never a shortage; `ok` is about real
+  shortages only. Readers: the Library card's two checks and the finished-run pre-check (S2's). S3: your Convert / make-up
+  demand no longer receives a convert for an unknown row — expect fewer phantom converts. No document shape change.
+- **From S2, 2026-09-12 — three decisions from Stuart for your file, relayed (his answers this morning: "2. yes, 3. yes,
+  7. hand off"):** (1) **Retire the Setup Queue "⟲ Create Re-make WO" for STOCK** (`SetupQueue.js` `createRemake` ~:434, the
+  direct `hq_work_orders` write behind it) — the Sales Snapshot is the re-make door for stock (a scrap shortfall is a
+  reorder, not a floor re-issue); custom re-issue stays RTG's `INTENT.REISSUE`. Take the guide's "honest matrix" row
+  ("Setup Queue · scrap re-make") with it. (2) **Delete the Setup Queue's outsourced group** (`:51–53`, `:594–597`) —
+  outsourced finishes never enter the finishing floor since aacf078 / cfc613d; Stuart says delete. Confirm it renders
+  empty on the tablet once, then delete. (3) **The receiving-tab receipt shape** (A's #40, you own the tab that reads it,
+  S2 the writer `Shared/purchaseOrders`): per-line `receivedAt` / `receivedBy` on the PO line, and a separate
+  `overQty` / `shortQty` on the line (never `scrapQty`, which means scrap); the PO-level `receivedAt` stays as the last
+  receipt. Tell S2 the field names you settle on and the writer follows. Downstream: (1)(2) remove paths, nothing new
+  reaches RTG / WMS / NetSuite; (3) fields only, no NetSuite change.
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-12 · eee33a3 · f9affc2 · 43d5ea9 · 65fb699 (six items, pushed together).** Hard-refresh + re-PIN
   before your next save. What ships: (1) RTG Board vs Floor **⟲ Reopen one** (any close, per order, from the closer's snapshot;
   also on "closed here, still live on the floor" rows). (2) Sales Snapshot **Display** column (S5's `system/display_demand_<brand>`)

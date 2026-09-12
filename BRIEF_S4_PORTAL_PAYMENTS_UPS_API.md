@@ -131,6 +131,12 @@ owed (`h2-simple-elegance-flow` memory).
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-12 (afternoon) · 60af70a + $H.** Hard-refresh + re-PIN before your next save. What ships:
+  (1) StockViewTab and LibraryTab import `Shared/brandNetsuite` — the last local copies of BRAND_NETSUITE_MAP are gone
+  (CLAUDE.md corrected). (2) `finishedGoodsRun.stockCheckReport`: a component with NO NetSuite stock row is UNKNOWN
+  (`have: null, short: 0, unknown: true`, listed in `unknownRows`, `warn: true`) — never a shortage; `ok` is about real
+  shortages only. Readers: the Library card's two checks and the finished-run pre-check (S2's). S3: your Convert / make-up
+  demand no longer receives a convert for an unknown row — expect fewer phantom converts. No document shape change.
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-12 · eee33a3 · f9affc2 · 43d5ea9 · 65fb699 (six items, pushed together).** Hard-refresh + re-PIN
   before your next save. What ships: (1) RTG Board vs Floor **⟲ Reopen one** (any close, per order, from the closer's snapshot;
   also on "closed here, still live on the floor" rows). (2) Sales Snapshot **Display** column (S5's `system/display_demand_<brand>`)
