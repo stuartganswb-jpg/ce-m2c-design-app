@@ -34,6 +34,9 @@ export const STAGES = {
     PAINTING: { rank: 40, label: 'Painting', hint: 'Being sprayed or hand finished' },
     OVEN: { rank: 45, label: 'In oven', hint: 'Baking' },
     FINISHED: { rank: 50, label: 'Finished', hint: 'Off the floor — ready to pick' },
+    // A pick-only order (all plated / custom-only) never goes to the finishing floor — its doc is
+    // born Complete so the floor screens skip it. The row must say THAT, not "finished off the floor".
+    NONE: { rank: 50, label: 'Not needed', hint: 'Pick-only — nothing for the finishing floor' },
     PICKING: { rank: 60, label: 'Picking', hint: 'In the pick queue' },
     PICKED: { rank: 70, label: 'Picked', hint: 'Picked — awaiting staging' },
     STAGED: { rank: 80, label: 'Staged', hint: 'Matched and staged' },
@@ -168,15 +171,22 @@ export function orderStatusOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
     // often holds an order up while the small parts look finished.
     if (wo.hasCustomSibling) {
         const cf = wo.customFabStatus;
+        // ONE HONEST VOCABULARY (S3's finding on SO60420, 2026-09-12): a Pending shop doc used to read
+        // "fabricating" before anyone had pressed Start. Not started is not started.
         streams.push(cf === 'Complete'
             ? { key: 'CUSTOM', label: 'Custom shop', stage: 'FINISHED', detail: 'fabrication done' }
             : cf === 'Sent to Plating'
             ? { key: 'CUSTOM', label: 'Custom shop', stage: 'PLATING', detail: shortDate(wo.customFabAt) ? `since ${shortDate(wo.customFabAt)}` : '', since: wo.customFabAt || null }
-            : { key: 'CUSTOM', label: 'Custom shop', stage: 'SHOP', detail: 'fabricating' });
+            : cf === 'In Process'
+            ? { key: 'CUSTOM', label: 'Custom shop', stage: 'SHOP', detail: 'fabricating' }
+            : { key: 'CUSTOM', label: 'Custom shop', stage: 'RELEASED', detail: 'not started' });
     }
 
     const finished = wo.currentPhase === 'Complete';
-    if (finished) {
+    if (wo.pickOnly === true) {
+        // Born Complete so the finishing screens skip it — it never went to the floor.
+        streams.push({ key: 'PARTS', label: 'Finishing', stage: 'NONE', detail: 'pick only — no finishing', since: null });
+    } else if (finished) {
         streams.push({ key: 'PARTS', label: 'Finishing', stage: 'FINISHED', detail: 'off the floor', since: wo.completedAt || null });
     } else {
         streams.push(finishingStream(wo, { key: 'PARTS', label: hasPoles(wo) ? 'Small parts' : 'Finishing', idxField: 'currentStepIndex', taskKeys: ['spinSetup', 'spinSpray', 'hand'], ovenKey: 'spinBake', len: recipeLen }));

@@ -9,7 +9,7 @@ import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderCo
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
-import { planSmallLines } from '../Shared/splitPlan';
+import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
 import { coverCodesOf } from '../Shared/backorder';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
@@ -18,7 +18,7 @@ import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, co
 import { woRefOf } from '../Shared/woRef';
 import { isOpenPo, isDraftPo, approvePurchaseOrder, markPoSent, poRef, PO_STATUS } from '../Shared/purchaseOrders';
 import { poLinesLocked, poLockMessage } from '../Shared/poLock';
-import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone, liftPatchFor, wholeOrderWait } from '../Shared/orderStatus';
+import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone, liftPatchFor, wholeOrderWait, customFabLabel } from '../Shared/orderStatus';
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
@@ -1437,7 +1437,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     partId: l.partId || null,
                     legacyErpId: l.legacyErpId || l.partId || null
                 }));
-                const qty = customLines.reduce((s, l) => s + (Number(l.qty) || 0), 0) || customLines.length;
+                // A POLE COUNTS AS A POLE (Stuart 2026-09-12): qty = poles, never lines — a return or a
+                // miter is fabrication on the rod. feet / billableFeet ride on the shop doc so the plating
+                // demand and the plater PO (S3) bill feet, not pieces × lines. (SO60420 read "3 pcs".)
+                const customQty = customShopQtyOf(customLines);
+                const qty = customQty.qty;
                 const firstPart = customLines[0] && customLines[0].partId ? partCache.get(customLines[0].partId) : null;
 
                 await setDoc(doc(db, "shop_custom_orders", shopId), buildShopDoc({
@@ -1451,6 +1455,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                         item: cleanLineName(customLines[0]?.name) || job.cpqData?.cartItems?.[0]?.assemblyName || 'Custom App Order',
                         partNum: customLines[0]?.legacyErpId || customLines[0]?.partId || '',
                         qty,
+                        poles: customQty.poles, feet: customQty.feet, billableFeet: customQty.billableFeet, riderLines: customQty.riders,
                         cutLength: cutLine?.cutLength || null,
                         cutList,
                         clientName: customerName, customerId,
@@ -2550,6 +2555,16 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                 </div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#5a8f5a', marginTop: '3px' }}>
                     Sent to floor · {dispatchedChip(o)} · {whenStr(o.dispatchedAt)}
+                    {/* THE CUSTOM HALF ON THE CARD (S3's finding on SO60420, 2026-09-12): "SENT TO FLOOR ·
+                        SHOP ✓" said nothing while the poles were at the plater. The mirror lives on the
+                        fin doc; one honest word here, the same word the job-log row uses. */}
+                    {kind === 'sales' && (() => {
+                        const f = liveFin.find(x => x.hasCustomSibling && String(x.orderKey || '') === String(o.soId || o.id));
+                        if (!f) return null;
+                        const st = String(f.customFabStatus || 'Pending');
+                        const tone = st === 'Sent to Plating' ? '#3f7fc4' : (st === 'Complete' ? 'var(--brass)' : 'var(--ink-soft)');
+                        return <span style={{ marginLeft: '8px', color: tone }}>· custom: {customFabLabel(f)}</span>;
+                    })()}
                     {/* SCRAP REPORTED ON THE FLOOR reaches the record (2026-09-04 sweep). */}
                     {(o.redlineAlert || Number(o.scrapReported) > 0) && (
                         <span title={`${o.redlineAlert || ''}${o.scrapReportedBy ? ` — ${o.scrapReportedBy}` : ''}${o.scrapReportedAt ? ` ${whenStr(o.scrapReportedAt)}` : ''}`} style={{ marginLeft: '8px', color: '#d9534f', fontWeight: 700 }}>

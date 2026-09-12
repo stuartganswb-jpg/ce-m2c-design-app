@@ -1,5 +1,5 @@
 // Stock-first at the split, offline.   node scripts/splitPlan.test.mjs
-import { planSmallLines, isPlatedLine } from '../src/components/Shared/splitPlan.js';
+import { planSmallLines, isPlatedLine, customShopQtyOf } from '../src/components/Shared/splitPlan.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -34,5 +34,11 @@ eq('unitsKnown false → unknown (retry), never a confident pick', [unitsBad.unk
 eq('OE planner dialect (quantity) is read', planSmallLines([{ partId: 'H1-1CP-V/EP4', quantity: 2 }], 'EP4', stock).pick[0].qty, 2);
 eq('all in-house → nothing to check', planSmallLines([{ legacyErpId: 'A/BS', qty: 1 }], 'BS', null).inHouse.length, 1);
 
+// ── a pole counts as a pole (Stuart 2026-09-12) ──
+const so60420 = [{ name: '1" Round Hollow Rod Stock', qty: 1, cutLength: 90 }, { name: 'French return L', qty: 1 }, { name: 'French return R', qty: 1 }];
+eq('SO60420: one bent rod with two returns is ONE pole, 7.5 ft, billed as 8', customShopQtyOf(so60420), { qty: 1, poles: 1, feet: 7.5, billableFeet: 8, riders: 2, isPoleOrder: true });
+eq('two 8 ft poles with a miter line = qty 2, 16 billable feet, one rider line', customShopQtyOf([{ qty: 2, cutLength: 96 }, { qty: 2, name: 'miter' }]), { qty: 2, poles: 2, feet: 16, billableFeet: 16, riders: 1, isPoleOrder: true });
+eq('a custom with no pole line keeps its line quantities', customShopQtyOf([{ qty: 4, name: 'bracket set' }]).qty, 4);
+eq('empty → 0', customShopQtyOf([]).qty, 0);
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

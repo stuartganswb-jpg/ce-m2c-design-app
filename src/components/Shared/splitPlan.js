@@ -68,3 +68,30 @@ export function planSmallLines(lines = [], orderRecipe = '', stock = null, { sin
     ].filter(Boolean).join(' · ');
     return out;
 }
+
+// ── A POLE COUNTS AS A POLE (Stuart 2026-09-12, verbatim: "the pole with french return or miter
+// return or straight pole anything pole for po to plater is always just the # of feet 1 pole x 8ft
+// = 8 billable feet") ────────────────────────────────────────────────────────────────────────────
+// The split used to sum EVERY custom line into the shop doc's qty: a bent rod with two French
+// returns read "3 pcs", and the demand, the staged line and the plater PO all said 3 × the rod
+// (SO60420). A custom line with a cut length IS a pole; a custom line without one (a return, a
+// miter, a bend fee) is fabrication ON the pole and adds nothing. qty = poles; feet = poles × the
+// cut length; billableFeet = feet rounded UP to the whole foot (the plater bills whole feet). A
+// custom order with no pole line at all (a bracket set, say) keeps its line quantities.
+export function customShopQtyOf(customLines = []) {
+    const lines = (customLines || []).filter(Boolean);
+    const num = (v) => Number(v) || 0;
+    const poleLines = lines.filter(l => num(l.cutLength) > 0);
+    const riders = lines.filter(l => !(num(l.cutLength) > 0));
+    const poles = poleLines.reduce((s, l) => s + (num(l.qty) || 1), 0);
+    const feet = poleLines.reduce((s, l) => s + (num(l.qty) || 1) * num(l.cutLength) / 12, 0);
+    const lineQty = lines.reduce((s, l) => s + num(l.qty), 0) || lines.length;
+    return {
+        qty: poles > 0 ? poles : lineQty,
+        poles,
+        feet: Math.round(feet * 100) / 100,
+        billableFeet: poles > 0 ? Math.ceil(feet - 1e-9) : 0,
+        riders: riders.length,
+        isPoleOrder: poles > 0,
+    };
+}
