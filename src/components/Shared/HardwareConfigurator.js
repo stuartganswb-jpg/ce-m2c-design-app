@@ -1354,7 +1354,8 @@ function HardwareConfiguratorInner({
         // A picture of what was configured, taken as it is added — front view, white ground, ≤900px
         // JPEG (the same capturer the old engine used) — so the quotation and the sales order can
         // show the customer what they are ordering. Never blocks the add: no canvas, no picture.
-        const renderSnapshot = (() => { try { const shots = captureRef.current ? captureRef.current() : null; return shots?.front || null; } catch { return null; } })();
+        // The view AS SET — rotated / zoomed the way the operator left it (Stuart 2026-09-11), not a re-framed front.
+        const renderSnapshot = (() => { try { const shots = captureRef.current ? captureRef.current({ current: true }) : null; return shots?.front || null; } catch { return null; } })();
         const item = handoffItem(resolved, {
             ...priceCtx, assembly, flow, findPart, qty: cfgQtyN, renderSnapshot,
             sidemark: configMemo, memo: configMemo,

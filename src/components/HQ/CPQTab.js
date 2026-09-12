@@ -615,8 +615,24 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
 export const ViewCapturer = ({ onReady }) => {
     const { gl, scene, camera } = useThree();
     useEffect(() => {
-        onReady(() => {
+        onReady((opts = {}) => {
             try {
+                // ── THE VIEW AS THE OPERATOR LEFT IT (Stuart 2026-09-11: "however we set the image
+                //    when we hit add to cart you should capture that view") ─────────────────────
+                // `{ current: true }` = no re-framing: render the camera exactly as it stands and hand
+                // back the same white-ground JPEG (≤900px) the documents print. Add configuration on
+                // both engines asks for this; the 📷 Capture Views packet button keeps the framed
+                // front + back pair below.
+                if (opts && opts.current) {
+                    gl.render(scene, camera);
+                    const src = gl.domElement;
+                    if (!src.width || !src.height) return null;
+                    const scale = Math.min(1, 900 / src.width);
+                    const w = Math.max(1, Math.round(src.width * scale)), h = Math.max(1, Math.round(src.height * scale));
+                    const oc = document.createElement('canvas'); oc.width = w; oc.height = h;
+                    const ctx = oc.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); ctx.drawImage(src, 0, 0, w, h);
+                    return { front: oc.toDataURL('image/jpeg', 0.85), back: null, asSet: true };
+                }
                 // Fit to the VISIBLE model only — hidden meshes (unselected options, the center
                 // source, fasteners) inflate the scene box and shrink the real model to nothing.
                 // Update world matrices first, then union each mesh's world-space geometry box by
@@ -3055,6 +3071,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           customOverrides: { ...customOverrides },
           ...visionFieldsOf(activeDraft, activeDraftSvg),
           capturedViews: capturedViews || null,
+          // The picture the quote and the sales order print — the 3D pane AS SET at Add to cart
+          // (Stuart 2026-09-11; the old engine's lines carried none until now). Never blocks the add.
+          renderSnapshot: (() => { try { const shots = captureFnRef.current ? captureFnRef.current({ current: true }) : null; return shots?.front || null; } catch { return null; } })(),
           // Snapshot the resolved render so this exact configuration re-renders later (shop/finishing
           // floor viewer + HQ) even if the flow or assembly is edited afterward. Overrides are stored
           // as ENTRY ARRAYS, not maps: their keys are GLB node names (e.g. "Bracket.001") and Firestore
