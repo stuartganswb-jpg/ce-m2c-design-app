@@ -95,6 +95,21 @@ export async function linkedDocsOf(ctx, order, kind) {
             if (snap.exists()) { hq = { coll, id: snap.id, data: snap.data() }; break; }
         }
     }
+    // A CPQ SALES ORDER'S RECORD IS NOT KEYED BY ANY ID THE FLOOR DOC CARRIES (2026-09-12): its
+    // doc id is SO-APP-<quoteNo> while the fin doc carries WO-SO60170 / SO60170 / the jobs id — so
+    // the loop above never found it, propagateFloorState returned null, and no CPQ order's record
+    // ever learned its floorPhase (the audit found the parent through the record's OWN soId; the
+    // floor's report could not). Same match the audit makes, from the other side.
+    if (!hq && slice.length) {
+        for (const field of ['soId', 'hqJobId']) {
+            if (hq) break;
+            try {
+                const qs = await getDocs(query(collection(db, 'hq_sales_orders'), where(field, 'in', slice)));
+                const d = qs.docs.find(x => !(x.data() || {}).deleted);
+                if (d) hq = { coll: 'hq_sales_orders', id: d.id, data: d.data() };
+            } catch (e) { /* a caller without the index or the read: the id loop above already ran */ }
+        }
+    }
     return { fin, shop, hq };
 }
 
@@ -229,9 +244,16 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
 
     // NetSuite: one close per order, and only when a work order is actually open there.
     const nsSrc = [...links.fin.entries()].find(([, d]) => d.nsWoId && !d.nsWoClosed && !d.nsWoCompletionPosted);
+    // A WORK ORDER WHOSE BUILD POSTED IS DONE IN NETSUITE (2026-09-12): the completion write-back
+    // lands on the FIN doc (nsWoCompletionPosted), not on the record — so the record leg below used
+    // to raise a "close the balance" task for orders NetSuite had already built (146 of them on the
+    // board). The fin docs' word counts for the record's work order.
+    const builtIds = new Set([...links.fin.values()].filter(d => d && d.nsWoCompletionPosted && d.nsWoId).map(d => String(d.nsWoId)));
+    const hqWoOpen = links.hq && links.hq.data.nsWoId && !links.hq.data.nsWoClosed
+        && !links.hq.data.nsWoCompletionPosted && !builtIds.has(String(links.hq.data.nsWoId));
     const ns = nsSrc
         ? { coll: 'fin_workorders', docId: nsSrc[0], nsWoId: nsSrc[1].nsWoId, tran: nsSrc[1].nsWoTran }
-        : ((links.hq && links.hq.data.nsWoId && !links.hq.data.nsWoClosed)
+        : (hqWoOpen
             ? { coll: links.hq.coll, docId: links.hq.id, nsWoId: links.hq.data.nsWoId, tran: links.hq.data.nsWoTran }
             : null);
     if (ns) {
@@ -331,13 +353,17 @@ export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], conver
         const first = docs[0];
         out.push({ type: 'FLOOR_DONE', coll: first.coll, floor: first.d, parent, floors: docs.map(x => x.d) });
     });
+    // A work order whose BUILD POSTED needs no balance close — NetSuite already has the assembly
+    // (the completion write-back stamps the fin doc; the record's to-do was raised blind).
+    const builtWoIds = new Set(finWos.filter(d => d && d.nsWoCompletionPosted && d.nsWoId).map(d => String(d.nsWoId)));
+    const woBuilt = (o) => !!o && (o.nsWoCompletionPosted === true || (o.nsWoId && builtWoIds.has(String(o.nsWoId))));
     hqOrders.forEach(o => {
         // Not an error — a job someone still has to do in NetSuite by hand (Eric's Option 3).
-        if (o.nsWoCloseRequired && !o.nsWoClosed) out.push({ type: 'NS_CLOSE_TODO', coll: null, floor: null, parent: o });
+        if (o.nsWoCloseRequired && !o.nsWoClosed && !woBuilt(o)) out.push({ type: 'NS_CLOSE_TODO', coll: null, floor: null, parent: o });
     });
     // The fin doc is stamped first by closeOrderEverywhere — an hq-less close must still surface.
     finWos.forEach(d => {
-        if (d.nsWoCloseRequired && !d.nsWoClosed && !parentOf(d)) out.push({ type: 'NS_CLOSE_TODO', coll: 'fin_workorders', floor: d, parent: null });
+        if (d.nsWoCloseRequired && !d.nsWoClosed && !woBuilt(d) && !parentOf(d)) out.push({ type: 'NS_CLOSE_TODO', coll: 'fin_workorders', floor: d, parent: null });
     });
     // Demands live only as long as the order they serve. finWoId points at hq_work_orders;
     // a demand whose parent is gone, tombstoned, or closed gates NOTHING and must be named.
@@ -553,8 +579,8 @@ export const REOPEN_FROM = 'RTG_BULK_REOPEN';
 export const DELETE = Object.freeze({ __delete: true });
 const has = (v) => !!v;
 export const toMs = (v) => (v && typeof v.toMillis === 'function') ? v.toMillis() : (typeof v === 'number' ? v : (v ? (Date.parse(v) || 0) : 0));
-export const closedByBulkIn = (d, { since = 0, until = Infinity } = {}) =>
-    !!d && d.closedFrom === BULK_CLOSE_FROM && toMs(d.closedAt) >= since && toMs(d.closedAt) <= until;
+export const closedByBulkIn = (d, { since = 0, until = Infinity, anyClose = false } = {}) =>
+    !!d && (anyClose ? !!(d.closedFrom || d.closedAt) : d.closedFrom === BULK_CLOSE_FROM) && toMs(d.closedAt) >= since && toMs(d.closedAt) <= until;
 // The WMS stamps pickedAt at pick confirm and stagedAt at the staging match; the latest wins.
 export const pickStatusFromStamps = (d) =>
     has(d && d.stagedAt) ? 'Staged_Ready_For_Finishing' : has(d && d.pickedAt) ? 'Picked_Awaiting_Staging' : 'Pending';
@@ -576,18 +602,21 @@ const clearClose = (d) => ({
  */
 // `force`: 'REOPEN' overrides a KEEP (the operator says it is still work — e.g. Stuart 2026-09-10:
 // "keep open only SO60151, SO60152" of the packed orders), 'KEEP' overrides a RESTORE. Recorded.
-export function reopenPlanFor({ coll, d, sibling = null, force = null }) {
+// `anyClose`: a PER-ORDER reopen (2026-09-12, S3's ask) accepts a close from any screen, not
+// only the bulk button — the closer keeps stateBeforeClose on every close since d62b682.
+export function reopenPlanFor({ coll, d, sibling = null, force = null, anyClose = false }) {
     const row = { coll, id: d && d.id, closedAt: (d && d.closedAt) || null, closeReason: (d && d.closeReason) || '', live: false };
     if (!d) return { ...row, action: 'SKIP', why: 'no document' };
     if (d.reopenedFrom === REOPEN_FROM) return { ...row, action: 'SKIP', why: `already reopened by this tool (${d.reopenedBy || '?'})` };
-    if (d.closedFrom !== BULK_CLOSE_FROM) return { ...row, action: 'SKIP', why: 'not closed by a bulk close' };
+    if (!anyClose && d.closedFrom !== BULK_CLOSE_FROM) return { ...row, action: 'SKIP', why: 'not closed by a bulk close' };
+    if (anyClose && !isClosedState(d) && !d.closedAt) return { ...row, action: 'SKIP', why: 'not closed' };
     // A hand reopen AFTER the close (the shop's Reopen button stamps reopenedAt but never clears the
     // `closed` flag the bulk close set, so the job stays hidden from its queue).
     const handReopened = has(d.reopenedAt) && toMs(d.reopenedAt) > toMs(d.closedAt);
     // Only a FLOOR_DONE close is suspect. FLOOR_CLOSED means the floor had already closed it;
     // BOARD_CLOSED means the board had; ORPHAN_FLOOR had no record to reopen into.
     if (force === 'KEEP') return { ...row, action: 'KEEP', override: 'KEEP', why: 'OVERRIDE — kept closed by the operator' };
-    if (force !== 'REOPEN' && d.closeReason && d.closeReason !== 'FLOOR_DONE') return { ...row, action: 'KEEP', why: `closed as ${d.closeReason} — it was already closed on the other side` };
+    if (force !== 'REOPEN' && !anyClose && d.closeReason && d.closeReason !== 'FLOOR_DONE') return { ...row, action: 'KEEP', why: `closed as ${d.closeReason} — it was already closed on the other side` };
 
     // A close made after 2026-09-10 kept the state it replaced — restore it exactly.
     if (d.stateBeforeClose && force !== 'KEEP' && (coll === 'fin_workorders' || coll === 'shop_custom_orders' || coll === 'hq_work_orders' || coll === 'hq_sales_orders')) {
@@ -681,15 +710,15 @@ export function reopenPlanFor({ coll, d, sibling = null, force = null }) {
  */
 // `overrides`: Map<orderKey, 'REOPEN'|'KEEP'> — any identity key of the order (SO60151, WO-SO60151,
 // SHOP-SO60151 …) selects every FLOOR document of that order; the record then follows its floor.
-export function planBulkReopen({ finWos = [], shopJobs = [], hqOrders = [], rodCuts = [], outbox = [], siblings = new Map(), since = 0, until = Infinity, overrides = new Map() }) {
-    const inWin = (d) => closedByBulkIn(d, { since, until });
+export function planBulkReopen({ finWos = [], shopJobs = [], hqOrders = [], rodCuts = [], outbox = [], siblings = new Map(), since = 0, until = Infinity, overrides = new Map(), anyClose = false }) {
+    const inWin = (d) => closedByBulkIn(d, { since, until, anyClose });
     const fin = finWos.filter(inWin), shop = shopJobs.filter(inWin), hq = hqOrders.filter(inWin);
     const byId = new Map([...finWos, ...shopJobs].map(d => [String(d.id), d]));
     const sib = (id) => (id && (byId.get(String(id)) || siblings.get(String(id)))) || null;
     const forceOf = (d) => { for (const k of identityKeysOf(d)) { if (overrides.has(k)) return overrides.get(k); } return null; };
     const rows = [
-        ...fin.map(d => ({ ...reopenPlanFor({ coll: 'fin_workorders', d, sibling: sib(d.shopSiblingId), force: forceOf(d) }), d })),
-        ...shop.map(d => ({ ...reopenPlanFor({ coll: 'shop_custom_orders', d, sibling: sib(d.finSiblingId), force: forceOf(d) }), d })),
+        ...fin.map(d => ({ ...reopenPlanFor({ coll: 'fin_workorders', d, sibling: sib(d.shopSiblingId), force: forceOf(d), anyClose }), d })),
+        ...shop.map(d => ({ ...reopenPlanFor({ coll: 'shop_custom_orders', d, sibling: sib(d.finSiblingId), force: forceOf(d), anyClose }), d })),
     ];
     // Link floor rows to their record the way the audit does — by the identity set.
     const byKey = new Map();
@@ -703,7 +732,7 @@ export function planBulkReopen({ finWos = [], shopJobs = [], hqOrders = [], rodC
     const recordRows = hq.map(d => {
         // The loader stamps __coll; the fallback is the board's own sales/stock test.
         const coll = d.__coll || ((d.soId && !d.woId) ? 'hq_sales_orders' : 'hq_work_orders');
-        const plan = reopenPlanFor({ coll, d });
+        const plan = reopenPlanFor({ coll, d, anyClose, force: forceOf(d) });
         const floor = floorOf.get(String(d.id)) || [];
         if (plan.action !== 'RESTORE') return { ...plan, d };
         if (!floor.length) { keptRecords.add(String(d.id)); return { ...plan, action: 'KEEP', live: false, why: 'no floor document of this close belongs to it — review by hand', d }; }
@@ -719,7 +748,7 @@ export function planBulkReopen({ finWos = [], shopJobs = [], hqOrders = [], rodC
     rows.filter(r => r.action === 'RESTORE').forEach(r => identityKeysOf(r.d).forEach(k => restoredOrderIds.add(k)));
     const allOrderIds = new Set([...hq, ...fin, ...shop].flatMap(d => identityKeysOf(d)));
     const cutRows = rodCuts
-        .filter(rc => String(rc.status || '').toUpperCase() === 'CANCELLED' && String(rc.cancelReason || '').includes(`from ${BULK_CLOSE_FROM}`) && toMs(rc.cancelledAt) >= since && toMs(rc.cancelledAt) <= until)
+        .filter(rc => String(rc.status || '').toUpperCase() === 'CANCELLED' && (anyClose ? /\bclosed\b/.test(String(rc.cancelReason || '')) : String(rc.cancelReason || '').includes(`from ${BULK_CLOSE_FROM}`)) && toMs(rc.cancelledAt) >= since && toMs(rc.cancelledAt) <= until)
         .map(rc => {
             const mine = restoredOrderIds.has(String(rc.finWoId));
             const base = { coll: 'rod_cut_orders', id: rc.id, closedAt: rc.cancelledAt || null, closeReason: 'cancelled with its order', d: rc, live: mine };
@@ -750,6 +779,24 @@ export function planBulkReopen({ finWos = [], shopJobs = [], hqOrders = [], rodC
         counts: all.reduce((m, r) => { m[r.action] = (m[r.action] || 0) + 1; return m; }, {}),
         outsideWindow: [...finWos, ...shopJobs, ...hqOrders].filter(d => d.closedFrom === BULK_CLOSE_FROM && !inWin(d)).length,
     };
+}
+
+/**
+ * ONE order's reopen (2026-09-12, S3's ask after the shop's Undo began refusing RTG-closed docs):
+ * the same rules as the bulk tool, for one record from ANY close, restored from the snapshot the
+ * closer keeps (stateBeforeClose) where it exists and from stamps where it does not. The operator's
+ * word is the override — every document of the order is forced REOPEN (a KEEP rule is for a
+ * sweep, not for a person pointing at one order). The window is the close itself, so a rod cut or
+ * queued write cancelled by that close comes back with it and an older cancellation does not.
+ */
+export function planOrderReopen({ record, coll, finDocs = [], shopDocs = [], rodCuts = [], outbox = [], siblings = new Map() }) {
+    if (!record) return { rows: [], counts: {}, outsideWindow: 0 };
+    const closedAt = toMs(record.closedAt) || Math.max(0, ...[...finDocs, ...shopDocs].map(d => toMs(d && d.closedAt))) || Date.now();
+    const overrides = new Map(identityKeysOf(record).map(k => [k, 'REOPEN']));
+    return planBulkReopen({
+        finWos: finDocs, shopJobs: shopDocs, hqOrders: [{ ...record, __coll: coll }], rodCuts, outbox, siblings,
+        since: closedAt - 60 * 1000, until: closedAt + 30 * 60 * 1000, overrides, anyClose: true,
+    });
 }
 
 /** Write the plan: every RESTORE row patched and ledgered; a failure is named and skipped. */

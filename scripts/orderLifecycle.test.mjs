@@ -5,7 +5,7 @@
 // library part id — so the hq record was never in the key set and the shop could not tell RTG
 // anything. This pins that the id convention is a key, from either side.
 
-import { identityKeysOf, isClosedState, isDoneState, auditOrphans, queuedWriteTargets, orderDocIdsOf, entryNamesOrder, reopenPlanFor, planBulkReopen, pickStatusFromStamps, closedByBulkIn, DELETE, BULK_CLOSE_FROM, recordKnowsDone } from '../src/components/Shared/orderLifecycle.js';
+import { identityKeysOf, isClosedState, isDoneState, auditOrphans, queuedWriteTargets, orderDocIdsOf, entryNamesOrder, reopenPlanFor, planBulkReopen, planOrderReopen, pickStatusFromStamps, closedByBulkIn, DELETE, BULK_CLOSE_FROM, recordKnowsDone, linkedDocsOf } from '../src/components/Shared/orderLifecycle.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
@@ -169,6 +169,40 @@ const ovRow = (c, id) => ov.rows.find(r => r.coll === c && r.id === id);
 eq('override REOPEN on a put-away order: fin restores, record restores, cut reopens', [ovRow('fin_workorders', 'WO-SOB').action, ovRow('hq_work_orders', 'WO-SOB').action, ovRow('rod_cut_orders', 'RC-B').action], ['RESTORE', 'RESTORE', 'RESTORE']);
 eq('override KEEP on a live order: fin kept, record kept, cut stays cancelled', [ovRow('fin_workorders', 'WO-SOA').action, ovRow('hq_work_orders', 'WO-SOA').action, ovRow('rod_cut_orders', 'RC-A').action], ['KEEP', 'KEEP', 'KEEP']);
 eq('plan: counts (kept: put-away fin, its record, its shop half, its cut)', plan.counts, { RESTORE: 5, KEEP: 4 });
+
+// ── a built work order needs no balance close (2026-09-12) ──
+const todo = (hq, fins) => auditOrphans({ hqOrders: [hq], finWos: fins }).filter(x => x.type === 'NS_CLOSE_TODO');
+eq('to-do raised: closed, WO open, nothing built', todo({ id: 'WO-A', status: 'Closed', nsWoId: '11', nsWoCloseRequired: true }, [{ id: 'WO-A', nsWoId: '11' }]).length, 1);
+eq('no to-do: the fin doc says the build posted', todo({ id: 'WO-A', status: 'Closed', nsWoId: '11', nsWoCloseRequired: true }, [{ id: 'WO-A', nsWoId: '11', nsWoCompletionPosted: true }]).length, 0);
+eq('no to-do: the record itself says built', todo({ id: 'WO-A', status: 'Closed', nsWoId: '11', nsWoCloseRequired: true, nsWoCompletionPosted: true }, []).length, 0);
+eq('to-do stays when confirmed closed is false and nothing built', todo({ id: 'WO-B', status: 'Closed', nsWoId: '12', nsWoCloseRequired: true }, [{ id: 'WO-B', nsWoId: '12' }]).length, 1);
+
+// ── linkedDocsOf finds a CPQ sales-order record by soId (2026-09-12) ──
+const fakeCtx = (soHit) => {
+    const calls = [];
+    return {
+        calls,
+        db: {}, doc: (db, coll, id) => ({ coll, id }), collection: (db, coll) => ({ coll }), query: (c, w) => ({ ...c, w }), where: (f, op, v) => ({ f, op, v }),
+        getDoc: async (ref) => ({ exists: () => false, id: ref.id, data: () => ({}) }),
+        getDocs: async (q) => { calls.push(`${q.coll}.${q.w.f}`); if (q.coll === 'hq_sales_orders' && q.w.f === 'soId' && q.w.v.includes('SO60170') && soHit) return { docs: [{ id: 'SO-APP-QUOTE-1', data: () => ({ soId: 'SO60170' }) }], forEach: () => {} }; return { docs: [], forEach: () => {} }; },
+    };
+};
+const found = await linkedDocsOf(fakeCtx(true), { id: 'WO-SO60170', orderKey: 'SO60170', shopSiblingId: 'SHOP-SO60170' }, 'sales');
+eq('sales order record found through soId, not the doc id', found.hq && found.hq.id, 'SO-APP-QUOTE-1');
+const notFound = await linkedDocsOf(fakeCtx(false), { id: 'WO-SO60170', orderKey: 'SO60170' }, 'sales');
+eq('no record → null, as before', notFound.hq, null);
+
+// ── a per-order reopen from ANY close, forced by the operator ──
+const closedRec = { id: 'WO-ONE', status: 'Closed', closedFrom: 'RTG', closedAt: T, closeReason: 'FLOOR_CLOSED', dispatchedAt: 1, stateBeforeClose: { status: 'Dispatched' } };
+const closedFin = { id: 'WO-ONE', closedFrom: 'RTG', closedAt: T + 5, closeReason: 'FLOOR_CLOSED', currentPhase: 'Closed', putawayBin: 'BIN', stateBeforeClose: { currentPhase: 'Complete', stepStatus: 'Complete', status: null, sentToPickPack: true, pickStatus: 'Staged_Ready_For_Finishing', currentStepIndex: 3 } };
+const closedCut = { id: 'RC-ONE', status: 'CANCELLED', finWoId: 'WO-ONE', cancelledAt: T + 6, cancelReason: 'order WO-ONE closed from RTG — the cut was still open; no inventory moved' };
+const oldCut = { id: 'RC-OLD', status: 'CANCELLED', finWoId: 'WO-ONE', cancelledAt: T - 86400000, cancelReason: 'order WO-ONE closed from RTG — the cut was still open; no inventory moved' };
+const single = planOrderReopen({ record: closedRec, coll: 'hq_work_orders', finDocs: [closedFin], rodCuts: [closedCut, oldCut] });
+const oneRow = (c, id) => single.rows.find(r => r.coll === c && r.id === id);
+eq('per-order: a put-away fin doc reopens anyway (the operator said so), from its snapshot', [oneRow('fin_workorders', 'WO-ONE').action, oneRow('fin_workorders', 'WO-ONE').patch.currentPhase, oneRow('fin_workorders', 'WO-ONE').patch.pickStatus], ['RESTORE', 'Complete', 'Staged_Ready_For_Finishing']);
+eq('per-order: the record restores from its snapshot', [oneRow('hq_work_orders', 'WO-ONE').action, oneRow('hq_work_orders', 'WO-ONE').patch.status], ['RESTORE', 'Dispatched']);
+eq('per-order: the cut that close cancelled comes back; an older cancellation does not', [oneRow('rod_cut_orders', 'RC-ONE').action, oneRow('rod_cut_orders', 'RC-OLD')], ['RESTORE', undefined]);
+ok('bulk tool still ignores a non-bulk close', reopenPlanFor({ coll: 'fin_workorders', d: closedFin }).action === 'SKIP');
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
