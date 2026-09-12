@@ -1285,6 +1285,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
 
     const isOvertakenPick = (job) => {
+        // A PICK-ONLY document is born `currentPhase 'Complete'` (S2's split, 2026-09-08: nothing on
+        // it goes to the finishing floor) — it can never be overtaken by a floor it never visits.
+        // Reading that phase as "already in production" put the red banner and a CLEAR button on
+        // SO60420's pick the moment it opened (the round trip, 2026-09-11).
+        if (job.pickOnly === true || job.finishingRequired === false) return false;
         if (job.currentPhase === 'Complete') return true;
         const st = orderStatusOf(job);
         return st.streams.some(s => s.key !== 'CUSTOM' && (['PAINTING', 'OVEN'].includes(s.stage) || s.stage === 'FINISHED'));

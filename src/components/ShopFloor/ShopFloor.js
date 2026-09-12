@@ -1271,6 +1271,21 @@ const ShopFloor = () => {
                 // already SHIPPED — then the reopen itself is refused: receive them back first.
                 if (order.platingDemandId) {
                     const shipSnap = await getDocs(query(collection(db, 'plating_shipments'), where('woNum', '==', order.woNum || order.id)));
+                    // ONCE THE WMS HAS THE PIECES, THE SHOP CANNOT TAKE THE ORDER BACK ALONE (the
+                    // SO60420 round trip, 2026-09-11): the demand ends the moment the WMS scans the
+                    // pieces into OB Plating, so a reopen here found nothing to cancel and would have
+                    // left a staged line in the bin for pieces back on the bench. Refuse by where the
+                    // pieces are — D's helper only knows "shipped"; the staged and built cases are ours.
+                    const shipLines = shipSnap.docs.map(d => d.data());
+                    const live = shipLines.filter(l => l && !['CANCELLED', 'cancelled'].includes(String(l.status || '')));
+                    if (live.length) {
+                        const st = String(live[0].status || '');
+                        const where = st === 'staged'
+                            ? 'the pieces are scanned into OB PLATING on the WMS — the WMS removes that staged line first (✕ on the Plating tab), then undo here'
+                            : (st === 'built' ? 'the pieces were received back from the plater and put away — this order is past undo; tell RTG'
+                            : 'those parts are already at the plater — receive them back before reopening');
+                        return alert(`⛔ ${order.woNum} cannot be reopened — ${where}.`);
+                    }
                     const res = await cancelPlatingDemand({ db, doc, setDoc, deleteDoc: (ref) => deleteDoc(ref) }, {
                         id: order.platingDemandId, record: { id: order.platingDemandId, woNum: order.woNum || order.id },
                         reason: `shop reopened ${order.woNum}`, by: user.name, from: 'SHOP',
