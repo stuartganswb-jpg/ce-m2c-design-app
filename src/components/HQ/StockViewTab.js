@@ -7,7 +7,7 @@ import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '
 import { SOURCING, sourcingOf, orderRouteFor, ORDER_ROUTE } from '../Shared/sourcing';
 import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
-import { closeOrderEverywhere, hardDeleteWithLedger } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere, hardDeleteWithLedger, propagateFloorState } from '../Shared/orderLifecycle';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { realPartOf, isAliasDoc } from '../Shared/aliasIdentity';
 import { woRefOf } from '../Shared/woRef';
@@ -188,6 +188,33 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // Retired items — locked by NetSuite INTERNAL ID (stable across an item# rename). Hidden from all
     // user-facing browse surfaces; still visible to sync/ERP tabs. Global list in system/retired_items.
     const [retiredDoc, setRetiredDoc] = useState({ internalIds: [], items: [] });
+    // SALES DISPLAY DEMAND (S5's hand-off, Stuart 2026-09-11): display boards pull far more than
+    // day-to-day orders and their NetSuite SO is a lump-sum display item, so `committed` never sees
+    // them. S5's build-order panel keeps system/display_demand_<brand> current from every open
+    // display order; this tab READS it — one column beside Backorder, and the Rec math counts it.
+    const [displayDemand, setDisplayDemand] = useState({ byItem: {}, builds: [] });
+    useEffect(() => {
+        if (!activeBrand) return undefined;
+        return onSnapshot(doc(db, 'system', `display_demand_${activeBrand}`),
+            snap => setDisplayDemand(snap.exists() ? { byItem: snap.data().byItem || {}, builds: snap.data().builds || [] } : { byItem: {}, builds: [] }),
+            () => setDisplayDemand({ byItem: {}, builds: [] }));
+    }, [activeBrand]);
+    // A row's display demand: the billed finished SKU first (H1-1BR/EP4), then the base code — and,
+    // on a base row, every billed variant of it (the same rollup the committed column makes).
+    const displayDemandFor = (erpId) => {
+        const up = String(erpId || '').toUpperCase();
+        const isVariant = /\/(P|EP[1-6]|MEP|P25)$/i.test(up);
+        let qty = 0; const builds = new Map();
+        Object.values(displayDemand.byItem || {}).forEach(e => {
+            if (!e) return;
+            const billed = String(e.billedId || '').toUpperCase(), code = String(e.code || '').toUpperCase();
+            const hit = billed === up || (!e.billedId && code === up) || (!isVariant && billed.startsWith(`${up}/`));
+            if (!hit) return;
+            qty += Number(e.qty) || 0;
+            (e.builds || []).forEach(b => builds.set(b.id || b.name, { name: b.name || b.id, qty: (builds.get(b.id || b.name)?.qty || 0) + (Number(b.qty) || 0) }));
+        });
+        return { qty, builds: [...builds.values()] };
+    };
     useEffect(() => onSnapshot(doc(db, 'system', 'retired_items'),
         s => setRetiredDoc(s.exists() ? { internalIds: s.data().internalIds || [], items: s.data().items || [] } : { internalIds: [], items: [] }),
         () => { }), []);
@@ -631,7 +658,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const suggestedQtyFor = (item) => {
         const avail = item.stock?.available || 0;
         const onOrder = item.stock?.onOrder || 0;
-        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0);
+        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0) + (item.stock?.displayDemand || 0);
         const rop = item.rop || 0;
         const moq = item.moq || 0;
         const topUp = Math.max(0, rop - avail);
@@ -651,7 +678,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (!specs.isStocked || !cap) return null; // only stocked, paint-sized assemblies get a recommendation
         const avail = item.stock?.available || 0;
         const onOrder = item.stock?.onOrder || 0;
-        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0);
+        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0) + (item.stock?.displayDemand || 0);
         const shortfall = Math.max(item.rop - avail, demand - avail - onOrder);
         if (shortfall <= 0) return 0; // at/above ROP and demand covered → nothing to run
         return Math.ceil(shortfall / cap) * cap;
@@ -1776,7 +1803,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 redlineAlert: false, resetAt: Date.now(), resetBy: currentUser || ''
             });
             if (row.hq) await updateDoc(doc(db, 'hq_work_orders', row.hq.id), { status: 'Dispatched' }).catch(() => {});
-            addLog(`↩ ${ref} reset to Setup (picked) — NetSuite build flags cleared.`, 'success');
+            // THE RECORD IS TOLD (B's hand-off, landed 2026-09-12): a reset that left floorPhase
+            // 'Complete' on the record made the board — and the audit — believe the floor was done.
+            try {
+                await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                    { finWo: { ...fin, id: fin.id }, phase: 'Setup', by: currentUser || '', extra: { floorCompletedAt: deleteField(), floorCompletedBy: deleteField(), resetAt: Date.now(), resetBy: currentUser || '' } });
+            } catch (e) { console.warn('propagate after reset failed (the reset stands):', e); }
+            addLog(`↩ ${ref} reset to Setup (picked) — NetSuite build flags cleared; the RTG record reads Setup.`, 'success');
             loadOpenWos();
         } catch (e) { alert('Reset failed: ' + (e.message || e)); }
     };
@@ -3007,9 +3040,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const moq = parseInt(specs.moq) || 0;
         const leadTime = parseInt(specs.leadTime) || 0;
 
+        const display = displayDemandFor(erpId);
         return {
             ...part,
-            stock: { ...stock, aggregatedCommitted, aggregatedBackorder },
+            stock: { ...stock, aggregatedCommitted, aggregatedBackorder, displayDemand: display.qty, displayBuilds: display.builds },
             wip: wipByErp[erpId] || { qty: 0, lines: [] }, // in-progress plating for this item
             rop, moq, leadTime,
             isLowStock: stock.available <= rop && rop > 0
@@ -3604,6 +3638,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <th style={monthTh}>Orders</th>
                                                 <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title="NetSuite quantity available">Avail</th>
                                                 <th style={{ ...monthTh, color: '#d9534f' }} title="BACKORDERED — pieces on open sales orders that nothing on the shelf can make. This is OUR record, the one with customers behind it, not NetSuite's quantitybackordered. Click a number for the orders and who is waiting.">BO</th>
+                                                <th style={{ ...monthTh, color: '#7a5cc4' }} title="DISPLAY — open sales display board orders that will pull this item (S5's build-order panel keeps it current); counted in Rec like backorder. Hover a number for the orders behind it.">Display</th>
                                                 <th style={{ ...monthTh, color: '#3f7fc4' }} title="Inbound: open purchase orders + work orders in production — click a number for the orders behind it">On Ord</th>
                                                 <th style={monthTh} title="Calculated minimum: OUTSOURCED = 6 months of demand · ASSEMBLY = 6 weeks (3wk finishing lead + 3wk safety) · else legacy 4-weeks rule. A re-order point acts as the FLOOR — a new item with no history shows its ROP (brass) until demand grows past it. Hover a value for its rule.">Min OH</th>
                                                 <th style={{ ...monthTh, color: 'var(--brass)' }} title="Re-order point — editable; ⬆ Save pushes to the Master Library (manufacturingSpecs.reorderPoint). Acts as the FLOOR under the calculated Min OH: it holds a new item up until real demand exceeds it.">ROP</th>
@@ -4593,6 +4628,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             );
                                         })()}
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.aggregatedBackorder > 0 ? '#d9534f' : 'var(--ink-soft)' }}>{item.stock.aggregatedBackorder}</td>
+                                        <td title={item.stock.displayDemand > 0 ? (item.stock.displayBuilds || []).map(b => `${b.name}: ${b.qty}`).join('\n') : ''} style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.displayDemand > 0 ? '#7a5cc4' : 'var(--ink-soft)', cursor: item.stock.displayDemand > 0 ? 'help' : 'default' }}>{item.stock.displayDemand || '-'}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', color: 'var(--ink-soft)' }}>{item.rop || '-'}</td>
                                         {(() => {
                                             const rec = recommendedProductionFor(item);
