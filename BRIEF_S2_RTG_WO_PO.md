@@ -229,7 +229,7 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 **Waiting on Stuart (relay through the communicator)**
 - #24 tag `material = WOOD` on `H1-138WHTOAK-*` (4.5) — the wood rule is live and dormant until then.
-- #25 `HCUMSBF15` in-house tag; clear `WO-HCUMSBF15-N25-655308-4`; close / re-issue WO11588 (pull 7674).
+- ~~#25 `HCUMSBF15` in-house tag; clear `WO-HCUMSBF15-N25-655308-4`; close / re-issue WO11588 (pull 7674).~~ CLOSED 2026-09-12 (tag confirmed by Stuart; WO11588 built; the stuck WO gone).
 - #26 close the two 14-Aug Order Entry orders in NetSuite.
 
 ## 4. Acceptance — on Stuart's orders, pinned in
@@ -509,6 +509,7 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 *(newest first; one line per commit or decision, with the hash)*
 
+- **CLOSE-OUT DONE (5): #25 closed** — Stuart confirmed 2026-09-12 the in-house tag on HCUMSBF15 is set; WO11588 was built (ASSYB10408) and `WO-HCUMSBF15-N25-655308-4` is off the board. Remaining on S2's list: 3 (§4 acceptance rows — Stuart's next live session), 2 (#31 — 09-16).
 - **CLOSE-OUT DONE (1 + 4): $H** · items 5 / 3 / 2 wait on Stuart's word, his next live session, and 09-16. Detail: (1) `Shared/splitPlan.customShopQtyOf` — the split's shop doc `qty` = POLES (cut-length lines), `poles / feet / billableFeet (ceil) / riderLines` stamped; PO-line half handed to S3 (§6 of their brief). Assumption stated: billable feet round UP. The Order Entry custom pair is the next place to stamp the same (named, not done). (4) `orderStatusOf`: a Pending custom half reads RELEASED · not started (fabricating only once In Process); a pick-only doc reads NOT NEEDED · pick only — no finishing (new STAGES.NONE, rank 50); the RTG SO card adds "· custom: <customFabLabel>" from its fin doc. Item 5 (#25 HCUMSBF15 in-house tag) — Stuart's word still owed; item 3 (§4 rows) at his next live session; item 2 on 09-16.
 - **CLOSE-OUT CONFIRMED 2026-09-12:** items 1 (pole feet rule: split qty = poles, demand carries poles + feet, PO-line half to S3), 4 (job-log wording), 5 (#25 tag — Stuart's word), then 3 (the §4 acceptance rows, Stuart pinned in), 2 (#31 waits for 09-16). In this order. ETA: 1 + 4 tonight; 5 on Stuart's answer; 3 at his next live session. Also DONE by Stuart today: `system/wms_config.rootBuildAuto.ce = true` (the root-build switch is ON for CE).
 - 2026-09-12 · **Stuart's close-out answers:** repaint from the Snapshot row = DONE (the 10 Sep WO-RPT runs were his); Q3 re-make retire = YES and #32 outsourced group = YES → relayed to S3 (their § Hand-offs in); #31 legacy branch = WAIT (the agreed week); #37 Open POs twin = DROPPED; #39 unknown-as-unknown = YES (built, $H); #40 receipt shape = handed to S3; #24 wood rods = tagged (closed); #26 the two 14-Aug Fabricut orders are CLOSED on the CRM — my "Awaiting dispatch" read was the job log's fallback label for a record with no floor stages, not a status (closed); #3 rootBuildAuto = walkthrough given (count the ⛏ builds in NetSuite by memo "Mill build", then `system/wms_config.rootBuildAuto.ce = true`).
