@@ -143,7 +143,14 @@ const pdc = poleDetailsOf({ job: customDoc, shopDoc: shopSibDoc });
 eq('the shop cut rows carry the pole CODE', pdc.rows.map(r => r.code), ['H1-1R']);
 eq('a cut row with no length is not a pole row', pdc.rows.length, 1);
 const liveRows = packLinesOf(customDoc, { poleRows: pdc.rows });
-eq('live pole rows become pack lines keyed POLE-i, by code', liveRows.filter(l => l.isPole).map(l => [l.key, l.erp, l.qty]), [['POLE-0', 'H1-1R', 1]]);
+eq('live pole rows become pack lines keyed POLE-i, by code', liveRows.filter(l => l.isPole && !l.rider).map(l => [l.key, l.erp, l.qty]), [['POLE-0', 'H1-1R', 1]]);
+// THE RIDERS (Stuart 2026-09-11): a shop custom line with no cut length is fabrication ON the rod.
+eq('the cut rows without a length are the riders, on the first pole row', pdc.rows[0].riders, [{ code: 'H1-FRPF', name: 'French return', qty: 2 }]);
+eq('a rider is a pack line by code, keyed under its pole, flagged', liveRows.filter(l => l.rider).map(l => [l.key, l.erp, l.qty, l.riderOf]), [['POLE-0-R0', 'H1-FRPF', 2, 'POLE-0']]);
+ok('a rider is a pole-group line (packed with the pole, never a row of its own)', liveRows.find(l => l.rider).isPole === true);
+const stampedWithRiders = { ...customDoc, poleLines: [{ code: 'H1-1R', name: 'rod', qty: 1, length: 106, unit: 'in', riders: [{ code: 'H1-FRPF', name: 'French return', qty: 2 }] }] };
+eq('the stamp round-trips the riders without the shop sibling', packLinesOf(stampedWithRiders).filter(l => l.rider).map(l => [l.key, l.erp, l.qty]), [['POLE-0-R0', 'H1-FRPF', 2]]);
+eq('a shop doc with cut lengths on every line has no riders', poleDetailsOf({ job: customDoc, shopDoc: { cutList: [{ legacyErpId: 'HBR1-1INPOLE', qty: 3, cutLength: 108 }] } }).riders, []);
 ok('the pole line names its length', /106/.test(liveRows.find(l => l.isPole).name));
 eq('the small parts are still there', liveRows.filter(l => !l.isPole).map(l => l.erp), ['H1-1BP-R/EP3']);
 const stampedDoc = { ...customDoc, poleLines: [{ code: 'H1-1R', name: '1" Round Hollow Rod Stock', qty: 1, length: 106, unit: 'in' }] };

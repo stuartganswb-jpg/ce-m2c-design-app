@@ -800,7 +800,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // The pole rows a custom order's pack should show: the shop sibling's cut rows (code · qty ·
     // length), which `poleInfoOf` loads and caches per order. Stock and Quick Ship carry none.
     const poleRowsForPack = (job) => (job && !isQsOrder(job) && job.orderType !== 'stock' && job.shopSiblingId) ? (poleInfoOf(job).rows || []).filter(r => r && r.code) : [];
-    const poleLinesStamp = (rows) => (rows || []).map(r => ({ code: r.code || '', name: r.name || '', qty: Number(r.qty) || 1, length: r.length != null ? r.length : null, unit: r.unit || 'in' }));
+    const poleLinesStamp = (rows) => (rows || []).map(r => ({ code: r.code || '', name: r.name || '', qty: Number(r.qty) || 1, length: r.length != null ? r.length : null, unit: r.unit || 'in',
+        ...(Array.isArray(r.riders) && r.riders.length ? { riders: r.riders.map(x => ({ code: x.code || '', name: x.name || '', qty: Number(x.qty) || 1 })) } : {}) }));
+    // The riders of a pole line, on the same pack list (ticked with it, cleared with it).
+    const ridersOf = (lines, poleKey) => (lines || []).filter(l => l.rider && l.riderOf === poleKey);
     const packLinesFor = (job) => packLinesOf(job, { poleRows: poleRowsForPack(job) });
     const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : woRefOf(j);
 
@@ -1631,17 +1634,28 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         // The tick carries the COUNT (the packing list reads `packedLines.<key>.qty`), and the first
         // pole tick stamps the pole rows on the document so the list can rebuild them without the
         // shop sibling in the room (Shared/pickLines.packLinesOf reads `poleLines`).
-        const patch = { [`packedLines.${line.key}`]: { at: Date.now(), by: operator?.name || 'Packer', qty: Number(line.qty) || 1 } };
+        // THE POLE TICKS ONLY WHEN IT IS BACK (Stuart 2026-09-11: "packaging prep can pick and pack
+        // ready parts on a plating order before the poles arrive" — the small parts go in the box
+        // now; the pole's tick, and the box's closing, wait for the plater).
+        if (line.isPole && job.hasCustomSibling && !customPartsReady(job)) {
+            return alert(`${line.erp || 'The pole'} is ${job.customFabStatus === 'Sent to Plating' ? 'AT THE PLATER' : `not finished yet (${job.customFabStatus || 'Pending'})`}.\n\nPack the ready parts now — the pole ticks when it is received and put away on the Plating tab, and the box closes then.`);
+        }
+        const stampAt = Date.now(), by = operator?.name || 'Packer';
+        const patch = { [`packedLines.${line.key}`]: { at: stampAt, by, qty: Number(line.qty) || 1 } };
         if (line.isPole && !isQsOrder(job) && job.orderType !== 'stock') {
             const rows = poleRowsForPack(job);
             if (rows.length) patch.poleLines = poleLinesStamp(rows);
+            // Its riders (French returns, miters — fabrication on this rod) are packed with it.
+            ridersOf(packLinesFor(job), line.key).forEach(r => { patch[`packedLines.${r.key}`] = { at: stampAt, by, qty: Number(r.qty) || 1, withPole: line.key }; });
         }
         try { await updateDoc(packDocOf(job), patch); }
         catch (e) { alert('Could not mark packed: ' + (e.message || e)); }
     };
     const unpackLine = async (job, line) => {
         if (!window.confirm(`Move "${line.name}" back to TO PACK?`)) return;
-        try { await updateDoc(packDocOf(job), { [`packedLines.${line.key}`]: deleteField() }); }
+        const patch = { [`packedLines.${line.key}`]: deleteField() };
+        if (line.isPole) ridersOf(packLinesFor(job), line.key).forEach(r => { patch[`packedLines.${r.key}`] = deleteField(); });
+        try { await updateDoc(packDocOf(job), patch); }
         catch (e) { alert(e.message || e); }
     };
     const uploadPackPhotos = async (job, files) => {
@@ -1891,7 +1905,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const completePacking = async (job) => {
         if (packCompletingRef.current) return;
         if (job.packStatus === 'Packed') return alert('This order is already packed.');
-        const lines = packLinesFor(job);
+        const lines = packLinesFor(job).filter(l => !l.rider);   // riders tick with their pole
         const left = lines.filter(l => !(job.packedLines && job.packedLines[l.key]));
         if (left.length) return alert(`Every piece must be physically packed and confirmed first — ${left.length} line${left.length === 1 ? '' : 's'} still on the TO PACK side.`);
         // The order must be YOURS to complete. (The card opens read-only — Stuart 2026-09-03.)
@@ -1938,6 +1952,20 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (job.hasCustomSibling && !job.packCustomMatchedAt && !job.packCustomMatchWaived) {
             if (!stagingScanMatches(job, custMatch)) {
                 return alert(`Scan the CUSTOM SHOP label on the poles first.\n\nThe poles for ${packRef(job)} came off the shop order — they are not on the parts list you just packed, so nothing here proves the right ones are in the box.\n\nIf this order genuinely has no poles, use "This order has no poles" above and say why — it is recorded against the order.`);
+            }
+        }
+        // THE BOX CLOSES ONLY WITH THE POLE IN IT (Stuart 2026-09-11): the ready parts may be packed
+        // early, the completion waits for the custom half — the same test the staging handshake uses.
+        if (!isStockPutaway && job.hasCustomSibling && !customPartsReady(job)) {
+            return alert(`❌ ${packRef(job)}: custom parts are not ready (${job.customFabStatus || 'Pending'}).${job.customFabStatus === 'Sent to Plating' ? '\n\nThey are AT THE PLATER. The ready parts stay packed here; the box closes when the pole is received and put away on the Plating tab.' : '\n\nWait for the shop to finish + label them.'}`);
+        }
+        // A BOX IS A CHOICE, NOT A BLANK (Stuart 2026-09-11: "force box choice"). Boxes come from
+        // HQ → 15. Packaging → standard boxes; an empty list for this brand is data to add, not a
+        // reason to ship in "—".
+        if (!isStockPutaway) {
+            const needSmall = lines.some(l => l.cat !== 'POLE'), needPole = lines.some(l => l.cat === 'POLE');
+            if ((needSmall && !String(packBoxSel.SMALL || '').trim()) || (needPole && !String(packBoxSel.POLE || '').trim())) {
+                return alert(`Pick the box${needSmall && needPole ? 'es' : ''} first — ${needSmall && !String(packBoxSel.SMALL || '').trim() ? 'small parts box' : ''}${needSmall && !String(packBoxSel.SMALL || '').trim() && needPole && !String(packBoxSel.POLE || '').trim() ? ' and ' : ''}${needPole && !String(packBoxSel.POLE || '').trim() ? 'pole box' : ''}.\n\nIf the list offers nothing, this brand has no standard boxes yet: add them in HQ → 15. Packaging → Standard boxes.`);
             }
         }
         if (!window.confirm(confirmMsg)) return;
@@ -2999,7 +3027,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 ...(nsConfig.subsidiary
                     ? { subsidiary: { id: String(nsConfig.subsidiary) }, location: { id: String(nsConfig.location) } }
                     : {}),
-                memo: nsMemo(`Weekly Plating Shipment ${shipId}`),
+                // THE ID FIRST (2026-09-11, SO60420): nsMemo caps at 40 chars and "Weekly Plating
+                // Shipment PLT-CE-1789164485442" is 44 — NetSuite held "…PLT-CE-17891644…" and the
+                // lookup for the whole id could never match. The id leads; the words follow.
+                memo: nsMemo(`${shipId} Weekly Plating Shipment`),
                 item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), description: lineDescription }] }
             }
         };
@@ -3016,9 +3047,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // does not always answer a query for a record it accepted a second ago.
     const lookupPlatingPo = async (shipId, { attempts = 1, delayMs = 0 } = {}) => {
         const key = String(shipId || '').toUpperCase().replace(/'/g, "''");
+        // Shipments before 2026-09-11 carry the OLD memo, cut by the 40-char cap: match what NetSuite
+        // actually holds ("WEEKLY PLATING SHIPMENT PLT-CE-17891644", no ellipsis).
+        const legacyMemo = nsMemo(`Weekly Plating Shipment ${shipId}`).replace(/…$/, '').toUpperCase().replace(/'/g, "''");
         for (let i = 0; i < attempts; i++) {
             try {
-                const rows = await suiteql(`SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND UPPER(memo) LIKE '%${key}%'`);
+                const rows = await suiteql(`SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND (UPPER(memo) LIKE '%${key}%' OR UPPER(memo) LIKE '${legacyMemo}%') ORDER BY id DESC`);
                 if (rows[0] && rows[0].id) return { id: String(rows[0].id), tranid: rows[0].tranid ? String(rows[0].tranid) : null };
             } catch (e) { console.warn('PO lookup attempt failed:', e); }
             if (i < attempts - 1) await sleepMs(delayMs);
@@ -5047,17 +5081,21 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                 {/* 📦 TAB: PACKING STATION */}
                 {activeTab === 'PACKING' && (() => {
-                    const lines = packJob ? packLinesFor(packJob) : [];
+                    const allLines = packJob ? packLinesFor(packJob) : [];
+                    const lines = allLines.filter(l => !l.rider);   // riders show under their pole, never as rows
+                    const riderNote = (l) => l.isPole && !l.rider ? ridersOf(allLines, l.key) : [];
                     const isPacked = (l) => !!(packJob.packedLines && packJob.packedLines[l.key]);
                     const toPack = packJob ? lines.filter(l => !isPacked(l)) : [];
                     const packed = packJob ? lines.filter(isPacked) : [];
+                    const poleAway = !!(packJob && packJob.hasCustomSibling && !customPartsReady(packJob));
                     const photos = packJob ? (packJob.packPhotos || []) : [];
                     const isStockJob = !!(packJob && packJob.orderType === 'stock');
                     // A custom order's poles come off the SHOP order, not this parts list — so
                     // "every line packed" says nothing about whether the right poles are in the box.
                     const needsPoleMatch = !!(packJob && packJob.hasCustomSibling && !packJob.packCustomMatchedAt && !packJob.packCustomMatchWaived);
                     const poleMatched = !needsPoleMatch || stagingScanMatches(packJob, packCustomScan);
-                    const canComplete = packJob && toPack.length === 0 && poleMatched && (isStockJob ? !!putawayBin.trim() : photos.length > 0);
+                    const boxesChosen = isStockJob || ((!lines.some(l => l.cat !== 'POLE') || !!String(packBoxSel.SMALL || '').trim()) && (!lines.some(l => l.cat === 'POLE') || !!String(packBoxSel.POLE || '').trim()));
+                    const canComplete = packJob && toPack.length === 0 && poleMatched && !poleAway && boxesChosen && (isStockJob ? !!putawayBin.trim() : photos.length > 0);
                     const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
                     const boxSelect = (slot, label) => (
                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft }}>
@@ -5076,12 +5114,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {l.aliasErp && <span style={{ fontSize: '9px', color: theme.inkSoft, marginLeft: '8px', letterSpacing: '.04em' }}>alias {l.aliasErp}</span>}
                                 </div>
                                 <div style={{ fontSize: '0.8rem', color: theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</div>
+                                {riderNote(l).length > 0 && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '2px' }}>with {riderNote(l).map(r => `${r.qty} × ${r.erp}`).join(' + ')} — on the rod, packed with it</div>}
+                                {side === 'left' && l.isPole && poleAway && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '2px' }}>AT THE PLATER — ticks when the pole is received and put away</div>}
                                 {side === 'right' && packJob.packedLines[l.key] && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: '#3a7d44', marginTop: '2px' }}>✓ {packJob.packedLines[l.key].by} · {new Date(packJob.packedLines[l.key].at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
                             </div>
                             <span style={{ fontFamily: theme.mono, fontWeight: 'bold', fontSize: '1rem', color: theme.ink, whiteSpace: 'nowrap' }}>× {l.qty}</span>
                             <button onClick={() => printPackLineLabel(packJob, l)} title={l.cat === 'POLE' ? 'Rod labels — sidemark · length · 1 of X per piece' : 'Item labels — one per piece'} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>🖨</button>
                             {side === 'left'
-                                ? <button onClick={() => confirmPackLine(packJob, l)} style={{ background: theme.ink, color: '#fff', border: 'none', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>✓ Packed</button>
+                                ? <button onClick={() => confirmPackLine(packJob, l)} disabled={l.isPole && poleAway} style={{ background: l.isPole && poleAway ? theme.paper : theme.ink, color: l.isPole && poleAway ? theme.inkSoft : '#fff', border: l.isPole && poleAway ? `1px solid ${theme.line}` : 'none', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: l.isPole && poleAway ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>{l.isPole && poleAway ? 'At the plater' : '✓ Packed'}</button>
                                 : <button onClick={() => unpackLine(packJob, l)} title="Undo — move back to TO PACK" style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>↩</button>}
                         </div>
                     );
@@ -5193,7 +5233,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 screen able to fix the record. So: an explicit way out that STATES what
                                                 happened, rather than a silent bypass. The reason is required and is
                                                 stored on the order and in the log. */}
-                                            {!poleMatched && (
+                                            {!poleMatched && !poleAway && (
                                                 <button onClick={noPolesOnOrder}
                                                     title="Use this only when the order genuinely has no poles — it is recorded against the order with your name and reason."
                                                     style={{ marginTop: '10px', padding: '9px 12px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>

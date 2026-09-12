@@ -139,6 +139,14 @@ export function packLinesOf(job, { poleRows = null } = {}) {
             const name = String((r && r.name) || code || 'Pole');
             const len = r && r.length != null && String(r.length) !== '' ? ` · ${r.display || formatPoleLength(r.length, r.unit || 'in')}` : '';
             out.push({ key: `POLE-${i}`, erp: code || name, aliasErp: '', name: `Pole · ${name}${len}`, qty: Number(r && r.qty) || 1, isPole: true, length: r ? r.length : null, unit: (r && r.unit) || 'in' });
+            // The riders — fabrication on that rod (French return, miter). A pack line each, so the
+            // packing list pairs them with their ordered lines by code, but they are ticked WITH the
+            // pole (the WMS ticks a pole's riders when the pole is ticked) and never shown as rows.
+            (Array.isArray(r && r.riders) ? r.riders : []).forEach((x, j) => {
+                const rc = String((x && x.code) || '').toUpperCase();
+                if (!rc) return;
+                out.push({ key: `POLE-${i}-R${j}`, erp: rc, aliasErp: '', name: `On the rod · ${String((x && x.name) || rc)}`, qty: Number(x && x.qty) || 1, isPole: true, rider: true, riderOf: `POLE-${i}` });
+            });
         });
         return out;
     }
@@ -206,12 +214,21 @@ export function poleDetailsOf({ job, shopDoc = null, salesOrder = null } = {}) {
     ).trim();
 
     // 1. THE SHOP ORDER'S CUT LIST — the real answer for a made-to-order pole.
-    const cuts = (shopDoc && Array.isArray(shopDoc.cutList) ? shopDoc.cutList : [])
-        .filter(c => c && c.cutLength != null && String(c.cutLength) !== '');
+    const allCuts = (shopDoc && Array.isArray(shopDoc.cutList) ? shopDoc.cutList : []).filter(Boolean);
+    const cuts = allCuts.filter(c => c.cutLength != null && String(c.cutLength) !== '');
+    // THE RIDERS (Stuart 2026-09-11: "you combine with the rod, they are a fabricating fee, once the
+    // shop confirms complete they are complete along with the pole"): a shop custom line with NO cut
+    // length — a French return, a miter — is a fabrication ON the rod, not a piece of its own. It
+    // rides the first pole row: packed when the pole is packed, listed under it, never ticked alone.
+    const riders = allCuts.filter(c => !(c.cutLength != null && String(c.cutLength) !== '')).map(c => ({
+        code: String(c.legacyErpId || c.partId || c.itemCode || c.code || '').toUpperCase(),
+        name: String(c.name || c.legacyErpId || 'Fabrication'),
+        qty: asQty(c.qty) || 1,
+    })).filter(r => r.code);
     if (cuts.length) {
         return {
-            source: 'shop', sidemark,
-            rows: cuts.map(c => {
+            source: 'shop', sidemark, riders,
+            rows: cuts.map((c, i) => {
                 const qty = asQty(c.qty) || 1;
                 return {
                     // THE CODE, for the packing list (2026-09-11): the list pairs ORDERED with PACKED by
@@ -220,6 +237,7 @@ export function poleDetailsOf({ job, shopDoc = null, salesOrder = null } = {}) {
                     name: String(c.name || c.legacyErpId || 'Pole'),
                     qty, length: c.cutLength, unit: 'in',
                     display: formatPoleLength(c.cutLength, 'in'),
+                    ...(i === 0 && riders.length ? { riders } : {}),
                 };
             }),
         };
