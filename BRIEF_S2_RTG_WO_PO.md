@@ -7,6 +7,39 @@ protocol), `STATE_OF_THE_APP_2026-09-10.md` (the state; your items are §2.1 #1�
 `WORK_ORDER_CONTRACT.md` for the rules as they now stand. `BRIEF_A_HANDOFF.md` and `BRIEF_B_HANDOFF.md` are the
 commit-by-commit history — read them for why, not for the current state.*
 
+## ⛔ CLOSE-OUT ORDER — Stuart, 2026-09-12 (read before anything else)
+
+Stuart: *"prompt all that we are going to close out now … make sure they are all aware to watch out for each
+other and confirm what we are doing so we get closure and can work on new functions."* No new function starts
+in this session until the list below is done and confirmed. Full picture: `SESSION_COMMS_2026-09-10.md` § Close-out.
+
+**Stuart's decision on S3's finding (a), verbatim, 2026-09-12:** *"the pole with french return or miter return or
+straight pole anything pole for po to plater is always just the # of feet 1 pole x 8ft = 8 billable feet."*
+So: a shop doc's `qty` for a pole is the number of POLES (pieces), never the number of custom lines; the plating
+demand / staged line / plater PO for a pole bills **feet = poles × length** (1 pole × 8 ft = 8 billable feet); a
+French return or a miter is fabrication on the rod and adds nothing to the count or the feet. S2 fixes the split's
+shop-doc `qty` (pieces) and what the demand carries; S3 owns the plater PO line (feet) — spec it into BRIEF_S3 §6.
+
+**S2's close-out list**
+1. The pole rule above: split `qty` = poles; the plating demand carries poles + feet; hand S3 the PO-line half.
+2. #31 the legacy enrich branch — delete on 09-16 if the panel still reads zero (Stuart's word on the day).
+3. The acceptance table (§4) on Stuart's live orders, the rows not yet run: backorder chip + Finish as available;
+   an all-plated order (pick-only doc); Delete → closer line; a stranded gate → ⬆ Lift; a straight and a mitered
+   wood rod (the rods are tagged now).
+4. Job-log wording (S3's finding (c)): a Pending shop doc says "fabricating", a pick-only doc says "FINISHED off
+   the floor", the SO card says only SENT TO FLOOR while the row says "At the plater" — one honest vocabulary.
+5. Confirm `HCUMSBF15`'s in-house tag with Stuart and close #25.
+
+**Watch out for each other** (the rules that were broken three times this week): before EVERY commit run
+`git log origin/main..HEAD` and ABORT if it prints anything (a local commit of yours rides the next session's
+push; a local commit of theirs rides yours); `git diff --cached --stat` must list only your files; never push
+while another session is mid-live-run (ask on the board's Status row); S3 is now editing `SetupQueue.js`
+(re-make retire, outsourced group) — you read it, do not touch it; every push still gets a deploy notice in the
+other four briefs.
+
+**Confirm** by appending to § 7 Status log, before starting: `CLOSE-OUT CONFIRMED 2026-09-12: items …, in this
+order, ETA …`; and when done: `CLOSE-OUT DONE: <hashes>`. The communicator collects the five confirmations.
+
 ## ⛔ Working agreement + standing rules
 
 Plan first and WAIT, every time. Requested scope only — adjacent problems get NAMED in this brief, never

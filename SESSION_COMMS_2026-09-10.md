@@ -77,6 +77,26 @@ functions and rules only from Cloud Shell (write the command for Stuart). Verify
 five sessions pushing. Save-is-send in CPQ refuses on a stale bundle: every deploy costs Stuart a re-PIN —
 batch pushes when he is mid-entry, and ask before pushing during a live run.
 
+## Close-out — Stuart, 2026-09-12
+
+Stuart: *"prompt all that we are going to close out now … make sure they are all aware to watch out for each other
+and confirm what we are doing so we get closure and can work on new functions."* Each brief now opens with a
+**⛔ CLOSE-OUT ORDER** naming that session's list. No new function in any session until its list is done and
+confirmed here. **New rule from the same message (S2 + S3):** a pole to the plater is billed by FEET — 1 pole × 8 ft
+= 8 billable feet, whatever return or miter it carries; a shop doc's `qty` is poles, never lines.
+
+| session | list (short) | confirmed (status-log line) | done (hashes) |
+|---|---|---|---|
+| S1 | broken suite (`nsTransmit.js:19`) · #46 kit push $0 + holder · E3 header (ask) · #17 OE backorder lines · Vision Phase 3 + #47 · CRM doc defects (gross/net, doc id, PO slot, date, "No Sidemark") · screen proofs · data list + S4 mirror block | — | — |
+| S2 | pole feet rule (split qty = poles, demand carries feet; PO line → S3) · #31 on 09-16 · §4 acceptance rows · job-log wording · #25 | — | — |
+| S3 | #16 re-make retire · #32 outsourced group · #12 rod-cut release · #14 JFP dedupe (+#35) · #33 build-back outbox · #18 arrival + hold · #19 empty state · #40 receipt fields · #34 #36 #42 #43 · live runs (build at pack, C4, ⛏×3, REPACK) | — | — |
+| S4 | FIRST: `location` on the fulfilment payload (every packed order fails today) · #20 portal date · #21 needBy/notes + `!deleted` · S1's four mirror lines · then the Fulfilment tab plan | — (not started) | — |
+| S5 | finish the display test with Stuart · H1-138TRV kit end-to-end · the data sitting · F9 guide · lump-sum SO (Eric) | — | — |
+
+**Stuart's own close-out items:** reverse IA26936; CE's boxes on HQ 15; LABELS in the WMS permission matrix; the
+`rootBuildAuto` flag after three ⛏ posts; `HCUMSBF15` in-house tag; Eric — pair item ids, class/form map, lump-sum
+display SO.
+
 ## Status (communicator updates this)
 
 | session | state | last hash | next |

@@ -8,6 +8,40 @@ in order: `CLAUDE.md`, `SESSION_COMMS_2026-09-10.md`, `STATE_OF_THE_APP_2026-09-
 `h1-2trv-traverse-engine-session`, `hardware-tag-engine`, `fabricut-projection-tag-defects`,
 `unfinished-item-tag`. Stuart's own words: "these areas still have a lot of work."*
 
+## ⛔ CLOSE-OUT ORDER — Stuart, 2026-09-12 (read before anything else)
+
+Stuart: *"prompt all that we are going to close out now … make sure they are all aware to watch out for each
+other and confirm what we are doing so we get closure and can work on new functions."* No new function starts
+in this session until the list below is done and confirmed. Full picture: `SESSION_COMMS_2026-09-10.md` § Close-out.
+
+**S1's close-out list** (verified against the code and the runner this morning)
+1. The broken suite: `scripts/nsTransmitLineDiscount.test.mjs` fails to load — `Shared/nsTransmit.js:19` imports
+   `./clientPricing` without `.js` (7d3f594). One line; the runner shows 1 failing suite until then.
+2. #46 the kit push: kit components at $0 and ONE holder line (`CE-TRV-SYSTEM`, fallback 61502) with the configuration
+   total; breakdown stable-sorted by `billGroup`; documents in that order. Confirmed NOT shipped (QUO141). Reaches
+   NetSuite on every kit order.
+3. E3 one NetSuite header builder (`nsTransmit.js:631`, `QuickShipTab.js:1373` still hard-code CE) — ask Stuart: CE map
+   now + a named refusal for the other brands, or wait for Eric.
+4. #17 Order Entry lines through `Shared/backorder.classifyLine` at save.
+5. Vision Phase 3: the generator stops emitting TRV END steps; #47 the first real CRM Approve through the
+   estimate→SO transform is a watched run.
+6. Named, not fixed, now to fix: CRM money documents print gross lines + a net total; the CRM quotation prints the doc
+   id (not the short number), the sidemark in the P.O. slot, and a date one day early (`docDate` UTC); the literal
+   "No Sidemark" reaches NetSuite `custcol3`.
+7. Screen proofs owed with Stuart: the packing list + invoice on the CRM card (needs a packed order), discounts on paper,
+   the picture = the view (4d09ce3).
+8. Data for Stuart, one list: `CE-INV-57732` Unfinished tag; Brimar BL / GOP lead class; the tag list from your log
+   (stray `drive: MANUAL`, single returns on doubles, carrier drift, in-line plates, `ridesWith` on H1-1 #31/#32 and
+   H1-138 #72). Hand the four portal mirror lines to S4 in one block (rank, ridesWith, parked-never-rides, plate-follows-arm).
+
+**Watch out for each other:** before EVERY commit run `git log origin/main..HEAD` and ABORT if it prints anything
+(it printed 60af70a on 09-12 and the chain did not stop); `git diff --cached --stat` must list only your files;
+never push while Stuart is mid-entry in CPQ (save-is-send); every push gets a deploy notice in the other four
+briefs; `UserGuideTab.js` — `git status --short` it first.
+
+**Confirm** by appending to § 7 Status log, before starting: `CLOSE-OUT CONFIRMED 2026-09-12: items …, in this
+order, ETA …`; and when done: `CLOSE-OUT DONE: <hashes>`. The communicator collects the five confirmations.
+
 ## ⛔ Working agreement + standing rules
 
 Plan first and WAIT. Requested scope only. No temporary fixes. Trace downstream: what you write becomes the

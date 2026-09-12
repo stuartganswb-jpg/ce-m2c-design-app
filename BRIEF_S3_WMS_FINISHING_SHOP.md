@@ -9,6 +9,45 @@ trip), the finishing-floor parts of `RTG_CONTROL_BRIEF.md` (§2 controls, §5 wh
 `deploy-verify-asset-manifest`, `wms-assembly-build-component-bin`, `rod-cuts-wms`, `finishing-order-release-flow`.
 `BRIEF_C_HANDOFF.md` and `BRIEF_D_HANDOFF.md` are history.*
 
+## ⛔ CLOSE-OUT ORDER — Stuart, 2026-09-12 (read before anything else)
+
+Stuart: *"prompt all that we are going to close out now … make sure they are all aware to watch out for each
+other and confirm what we are doing so we get closure and can work on new functions."* No new function starts
+in this session until the list below is done and confirmed. Full picture: `SESSION_COMMS_2026-09-10.md` § Close-out.
+
+**Stuart's rule for the plater PO, verbatim, 2026-09-12:** *"the pole with french return or miter return or
+straight pole anything pole for po to plater is always just the # of feet 1 pole x 8ft = 8 billable feet."*
+The plater PO line for a pole bills **feet = poles × length**; a French return or miter adds nothing. S2 fixes the
+shop doc's `qty` (pieces, not lines) and what the plating demand carries; your half is the PO line in
+`PickPackApp.js` (the weekly shipment's `buildPlatingPoPayload` / description) reading poles + feet, and the staged
+line's count — S2 writes the field names into your § 6.
+
+**S3's close-out list** (three are approved and waiting; the rest verified absent from the code this morning)
+1. #16 retire the Setup Queue "⟲ Create Re-make WO" for stock (`SetupQueue.js:686`, writer `:525`) + the guide's
+   honest-matrix row. Stuart: yes.
+2. #32 delete the Setup Queue's outsourced group (`:51–53`, `:594–597`). Stuart: yes. Look once on the tablet first.
+3. #12 the WMS rod-cut completion calls `releaseStockWoToFloor` for a stock WO — the LAST path that still needs an
+   open RTG tab (spec: BRIEF_D "the rod-cut / convert completions RELEASE a stock order").
+4. #14 the JFP adjustment `dedupeKey: jfp-adj:<id>` + refuse on `jfpAdjQueued/Posted` (`PickPackApp.js` ~1759, ~1867);
+   #35 look at the pack-scrap adjustment for the same shape while there. Stuart reverses IA26936 by hand.
+5. #33 the plating build-back onto the outbox (the last direct inventory write with no double-post guard).
+6. #18 arrival stamp `backorderCovered` + release of the BACKORDER hold; SO Pack toggle releases the same hold.
+7. #19 Rod Cuts empty state "0 for CE — n open under M2C".
+8. #40 settle the receipt field names (`receivedAt/By` per line; `overQty` / `shortQty`) and tell S2.
+9. #34 the pre-pack confirm on an Order Entry custom half; #36 writeBack on the two pull adjustments; #42 C3 read one
+   shape; #43 C6 (`isShopEngineer`, Brimar bent pole).
+10. Live runs: the sales-typed build at pack (never posted live); C4 the Order Entry pair; three clean ⛏ posts →
+    Stuart flips `rootBuildAuto`; the first REPACK on real packs; the first reopened-doc chip and Undo refusal seen by
+    an operator. Stuart owes CE's boxes on HQ 15; pairs wait on Eric.
+
+**Watch out for each other:** before EVERY commit run `git log origin/main..HEAD` and ABORT if it prints anything;
+`git diff --cached --stat` must list only your files; S2 reads `SetupQueue.js` and `PickPackApp.js` (never edits);
+S4 will mount ONE Fulfilment panel in `PickPackApp.js` — coordinate before they start; never push while another
+session is mid-live-run; every push gets a deploy notice in the other four briefs.
+
+**Confirm** by appending to § 7 Status log, before starting: `CLOSE-OUT CONFIRMED 2026-09-12: items …, in this
+order, ETA …`; and when done: `CLOSE-OUT DONE: <hashes>`. The communicator collects the five confirmations.
+
 ## ⛔ Working agreement + standing rules
 
 Plan first and WAIT. Requested scope only. No temporary fixes. Trace downstream. One issue at a time.

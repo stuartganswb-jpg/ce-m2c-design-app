@@ -9,6 +9,33 @@ F4, F6, F9 are yours), `KIT_CPQ_ALIGNMENT_BRIEF.md` (for why; the CPQ half is go
 Part 3 (the offline replay harness), `ASSET_GALLERY_PRINTS_SPEC.md`. Older spec-sheet briefs are history where
 they conflict with the memory.*
 
+## ⛔ CLOSE-OUT ORDER — Stuart, 2026-09-12 (read before anything else)
+
+Stuart: *"prompt all that we are going to close out now … make sure they are all aware to watch out for each
+other and confirm what we are doing so we get closure and can work on new functions."* Stuart is mid-testing the
+display tools; finish that test with him, then the list. Full picture: `SESSION_COMMS_2026-09-10.md` § Close-out.
+
+**S5's close-out list**
+1. The display tools test with Stuart to its end (re-seed the tabletop, pick the H1 flow, Place the CPQ rows into
+   Top Row 1 / 2, the wall board, a build order) — every defect he sees fixed before anything else. Note: S1's
+   4d09ce3 made Add-to-cart capture the view as set for the whole CPQ; your `displaySnapshot` preference falls back
+   to `renderSnapshot` — remove the dead preference or confirm it is harmless.
+2. The H1-138TRV kit end-to-end: one kit on tab 7 and the same kit in CPQ, the bills compared, now that Stuart has
+   applied the import and tagged the flow. The plug placeholder (`H1-2TRVPLUG ×2`) he will replace — record what.
+3. The data sitting with Stuart: `frontRail` on the -4D/-4DC/-4MD/-4MDC and -4FRT/-4MFRT kit records; the
+   spec-sheet tags (S72 `returnOnly`, FR/MTR proj as `FRONT:8.5, BACK:3.25`, the 6" returns' `feeItemNo`, the wood
+   singles' pin copy); prices for `H1-138AR`, `H1-138D`, `H1-DBLMR`.
+4. F9 guide sections (kits, spec sheets, 4.6 KITS / CHECKOUT) — coordinate on `UserGuideTab.js` with S1.
+5. Named for Eric / Stuart, not code: the lump-sum display SO and component relief at build.
+
+**Watch out for each other:** before EVERY commit run `git log origin/main..HEAD` and ABORT if it prints anything
+(your b3fd59f carried S2's c0f562d); `git diff --cached --stat` must list only your files; `kitSeed` is yours,
+`traverseExplode` is S1's; never push while Stuart is mid-entry in CPQ; every push gets a deploy notice in the
+other four briefs.
+
+**Confirm** by appending to § 7 Status log, before starting: `CLOSE-OUT CONFIRMED 2026-09-12: items …, in this
+order, ETA …`; and when done: `CLOSE-OUT DONE: <hashes>`. The communicator collects the five confirmations.
+
 ## ⛔ Working agreement + standing rules
 
 Plan first and WAIT. Requested scope only. No temporary fixes. Trace downstream: a kit record feeds S1's engine

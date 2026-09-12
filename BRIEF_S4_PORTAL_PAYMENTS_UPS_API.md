@@ -12,6 +12,33 @@ once credentials arrive), `PORTAL_CPQ_CONTRACT_BRIEF.md` (the four contracts the
 full — where they conflict with `STATE_OF_THE_APP_2026-09-10.md` or `SESSION_COMMS_2026-09-10.md`, the newer wins;
 where they conflict with each other, ask.*
 
+## ⛔ CLOSE-OUT ORDER — Stuart, 2026-09-12 (read before anything else)
+
+Stuart: *"prompt all that we are going to close out now … make sure they are all aware to watch out for each
+other and confirm what we are doing so we get closure and can work on new functions."* S4 has not started. When
+Stuart opens it, the first issue is the loophole every other session is now blocked on, not the brief's §3 order.
+Full picture: `SESSION_COMMS_2026-09-10.md` § Close-out.
+
+**S4's close-out list**
+1. **Every packed order's NetSuite fulfilment FAILS** in 11.1 on "Items list: Location" (multi-location; Eric
+   confirmed one location per line — put `location` on the `itemfulfillment` payload). Seen again on SO60420 on
+   09-11. Until this lands nothing packed is fulfilled in NetSuite. This is the FIRST issue, planned whole with the
+   Fulfilment tab in view but shippable on its own.
+2. #20 `portalMyOrders` date read (`functions/index.js:1262`) → `needBy || readyDate || createdDate`; deploy; tell S1 so
+   the two alias lines go.
+3. #21 `needBy` + `productionNotes` on the three portal request functions; the `!j.deleted` filter on the portal list.
+4. The four portal mirror lines S1 hands you (engine rank, `ridesWith`, parked-never-rides, plate-follows-arm) into
+   `portalEngine.js`.
+5. Then the Fulfilment tab plan (§3 items 4–7) and payments when the sandbox exists.
+
+**Watch out for each other:** the Fulfilment tab is ONE guarded mount in S3's `PickPackApp.js` — coordinate before
+you touch it; before EVERY commit run `git log origin/main..HEAD` and ABORT if it prints anything; `git diff
+--cached --stat` must list only your files; portal functions deploy only from Cloud Shell (write the command);
+every push gets a deploy notice in the other four briefs.
+
+**Confirm** by appending to § 7 Status log, on start: `CLOSE-OUT CONFIRMED <date>: items …, in this order, ETA …`;
+and when done: `CLOSE-OUT DONE: <hashes>`.
+
 ## ⛔ Working agreement + standing rules
 
 Plan first and WAIT. Requested scope only. No temporary fixes. Trace downstream — a fulfilment that ships must
