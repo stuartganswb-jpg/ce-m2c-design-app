@@ -91,6 +91,7 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
+| 2026-09-12 | S2 | eee33a3 f9affc2 43d5ea9 65fb699 | Six items: ⟲ Reopen one order; Snapshot Display column; transmit panel FAILED; no close to-do when built; `linkedDocsOf` finds SO-APP records (floorPhase now reaches CPQ orders); three writers onto the shared builders + convert hook releases stock (Route A) + Reset tells the record + PO ✎ lock. | everyone |
 | 2026-09-11 | S2 | d50cce1 | Packing list / invoice SHARED HALF: `Shared/packingList` builder + `orderStatus` inProduction / packedStateOf / reopen roles. No screen change until S1 + S3 wire it. | everyone |
 | 2026-09-11 22:47 | S3 | 1d02231 | WMS: a pick-only order never shows the "overtaken pick" banner. Shop: Undo on a plated order refuses once the WMS holds the pieces (staged / at the plater / built). | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-11 22:39 | S3 | a8bb6a8 | WMS pack: French returns/miters ride the rod (pack lines by code, ticked with the pole — the packing list pairs them); a box must be chosen to complete; the plater PO memo leads with the shipment id (the 40-char cap hid PO2316); a plating order packs its ready parts early but the pole line and the close wait for the plater. | everyone — save-is-send refuses on a stale bundle |

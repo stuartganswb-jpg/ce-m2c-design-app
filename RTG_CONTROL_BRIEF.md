@@ -59,8 +59,8 @@ Stock View / Snapshot / Library / Raw Cores / pre-check ─► parkWorkOrder (A)
           · stock WO         → releaseStockWoToFloor (Shared/floorRelease) = buildFinDoc + ROUTE A
                                (the NetSuite work order queued at that moment, writeBack to both docs)
           · SHOP route       → pushToShop → buildShopDoc
-        Nothing releases from a browser tab alone any more: the WMS rod-cut / convert completions and
-        A's clearConvertGate call the same shared release.
+        The WMS CONVERT completion (A's clearConvertGate, stock branch since 2026-09-12) calls the same
+        shared release; the WMS ROD-CUT completion still waits for an open RTG tab (S3's #12).
                      │
           fin_workorders  ──► Setup Queue → Active Floor → WMS pick (Start Setup / shop START releases it)
           shop_custom_orders ► Shop Floor; START releases the sibling pick; COMPLETE mirrors

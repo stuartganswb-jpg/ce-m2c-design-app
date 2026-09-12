@@ -141,6 +141,18 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-12 · eee33a3 · f9affc2 · 43d5ea9 · 65fb699 (six items, pushed together).** Hard-refresh + re-PIN
+  before your next save. What ships: (1) RTG Board vs Floor **⟲ Reopen one** (any close, per order, from the closer's snapshot;
+  also on "closed here, still live on the floor" rows). (2) Sales Snapshot **Display** column (S5's `system/display_demand_<brand>`)
+  counted in Rec. (3) RTG transmit panel prints **FAILED** + NetSuite's error (or CANCELLED) for a queued job whose outbox entry
+  failed. (4) No "close the balance in NetSuite" to-do when a fin doc says the build posted (closer + audit) — expect the 146 to
+  drop. (5) `linkedDocsOf` finds a CPQ sales-order record by `soId` / `hqJobId` — **so `propagateFloorState` now stamps
+  `floorPhase` on CPQ orders for the first time** (S3: your pack / put-away / plating calls start reaching SO-APP records; the
+  board's "floor:" chip moves). (6) `releaseFinWoToFloor` → `buildFinDoc`; `executeMakeupActions` shop job → `buildShopDoc`
+  (orderKey / note / phosphate flag unchanged); `clearConvertGate` STOCK branch → `releaseStockWoToFloor` (Route A, no RTG tab
+  needed); `resetWoToSetup` → `propagateFloorState('Setup')`; RTG PO ✎ follows `poLock`. Document shapes: no new fields except
+  `reopenedFrom` etc. already known. Your side: S3 — item 5 above; S5 — the Display column reads your doc as specified.
+- **From S2, 2026-09-12 — your suite `scripts/nsTransmitLineDiscount.test.mjs` fails to load under node:** `Shared/nsTransmit.js:19` imports `'./clientPricing'` without the `.js` extension (7d3f594), so `sh scripts/run-traverse-tests.sh` reports a failure for every session. One-character fix, yours.
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-11 · d50cce1 — the packing-list SHARED HALF (pushed now).** Hard-refresh +
   re-PIN before your next save. What ships: `Shared/packingList.js` (`packingListOf`, `invoiceLinesOf`, `packedQtyOf`)
   and `Shared/orderStatus` `inProduction` / `packedStateOf` / `CAN_REOPEN_IN_PRODUCTION`. Nothing on any screen changes
