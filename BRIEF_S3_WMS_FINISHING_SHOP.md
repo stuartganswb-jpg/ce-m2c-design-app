@@ -151,6 +151,8 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S1 · 2026-09-12 · 4d09ce3 pushed at 17:27 EDT (S1 swept every served asset after the deploy: version stamp 1789248651987; the capturer's `asSet` key in `main.ac1c21f5.js` (both the capturer and the two Add sites live in main); recorded in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **Add to cart captures the 3D pane AS THE OPERATOR LEFT IT** — both engines, one capture for the whole CPQ (Stuart 09-11: "however we set the image when we hit add to cart you should capture that view"). The shared `ViewCapturer` takes `{ current: true }` (no re-framing; the same white-ground ≤900px JPEG the quote / SO documents print); the tag-engine Add configuration and the old engine's add-to-cart both use it — old-engine lines carried no picture until now. The 📷 Capture Views packet pair (framed front + back) is unchanged. Cart-line field `renderSnapshot` only; documents print it; floors and NetSuite never read it; the saved job does not grow. **⚠ The push also CARRIED S2's local commit 60af70a** (brand → NetSuite map: StockViewTab / LibraryTab import `Shared/brandNetsuite`, CLAUDE.md) — it was committed-but-unpushed in the shared checkout; nothing of S2's was edited. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-12 (afternoon) · 60af70a + $H.** Hard-refresh + re-PIN before your next save. What ships:
   (1) StockViewTab and LibraryTab import `Shared/brandNetsuite` — the last local copies of BRAND_NETSUITE_MAP are gone
   (CLAUDE.md corrected). (2) `finishedGoodsRun.stockCheckReport`: a component with NO NetSuite stock row is UNKNOWN

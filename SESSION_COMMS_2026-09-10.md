@@ -81,7 +81,7 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | session | state | last hash | next |
 |---|---|---|---|
-| S1 | started 09-10. **Live:** a58d126 … 2b164a5 (Vision 2 ✓); 7d3f594 (discounts · QUO147 · Vision gate); e9dfc1c (tab 7 set % · money docs add up); bcb3ecb (packing list + invoice on the SO card). **Next:** Stuart's screen proof (QUO147 / QUO142 / a discounted quote / a packed order's 📦🧾); BRIEF_S1 §3 leftovers (#22, #20, #17, #47, #46, #53). | bcb3ecb | screen proof; §3 leftovers |
+| S1 | started 09-10. **Live:** a58d126 … bcb3ecb (packing list + invoice); 4d09ce3 (add-to-cart captures the view as set). **Next:** Stuart's screen proof; BRIEF_S1 §3 leftovers (#22, #20, #17, #47, #46, #53). | 4d09ce3 | screen proof; §3 leftovers |
 | S2 | started 09-10. Issue 1 DONE: reopen tool shipped (6c72e80 → 553272b), run REOPEN-1789057501646 = 52 restored / 0 failed on Stuart's list. Issue 2 (prevention) built + tested, push pending. Hand-offs out: S3 `reopenConfirmPick` chip; S1 refused-estimate stamp. Named: refused quotes invisible on RTG (S2 row queued). | 553272b | push Issue 2; then the refused-quotes row; then §3 #1 live pass |
 | S3 | started 09-10. Live: f5a6c19 · e2cef1f · 47c2b6b · 1e5e5a4 · 8b2e6b1 · a8bb6a8 · 1d02231 · 6ac41ac (HQ 15 Standard boxes tool — the add-box path was a hidden prompt-driven Save; now a real section). **SO60420 plating round trip COMPLETE end to end 09-11** (`PLATING_ROUND_TRIP_SO60420.md`); every defect it found is fixed. Stuart: add CE's boxes on HQ 15 (packs cannot close without one). Pairs wait on Eric. Next: BRIEF_S3 §3 items 2–5 (the sales-typed build at pack, the rest of the live pass, C4, the ⛏ posts) as Stuart picks. | 6ac41ac | §3 #2 when Stuart picks |
 | S4 | brief written, not started | — | when Stuart opens it |
@@ -91,6 +91,7 @@ batch pushes when he is mid-entry, and ask before pushing during a live run.
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
+| 2026-09-12 17:27 | S1 | 4d09ce3 | **Add to cart captures the view as set** (both engines; old-engine lines gain a picture); S2's 60af70a carried. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-12 pm | S2 | 60af70a $H | One brand map (Shared/brandNetsuite everywhere); the stock pre-check treats a missing NetSuite row as UNKNOWN, not short. | everyone |
 | 2026-09-12 | S2 | eee33a3 f9affc2 43d5ea9 65fb699 | Six items: ⟲ Reopen one order; Snapshot Display column; transmit panel FAILED; no close to-do when built; `linkedDocsOf` finds SO-APP records (floorPhase now reaches CPQ orders); three writers onto the shared builders + convert hook releases stock (Route A) + Reset tells the record + PO ✎ lock. | everyone |
 | 2026-09-11 | S2 | d50cce1 | Packing list / invoice SHARED HALF: `Shared/packingList` builder + `orderStatus` inProduction / packedStateOf / reopen roles. No screen change until S1 + S3 wire it. | everyone |

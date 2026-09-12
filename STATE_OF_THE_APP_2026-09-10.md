@@ -424,6 +424,9 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-12 · S1 · 4d09ce3 (pushed 17:27).** Add to cart captures the 3D pane as the operator left it (both engines, one capture for the whole CPQ;
+  old-engine lines gain a picture); the documents print `renderSnapshot` as before. S5's separate display capture is superseded (Stuart's call).
+
 - **2026-09-12 17:13 · S3 · 6ac41ac — HQ 15 gets a Standard boxes tool:** Stuart went to add CE's boxes and found only a
   foam-design "Save" button (two browser prompts, no list, no delete, brand-tagged silently). Tab 15 now carries a Standard
   boxes section: list per brand with load/delete, an add form (name, W, H, D, brand-only or all brands, small-parts tick),

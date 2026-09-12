@@ -454,6 +454,11 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-12 — 4d09ce3 (S1) pushed 17:27, SWEPT: version stamp 1789248651987; `asSet` in `main.ac1c21f5.js` (both the capturer and the two Add sites live in main).** `ViewCapturer` `{ current: true }` = the camera as
+  it stands (no re-frame), same JPEG; TAGS Add configuration + old-engine handleAddToCart use it. S5's `displaySnapshot` ask superseded by Stuart
+  (one capture for the whole CPQ). ⚠ The push CARRIED S2's unpushed 60af70a — my pre-commit `git log origin/main..HEAD` check PRINTED it but the
+  chain did not stop; from now on that check must `exit 1` before `git commit`. Proof = Stuart: rotate/zoom, Add, Docs → the picture is the view.
+
 - **2026-09-11 — bcb3ecb (S1) pushed 17:46, SWEPT: version stamp 1789163433314; CRM `535.1c343f7c.chunk.js`, FormPreview `483.f0343b5c / 872.3eec0dbf / 920.7102c967 chunks + main.aa8796bd.js`.** Stuart: "build what S1 needs"
   → S2's 09-11 hand-off (the packing list + the invoice on the SO card). `Shared/invoiceMath.invoiceDocOf` (11 assertions): nothing short → the
   invoice IS the order + shipping; adjusted → items at shipped $, discount rows × shipped÷ordered goods, net-line subtotals dropped, fees in full,
