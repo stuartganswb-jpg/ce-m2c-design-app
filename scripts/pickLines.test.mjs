@@ -134,5 +134,25 @@ eq('a finish suffix does not hide the length', stockedPoleDetail('HCUMP810/P', 1
 eq('a ring has no length and gets no guess', stockedPoleDetail('HCUSR1', 2, poleLengthOf), null);
 eq('nor does a joiner', stockedPoleDetail('H1-1JNR-16G', 2, poleLengthOf), null);
 
+// ── THE POLE, BY CODE (2026-09-11: every Brimar packing list read NOT PACKED on the pole) ───────
+// A custom order's pole rides the shop order; the finishing document had no pole line to tick,
+// and the one synthetic row carried a TYPE word. The packing list pairs by code — nothing matched.
+const customDoc = { id: 'WO-SO1', orderType: 'sales', shopSiblingId: 'SHOP-SO1', hasCustomSibling: true, partsList: [{ legacyErpId: 'H1-1BP-R/EP3', name: 'Round Backplate', qty: 3 }] };
+const shopSibDoc = { cutList: [{ legacyErpId: 'H1-1R', name: '1" Round Hollow Rod Stock', qty: 1, cutLength: 106 }, { legacyErpId: 'H1-FRPF', name: 'French return', qty: 2 }] };
+const pdc = poleDetailsOf({ job: customDoc, shopDoc: shopSibDoc });
+eq('the shop cut rows carry the pole CODE', pdc.rows.map(r => r.code), ['H1-1R']);
+eq('a cut row with no length is not a pole row', pdc.rows.length, 1);
+const liveRows = packLinesOf(customDoc, { poleRows: pdc.rows });
+eq('live pole rows become pack lines keyed POLE-i, by code', liveRows.filter(l => l.isPole).map(l => [l.key, l.erp, l.qty]), [['POLE-0', 'H1-1R', 1]]);
+ok('the pole line names its length', /106/.test(liveRows.find(l => l.isPole).name));
+eq('the small parts are still there', liveRows.filter(l => !l.isPole).map(l => l.erp), ['H1-1BP-R/EP3']);
+const stampedDoc = { ...customDoc, poleLines: [{ code: 'H1-1R', name: '1" Round Hollow Rod Stock', qty: 1, length: 106, unit: 'in' }] };
+eq('a document the pack STAMPED rebuilds the same pole line with no shop sibling in the room', packLinesOf(stampedDoc).filter(l => l.isPole).map(l => [l.key, l.erp, l.qty]), [['POLE-0', 'H1-1R', 1]]);
+eq('live rows win over the stamp when both are present', packLinesOf(stampedDoc, { poleRows: [{ code: 'H1-1R', qty: 2, length: 96, unit: 'in' }] }).find(l => l.isPole).qty, 2);
+const legacyDoc = { id: 'WO-L', orderType: 'sales', partsList: [], totalPoles: 2, poles: { type: 'POLES' } };
+eq('a document with only a pole count keeps the legacy POLES row', packLinesOf(legacyDoc).map(l => [l.key, l.erp, l.qty]), [['POLES', 'POLES', 2]]);
+eq('the stocked pole row carries its code too', stockedPoleDetail('HCUMP810', 6, poleLengthOf).code, 'HCUMP810');
+eq('a single-cutLength shop doc names its code', poleDetailsOf({ job: customDoc, shopDoc: { itemCode: 'HBR1-1INPOLE', qty: 3, cutLength: 108 } }).rows.map(r => [r.code, r.qty]), [['HBR1-1INPOLE', 3]]);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

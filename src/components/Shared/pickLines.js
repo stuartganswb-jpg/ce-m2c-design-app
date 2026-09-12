@@ -86,7 +86,7 @@ export function pickableLinesOf(job) {
  *   FINISHING    the exploded parts list, plus the poles, which are not on it — they came off the
  *                shop order and are counted separately.
  */
-export function packLinesOf(job) {
+export function packLinesOf(job, { poleRows = null } = {}) {
     if (!job) return [];
     const out = [];
     if (isQuickShip(job)) {
@@ -122,6 +122,26 @@ export function packLinesOf(job) {
             qty: Number(l.quantity ?? l.qty) || 1,
         });
     });
+    // THE POLES, BY CODE (2026-09-11, the Brimar packing lists read NOT PACKED on every pole):
+    // a custom order's poles come off the SHOP order, so this document never listed them and the
+    // one synthetic row it could make carried a TYPE word, not the pole's code — the packing list
+    // pairs by code and found nothing. Now: the caller passes the shop sibling's rows live
+    // (Shared/pickLines.poleDetailsOf, the same rows the pick and pack cards show), the pack
+    // STAMPS them on the document (`poleLines`) the moment a pole is ticked, and from then on the
+    // document alone rebuilds the same rows — so the packing list, built from the documents with
+    // no shop sibling in the room, sees the pole by its code. The legacy type-word row survives
+    // for documents with a pole count and neither.
+    const stamped = Array.isArray(job.poleLines) ? job.poleLines : null;
+    const rows = (Array.isArray(poleRows) && poleRows.length) ? poleRows : (stamped && stamped.length ? stamped : null);
+    if (rows) {
+        rows.forEach((r, i) => {
+            const code = String((r && r.code) || '').toUpperCase();
+            const name = String((r && r.name) || code || 'Pole');
+            const len = r && r.length != null && String(r.length) !== '' ? ` · ${r.display || formatPoleLength(r.length, r.unit || 'in')}` : '';
+            out.push({ key: `POLE-${i}`, erp: code || name, aliasErp: '', name: `Pole · ${name}${len}`, qty: Number(r && r.qty) || 1, isPole: true, length: r ? r.length : null, unit: (r && r.unit) || 'in' });
+        });
+        return out;
+    }
     const poleQty = Number(job.totalPoles || (job.poles && job.poles.qty)) || 0;
     if (poleQty > 0) {
         const ptype = (job.poles && job.poles.type) || job.type || '';
@@ -194,6 +214,9 @@ export function poleDetailsOf({ job, shopDoc = null, salesOrder = null } = {}) {
             rows: cuts.map(c => {
                 const qty = asQty(c.qty) || 1;
                 return {
+                    // THE CODE, for the packing list (2026-09-11): the list pairs ORDERED with PACKED by
+                    // item code, and a pole row that carried only a name never matched its ordered line.
+                    code: String(c.legacyErpId || c.partId || c.itemCode || c.code || '').toUpperCase(),
                     name: String(c.name || c.legacyErpId || 'Pole'),
                     qty, length: c.cutLength, unit: 'in',
                     display: formatPoleLength(c.cutLength, 'in'),
@@ -206,6 +229,7 @@ export function poleDetailsOf({ job, shopDoc = null, salesOrder = null } = {}) {
         return {
             source: 'shop', sidemark,
             rows: [{
+                code: String(shopDoc.itemCode || shopDoc.legacyErpId || shopDoc.stockErpId || shopDoc.item || shopDoc.partNum || '').toUpperCase(),
                 name: String(shopDoc.item || shopDoc.partNum || 'Pole'),
                 qty: asQty(shopDoc.qty) || 1, length: shopDoc.cutLength, unit: 'in',
                 display: formatPoleLength(shopDoc.cutLength, 'in'),
@@ -227,5 +251,5 @@ export function poleDetailsOf({ job, shopDoc = null, salesOrder = null } = {}) {
 export function stockedPoleDetail(code, qty, lengthOf) {
     const ft = typeof lengthOf === 'function' ? lengthOf(code) : null;
     if (!ft) return null;
-    return { name: String(code || 'Pole'), qty: asQty(qty) || 1, length: ft, unit: 'ft', display: formatPoleLength(ft, 'ft') };
+    return { code: String(code || '').toUpperCase(), name: String(code || 'Pole'), qty: asQty(qty) || 1, length: ft, unit: 'ft', display: formatPoleLength(ft, 'ft') };
 }

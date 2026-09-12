@@ -32,6 +32,14 @@ import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualC
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { printUomLabels, printSalesOrderLabels, printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { encodeUomScan, uomDisplay } from '../Shared/labelScan';
+// THE PACKING LIST ON THE WMS (Stuart 2026-09-11: "i do not see this same packing slip available on
+// the wms so pack screen or packaging prep") — the SAME builder the CRM card prints from (S2's
+// Shared/packingList), the same branded form (S1's FormPreview), printed the way every form prints.
+import FormPreview from '../Shared/FormPreview';
+import { printForm } from '../Shared/printForm';
+import { packingListOf } from '../Shared/packingList';
+import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
+import { customerKeys } from '../Shared/clientPricing';
 // ⚠ ALIASED ON PURPOSE. This file already has a LOCAL `packSizeOf` (~:3763) that parses a pack
 // size out of an ITEM CODE suffix ("…-12" → 12) for the ring-pack builder. The shared one reads a
 // UNIT ("7PACK" → 7). Same name, different question — importing it unaliased silently shadowed
@@ -788,8 +796,71 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
     // ONE READER, both dialects (Brief D · D7 — Shared/pickLines). The category tag stays here:
     // it is display grouping for the pack screen, not part of what a line IS.
-    const packLinesOf = (job) => packLinesShared(job).map(l => ({ ...l, cat: packCatOf(l) }));
+    const packLinesOf = (job, opts) => packLinesShared(job, opts).map(l => ({ ...l, cat: packCatOf(l) }));
+    // The pole rows a custom order's pack should show: the shop sibling's cut rows (code · qty ·
+    // length), which `poleInfoOf` loads and caches per order. Stock and Quick Ship carry none.
+    const poleRowsForPack = (job) => (job && !isQsOrder(job) && job.orderType !== 'stock' && job.shopSiblingId) ? (poleInfoOf(job).rows || []).filter(r => r && r.code) : [];
+    const poleLinesStamp = (rows) => (rows || []).map(r => ({ code: r.code || '', name: r.name || '', qty: Number(r.qty) || 1, length: r.length != null ? r.length : null, unit: r.unit || 'in' }));
+    const packLinesFor = (job) => packLinesOf(job, { poleRows: poleRowsForPack(job) });
     const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : woRefOf(j);
+
+    // ── 🖨 PACKING LIST, from the pack station (Stuart 2026-09-11) ──────────────────────────────
+    // ORDERED = the sales order's customer lines (S1's customerDocLines over the CPQ job's breakdown,
+    // or the Order Entry SO's own lines); PACKED = this order's pack documents with the packer's
+    // ticks. Both sides meet in S2's packingListOf — the SAME list the CRM card prints — on S1's
+    // branded form. A CPQ order's lines live on its `jobs` document (the finishing document points
+    // at it by `quoteId`), read once at print time.
+    const printWmsPackingList = async (job) => {
+        if (!job) return;
+        try {
+            setIsSyncing(true);
+            const [tplSnap, logoSnap] = await Promise.all([
+                getDoc(doc(db, 'hq_config', 'form_templates')).catch(() => null),
+                getDoc(doc(db, 'hq_config', 'brand_logos')).catch(() => null),
+            ]);
+            const tpls = tplSnap && tplSnap.exists() ? (tplSnap.data() || {}) : {};
+            const tpl = tpls['PACKING_SLIP'] || tpls['QUOTE'] || { header: '', footer: '', terms: '' };
+            const logoUrl = logoSnap && logoSnap.exists() ? (logoSnap.data() || {})[activeBrand] : undefined;
+            const so = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || soIndex[String(job.orderKey || '')] || null);
+            let ordered, packDocs, docNumber, customerName, poRef;
+            if (isQsOrder(job)) {
+                ordered = (job.lines || []).map(l => ({ erp: l.erp, legacyErpId: l.erp, name: l.name, qty: l.qty, finishLabel: l.finishCode || '' }));
+                packDocs = [job];
+                docNumber = job.soId || job.id;
+                customerName = job.customer || job.customerName || '';
+                poRef = job.customerPo || job.poNum || job.sidemark || job.memo || '';
+            } else {
+                const jobId = job.quoteId || job.hqJobId || (so && (so.hqJobId || so.cpqAppId || so.quoteId)) || null;
+                const jSnap = jobId ? await getDoc(doc(db, 'jobs', String(jobId))).catch(() => null) : null;
+                const j = jSnap && jSnap.exists() ? { id: jSnap.id, ...jSnap.data() } : null;
+                if (!j) return alert(`The packing list needs the order's sales lines, and no CPQ job was found for ${packRef(job)} (quote id ${jobId || 'none on the document'}). Print it from the CRM card, and tell Stuart.`);
+                const idx = new Map();
+                hqParts.forEach(p => {
+                    const slim = { itemName: p.itemName, clientPricing: p.clientPricing };
+                    [p.id, p.itemId, p.legacyErpId].forEach(k => { const kk = String(k || '').trim().toUpperCase(); if (kk && kk !== 'PENDING' && !idx.has(kk)) idx.set(kk, slim); });
+                });
+                customerName = (j.customer && j.customer.name) || j.clientName || job.customerName || job.clientName || (so && so.customer) || '';
+                ordered = customerDocLines(j.cpqData?.breakdown || [], 'PACKING_SLIP', cartFinishLabelOf(j.cpqData), {
+                    findPart: (id) => idx.get(String(id || '').trim().toUpperCase()) || null,
+                    custKeys: customerKeys((j.customer && j.customer.id) || job.customerId || '', { name: customerName }),
+                }).filter(l => !l.isKit);
+                packDocs = finAll.filter(w => w.id === job.id || (job.orderKey && w.orderKey === job.orderKey) || (job.salesOrderId && w.salesOrderId === job.salesOrderId));
+                if (!packDocs.length) packDocs = [job];
+                docNumber = job.soNum || job.salesOrderId || job.orderKey || job.id;
+                poRef = j.customerPo || j.sidemark || (so && (so.customerPo || so.sidemark || so.memo)) || job.sidemark || job.note || '';
+            }
+            const pl = packingListOf({ ordered, packDocs });
+            const shipTo = (so && Array.isArray(so.shipTo) && so.shipTo.length) ? so.shipTo : [customerName || '—'];
+            const data = {
+                billTo: [customerName || '—'], shipTo, date: new Date().toLocaleDateString(), po: poRef || '—', termsLabel: '', lines: [],
+                packing: { shipDate: pl.shipDate, tracking: pl.tracking, lines: pl.lines, flagged: pl.flagged, packed: pl.packed },
+            };
+            printForm(<FormPreview type="PACKING_SLIP" brand={activeBrand} logoUrl={logoUrl} header={tpl.header} footer={tpl.footer} terms={tpl.terms} docNumber={String(docNumber)} data={data} />, `Packing List — ${docNumber}`);
+            writeLog(`Packing list printed for ${packRef(job)} from the WMS (${pl.lines.length} line${pl.lines.length === 1 ? '' : 's'}${pl.flagged ? `, ${pl.flagged} flagged` : ''}).`, 'wms');
+        } catch (e) {
+            alert('Could not build the packing list: ' + (e.message || e));
+        } finally { setIsSyncing(false); }
+    };
 
     // ── ONE ORDER, ONE PAIR OF HANDS (Stuart 2026-09-02: "make sure each is gated so once a user
     // starts a pick another user sees that and does not start to pick") ─────────────────────────
@@ -1557,7 +1628,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const c = claimOf(job, 'pack');
             return alert(c ? `${c.by} ${t('is packing this')} — ${t('since')} ${claimSince(c)}.` : `Press START PACKING first — this order is not yours yet, and marking pieces packed on someone else's order is how a box goes out wrong.`);
         }
-        try { await updateDoc(packDocOf(job), { [`packedLines.${line.key}`]: { at: Date.now(), by: operator?.name || 'Packer' } }); }
+        // The tick carries the COUNT (the packing list reads `packedLines.<key>.qty`), and the first
+        // pole tick stamps the pole rows on the document so the list can rebuild them without the
+        // shop sibling in the room (Shared/pickLines.packLinesOf reads `poleLines`).
+        const patch = { [`packedLines.${line.key}`]: { at: Date.now(), by: operator?.name || 'Packer', qty: Number(line.qty) || 1 } };
+        if (line.isPole && !isQsOrder(job) && job.orderType !== 'stock') {
+            const rows = poleRowsForPack(job);
+            if (rows.length) patch.poleLines = poleLinesStamp(rows);
+        }
+        try { await updateDoc(packDocOf(job), patch); }
         catch (e) { alert('Could not mark packed: ' + (e.message || e)); }
     };
     const unpackLine = async (job, line) => {
@@ -1812,7 +1891,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const completePacking = async (job) => {
         if (packCompletingRef.current) return;
         if (job.packStatus === 'Packed') return alert('This order is already packed.');
-        const lines = packLinesOf(job);
+        const lines = packLinesFor(job);
         const left = lines.filter(l => !(job.packedLines && job.packedLines[l.key]));
         if (left.length) return alert(`Every piece must be physically packed and confirmed first — ${left.length} line${left.length === 1 ? '' : 's'} still on the TO PACK side.`);
         // The order must be YOURS to complete. (The card opens read-only — Stuart 2026-09-03.)
@@ -1864,7 +1943,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!window.confirm(confirmMsg)) return;
         packCompletingRef.current = true;
         try {
+            const poleRowsAtPack = poleRowsForPack(job);
             await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', packInProgress: null,
+                ...(poleRowsAtPack.length ? { poleLines: poleLinesStamp(poleRowsAtPack) } : {}),
                 ...(job.hasCustomSibling && !job.packCustomMatchedAt ? { packCustomMatchedAt: Date.now(), packCustomMatchedBy: operator?.name || '', packCustomMatchedScan: custMatch } : {}),
                 ...(isStockPutaway ? { putawayBin: bin, packMode: 'PUTAWAY' } : { packBoxes: packBoxSel }) });
             setPackCustomScan('');
@@ -4899,6 +4980,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         ? <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44' }}>📦 Packed · {(o.packPhotos || []).length} photo{(o.packPhotos || []).length === 1 ? '' : 's'} · {o.packedBy || ''}{o.nsIfTran ? ` · IF ${o.nsIfTran}${o.nsFulfillStatus ? ` (${o.nsFulfillStatus})` : ''}` : (o.nsFulfillQueued ? ' · IF queued…' : '')}{(o.trackingNumbers || []).length ? ` · 🚚 ${o.trackingNumbers.join(', ')}` : ''}</span>
                                         : (o.status === 'Picked' && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: theme.brass }}>→ in the PACKING tab queue</span>)}
                                     <button onClick={() => toggleFinishAsAvailable(o)} title={finishAsAvailable(o) ? 'Parts are going to finishing as they arrive — switch back to waiting for the whole order' : 'The exception: send parts to finishing as they arrive, rather than waiting for the whole order'} style={{ padding: '9px 14px', background: 'transparent', color: finishAsAvailable(o) ? theme.brass : theme.inkSoft, border: `1px solid ${finishAsAvailable(o) ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⚡ {t(finishAsAvailable(o) ? 'Waiting off' : 'Finish as available')}</button>
+                                    <button onClick={() => printWmsPackingList(o)} disabled={isSyncing} title="The packing list — ordered beside packed, by item code" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: isSyncing ? 'wait' : 'pointer' }}>🖨 {t('Packing list')}</button>
                                     <button onClick={() => printAllOrderLabels(o, o.lines || [])} title="Print item labels for every line on this order" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 {t('Labels')}</button>
                                     {/* A stale order had nowhere to die: RTG's board cannot see an Order Entry sale, and RTG
                                         was the only caller of the closer. This is that same closer, reachable from where the
@@ -4965,7 +5047,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                 {/* 📦 TAB: PACKING STATION */}
                 {activeTab === 'PACKING' && (() => {
-                    const lines = packJob ? packLinesOf(packJob) : [];
+                    const lines = packJob ? packLinesFor(packJob) : [];
                     const isPacked = (l) => !!(packJob.packedLines && packJob.packedLines[l.key]);
                     const toPack = packJob ? lines.filter(l => !isPacked(l)) : [];
                     const packed = packJob ? lines.filter(isPacked) : [];
@@ -5079,6 +5161,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             : `👁 ${t('Looking only — nothing is changed until you start packing')}`}
                                                 </span>
                                                 <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                                    <button onClick={() => printWmsPackingList(packJob)} disabled={isSyncing} title="The packing list — what was ordered beside what this station has packed, by item code. The same list the CRM card prints." style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: isSyncing ? 'wait' : 'pointer' }}>🖨 {t('Packing list')}</button>
                                                     <button onClick={() => printAllOrderLabels(packJob, packLinesOf(packJob))} title="Print item labels for every line on this order" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 {t('Labels')}</button>
                                                     {!c && <button onClick={() => startPacking(packJob)} style={{ padding: '9px 16px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Start packing')}</button>}
                                                     {held && isPlatingAdmin && <button onClick={() => adminReleaseClaim(packJob, 'pack')} style={{ padding: '9px 14px', background: 'transparent', border: '1px solid #d9534f', color: '#c0392b', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Release (admin)')}</button>}
@@ -5220,6 +5303,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             {(j.trackingNumbers || []).length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.ink }}>🚚 {j.trackingNumbers.join(', ')}</span>}
                                             <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '10px' }}>
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px' }}>{j.packedBy || ''} · {j.packedAt ? new Date(j.packedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''} · {(j.packPhotos || []).length} 📷</span>
+                                                <button onClick={(e) => { e.stopPropagation(); printWmsPackingList(j); }} disabled={isSyncing} title="The packing list — ordered beside packed, by item code" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: isSyncing ? 'wait' : 'pointer' }}>🖨 {t('Packing list')}</button>
                                                 <button onClick={() => pullFulfillment(j)} title="Pull fulfillment status + tracking # from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⤓ Tracking</button>
                                                 {!isQsOrder(j) && <button onClick={() => reportPackScrap(j)} title="Bad pieces found after packing — record scrap" style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⚠ Scrap</button>}
                                             </span>
