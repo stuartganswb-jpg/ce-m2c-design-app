@@ -221,6 +221,14 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-12 · 6ac41ac pushed 17:13 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. HQ → 15. Packaging (`HQ/PackagingTab.js`, no other file) gains a real **Standard
+  boxes** section: list of the active brand's boxes (name, W×H×D, brand, SMALL PARTS tag) with Load-to-workspace and delete,
+  and an add form (name, W, H, D, brand-only / all brands, small-parts tick); the old blind "Save" next to "Load Standard…"
+  is now "Save as box" (fills the form from the workspace). Same `standard_boxes` record shape the WMS pack screen already
+  reads, so nothing changes on the pack side; the WMS refusal "add them in HQ → 15. Packaging → Standard boxes" now points
+  at a section that exists. Nothing reaches RTG, the floors or NetSuite. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-11 · 1d02231 pushed 22:47 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
   (⌘⇧R) + re-PIN before your next save. The last two defects from the SO60420 run: (1) WMS pick queue — `isOvertakenPick`
   no longer reads a pick-only document's born-`Complete` phase as "already in production" (no red banner / CLEAR on a

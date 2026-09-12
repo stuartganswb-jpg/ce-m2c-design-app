@@ -424,6 +424,13 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-12 17:13 · S3 · 6ac41ac — HQ 15 gets a Standard boxes tool:** Stuart went to add CE's boxes and found only a
+  foam-design "Save" button (two browser prompts, no list, no delete, brand-tagged silently). Tab 15 now carries a Standard
+  boxes section: list per brand with load/delete, an add form (name, W, H, D, brand-only or all brands, small-parts tick),
+  and "Save as box" from the workspace size. The WMS pack screen is unchanged (same `standard_boxes` shape); its box refusal
+  now points at a section that exists. **Still on Stuart:** add the CE boxes (a name with "small" and one with "pole"
+  pre-select themselves on the pack screen).
+
 - **2026-09-11 22:47 · S3 · 1d02231 — the last two defects from the run closed:** the "overtaken pick" banner no longer
   fires on a pick-only document; the shop's Undo on a plated order refuses once the WMS holds the pieces (staged / shipped /
   built). **§2.4 (S3) is now empty of run findings**; what remains for S3 is §3 of its brief (#3 the sales-typed build at

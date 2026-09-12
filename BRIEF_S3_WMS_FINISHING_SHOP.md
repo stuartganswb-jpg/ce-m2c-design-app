@@ -381,6 +381,19 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-12 — 6ac41ac pushed 17:13 EDT (S3): HQ 15 Standard boxes tool** (Stuart: "tab 15 needs a tool to add the size
+  of the box and save … or i am missing it"). It existed but hidden: the "Save" beside "Load Standard…" wrote the foam W×H
+  as a box through two `prompt()`s, brand-tagged to whatever HQ was switched to, with no list or delete. Now a **Standard
+  boxes** section in the right panel: `visibleBoxes` (active brand + global), Load-to-workspace, ✕ delete (confirm; closed
+  packs keep the name they recorded), add form with name / W / H / D / scope (`brandId` = active brand or `'global'`) /
+  small-parts tick (`usage:'small_parts'`), duplicate-name and zero-size refusals; "Save as box" and "Use workspace" fill
+  W×H from the sheet. The BOM panel's small-parts card now reads the brand's flagged box, then a global one, then the
+  18×12×4 fallback (its old lookup could never match). `HQ/PackagingTab.js` only; `standard_boxes` shape unchanged;
+  rules already `isAuth()` read/write. Lint 0, full build passed, safe-push = one commit. **Sweep 17:16 EDT:** stamp
+  1789247750342 (after the push); 37 JS assets, all fetched with `curl -sf` (8,571,679 bytes, 0 failures);
+  `Save as box` ×1 and `cannot close a pack until one exists` ×1 in `107.e475b1b6.chunk.js` (tab 15's chunk), the
+  changelog copy ×1 in `main.7cb49573.js`. **LIVE.** Owed by Stuart: CE's boxes, then the first CE pack closing with one.
+
 - **2026-09-11 — 1d02231 pushed 22:47 EDT (S3): the two remaining defects** (Stuart: "go ahead now and fix all the open
   defects"). `isOvertakenPick` returns false for `pickOnly` / `finishingRequired === false` documents; `ShopFloor.js
   undoComplete` refuses when any live `plating_shipments` line exists for the WO, worded by status (staged / at the plater /
