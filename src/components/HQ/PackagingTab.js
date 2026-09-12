@@ -381,6 +381,10 @@ const PackagingTab = ({ activeBrand }) => {
   const [templates, setTemplates] = useState([]);
   const [standardBoxes, setStandardBoxes] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
+  // Standard boxes section (the WMS pack screen offers these by brand; see PickPackApp brandBoxes)
+  const [boxOpen, setBoxOpen] = useState(true);
+  const [boxForm, setBoxForm] = useState({ name: '', w: '', h: '', d: '', scope: 'brand', smallParts: false });
+  const [boxSaving, setBoxSaving] = useState(false);
   
   // Canvas State
   const [foamW,  setFoamW]  = useState(90);
@@ -576,13 +580,39 @@ const PackagingTab = ({ activeBrand }) => {
     }
   };
 
-  const saveStandardBox = async () => {
-    const name = prompt("Enter a name for this standard box (e.g., 'Small Parts Box 18x12x4'):");
-    if (!name) return;
-    const d = parseFloat(prompt("Box depth / foam thickness (in):", "4")) || 0;
-    await addDoc(collection(db, "standard_boxes"), {
-      name, w: foamW, h: foamH, d, brandId: activeBrand || 'global', createdAt: serverTimestamp()
-    });
+  // Standard boxes — the list the WMS pack screen offers (filtered there to this brand + global).
+  // Names carrying "small" / "pole" pre-select themselves on the pack screen; the rest are picked
+  // by hand. The BOM panel below reads the box flagged usage:'small_parts' for the small-parts card.
+  const brandLabel = (id) => (!id || id === 'global') ? 'All brands' : String(id).toUpperCase();
+  const visibleBoxes = standardBoxes
+    .filter(b => !activeBrand || !b.brandId || b.brandId === 'global' || b.brandId === activeBrand)
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  const boxFormFromWorkspace = () => {
+    setBoxForm(f => ({ ...f, w: String(foamW || ''), h: String(foamH || '') }));
+    setBoxOpen(true);
+  };
+  const addStandardBox = async () => {
+    const name = String(boxForm.name || '').trim();
+    const w = parseFloat(boxForm.w) || 0, h = parseFloat(boxForm.h) || 0, d = parseFloat(boxForm.d) || 0;
+    if (!name) return alert('Give the box a name (e.g. "Small Parts Box 18x12x4").');
+    if (!(w > 0) || !(h > 0)) return alert('Width and height must be greater than 0.');
+    const brandId = (boxForm.scope === 'global' || !activeBrand) ? 'global' : activeBrand;
+    if (visibleBoxes.some(b => String(b.name || '').trim().toLowerCase() === name.toLowerCase() && (b.brandId || 'global') === brandId)) {
+      return alert(`A box named "${name}" already exists for ${brandLabel(brandId)}.`);
+    }
+    setBoxSaving(true);
+    try {
+      await addDoc(collection(db, "standard_boxes"), {
+        name, w, h, d, brandId, ...(boxForm.smallParts ? { usage: 'small_parts' } : {}), createdAt: serverTimestamp()
+      });
+      setBoxForm({ name: '', w: '', h: '', d: '', scope: boxForm.scope, smallParts: false });
+    } catch (e) {
+      alert(`Could not save the box: ${e.message || e}`);
+    } finally { setBoxSaving(false); }
+  };
+  const deleteStandardBox = async (b) => {
+    if (!window.confirm(`Delete standard box "${b.name}" (${b.w}" x ${b.h}"${b.d ? ` x ${b.d}"` : ''})?\n\nPacks already closed keep the box name they recorded; the pack screen simply stops offering it.`)) return;
+    await deleteDoc(doc(db, "standard_boxes", b.id));
   };
 
   // Lay out N pole bores across the box cross-section (boxW x boxH). Each bore = the pole
@@ -943,11 +973,66 @@ const PackagingTab = ({ activeBrand }) => {
                 <option key={b.id} value={b.id}>{b.name} ({b.w}" x {b.h}")</option>
               ))}
             </select>
-            <button onClick={saveStandardBox} style={{ ...btnStyle(false), padding: '6px 10px' }}>Save</button>
+            <button onClick={boxFormFromWorkspace} title="Save the workspace width × height as a new standard box (fills the form below)" style={{ ...btnStyle(false), padding: '6px 10px', whiteSpace: 'nowrap' }}>Save as box</button>
           </div>
         </div>
 
         <hr style={{ border: 0, borderTop: `1px solid ${theme.line}`, margin: 0 }} />
+
+        {/* Standard boxes — the box sizes the WMS pack screen offers (by brand). */}
+        <div style={{ padding: '14px 20px', borderBottom: `1px solid ${theme.line}`, flexShrink: 0 }}>
+          <div onClick={() => setBoxOpen(o => !o)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}>
+            <div>
+              <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: theme.brass }}>Standard boxes</span>
+              <h3 style={{ margin: '5px 0 0 0', fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink }}>Box Sizes <span style={{ fontFamily: theme.mono, fontSize: '0.7rem', color: theme.inkSoft }}>· {visibleBoxes.length} for {brandLabel(activeBrand)}</span></h3>
+            </div>
+            <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{boxOpen ? '▾' : '▸'}</span>
+          </div>
+          {boxOpen && (
+            <div style={{ marginTop: '10px' }}>
+              <div style={{ fontSize: '0.68rem', color: theme.inkSoft, marginBottom: '8px', lineHeight: 1.35 }}>
+                The WMS pack screen offers these to the packer. A name with “small” or “pole” is picked automatically; the rest are picked by hand.
+              </div>
+              <div style={{ maxHeight: '150px', overflowY: 'auto', border: `1px solid ${theme.line}`, background: '#fff', marginBottom: '10px' }}>
+                {visibleBoxes.length === 0 && <div style={{ padding: '10px', fontSize: '0.75rem', color: theme.inkSoft, fontStyle: 'italic' }}>No boxes for {brandLabel(activeBrand)} yet — the pack screen cannot close a pack until one exists.</div>}
+                {visibleBoxes.map((b, i) => (
+                  <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 8px', borderTop: i ? `1px solid ${theme.line}` : 'none' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '0.78rem', color: theme.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.name}{b.usage === 'small_parts' && <span title="The BOM panel's small-parts box" style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.brass, marginLeft: '6px', letterSpacing: '.06em' }}>SMALL PARTS</span>}</div>
+                      <div style={{ fontFamily: theme.mono, fontSize: '0.68rem', color: theme.inkSoft }}>{b.w}" × {b.h}"{b.d ? ` × ${b.d}"` : ''} · {brandLabel(b.brandId)}</div>
+                    </div>
+                    <button onClick={() => { setFoamW(b.w); setFoamH(b.h); }} title="Load this box into the workspace" style={{ ...btnStyle(false), padding: '4px 6px' }}>Load</button>
+                    <button onClick={() => deleteStandardBox(b)} title="Delete this standard box" style={{ ...btnStyle(false), padding: '4px 6px', color: '#a33' }}>✕</button>
+                  </div>
+                ))}
+              </div>
+              <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '8px' }}>
+                <input placeholder="Box name (e.g. Small Parts Box 18x12x4)" value={boxForm.name} onChange={e => setBoxForm({ ...boxForm, name: e.target.value })} style={{ ...inpStyle, padding: '5px', marginBottom: '6px' }} />
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+                  {[['w', 'W'], ['h', 'H'], ['d', 'D']].map(([k, lbl]) => (
+                    <div key={k} style={{ flex: 1 }}>
+                      <label style={{ display: 'block', fontSize: '0.62rem', color: theme.inkSoft }}>{lbl} (in)</label>
+                      <input type="number" step="0.125" min="0" value={boxForm[k]} onChange={e => setBoxForm({ ...boxForm, [k]: e.target.value })} style={{ ...inpStyle, padding: '5px' }} />
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' }}>
+                  <select value={boxForm.scope} onChange={e => setBoxForm({ ...boxForm, scope: e.target.value })} disabled={!activeBrand} title={activeBrand ? "Which brand's pack screen offers this box" : 'Pick a brand at the top of HQ to save a brand-only box'} style={{ ...inpStyle, padding: '5px', flex: 1 }}>
+                    <option value="brand">{activeBrand ? brandLabel(activeBrand) + ' only' : 'All brands'}</option>
+                    <option value="global">All brands</option>
+                  </select>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.68rem', color: theme.inkSoft, whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={boxForm.smallParts} onChange={e => setBoxForm({ ...boxForm, smallParts: e.target.checked })} /> small parts
+                  </label>
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button onClick={boxFormFromWorkspace} title="Fill W × H from the workspace sheet size" style={{ ...btnStyle(false), padding: '6px 8px', flex: 1 }}>Use workspace</button>
+                  <button onClick={addStandardBox} disabled={boxSaving} style={{ flex: 1, padding: '6px', background: theme.ink, color: '#fff', border: 'none', cursor: boxSaving ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', opacity: boxSaving ? 0.6 : 1 }}>{boxSaving ? 'Saving…' : 'Add box'}</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Bill of Materials */}
         <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
@@ -974,7 +1059,9 @@ const PackagingTab = ({ activeBrand }) => {
             // Each rod line = one physical pole (its qty is feet/length, not a pole count).
             const poleCount = poleItems.length;
             const maxPoleLen = poleItems.reduce((m, i) => Math.max(m, Number(i.cutLength) || Number(i.dimensions?.length) || 0), 0);
-            const smallBox = standardBoxes.find(b => b.usage === 'small_parts') || { name: 'Small Parts Box', w: 18, h: 12, d: 4 };
+            const smallBox = visibleBoxes.find(b => b.usage === 'small_parts' && b.brandId === activeBrand)
+              || visibleBoxes.find(b => b.usage === 'small_parts')
+              || { name: 'Small Parts Box', w: 18, h: 12, d: 4 };
             // Pole box width: french-return bends (or >1 pole side-by-side) need the wide 8" box;
             // a single straight pole fits the 3" box.
             const fab = activeJob.fab || {};
