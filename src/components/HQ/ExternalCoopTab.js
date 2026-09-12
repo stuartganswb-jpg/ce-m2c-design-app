@@ -6,7 +6,7 @@ import { collection, onSnapshot, query, where, doc, getDoc, getDocs, updateDoc, 
 import { portalRequestLines } from '../Shared/portalRequestLines';
 import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
-import { quoteDisplayNo, quoteAuthorLine } from '../Shared/quoteDisplay';
+import { quoteDisplayNo, quoteAuthorLine, docDateOf, orderSidemarkOf } from '../Shared/quoteDisplay';
 import QuickShipInvoiceModal from '../Shared/QuickShipInvoiceModal';
 import FormPreview from '../Shared/FormPreview';
 import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
@@ -1335,14 +1335,19 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
           }));
       if (!isUnpricedRequest && shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt });
       // dateSaved is an ISO stamp — the doc was printing it verbatim ("2026-08-05T20:00:58.578Z").
-      const docDate = (() => { const v = activeDocJob.dateSaved; if (!v) return new Date().toLocaleDateString(); const dt = new Date(v); return isNaN(dt.getTime()) ? String(v) : dt.toLocaleDateString(); })();
+      // The day it was saved, as a local calendar day — 'YYYY-MM-DD' through new Date() was UTC
+      // midnight and printed the evening before (close-out item 6; Shared/quoteDisplay.docDateOf).
+      const docDate = docDateOf(activeDocJob);
       const quoteFormData = {
           billTo: [activeDocJob.customer?.name || activeDocJob.clientName || 'N/A',
                    ...(billLines.length ? billLines : fmtAddr(savedAddr))],
           shipTo: (shipLines.length ? shipLines : [activeDocJob.customer?.name || activeDocJob.clientName || 'Per project']),
           lines: quoteLines,
           date: docDate,
-          po: activeDocJob.sidemark || activeDocJob.jobId || '—',
+          // The P.O. slot carries the customer's PO; the sidemark has its own row (close-out item 6 —
+          // the sidemark, or the doc id, used to print where the customer's PO belongs).
+          po: String(activeDocJob.poNumber || '').trim() || '—',
+          sidemark: orderSidemarkOf(activeDocJob),
           termsLabel: activeCrmRecord?.terms || 'Per agreement',
           tax: isUnpricedRequest ? undefined : 0,
           total: isUnpricedRequest ? undefined : (activeDocJob.cpqData?.totalPrice || 0) + shippingAmt,
@@ -1452,7 +1457,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                   header={template.header}
                                   footer={template.footer}
                                   terms={template.terms}
-                                  docNumber={activeDocJob.jobId || activeDocJob.id}
+                                  docNumber={quoteDisplayNo(activeDocJob)}
                                   data={quoteFormData}
                               />
                           </div>
@@ -1574,7 +1579,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
           <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9999, overflowY: 'auto', padding: '40px 0' }}>
               <div style={{ position: 'relative' }}>
                   <div className="no-print" style={{ position: 'absolute', top: 0, right: '-160px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <button onClick={() => printForm(printableDoc, `${String(activeDocType || 'QUOTE').replace(/_/g, ' ')} ${activeDocJob.jobId || activeDocJob.id}`, { pageCss: '@page { size: Letter portrait; margin: 0; }' })} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>Print PDF</button>
+                      <button onClick={() => printForm(printableDoc, `${String(activeDocType || 'QUOTE').replace(/_/g, ' ')} ${quoteDisplayNo(activeDocJob)}`, { pageCss: '@page { size: Letter portrait; margin: 0; }' })} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>Print PDF</button>
                       <button onClick={() => setActiveDocJob(null)} style={{ padding: '16px 24px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>Close</button>
                   </div>
 

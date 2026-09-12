@@ -22,6 +22,7 @@ import { aliasTargetIdOf } from './aliasIdentity';
 import { nsProxyFetch } from './nsProxy';
 import { enqueueNsWrite } from './nsOutbox';
 import { nsTransactionHeader } from './nsHeader';
+import { cleanSidemark } from './quoteDisplay';
 import { isParkedGeometryLine } from './lineClassification';
 import { netFactorOf } from './lineDiscount';
 
@@ -114,7 +115,9 @@ export function resolveJobLines(job, data) {
               assemblyQty: parseInt(ci.qty) || 1,
               // Line-level sidemark ("Formal Living 1") — rides every line this cart item
               // produces and lands in NetSuite's line Tag (custcol3; Eric 2026-08-11).
-              sidemark: String(ci.sidemark || '').trim(),
+              // "No Sidemark" (the old cart placeholder, stamped on lines saved before 2026-09-12)
+              // is not a sidemark — it reached custcol3 as text (close-out item 6).
+              sidemark: cleanSidemark(ci.sidemark),
               // Traverse components chosen in the checkout configurator — carriers, end stops,
               // splices, accessories. Not flow steps, so the step walk never sees them.
               trvComponents: Array.isArray(ci.trvComponents) ? ci.trvComponents : [],

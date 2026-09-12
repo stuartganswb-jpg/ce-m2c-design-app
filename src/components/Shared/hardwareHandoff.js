@@ -219,7 +219,9 @@ export function handoffItem(resolved, ctx = {}) {
         id: String(Date.now()),
         assemblyId: assembly?.id || null,
         assemblyName: assembly?.itemName || flow?.name || 'Configured Item',
-        sidemark: String(sidemark || '').trim() || 'No Sidemark',
+        // Blank stays blank (close-out item 6): the 'No Sidemark' placeholder is the CART ROW's
+        // empty-state word, never a value — stamped here it reached NetSuite's line Tag as text.
+        sidemark: String(sidemark || '').trim(),
         flowId: flow?.id || null,
         qty,
         priceLevel,

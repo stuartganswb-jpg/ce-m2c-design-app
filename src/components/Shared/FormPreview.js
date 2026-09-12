@@ -104,6 +104,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
             <div><span style={{ color: 'var(--ink-soft)' }}>NO.</span> {docNumber}</div>
             <div><span style={{ color: 'var(--ink-soft)' }}>DATE</span> {date}</div>
             <div><span style={{ color: 'var(--ink-soft)' }}>P.O.</span> {po}</div>
+            {d.sidemark ? <div><span style={{ color: 'var(--ink-soft)' }}>SIDEMARK</span> {d.sidemark}</div> : null}
             <div><span style={{ color: 'var(--ink-soft)' }}>TERMS</span> {termsLabel}</div>
             {packing && <div><span style={{ color: 'var(--ink-soft)' }}>SHIP DATE</span> {fmtDate(packing.shipDate)}</div>}
             {packing && <div><span style={{ color: 'var(--ink-soft)' }}>TRACKING</span> {(packing.tracking || []).length ? packing.tracking.join(', ') : '—'}</div>}

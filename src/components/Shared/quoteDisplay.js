@@ -52,3 +52,36 @@ export const quoteAuthorLine = (job) => {
 // this to style it quietly rather than presenting an epoch stamp as if it were a quote number.
 export const isInternalId = (job) => quoteDisplayNo(job) === String((job && (job.jobId || job.id)) || '')
     && !String((job && job.quoteNo) || '').trim();
+
+// ── THE DATE ON THE PAPER (close-out item 6, S1 2026-09-12): `dateSaved` is 'YYYY-MM-DD' and
+// `new Date('2026-09-10')` is UTC midnight — printed in Eastern that is the evening BEFORE, so
+// every quotation carried a date one day early. A bare date is read as a LOCAL calendar day;
+// anything else (an ISO stamp, a Firestore Timestamp, epoch ms) is a moment and prints as such.
+export const docDateOf = (job, now = new Date()) => {
+    const v = job && job.dateSaved;
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim())) {
+        const [y, m, d] = v.trim().split('-').map(Number);
+        return new Date(y, m - 1, d).toLocaleDateString();
+    }
+    const c = job && job.createdAt;
+    const ms = v ? Date.parse(v) : (c && typeof c.toMillis === 'function' ? c.toMillis() : (c && c.seconds ? c.seconds * 1000 : (typeof c === 'number' ? c : NaN)));
+    if (Number.isFinite(ms)) return new Date(ms).toLocaleDateString();
+    if (v) return String(v);
+    return now.toLocaleDateString();
+};
+
+// ── "No Sidemark" IS NOT A SIDEMARK (close-out item 6): the cart's display placeholder was
+// stamped on the line and reached NetSuite's line Tag (custcol3) as text. The placeholder reads
+// as blank everywhere a value is used; the screens keep printing it as the empty-state word.
+export const NO_SIDEMARK = 'No Sidemark';
+export const cleanSidemark = (s) => { const t = String(s == null ? '' : s).trim(); return t.toLowerCase() === NO_SIDEMARK.toLowerCase() ? '' : t; };
+
+// The typed order sidemark for a document: `orderSidemark` as typed, else the legacy `sidemark`
+// unless it is just the job-name fallback (the CRM card's rule, one place).
+export const orderSidemarkOf = (job) => {
+    const jobName = String((job && job.jobName) || '').trim();
+    const typed = String((job && job.orderSidemark) || '').trim();
+    if (typed) return typed;
+    const legacy = cleanSidemark(job && job.sidemark);
+    return legacy && legacy !== jobName && legacy !== 'Multi-Room Project' ? legacy : '';
+};

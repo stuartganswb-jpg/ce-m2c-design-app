@@ -3046,7 +3046,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           masterQuoteId: activeMasterQuoteId,
           assemblyId: activeAssemblyId,
           assemblyName: activeAssembly?.itemName || activeFlow?.name || 'Configured Item',
-          sidemark: (lineTag || '').trim() || activeDraft?.sidemark || 'No Sidemark',
+          sidemark: (lineTag || '').trim() || activeDraft?.sidemark || '',   // blank stays blank — the cart row prints its own placeholder
           flowId: activeFlowId,
           qty: assemblyQty,
           priceLevel,

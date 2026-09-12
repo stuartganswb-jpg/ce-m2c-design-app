@@ -92,5 +92,13 @@ eq('rates: the set line at ×1.2', b6.payload.item.items.slice(1).map(l => [l.it
     eq('no customer still refuses as NO_CUSTOMER', noCust.error && noCust.error.code, 'NO_CUSTOMER');
 }
 
+// ── 8. "No Sidemark" never reaches custcol3; a real sidemark does (close-out item 6) ─────────
+{
+    const j = job([cartItem('a', { sidemark: 'No Sidemark' }), cartItem('b', { sidemark: 'Formal Living 1' })], 220);
+    const b = await buildNsTransaction({ job: j, asType: 'estimate', brand: 'ce', data, ctx: null });
+    const tags = b.payload.item.items.slice(1).map(l => l.custcol3 || '');
+    eq('the placeholder line carries no Tag; the real one carries its room', [...new Set(tags)].sort(), ['', 'Formal Living 1']);
+}
+
 console.log(`\nnsTransmit line discount: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
