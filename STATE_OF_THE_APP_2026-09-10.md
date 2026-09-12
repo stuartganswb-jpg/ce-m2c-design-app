@@ -424,6 +424,15 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 22:39 · S3 · a8bb6a8 — Stuart's four rulings from the run:** (1) French returns / miters are fabrication on
+  the rod: they ride the first pole row as pack lines by code, ticked with the pole — the packing list pairs them (closes the
+  French-return finding above, S3 side; nothing for S1). (2) A box is a choice: Complete refuses without one; CE's standard
+  box list is empty (Stuart, HQ 15). (3) The plater PO memo leads with the shipment id — the `nsMemo` 40-char cap had cut the
+  id off, which is the whole reason PO2316 read as missing (closes the memo-lookup question). (4) A plating order packs its
+  ready parts before the pole is back; the pole line and the close wait for `customPartsReady` (9a in the run document was
+  not a defect but a missing close; corrected). **§2.4 (S3) now:** the false "overtaken pick" banner on pick-only docs; the
+  shop Undo between scan-in and Ship.
+
 - **2026-09-11 22:30 · S3 · §2.1 #2 DONE — the plating round trip ran end to end on SO60420** on the 8b2e6b1 bundle:
   PO2316 found and stamped (⟳ FIND NETSUITE PO — the PO existed; the memo SuiteQL lookup misses it, open), receipt IR22105
   posted through the outbox, custom put-away with no NetSuite build, sibling Complete, pack with the pole by code, CRM

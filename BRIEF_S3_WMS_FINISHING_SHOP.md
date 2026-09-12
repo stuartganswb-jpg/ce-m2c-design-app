@@ -364,6 +364,19 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-11 — a8bb6a8 pushed 22:39 EDT (S3): Stuart's four rulings** ("1. you combine with the rod, they are a
+  fabricating fee, once the shop confirms complete they are complete along with the pole. 2. force box choice. 3. for
+  you to figure out. 4. packaging prep can pick and pack ready parts on a plating order before the poles arrive."). Built:
+  riders (`poleDetailsOf.riders`, `packLinesOf` POLE-i-Rj lines, ticked/cleared with the pole, note under it); box choice
+  forced at Complete (+ button off); memo `<shipId> Weekly Plating Shipment` (the 40-char `nsMemo` cap was cutting the id —
+  question 3 answered) + legacy-shape match in the lookup; pole line un-tickable "At the plater", waiver hidden, Complete
+  refuses until `customPartsReady`. `pickLines.test.mjs` 58 → 63. Lint 0, build passed, safe-push = one commit. Run doc 9a
+  corrected. **Sweep 22:44 EDT:** stamp 1789180967141 (after the push); 38 JS assets, all fetched with `curl -sf`
+  (8,561,345 bytes, 0 failures); `on the rod, packed with it` ×1, `ticks when the pole is received` ×1 and `Pick the box`
+  ×1 in `main.da8db0d3.js`. **LIVE.** Acceptance still owed on the floor: the first plating order packed early (small
+  parts ticked while the pole reads "At the plater", Complete refused, then closed after put-away), the first pack with
+  riders reading MATCH on the packing list, and CE's standard boxes added in HQ 15 so a box can be chosen at all.
+
 - **2026-09-11 22:30 — THE PLATING ROUND TRIP IS COMPLETE END TO END on SO60420** (`PLATING_ROUND_TRIP_SO60420.md`).
   After 8b2e6b1 went live: ⟳ FIND NETSUITE PO found **PO2316** in the vendor's recent POs (the PO had been created at
   Ship; the memo SuiteQL lookup misses it — open question) → stamped, no re-post → Receive → item receipt **IR22105**

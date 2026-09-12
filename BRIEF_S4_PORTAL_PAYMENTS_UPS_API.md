@@ -131,6 +131,19 @@ owed (`h2-simple-elegance-flow` memory).
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-11 · a8bb6a8 pushed 22:39 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. Four of Stuart's decisions from the SO60420 run, all in `PickPackApp.js` +
+  `Shared/pickLines.js`: (1) **French returns / miters ride the rod** — a shop custom line with no cut length is a
+  fabrication on the pole (`poleDetailsOf` → `riders` on the first pole row; `packLinesOf` emits them as pack lines by code,
+  `rider: true`, ticked and cleared with the pole's tick, shown as a note under it) — **S2: your packing list now pairs
+  `H1-FRPF` etc. with their ordered lines through the same `packedLines` ticks; no builder change.** (2) **A box is a
+  choice**: Complete refuses until the small-parts box and (with pole lines) the pole box are chosen — boxes live in HQ →
+  15. Packaging → standard boxes; CE's list is EMPTY today (Stuart adds). (3) **The plater PO memo leads with the
+  shipment id**: `nsMemo` caps at 40 chars and cut the old memo, which is why the lookup never found PO2316; the lookup also
+  matches the old cut shape. (4) **A plating order packs its ready parts early** (Stuart's rule); the pole line reads "At
+  the plater" and cannot be ticked, the "no poles" waiver is hidden, Complete refuses until `customPartsReady`. Your side:
+  nothing.
+
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-11 · TWO pushes: 1e5e5a4 (18:35 EDT, swept live) and 8b2e6b1 (21:17 EDT; S3
   sweeps and records in BRIEF_S3 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. Found on the SO60420 plating
   round trip (`PLATING_ROUND_TRIP_SO60420.md`). **1e5e5a4** — WMS Plating: the plater PO's NetSuite number. The PO POST comes
