@@ -131,6 +131,11 @@ owed (`h2-simple-elegance-flow` memory).
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-11 · d50cce1 — the packing-list SHARED HALF (pushed now).** Hard-refresh +
+  re-PIN before your next save. What ships: `Shared/packingList.js` (`packingListOf`, `invoiceLinesOf`, `packedQtyOf`)
+  and `Shared/orderStatus` `inProduction` / `packedStateOf` / `CAN_REOPEN_IN_PRODUCTION`. Nothing on any screen changes
+  until S1 (form + CRM card) and S3 (per-line count + SO Pack print) wire it — specs in their § Hand-offs in. No
+  document or field shape changes in this push. Your side: nothing unless you are S1 or S3.
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-11 · 1d02231 pushed 22:47 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
   (⌘⇧R) + re-PIN before your next save. The last two defects from the SO60420 run: (1) WMS pick queue — `isOvertakenPick`
   no longer reads a pick-only document's born-`Complete` phase as "already in production" (no red banner / CLEAR on a

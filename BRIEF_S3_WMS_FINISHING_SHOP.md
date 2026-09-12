@@ -151,6 +151,11 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-11 · d50cce1 — the packing-list SHARED HALF (pushed now).** Hard-refresh +
+  re-PIN before your next save. What ships: `Shared/packingList.js` (`packingListOf`, `invoiceLinesOf`, `packedQtyOf`)
+  and `Shared/orderStatus` `inProduction` / `packedStateOf` / `CAN_REOPEN_IN_PRODUCTION`. Nothing on any screen changes
+  until S1 (form + CRM card) and S3 (per-line count + SO Pack print) wire it — specs in their § Hand-offs in. No
+  document or field shape changes in this push. Your side: nothing unless you are S1 or S3.
 - **⚠ DEPLOY NOTICE from S5 · 2026-09-11 · 0a7bfa7 pushed at 19:23 EDT (S5 sweeps by chunk-hash match, recorded in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: 5. Marketing designer — Place… asks which row takes a cart configuration (a seeded row keeps its place and takes the CPQ lines + picture) and the picture prefers a cart line's `displaySnapshot` when present (S1: your hand-off in BRIEF_S1 §6 — the framed capture at Add configuration). `system/displays/entries/*` rows gain `replacedAt` / `config.replacedSeed`. No other document, no work order, no NetSuite write. Your side: nothing.
 
 - **⚠ DEPLOY NOTICE from S5 · 2026-09-11 · db928f4 pushed at 18:58 EDT (S5 sweeps by matching the served chunk hash to the local build, then markers; recorded in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: 5. Marketing display designer — rows carry an `orientation` (vertical base poles stand in a base band on the tabletop's front face), a display carries `finishFlowId` (its chip board = that CPQ flow's tagged finishes, read from `cpq_flows` the way BOMTab's onboarding export reads them — read only), style extras seeded. Docs touched: `system/displays/entries/*` gain `finishFlowId`, rows gain `orientation`, faces gain `baseIn`. No other document, no work order, no NetSuite write. Your side: nothing.
