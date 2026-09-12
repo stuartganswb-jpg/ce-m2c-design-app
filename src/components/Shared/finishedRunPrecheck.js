@@ -34,6 +34,7 @@ import { doc, setDoc, updateDoc, getDoc, collection, query, where, getDocs } fro
 import { withItemCode } from './workOrderContract';
 import { isReleasable } from './orderStatus';
 import { buildParkedWorkOrder, ROUTE_SHOP } from './stockRun.js';
+import { buildFinDoc, buildShopDoc, releaseStockWoToFloor } from './floorRelease';
 
 // ── PURE PLANNING ──────────────────────────────────────────────────────────────────────────────
 
@@ -268,21 +269,27 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
             // component milling WO goes STRAIGHT to the shop's milling intake instead of parking
             // in RTG for a human's Push to Shop. Same doc shape RTG's pushToShop writes.
             if (dispatchShop) {
-                await setDoc(doc(db, 'shop_custom_orders', `SHOP-${woId}`), {
-                    id: `SHOP-${woId}`, woNum: `SHOP-${woId}`, orderKey: woId,
-                    quoteId: null, salesOrderId: null, finSiblingId: null, hasSmallSibling: false,
-                    soNum: soRef || 'N/A', isStock: true, routeTo: 'MILLING',
-                    partNum: a.code, itemCode: a.code, item: p.itemName || a.code, qty: a.qty,
-                    isOutsourced: false, finishRecipe: 'PENDING-RECIPE', outsourcePrice: 0,
-                    reqDate: reqDate || '', category: 'Stock Milling', status: 'Pending', priority: 999,
-                    brand: brandId, customerId: null, clientName: customerName || 'Internal Stock',
-                    note: `Component make-up for ${finWoErpId || ''}${soRef ? ` · SO ${soRef}` : ''} — mill, then phosphate (convert), then finishing`,
-                    cpqSpecs: {}, imageUrl: null,
-                    // The raw this WO makes is destined for the /P convert — the shop's own
-                    // in-house-finish rule would derive this anyway; stated explicitly here.
-                    needsPhosphating: true, isPlatingDemand: false,
-                    rootItem: a.code, createdAt: Date.now(), createdBy,
-                });
+                // ONE SHOP DOCUMENT SHAPE (B1 #7, landed 2026-09-12): the shared builder, with the
+                // fields this writer has always stamped riding on top so nothing the shop reads
+                // changes (orderKey = the WO id, quoteId null, the make-up note, the explicit
+                // phosphate flag); it gains urgent / needBy / the item's shopInstruction.
+                await setDoc(doc(db, 'shop_custom_orders', `SHOP-${woId}`), buildShopDoc({
+                    hqOrder: { ...built.hq, brand: brandId }, orderType: 'stock', shopId: `SHOP-${woId}`,
+                    finishRecipe: 'PENDING-RECIPE', finSiblingId: null, part: p, by: createdBy,
+                    fields: {
+                        orderKey: woId, quoteId: null, salesOrderId: null,
+                        soNum: soRef || 'N/A', isStock: true, routeTo: 'MILLING',
+                        partNum: a.code, itemCode: a.code, item: p.itemName || a.code, qty: a.qty,
+                        isOutsourced: false, outsourcePrice: 0,
+                        reqDate: reqDate || '', category: 'Stock Milling',
+                        customerId: null, clientName: customerName || 'Internal Stock',
+                        note: `Component make-up for ${finWoErpId || ''}${soRef ? ` · SO ${soRef}` : ''} — mill, then phosphate (convert), then finishing`,
+                        cpqSpecs: {}, imageUrl: null,
+                        // The raw this WO makes is destined for the /P convert — the shop's own
+                        // in-house-finish rule would derive this anyway; stated explicitly here.
+                        needsPhosphating: true, isPlatingDemand: false, rootItem: a.code,
+                    },
+                }));
             }
             shopWoIds.push(woId);
             made.push(`🏭 SHOP WO ${woId} — ${a.qty} × ${a.code}${dispatchShop ? ' (sent to shop milling)' : ' (RTG → Push to Shop)'}`);
@@ -331,12 +338,13 @@ export const releaseFinWoToFloor = async (hqWo, by = '') => {
     // The NetSuite work-order stamp rides onto the floor card (Stuart 2026-08-29: every floor
     // doc carries its NS WO number). The number lands on the hq record via the outbox writeBack,
     // so at release time the hq doc is the source.
-    await setDoc(doc(db, 'fin_workorders', fp.id), withItemCode({
-        ...fp,
-        ...(hqWo.nsWoId ? { nsWoId: hqWo.nsWoId, nsWoTran: hqWo.nsWoTran || null } : {}),
-        dispatchedAt: Date.now(), dispatchedBy: by || 'auto-flow',
-    }));
-    await updateDoc(doc(db, 'hq_work_orders', hqWo.id), { pushedToFinishing: true, status: 'Dispatched', dispatchedAt: Date.now(), dispatchedBy: by || 'auto-flow' });
+    // ONE FLOOR DOCUMENT SHAPE (B's hand-off, landed 2026-09-12): the same builder every other
+    // release uses — the payload verbatim, the NetSuite anchor, PLUS what a hand-written copy never
+    // had: the board's later urgent statement, a hold placed while parked, needBy, the pole/sled
+    // assertion, withItemCode. Never both streams.
+    const now = Date.now();
+    await setDoc(doc(db, 'fin_workorders', fp.id), buildFinDoc({ hqOrder: hqWo, finPayload: fp, by: by || 'auto-flow', now }));
+    await updateDoc(doc(db, 'hq_work_orders', hqWo.id), { pushedToFinishing: true, status: 'Dispatched', dispatchedAt: now, dispatchedBy: by || 'auto-flow' });
     return true;
 };
 
@@ -346,12 +354,11 @@ export const releaseFinWoToFloor = async (hqWo, by = '') => {
 // then releases itself straight to the finishing floor — raw was made, /P now exists, finishing
 // is next; no human hop in between. Returns 'released' | 'cleared' | false.
 //
-// STOCK orders are NOT released from here (Brief A, 2026-09-02). Every parked stock order now
-// carries autoFlow:true (Shared/workOrderCreate), and this self-release copies the payload to the
-// floor WITHOUT Route A — the NetSuite work order RTG queues at release. A stock order released
-// here would reach the floor unanchored, so the cleared gate hands it to RTG's auto-release
-// effect, which releases AND anchors. Only the sales path keeps the direct release, because its
-// NetSuite record is the sales order / its FLOW anchor, opened at creation.
+// STOCK orders release from here through Shared/floorRelease.releaseStockWoToFloor (2026-09-12),
+// which anchors (Route A) as RTG's auto-release does — so a stock order whose last gate clears at
+// the WMS no longer waits for an open RTG tab. (Until then the stock path was excluded because this
+// hook's own copy reached the floor unanchored; that copy is gone.) The sales path keeps
+// releaseFinWoToFloor, because its NetSuite record is the sales order / its FLOW anchor.
 export const clearConvertGate = async (demand, operatorName = '') => {
     const finWoId = demand && demand.finWoId;
     if (!finWoId) return false;
@@ -377,6 +384,13 @@ export const clearConvertGate = async (demand, operatorName = '') => {
         if (wo && (wo.orderType === 'sales' || wo.orderClass === 'ORDER_ENTRY') && (wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') && isReleasable(wo)) {
             const released = await releaseFinWoToFloor(wo, operatorName || 'convert-complete');
             if (released) return 'released';
+        } else if (wo && wo.orderType !== 'sales' && wo.autoFlow && !wo.pushedToFinishing && isReleasable(wo)) {
+            // A STOCK order releases from here too now (B's hand-off, landed 2026-09-12): the shared
+            // stock release IS Route A — buildFinDoc + the dispatched stamps + the NetSuite work
+            // order queued at that moment, with no RTG tab open. The stock exclusion above is gone
+            // because its reason (an unanchored copy) is gone.
+            const r = await releaseStockWoToFloor({ hqOrder: wo, brand: wo.brand || wo.brandId || 'ce', by: operatorName || 'convert-complete' });
+            if (r && r.released) return 'released';
         }
     } catch (e) { console.warn('auto-flow release after convert failed (gate is cleared; release from RTG):', e); }
     return 'cleared';
