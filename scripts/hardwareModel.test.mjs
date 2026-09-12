@@ -2441,5 +2441,31 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('a plain bracket + its plate hold', Object.values(bracketOnly.picks).sort(), ['BK6', 'PL-6']);
 }
 
+// ── NORMALIZING TWICE CHANGES NOTHING (Stuart 2026-09-12: Vision's brackets ignored the projection) ──
+// resolve() normalizes what it is given; Vision hands it rows it had already normalized, and the
+// second pass used to drop the depths and the tiered pair and flip fitsExplicit.
+{
+    const raws = [
+        { id: 'B1', partId: 'H1-138B6', role: 'BRACKET', proj: '6', position: 'LEFT', nodes: ['n1'] },
+        { id: 'B2', partId: 'H1-138DBA', role: 'BRACKET', proj: 'FRONT:6.5, BACK:3.25', setup: 'DOUBLE', nodes: ['n2'] },
+        { id: 'R1', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', nodes: ['n3'] },
+        { id: 'F1', partId: 'H1-138KF', role: 'FINIAL', fits: ['SOLID'], position: 'LEFT', nodes: ['n4'] },
+    ];
+    raws.forEach(r => {
+        const once = normalizeChoice(r), twice = normalizeChoice(once);
+        eq(`normalizeChoice is idempotent: ${r.id}`, twice, once);
+    });
+    eq('depths survive the second pass', normalizeChoice(normalizeChoice(raws[0])).projs, [6]);
+    eq('the tiered pair survives the second pass', normalizeChoice(normalizeChoice(raws[1])).projTiers, { FRONT: 6.5, BACK: 3.25 });
+    eq('fitsExplicit is not flipped by the defaulted fits list', [normalizeChoice(normalizeChoice(raws[0])).fitsExplicit, normalizeChoice(normalizeChoice(raws[3])).fitsExplicit], [false, true]);
+    // the Vision path end to end: pre-normalized choices still filter by projection
+    const pre = applyFitsDefaults(raws.map(normalizeChoice));
+    const m = resolve({ choices: pre, answers: { rodKind: 'SOLID', setup: 'SINGLE', proj: 3.625 }, selectedIds: [] });
+    const bl = (m.slots || []).find(s => s.kind === 'BRACKET' && s.position === 'LEFT');
+    ok('pre-normalized rows: a 6" bracket is NOT offered at 3-5/8"', bl && !bl.options.some(o => o.id === 'B1'), bl && JSON.stringify(bl.options.map(o => o.id)));
+    const m6 = resolve({ choices: pre, answers: { rodKind: 'SOLID', setup: 'SINGLE', proj: 6 }, selectedIds: [] });
+    ok('…and IS offered at 6"', (m6.slots || []).find(s => s.kind === 'BRACKET' && s.position === 'LEFT').options.some(o => o.id === 'B1'));
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { isPoleCategory } from '../Shared/poleCut';
-import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
+import { nsTransactionHeader } from '../Shared/nsHeader';
+import { resolveShipMethod } from '../Shared/nsTransmit';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
 import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp } from '../Shared/lineDiscount';
-import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
@@ -157,7 +157,6 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // Shipping — the same fields the CPQ checkout collects, because NetSuite's SO wants them
     // (Stuart 2026-08-13: "Netsuite not going to accept an order without this stuff").
     const [ship, setShip] = useState({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
-    const shipMethodRef = useRef(undefined); // undefined = not looked up; null = none found (same cache as ERPPushPull)
     // NetSuite header fields (Stuart 2026-08-13, from the failed SO push — the exact alignment
     // list): PO# → otherrefnum, sidemark → mainline memo + every line's Tag (custcol3), internal
     // memo → custbody_bit_internalmemo. Form/class/status ride the payload, not fields here.
@@ -1210,7 +1209,6 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         setPushing(true);
         try {
             let nsCustomerId = customerId.startsWith('CUST-') ? customerId.replace('CUST-', '') : customerId;
-            const brandMapping = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2", location: "17" };
             // Mainline memo = the sidemark/job — ONE value (the CPQ push's rule), Quick Ship label
             // only when neither is given.
             const memoText = (String(soExtras.sidemark || '').trim() || String(jobName || '').trim() || 'Quick Ship').slice(0, 40);
@@ -1333,48 +1331,29 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 feetPool.forEach(f => trvDocLines.push({ kind: 'FEET', code: f.aliasErp || f.erp, name: f.name, note: f.note, qty: f.eachQty || 1, rate: f.rate || 0, memo: String(f.lineMemo || '').trim() }));
             }
 
-            // Shipping — the exact shape ERPPushPull sends (proven against this account): saved
-            // address by NetSuite Address Book id, or the custom override; a charge needs a ship
-            // METHOD riding along or NetSuite 400s the order.
-            const shippingPayload = {};
-            if (ship.method === 'SAVED' && ship.addressId) shippingPayload.shipaddresslist = { id: ship.addressId };
-            else if (ship.method === 'CUSTOM' && ship.custom.addr1) {
-                shippingPayload.shippingaddress = {
-                    attention: ship.custom.attention || '', addressee: ship.custom.addressee || '',
-                    addr1: ship.custom.addr1 || '', addr2: ship.custom.addr2 || '',
-                    city: ship.custom.city || '', state: String(ship.custom.state || '').toUpperCase().replace(/\./g, '').trim(),
-                    zip: ship.custom.zip || '', country: { id: ship.custom.country || 'US' },
-                };
-            }
+            // ── THE ONE HEADER (E3 / #22, Stuart 2026-09-12 option 1): Shared/nsHeader, the same
+            // builder CPQ's push uses — entity, subsidiary / location, the brand's form + class, memo,
+            // PO, internal memo, shipping (saved address or custom; a charge rides with the ONE cached
+            // ship method from nsTransmit.resolveShipMethod). A brand with no form + class on file
+            // REFUSES here, before anything is written — never a default form. orderstatus is
+            // omitted: NS defaults to Pending Fulfillment, exactly as specified.
             const shipAmt = parseFloat(ship.amount) || 0;
-            if (shipAmt > 0) {
-                if (shipMethodRef.current === undefined) {
-                    try {
-                        const r = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: "SELECT id, itemid FROM item WHERE itemtype = 'ShipItem' AND NVL(isinactive,'F') = 'F' ORDER BY id" } });
-                        const b = await r.json().catch(() => ({}));
-                        const rows = (r.ok && b.items) || [];
-                        const pick = rows.find(x => /ship|freight|delivery|best way/i.test(String(x.itemid))) || rows[0] || null;
-                        shipMethodRef.current = pick ? { id: String(pick.id), name: String(pick.itemid) } : null;
-                    } catch { shipMethodRef.current = null; }
-                }
-                if (shipMethodRef.current) { shippingPayload.shippingcost = parseFloat(shipAmt.toFixed(2)); shippingPayload.shipMethod = { id: shipMethodRef.current.id }; }
-                else addLog(`⚠️ No active Ship Item in NetSuite — pushing WITHOUT the $${shipAmt.toFixed(2)} shipping charge; add it on the SO manually.`, 'warn');
+            const sm = shipAmt > 0 ? await resolveShipMethod() : null;
+            const hdr = nsTransactionHeader({
+                brand: activeBrand, asType, customerId, memo: memoText,
+                poNumber: soExtras.po, internalMemo: soExtras.internalMemo,
+                shipping: { method: ship.method, addressId: ship.addressId, custom: ship.custom, amount: shipAmt, shipMethod: sm },
+            });
+            if (!hdr.ok) {
+                addLog(`⛔ ${hdr.error.code}: ${hdr.error.message}`, 'error');
+                alert(`Not queued — ${hdr.error.message}`);
+                setPushing(false);
+                return;
             }
-
-            // Header alignment (Stuart's NetSuite list, 2026-08-13): CE Sales Order form 177 /
-            // CE Quote form 299 (proven by the CPQ estimate push) + Hardware class 2 — CE brand
-            // only, other brands keep NS defaults. orderstatus is omitted: NS defaults to Pending
-            // Fulfillment, exactly as specified.
+            hdr.warnings.forEach(w => addLog(`⚠️ ${w}`, 'warn'));
             const lineTag = String(soExtras.sidemark || '').trim().slice(0, 300);
             const payload = {
-                entity: { id: nsCustomerId },
-                subsidiary: { id: brandMapping.subsidiary },
-                location: { id: brandMapping.location },
-                ...(activeBrand === 'ce' ? { customForm: { id: asType === 'estimate' ? '299' : '177' }, class: { id: '2' } } : {}),
-                memo: memoText,
-                ...(String(soExtras.po || '').trim() ? { otherRefNum: String(soExtras.po).trim().slice(0, 40) } : {}),
-                ...(String(soExtras.internalMemo || '').trim() ? { custbody_bit_internalmemo: String(soExtras.internalMemo).trim().slice(0, 999) } : {}),
-                ...shippingPayload,
+                ...hdr.header,
                 item: {
                     // PACKS never reach NetSuite: we stock and transmit EACH (2 × 7-pack = 14), and
                     // the pack only shows on the customer-facing quote/invoice. The description

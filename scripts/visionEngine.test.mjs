@@ -8,6 +8,7 @@
 
 import { visionPickers, engDataFromPickers, enginePicksForDraft, endStyleOf, chosenRods, engineEndSettled } from '../src/components/Shared/visionEngine.js';
 import { visionPartIds } from '../src/components/Shared/visionBridge.js';
+import { normalizeChoice, applyFitsDefaults } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -99,6 +100,18 @@ const nameOf = (id) => ({ 'H1-MRPF': 'MITER RETURN - H1-MRPF' })[id] || null;
     eq('a finial alone leaves the bracket open → not settled', engineEndSettled(visionPickers({ choices: FAM, answers: SINGLE, picks: { 'END|FRONT|LEFT': 'FIN-L' } })), false);
     eq('the right end is asked separately', engineEndSettled(visionPickers({ choices: FAM, answers: SINGLE, picks: { 'END|FRONT|LEFT': 'MTR-L' } }), 'RIGHT'), false);
     eq('no pickers → false', engineEndSettled(null), false);
+}
+
+{
+    // THE PROJECTION FILTERS IN VISION TOO (Stuart 2026-09-12: "once a projection is selected the bracket
+    // offering should be filtered to match"). VisionHardware hands visionPickers choices it already
+    // normalized for its axis questions — exactly this shape.
+    const pre = applyFitsDefaults(FAM.map(normalizeChoice));
+    const at6 = visionPickers({ choices: pre, answers: { ...SINGLE, proj: 6 }, picks: {} });
+    ok('pre-normalized rows keep their depths', at6.at('BRACKET', 'LEFT').options.every(o => o.depths.length === 1 && o.depths[0] === 6));
+    const at3 = visionPickers({ choices: pre, answers: { ...SINGLE, proj: 3.625 }, picks: {} });
+    eq('at 3-5/8" the 6" bracket is not offered on the left', (at3.at('BRACKET', 'LEFT') || { options: [] }).options.map(o => o.id), []);
+    eq('…and the raw-row answer is identical (CPQ and Vision agree)', visionPickers({ choices: FAM, answers: { ...SINGLE, proj: 3.625 }, picks: {} }).at('BRACKET', 'LEFT')?.options.map(o => o.id) || [], []);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

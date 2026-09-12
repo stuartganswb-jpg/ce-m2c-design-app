@@ -1,6 +1,6 @@
 // Harness for the NetSuite push of a cart line discounted in CPQ (Stuart 2026-09-11, S1).
 //
-//   node --import ./scripts/_lib/register-extless.mjs scripts/nsTransmitLineDiscount.test.mjs
+//   node scripts/nsTransmitLineDiscount.test.mjs   (the loader registers itself)
 //
 // (the --import hook resolves CRA's extension-less relative imports and stubs '../../firebase';
 //  buildNsTransaction is exercised with no ctx, so it never reaches Firestore or the proxy)
@@ -10,7 +10,12 @@
 // the discounted item's components at THEIR OWN lower rates and leaves the other item's alone,
 // the transaction lands at the quote's net total, and the whole-quote scale never fires.
 
-import { resolveJobLines, buildNsTransaction } from '../src/components/Shared/nsTransmit.js';
+// The loader registers ITSELF so the shared runner's plain `node --test` loads this suite too
+// (close-out item 1, 2026-09-12): CRA source omits '.js' on relative imports and pulls the
+// browser-only firebase bootstrap; scripts/_lib resolves the one and stubs the other.
+import { register } from 'node:module';
+register('./_lib/extless-hook.mjs', import.meta.url);
+const { resolveJobLines, buildNsTransaction } = await import('../src/components/Shared/nsTransmit.js');
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -76,6 +81,16 @@ ok('code named in the log', logs5.some(m => /Customer discount code D20 \(20%\)/
 const j6 = job([cartItem('a'), cartItem('b', { lineDiscount: { mode: 'NET', netPrice: 132, by: 'Stuart', at: 1 } })], 242);
 const b6 = await buildNsTransaction({ job: j6, asType: 'estimate', brand: 'ce', data, ctx: null });
 eq('rates: the set line at ×1.2', b6.payload.item.items.slice(1).map(l => [l.item.id, l.rate]).sort(), [['101', 10], ['101', 12], ['102', 50], ['102', 60]].sort());
+
+// ── 7. THE ONE HEADER (E3, 2026-09-12): CE carries its form + class; a brand with no ids REFUSES ──
+{
+    const ce = await buildNsTransaction({ job: job([cartItem('a')], 110, { poNumber: 'PO-9', shippingMethod: 'SAVED', shippingAddressId: '55' }), asType: 'salesorder', brand: 'ce', data, ctx: null });
+    eq('CE sales order header: form 177, class 2, subsidiary 2 / location 17, PO, job id, saved address', [ce.payload.customForm, ce.payload.class, ce.payload.subsidiary, ce.payload.location, ce.payload.otherRefNum, ce.payload.custbody50, ce.payload.shipaddresslist], [{ id: '177' }, { id: '2' }, { id: '2' }, { id: '17' }, 'PO-9', 'JOB-1', { id: '55' }]);
+    const m2c = await buildNsTransaction({ job: job([cartItem('a')], 110), asType: 'estimate', brand: 'm2c', data, ctx: null });
+    eq('M2C refuses to queue with a named code until Eric\'s ids are on file', [m2c.ok, m2c.error && m2c.error.code], [false, 'NO_NS_FORM_FOR_BRAND']);
+    const noCust = await buildNsTransaction({ job: { ...job([cartItem('a')], 110), customer: { id: '' } }, asType: 'estimate', brand: 'ce', data, ctx: null });
+    eq('no customer still refuses as NO_CUSTOMER', noCust.error && noCust.error.code, 'NO_CUSTOMER');
+}
 
 console.log(`\nnsTransmit line discount: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

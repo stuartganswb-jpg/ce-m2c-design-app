@@ -325,7 +325,13 @@ export function normalizeChoice(input = {}) {
         // Left as the raw tag. What an UNTAGGED attachment fits is decided per assembly by
         // applyFitsDefaults(), because it depends on what the assembly distinguishes.
         fits: fitsTag.length ? fitsTag : (DEFAULT_FITS[role] || [SOLID, TRAVERSE]),
-        fitsExplicit: fitsTag.length > 0,
+        // ⚠ NORMALIZING TWICE MUST CHANGE NOTHING (Stuart 2026-09-12: Vision's brackets ignored the
+        // projection). resolve() normalizes whatever it is given; CPQ hands it raw adapter rows
+        // (one pass) but Vision hands rows it had already normalized for its axis questions — and
+        // the second pass read no `proj` tag, wrote an empty depth list, and the projection rule
+        // had nothing to test (1,037 live rows lost their depths, 170 their tiered pair). So a
+        // field that only exists on a normalized row is kept as it stands.
+        fitsExplicit: typeof input.fitsExplicit === 'boolean' ? input.fitsExplicit : fitsTag.length > 0,
         // WHICH ROD OF A DOUBLE THIS BELONGS TO. Separate from position on purpose: a back rod's
         // LEFT piece is BACK **and** LEFT, and one field cannot hold both. Tagging tier on the pin
         // is the clean path; a part pinned FRONT/BACK in the position field is read as a tier and
@@ -341,8 +347,11 @@ export function normalizeChoice(input = {}) {
         frontLayer: U(input.frontLayer),             // '' = either front — every bracket that is not a double
         // A per-tier tag is NOT a list of alternatives, so it never lands in `projs` — otherwise a
         // double bracket would appear once per depth, each time judged against the wrong rod.
-        projs: Object.keys(parseProjTiers(input.proj)).length ? [] : measureList(input.proj),
-        ...(Object.keys(parseProjTiers(input.proj)).length ? { projTiers: parseProjTiers(input.proj) } : {}),
+        // An already-normalized row has no `proj` tag — its `projs` / `projTiers` are the answer (see fitsExplicit).
+        ...((input.proj === undefined || input.proj === null || input.proj === '') && (Array.isArray(input.projs) || (input.projTiers && typeof input.projTiers === 'object'))
+            ? { projs: Array.isArray(input.projs) ? input.projs.slice() : [], ...(input.projTiers && typeof input.projTiers === 'object' ? { projTiers: { ...input.projTiers } } : {}) }
+            : { projs: Object.keys(parseProjTiers(input.proj)).length ? [] : measureList(input.proj),
+                ...(Object.keys(parseProjTiers(input.proj)).length ? { projTiers: parseProjTiers(input.proj) } : {}) }),
         // Blank on mounting hardware = WALL; blank on anything else = not filtered by mount.
         // ⚠ ONLY MOUNTING HARDWARE CARRIES A MOUNT (Stuart 2026-08-17: "when i switch to inside
         // mount or wall it reduces to only two, the wood and acrylic"). This line supplied a

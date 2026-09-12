@@ -8,3 +8,12 @@ export const BRAND_NETSUITE_MAP = {
     'ce': { subsidiary: "2", location: "17" },
     'leyla': { subsidiary: "5", location: "18" }
 };
+
+// THE brand → NetSuite custom FORM + CLASS map, one copy (E3 / STATE #22, Stuart 2026-09-12:
+// "option 1"). CE: quote = "CE - Quote" (299), sales order = 177, class 2 = Hardware (Eric
+// 2026-08-11). A brand with no row here REFUSES to queue with a named error
+// (Shared/nsHeader.nsTransactionHeader) — never a silent default form. When Eric sends the M2C /
+// Uniquity / Leyla ids, they go here and nothing else changes.
+export const BRAND_NETSUITE_FORMS = {
+    'ce': { estimate: '299', salesorder: '177', class: '2' },
+};

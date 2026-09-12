@@ -21,7 +21,7 @@ import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from './sizeMatrix';
 import { aliasTargetIdOf } from './aliasIdentity';
 import { nsProxyFetch } from './nsProxy';
 import { enqueueNsWrite } from './nsOutbox';
-import { BRAND_NETSUITE_MAP } from './brandNetsuite';
+import { nsTransactionHeader } from './nsHeader';
 import { isParkedGeometryLine } from './lineClassification';
 import { netFactorOf } from './lineDiscount';
 
@@ -581,10 +581,8 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
         log(`Discounted quote: item rates scaled to ${(factor * 100).toFixed(1)}% so the ${asType} lands at $${cpqGrandTotal.toFixed(2)}.`, 'info');
     }
 
-    let nsCustomerId = job.customer?.id || "";
-    if (nsCustomerId.startsWith('CUST-')) nsCustomerId = nsCustomerId.replace('CUST-', '');
-    if (!nsCustomerId) return { ok: false, error: { code: 'NO_CUSTOMER', message: 'This job has no NetSuite customer id — pick the customer on the quote first.' } };
-    const brandMapping = BRAND_NETSUITE_MAP[brand] || { subsidiary: "2", location: "17" };
+    // The customer, the subsidiary / location and the form + class are the ONE header builder's
+    // (Shared/nsHeader, both doors) — below, once the shipping method is resolved.
 
     const flowDoc = (data.cpqFlows || []).find(f => f.id === job.flowId);
     const flowName = flowDoc?.name || 'Custom Assembly';
@@ -592,48 +590,23 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     if (!flowDoc?.nsRollupItemId) log(`⚠️ Flow "${flowName}" has no dedicated rollup item — using shared default 61502.`, 'warn');
     const headerDesc = `${flowName} labor portion of quote# ${job.jobId || job.id} for Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`;
 
-    const shippingPayload = {};
-    if (job.shippingMethod === 'SAVED' && job.shippingAddressId) {
-        shippingPayload.shipaddresslist = { id: job.shippingAddressId };
-    } else if (job.shippingMethod === 'CUSTOM' && job.customShippingAddress) {
-        let cleanState = job.customShippingAddress.state || '';
-        if (cleanState) cleanState = cleanState.toUpperCase().replace(/\./g, '').trim();
-        shippingPayload.shippingaddress = {
-            attention: job.customShippingAddress.attention || '',
-            addressee: job.customShippingAddress.addressee || '',
-            addr1: job.customShippingAddress.addr1 || '',
-            addr2: job.customShippingAddress.addr2 || '',
-            city: job.customShippingAddress.city || '',
-            state: cleanState,
-            zip: job.customShippingAddress.zip || '',
-            country: { id: job.customShippingAddress.country || 'US' }
-        };
-    }
+    // ── THE ONE HEADER (E3 / #22, Stuart 2026-09-12 option 1): Shared/nsHeader for BOTH doors ──
+    // CE gets its form + class; a brand with no ids on file REFUSES to queue with a named error
+    // (never a default form) until Eric's ids land in Shared/brandNetsuite.BRAND_NETSUITE_FORMS.
     const memoText = String((job.sidemark || '').trim() || (job.jobName || '').trim());
     const shippingAmount = parseFloat(job.shippingAmount) || 0;
-    if (shippingAmount > 0) {
-        const sm = await resolveShipMethod();
-        if (sm) {
-            shippingPayload.shippingcost = parseFloat(shippingAmount.toFixed(2));
-            shippingPayload.shipMethod = { id: sm.id };
-            log(`Shipping $${shippingAmount.toFixed(2)} → header via ship method "${sm.name}".`, 'info');
-        } else {
-            log(`⚠️ No active Ship Item in NetSuite — pushing WITHOUT the $${shippingAmount.toFixed(2)} shipping charge.`, 'warn');
-        }
-    }
+    const sm = shippingAmount > 0 ? await resolveShipMethod() : null;
+    if (shippingAmount > 0 && sm) log(`Shipping $${shippingAmount.toFixed(2)} → header via ship method "${sm.name}".`, 'info');
+    const hdr = nsTransactionHeader({
+        brand, asType, customerId: job.customer?.id || '', memo: memoText,
+        poNumber: job.poNumber, internalMemo: job.internalMemo, appJobId: job.jobId || job.id,
+        shipping: { method: job.shippingMethod, addressId: job.shippingAddressId, custom: job.customShippingAddress, amount: shippingAmount, shipMethod: sm },
+    });
+    if (!hdr.ok) return { ok: false, error: hdr.error };
+    hdr.warnings.forEach(w => log(`⚠️ ${w}`, 'warn'));
 
     const payload = {
-        entity: { id: nsCustomerId },
-        subsidiary: { id: brandMapping.subsidiary },
-        location: { id: brandMapping.location },
-        // CE rides its own custom forms (Eric 2026-08-11): estimate = "CE - Quote" (299), sales
-        // order = 177 (the form Quick Ship has always used). Class 2 = Hardware.
-        ...(brand === 'ce' ? { customForm: { id: asType === 'estimate' ? '299' : '177' }, class: { id: '2' } } : {}),
-        memo: memoText,
-        ...(job.poNumber ? { otherRefNum: String(job.poNumber).slice(0, 40) } : {}),
-        ...(job.internalMemo ? { custbody_bit_internalmemo: String(job.internalMemo).slice(0, 999) } : {}),
-        custbody50: job.jobId || job.id,
-        ...shippingPayload,
+        ...hdr.header,
         item: {
             items: [
                 { item: { id: rollupItemId }, quantity: 1, rate: parseFloat(silentFeeBalance.toFixed(2)), price: { id: "-1" }, description: headerDesc },
