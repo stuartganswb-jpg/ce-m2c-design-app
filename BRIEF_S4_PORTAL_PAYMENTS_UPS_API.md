@@ -131,6 +131,23 @@ owed (`h2-simple-elegance-flow` memory).
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-11 · TWO pushes: 1e5e5a4 (18:35 EDT, swept live) and 8b2e6b1 (21:17 EDT; S3
+  sweeps and records in BRIEF_S3 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. Found on the SO60420 plating
+  round trip (`PLATING_ROUND_TRIP_SO60420.md`). **1e5e5a4** — WMS Plating: the plater PO's NetSuite number. The PO POST comes
+  back without the id and the one immediate SuiteQL lookup by memo found nothing, so the shipment carried `nsPoId: null` and
+  Receive refused. Now Ship retries the lookup over 10 s, a shipment still without a number carries `nsPoPending` and says so,
+  the Out-at-plater row has ⟳ FIND NETSUITE PO (memo lookup → the vendor's last-3-days POs to pick from → only when both are
+  empty a guarded re-post through the same builders), admin Reset refuses when a number is on file. **8b2e6b1** — (1) why
+  every Brimar packing list read NOT PACKED on the pole: `Shared/packingList` pairs ORDERED with PACKED by item code, and
+  the finishing document had no pole line by code (the pole rides the shop order). `Shared/pickLines.poleDetailsOf` rows now
+  carry `code`; `packLinesOf(job, { poleRows })` emits POLE-i lines by code from the live shop-sibling rows or from
+  `poleLines` the pack stamps on the finishing document; the pack workspace lists the poles as tickable lines, a tick
+  writes `packedLines.<key>.qty`, the first pole tick and pack completion stamp `poleLines`. **S2: no change to your
+  builder — it now finds the pole by code on documents packed from here on; documents packed before today keep reading
+  NOT PACKED on the pole (no `poleLines`).** (2) 🖨 Packing list on the WMS pack workspace, Recently Packed rows and the SO
+  Pack card — the same `packingListOf` + `FormPreview` the CRM prints (S1: FormPreview/printForm/customerDocLines imported,
+  not edited; a CPQ order's lines read from `jobs/<quoteId>` at print time). Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S5 · 2026-09-11 · 0a7bfa7 pushed at 19:23 EDT (S5 sweeps by chunk-hash match, recorded in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: 5. Marketing designer — Place… asks which row takes a cart configuration (a seeded row keeps its place and takes the CPQ lines + picture) and the picture prefers a cart line's `displaySnapshot` when present (S1: your hand-off in BRIEF_S1 §6 — the framed capture at Add configuration). `system/displays/entries/*` rows gain `replacedAt` / `config.replacedSeed`. No other document, no work order, no NetSuite write. Your side: nothing.
 
 - **⚠ DEPLOY NOTICE from S5 · 2026-09-11 · db928f4 pushed at 18:58 EDT (S5 sweeps by matching the served chunk hash to the local build, then markers; recorded in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: 5. Marketing display designer — rows carry an `orientation` (vertical base poles stand in a base band on the tabletop's front face), a display carries `finishFlowId` (its chip board = that CPQ flow's tagged finishes, read from `cpq_flows` the way BOMTab's onboarding export reads them — read only), style extras seeded. Docs touched: `system/displays/entries/*` gain `finishFlowId`, rows gain `orientation`, faces gain `baseIn`. No other document, no work order, no NetSuite write. Your side: nothing.

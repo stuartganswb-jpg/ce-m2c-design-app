@@ -424,6 +424,21 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 · S3 · 1e5e5a4 + 8b2e6b1 — the plating round trip ran live on SO60420** (`PLATING_ROUND_TRIP_SO60420.md`,
+  every step with expected vs seen and a screenshot). Passed: RTG split (8 plated small parts from stock → pick-only doc,
+  bent rod + 2 returns → shop, nothing to finishing) → shop ▶ Start (pick opened within 2 s) → Complete & Label (Sent to
+  Plating, ONE demand with the links, "At the plater" on the WMS row and RTG's job log) → ↩ Undo (demand cancelled) →
+  Complete again (one fresh demand) → 📥 OB scan-in (staged line) → the small-parts pick → 📦 Ship (PLT-CE-1789164485442,
+  $30) → undo-after-ship refused. **Blocked at Receive:** the plater PO's NetSuite number was never recovered (the one
+  immediate memo lookup found nothing; Stuart found no PO in NetSuite) → 1e5e5a4 (retry, honest alert, ⟳ FIND NETSUITE PO,
+  guarded re-post, Reset guard). **Also from the run → 8b2e6b1:** Stuart's CRM question "none of the poles show packed" —
+  the packing list pairs by item code and the finishing document had no pole line by code; fixed on the pack side
+  (`poleLines` stamp) so §2.4 gains nothing for S2; and 🖨 Packing list on the WMS. **Defects found, S3, open (§2.4):**
+  Packaging Prep lets a packer Start packing while `customFabStatus` is 'Sent to Plating' (the gate lives only on the
+  staging handshake — a box could ship without its pole); the pick-only doc's born-Complete trips the WMS "overtaken pick"
+  banner; a shop ↩ Undo between scan-in and Ship is not refused (the demand is already fulfilled). **For S2 (§2.3):** the
+  split's shop doc `qty` = custom LINES, not pieces, and it reached the plater PO; ✎ EDIT PO offered on a sent plating PO.
+
 - **2026-09-11 · S5 · 0a7bfa7 (pushed 19:23).** Display designer: Place asks which row; framed-capture preference. Adds to §2.2: S1 owes `displaySnapshot` on the cart line at Add configuration (transparent, the camera as framed; stripped at save) — BRIEF_S1 §6.
 
 - **2026-09-11 · S5 · db928f4 (pushed 18:58).** Stuart's first read of the seeded tabletop: base rows are vertical poles in a base (now drawn so), a tabletop's parts are its extras (seeded), the chip board carries only the CPQ flow's tagged finishes (`finishFlowId`, the BOMTab union rule). Harness 78.

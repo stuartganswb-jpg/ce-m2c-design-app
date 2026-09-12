@@ -364,6 +364,32 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-11 — 8b2e6b1 pushed 21:17 EDT (S3): the pole packed by its code + 🖨 Packing list on the WMS.** Stuart's CRM
+  question ("none of the poles are showing packed … i do not see this same packing slip on the wms") → cause read in
+  `Shared/packingList` (S2) + `Shared/pickLines.packLinesOf`: the list pairs by code; the finishing doc had no pole line by
+  code. Built: `poleDetailsOf` rows carry `code`; `packLinesOf(job, { poleRows })` → POLE-i lines by code (live rows or the
+  `poleLines` stamp); WMS pack workspace lists the poles to tick, ticks write `qty`, first pole tick + pack completion stamp
+  `poleLines`; 🖨 Packing list on the pack workspace / Recently Packed / SO Pack via `packingListOf` + `FormPreview` +
+  `printForm` (S1's, imported). `scripts/pickLines.test.mjs` 48 → 58. Lint 0, build passed, safe-push = one commit. Stuart:
+  "go ahead on all of them". **Sweep 21:48 EDT:** stamp 1789177611978 (after the push); 38 JS assets, all fetched with
+  `curl -sf` (8,558,128 bytes, 0 failures); `The packing list needs the order` ×1, `poleLines` ×1 and `NUMBER NOT RECOVERED`
+  ×1 in `main.38da7e40.js`. **LIVE** (both pushes in one bundle). Not yet run by an operator: the first pole tick and the
+  first WMS packing-list print are the acceptance runs — SO60420 continues on this bundle.
+- **2026-09-11 — 1e5e5a4 pushed 18:35 EDT (S3): the plater PO keeps its NetSuite number.** Found live on SO60420: Receive
+  refused ("no NetSuite PO id on file") because the ship step's one immediate memo lookup found nothing and nothing retried;
+  Stuart: no such PO in NetSuite. Built: retry ×5 over 10 s at Ship; `nsPoPending` + "NUMBER NOT RECOVERED" alert (never
+  "pending sync"); ⟳ FIND NETSUITE PO on the Out-at-plater row (memo lookup → vendor's last-3-days POs → guarded re-post
+  through the now-shared `buildPlatingPoDescription` / `buildPlatingPoPayload`); Reset refuses with a number on file.
+  Sweep 18:38: stamp 1789167933768; 40 assets, 0 failures; `NUMBER NOT RECOVERED` ×1 and `Find NetSuite PO` ×1 in
+  `main.74173426.js`. **LIVE.**
+- **2026-09-11 — the SO60420 plating round trip, live, Stuart pinned in** — `PLATING_ROUND_TRIP_SO60420.md` (expected vs
+  seen, screenshots per step). ✓ §0 split · §1 Start · §2 pick row · §2b pick · §3 Complete & Label · §4 Undo + Complete
+  again · §5 scan-in · §6 Ship · §6a undo-after-ship refusal. ✗ §7 Receive blocked (PO number → 1e5e5a4). ✗ §9a Packaging
+  Prep packs at the plater (defect, mine). Named: overtaken-pick banner on pick-only docs; Undo between scan-in and Ship;
+  shop doc qty = lines (S2); ✎ EDIT PO on a sent plating PO (S2); standoffs picked bare while the quote says EP3 (S1).
+  Driving note: native confirm/alert/print dialogs freeze the Chrome tools — override them in the tab and read the captured
+  text (the run doc has every dialog's words).
+
 - **2026-09-11 — 47c2b6b pushed 12:25 EDT (S3): the plating links + custom put-away, and the Convert scroll.** Stuart:
   "yes fix the plating links" (approval of the 09-10 plan); the NetSuite-at-return question answered by assumption (a)
   stated before the push and not contradicted: no build for a custom-fabricated pole. Built: OB scan-in carries the links;
