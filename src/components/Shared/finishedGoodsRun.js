@@ -136,18 +136,29 @@ export const availabilityQuery = (codes, locationId) => {
 // The check, shaped for a confirm dialog: one row per pull line, shortages flagged. A code
 // NetSuite returned no row for reads as 0 with a note — absence of a stock record is itself
 // something the person should see before releasing the run.
+// UNKNOWN IS UNKNOWN, NOT ZERO (Stuart 2026-09-12, A's #39): a component NetSuite returned no stock
+// row for (a code it does not know, a location it does not stock, a truncated answer) used to read
+// as 0 on hand — a SHORT that raised a make-up work order or a convert for a part that may be on the
+// shelf. Now such a row is flagged, never counted: `have` is null, `short` is 0, `unknownRows` lists
+// it, `warn` is true, and the text says CHECK. A shortage is only ever a number NetSuite gave us.
 export const stockCheckReport = (lines, availMap) => {
     const rows = (lines || []).map(l => {
         const code = String(l.legacyErpId || '').toUpperCase();
-        const known = availMap && Object.prototype.hasOwnProperty.call(availMap, code);
-        const have = known ? (Number(availMap[code]) || 0) : 0;
-        const short = Math.max(0, (Number(l.quantity) || 0) - have);
-        return { code, need: Number(l.quantity) || 0, have, short, known };
+        const known = !!availMap && Object.prototype.hasOwnProperty.call(availMap, code);
+        const need = Number(l.quantity) || 0;
+        const have = known ? (Number(availMap[code]) || 0) : null;
+        const short = known ? Math.max(0, need - have) : 0;
+        return { code, need, have, short, known, unknown: !known };
     });
     const shortRows = rows.filter(r => r.short > 0);
+    const unknownRows = rows.filter(r => !r.known);
     return {
-        rows, shortRows, ok: shortRows.length === 0,
-        text: rows.map(r => `• ${r.code} — need ${r.need}, available ${r.have}${r.known ? '' : ' (no NetSuite stock row)'}${r.short > 0 ? ` ⚠ SHORT ${r.short}` : ' ✓'}`).join('\n'),
+        rows, shortRows, unknownRows,
+        ok: shortRows.length === 0,
+        warn: unknownRows.length > 0,
+        text: rows.map(r => r.known
+            ? `• ${r.code} — need ${r.need}, available ${r.have}${r.short > 0 ? ` ⚠ SHORT ${r.short}` : ' ✓'}`
+            : `• ${r.code} — need ${r.need}, NO NETSUITE STOCK ROW ⚠ CHECK THE ITEM (not counted as short)`).join('\n'),
     };
 };
 
