@@ -364,6 +364,19 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-11 22:30 — THE PLATING ROUND TRIP IS COMPLETE END TO END on SO60420** (`PLATING_ROUND_TRIP_SO60420.md`).
+  After 8b2e6b1 went live: ⟳ FIND NETSUITE PO found **PO2316** in the vendor's recent POs (the PO had been created at
+  Ship; the memo SuiteQL lookup misses it — open question) → stamped, no re-post → Receive → item receipt **IR22105**
+  POSTED via the outbox (11.1) → cart → custom put-away into `HP Plating` with NO NetSuite build → the finishing document
+  read `customFabStatus 'Complete'` (WMS chip "fabrication done", RTG job log the same) → pack: 9 lines incl. **the pole
+  H1-1R by code** (8b2e6b1), both halves matched, photo, COMPLETE → `packStatus 'Packed'`, fulfilment queued → 11.1
+  FAILED "Items list: Location" (the known S4/Eric wall) → **CRM packing list reads `H1-1R · ordered 1 · shipped 1`**.
+  Findings for the queue: the two French returns (`H1-FRPF`, shop custom lines with no cut length) read NOT PACKED —
+  S3 (a) every shop custom line becomes a pack row, or S1 (b) fabrication-on-the-rod items leave the packing slip; the CE
+  standard box list is empty so packs complete with no box; the memo lookup vs vendor-list discrepancy. Open defects
+  (mine) unchanged: Packaging Prep packs while the pole is at the plater; false "overtaken pick" on pick-only docs; shop
+  Undo between scan-in and Ship. **§3 item 1 is DONE.**
+
 - **2026-09-11 — 8b2e6b1 pushed 21:17 EDT (S3): the pole packed by its code + 🖨 Packing list on the WMS.** Stuart's CRM
   question ("none of the poles are showing packed … i do not see this same packing slip on the wms") → cause read in
   `Shared/packingList` (S2) + `Shared/pickLines.packLinesOf`: the list pairs by code; the finishing doc had no pole line by

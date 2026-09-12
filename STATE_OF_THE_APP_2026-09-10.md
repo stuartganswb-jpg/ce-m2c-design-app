@@ -424,6 +424,14 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 22:30 · S3 · §2.1 #2 DONE — the plating round trip ran end to end on SO60420** on the 8b2e6b1 bundle:
+  PO2316 found and stamped (⟳ FIND NETSUITE PO — the PO existed; the memo SuiteQL lookup misses it, open), receipt IR22105
+  posted through the outbox, custom put-away with no NetSuite build, sibling Complete, pack with the pole by code, CRM
+  packing list reads the pole 1/1. Fulfilment queued → FAILED on the known "Items list: Location" (§2.3 #30). **Adds to
+  §2.4 (S3):** French returns (`H1-FRPF`) read NOT PACKED on the packing list — shop custom lines without a cut length are
+  not pack rows (S3 a) or fabrication-on-the-rod items should leave the packing slip (S1 b), Stuart decides; the CE standard
+  box list is empty, packs complete with no box; the memo-lookup discrepancy.
+
 - **2026-09-11 · S3 · 1e5e5a4 + 8b2e6b1 — the plating round trip ran live on SO60420** (`PLATING_ROUND_TRIP_SO60420.md`,
   every step with expected vs seen and a screenshot). Passed: RTG split (8 plated small parts from stock → pick-only doc,
   bent rod + 2 returns → shop, nothing to finishing) → shop ▶ Start (pick opened within 2 s) → Complete & Label (Sent to
