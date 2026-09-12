@@ -101,7 +101,7 @@ display SO.
 
 | session | state | last hash | next |
 |---|---|---|---|
-| S1 | started 09-10. **Live:** a58d126 … bcb3ecb (packing list + invoice); 4d09ce3 (add-to-cart captures the view as set). **Next:** Stuart's screen proof; BRIEF_S1 §3 leftovers (#22, #20, #17, #47, #46, #53). | 4d09ce3 | screen proof; §3 leftovers |
+| S1 | started 09-10. **Live:** … 4d09ce3 (capture as set); cce9f96 (Vision projection filter · one NS header + refusal · close-out 1). **Next (close-out order):** 6 CRM document defects → 2 #46 kit push → 4 #17 classifyLine → 5/7 with Stuart → 8 data list + S4 mirror lines. | cce9f96 | close-out 6 → 2 → 4 |
 | S2 | started 09-10. Issue 1 DONE: reopen tool shipped (6c72e80 → 553272b), run REOPEN-1789057501646 = 52 restored / 0 failed on Stuart's list. Issue 2 (prevention) built + tested, push pending. Hand-offs out: S3 `reopenConfirmPick` chip; S1 refused-estimate stamp. Named: refused quotes invisible on RTG (S2 row queued). | 553272b | push Issue 2; then the refused-quotes row; then §3 #1 live pass |
 | S3 | started 09-10. Live: f5a6c19 · e2cef1f · 47c2b6b · 1e5e5a4 · 8b2e6b1 · a8bb6a8 · 1d02231 · 6ac41ac (HQ 15 Standard boxes tool — the add-box path was a hidden prompt-driven Save; now a real section). **SO60420 plating round trip COMPLETE end to end 09-11** (`PLATING_ROUND_TRIP_SO60420.md`); every defect it found is fixed. Stuart: add CE's boxes on HQ 15 (packs cannot close without one). Pairs wait on Eric. Next: BRIEF_S3 §3 items 2–5 (the sales-typed build at pack, the rest of the live pass, C4, the ⛏ posts) as Stuart picks. | 6ac41ac | §3 #2 when Stuart picks |
 | S4 | brief written, not started | — | when Stuart opens it |
@@ -111,6 +111,7 @@ display SO.
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
+| 2026-09-12 19:18 | S1 | cce9f96 | **Vision brackets follow the projection** (engine normalizer idempotent) · **ONE NetSuite header both doors** (`Shared/nsHeader`; CE form/class; non-CE brands REFUSE `NO_NS_FORM_FOR_BRAND` until Eric's ids land in `BRAND_NETSUITE_FORMS`) · close-out item 1 (suite loads). | everyone — save-is-send refuses on a stale bundle; NON-CE quotes refuse to queue until the ids land |
 | 2026-09-12 eve | S2 | $H | Close-out 1 + 4: shop qty = poles (+ feet / billableFeet on the shop doc; PO line → S3); job log says 'not started' / 'pick only — no finishing'; SO card names the custom half. | everyone |
 | 2026-09-12 17:27 | S1 | 4d09ce3 | **Add to cart captures the view as set** (both engines; old-engine lines gain a picture); S2's 60af70a carried. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-12 pm | S2 | 60af70a $H | One brand map (Shared/brandNetsuite everywhere); the stock pre-check treats a missing NetSuite row as UNKNOWN, not short. | everyone |

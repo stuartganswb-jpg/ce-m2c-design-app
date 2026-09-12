@@ -424,6 +424,11 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-12 · S1 · cce9f96 (pushed 19:18).** Vision's brackets filter by the chosen projection (the engine normalizer is idempotent — Vision's
+  pre-normalized rows had lost every depth). ONE NetSuite header for both doors (`Shared/nsHeader`; per-brand form + class in
+  `Shared/brandNetsuite.BRAND_NETSUITE_FORMS`, CE only today): a brand with no ids REFUSES to queue with a named error instead of landing on a
+  default form (Stuart: option 1; Eric owes the M2C / Uniquity / Leyla ids). STATE #22 closed; close-out item 1 (the broken suite) closed.
+
 - **2026-09-12 · S1 · 4d09ce3 (pushed 17:27).** Add to cart captures the 3D pane as the operator left it (both engines, one capture for the whole CPQ;
   old-engine lines gain a picture); the documents print `renderSnapshot` as before. S5's separate display capture is superseded (Stuart's call).
 

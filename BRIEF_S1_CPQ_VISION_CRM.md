@@ -495,6 +495,18 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-12 — cce9f96 (S1) pushed 19:18, SWEPT: version stamp 1789255307636; `main.da41a424.js` (nsTransmit + the engine) and `238.44f4e810.chunk.js` (tab 7).** Stuart's Vision-filter bug + close-out items 1 and 3 (option 1).
+  (a) `normalizeChoice` idempotent (projs / projTiers / fitsExplicit kept on a second pass) — proven on the live pins (`scratchpad/idem.mjs`
+  diff {} after; H1-138 BRACKET LEFT 16 → 6 at 3-5/8" with Vision-shaped rows) and in hardwareModel (+9) / visionEngine (+3). (b) `Shared/nsHeader`
+  = the one header; `BRAND_NETSUITE_FORMS` (CE only) in `Shared/brandNetsuite`; nsTransmit + QuickShipTab both use it; tab 7 refuses before
+  any write; `shipMethodRef` + tab 7's SuiteQL lookup deleted (one `resolveShipMethod`). Behaviour note: a CUSTOM ship method with no street
+  now sends NO address block from CPQ too (tab 7's stricter rule, both doors agree). (c) the line-discount suite self-registers its loader.
+  PUSH MECHANICS: the pre-commit guard caught S2's unpushed 6048b10; pushed from a detached `git worktree` on origin/main (my nine files copied
+  in, committed, `push HEAD:main`), then the shared checkout rebased — S2's commit stays local, theirs to push. Use this whenever the guard fires.
+  CLOSE-OUT: items 1 + 3 DONE ({h}); next 6 → 2 → 4 → 5/7 (Stuart) → 8.
+
+- **CLOSE-OUT CONFIRMED 2026-09-12: items 1 (broken suite) + Stuart's 09-12 Vision-filter bug (normalizeChoice idempotency, engine fix) → 6 (CRM document defects) → 2 (#46 kit push, proven with the real resolver in node) → 4 (#17 classifyLine) → 3 (E3, needs Stuart's decision: CE map + named refusal now, or wait for Eric) → 5 (Phase 3 + #47 watched Approve, with Stuart) → 7 (screen proofs, with Stuart) → 8 (data list + S4 mirror lines). ETA: 1 + Vision filter today; 6 + 2 + 4 tomorrow; 3/5/7 on Stuart's word.**
+
 - **2026-09-12 — 4d09ce3 (S1) pushed 17:27, SWEPT: version stamp 1789248651987; `asSet` in `main.ac1c21f5.js` (both the capturer and the two Add sites live in main).** `ViewCapturer` `{ current: true }` = the camera as
   it stands (no re-frame), same JPEG; TAGS Add configuration + old-engine handleAddToCart use it. S5's `displaySnapshot` ask superseded by Stuart
   (one capture for the whole CPQ). ⚠ The push CARRIED S2's unpushed 60af70a — my pre-commit `git log origin/main..HEAD` check PRINTED it but the
