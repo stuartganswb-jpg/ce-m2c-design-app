@@ -364,6 +364,14 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-11 — 1d02231 pushed 22:47 EDT (S3): the two remaining defects** (Stuart: "go ahead now and fix all the open
+  defects"). `isOvertakenPick` returns false for `pickOnly` / `finishingRequired === false` documents; `ShopFloor.js
+  undoComplete` refuses when any live `plating_shipments` line exists for the WO, worded by status (staged / at the plater /
+  built) — the refusal is the shop's own so S2's `cancelPlatingDemand` stays as is. Lint 0, build passed, safe-push = one
+  commit. **Sweep 22:51 EDT:** stamp 1789181450247 (after the push); 38 JS assets, all fetched with `curl -sf`
+  (8,561,495 bytes, 0 failures); `the WMS removes that staged line first` ×1 in `main.9d943d3a.js`; the pick-only
+  change is logic-only (no emitted string) — verified by the build, to be seen on the next pick-only order's row. **LIVE.**
+
 - **2026-09-11 — a8bb6a8 pushed 22:39 EDT (S3): Stuart's four rulings** ("1. you combine with the rod, they are a
   fabricating fee, once the shop confirms complete they are complete along with the pole. 2. force box choice. 3. for
   you to figure out. 4. packaging prep can pick and pack ready parts on a plating order before the poles arrive."). Built:

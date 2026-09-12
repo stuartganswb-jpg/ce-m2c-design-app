@@ -424,6 +424,12 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-11 22:47 · S3 · 1d02231 — the last two defects from the run closed:** the "overtaken pick" banner no longer
+  fires on a pick-only document; the shop's Undo on a plated order refuses once the WMS holds the pieces (staged / shipped /
+  built). **§2.4 (S3) is now empty of run findings**; what remains for S3 is §3 of its brief (#3 the sales-typed build at
+  pack, #1 the rest of the live pass, #4 C4, #6 the ⛏ posts) and the hand-offs never landed (#12, #14, #16, #18, #19, #32,
+  #33, #34, #35, #36, #40, #42, #43). Stuart owes CE's standard boxes (HQ 15) — packs cannot close without a box now.
+
 - **2026-09-11 22:39 · S3 · a8bb6a8 — Stuart's four rulings from the run:** (1) French returns / miters are fabrication on
   the rod: they ride the first pole row as pack lines by code, ticked with the pole — the packing list pairs them (closes the
   French-return finding above, S3 side; nothing for S1). (2) A box is a choice: Complete refuses without one; CE's standard

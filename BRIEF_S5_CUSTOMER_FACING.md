@@ -128,6 +128,13 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-11 · 1d02231 pushed 22:47 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. The last two defects from the SO60420 run: (1) WMS pick queue — `isOvertakenPick`
+  no longer reads a pick-only document's born-`Complete` phase as "already in production" (no red banner / CLEAR on a
+  pick-only order); (2) Shop floor — Undo on a plated order refuses once the WMS holds the pieces (staged → the WMS removes
+  the line first; shipped/received → receive them back; built → past undo), because the demand is already fulfilled at
+  scan-in and there was nothing to cancel. `cancelPlatingDemand` (S2) unchanged. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-11 · a8bb6a8 pushed 22:39 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
   (⌘⇧R) + re-PIN before your next save. Four of Stuart's decisions from the SO60420 run, all in `PickPackApp.js` +
   `Shared/pickLines.js`: (1) **French returns / miters ride the rod** — a shop custom line with no cut length is a
