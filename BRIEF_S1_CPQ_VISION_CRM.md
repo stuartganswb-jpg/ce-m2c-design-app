@@ -175,6 +175,13 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-12 (evening) · $H — close-out items 1 + 4.** Hard-refresh + re-PIN before your next
+  save. What ships: (1) the CPQ split's `shop_custom_orders.qty` = POLES (cut-length lines), never lines; new stamps
+  `poles`, `feet`, `billableFeet` (rounded up), `riderLines` — S3: the custom plating demand + plater PO line bill feet
+  (spec in your § 6); S1: nothing, the cart lines are unchanged. (2) `Shared/orderStatus.orderStatusOf`: a Pending custom half
+  reads RELEASED · "not started"; a pick-only doc reads new stage NONE ("Not needed") · "pick only — no finishing"; the RTG
+  sales-order card shows "· custom: <customFabLabel>". Readers of `orderStatusOf` / `STAGES` (WhereIsIt, OrderStatusChips,
+  the CRM pipeline card) see the two new words; no document shape change beyond the four shop-doc stamps.
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-12 (afternoon) · 60af70a + $H.** Hard-refresh + re-PIN before your next save. What ships:
   (1) StockViewTab and LibraryTab import `Shared/brandNetsuite` — the last local copies of BRAND_NETSUITE_MAP are gone
   (CLAUDE.md corrected). (2) `finishedGoodsRun.stockCheckReport`: a component with NO NetSuite stock row is UNKNOWN

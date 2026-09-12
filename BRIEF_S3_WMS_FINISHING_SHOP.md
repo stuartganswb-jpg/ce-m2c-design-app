@@ -190,6 +190,26 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-12 (evening) · $H — close-out items 1 + 4.** Hard-refresh + re-PIN before your next
+  save. What ships: (1) the CPQ split's `shop_custom_orders.qty` = POLES (cut-length lines), never lines; new stamps
+  `poles`, `feet`, `billableFeet` (rounded up), `riderLines` — S3: the custom plating demand + plater PO line bill feet
+  (spec in your § 6); S1: nothing, the cart lines are unchanged. (2) `Shared/orderStatus.orderStatusOf`: a Pending custom half
+  reads RELEASED · "not started"; a pick-only doc reads new stage NONE ("Not needed") · "pick only — no finishing"; the RTG
+  sales-order card shows "· custom: <customFabLabel>". Readers of `orderStatusOf` / `STAGES` (WhereIsIt, OrderStatusChips,
+  the CRM pipeline card) see the two new words; no document shape change beyond the four shop-doc stamps.
+- **From S2, 2026-09-12 — the plater bills FEET (Stuart's rule, your half):** *"the pole with french return or miter return
+  or straight pole anything pole for po to plater is always just the # of feet 1 pole x 8ft = 8 billable feet."* S2's split
+  now writes the shop doc's `qty` as POLES (a custom line with a cut length is a pole; a return / miter / bend line is
+  fabrication on it and adds nothing) and stamps `poles`, `feet` (poles × cut length ÷ 12, 2 dp), `billableFeet` (feet
+  rounded UP to the whole foot — S2's assumption from "8 billable feet"; say if the plater bills exact feet) and
+  `riderLines` on `shop_custom_orders` (`Shared/splitPlan.customShopQtyOf`, 4 assertions). **Ask:** (1) the custom plating
+  demand the shop raises at Complete & Label (`ShopFloor.js` ~:1391, `qty: Number(order.qty) || 1`) carries
+  `poles: order.qty`, `feet: order.feet`, `billableFeet: order.billableFeet` beside `qty`; (2) the plater PO line for a
+  pole bills `billableFeet` at the per-foot rate (SO60420's "3 × H1-1R @ 10.00" becomes "8 ft × H1-1R @ <per-ft>"), the
+  staged line shows "1 pole · 90" · 8 ft"; (3) the Order Entry custom pair (`<woId>-C`, written by S2's
+  `oeReviewPlan` / `workOrderCreate`) will get the same stamps in S2's next pass — until then a missing `billableFeet`
+  means "bill by qty as before". Downstream: shop card reads qty = poles (fewer pieces to count), demand + PO carry
+  feet, RTG unchanged, NetSuite PO quantity becomes feet for pole lines.
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-12 · 4d09ce3 pushed at 17:27 EDT (S1 swept every served asset after the deploy: version stamp 1789248651987; the capturer's `asSet` key in `main.ac1c21f5.js` (both the capturer and the two Add sites live in main); recorded in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **Add to cart captures the 3D pane AS THE OPERATOR LEFT IT** — both engines, one capture for the whole CPQ (Stuart 09-11: "however we set the image when we hit add to cart you should capture that view"). The shared `ViewCapturer` takes `{ current: true }` (no re-framing; the same white-ground ≤900px JPEG the quote / SO documents print); the tag-engine Add configuration and the old engine's add-to-cart both use it — old-engine lines carried no picture until now. The 📷 Capture Views packet pair (framed front + back) is unchanged. Cart-line field `renderSnapshot` only; documents print it; floors and NetSuite never read it; the saved job does not grow. **⚠ The push also CARRIED S2's local commit 60af70a** (brand → NetSuite map: StockViewTab / LibraryTab import `Shared/brandNetsuite`, CLAUDE.md) — it was committed-but-unpushed in the shared checkout; nothing of S2's was edited. Your side: nothing.
 
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-12 (afternoon) · 60af70a + $H.** Hard-refresh + re-PIN before your next save. What ships:

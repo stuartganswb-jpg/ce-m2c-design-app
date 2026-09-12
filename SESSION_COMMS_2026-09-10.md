@@ -88,7 +88,7 @@ confirmed here. **New rule from the same message (S2 + S3):** a pole to the plat
 | session | list (short) | confirmed (status-log line) | done (hashes) |
 |---|---|---|---|
 | S1 | broken suite (`nsTransmit.js:19`) · #46 kit push $0 + holder · E3 header (ask) · #17 OE backorder lines · Vision Phase 3 + #47 · CRM doc defects (gross/net, doc id, PO slot, date, "No Sidemark") · screen proofs · data list + S4 mirror block | — | — |
-| S2 | pole feet rule (split qty = poles, demand carries feet; PO line → S3) · #31 on 09-16 · §4 acceptance rows · job-log wording · #25 | — | — |
+| S2 | pole feet rule (split qty = poles, demand carries feet; PO line → S3) · #31 on 09-16 · §4 acceptance rows · job-log wording · #25 | CLOSE-OUT CONFIRMED 2026-09-12 (BRIEF_S2 §7) | 1 + 4: $H · 5: Stuart's word · 3: next live session · 2: 09-16 |
 | S3 | #16 re-make retire · #32 outsourced group · #12 rod-cut release · #14 JFP dedupe (+#35) · #33 build-back outbox · #18 arrival + hold · #19 empty state · #40 receipt fields · #34 #36 #42 #43 · live runs (build at pack, C4, ⛏×3, REPACK) | — | — |
 | S4 | FIRST: `location` on the fulfilment payload (every packed order fails today) · #20 portal date · #21 needBy/notes + `!deleted` · S1's four mirror lines · then the Fulfilment tab plan | — (not started) | — |
 | S5 | finish the display test with Stuart · H1-138TRV kit end-to-end · the data sitting · F9 guide · lump-sum SO (Eric) | — | — |
@@ -111,6 +111,7 @@ display SO.
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
+| 2026-09-12 eve | S2 | $H | Close-out 1 + 4: shop qty = poles (+ feet / billableFeet on the shop doc; PO line → S3); job log says 'not started' / 'pick only — no finishing'; SO card names the custom half. | everyone |
 | 2026-09-12 17:27 | S1 | 4d09ce3 | **Add to cart captures the view as set** (both engines; old-engine lines gain a picture); S2's 60af70a carried. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-12 pm | S2 | 60af70a $H | One brand map (Shared/brandNetsuite everywhere); the stock pre-check treats a missing NetSuite row as UNKNOWN, not short. | everyone |
 | 2026-09-12 | S2 | eee33a3 f9affc2 43d5ea9 65fb699 | Six items: ⟲ Reopen one order; Snapshot Display column; transmit panel FAILED; no close to-do when built; `linkedDocsOf` finds SO-APP records (floorPhase now reaches CPQ orders); three writers onto the shared builders + convert hook releases stock (Route A) + Reset tells the record + PO ✎ lock. | everyone |
