@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import BufferedInput from '../Shared/BufferedInput';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, addDoc, serverTimestamp } from "firebase/firestore";
+import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { SOURCING, sourcingOf, orderRouteFor, ORDER_ROUTE } from '../Shared/sourcing';
@@ -30,12 +31,6 @@ import { queueNsAssemblyWorkOrder } from '../Shared/nsWorkOrder';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 
 const NS_SUITEQL_URL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
-const BRAND_NETSUITE_MAP = {
-    'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "20" },
-    'ce': { subsidiary: "2", location: "17" },
-    'leyla': { subsidiary: "5", location: "18" }
-};
 
 // Last 12 calendar months oldest → newest, e.g. { key:'2025-07', label:"Jul '25" }.
 const last12Months = (now) => {

@@ -15,6 +15,7 @@ import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
 import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch, updateDoc, addDoc, serverTimestamp } from "firebase/firestore";
+import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { fixMojibake } from '../Shared/textRepair';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
@@ -39,12 +40,6 @@ const BRAND_NS_LOCATION = { m2c: "19", uniquity: "22", ce: "17", leyla: "18" };
 // Canonical brand → NetSuite subsidiary/location map (same values as PickPackApp / NetSuiteSync /
 // ERPPushPull / AdminTab — keep every copy in sync). Used to queue the parent-assembly work order.
 const NS_SUITEQL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
-const BRAND_NETSUITE_MAP = {
-    'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "20" },
-    'ce': { subsidiary: "2", location: "17" },
-    'leyla': { subsidiary: "5", location: "18" }
-};
 
 // 🔤 Mojibake repair lives in Shared/textRepair (also runs on Mass Update CSV imports).
 const MOJI_ITEM_FIELDS = ['itemName', 'description', 'itemDescription'];

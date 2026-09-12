@@ -66,7 +66,7 @@ After deploy, the user must **hard-refresh** (⌘⇧R) to clear the cached bundl
 
 ## Key conventions & gotchas
 - **Super admin**: gate admin features with a role normalized to include super admin (e.g. ShopFloor maps `superadmin`→`admin`). Super admin can reach tabs but was historically excluded from inner `['admin','programmer']` gates — include it.
-- **Brand → NetSuite map** (`BRAND_NETSUITE_MAP`, duplicated in PickPackApp/NetSuiteSync/ERPPushPull/AdminTab): `m2c`=sub3/loc19, `ce`=sub2/loc17, `uniquity`=sub6/loc20 ("Unique - HP"), `leyla`=sub5/loc18. Keep all copies in sync.
+- **Brand → NetSuite map** (`BRAND_NETSUITE_MAP`, ONE definition in `Shared/brandNetsuite.js`, imported by 15 files — the last two local copies, StockViewTab and LibraryTab, went 2026-09-12): `m2c`=sub3/loc19, `ce`=sub2/loc17, `uniquity`=sub6/loc20 ("Unique - HP"), `leyla`=sub5/loc18. Never add a local copy.
 - **Mainline assembly** = `routingType === 'MAIN'` OR `recordType === 'PRODUCT'`. Inception/Node Grouping/Visual Assembly/BOM filter to mainline; orphans/sub-components live only in BOM Engine / Master Library. Inception stamps saved PRODUCTS as `routingType: MAIN`.
 - **Assembly data model** (`Approved_Designs` doc): `manufacturingSpecs.cadUrl` = the working GLB (what Visual Assembly/BOM read); `revisions[]` = history; `finalRevisionId` = current; `nodeClusters[]` = node groups (have `location`/`position`/`category`); BOM lines = `assembly_pins` (keyed by `assemblyId`, link `clusterId`). The doc id never changes on update, so BOM/CPQ stay linked.
 - **CPQ flows**: stored in `cpq_flows`, edited in **System Admin → CPQ Flows** (the "8. CPQ Configurator" tab is the runtime). "Auto Sync BOM" appends steps; updates are in-place (no delete needed).
