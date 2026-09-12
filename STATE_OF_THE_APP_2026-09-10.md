@@ -424,6 +424,10 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-12 · S1 · bfac710 (pushed 19:38).** Close-out item 6 done: the CRM quotation prints its own number (never the doc id), the customer's PO
+  in the P.O. slot, a SIDEMARK row, and the day it was saved as a local date (the UTC evening-before is gone); "No Sidemark" is never stamped
+  on a line and never reaches NetSuite's line Tag. Items 1, 3 and 6 closed; next 2 (#46 kit push), 4 (#17).
+
 - **2026-09-12 · S1 · cce9f96 (pushed 19:18).** Vision's brackets filter by the chosen projection (the engine normalizer is idempotent — Vision's
   pre-normalized rows had lost every depth). ONE NetSuite header for both doors (`Shared/nsHeader`; per-brand form + class in
   `Shared/brandNetsuite.BRAND_NETSUITE_FORMS`, CE only today): a brand with no ids REFUSES to queue with a named error instead of landing on a

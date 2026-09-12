@@ -495,6 +495,13 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-12 — bfac710 (S1) pushed 19:38, SWEPT: version stamp 1789256527160; `main.e268c830.js` (FormPreview + quoteDisplay: `"SIDEMARK"`, `"SHIP DATE"`, `"No Sidemark"`) and `367.562a008b.chunk.js`. CLOSE-OUT item 6 DONE.** `Shared/quoteDisplay` +`docDateOf`
+  (bare 'YYYY-MM-DD' = local calendar day), `cleanSidemark` / `NO_SIDEMARK`, `orderSidemarkOf` (the card's rule); FormPreview Order Details
+  gains a SIDEMARK row on `data.sidemark`; the CRM print: `docNumber={quoteDisplayNo}`, `po = poNumber`, `sidemark`, `date = docDateOf`, print
+  title = the display number (the router / drawing pages keep the internal id — shop paper). hardwareHandoff + the old add-to-cart stamp ''
+  instead of 'No Sidemark' (the cart row keeps its placeholder; reopen already read both); nsTransmit cleans the legacy literal before custcol3
+  (+1 in the resolver suite). Not screen-verified — Stuart's next Docs print is the proof. Items 1, 3, 6 done; next 2 → 4 → 5/7 (Stuart) → 8.
+
 - **2026-09-12 — cce9f96 (S1) pushed 19:18, SWEPT: version stamp 1789255307636; `main.da41a424.js` (nsTransmit + the engine) and `238.44f4e810.chunk.js` (tab 7).** Stuart's Vision-filter bug + close-out items 1 and 3 (option 1).
   (a) `normalizeChoice` idempotent (projs / projTiers / fitsExplicit kept on a second pass) — proven on the live pins (`scratchpad/idem.mjs`
   diff {} after; H1-138 BRACKET LEFT 16 → 6 at 3-5/8" with Vision-shaped rows) and in hardwareModel (+9) / visionEngine (+3). (b) `Shared/nsHeader`
