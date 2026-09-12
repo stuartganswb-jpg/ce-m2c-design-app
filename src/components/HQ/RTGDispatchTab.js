@@ -14,9 +14,10 @@ import { coverCodesOf } from '../Shared/backorder';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
-import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState, planBulkReopen, applyBulkReopen, BULK_CLOSE_FROM, toMs } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState, planBulkReopen, applyBulkReopen, planOrderReopen, identityKeysOf, BULK_CLOSE_FROM, toMs } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
 import { isOpenPo, isDraftPo, approvePurchaseOrder, markPoSent, poRef, PO_STATUS } from '../Shared/purchaseOrders';
+import { poLinesLocked, poLockMessage } from '../Shared/poLock';
 import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone, liftPatchFor, wholeOrderWait } from '../Shared/orderStatus';
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
@@ -165,6 +166,19 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // SALES ORDER with the board write-back; anything else as an ESTIMATE. On success the refusal
     // stamp is cleared in the write that stamps nsTransmitQueuedAt (S1's contract); on a fresh
     // refusal the stamp is renewed so the row says the CURRENT reason. Jobs document only.
+    // A FAILED WRITE IS NOT "POSTING…" (2026-09-12): the panel read only the job's queued stamp,
+    // so a sales order whose NetSuite write had failed three times (missing Class) read as a slow
+    // one forever. The queued jobs' outbox entries are read once per change and the row says
+    // FAILED with the error, CANCELLED, or posting — the retry stays in 11.1.
+    const [outboxById, setOutboxById] = useState({});
+    useEffect(() => {
+        const ids = txJobs.filter(j => j.nsTransmitQueuedAt && j.nsTransmitOutboxId && !j.netsuiteEstimateId && !j.netsuiteSalesOrderId).map(j => String(j.nsTransmitOutboxId)).slice(0, 20);
+        if (!ids.length) return undefined;
+        let live = true;
+        Promise.all(ids.map(id => getDoc(doc(db, 'ns_outbox', id)).then(snap => [id, snap.exists() ? { id, ...snap.data() } : null]).catch(() => [id, null])))
+            .then(pairs => { if (live) setOutboxById(Object.fromEntries(pairs)); });
+        return () => { live = false; };
+    }, [txJobs, nsOutboxTail]);
     const txDataRef = useRef(null);
     const [queueingJobId, setQueueingJobId] = useState(null);
     const loadTxData = async () => {
@@ -221,8 +235,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // NetSuite so the two can never disagree. New lines resolve from the Master Library by our
     // code (or the customer's) — an item without a NetSuite id is refused, never guessed.
     const [poEdit, setPoEdit] = useState(null);   // { po, items: [...], add: {code, qty, rate}, busy }
-    const poLocked = (po) => !!(po.nsPoId || po.nsPoTran || po.status === 'Pushed to NetSuite');
-    const openPoEdit = (po) => setPoEdit({ po, items: (po.items || []).map(x => ({ ...x })), add: { code: '', qty: '', rate: '' }, busy: false });
+    // A PURCHASE ORDER IS FINAL ONCE IT HAS LEFT US (A's rule, Shared/poLock — landed here
+    // 2026-09-12): queued / numbered / sent / acknowledged lock the LINES; receiving still works.
+    // The one test both the ✎ button and the editor ask.
+    const poLocked = (po) => poLinesLocked(po);
+    const openPoEdit = (po) => {
+        if (poLinesLocked(po)) return alert(poLockMessage(po));
+        setPoEdit({ po, items: (po.items || []).map(x => ({ ...x })), add: { code: '', qty: '', rate: '' }, busy: false });
+    };
     const poEditAddLine = async () => {
         const e = poEdit; if (!e) return;
         const code = String(e.add.code || '').trim().toUpperCase();
@@ -2321,11 +2341,41 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
             return { ...b, overrides, plan: planBulkReopen({ ...b.raw, overrides }) };
         });
     };
+    // ⟲ REOPEN ONE ORDER (S3's ask, 2026-09-12): the shop's Undo now refuses an RTG-closed doc, so
+    // RTG must be able to reopen a single wrongly-closed order from ANY close — the same rules and
+    // the same panel as the bulk tool, one record, restored from the closer's snapshot where it
+    // exists. Found by its record id, its SO number, its WO id or its NetSuite work-order number.
+    const [reopenOneId, setReopenOneId] = useState('');
+    const loadOrderReopen = async (idText) => {
+        const key = String(idText || '').trim();
+        if (!key) return;
+        setBulkReopen({ since: Date.now(), loading: true, single: key });
+        try {
+            const tryDoc = async (coll, id) => { const snap = await getDoc(doc(db, coll, id)); return snap.exists() ? { coll, record: { ...snap.data(), id: snap.id } } : null; };
+            const tryField = async (coll, field) => { const qs = await getDocs(query(collection(db, coll), where(field, '==', key))); const d = qs.docs.find(x => !(x.data() || {}).deleted) || qs.docs[0]; return d ? { coll, record: { ...d.data(), id: d.id } } : null; };
+            const hit = await tryDoc('hq_work_orders', key) || await tryDoc('hq_sales_orders', key) || await tryDoc('hq_sales_orders', `SO-APP-${key.replace(/[^A-Za-z0-9-]/g, '')}`)
+                || await tryField('hq_sales_orders', 'soId') || await tryField('hq_work_orders', 'woId') || await tryField('hq_work_orders', 'nsWoTran');
+            if (!hit) { setBulkReopen(null); return alert(`No RTG record found for "${key}" — try the record id (WO-… / SO-APP-…), the SO number, the WO id or the NetSuite WO number.`); }
+            const { coll, record } = hit;
+            if (!isClosedState(record) && !record.closedAt) { setBulkReopen(null); return alert(`${woRefOf(record)} is not closed (${record.status || '?'}) — nothing to reopen.`); }
+            const kind = coll === 'hq_sales_orders' ? 'sales' : 'stock';
+            const links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, record, kind);
+            const finDocs = [...links.fin.entries()].map(([id, d]) => ({ ...d, id }));
+            const shopDocs = [...links.shop.entries()].map(([id, d]) => ({ ...d, id }));
+            const keys = [...new Set([...identityKeysOf(record), ...finDocs.map(d => d.id)])].slice(0, 10);
+            const [cutSnap, obSnap] = await Promise.all([
+                keys.length ? getDocs(query(collection(db, 'rod_cut_orders'), where('finWoId', 'in', keys))) : { docs: [] },
+                getDocs(query(collection(db, 'ns_outbox'), where('status', '==', 'CANCELLED'))),
+            ]);
+            const plan = planOrderReopen({ record, coll, finDocs, shopDocs, rodCuts: cutSnap.docs.map(d => ({ ...d.data(), id: d.id })), outbox: obSnap.docs.map(d => ({ ...d.data(), id: d.id })) });
+            setBulkReopen({ since: toMs(record.closedAt) || Date.now(), plan, loading: false, single: woRefOf(record), overrides: new Map() });
+        } catch (e) { setBulkReopen(null); alert('Could not read the order: ' + (e.message || e)); }
+    };
     const applyBulkReopenNow = async () => {
         const plan = bulkReopen && bulkReopen.plan; if (!plan || bulkReopen.applying) return;
         const n = plan.rows.filter(r => r.action === 'RESTORE').length;
         if (!n) return alert('Nothing to restore — every document in this close is kept or already reopened.');
-        if (!window.confirm(`⟲ REOPEN ${n} document(s) from today's bulk close?\n\nEach is restored from its own stamps exactly as listed above — nothing is guessed. KEEP rows stay closed. Reopened rod cuts return to the saw; reopened NetSuite writes post on the worker's next pass. Every write is stamped ${'reopenedBy ' + (currentUser || '?')} and ledgered.`)) return;
+        if (!window.confirm(`⟲ REOPEN ${n} document(s)${bulkReopen.single ? ` of ${bulkReopen.single}` : " from today's bulk close"}?\n\nEach is restored from its own stamps exactly as listed above — nothing is guessed. KEEP rows stay closed. Reopened rod cuts return to the saw; reopened NetSuite writes post on the worker's next pass. Every write is stamped ${'reopenedBy ' + (currentUser || '?')} and ledgered.`)) return;
         setBulkReopen(b => ({ ...b, applying: true, progress: 0, total: n }));
         const res = await applyBulkReopen({ db, doc, updateDoc, deleteField, setDoc }, {
             plan, by: currentUser || '',
@@ -2348,7 +2398,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
             <div style={{ padding: '12px 24px', borderBottom: '1px solid var(--line)', background: '#fffdf7' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)', fontWeight: 700 }}>
-                        ⟲ Reopen today's bulk close · {new Date(bulkReopen.since).toLocaleDateString()}
+                        {bulkReopen.single ? `⟲ Reopen ${bulkReopen.single} · closed ${new Date(bulkReopen.since).toLocaleString()}` : `⟲ Reopen today's bulk close · ${new Date(bulkReopen.since).toLocaleDateString()}`}
                     </span>
                     {bulkReopen.loading && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>reading every document the close stamped…</span>}
                     {bulkReopen.plan && !bulkReopen.result && (
@@ -2466,6 +2516,9 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                     )}
                                     {!['NS_CLOSE_TODO', 'DEMAND_ORPHAN', 'RODCUT_ORPHAN', 'STRANDED_GATE', 'NS_POSTED_AFTER_CLOSE'].includes(type) && (
                                         <button onClick={() => reconcileOne(f)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }}>⇄ Close everywhere</button>
+                                    )}
+                                    {type === 'BOARD_CLOSED' && f.parent && (
+                                        <button onClick={() => loadOrderReopen(f.parent.id)} title="The board closed it and the floor is still working it — reopen the record and its documents (dry run first)" style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>⟲ Reopen</button>
                                     )}
                                     {type === 'NS_CLOSE_TODO' && (
                                         <>
@@ -3169,6 +3222,11 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                             </span>
                             {/* The recovery for a "Close all" that closed live orders (2026-09-10): a dry run
                                 of every document today's bulk close stamped, restored from its own stamps. */}
+                            <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+                                <input value={reopenOneId} onChange={e => setReopenOneId(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') loadOrderReopen(reopenOneId); }} placeholder="SO60170 · WO-… · WO11599" title="Reopen ONE closed order from any close — dry run first"
+                                    style={{ fontFamily: 'var(--mono)', fontSize: '10px', padding: '4px 8px', border: '1px solid var(--line)', width: '150px' }} />
+                                <button onClick={() => loadOrderReopen(reopenOneId)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>⟲ Reopen one</button>
+                            </span>
                             <button onClick={() => bulkReopen ? setBulkReopen(null) : loadBulkReopen()} title="Read every document today's bulk close stamped and show what a reopen would restore (dry run first; nothing is written until you confirm)"
                                 style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>
                                 {bulkReopen ? '⟲ Hide the bulk-close list' : '⟲ Reopen a bulk close'}
@@ -3274,8 +3332,12 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     {txJobs.map(j => {
                         const refused = !!j.nsTransmitRefusedAt && !j.netsuiteEstimateId && !j.netsuiteSalesOrderId;
                         const queued = !refused && j.nsTransmitQueuedAt && !j.netsuiteEstimateId && !j.netsuiteSalesOrderId;
-                        const stateTone = j.netsuiteSalesOrderId ? '#3a7d44' : (j.netsuiteEstimateId ? '#3f7fc4' : (refused ? '#d9534f' : 'var(--brass)'));
-                        const stateLabel = j.netsuiteSalesOrderId ? `SO ${j.netsuiteSalesOrderNo || j.netsuiteSalesOrderId}` : (j.netsuiteEstimateId ? `EST ${j.netsuiteEstimateNo || j.netsuiteEstimateId}` : (refused ? `REFUSED — ${j.nsTransmitRefusedCode || '?'}` : 'QUEUED — posting…'));
+                        const ob = queued && j.nsTransmitOutboxId ? outboxById[String(j.nsTransmitOutboxId)] : null;
+                        const obState = ob ? String(ob.status || '').toUpperCase() : '';
+                        const failed = queued && obState === 'FAILED';
+                        const cancelled = queued && obState === 'CANCELLED';
+                        const stateTone = j.netsuiteSalesOrderId ? '#3a7d44' : (j.netsuiteEstimateId ? '#3f7fc4' : ((refused || failed) ? '#d9534f' : (cancelled ? '#9b968c' : 'var(--brass)')));
+                        const stateLabel = j.netsuiteSalesOrderId ? `SO ${j.netsuiteSalesOrderNo || j.netsuiteSalesOrderId}` : (j.netsuiteEstimateId ? `EST ${j.netsuiteEstimateNo || j.netsuiteEstimateId}` : (refused ? `REFUSED — ${j.nsTransmitRefusedCode || '?'}` : (failed ? `FAILED in NetSuite${ob.attempts ? ` (${ob.attempts}×)` : ''}` : (cancelled ? 'CANCELLED in 11.1' : 'QUEUED — posting…'))));
                         return (
                             <div key={j.id} style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap', padding: '10px 24px', borderBottom: '1px solid var(--paper-2)', fontSize: '0.85rem' }}>
                                 <b style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{j.quoteNo || j.jobId || j.id}</b>
@@ -3283,7 +3345,12 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                 {j.cpqData?.totalPrice ? <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>${Number(j.cpqData.totalPrice).toFixed(2)}</span> : null}
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: stateTone, whiteSpace: 'nowrap' }}>{stateLabel}</span>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint, var(--ink-soft))', whiteSpace: 'nowrap' }}>{String(j.status || '').replace(/_/g, ' ')}</span>
-                                {queued && <span title="Waiting on the staged sync (~1 min). If it sits here, check the Transmit Log below / 11.1 Sync Queue." style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>⏳</span>}
+                                {queued && !failed && !cancelled && <span title="Waiting on the staged sync (~1 min). If it sits here, check the Transmit Log below / 11.1 Sync Queue." style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>⏳</span>}
+                                {failed && (
+                                    <div style={{ flexBasis: '100%', fontSize: '11px', color: '#d9534f', lineHeight: 1.45, whiteSpace: 'pre-wrap' }} title={String(ob.lastError || '')}>
+                                        NetSuite refused the write: {String(ob.lastError || '').slice(0, 300)} — fix the cause, then ↻ Retry in 11.1 → NetSuite Sync Queue.
+                                    </div>
+                                )}
                                 {refused && (
                                     <>
                                         <button onClick={() => queueRefusedNow(j)} disabled={!!queueingJobId} title={j.nsTransmitRefusedMessage || ''}
