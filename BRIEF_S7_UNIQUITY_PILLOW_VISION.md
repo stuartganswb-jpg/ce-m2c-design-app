@@ -229,6 +229,34 @@ either posts (ids on file) or refuses with `NO_NS_FORM_FOR_BRAND` — and the CE
 
 *(newest first)*
 
+- **2026-09-13 — step 1 approved (Stuart): "go ahead with step 1".** Three more decisions: throws are broken into
+  smaller sizes that are LABELLED AS FABRICS (fabric items; a pillow panel is applied against them); a
+  NON-INVENTORY item "custom pillow" will be set up (the labour / price rollup — the holder line); tab 7 saves
+  the pillow order as a QUOTE as well as straight to a SALES ORDER; Stuart develops the pricing spreadsheet
+  (seeds `system/pillow_pricing`). Program order as planned: 1 price rule (pure) → 2 key dimensions + price
+  groups on the items (4.5) → 3 the board → 4 tab 7 mount (S1) → 5 Stitch & Sew (S2/S3) → 6 panel cutter (S3)
+  → 7 samples + portal.
+
+- **2026-09-13 — S7 opened; Stuart's answers to §5 (verbatim in spirit, decisions in force):**
+  **Door = Order Entry (tab 7), not CPQ.** The textile configurator on Vision draws the custom pillow, applies the
+  textile and a price, and the line goes straight to sales order entry, where standard pillows / throws are added
+  and the card is charged (card integration lands next week, S4). **Add-ons only:** nothing may break Classical /
+  M2C; separate tabs are acceptable if that is what keeps it clean.
+  **Q1 (library):** fabrics AND throws. Throws are cut into smaller panels of usable inventory (a 40×80 throw →
+  several panels) — a panel tool like the ring-pack builder; `length` and `width` become KEY DIMENSIONS on the
+  Uniquity master (as projection / diameter are for CE). Throws carry width + length; fabrics carry width and are
+  kept and used in RUNNING YARDS. A designed pillow consumes each panel, carries its cost and pushes the usage to
+  NetSuite; the labour rolls up into a non-inventory item as CPQ does.
+  **Q2 (NetSuite):** yes — inventory consumed for the seam, zipper and fabric/throw portion; labour = a rollup like CPQ.
+  **Q3 (price):** size first (includes filler, zipper, base labour) → the fabric of the first panel sets the PRICE
+  GROUP → every panel consumes its own inventory but the pillow is priced at the HIGHEST price group among its
+  panels (a standard price per size, e.g. Naka 23×23, covers it) + a labour charge per custom seam + a charge per
+  custom detail (edge details, trim, …).
+  **Q4 (floor):** custom pillows flow exactly as small parts flow to the finishing floor for CE — same flow, rules,
+  tools — but to the "Stitch & Sew" division with a NetSuite work order from the Uniquity subsidiary; same Setup
+  Queue; zones renamed cut · sew · stuff · pack. Lead time 2–3 weeks.
+  **Q5 (portal):** yes, eventually. **Q6 (samples):** sold through order entry, with an Asset Gallery image attached.
+
 - **2026-09-13 — brief written by S1** from the live code and data (VisionPillow 626 lines; the Uniquity flow a
   six-step stub with zero options; 2,821 Uniquity items, none a fabric or trim; 1,778 customers; no Uniquity
   quotes or drafts yet; NetSuite ids for the brand not on file → refusal by design). Registered on the board as S7.
