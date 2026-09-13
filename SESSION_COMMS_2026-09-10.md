@@ -27,7 +27,7 @@ and what Stuart has decided. Every session reads it at start and whenever a hand
 - **One issue at a time per session** (09-03 rule, unchanged). Plan → wait → edit → lint → commit →
   pull-rebase → safe-push check → push.
 
-## The six sessions (S6 added 2026-09-13 — spec sheets split out of S5 at Stuart's ask)
+## The seven sessions (S6 added 2026-09-13 — spec sheets split out of S5 at Stuart's ask; S7 added 2026-09-13 — the Uniquity pillow builder, brief by S1)
 
 | key | brief | territory in one line |
 |---|---|---|
@@ -37,6 +37,7 @@ and what Stuart has decided. Every session reads it at start and whenever a hand
 | **S4** | `BRIEF_S4_PORTAL_PAYMENTS_UPS_API.md` | the customer portal, card payments, UPS rate/ship/track, the Fulfilment tab, vendor API onboarding |
 | **S5** | `BRIEF_S5_CUSTOMER_FACING.md` | what the customer holds: 4.6 collections and kits, marketing (the sales display program), guide books, asset gallery |
 | **S6** | `BRIEF_S6_SPEC_SHEETS.md` | the 📐 spec-sheet generator in BOM Engine: its pages, paper, text and measurements, its harness; the tags it reads are S1's, the Fabricut codes it prints are S5's |
+| **S7** | `BRIEF_S7_UNIQUITY_PILLOW_VISION.md` | the Uniquity brand's pillow builder on Client Vision and its path to a CPQ quote; the Classical Elements hardware tools are read-only to it (written by S1 at Stuart's ask, 2026-09-13) |
 
 ## File ownership (the line that keeps five sessions safe)
 
@@ -50,6 +51,7 @@ Own = edit freely (after a plan). Read-only = never edit; write a patch spec int
 | S4 | `portal/*`; `functions/` `portal*` exports, `portalEngine.js`, `portalRequestLines.js`, `feeRulesPort.js`, `aliasIdentity.js` (functions copy); `HQ/UPSShippingCalculator.js` (9.5); the new payment and UPS functions; the new Fulfilment tab (built as ONE guarded mount inside `PickPackApp.js` — S3's file — with the module in `Shared/fulfilment*.js`, S4's) |
 | S5 | `HQ/CustomerCollectionsTab.js` (4.6); `Shared/kitSeed`, `kitCode`, `customerControlFile`, `clientPricing`, `priceLevels`, `feeRules`, `itemStarterXlsx`, the onboarding xlsx export; `system/quick_ship_kits`; `HQ/GuideBuilder`, `guideCapture`; `Shared/AssetGalleryTab`, `BatchImageProcessor`, `BatchTextureProcessor` (14.x); tab 5 Marketing — `HQ/DisplayDesignerTab.js`, `HQ/DisplayBuildsPanel.js`, `Shared/displayBom.js`, `Shared/displayFrame.js`, `system/displays/*`, `system/display_demand_<brand>` (one guarded mount each in `ProjectManagementTab.js` and S1's `HardwareConfigurator.js`) |
 | S6 | `SpecSheet/*`, `scripts/specSheet*.test.mjs`, `system/spec_sheet_config`, `Approved_Designs.*.specSheetOverrides`, the 📐 button + lazy mount lines in `HQ/BOMTab.js` (nothing else there), `SPEC_SHEET_*.md`, `SPEC_MASTER_MANIFESTS.md` (moved from S5 2026-09-13) |
+| S7 | `HQ/VisionPillow.js`; the PILLOW mount lines in `HQ/ClientVisionTab.js` (the `CATEGORIES_BY_BRAND.uniquity` row, the PILLOW block, the pillow `globalLists` entries — nothing else); new `Shared/pillow*.js` + harness; the Uniquity CPQ flow `FLOW-1779393547645` (data, tab 11); `system/master_lists` pillow lists; Uniquity items in 4.5 (data); the Uniquity section of `UserGuideTab.js` (append). Read-only: every hardware module (S1's list), `CPQTab.js` (S1 mounts the ONE pillow branch), the spine, the floors, the portal. |
 | shared, ask first | `HQ/UserGuideTab.js` (every session appends its own section; `git status --short` it before editing), `NetSuiteSyncTab.js` (11.1 — announce), `HQ.js`, `firestore.rules` (name the collection in the commit and tell the communicator it needs Cloud Shell), `CLAUDE.md` |
 
 Where a read crosses a line (S2's split reads S1's `classifyLine`; S3 reads S2's `orderStatus.GATES`;
@@ -109,6 +111,7 @@ display SO.
 | S4 | brief written, not started | — | when Stuart opens it |
 | S5 | started 09-10. Issue 1 (H1-138TRV kits) live both halves. Display program: Designer b3fd59f · Builds d3c6777 · Seed 9f5c714 · poles/chips db928f4 · row chooser 0a7bfa7 · true scale edfb8e3 · CPQ Display mode d35eedc · frame pinned to the pane + ⌖ True scale 2d94c09 (all live; S1's files touched with Stuart's go-ahead, noted in BRIEF_S1 §6); S2 owes the snapshot Display column | 2d94c09 | Stuart: CPQ → 🖼 Display mode 24×24 → ⌖ True scale → zoom/pan the row into the frame → Add → 5. Marketing Place… into the row; wall board; build orders |
 | S6 | brief written 09-13 (`BRIEF_S6_SPEC_SHEETS.md`), not started — spec sheets split out of S5 | — | when Stuart opens it: BRIEF_S6 §5 Q1 |
+| S7 | brief written 09-13 (`BRIEF_S7_UNIQUITY_PILLOW_VISION.md`, by S1 at Stuart's ask), not started — Uniquity pillow builder | — | when Stuart opens it: §5's six questions first |
 
 ## Deploys (every session appends a row when it pushes; newest first)
 

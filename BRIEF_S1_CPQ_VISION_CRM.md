@@ -503,6 +503,8 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-13 — BRIEF_S7_UNIQUITY_PILLOW_VISION.md written (Stuart's ask, before close-out item 4).** From the live code + data: `VisionPillow.js` (2D SVG board, pushes `cpq_drafts` category PILLOW), the Uniquity flow `FLOW-1779393547645` is a six-step stub with ZERO options (+ a 'yoyo' test step), 2,821 Uniquity items — pillows/throws/swatches/table linens as finished goods, NO fabric / trim / fill items (the board's pickers are empty), 1,778 customers, no Uniquity quotes or drafts yet, NetSuite form/class ids not on file (refusal by design). The brief names the CE guard (harness wall + `git diff --stat origin/main` on every hardware file, the shared Vision chunk literals) and the ONE seam S1 will build: `engine: 'BOM'` treated as TAGS in `resolveJobLines` + a guarded PILLOW branch in `handleResumeDraft` calling their `Shared/pillowHandoff`. Six questions for Stuart in §5 (what a custom pillow IS, the NetSuite shape, the price rule, who sews, the portal, swatches). Registered on the board as S7.
+
 - **2026-09-12 — 18ad75f (S1) pushed 12:06, SWEPT: version stamp 1789315750609; `main.4ef48df2.js` (nsTransmit); the warning also in tab 7's `238.44f4e810.chunk.js`. CLOSE-OUT item 2 (#46) DONE.** Evidence first: QUO141's
   saved item carries the kit row (isKit, $995), three `inKit` brackets at $0 and added arms / pulleys / carriers with money — and NO `billGroup`
   on any row (the handoff never wrote it). `nsTransmit`: the TAGS branch collects `kitCodes`, stamps `inKit` on the line, the aggregation key
