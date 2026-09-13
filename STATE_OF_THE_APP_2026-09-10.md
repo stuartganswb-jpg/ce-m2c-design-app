@@ -450,6 +450,11 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 - **2026-09-12 · S1 · 4d09ce3 (pushed 17:27).** Add to cart captures the 3D pane as the operator left it (both engines, one capture for the whole CPQ;
   old-engine lines gain a picture); the documents print `renderSnapshot` as before. S5's separate display capture is superseded (Stuart's call).
 
+- **2026-09-13 17:24 · S3 · 6a8f1c1 — close-out #14, the JFP double-post closed:** both paint-run put-away adjustment
+  enqueues carry `dedupeKey jfp-adj:<id>`; a second scan is refused on the stamp; ↩ re-post reads the outbox and only a
+  FAILED entry earns a re-post. §2 item #14 done (S3); #35 looked at, different shape, left. Stuart reverses IA26936 by
+  hand. S3's close-out is confirmed in BRIEF_S3 §7 with Stuart's three answers (§5); next #16 + #32, then #12.
+
 - **2026-09-12 17:13 · S3 · 6ac41ac — HQ 15 gets a Standard boxes tool:** Stuart went to add CE's boxes and found only a
   foam-design "Save" button (two browser prompts, no list, no delete, brand-tagged silently). Tab 15 now carries a Standard
   boxes section: list per brand with load/delete, an add form (name, W, H, D, brand-only or all brands, small-parts tick),

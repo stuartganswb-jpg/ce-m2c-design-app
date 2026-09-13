@@ -213,6 +213,14 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
   and `Shared/orderStatus` `inProduction` / `packedStateOf` / `CAN_REOPEN_IN_PRODUCTION`. Nothing on any screen changes
   until S1 (form + CRM card) and S3 (per-line count + SO Pack print) wire it — specs in their § Hand-offs in. No
   document or field shape changes in this push. Your side: nothing unless you are S1 or S3.
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-13 · 6a8f1c1 pushed 17:24 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. Close-out #14, the JFP double-post (IA26935 / IA26936): both paint-run put-away
+  adjustment enqueues in `PickPackApp.js` now carry `dedupeKey: jfp-adj:<fin doc id>` (the outbox refuses a second entry
+  while one is PENDING/POSTING; FAILED does not block); the put-away scan refuses up front on `jfpAdjQueued || jfpAdjPosted`;
+  ↩ re-post reads the outbox first (in flight → wait / 11.1; POSTED → nothing to redo; only FAILED earns a re-post). #35 the
+  pack-scrap adjustment looked at: a different shape (each report is a typed count), left as is. No document shape change,
+  no other writer touched. Your side: nothing. Stuart reverses IA26936 by hand.
+
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-12 · 6ac41ac pushed 17:13 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
   (⌘⇧R) + re-PIN before your next save. HQ → 15. Packaging (`HQ/PackagingTab.js`, no other file) gains a real **Standard
   boxes** section: list of the active brand's boxes (name, W×H×D, brand, SMALL PARTS tag) with Load-to-workspace and delete,

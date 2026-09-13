@@ -475,6 +475,20 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-13 — 6a8f1c1 pushed 17:24 EDT (S3): close-out #14, the JFP double-post** (Stuart 09-12 "yes to all three"; the
+  go relayed 09-13 12:53 as "close-out item 4"). `PickPackApp.js`: `jfpOutboxEntry(job)` (newest `ns_outbox` entry whose
+  `writeBack.docId` is the fin doc and `idField === 'jfpAdjId'` — covers entries queued before the key existed);
+  `redoPutaway` refuses while that entry is PENDING/POSTING ("wait a minute or check 11.1") or POSTED ("nothing to redo");
+  `completePacking` refuses up front for a paint-only order with `jfpAdjQueued || jfpAdjPosted` (names `jfpAdjTran`); both
+  enqueues carry `dedupeKey: jfp-adj:${job.id}`. #35 pack scrap: a different shape (each report is a count the packer
+  types; two reports are two events) — named, left. Named too: the JFP pull adjustment at pick confirm has no guard
+  against re-confirming a line after a reopened pick (belongs with the reopen work). Lint 0, full build passed,
+  safe-push = one commit. **Sweep 17:27 EDT:** first stamp 1789338315036 was S1's f29c4db build finishing 27 s after my
+  push (0 hits — correctly ignored); stamp 1789338473163 is mine: 37 JS assets, all fetched with `curl -sf` (8,595,635
+  bytes, 0 failures); `a second scan would double the stock` ×1 and `still in the NetSuite Sync Queue` ×1 in
+  `main.b99de1bd.js`. **LIVE.** Acceptance owed on the floor: JFP put-away scanned twice → one outbox entry, second scan
+  refused; ↩ inside a minute → refused; bad bin → FAILED → ↩ allowed → one new entry.
+
 - **CLOSE-OUT CONFIRMED 2026-09-12 (S3):** items #14 (+#35 looked at) → #16 + #32 → #12 → #33 (queued, per Stuart) → #18,
   #19, #40 (names to S2) → #34, #36, #42, #43 → the plater-PO feet line once S2 writes the field names into § 6 → live runs
   with Stuart pinned in (sales-typed build at pack, C4, three ⛏ posts, first REPACK, first CE pack closing with a box).
