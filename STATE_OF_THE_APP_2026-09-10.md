@@ -425,6 +425,7 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 ## 6. Changes since this report (each session appends; newest first)
 
 - **2026-09-13 · S5 · d35eedc (pushed 10:17).** Display mode in the CPQ 3D pane: a board frame at true scale (world-per-inch = drawn model ÷ ordered inches — the pane does not draw ordered length), captured exactly at Add; the designer lays it over the face. Built in S1's `HardwareConfigurator` as one guarded block with Stuart's go-ahead; S1 told in their §6. Harness: displayFrame 16, displayBom 84.
+- **2026-09-13 · S5 · 2d94c09 (pushed 11:50).** Display mode, second cut: the frame is pinned to the pane (largest W×H that fits, centred) and the hardware moves inside it — Stuart's first test showed zoom moving both together, true scale locked with no say. The label reads what the drawn rod measures on the board; ⌖ True scale dollies the camera to the ordered inches; the reading rides `displayBoard.readsInches` into the designer, which flags off-scale rows. Harness: displayFrame 25 (mutation-tested), displayBom 84.
 
 - **2026-09-13 · S5 · edfb8e3 (pushed 10:00).** Display designer: placed rows cropped to the part and drawn at the configuration's real length (board = 100 u/in). Harness 84.
 
