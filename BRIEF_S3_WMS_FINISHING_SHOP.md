@@ -183,12 +183,16 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 5. Questions for Stuart
 
-1. STATE §3 Q5 — which of IA26935 / IA26936 to reverse; approve the dedupe fix.
-2. STATE §3 Q6 — may the build-back be queued (no immediate NetSuite answer)?
-3. STATE §3 Q4 — Q3 / Q4 one line each.
-4. STATE §3 Q3 — delete the Setup Queue re-make now?
+**All answered 2026-09-12 ("yes to all three", after the close-out list was read back):**
+1. STATE §3 Q5 — the JFP dedupe fix is approved as specified in §3 #6; Stuart reverses **IA26936** by hand. ✅
+2. STATE §3 Q6 — the plating build-back MAY be queued ("queued — watch 11.1"); the pull stays immediate. ✅
+3. STATE §3 Q4 — defaults stand: root-build N = 3; the 20 ft stick family = H1-1R only, 20 ft, offcuts kept, home
+   bin = library bin. ✅
+4. STATE §3 Q3 — delete the Setup Queue re-make now: yes (relayed by S2 this morning). ✅
 
 ## 6. Hand-offs in
+
+- **⚠ DEPLOY NOTICE from S5 · 2026-09-13 · edfb8e3 pushed at 10:00 EDT (S5 sweeps by chunk-hash match, recorded in BRIEF_S5 §7). The push carried S2's docs-only 2384cb7 (unpushed since 09-12 19:43).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: 5. Marketing designer — a placed row's capture is cropped to the part (white ground knocked out) and the row box is drawn at the configuration's real length on the board. `system/displays/entries/*` rows gain `trueScale`; DISPLAY CAPTURE assets are now the cropped PNGs. No other document, no work order, no NetSuite write. Your side: nothing.
 
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-12 · bfac710 pushed at 19:38 EDT (S1 swept every served asset after the deploy: version stamp 1789256527160; the new `SIDEMARK` row literal in `main.e268c830.js` (FormPreview + quoteDisplay: `"SIDEMARK"`, `"SHIP DATE"`, `"No Sidemark"`) and `367.562a008b.chunk.js`; recorded in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped (close-out item 6, the rest of it): the CRM quotation prints **its own number** (`quoteDisplayNo`: QUO147 / the short number, never the doc id) and the print title matches; the **P.O. slot carries the customer's PO** and the typed order sidemark has its own **SIDEMARK row** in Order Details (`Shared/FormPreview`, every document type; `Shared/quoteDisplay.orderSidemarkOf` = the card's rule); the **date is the day it was saved** as a local calendar day (`docDateOf` — `new Date('YYYY-MM-DD')` was UTC midnight and printed the evening before); **"No Sidemark" is never stamped on a cart line** by either engine any more (`hardwareHandoff`, the old add-to-cart) and lines saved before today read as blank on the way to NetSuite's line Tag (`nsTransmit` → `cleanSidemark`). Tests: quoteDisplayDoc 14 (new), the resolver suite 19 (Tag end to end), hardwareHandoff 45. Pushed from a detached worktree; S2's docs commit stays theirs. Your side: nothing — floor documents do not go through FormPreview's Order Details; the pick list reads `lines[]` as before.
 
@@ -462,6 +466,11 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 ## 7. Status log
 
 *(newest first)*
+
+- **CLOSE-OUT CONFIRMED 2026-09-12 (S3):** items #14 (+#35 looked at) → #16 + #32 → #12 → #33 (queued, per Stuart) → #18,
+  #19, #40 (names to S2) → #34, #36, #42, #43 → the plater-PO feet line once S2 writes the field names into § 6 → live runs
+  with Stuart pinned in (sales-typed build at pack, C4, three ⛏ posts, first REPACK, first CE pack closing with a box).
+  Stuart's three answers recorded in § 5. ETA: the code items through 09-13; the live runs as Stuart's orders come.
 
 - **2026-09-12 — 6ac41ac pushed 17:13 EDT (S3): HQ 15 Standard boxes tool** (Stuart: "tab 15 needs a tool to add the size
   of the box and save … or i am missing it"). It existed but hidden: the "Save" beside "Load Standard…" wrote the foam W×H

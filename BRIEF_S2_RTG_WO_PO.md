@@ -29,6 +29,16 @@ shop-doc `qty` (pieces) and what the demand carries; S3 owns the plater PO line 
 4. Job-log wording (S3's finding (c)): a Pending shop doc says "fabricating", a pick-only doc says "FINISHED off
    the floor", the SO card says only SENT TO FLOOR while the row says "At the plater" — one honest vocabulary.
 5. Confirm `HCUMSBF15`'s in-house tag with Stuart and close #25.
+6. **The unresolved-BOM refusal was never built** (B's hand-off of 2026-09-04, WO11588 class — found by the
+   communicator 09-12 while answering Stuart's "older NetSuite items" question). `finishedGoodsRun.pinErpOf`
+   still returns `pid.toUpperCase()` on a miss (`:57`), so a pin whose component is retired or absent leaks a
+   NetSuite internal id as the pull code and `parkWorkOrder` parks it; the grid resolves pins against
+   `enrichedInventory`, which excludes retired items. Build it as specified in `BRIEF_A_WO_PO_CREATION.md`
+   "Hand-off from B — a BOM pull line that is a NetSuite INTERNAL ID": on a miss return `''` + `unresolved`,
+   `parkWorkOrder` refuses with `ParkRefusal { code: 'BOM_UNRESOLVED' }` and the sentence *"fix the BOM — link
+   that pin to a library item with an item # — or run this as a JUST FOR PAINT job"*, the lookup tries the full
+   library (retired included). Trace: finishing gets a card that names its component; WMS gets a pull that scans;
+   NetSuite unchanged.
 
 **Watch out for each other** (the rules that were broken three times this week): before EVERY commit run
 `git log origin/main..HEAD` and ABORT if it prints anything (a local commit of yours rides the next session's
@@ -253,6 +263,10 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 5. STATE §3 Q14 — when does he read the legacy-release count and the outsourced group as empty?
 
 ## 6. Hand-offs in
+
+- **⚠ DEPLOY NOTICE from S5 · 2026-09-13 · edfb8e3 pushed at 10:00 EDT (S5 sweeps by chunk-hash match, recorded in BRIEF_S5 §7). The push carried S2's docs-only 2384cb7 (unpushed since 09-12 19:43).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: 5. Marketing designer — a placed row's capture is cropped to the part (white ground knocked out) and the row box is drawn at the configuration's real length on the board. `system/displays/entries/*` rows gain `trueScale`; DISPLAY CAPTURE assets are now the cropped PNGs. No other document, no work order, no NetSuite write. Your side: nothing.
+
+- **From S5, 2026-09-13 10:00: my push edfb8e3 CARRIED your docs-only 2384cb7** (close-out item 5) — it had sat unpushed since 09-12 19:43; the safe-push gate refuses to strand a docs-only commit. Nothing of yours deployed unverified.
 
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-12 · bfac710 pushed at 19:38 EDT (S1 swept every served asset after the deploy: version stamp 1789256527160; the new `SIDEMARK` row literal in `main.e268c830.js` (FormPreview + quoteDisplay: `"SIDEMARK"`, `"SHIP DATE"`, `"No Sidemark"`) and `367.562a008b.chunk.js`; recorded in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped (close-out item 6, the rest of it): the CRM quotation prints **its own number** (`quoteDisplayNo`: QUO147 / the short number, never the doc id) and the print title matches; the **P.O. slot carries the customer's PO** and the typed order sidemark has its own **SIDEMARK row** in Order Details (`Shared/FormPreview`, every document type; `Shared/quoteDisplay.orderSidemarkOf` = the card's rule); the **date is the day it was saved** as a local calendar day (`docDateOf` — `new Date('YYYY-MM-DD')` was UTC midnight and printed the evening before); **"No Sidemark" is never stamped on a cart line** by either engine any more (`hardwareHandoff`, the old add-to-cart) and lines saved before today read as blank on the way to NetSuite's line Tag (`nsTransmit` → `cleanSidemark`). Tests: quoteDisplayDoc 14 (new), the resolver suite 19 (Tag end to end), hardwareHandoff 45. Pushed from a detached worktree; S2's docs commit stays theirs. Your side: nothing to build. Two reads for you: a cart item's `sidemark` may now be '' where it used to be the literal 'No Sidemark' — anything of yours that prints `ci.sidemark` should already fall back (the CRM card and the cart row do); and `quoteDisplay` gained `docDateOf` / `orderSidemarkOf` if RTG's documents want the same date and sidemark rules.
 

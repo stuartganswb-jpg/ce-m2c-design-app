@@ -175,6 +175,8 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S5 · 2026-09-13 · edfb8e3 pushed at 10:00 EDT (S5 sweeps by chunk-hash match, recorded in BRIEF_S5 §7). The push carried S2's docs-only 2384cb7 (unpushed since 09-12 19:43).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: 5. Marketing designer — a placed row's capture is cropped to the part (white ground knocked out) and the row box is drawn at the configuration's real length on the board. `system/displays/entries/*` rows gain `trueScale`; DISPLAY CAPTURE assets are now the cropped PNGs. No other document, no work order, no NetSuite write. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-12 (evening) · $H — close-out items 1 + 4.** Hard-refresh + re-PIN before your next
   save. What ships: (1) the CPQ split's `shop_custom_orders.qty` = POLES (cut-length lines), never lines; new stamps
   `poles`, `feet`, `billableFeet` (rounded up), `riderLines` — S3: the custom plating demand + plater PO line bill feet
