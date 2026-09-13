@@ -1866,9 +1866,26 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // His adjustment failed on a mistyped bin, and the order was already Packed — so the pieces
     // were physically away but NetSuite never received them, with no way back to fix it. This
     // re-queues the SAME adjustment against a corrected bin, without re-opening the pack.
+    // #14 (IA26935 / IA26936, Stuart 2026-09-04 "it def. doubled the transaction"): the newest outbox
+    // entry for this order's JFP put-away adjustment, found by its writeBack target so entries queued
+    // before the dedupeKey existed are seen too. PENDING/POSTING = in flight; POSTED = the stamp is
+    // on its way; FAILED = a re-post is legitimate.
+    const jfpOutboxEntry = async (job) => {
+        const snap = await getDocs(query(collection(db, 'ns_outbox'), where('writeBack.docId', '==', job.id)));
+        return snap.docs.map(d2 => ({ id: d2.id, ...d2.data() }))
+            .filter(e => e.kind === 'inventoryadjustment' && e.writeBack && e.writeBack.idField === 'jfpAdjId')
+            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || null;
+    };
     const redoPutaway = async (job) => {
         if (!job) return;
         if (job.jfpAdjPosted) return alert(`${packRef(job)} already posted its NetSuite adjustment${job.jfpAdjTran ? ` (${job.jfpAdjTran})` : ''}.\n\nNothing to redo — re-posting would double the stock.`);
+        if (job.jfpAdjQueued) {
+            // The first attempt may still be in the queue (the worker runs once a minute) — a re-post
+            // inside that minute is how the stock doubled. Only a FAILED entry earns a re-post.
+            const last = await jfpOutboxEntry(job);
+            if (last && ['PENDING', 'POSTING'].includes(last.status)) return alert(`${packRef(job)}: the first put-away adjustment is still in the NetSuite Sync Queue (${last.status}).\n\nWait a minute for it to post, or check HQ 11.1. Re-posting now would double the stock.`);
+            if (last && last.status === 'POSTED') return alert(`${packRef(job)}: the put-away adjustment already POSTED${last.nsTran ? ` (${last.nsTran})` : ''} — the order is being stamped.\n\nNothing to redo — re-posting would double the stock.`);
+        }
         const { list: known, complete: binsComplete } = await loadBinIndex();
         const entered = window.prompt(`↩ Re-post the put-away for ${packRef(job)}?\n\nThe last attempt used "${job.jfpAdjBin || job.putawayBin || '—'}" and NetSuite rejected it, so the pieces are physically away but NOT on the books.\n\nCorrect bin:`, job.putawayBin || '');
         if (entered === null) return;
@@ -1891,6 +1908,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             await enqueueNsWrite({
                 kind: 'inventoryadjustment',
                 label: `JFP RETRY +${qty} × ${job.jfpItemCode || ''} → ${bin} (${packRef(job)})`,
+                dedupeKey: `jfp-adj:${job.id}`,
                 sourceApp: 'WMS', createdBy: operator?.name || '',
                 targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
                 method: 'POST',
@@ -1910,6 +1928,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const completePacking = async (job) => {
         if (packCompletingRef.current) return;
         if (job.packStatus === 'Packed') return alert('This order is already packed.');
+        // #14: a paint run's put-away adjustment goes to NetSuite ONCE. The stamp is a guard, not
+        // just a record — a second scan (or a second tablet on the same order) is refused here.
+        if (isPaintOnlyOrder(job) && (job.jfpAdjQueued || job.jfpAdjPosted)) {
+            return alert(`${packRef(job)} already ${job.jfpAdjPosted ? 'posted' : 'queued'} its NetSuite adjustment${job.jfpAdjTran ? ` (${job.jfpAdjTran})` : ''}.\n\nNothing to put away again — a second scan would double the stock.${job.jfpAdjPosted ? '' : ' Watch it land in HQ 11.1 → NetSuite Sync Queue.'}`);
+        }
         const lines = packLinesFor(job).filter(l => !l.rider);   // riders tick with their pole
         const left = lines.filter(l => !(job.packedLines && job.packedLines[l.key]));
         if (left.length) return alert(`Every piece must be physically packed and confirmed first — ${left.length} line${left.length === 1 ? '' : 's'} still on the TO PACK side.`);
@@ -2015,6 +2038,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                         await enqueueNsWrite({
                             kind: 'inventoryadjustment',
                             label: `JFP +${doneQty} × ${job.jfpItemCode || ''} → ${bin} (${packRef(job)})`,
+                            dedupeKey: `jfp-adj:${job.id}`,
                             sourceApp: 'WMS', createdBy: operator?.name || '',
                             targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
                             method: 'POST',
