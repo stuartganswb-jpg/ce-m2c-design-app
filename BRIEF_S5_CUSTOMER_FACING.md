@@ -1,4 +1,6 @@
-# Brief S5 — customer-facing: spec sheets · 4.6 Customer Collections and kits · marketing · guide books · assets
+# Brief S5 — customer-facing: 4.6 Customer Collections and kits · marketing (the display program) · guide books · assets
+
+> **⚠ 2026-09-13 — SPEC SHEETS MOVED TO S6** (`BRIEF_S6_SPEC_SHEETS.md`, at Stuart's ask: "i need a new session to work specifically on the spec sheets"). §3 items 5–8, the spec-sheet data list and the spec-sheet third of #49 are S6's now; `SpecSheet/*`, the two spec harnesses, `system/spec_sheet_config` and the 📐 mount lines in BOMTab left this territory. S5 continues on the display tool.
 
 *Written 2026-09-10 by the communicator session. Starts when Stuart opens it. Read, in order: `CLAUDE.md`,
 `SESSION_COMMS_2026-09-10.md`, `STATE_OF_THE_APP_2026-09-10.md` (your items: §1 F, §2.4 #46 (the kit half), #49,
@@ -63,7 +65,7 @@ cannot fail is decoration** (the spec-sheet traps, all still live).
 
 ## 1. Territory
 
-**Own:** `SpecSheet/*` and `system/spec_sheet_config`; `HQ/CustomerCollectionsTab.js` (4.6: COLLECTION, FEES,
+**Own:** ~~`SpecSheet/*` and `system/spec_sheet_config`~~ (S6 since 09-13); `HQ/CustomerCollectionsTab.js` (4.6: COLLECTION, FEES,
 KITS, CHECKOUT, PLATES, ARMS); `Shared/kitSeed`, `kitCode`, `customerControlFile`, `clientPricing`, `priceLevels`,
 `feeRules`, `itemStarterXlsx`, the onboarding xlsx export (BOM Engine's Generate Excel); `system/quick_ship_kits`;
 `HQ/GuideBuilder`, `guideCapture`; `Shared/AssetGalleryTab`, `BatchImageProcessor`, `BatchTextureProcessor`; tab 5
@@ -102,7 +104,7 @@ Guide"). Asset gallery Fabricut combo tagging, bulk re-tag, crop per folder.
    S1's file; spec to them).
 4. Kit sheet imports beyond H1-2TRV (the pending list in `CPQ_ORDERENTRY_TAB11_BRIEF.md` §2).
 
-**Spec sheets (F4 — the memory's stated NEXT)**
+**Spec sheets (F4) — MOVED TO S6 2026-09-13; items 5–8 stay here only as the record of what was handed over**
 5. **#50** the text and measurement pass on the harness first: the type scale was sized for a 64% reduction that
    no longer happens; text is most of the fixed overhead; callouts on row 1 only; the footer's REDUCED line kept
    honest. Then the two repeated right-hand columns on return pages — **French Return** and **Passing Support
@@ -113,7 +115,7 @@ Guide"). Asset gallery Fabricut combo tagging, bulk re-tag, crop per folder.
 7. H1-2TRV sheets (fascia + stationary front = ring AND carrier on one page) — the declared next stop.
 8. PDF download is a 300 dpi raster embed; the print window is the true-vector path. Only if Stuart asks.
 
-**Data with Stuart (the spec-sheet share of §2.3 #28):** S72 rear-pole `returnOnly` re-ticked and saved (it
+**Data with Stuart (the spec-sheet share of §2.3 #28) — S6's sitting now:** S72 rear-pole `returnOnly` re-ticked and saved (it
 did not persist); FR/MTR double return pins' proj as `FRONT:8.5, BACK:3.25`; the 6" single returns'
 `feeItemNo`; the wood singles' untagged pin copy; the two NEW-SLOT finial sections → `rod: front`; prices for
 `H1-138AR`, `H1-138D`, `H1-DBLMR` in 4.6. Each is a tag or a price in S1's 1.6 or your 4.6 — cite the slot #.
@@ -417,6 +419,7 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 - **2026-09-13 — Issue 3e (S5) edfb8e3 SWEPT LIVE by chunk-hash match: served `488.9ef24f5a.chunk.js` = local build (stamp 1789308219269); `to scale` in it (the other marker was a code comment — minified away; the hash match is the proof). Push carried S2's docs-only 2384cb7 (noted in BRIEF_S2 §6). Notices in BRIEF_S1–S4 §6, board Deploys row + status, state doc §6.**
 - **2026-09-13 — Issue 3f (S5) d35eedc SWEPT LIVE: served `488.0e401ad4.chunk.js` = local build (exact hash); served `main.ae5ed20c.js` carries `Display mode` + `hq_cpq_display_mode` (local main hash differs only because the tree holds S1's uncommitted hardwareHandoff/nsTransmit edits — the served one is the truth). Stuart tested and confirmed the frame appears. FIRST FEEDBACK: "as i scale in and out on the hardware config the frame window zooms with it so i am not able to change the scale of the hardware" — by design today (frame anchored to the model's world = true scale locked); plan for a pane-fixed frame + live inch reading + ⌖ True-scale snap written to Stuart, waiting.**
 - **2026-09-13 — Issue 3g (S5) 2d94c09 pushed 11:50 EDT: the board frame pinned to the pane, the hardware moves inside it; live reading (`rod reads N" · true L"`), ⌖ True scale dolly (keeps rotation, refuses to pass through the orbit target), `displayBoard.readsInches` → designer row `rod at N" (off scale)`. `Shared/displayFrame.js`: `boardFrameRect` → `fixedBoardFrame` + `boardReading` + `depthForTrueScale`; harness rewritten, 25 assertions, mutation-tested (one assertion tightened: JSON reads Infinity as null — compare `=== null`). Lint 0 errors. SWEPT LIVE 11:58 EDT: served `488.0e10a820.chunk.js` = local build (exact hash, stamp 1789315091688); served `main.6dde06e9.js` carries `True scale`, `rod reads`, `right-drag pans`; `off scale` in both. Notices in BRIEF_S1–S4 §6, board Deploys row + status, state doc §6.**
+- **2026-09-13 — Stuart: 2d94c09 "tested much better now". New ask: a brief for a NEW session on the spec sheets; S5 continues on the display tool. Written `BRIEF_S6_SPEC_SHEETS.md` (territory = `SpecSheet/*`, both harnesses, `spec_sheet_config`, `specSheetOverrides`, the 📐 mount lines; §3 = #50 text pass · H1-138D on paper · French Return / Passing Support Arm columns · H1-2TRV sheets · the tag sitting · `fabCodeBase`); board: six sessions, S6 ownership + status rows, and the S5 OWNERSHIP row restored (my status updates since 069e587 had been landing on it instead of the Status table — fixed); NEW SESSION NOTICE in BRIEF_S1–S4 §6; state doc §6. Spec sheets struck from this brief's header, territory and §3.**
 
 - **2026-09-13 — Issue 3e (S5): a placed row is drawn at the rod's REAL length (Stuart: "align the width of the cpq design window … have the scale match closer").** Cause: the capture is the whole 3D pane (rod in a field of white/transparent margin) fitted into the row box → the rod shrank to the margins. Fix in my file: `cropToObject` (canvas: trim to non-white/opaque bounds, knock the white ground out → transparent PNG, filed as the DISPLAY CAPTURE) + `fitRowToLength` (pure, tested: box = `config.lengthInches` × 100 u along the row's axis, the cropped picture's aspect the other way, centre kept, capped inside the face; V rows by height). Row shows "· to scale". Harness 84.
 
@@ -501,8 +504,8 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 ## 8. Opener (paste to start the session)
 
 ```
-You are the S5 session — customer-facing: spec sheets · 4.6 Customer Collections and kits · marketing · guide
-books · assets. Read, in order: CLAUDE.md (the working agreement binds you), SESSION_COMMS_2026-09-10.md (the
+You are the S5 session — customer-facing: 4.6 Customer Collections and kits · marketing (the sales display
+program) · guide books · assets (spec sheets are S6's since 2026-09-13 — BRIEF_S6_SPEC_SHEETS.md). Read, in order: CLAUDE.md (the working agreement binds you), SESSION_COMMS_2026-09-10.md (the
 map, file ownership, hand-off protocol — briefs are the channel), STATE_OF_THE_APP_2026-09-10.md,
 BRIEF_S5_CUSTOMER_FACING.md (your brief), then the memories spec-sheet-generator (trusted over every spec-sheet
 brief), spec-sheet-cpq-contract, brief-f-decisions-2026-09-03, quick-ship-stocked-items, onboarding-xlsx-export,

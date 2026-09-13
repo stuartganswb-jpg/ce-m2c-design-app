@@ -16,7 +16,7 @@ and what Stuart has decided. Every session reads it at start and whenever a hand
 - **Stuart answers each session directly, in that session.** Do not route your questions through the
   communicator. Keep the communicator informed by appending to your brief's **§ Status log** (hash + one
   line) after every commit and every decision Stuart gives you.
-- **Anything that falls under none of S1–S5 goes to the communicator session**, which handles it directly
+- **Anything that falls under none of S1–S6 goes to the communicator session**, which handles it directly
   with Stuart.
 - **Every push is announced (Stuart, 2026-09-10, to S2).** The session that pushes writes a DEPLOY NOTICE into
   every other session's brief under **§ 6 Hand-offs in** (hash, what shipped, which documents/fields changed,
@@ -27,7 +27,7 @@ and what Stuart has decided. Every session reads it at start and whenever a hand
 - **One issue at a time per session** (09-03 rule, unchanged). Plan → wait → edit → lint → commit →
   pull-rebase → safe-push check → push.
 
-## The five sessions
+## The six sessions (S6 added 2026-09-13 — spec sheets split out of S5 at Stuart's ask)
 
 | key | brief | territory in one line |
 |---|---|---|
@@ -35,7 +35,8 @@ and what Stuart has decided. Every session reads it at start and whenever a hand
 | **S2** | `BRIEF_S2_RTG_WO_PO.md` | the control spine: RTG Dispatch, work-order and purchase-order creation, Stock View, Snapshot, Library WO/PO paths, the closer, the gates, the split |
 | **S3** | `BRIEF_S3_WMS_FINISHING_SHOP.md` | the three floors: WMS, Finishing, Shop; the outbox and the NetSuite functions; every NetSuite inventory write |
 | **S4** | `BRIEF_S4_PORTAL_PAYMENTS_UPS_API.md` | the customer portal, card payments, UPS rate/ship/track, the Fulfilment tab, vendor API onboarding |
-| **S5** | `BRIEF_S5_CUSTOMER_FACING.md` | what the customer holds: spec sheets, 4.6 collections and kits, marketing, guide books, asset gallery |
+| **S5** | `BRIEF_S5_CUSTOMER_FACING.md` | what the customer holds: 4.6 collections and kits, marketing (the sales display program), guide books, asset gallery |
+| **S6** | `BRIEF_S6_SPEC_SHEETS.md` | the 📐 spec-sheet generator in BOM Engine: its pages, paper, text and measurements, its harness; the tags it reads are S1's, the Fabricut codes it prints are S5's |
 
 ## File ownership (the line that keeps five sessions safe)
 
@@ -47,11 +48,12 @@ Own = edit freely (after a plan). Read-only = never edit; write a patch spec int
 | S2 | `HQ/RTGDispatchTab.js`, `StockViewTab.js`, `LibraryTab.js` (the WO/PO/repaint paths), `LibraryMassUpdateTab.js` (4.5); `Shared/`: `workOrderCreate`, `floorRelease`, `orderStatus`, `orderLifecycle`, `workOrderContract`, `orderHold`, `purchaseOrders`, `poLock`, `platingDemand`, `finishedRunPrecheck`, `finishedGoodsRun`, `stockRun`, `oeReviewPlan`, `poleCut`, `finishRouting`, `sourcing`, `backorder`, `backorderBoard`, `splitPlan`, `repaintRun`, `repaintSource`, `paintOnly`, `woRef`, `shortId`, `scrapClose`, `stockReviewRows` |
 | S3 | `PickPack/*`, `FinishingFloor/*`, `ShopFloor/*`; `functions/index.js` (`netsuiteProxy`, `nsOutboxWorker`, `onStockBuildDone`, `onMillComplete`, `authenticatePin`, the user-directory callables); `netsuite/ce_convert_build_restlet.js`; `Shared/`: `nsOutbox`, `nsWorkOrder`, `nsProxy`, `convertDiag`, `pickOrder`, `pickTabs`, `pickLines`, `committedBins`, `labelScan`, `labelPrint`, `platingPackingList`, `platingOrderPdf`, `quickShipUom`, `i18n`, `rodPieces`, `rodPieceLedger`, `RodPieceInventory`, `programPrints`, `PullLinesLive`, `WhereIsIt`, `OrderStatusChips`, `finishingTime`, `floorActivity` |
 | S4 | `portal/*`; `functions/` `portal*` exports, `portalEngine.js`, `portalRequestLines.js`, `feeRulesPort.js`, `aliasIdentity.js` (functions copy); `HQ/UPSShippingCalculator.js` (9.5); the new payment and UPS functions; the new Fulfilment tab (built as ONE guarded mount inside `PickPackApp.js` — S3's file — with the module in `Shared/fulfilment*.js`, S4's) |
-| S5 | Display program: Designer b3fd59f · Builds d3c6777 · Seed 9f5c714 · poles/chips db928f4 · row chooser 0a7bfa7 · true scale edfb8e3 · CPQ Display mode d35eedc · frame pinned to the pane + ⌖ True scale 2d94c09 (all live; S1's files touched with Stuart's go-ahead, noted in BRIEF_S1 §6); S2 owes the snapshot Display column | 2d94c09 | Stuart: CPQ → 🖼 Display mode 24×24 → ⌖ True scale → zoom/pan the row into the frame → Add → 5. Marketing Place… into the row; wall board; build orders |
+| S5 | `HQ/CustomerCollectionsTab.js` (4.6); `Shared/kitSeed`, `kitCode`, `customerControlFile`, `clientPricing`, `priceLevels`, `feeRules`, `itemStarterXlsx`, the onboarding xlsx export; `system/quick_ship_kits`; `HQ/GuideBuilder`, `guideCapture`; `Shared/AssetGalleryTab`, `BatchImageProcessor`, `BatchTextureProcessor` (14.x); tab 5 Marketing — `HQ/DisplayDesignerTab.js`, `HQ/DisplayBuildsPanel.js`, `Shared/displayBom.js`, `Shared/displayFrame.js`, `system/displays/*`, `system/display_demand_<brand>` (one guarded mount each in `ProjectManagementTab.js` and S1's `HardwareConfigurator.js`) |
+| S6 | `SpecSheet/*`, `scripts/specSheet*.test.mjs`, `system/spec_sheet_config`, `Approved_Designs.*.specSheetOverrides`, the 📐 button + lazy mount lines in `HQ/BOMTab.js` (nothing else there), `SPEC_SHEET_*.md`, `SPEC_MASTER_MANIFESTS.md` (moved from S5 2026-09-13) |
 | shared, ask first | `HQ/UserGuideTab.js` (every session appends its own section; `git status --short` it before editing), `NetSuiteSyncTab.js` (11.1 — announce), `HQ.js`, `firestore.rules` (name the collection in the commit and tell the communicator it needs Cloud Shell), `CLAUDE.md` |
 
 Where a read crosses a line (S2's split reads S1's `classifyLine`; S3 reads S2's `orderStatus.GATES`;
-S5's kits feed S1's engine), the reader never edits the module. It writes what it needs into the owner's
+S5's kits feed S1's engine; S6's sheets read S1's tags and S5's Fabricut codes), the reader never edits the module. It writes what it needs into the owner's
 brief under **§ Hand-offs in** and tells the communicator.
 
 ## How a hand-off travels
@@ -105,7 +107,8 @@ display SO.
 | S2 | started 09-10. Issue 1 DONE: reopen tool shipped (6c72e80 → 553272b), run REOPEN-1789057501646 = 52 restored / 0 failed on Stuart's list. Issue 2 (prevention) built + tested, push pending. Hand-offs out: S3 `reopenConfirmPick` chip; S1 refused-estimate stamp. Named: refused quotes invisible on RTG (S2 row queued). | 553272b | push Issue 2; then the refused-quotes row; then §3 #1 live pass |
 | S3 | started 09-10. Live: f5a6c19 · e2cef1f · 47c2b6b · 1e5e5a4 · 8b2e6b1 · a8bb6a8 · 1d02231 · 6ac41ac (HQ 15 Standard boxes tool — the add-box path was a hidden prompt-driven Save; now a real section). **SO60420 plating round trip COMPLETE end to end 09-11** (`PLATING_ROUND_TRIP_SO60420.md`); every defect it found is fixed. Stuart: add CE's boxes on HQ 15 (packs cannot close without one). Pairs wait on Eric. Next: BRIEF_S3 §3 items 2–5 (the sales-typed build at pack, the rest of the live pass, C4, the ⛏ posts) as Stuart picks. | 6ac41ac | §3 #2 when Stuart picks |
 | S4 | brief written, not started | — | when Stuart opens it |
-| S5 | Issue 1 COMPLETE + live both halves (S5 09104cf / 105b29c, S1 38b1ba6); Stuart applied the import, tagged the flow, set the finish matrix (09-11 morning); acceptance run parked at Stuart's word | 884faba | Stuart's new ask 09-11: a management tool for the production of sales DISPLAY BOARDS — survey + requirements first, plan, wait |
+| S5 | started 09-10. Issue 1 (H1-138TRV kits) live both halves. Display program: Designer b3fd59f · Builds d3c6777 · Seed 9f5c714 · poles/chips db928f4 · row chooser 0a7bfa7 · true scale edfb8e3 · CPQ Display mode d35eedc · frame pinned to the pane + ⌖ True scale 2d94c09 (all live; S1's files touched with Stuart's go-ahead, noted in BRIEF_S1 §6); S2 owes the snapshot Display column | 2d94c09 | Stuart: CPQ → 🖼 Display mode 24×24 → ⌖ True scale → zoom/pan the row into the frame → Add → 5. Marketing Place… into the row; wall board; build orders |
+| S6 | brief written 09-13 (`BRIEF_S6_SPEC_SHEETS.md`), not started — spec sheets split out of S5 | — | when Stuart opens it: BRIEF_S6 §5 Q1 |
 
 ## Deploys (every session appends a row when it pushes; newest first)
 

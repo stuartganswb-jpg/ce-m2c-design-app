@@ -1,0 +1,162 @@
+# Brief S6 — spec sheets: the 📐 generator, its paper, its text and measurements, its harness
+
+*Written 2026-09-13 by S5 at Stuart's ask ("i need a new session to work specifically on the spec sheets"). Spec
+sheets were S5's territory until today; S5 keeps 4.6 collections and kits, marketing (the display program),
+guide books and assets, and continues on the display tool. Starts when Stuart opens it. Read, in order:
+`CLAUDE.md`, `SESSION_COMMS_2026-09-10.md`, `STATE_OF_THE_APP_2026-09-10.md` (your items: §1 F, §2.4 #50, the
+spec-sheet share of #28 and #49), then the memories `spec-sheet-generator` (**trusted over every spec-sheet
+brief**), `spec-sheet-cpq-contract`, `canonical-tag-spec`, `hardware-tag-engine`, `brief-f-decisions-2026-09-03`
+(Q4: the 4-row sheet is not to be touched); then `BRIEF_F_KITS_SPEC_SHEETS.md` §F4 and §F6, and
+`SPEC_SHEET_CPQ_TIEIN_BRIEF.md` Part 3 (the offline replay harness). `SPEC_SHEET_HANDOFF_BRIEF.md` and
+`SPEC_SHEET_SESSION_BRIEF.md` are history where they conflict with the memory.*
+
+## ⛔ Working agreement + standing rules
+
+Plan first and WAIT. Requested scope only. No temporary fixes. Trace downstream — a spec sheet is a READ of the
+same pins and tags the CPQ engine reads, so a sheet defect is almost always a tag defect: **tags before code** —
+a wrong page is a wrong tag in 1.6 (S1's file; hand them the slot # and the tag, never draw around it). One issue
+at a time. The spec-sheet traps, all still live (memory, verbatim intent): **never filter the answer you asked
+for; one code can be two pins; no single field holds the part code; read subjects by role, not slot kind; judge
+the rod pool against the leaf before `rodForArm()`; fixtures use the prod shape; a fixture that cannot fail is
+decoration — mutation-test every new assertion.** Stuart's locked drawing rules are in the memory (the pole is
+fixed and everything moves back from it; an audit that fires when it should not is worse than none; one side is
+the whole drawing; the paper is the 8.5×11 binder; carriers drawn through the track; ring drop = top of rod →
+bottom of eyelet).
+
+## 0. Operating
+
+- The generator opens from **📐 in BOM Engine (tab 3)** on the selected assembly (`HQ/BOMTab.js:1204` button,
+  `:1998` mount — three lines; the rest of BOMTab is not yours). Editions: H1 codes or Fabricut codes, never
+  mixed. Left/Right toggle in the header. Print window = the true-vector path; PDF download = a 300 dpi raster
+  embed (`specSheetOutput.js`).
+- **The fast loop:** `node scripts/specSheetPages.test.mjs` (79) and `node scripts/specSheetRows.test.mjs` (19)
+  — both green on 2026-09-13; then the **offline replay harness** (`SPEC_SHEET_CPQ_TIEIN_BRIEF.md` Part 3): pull
+  the assembly's pins + clusters through the console recipe keeping `passing`, `legacyErpId`, `returnOnly`;
+  `curl` its `manufacturingSpecs.cadUrl` (token-public); strip textures from the GLB's JSON chunk; replay
+  `choicesFromAssembly → specPages → buildPageSvg` headless for exact fit percentages. The scratchpad dies daily —
+  the recipe rebuilds it in minutes. **Fit percentages are stated, never screenshot-looped.**
+- H1-138's live shape: `Approved_Designs/CE-ASM-1786572226393`, 467 pins, 96 clusters, no `specCadUrl` and none
+  coming (Stuart: "it is all here"). 31 bracket arms (six pinned CENTER only), 11 plates, `HTCAR35/01` is a
+  RING, `HTSLNTCAR` the only carrier, `passing: "PASSING"` on the six passing brackets + `H1-138BPR`.
+- Reading prod without the PIN gate: the console recipe in the memory (module `1624` = `db`, `565` = the
+  Firestore SDK; duck-test the ops; never brute-force module exports).
+- Deploy-verify: `SpecSheetModal` is a lazy chunk — sweep `asset-manifest.json`, match the served chunk hash to
+  your local `build/static/js/<id>.<hash>.chunk.js` (CRA hashes are content-deterministic) before reading a
+  marker miss as a stale build; plain-ASCII markers only. With six sessions pushing, a version stamp proves
+  nothing.
+
+## 1. Territory
+
+**Own:** `src/components/SpecSheet/*` (`SpecSheetModal`, `specSheetPages`, `specSheetRows`, `specSheetPage`,
+`specSheetGeometry`, `specSheetOutput`, `specCellCheck`, `hiddenLine` — ~3,600 lines); `scripts/specSheetPages.test.mjs`,
+`scripts/specSheetRows.test.mjs`; the 📐 button + lazy mount lines in `HQ/BOMTab.js` (nothing else in that
+file); the Firestore surfaces `system/spec_sheet_config` (`wallPlates`) and `Approved_Designs.<doc>.specSheetOverrides`
+(`manualDims[]`); the spec-sheet section of the User Guide (`HQ/UserGuideTab.js` — shared, ask first; `git status
+--short` it before editing); `SPEC_SHEET_*.md`, `SPEC_MASTER_MANIFESTS.md`, the `Spec Sheets/` and `SpecSheet/`
+reference folders.
+
+**Read-only:** S1's engine and 1.6 (`Shared/hardwareModel`, `hardwareAdapter`, `assemblyTags`, `componentExport`,
+`slotGroups`, `AssemblyBuilderTab`, `NodeClusterTab`) — you *read* pins, tags and the GLB; a tag change is a
+hand-off with the slot # into BRIEF_S1 §6; S5's 4.6 (`CustomerCollectionsTab`, `clientPricing`, `priceLevels`,
+`feeRules`) — the FAB edition reads `manufacturingSpecs.fabricut.*` that S5's importer stamps (coordination item:
+`fabCodeBase` for single-finish items is not yet in `fabCodeFor()`'s chain); S1's `sizeMatrix` (per-configuration
+sheets, when built, must resolve identity through it — designed, not built); everything on the RTG spine.
+
+**Never:** a per-assembly spec GLB or a spec-layout upload (rejected 2026-08-23, twice); the size-source machine
+(deleted 2026-08-23 — do not reintroduce); drawing around a tag.
+
+## 2. What is live (do not rebuild)
+
+The generator rebuilt on the tag engine 2026-08-23 → 08-27 (79 commits on `SpecSheet/` since 08-20, last
+bb76ff8): one page per (leaf × subject) from `activeAxes()` — the CPQ's own questions in its own order; measured
+grid, one true scale, "REDUCED n% — bound by height/width" honest in the footer; 8.5×11 binder, portrait
+standard, doubles auto-landscape and 2 rows per sheet (presentation-only split); doubles by ROD SELECTION
+(`rodForArm` FRONT rule, `backRodForArm` mirrors the CPQ pairing, `pinForChoice` narrows on tier + cut);
+returns as PLAN VIEW (window with a 2.0" stub, plate at the wall leg, rtn-only plates by twin swap from the
+leaf's admissible set, a page per projection); ceiling pages dimensioned by DROP; one unioned finial catalog per
+material with collars; section riders (passing ring / carrier) in the cell's own basis; `auditPages()` scoping
+guarantee on every load; names `legacyErpId → feeItemNo → partName`; the customer picker with CRM names; the
+sheet says inches and can speak the customer's language; `H1-75D` tagged right (a tiered arm never fans across
+the plates' depths).
+
+## 3. The work, in order — Stuart picks
+
+1. **#50 the text and measurement pass** (F4, the memory's stated NEXT) — on the harness first, then on paper
+   with Stuart: the type scale was sized for a 64% reduction that no longer happens (can shrink ~⅓ at equal
+   printed size); TEXT is most of the fixed overhead (`cellAboveBelow` charges dim/label room; text does not
+   scale with geometry — why ring ids stagger on two lines with leaders); callouts on row 1 only, code placement,
+   leader lines; the footer's REDUCED line kept honest. **Stuart's Q4 (09-03): the 4-row plate sheet is NOT to be
+   touched; H1-138 is at 2 rows per sheet and he is content.** Every change measured offline, percentages stated.
+2. **Verify `H1-138D` on paper**: the two-step dimension reads wall → 3¼ → 5¼. Every placement measured 0.00 on
+   the harness; it was never confirmed on a printed sheet.
+3. **The two repeated right-hand columns on return pages** — **French Return** and **Passing Support Arm** — the
+   reference set carries them; the row builder makes detail / front / profile (plan) only. Return pages draw as
+   ordinary bracket pages today.
+4. **H1-2TRV sheets** — the declared next stop: fascia + stationary front = ring AND carrier on one page (rings
+   ride the solid front rod's page; already safe in the builder rule). The traverse family's own generator is
+   S1's (`Shared/traverseFlow.js`); you read its pins like any other.
+5. **The data with Stuart** (the spec-sheet share of STATE #28 — each is a tag in S1's 1.6, cite the slot #):
+   S72 rear-pole pin's `returnOnly` re-ticked and saved (it did not persist — false in Firestore); FR/MTR double
+   return pins' proj as the tier-labelled form `FRONT:8.5, BACK:3.25` (the bare list means "made at two
+   projections" and pairs 6.5); the 6" single returns' `feeItemNo`; the wood singles' untagged pin copy; the two
+   NEW-SLOT finial sections → `rod: front`. Run the sitting; S1 applies nothing — Stuart types in 1.6.
+6. **`fabCodeFor()` + `fabCodeBase`** (the contract's coordination item): single-finish items (wood / acrylic /
+   raw aluminium) carry `fabricut.fabCodeBase`; add it to the FAB edition's chain before those items get sheets.
+7. **PDF as true vector** — only if Stuart asks; the print window already is.
+8. **Per-configuration sheets** (a quote's selections at a chosen size; identity through S1's `sizeMatrix`
+   chain, geometry the master GLB) and **Phase 4 ceiling / double flows** (`nodesFor()` accepts LEFT / SHARED /
+   CENTER / '' only — a FRONT/BACK double assembly finds no pole nodes) — designed joints, not built; propose
+   when Stuart names them.
+
+**Guide (S2 rule) — #49, the spec-sheet third:** no section exists for spec sheets ("what a page is, the paper,
+why a sheet says REDUCED, editions, Left/Right"). S1 owns the tag-engine section, S5 the kits / 4.6 sections;
+coordinate before editing `UserGuideTab.js`.
+
+## 4. Acceptance
+
+| run | expect |
+|---|---|
+| `node scripts/specSheetPages.test.mjs` · `specSheetRows.test.mjs` | green; every new assertion mutation-tested (break the builder, watch the test dissent) |
+| the offline replay on H1-138 after the text pass | the fit percentage per page STATED and not worse than today's; 4-row plate sheets untouched |
+| H1-138D on paper | wall → 3¼ → 5¼; landscape, 2 rows per sheet |
+| an H1-138 return page | French Return + Passing Support Arm columns present; the footer's REDUCED figure equals the harness's |
+| an H1-2TRV page | fascia + stationary front: ring AND carrier, carrier drawn through the track, no rings on a track-only page |
+| `auditPages()` on every load | 0 violations on H1-138, H1-75, H1-2TRV; a deliberately broken builder is named |
+| a tag fix from #5 | the sheet changes with NO code change (that is the proof it was a tag) |
+
+## 5. Questions for Stuart
+
+1. Which first: the text pass (#1), the paper check of H1-138D (#2), or the return columns (#3)?
+2. When does the tag sitting (#5) happen — it needs him in 1.6, and #3 partly waits on the FR/MTR tier form.
+3. Does he want the H1-2TRV sheets before or after the H1 text pass?
+
+## 6. Hand-offs in
+
+- **From S5 · 2026-09-13 (the hand-over):** everything spec-sheet in `BRIEF_S5_CUSTOMER_FACING.md` §3 items 5–8
+  and the data list is yours now; S5's §7 has no spec-sheet commits since 2026-09-10 (the generator's last commit
+  is bb76ff8, 08-27). Nothing is half-done in the code. The 📐 mount in BOMTab is intact (checked 09-13). Your
+  side: nothing to merge — start from the memory and the harness.
+
+## 7. Status log
+
+(append: hash + one line after every commit; every decision Stuart gives you)
+
+## 8. Opener (paste to start the session)
+
+```
+You are the S6 session — spec sheets: the 📐 generator in BOM Engine, its paper, text and measurements, its
+harness. Read, in order: CLAUDE.md (the working agreement binds you), SESSION_COMMS_2026-09-10.md (the map,
+file ownership, hand-off protocol — briefs are the channel), STATE_OF_THE_APP_2026-09-10.md, BRIEF_S6_SPEC_SHEETS.md
+(your brief), then the memories spec-sheet-generator (trusted over every spec-sheet brief), spec-sheet-cpq-contract,
+canonical-tag-spec, hardware-tag-engine, brief-f-decisions-2026-09-03; then BRIEF_F_KITS_SPEC_SHEETS.md §F4 + §F6
+and SPEC_SHEET_CPQ_TIEIN_BRIEF.md Part 3 (the offline harness). Rules: tags before code — a wrong page is a wrong
+tag in 1.6 (S1's file; hand them the slot #); never filter the answer you asked for; one code can be two pins;
+read subjects by role; fixtures use the prod shape; a fix is proven on the harness or in a node test before a
+screen; the 4-row plate sheet is not to be touched. Other sessions: S1 (CPQ/engine/1.6 — the tags you read),
+S2 (RTG), S3 (floors/WMS), S4 (portal), S5 (4.6 kits, marketing / displays, guide books, assets — the Fabricut
+codes you print come from their importer). Cross a line: stop, patch spec into THEIR brief's § Hand-offs in, log
+it in yours. Git: never switch branches, stage only your files, pull --rebase --autostash, safe-push check
+(git log origin/main..HEAD must show only your commit), eslint 0 errors, sweep asset-manifest.json by chunk
+hash. Plan first and wait — every time. One issue at a time. First: ask Stuart BRIEF_S6 §5 Q1, then plan that one
+issue. Identify as "(S6)" in every commit.
+```
