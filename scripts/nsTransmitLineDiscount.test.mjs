@@ -100,5 +100,45 @@ eq('rates: the set line at ×1.2', b6.payload.item.items.slice(1).map(l => [l.it
     eq('the placeholder line carries no Tag; the real one carries its room', [...new Set(tags)].sort(), ['', 'Formal Living 1']);
 }
 
+// ── 9. THE KIT PUSH (F2 E / #46, close-out item 2): components the kit paid for at $0, ONE holder ──
+{
+    const kitParts = [
+        ...libraryParts,
+        { id: 'P3', legacyErpId: 'H1-2TRV-WB/P', itemId: 'H1-2TRV-WB/P', itemName: 'Traverse Wall Bracket', netSuiteInternalId: '103', manufacturingSpecs: { basePrice: 45, partHandling: 'Small Parts' } },
+        { id: 'P4', legacyErpId: 'H1-2TRVSRA/P', itemId: 'H1-2TRVSRA/P', itemName: 'End Return Arm', netSuiteInternalId: '104', manufacturingSpecs: { basePrice: 22, partHandling: 'Small Parts' } },
+    ];
+    const holderPart = { id: 'PH', legacyErpId: 'CE-TRV-SYSTEM', itemId: 'CE-TRV-SYSTEM', itemName: 'Traverse system', netSuiteInternalId: '777', manufacturingSpecs: { basePrice: 0 } };
+    const kitBreakdown = [
+        { name: '2" MOTORIZED TRAVERSE SYSTEM', partId: 'H1-2TRV-4M/P-45W', legacyErpId: 'H1-2TRV-4M/P-45W', qty: 1, price: 995, total: 995, isKit: true, noNs: true, billGroup: 1 },
+        { name: 'End Return Arm', partId: 'P4', legacyErpId: 'H1-2TRVSRA/P', qty: 2, price: 22, total: 44, billGroup: 3 },
+        { name: 'Traverse Wall Bracket', partId: 'P3', legacyErpId: 'H1-2TRV-WB/P', qty: 3, price: 45, total: 0, inKit: true, billGroup: 4 },
+    ];
+    const kitJob = (parts) => ({ job: job([{ id: 'k', engine: 'TAGS', flowId: 'F1', qty: 1, pricing: { finalPrice: 1039 }, pricingBreakdown: kitBreakdown, sidemark: '' }], 1039), data: { ...data, libraryParts: parts } });
+    const withHolder = kitJob([...kitParts, holderPart]);
+    const logsK = [];
+    const bk = await buildNsTransaction({ ...withHolder, asType: 'estimate', brand: 'ce', ctx: null, log: (m) => logsK.push(String(m)) });
+    ok('builds', bk.ok);
+    const itemsK = bk.payload.item.items;
+    eq('the holder line IS CE-TRV-SYSTEM and carries the kit\'s dollars (1039 − 44 added)', [itemsK[0].item.id, itemsK[0].rate], ['777', 995]);
+    ok('the holder names the kit and says the components are below at $0', /H1-2TRV-4M\/P-45W \[traverse system — components below at \$0\]/.test(itemsK[0].description), itemsK[0].description);
+    eq('the brackets the kit paid for push at $0, qty 3; the added arms at their rate', itemsK.slice(1).map(l => [l.item.id, l.quantity, l.rate]).sort(), [['103', 3, 0], ['104', 2, 22]].sort());
+    ok('the kit row itself is not a line', !itemsK.some(l => l.description && /MOTORIZED TRAVERSE SYSTEM/.test(l.description) && l.item.id !== '777'));
+    eq('the transaction lands at the quote total', Math.round(itemsK.reduce((s, l) => s + l.rate * l.quantity, 0) * 100) / 100, 1039);
+    ok('the whole-quote scale never fired', !logsK.some(m => /item rates scaled/.test(m)));
+    ok('the log says so', logsK.some(m => /Kit order: 1 component line\(s\) at \$0.*CE-TRV-SYSTEM/.test(m)));
+    // no holder item in the library → the flow rollup carries the money, and the log warns
+    const noHolder = kitJob(kitParts);
+    const logsN = [];
+    const bn = await buildNsTransaction({ ...noHolder, asType: 'estimate', brand: 'ce', ctx: null, log: (m) => logsN.push(String(m)) });
+    eq('no holder item: the flow rollup (999) carries the kit\'s dollars', [bn.payload.item.items[0].item.id, bn.payload.item.items[0].rate], ['999', 995]);
+    ok('…and the log warns', logsN.some(m => /No CE-TRV-SYSTEM holder item/.test(m)));
+    // a paid twin and a kit-paid twin of one item never merge
+    const twin = kitJob([...kitParts, holderPart]);
+    twin.job.cpqData.cartItems[0].pricingBreakdown = [...kitBreakdown, { name: 'Traverse Wall Bracket', partId: 'P3', legacyErpId: 'H1-2TRV-WB/P', qty: 1, price: 45, total: 45, billGroup: 3 }];
+    twin.job.cpqData.totalPrice = 1084;
+    const bt = await buildNsTransaction({ ...twin, asType: 'estimate', brand: 'ce', ctx: null });
+    eq('a 4th bracket above the kit bills at 45 on its own line beside the three at $0', bt.payload.item.items.slice(1).filter(l => l.item.id === '103').map(l => [l.quantity, l.rate]).sort(), [[1, 45], [3, 0]].sort());
+}
+
 console.log(`\nnsTransmit line discount: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

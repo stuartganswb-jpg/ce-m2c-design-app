@@ -133,6 +133,15 @@ ok('the billable is in the money', item.pricing.finalPrice >= 78);
         (withKit.pricingBreakdown || []).some(l => l.legacyErpId === 'H1-2TRV-4/EP' && l.total === 318));
     ok('a configuration with no kit is byte-identical to before',
         JSON.stringify(noKit.pricingBreakdown) === JSON.stringify(handoffItem(resolved, baseCtx).pricingBreakdown));
+    // ── THE BILL ORDER RIDES THE SAVED LINE (F2 E / #46, close-out item 2) ───────────────────
+    const groups = (withKit.pricingBreakdown || []).map(l => l.billGroup || 9);
+    ok('every kit-order line carries its bill group', groups.every(g => g !== 9), JSON.stringify(groups));
+    ok('the kit line is first (group 1) and the groups never decrease', groups[0] === 1 && groups.every((g, i) => i === 0 || g >= groups[i - 1]), JSON.stringify(groups));
+    const withKitAndExtras = handoffItem(resolved, { ...baseCtx, kit, extras: [{ code: 'H1-2TRVJNR', qty: 1 }], extraLines: [{ partId: 'H1-2TRVJNR', name: 'Joiner', qty: 1, unit: 6, total: 6 }] });
+    const ge = (withKitAndExtras.pricingBreakdown || []).map(l => [l.legacyErpId || l.partId, l.billGroup || 9]);
+    ok('a hand-added extra with money sorts in with the ADDED group (3), before the included parts',
+        ge.some(([id, g]) => id === 'H1-2TRVJNR' && g === 3) && ge.every(([, g], i) => i === 0 || g >= ge[i - 1][1]), JSON.stringify(ge));
+    ok('a no-kit order stays in entry order with no groups', (noKit.pricingBreakdown || []).every(l => l.billGroup === undefined));
 }
 
 // ── THE TRACK'S INSTRUCTIONS REACH THE ORDER (Stuart 2026-08-22) ─────────────────────────────

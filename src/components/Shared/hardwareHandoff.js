@@ -32,7 +32,7 @@
 // consumers take every line, customer documents filter it out. One list, two audiences — which is
 // safer than two lists that can disagree about what is on the order.
 
-import { applyKitPricing } from './kitSeed.js';
+import { applyKitPricing, BILL_GROUP } from './kitSeed.js';
 import { priceConfiguration } from './hardwarePricing.js';
 
 /** Lines a customer may see: no BOM-only parts. */
@@ -99,6 +99,9 @@ function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishC
         // for, so a document can print it as included rather than as a free line nobody understands.
         ...(l.isKit ? { isKit: true, noNs: true } : {}),
         ...(l.inKit ? { inKit: true } : {}),
+        // The bill group (KIT 1 · FEET 2 · ADDED 3 · INCLUDED 4) rides the saved line, so a document
+        // or a pick list can read the order it was billed in without re-deriving it (#46).
+        ...(l.billGroup ? { billGroup: l.billGroup } : {}),
         ...(l.shopOnly ? { shopOnly: true } : {}),
         ...(l.billedFeet !== undefined ? { billedFeet: l.billedFeet } : {}),
         // ⚠ PER-FOOT LINES SAY SO (Stuart 2026-08-25, first Brimar orders). The engine prices rod
@@ -212,7 +215,20 @@ export function handoffItem(resolved, ctx = {}) {
         trvComponent: true,
     }));
 
-    const breakdown = [...lines, ...extraRows, ...trvRows];
+    // ── ONE BILL ORDER ON A KIT ORDER (F2 E / #46): kit · extra feet · added · included ────────
+    // applyKitPricing already sorts the walk's lines; the hand-added extras and the traverse
+    // components join the same order (an extra with money is ADDED, a $0 one INCLUDED; a billable
+    // component ADDED, an included one INCLUDED), stable — within a group the entry order holds.
+    // A quote with no kit is untouched (no line carries a group, so the sort is the identity).
+    const hasKit = lines.some(l => l && l.isKit);
+    const grouped = hasKit
+        ? [
+            ...lines,
+            ...extraRows.map(r => ({ ...r, billGroup: r.billGroup || ((Number(r.total) || 0) > 0 ? BILL_GROUP.ADDED : BILL_GROUP.INCLUDED) })),
+            ...trvRows.map(r => ({ ...r, billGroup: (Number(r.total) || 0) > 0 ? BILL_GROUP.ADDED : BILL_GROUP.INCLUDED })),
+        ].map((l, i) => ({ l, i })).sort((a, b) => (a.l.billGroup || 9) - (b.l.billGroup || 9) || a.i - b.i).map(x => x.l)
+        : [...lines, ...extraRows, ...trvRows];
+    const breakdown = grouped;
     const total = breakdown.reduce((s, l) => s + (l.total || 0), 0);
 
     return {

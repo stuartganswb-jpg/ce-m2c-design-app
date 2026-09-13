@@ -35,7 +35,8 @@ export const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpp
 // (2026-08-25) — only the four data inputs became parameters.
 export function resolveJobLines(job, data) {
   const { libraryParts, cpqFlows, outsourceFinishes, globalFinishes } = data;
-      const result = { lines: [], stepsConsidered: 0, unresolved: [], hasConfig: false };
+      // kitCodes: the traverse kit(s) on this quote (isKit rows) — the push names them on the holder line.
+      const result = { lines: [], stepsConsidered: 0, unresolved: [], hasConfig: false, kitCodes: [] };
       if (!job || !job.cpqData) return result;
 
       // Resolve a CPQ selection to its real library part. STYLE_SWAP selections are per-instance
@@ -163,6 +164,12 @@ export function resolveJobLines(job, data) {
           // through the same routeFinishedItem — because the floor's copy of that decision is what
           // makes a phosphate line a phosphate line, and two engines must never disagree about it.
           if (cart.engine === 'TAGS') {
+              // ── THE KIT BILL SHAPE, NETSUITE'S HALF (F2 E / STATE #46, close-out item 2) ──────
+              // ONE bill shape both doors: the kit's dollars ride ONE holder line and every part the
+              // kit already paid for (`inKit`) pushes at $0 — exactly what tab 7 has always sent.
+              // Until now an inKit component pushed at its library rate and the whole-quote scale
+              // then squeezed every line to make the total fit (QUO141).
+              cart.breakdown.forEach(l => { if (l && l.isKit) result.kitCodes.push(String(l.legacyErpId || l.partId || l.name || 'KIT')); });
               cart.breakdown.forEach(l => {
                   if (!l) return;
                   // A fee prices the quote and rides the rollup; it is not a NetSuite component.
@@ -248,7 +255,9 @@ export function resolveJobLines(job, data) {
                       partCategory: l.partHandling || masterPart.manufacturingSpecs?.partHandling || '',
                       // What the bench cuts to, where this line is cut at all.
                       projection: l.cutLength ? String(l.cutLength) : '',
-                      sidemark: cart.sidemark || ''
+                      sidemark: cart.sidemark || '',
+                      // Paid for by the kit → pushes at $0 (the holder line carries the money).
+                      ...(l.inKit ? { inKit: true } : {}),
                   });
               });
               // …and then fall through to the traverse loop, which is shared.
@@ -453,7 +462,8 @@ export function resolveJobLines(job, data) {
           // Sidemark is part of line identity: two rooms ordering the same pole stay TWO lines,
           // each carrying its own Tag (custcol3) — merging them would blank the room attribution.
           // A discounted cart line never merges with a full-price twin of the same item (its rate differs).
-          const key = `${l.nsId}|${l.finishedErpId}|${l.finishNote || ''}|${l.projection}|${l.sidemark || ''}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}|${(l.netFactor && l.netFactor !== 1) ? l.netFactor : ''}`;
+          // …and a part the kit paid for ($0) never merges with a paid twin of the same item.
+          const key = `${l.nsId}|${l.finishedErpId}|${l.finishNote || ''}|${l.projection}|${l.sidemark || ''}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}|${(l.netFactor && l.netFactor !== 1) ? l.netFactor : ''}|${l.inKit ? 'kit' : ''}`;
           const cur = agg.get(key);
           if (cur) cur.qty += l.qty;
           else agg.set(key, { ...l });
@@ -489,7 +499,7 @@ export async function resolveShipMethod() {
  * Never confirms and never alerts — interactive callers read `meta` and ask their own questions.
  */
 export async function buildNsTransaction({ job, asType = 'estimate', brand, data, ctx, log = () => {} }) {
-    const { lines: linesToPush, stepsConsidered, unresolved, hasConfig } = resolveJobLines(job, data);
+    const { lines: linesToPush, stepsConsidered, unresolved, hasConfig, kitCodes = [] } = resolveJobLines(job, data);
     if (linesToPush.length === 0) {
         if (!hasConfig) return { ok: false, error: { code: 'NO_CONFIG', message: 'This quote has no CPQ configuration data attached — re-save it as a fresh quote.' } };
         if (stepsConsidered === 0) return { ok: false, error: { code: 'NO_LINKED_PARTS', message: "This flow's steps aren't linked to physical parts (no Linked Item / Auto-Sync BOM)." } };
@@ -515,6 +525,7 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     const lineItems = [];
     let physicalItemsTotal = 0;
     let lineDiscounted = 0;
+    let kitZeroed = 0;
     const unmappedNames = [];
     // THE SAME MATCHER CPQ PRICED WITH — resolve the CRM record once so line rates match the quote.
     let custRec = null;
@@ -530,6 +541,8 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
             let itemRate = parseFloat(line.masterPart.manufacturingSpecs?.basePrice || 0) || 0;
             const cpPrice = clientPriceFor(line.masterPart.clientPricing, custKeys);
             if (cpPrice != null) itemRate = cpPrice;
+            // A part the kit already paid for: on the transaction at $0, the kit's money on the holder.
+            if (line.inKit) { itemRate = 0; kitZeroed++; }
             // A cart line discounted in CPQ (percent off / net price set by a manager) lands in
             // NetSuite as ITS OWN lower rates — the other lines keep theirs. Floored to cents;
             // the rollup line absorbs the residue as it always has.
@@ -589,9 +602,20 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
 
     const flowDoc = (data.cpqFlows || []).find(f => f.id === job.flowId);
     const flowName = flowDoc?.name || 'Custom Assembly';
-    const rollupItemId = flowDoc?.nsRollupItemId || '61502';
+    let rollupItemId = flowDoc?.nsRollupItemId || '61502';
     if (!flowDoc?.nsRollupItemId) log(`⚠️ Flow "${flowName}" has no dedicated rollup item — using shared default 61502.`, 'warn');
-    const headerDesc = `${flowName} labor portion of quote# ${job.jobId || job.id} for Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`;
+    let headerDesc = `${flowName} labor portion of quote# ${job.jobId || job.id} for Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`;
+    // ── A KIT ORDER'S HOLDER (F2 E / #46): the kit's dollars ride ONE line on the generic traverse
+    // holder item (CE-TRV-SYSTEM, found by code — made once with the 11.1 item tool), falling back
+    // to the flow's rollup so a missing holder can never drop the money; the components beneath
+    // it pushed at $0 above. The same holder, the same words, as tab 7.
+    if (kitCodes.length) {
+        const holder = (data.libraryParts || []).find(p => String(p.legacyErpId || p.itemId || '').trim().toUpperCase() === 'CE-TRV-SYSTEM' && p.netSuiteInternalId);
+        if (holder) rollupItemId = String(holder.netSuiteInternalId);
+        else log(`⚠️ No CE-TRV-SYSTEM holder item with a NetSuite id — the kit's dollars ride the flow rollup ${rollupItemId}. Create it with the 11.1 tool and sync.`, 'warn');
+        headerDesc = `${[...new Set(kitCodes)].join(' + ')} [traverse system — components below at $0] · quote# ${job.jobId || job.id} Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`;
+        log(`Kit order: ${kitZeroed} component line(s) at $0; the kit's dollars ride the holder line (${holder ? 'CE-TRV-SYSTEM' : `rollup ${rollupItemId}`}).`, 'info');
+    }
 
     // ── THE ONE HEADER (E3 / #22, Stuart 2026-09-12 option 1): Shared/nsHeader for BOTH doors ──
     // CE gets its form + class; a brand with no ids on file REFUSES to queue with a named error
