@@ -20,12 +20,43 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, query, where } from 'firebase/firestore';
-import { DISPLAY_STYLES, UNITS_PER_INCH, newDisplay, chipsForDisplay, chipFaceLayout, boardBom, orderBom, bomCsv, rowConfigFromCartItem, displayFromTracker, seededRowsLayout } from '../Shared/displayBom';
+import { DISPLAY_STYLES, UNITS_PER_INCH, newDisplay, chipsForDisplay, chipFaceLayout, boardBom, orderBom, bomCsv, rowConfigFromCartItem, displayFromTracker, seededRowsLayout, fitRowToLength } from '../Shared/displayBom';
 import { saveGuideCapture } from '../Shared/guideCapture';
 import { workbookFileToSheets } from '../Shared/customerControlFile';
 import DisplayBuildsPanel from './DisplayBuildsPanel';
 
 const uid = () => Math.random().toString(36).slice(2, 9);
+
+// ── CROP A CAPTURE TO THE OBJECT (Stuart 2026-09-13) ─────────────────────────────────────────
+// The CPQ capture is the whole 3D pane — the rod sits in a field of white (the documents' JPEG)
+// or of transparency (S1's framed PNG). Fitting that into a box shrank the rod to the margins.
+// Trim to the object's own bounds so the picture IS the part, then the box can be its real size.
+// Returns { dataUrl, aspect } — a transparent PNG and its width / height.
+async function cropToObject(dataUrl) {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUrl; });
+    const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+    const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+    const { data } = ctx.getImageData(0, 0, c.width, c.height);
+    let minX = c.width, minY = c.height, maxX = -1, maxY = -1;
+    for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+        const i = (y * c.width + x) * 4;
+        const a = data[i + 3];
+        // an object pixel: opaque and not (near-)white — the white ground of the documents' JPEG
+        const isObj = a > 24 && !(data[i] > 238 && data[i + 1] > 238 && data[i + 2] > 238);
+        if (isObj) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+    }
+    if (maxX < 0) return { dataUrl, aspect: c.width / c.height };
+    const pad = 4;
+    const sx = Math.max(0, minX - pad), sy = Math.max(0, minY - pad);
+    const sw = Math.min(c.width - sx, maxX - minX + 1 + 2 * pad), sh = Math.min(c.height - sy, maxY - minY + 1 + 2 * pad);
+    const o = document.createElement('canvas'); o.width = sw; o.height = sh;
+    const octx = o.getContext('2d'); octx.drawImage(c, sx, sy, sw, sh, 0, 0, sw, sh);
+    // knock the white ground out so the board's paper shows through (the framed PNG is already clear)
+    const od = octx.getImageData(0, 0, sw, sh);
+    for (let i = 0; i < od.data.length; i += 4) if (od.data[i] > 238 && od.data[i + 1] > 238 && od.data[i + 2] > 238) od.data[i + 3] = 0;
+    octx.putImageData(od, 0, 0);
+    return { dataUrl: o.toDataURL('image/png'), aspect: sw / sh };
+}
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
 const btn = (on, extra = {}) => ({ padding: '8px 14px', border: `1px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: on ? 'var(--ink)' : '#fff', color: on ? '#fff' : 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', ...extra });
 const inp = { padding: '8px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none', background: '#fff' };
@@ -173,25 +204,29 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
         try {
             const target = targetRowId ? (face.rows || []).find(r => r.id === targetRowId) : null;
             const label = target ? target.label : `Row ${(face.rows || []).length + 1}`;
-            let imageUrl = '', hiResUrl = '';
+            let imageUrl = '', hiResUrl = '', aspect = 0;
             // The picture: the view the operator FRAMED at Add configuration (`displaySnapshot`,
             // S1's hand-off — transparent, the camera as left) when the cart line carries one;
-            // else the documents' auto-front JPEG (`renderSnapshot`).
+            // else the documents' auto-front JPEG (`renderSnapshot`). Either way cropped to the
+            // object first, so the box can be drawn at the rod's real length.
             const shot = (it.displaySnapshot && /^data:image/.test(it.displaySnapshot)) ? it.displaySnapshot : ((it.renderSnapshot && /^data:image/.test(it.renderSnapshot)) ? it.renderSnapshot : '');
             if (shot) {
-                const a = await saveGuideCapture({ dataUrl: shot, name: `${draft.name} ${label}`, code: it.assemblyName || '', brandId: activeBrand || '', user: currentUser, kind: 'DISPLAY' });
+                const cropped = await cropToObject(shot);
+                aspect = cropped.aspect;
+                const a = await saveGuideCapture({ dataUrl: cropped.dataUrl, name: `${draft.name} ${label}`, code: it.assemblyName || '', brandId: activeBrand || '', user: currentUser, kind: 'DISPLAY' });
                 imageUrl = a.thumbnailUrl; hiResUrl = a.originalUrl;
             }
             const config = rowConfigFromCartItem(it);
+            const fitOpts = { lengthInches: config.lengthInches, aspect, faceWidthIn: face.widthIn || 24, faceHeightIn: face.heightIn || 24 };
             if (target) {
-                mutateFace(f => ({ ...f, rows: f.rows.map(r => (r.id === target.id ? { ...r, imageUrl, hiResUrl, config: { ...config, replacedSeed: r.config?.seededFrom || '' }, replacedAt: Date.now() } : r)) }));
+                mutateFace(f => ({ ...f, rows: f.rows.map(r => (r.id === target.id ? fitRowToLength({ ...r, imageUrl, hiResUrl, config: { ...config, replacedSeed: r.config?.seededFrom || '' }, replacedAt: Date.now() }, fitOpts) : r)) }));
                 return setBusy('');
             }
             const W = (face.widthIn || 24) * UNITS_PER_INCH;
             const w = Math.round(W * 0.82);
             const h = Math.round(w / 4);
             const below = (face.rows || []).reduce((m, r) => Math.max(m, r.y + r.h), 0.6 * UNITS_PER_INCH);
-            const row = { id: uid(), label, orientation: 'H', x: Math.round((W - w) / 2), y: Math.round(below + 0.4 * UNITS_PER_INCH), w, h, imageUrl, hiResUrl, config };
+            const row = fitRowToLength({ id: uid(), label, orientation: 'H', x: Math.round((W - w) / 2), y: Math.round(below + 0.4 * UNITS_PER_INCH), w, h, imageUrl, hiResUrl, config }, fitOpts);
             mutateFace(f => ({ ...f, rows: [...(f.rows || []), row] }));
         } catch (e) { alert('Could not place the row: ' + (e?.message || e)); }
         setBusy('');
@@ -363,7 +398,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                             {(face.rows || []).map(r => (
                                 <div key={r.id} style={{ padding: '8px 10px', margin: '6px 0', border: '1px solid var(--line)' }}>
                                     <input value={r.label} onChange={e => mutateFace(f => ({ ...f, rows: f.rows.map(x => (x.id === r.id ? { ...x, label: e.target.value } : x)) }))} style={{ ...inp, width: '100%', padding: '4px 6px', fontSize: '0.85rem' }} />
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px' }}>{r.config?.assemblyName}{r.config?.lengthInches ? ` · ${r.config.lengthInches}"` : ''}{r.config?.finishLabel ? ` · ${r.config.finishLabel}` : ''}</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px' }}>{r.config?.assemblyName}{r.config?.lengthInches ? ` · ${r.config.lengthInches}"` : ''}{r.config?.finishLabel ? ` · ${r.config.finishLabel}` : ''}{r.trueScale ? ' · to scale' : ''}</div>
                                     <div style={{ ...mono, marginTop: '4px' }}>{(r.config?.lines || []).filter(l => !l.hidden && !l.noNs).length} lines · <span onClick={() => mutateFace(f => ({ ...f, rows: f.rows.map(x => (x.id === r.id ? { ...x, orientation: x.orientation === 'V' ? 'H' : 'V', w: x.h, h: x.w } : x)) }))} style={{ cursor: 'pointer', color: 'var(--brass)' }} title="Horizontal = mounted across the board · Vertical = a pole standing in the base">{r.orientation === 'V' ? '↕ vertical' : '↔ horizontal'}</span> · <span onClick={() => mutateFace(f => ({ ...f, rows: f.rows.filter(x => x.id !== r.id) }))} style={{ color: '#b02d20', cursor: 'pointer' }}>remove</span></div>
                                 </div>
                             ))}

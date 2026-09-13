@@ -1,6 +1,6 @@
 // Harness for Shared/displayBom.js — the bill of a sales display board.
 //   node scripts/displayBom.test.mjs
-import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay } from '../src/components/Shared/displayBom.js';
+import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength } from '../src/components/Shared/displayBom.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -226,6 +226,20 @@ const cartBaseFront3 = {
     eq('an unknown flow id → nothing restricted (all), not zero chips', chipsForDisplay({ ...d, finishFlowId: 'gone' }, finishes, [flow]).chips.length, 5);
     eq('a flow with nothing tagged → all', chipsForDisplay(d, finishes, [{ id: 'F-H1', steps: [] }]).restricted, false);
     eq('a tabletop is born with its two parts, a wall board with its two boards', [newDisplay({ id: 'a', style: 'TABLETOP' }).extras.length, newDisplay({ id: 'b', style: 'WALL' }).extras.map(e => e.text.split(' — ')[0])], [2, ['Product board', 'Chip board']]);
+}
+
+// ── 9. A PLACED ROW IS DRAWN AT THE ROD'S REAL LENGTH ─────────────────────────────────────────
+{
+    const band = { id: 'r', label: 'Top Row 1', orientation: 'H', x: 192, y: 300, w: 2016, h: 504 };
+    const fit = fitRowToLength(band, { lengthInches: 16.75, aspect: 8, faceWidthIn: 24, faceHeightIn: 24 });
+    eq('a 16.75" rod on a 24" board is 1675 units wide, height from the cropped picture\'s aspect', [fit.w, fit.h, fit.trueScale], [1675, 209, true]);
+    ok('the box keeps its centre (within a unit of rounding)', Math.abs(fit.x + fit.w / 2 - 1200) <= 1 && Math.abs(fit.y + fit.h / 2 - 552) <= 1, `${fit.x + fit.w / 2}, ${fit.y + fit.h / 2}`);
+    const pole = { id: 'p', label: 'Base Front 1', orientation: 'V', x: 100, y: 1000, w: 160, h: 600 };
+    const vfit = fitRowToLength(pole, { lengthInches: 7.5, aspect: 0.2, faceWidthIn: 24, faceHeightIn: 24 });
+    eq('a vertical 7.5" pole is 750 units tall, width from the aspect', [vfit.h, vfit.w], [750, 150]);
+    eq('a rod longer than the board is capped inside it', fitRowToLength(band, { lengthInches: 40, aspect: 8 }).w, Math.round(2400 * 0.96));
+    eq('no length or no aspect → the row is untouched', [fitRowToLength(band, { lengthInches: 0, aspect: 8 }), fitRowToLength(band, { lengthInches: 10, aspect: 0 })], [band, band]);
+    ok('never leaves the face', (() => { const r = fitRowToLength({ ...band, x: 2300 }, { lengthInches: 16.75, aspect: 8 }); return r.x >= 0 && r.x + r.w <= 2400; })());
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

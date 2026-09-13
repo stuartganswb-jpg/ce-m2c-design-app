@@ -412,6 +412,8 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
 
 *(newest first)*
 
+- **2026-09-13 — Issue 3e (S5): a placed row is drawn at the rod's REAL length (Stuart: "align the width of the cpq design window … have the scale match closer").** Cause: the capture is the whole 3D pane (rod in a field of white/transparent margin) fitted into the row box → the rod shrank to the margins. Fix in my file: `cropToObject` (canvas: trim to non-white/opaque bounds, knock the white ground out → transparent PNG, filed as the DISPLAY CAPTURE) + `fitRowToLength` (pure, tested: box = `config.lengthInches` × 100 u along the row's axis, the cropped picture's aspect the other way, centre kept, capped inside the face; V rows by height). Row shows "· to scale". Harness 84.
+
 - **2026-09-11 — Issue 3d (S5) 0a7bfa7 SWEPT LIVE by chunk-hash match: served `488.0be21510.chunk.js` = local build (stamp 1789169243644); `Which row takes` in it. Notices in BRIEF_S1–S4 §6, board Deploys row + status, state doc §6. Open on others: S1 `displaySnapshot` (framed capture at Add), S2 the snapshot Display column.**
 
 - **2026-09-11 — Issue 3d (S5): Place asks WHICH ROW (Stuart's second live read): "Place…" opens a chooser — every row on the face (↔/↕ + label, "seeded" marked) or "+ New row"; picking a row keeps its label/place/size/orientation and replaces its lines + picture with the configuration's (`replacedSeed` stamped). The framed-angle capture is S1's: handed (BRIEF_S1 §6) — `displaySnapshot` on the cart line at Add (transparent, camera as left, stripped at save); the designer already prefers it over `renderSnapshot`.

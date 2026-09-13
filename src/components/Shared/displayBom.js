@@ -418,3 +418,24 @@ export function seededRowsLayout(rows, { widthIn = 24, heightIn = 24, baseIn = 0
     horiz.forEach((r, i) => out.push({ ...r, x: Math.round((W - w) / 2), y: Math.round(margin + i * band + (band - h) / 2), w, h }));
     return rows.map(r => out.find(o => o.label === r.label));
 }
+
+// ── A PLACED ROW IS DRAWN AT THE OBJECT'S REAL SIZE (Stuart 2026-09-13) ──────────────────────
+// "align the width of the cpq design window to the same when it places it in the display tool …
+// if you can have the scale match closer." The capture is the whole 3D pane, so fitting it into a
+// box shrank the rod to the pane's margins. The board is drawn at 100 units per inch and the
+// configuration knows its length, so once the picture is cropped to the object (the screen does
+// that), the box is the rod's length in inches along its axis and the picture's own aspect the
+// other way. A row with no known length keeps whatever box it has.
+export function fitRowToLength(row, { lengthInches, aspect, faceWidthIn = 24, faceHeightIn = 24 } = {}) {
+    const L = N(lengthInches, 0), a = N(aspect, 0);   // aspect = image width / height after the crop
+    if (!(L > 0) || !(a > 0) || !row) return row;
+    const W = faceWidthIn * UNITS_PER_INCH, H = faceHeightIn * UNITS_PER_INCH;
+    const cx = N(row.x) + N(row.w) / 2, cy = N(row.y) + N(row.h) / 2;
+    let w, h;
+    if (row.orientation === 'V') { h = Math.min(L * UNITS_PER_INCH, H * 0.9); w = h * a; }
+    else { w = Math.min(L * UNITS_PER_INCH, W * 0.96); h = w / a; }
+    w = Math.round(w); h = Math.round(h);
+    const x = Math.round(Math.min(Math.max(0, cx - w / 2), W - w));
+    const y = Math.round(Math.min(Math.max(0, cy - h / 2), H - h));
+    return { ...row, x, y, w, h, trueScale: true };
+}
