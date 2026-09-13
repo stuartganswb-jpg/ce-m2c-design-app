@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { isPoleCategory } from '../Shared/poleCut';
 import { nsTransactionHeader } from '../Shared/nsHeader';
 import { resolveShipMethod } from '../Shared/nsTransmit';
+import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
+import { quickShipPullLines, quickShipCoverCodes, quickShipBackorderLines } from '../Shared/quickShipBackorder';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
@@ -1480,22 +1482,40 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             const rushOnOrder = pricedCart.some(l => isRushFeeItem(itemById(l.itemId)));
 
             const hqId = `QS-${stamp}`;
+            // ONE HEADER, WHICHEVER DOOR (Brief E, Q9/Q10 — Shared/salesOrderHeader): customer,
+            // customerPo, sidemark, jobName, needBy (the customer's date or ''), readyDate /
+            // leadWeeks (painted 4 wk, plated 6, rush 2 / 4), shipTo[], shipping, productionNotes,
+            // internalMemo, recipe / recipes[] (the to-be-finished lines' codes), memo, source.
+            // THE DOCUMENTS NEED THESE (Stuart 2026-08-30: "the sales order forms … must show
+            // the bill to address, the ship to address, the sidemark and the customer po").
+            // reqDate / needByDate ride as aliases of needBy for one release.
+            const soHeader = soHeaderOf({
+                door: 'QUICKSHIP',
+                form: { soExtras, ship, jobName, lines, rush: rushOnOrder, customerName: selectedCustomer?.name || nsCustomerId, customerId },
+                customer: selectedCustomer, finishes: finishList, outsourceFinishes: finishList, by: currentUser || '',
+            });
+            // ── TRUE BACKORDERS ON AN ORDER ENTRY ORDER (STATE #17, close-out item 4) ─────────────
+            // A CPQ order reaches RTG's split, which writes `backorderLines[]` for the Snapshot's
+            // Backorders board; an Order Entry order never reaches the split (the WMS packs it off this
+            // doc), so its shorts were invisible. The SAME planner and definition run here at save —
+            // one stock read (available net of NetSuite's commitments), one rule (Shared/backorder), the
+            // same record. An unread shelf claims nothing; a failed read is said, never a shortage.
+            let backorderLines = [];
+            try {
+                const pull = quickShipPullLines(lines, trvDocLines);
+                const codes = quickShipCoverCodes(pull, soHeader.recipe || '');
+                const stock = codes.length ? await fetchAvailabilityUnits(codes, hdr.header.location.id) : null;
+                backorderLines = quickShipBackorderLines(pull, soHeader.recipe || '', stock, { since: stamp });
+                if (backorderLines.length) addLog(`🧭 ${backorderLines.length} TRUE BACKORDER${backorderLines.length === 1 ? '' : 'S'} on this order (${backorderLines.map(b => `${b.qty} × ${b.code} ${b.kind}`).join(', ')}) — recorded for the Snapshot's Backorders board.`, 'warn');
+            } catch (e) {
+                addLog(`⚠ Stock read for backorders failed (${e.message || e}) — the order saves without a backorder record; RTG / the Snapshot can re-check.`, 'warn');
+            }
             await setDoc(doc(db, "hq_sales_orders", hqId), {
                 id: hqId, soId: hqId, nsInternalId: null, nsQueuedAt: stamp,
                 orderClass: 'QUICKSHIP', type: 'Stock',
                 brand: activeBrand,
-                // ONE HEADER, WHICHEVER DOOR (Brief E, Q9/Q10 — Shared/salesOrderHeader): customer,
-                // customerPo, sidemark, jobName, needBy (the customer's date or ''), readyDate /
-                // leadWeeks (painted 4 wk, plated 6, rush 2 / 4), shipTo[], shipping, productionNotes,
-                // internalMemo, recipe / recipes[] (the to-be-finished lines' codes), memo, source.
-                // THE DOCUMENTS NEED THESE (Stuart 2026-08-30: "the sales order forms … must show
-                // the bill to address, the ship to address, the sidemark and the customer po").
-                // reqDate / needByDate ride as aliases of needBy for one release.
-                ...soHeaderOf({
-                    door: 'QUICKSHIP',
-                    form: { soExtras, ship, jobName, lines, rush: rushOnOrder, customerName: selectedCustomer?.name || nsCustomerId, customerId },
-                    customer: selectedCustomer, finishes: finishList, outsourceFinishes: finishList, by: currentUser || '',
-                }),
+                ...soHeader,
+                ...(backorderLines.length ? { backorderLines, backorderAt: stamp } : {}),
                 // Kept verbatim from before the shared header: the WMS and the CRM key on these exact
                 // values (the memo keeps its 'Quick Ship' fallback and 40-char cut for NetSuite).
                 customer: selectedCustomer?.name || nsCustomerId, customerId,
