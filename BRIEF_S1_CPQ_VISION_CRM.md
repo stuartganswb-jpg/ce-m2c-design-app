@@ -503,6 +503,14 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-13 — f29c4db (S1) pushed 17:22, SWEPT: version stamp 1789338315036; tab 7's `876.665697cc.chunk.js`. CLOSE-OUT item 4 (#17) DONE.** `Shared/quickShipBackorder`
+  (pure): `quickShipPullLines` (stock lines as pieces — per-foot by `qty`, packs by eaches; to-be-finished lines carry `finishOutsourced` only when
+  the line says so; traverse PART rows), `quickShipCoverCodes`, `quickShipBackorderLines` = `planSmallLines(...).backorder`, nothing else — the
+  harness proves byte-identity with the split. Tab 7: `soHeaderOf` computed once; one `fetchAvailabilityUnits(codes, hdr.header.location.id)`
+  read (the header builder's location, so the brand map import stays gone); `backorderLines` + `backorderAt` on the SO doc; a failed read is
+  logged and the order saves without a record. Not screen-verified — Stuart's next tab 7 order with a short line is the proof (the Backorders
+  window on 12.5). CLOSE-OUT DONE: cce9f96 (1, 3) · bfac710 (6) · 18ad75f (2) · f29c4db (4). Open: 5 + 7 with Stuart, 8.
+
 - **2026-09-13 — BRIEF_S7_UNIQUITY_PILLOW_VISION.md written (Stuart's ask, before close-out item 4).** From the live code + data: `VisionPillow.js` (2D SVG board, pushes `cpq_drafts` category PILLOW), the Uniquity flow `FLOW-1779393547645` is a six-step stub with ZERO options (+ a 'yoyo' test step), 2,821 Uniquity items — pillows/throws/swatches/table linens as finished goods, NO fabric / trim / fill items (the board's pickers are empty), 1,778 customers, no Uniquity quotes or drafts yet, NetSuite form/class ids not on file (refusal by design). The brief names the CE guard (harness wall + `git diff --stat origin/main` on every hardware file, the shared Vision chunk literals) and the ONE seam S1 will build: `engine: 'BOM'` treated as TAGS in `resolveJobLines` + a guarded PILLOW branch in `handleResumeDraft` calling their `Shared/pillowHandoff`. Six questions for Stuart in §5 (what a custom pillow IS, the NetSuite shape, the price rule, who sews, the portal, swatches). Registered on the board as S7.
 
 - **2026-09-12 — 18ad75f (S1) pushed 12:06, SWEPT: version stamp 1789315750609; `main.4ef48df2.js` (nsTransmit); the warning also in tab 7's `238.44f4e810.chunk.js`. CLOSE-OUT item 2 (#46) DONE.** Evidence first: QUO141's

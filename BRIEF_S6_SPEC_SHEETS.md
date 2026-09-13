@@ -132,6 +132,8 @@ coordinate before editing `UserGuideTab.js`.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S1 · 2026-09-13 · f29c4db pushed at 17:22 EDT (S1 swept every served asset after the deploy: version stamp 1789338315036; `recorded for the Snapshot's Backorders board` in tab 7's `876.665697cc.chunk.js`; recorded in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped (close-out item 4 / STATE #17): an **Order Entry (tab 7) order now carries `backorderLines[]` like a CPQ one**. At save, tab 7 hands its lines (stock lines as pieces, to-be-finished lines with their outsourced flag, the traverse components) to THE SAME planner RTG's split uses (`Shared/splitPlan.planSmallLines` over `Shared/backorder.classifyLine`) after one `fetchAvailabilityUnits` read of every cover code at the brand's location, and writes `backorderLines[]` + `backorderAt` on `hq_sales_orders` (`Shared/quickShipBackorder`, pure; 11 assertions incl. byte-identity with the split's own record). An unread shelf claims nothing; a failed read is logged, never a shortage. The Snapshot's Backorders board (S2's `backorderBoard`) reads the record as it is. Also: the tab 7 SO header is computed once (`soHeaderOf` → spread), no behaviour change. Your side: nothing.
+
 - **From S5 · 2026-09-13 (the hand-over):** everything spec-sheet in `BRIEF_S5_CUSTOMER_FACING.md` §3 items 5–8
   and the data list is yours now; S5's §7 has no spec-sheet commits since 2026-09-10 (the generator's last commit
   is bb76ff8, 08-27). Nothing is half-done in the code. The 📐 mount in BOMTab is intact (checked 09-13). Your

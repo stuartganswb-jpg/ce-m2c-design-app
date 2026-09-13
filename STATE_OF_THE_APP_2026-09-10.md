@@ -424,6 +424,10 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-13 · S1 · f29c4db (pushed 17:22).** #17 closed: an Order Entry order carries `backorderLines[]` from the same planner and definition RTG's
+  split uses, after one stock read at save — the Snapshot's Backorders board now sees tab 7 shorts. S1 close-out items 1, 2, 3, 4, 6 done;
+  5 and 7 need Stuart on a screen, 8 is Stuart's data list + S4's mirror lines.
+
 - **2026-09-12 · S1 · 18ad75f (pushed 12:06).** #46 closed: a CPQ kit order reaches NetSuite as ONE `CE-TRV-SYSTEM` holder line carrying the kit's
   dollars and every kit-paid component at $0 — the same bill shape tab 7 sends; `billGroup` rides the saved breakdown and orders it
   KIT · FEET · ADDED · INCLUDED for the documents. Items 1, 2, 3, 6 closed; next 4 (#17).

@@ -105,7 +105,7 @@ display SO.
 
 | session | state | last hash | next |
 |---|---|---|---|
-| S1 | started 09-10. **Live:** … bfac710 (close-out 6); 18ad75f (close-out 2, #46 kit push). **Next (close-out order):** 4 #17 classifyLine → 5/7 with Stuart → 8 data list + S4 mirror lines. | 18ad75f | close-out 4 |
+| S1 | started 09-10. **Live:** … 18ad75f (close-out 2); b3d16c4 (BRIEF_S7); f29c4db (close-out 4, #17). **Close-out: 1, 2, 3, 4, 6 DONE.** Left: 5 (Phase 3 generator + #47 watched Approve, with Stuart) · 7 (screen proofs, with Stuart) · 8 (Stuart's data list + S4 mirror lines). | f29c4db | 5 / 7 with Stuart; 8 |
 | S2 | started 09-10. Issue 1 DONE: reopen tool shipped (6c72e80 → 553272b), run REOPEN-1789057501646 = 52 restored / 0 failed on Stuart's list. Issue 2 (prevention) built + tested, push pending. Hand-offs out: S3 `reopenConfirmPick` chip; S1 refused-estimate stamp. Named: refused quotes invisible on RTG (S2 row queued). | 553272b | push Issue 2; then the refused-quotes row; then §3 #1 live pass |
 | S3 | started 09-10. Live: f5a6c19 · e2cef1f · 47c2b6b · 1e5e5a4 · 8b2e6b1 · a8bb6a8 · 1d02231 · 6ac41ac (HQ 15 Standard boxes tool — the add-box path was a hidden prompt-driven Save; now a real section). **SO60420 plating round trip COMPLETE end to end 09-11** (`PLATING_ROUND_TRIP_SO60420.md`); every defect it found is fixed. Stuart: add CE's boxes on HQ 15 (packs cannot close without one). Pairs wait on Eric. Next: BRIEF_S3 §3 items 2–5 (the sales-typed build at pack, the rest of the live pass, C4, the ⛏ posts) as Stuart picks. | 6ac41ac | §3 #2 when Stuart picks |
 | S4 | brief written, not started | — | when Stuart opens it |
@@ -117,6 +117,7 @@ display SO.
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
+| 2026-09-13 17:22 | S1 | f29c4db | **Close-out item 4 / #17 done**: an Order Entry order writes `backorderLines[]` at save through the split's own planner + one stock read; the Snapshot's Backorders board sees tab 7 shorts. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-12 12:06 | S1 | 18ad75f | **Close-out item 2 / #46 done**: a CPQ kit order pushes as ONE `CE-TRV-SYSTEM` holder line + kit-paid components at $0 (tab 7's shape); `billGroup` persisted, breakdown ordered KIT · FEET · ADDED · INCLUDED. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-13 10:17 | S5 | d35eedc | **Display mode in the CPQ 3D pane** (S1's configurator, one guarded block, Stuart's go-ahead): board frame at true scale; Add stamps `displaySnapshot` + `displayBoard` on the cart line (stripped from `jobs.cartItems` at save); the designer lays it over the whole face. No WO/floor/NetSuite write. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-13 11:50 | S5 | 2d94c09 | **Display mode, second cut**: the board frame is pinned to the pane, the hardware moves inside it; label reads the rod's inches on the board, ⌖ True scale dollies to the ordered length; `displayBoard.readsInches` on the cart line → designer shows off-scale rows. S1's configurator, same guarded block. No WO/floor/NetSuite write. | everyone — save-is-send refuses on a stale bundle |
