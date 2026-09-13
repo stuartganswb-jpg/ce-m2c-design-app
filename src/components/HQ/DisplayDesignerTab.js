@@ -205,6 +205,21 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
             const target = targetRowId ? (face.rows || []).find(r => r.id === targetRowId) : null;
             const label = target ? target.label : `Row ${(face.rows || []).length + 1}`;
             let imageUrl = '', hiResUrl = '', aspect = 0;
+            // DISPLAY MODE (Stuart 2026-09-13): the cart line carries the BOARD as captured — the
+            // frame in CPQ was the board at true scale — so the picture lays over the whole face
+            // and needs neither crop nor length fit. The row keeps its label; its box becomes the board.
+            const board = it.displayBoard && it.displaySnapshot && /^data:image/.test(it.displaySnapshot) ? it.displayBoard : null;
+            if (board) {
+                const a = await saveGuideCapture({ dataUrl: it.displaySnapshot, name: `${draft.name} ${label} (board ${board.widthIn}×${board.heightIn})`, code: it.assemblyName || '', brandId: activeBrand || '', user: currentUser, kind: 'DISPLAY' });
+                const W = (face.widthIn || 24) * UNITS_PER_INCH;
+                const bw = Math.round(Math.min(W, (Number(board.widthIn) || 24) * UNITS_PER_INCH));
+                const bh = Math.round(bw * (Number(board.heightIn) || 24) / (Number(board.widthIn) || 24));
+                const boardRow = { x: Math.round((W - bw) / 2), y: 0, w: bw, h: bh, imageUrl: a.thumbnailUrl, hiResUrl: a.originalUrl, boardFramed: true, trueScale: true, replacedAt: Date.now() };
+                const config = { ...rowConfigFromCartItem(it), board };
+                if (target) mutateFace(f => ({ ...f, rows: f.rows.map(r => (r.id === target.id ? { ...r, ...boardRow, config: { ...config, replacedSeed: r.config?.seededFrom || '' } } : r)) }));
+                else mutateFace(f => ({ ...f, rows: [...(f.rows || []), { id: uid(), label, orientation: 'H', ...boardRow, config }] }));
+                return setBusy('');
+            }
             // The picture: the view the operator FRAMED at Add configuration (`displaySnapshot`,
             // S1's hand-off — transparent, the camera as left) when the cart line carries one;
             // else the documents' auto-front JPEG (`renderSnapshot`). Either way cropped to the
@@ -398,7 +413,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                             {(face.rows || []).map(r => (
                                 <div key={r.id} style={{ padding: '8px 10px', margin: '6px 0', border: '1px solid var(--line)' }}>
                                     <input value={r.label} onChange={e => mutateFace(f => ({ ...f, rows: f.rows.map(x => (x.id === r.id ? { ...x, label: e.target.value } : x)) }))} style={{ ...inp, width: '100%', padding: '4px 6px', fontSize: '0.85rem' }} />
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px' }}>{r.config?.assemblyName}{r.config?.lengthInches ? ` · ${r.config.lengthInches}"` : ''}{r.config?.finishLabel ? ` · ${r.config.finishLabel}` : ''}{r.trueScale ? ' · to scale' : ''}</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px' }}>{r.config?.assemblyName}{r.config?.lengthInches ? ` · ${r.config.lengthInches}"` : ''}{r.config?.finishLabel ? ` · ${r.config.finishLabel}` : ''}{r.boardFramed ? ' · board-framed' : r.trueScale ? ' · to scale' : ''}</div>
                                     <div style={{ ...mono, marginTop: '4px' }}>{(r.config?.lines || []).filter(l => !l.hidden && !l.noNs).length} lines · <span onClick={() => mutateFace(f => ({ ...f, rows: f.rows.map(x => (x.id === r.id ? { ...x, orientation: x.orientation === 'V' ? 'H' : 'V', w: x.h, h: x.w } : x)) }))} style={{ cursor: 'pointer', color: 'var(--brass)' }} title="Horizontal = mounted across the board · Vertical = a pole standing in the base">{r.orientation === 'V' ? '↕ vertical' : '↔ horizontal'}</span> · <span onClick={() => mutateFace(f => ({ ...f, rows: f.rows.filter(x => x.id !== r.id) }))} style={{ color: '#b02d20', cursor: 'pointer' }}>remove</span></div>
                                 </div>
                             ))}
@@ -464,7 +479,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                         <div key={it.id} style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '8px 10px', margin: '6px 0', border: '1px solid var(--line)' }}>
                             {(it.displaySnapshot || it.renderSnapshot) ? <img src={it.displaySnapshot || it.renderSnapshot} alt="" title={it.displaySnapshot ? 'the view framed at Add configuration' : 'the documents\' auto-front view — S1 is adding a framed capture'} style={{ width: '64px', height: '40px', objectFit: 'contain', background: 'var(--paper-2)' }} /> : <div style={{ width: '64px', height: '40px', background: 'var(--paper-2)' }} />}
                             <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.assemblyName || it.name || 'Configured item'}</div>
+                                <div style={{ fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.assemblyName || it.name || 'Configured item'}{it.displayBoard ? <span style={{ ...mono, color: 'var(--brass)', marginLeft: '6px' }}>board {it.displayBoard.widthIn}×{it.displayBoard.heightIn}</span> : null}</div>
                                 <div style={{ ...mono }}>{it.finishLabel || ''}{it.engineConfig?.lengthInches ? ` · ${it.engineConfig.lengthInches}"` : ''}{it.qty > 1 ? ` · qty ${it.qty}` : ''}</div>
                             </div>
                             <button onClick={() => setPlacing(placing === it.id ? null : it.id)} disabled={!!busy || face?.kind !== 'ROWS'} style={btn(placing === it.id)}>Place…</button>

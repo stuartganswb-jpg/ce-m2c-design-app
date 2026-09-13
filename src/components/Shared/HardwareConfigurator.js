@@ -24,6 +24,7 @@ import { finishLabelOf, takesNoFinish } from './finishLabel';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 import { captureTransparentPng, saveGuideCapture } from './guideCapture';
+import { BoardFrame, captureBoardFrame, readDisplayMode, writeDisplayMode } from './displayFrame';   // DISPLAY MODE (S5, Stuart 2026-09-13) — one guarded block, see below
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // THE MASTER TEMPLATE (Stuart 2026-08-17)
@@ -431,6 +432,24 @@ function HardwareConfiguratorInner({
     const glStateRef = useRef(null);
     const captureRef = useRef(null);   // the 3D pane's snapshot function, once the canvas is up
     const [guideCapBusy, setGuideCapBusy] = useState(false);
+    // ── DISPLAY MODE (Stuart 2026-09-13, built by S5 with his go-ahead — ONE guarded block) ──
+    // "set the cpq window mode into display creator, then set the scale … so we could zoom and set
+    // them to go as close to the edge of the display as we would like." A board frame at true
+    // scale over the pane (Shared/displayFrame); Add configuration captures exactly the frame and
+    // stamps it on the cart line as `displaySnapshot` + `displayBoard` for the 5. Marketing
+    // designer. Off = the configurator exactly as before.
+    const [displayMode, setDisplayMode] = useState(readDisplayMode);
+    const frameOverlayRef = useRef(null);
+    const frameRectRef = useRef(null);
+    const onBoardFrameRect = useCallback((rect) => {
+        frameRectRef.current = rect;
+        const el = frameOverlayRef.current; if (!el) return;
+        if (!rect) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        el.style.left = `${rect.x}px`; el.style.top = `${rect.y}px`; el.style.width = `${rect.w}px`; el.style.height = `${rect.h}px`;
+        el.style.borderColor = rect.oversize ? '#b02d20' : 'var(--brass)';
+    }, []);
+    const setDisplayModeAndKeep = (patch) => setDisplayMode(m => { const v = { ...m, ...patch }; writeDisplayMode(v); return v; });
     const handleSendToGuide = async () => {
         if (guideCapBusy) return;
         const dataUrl = captureTransparentPng(glStateRef.current, { scale: 3 });
@@ -1356,6 +1375,9 @@ function HardwareConfiguratorInner({
         // show the customer what they are ordering. Never blocks the add: no canvas, no picture.
         // The view AS SET — rotated / zoomed the way the operator left it (Stuart 2026-09-11), not a re-framed front.
         const renderSnapshot = (() => { try { const shots = captureRef.current ? captureRef.current({ current: true }) : null; return shots?.front || null; } catch { return null; } })();
+        // DISPLAY MODE: the frame is the board — capture exactly it (transparent) for the designer.
+        const displaySnapshot = (displayMode.on && frameRectRef.current) ? captureBoardFrame(glStateRef.current, frameRectRef.current, { scale: 1 }) : null;
+        const displayBoard = displaySnapshot ? { widthIn: displayMode.widthIn, heightIn: displayMode.heightIn, lengthInches } : null;
         const item = handoffItem(resolved, {
             ...priceCtx, assembly, flow, findPart, qty: cfgQtyN, renderSnapshot,
             sidemark: configMemo, memo: configMemo,
@@ -1399,7 +1421,7 @@ function HardwareConfiguratorInner({
                 clearNodes: clearList,
             } : null,
         });
-        if (typeof onAdd === 'function') onAdd(item);
+        if (typeof onAdd === 'function') onAdd(displaySnapshot ? { ...item, displaySnapshot, displayBoard } : item);
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
         setStepNotes({}); setExtras([]); setDrawnSplices([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]);
@@ -2175,6 +2197,26 @@ function HardwareConfiguratorInner({
                             makes sense, then capture" — a hi-res TRANSPARENT png of exactly this
                             view, filed in the Asset Gallery for the tab-1 Guide Builder. */}
                         {cadUrl && (
+                            <div style={{ position: 'absolute', right: '150px', top: '9px', zIndex: 3, display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                <button onClick={() => setDisplayModeAndKeep({ on: !displayMode.on })}
+                                    title="Display mode: a board frame at TRUE scale over the view — zoom and rotate so the item sits on the board where you want it; Add configuration captures exactly the frame for 5. Marketing"
+                                    style={{ ...mono, padding: '7px 12px', background: displayMode.on ? 'var(--ink)' : '#fff', color: displayMode.on ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer' }}>
+                                    🖼 Display mode{displayMode.on ? ' · on' : ''}
+                                </button>
+                                {displayMode.on && (<>
+                                    <input type="number" min="6" max="96" step="0.5" value={displayMode.widthIn} onChange={e => setDisplayModeAndKeep({ widthIn: Number(e.target.value) || 24 })} title="board width, inches" style={{ ...mono, width: '46px', padding: '6px 4px', border: '1px solid var(--line)' }} />
+                                    <span style={mono}>×</span>
+                                    <input type="number" min="6" max="96" step="0.5" value={displayMode.heightIn} onChange={e => setDisplayModeAndKeep({ heightIn: Number(e.target.value) || 24 })} title="board height, inches" style={{ ...mono, width: '46px', padding: '6px 4px', border: '1px solid var(--line)' }} />
+                                    <span style={mono}>in</span>
+                                </>)}
+                            </div>
+                        )}
+                        {cadUrl && displayMode.on && (
+                            <div ref={frameOverlayRef} style={{ display: 'none', position: 'absolute', border: '2px dashed var(--brass)', pointerEvents: 'none', zIndex: 2, boxSizing: 'border-box' }}>
+                                <span style={{ ...mono, position: 'absolute', left: '6px', bottom: '4px', color: 'var(--brass)', background: 'rgba(255,255,255,.7)', padding: '1px 5px' }}>{displayMode.widthIn}" × {displayMode.heightIn}" board · true to the {lengthInches > 0 ? `${lengthInches}"` : 'model'} · red = zoom out</span>
+                            </div>
+                        )}
+                        {cadUrl && (
                             <button onClick={handleSendToGuide} disabled={guideCapBusy || !Object.keys(visibleOverrides).length}
                                 title={Object.keys(visibleOverrides).length ? 'Capture this exact view as a hi-res transparent PNG and file it in the Asset Gallery for the Guide Builder (tab 1 → Guide Books)' : 'Nothing on screen to capture — choose parts first'}
                                 style={{ ...mono, position: 'absolute', right: '12px', top: '9px', zIndex: 3, padding: '7px 12px', background: guideCapBusy ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', border: '1px solid var(--brass)', cursor: guideCapBusy ? 'wait' : 'pointer', opacity: Object.keys(visibleOverrides).length ? 1 : .45 }}>
@@ -2186,6 +2228,7 @@ function HardwareConfiguratorInner({
                                 onCreated={(st) => { glStateRef.current = st; }}>
                                 <StudioRig />
                                 <ViewCapturer onReady={(fn) => { captureRef.current = fn; }} />
+                                <BoardFrame enabled={displayMode.on} widthIn={displayMode.widthIn} heightIn={displayMode.heightIn} lengthInches={lengthInches} onRect={onBoardFrameRect} />
                                 <OrbitControls makeDefault />
                                 <Bounds fit clip margin={1.2}>
                                     {/* ⚠ ONE GEOMETRY, SCALED. A combined flow's .glb is the master

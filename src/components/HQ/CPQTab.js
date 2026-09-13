@@ -3334,7 +3334,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
               breakdown: stampLineFinishRouting(mergedBreakdown, outsourceFinishes),
               // tradeDiscount stamped per item (always set, so a re-finalize after the code
               // changed can't keep a stale stamp). finalPrice stays GROSS per-unit; net derives.
-              cartItems: cartForSave.map(it => ({ ...it, tradeDiscount: tradeDiscountFor(it) || null, pricingBreakdown: stampLineFinishRouting(it.pricingBreakdown || [], outsourceFinishes) })),
+              // `displaySnapshot` (the display-mode board capture, S5 2026-09-13) is read by the 5. Marketing
+              // designer from the CART only — never saved on the job (a data URL would bloat the doc).
+              cartItems: cartForSave.map(({ displaySnapshot, ...it }) => ({ ...it, tradeDiscount: tradeDiscountFor(it) || null, pricingBreakdown: stampLineFinishRouting(it.pricingBreakdown || [], outsourceFinishes) })),
               // Consumed by ERPPushPullTab to map lines -> physical NetSuite inventory.
               configuration: mergedConfiguration,
               quantities: mergedQuantities,
