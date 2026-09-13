@@ -503,6 +503,17 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-12 — 18ad75f (S1) pushed 12:06, SWEPT: version stamp 1789315750609; `main.4ef48df2.js` (nsTransmit); the warning also in tab 7's `238.44f4e810.chunk.js`. CLOSE-OUT item 2 (#46) DONE.** Evidence first: QUO141's
+  saved item carries the kit row (isKit, $995), three `inKit` brackets at $0 and added arms / pulleys / carriers with money — and NO `billGroup`
+  on any row (the handoff never wrote it). `nsTransmit`: the TAGS branch collects `kitCodes`, stamps `inKit` on the line, the aggregation key
+  keeps a $0 kit-paid line apart from a paid twin, `buildNsTransaction` rates `inKit` lines at 0 and, on a kit order, makes the rollup line the
+  `CE-TRV-SYSTEM` holder (by code, NetSuite id required; fallback the flow rollup + a warning) with the kit codes in its description; the log
+  names it. `hardwareHandoff`: `billGroup` persisted on every line; on a kit order extras (money → ADDED, $0 → INCLUDED) and traverse
+  components (billable → ADDED, else INCLUDED) join the stable sort; no-kit orders byte-identical. Tests: resolver suite +11 (holder id + rate,
+  description, $0 components, no-holder fallback + warning, the paid/kit-paid twin), handoff +4 (groups persisted, never decrease, an extra
+  with money sorts as ADDED). Not screen-verified — the next kit quote's Transmit Log payload is the proof (tab 12 pre-flight shows the lines).
+  Items 1, 2, 3, 6 done; next 4 (#17 classifyLine) → 5/7 (Stuart) → 8.
+
 - **2026-09-12 — bfac710 (S1) pushed 19:38, SWEPT: version stamp 1789256527160; `main.e268c830.js` (FormPreview + quoteDisplay: `"SIDEMARK"`, `"SHIP DATE"`, `"No Sidemark"`) and `367.562a008b.chunk.js`. CLOSE-OUT item 6 DONE.** `Shared/quoteDisplay` +`docDateOf`
   (bare 'YYYY-MM-DD' = local calendar day), `cleanSidemark` / `NO_SIDEMARK`, `orderSidemarkOf` (the card's rule); FormPreview Order Details
   gains a SIDEMARK row on `data.sidemark`; the CRM print: `docNumber={quoteDisplayNo}`, `po = poNumber`, `sidemark`, `date = docDateOf`, print
