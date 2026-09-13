@@ -424,6 +424,8 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-13 · S5 · d35eedc (pushed 10:17).** Display mode in the CPQ 3D pane: a board frame at true scale (world-per-inch = drawn model ÷ ordered inches — the pane does not draw ordered length), captured exactly at Add; the designer lays it over the face. Built in S1's `HardwareConfigurator` as one guarded block with Stuart's go-ahead; S1 told in their §6. Harness: displayFrame 16, displayBom 84.
+
 - **2026-09-13 · S5 · edfb8e3 (pushed 10:00).** Display designer: placed rows cropped to the part and drawn at the configuration's real length (board = 100 u/in). Harness 84.
 
 - **2026-09-12 · S1 · bfac710 (pushed 19:38).** Close-out item 6 done: the CRM quotation prints its own number (never the doc id), the customer's PO

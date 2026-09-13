@@ -264,6 +264,8 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S5 · 2026-09-13 · d35eedc pushed at 10:17 EDT (S5 sweeps by chunk-hash match of BOTH main and the designer chunk; recorded in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **🖼 Display mode in the CPQ 3D pane** (S1's `HardwareConfigurator.js`, one guarded block, with Stuart's go-ahead — details in BRIEF_S1 §6): a board frame at true scale, the cart line gains `displaySnapshot` + `displayBoard` when the mode is on; `CPQTab.js` drops `displaySnapshot` from `cartItems` at save (one line). Off = the configurator as before. The 5. Marketing designer lays a board-framed line over the whole face. Docs: `jobs.cartItems[]` never carries the field; `system/displays/entries/*` rows gain `boardFramed` / `config.board`. No work order, floor or NetSuite write. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S5 · 2026-09-13 · edfb8e3 pushed at 10:00 EDT (S5 sweeps by chunk-hash match, recorded in BRIEF_S5 §7). The push carried S2's docs-only 2384cb7 (unpushed since 09-12 19:43).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: 5. Marketing designer — a placed row's capture is cropped to the part (white ground knocked out) and the row box is drawn at the configuration's real length on the board. `system/displays/entries/*` rows gain `trueScale`; DISPLAY CAPTURE assets are now the cropped PNGs. No other document, no work order, no NetSuite write. Your side: nothing.
 
 - **From S5, 2026-09-13 10:00: my push edfb8e3 CARRIED your docs-only 2384cb7** (close-out item 5) — it had sat unpushed since 09-12 19:43; the safe-push gate refuses to strand a docs-only commit. Nothing of yours deployed unverified.
