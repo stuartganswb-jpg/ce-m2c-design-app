@@ -5,49 +5,62 @@
 import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../src/components/Shared/displayFrame.js', import.meta.url), 'utf8');
 const mathOnly = src.split('/** The visible model')[0].replace(/^import .*$/mg, '');
-const { boardFrameRect } = await import('data:text/javascript,' + encodeURIComponent(mathOnly));
+const { fixedBoardFrame, boardReading, depthForTrueScale } = await import('data:text/javascript,' + encodeURIComponent(mathOnly));
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
 const near = (name, got, want, tol = 0.5) => { if (Math.abs(got - want) <= tol) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${got}\n    want ${want} ± ${tol}`); };
 
-// A 4 ft master rod drawn 1.2 world units long, the order is 16.75": world-per-inch = 1.2 / 16.75.
-// Camera 3 units from the model centre, fov 50, a 900 × 420 pane.
 const pane = { w: 900, h: 420 };
-const model = { longAxisWorld: 1.2, centerDepth: 3 };
+const fovDeg = 50;
+const visibleH = (d) => 2 * d * Math.tan(25 * Math.PI / 180);
+
+// ── the frame is pinned to the pane ─────────────────────────────────────────────────────────
 {
-    const r = boardFrameRect({ widthIn: 24, heightIn: 24, lengthInches: 16.75, model, pane, fovDeg: 50 });
-    near('world per inch is the drawn rod over the ordered inches', r.worldPerInch, 1.2 / 16.75, 1e-9);
-    const visibleH = 2 * 3 * Math.tan(25 * Math.PI / 180);
-    near('the frame height is 24" of that scale against the visible height', r.h, 420 * (24 * 1.2 / 16.75) / visibleH);
-    near('square board → square frame (pane aspect cancels)', r.w, r.h, 0.01);
-    near('centred in the pane', r.x + r.w / 2, 450, 0.01);
-    near('…both ways', r.y + r.h / 2, 210, 0.01);
-    eq('at this distance the 24" board fits the pane (h ≈ 258 px < 420) → not oversize', r.oversize, false);
-    eq('closer in (half the distance, frame doubles to ≈ 516 px) → oversize, the overlay turns red', boardFrameRect({ widthIn: 24, heightIn: 24, lengthInches: 16.75, model: { ...model, centerDepth: 1.5 }, pane, fovDeg: 50 }).oversize, true);
+    const f = fixedBoardFrame({ widthIn: 24, heightIn: 24, pane });
+    near('a square board in a wide pane is limited by the height: 92% of 420', f.h, 386.4, 1e-9);
+    near('…and square', f.w, f.h, 1e-9);
+    near('px per inch = frame px over board inches', f.pxPerInch, 386.4 / 24, 1e-9);
+    near('centred horizontally', f.x + f.w / 2, 450, 1e-9);
+    near('centred vertically', f.y + f.h / 2, 210, 1e-9);
+    const far = fixedBoardFrame({ widthIn: 24, heightIn: 24, pane });
+    eq('the frame does not depend on the camera — same pane, same frame', far, f);
+    const wide = fixedBoardFrame({ widthIn: 96, heightIn: 24, pane });
+    near('a 96 × 24 board is limited by the width: 92% of 900', wide.w, 828, 1e-9);
+    near('…4:1', wide.h, 207, 1e-9);
+    eq('no pane → null', fixedBoardFrame({ widthIn: 24, heightIn: 24, pane: { w: 0, h: 0 } }), null);
+    near('blank sizes fall back to 24 × 24', fixedBoardFrame({ widthIn: '', heightIn: null, pane }).w, f.w, 1e-9);
+    near('a bad margin falls back to 92%', fixedBoardFrame({ widthIn: 24, heightIn: 24, pane, margin: 7 }).h, 386.4, 1e-9);
+    near('a margin of 1 fills the pane', fixedBoardFrame({ widthIn: 24, heightIn: 24, pane, margin: 1 }).h, 420, 1e-9);
 }
+
+// ── the reading: what the drawn rod measures on that board ──────────────────────────────────
+// A 4 ft master rod drawn 1.2 world units long; the order is 16.75". Camera 3 units from the model centre.
+const frame = fixedBoardFrame({ widthIn: 24, heightIn: 24, pane });
 {
-    // the rod inside the frame IS its ordered length: rod px / frame px = 16.75 / 24
-    const r = boardFrameRect({ widthIn: 24, heightIn: 24, lengthInches: 16.75, model, pane, fovDeg: 50 });
-    const visibleW = 2 * 3 * Math.tan(25 * Math.PI / 180) * (900 / 420);
-    const rodPx = 900 * 1.2 / visibleW;
-    near('the drawn rod spans 16.75/24 of the frame width', rodPx / r.w, 16.75 / 24, 1e-6);
+    const model = { longAxisWorld: 1.2, centerDepth: 3 };
+    const projectedPx = 420 * 1.2 / visibleH(3);
+    const r = boardReading({ model, pane, fovDeg, frame });
+    near('reading = projected px over px-per-inch', r, projectedPx / frame.pxPerInch, 1e-9);
+    near('zoom in (half the depth) doubles the reading — the frame did not move', boardReading({ model: { ...model, centerDepth: 1.5 }, pane, fovDeg, frame }), 2 * r, 1e-9);
+    near('zoom out (twice the depth) halves it', boardReading({ model: { ...model, centerDepth: 6 }, pane, fovDeg, frame }), r / 2, 1e-9);
+    near('a bigger board at the same zoom reads more inches for the same px', boardReading({ model, pane, fovDeg, frame: fixedBoardFrame({ widthIn: 48, heightIn: 48, pane }) }), 2 * r, 1e-9);
+    eq('nothing drawn → null', boardReading({ model: null, pane, fovDeg, frame }), null);
+    eq('model behind the camera → null', boardReading({ model: { longAxisWorld: 1, centerDepth: -1 }, pane, fovDeg, frame }), null);
+    eq('no frame → null', boardReading({ model, pane, fovDeg, frame: null }), null);
 }
+
+// ── ⌖ true scale: the depth where the reading equals the ordered inches ─────────────────────
 {
-    // zooming out (camera farther) shrinks the frame; a wider board widens it; a taller one lengthens it
-    const far = boardFrameRect({ widthIn: 24, heightIn: 24, lengthInches: 16.75, model: { ...model, centerDepth: 6 }, pane });
-    const base = boardFrameRect({ widthIn: 24, heightIn: 24, lengthInches: 16.75, model, pane });
-    near('twice the distance, half the frame', far.h / base.h, 0.5, 1e-9);
-    const wide = boardFrameRect({ widthIn: 36, heightIn: 24, lengthInches: 16.75, model, pane });
-    near('a 36 × 24 board is 1.5× wider, same height', wide.w / base.w, 1.5, 1e-9); near('', wide.h, base.h, 1e-9);
-    eq('zoomed out far enough the frame fits', boardFrameRect({ widthIn: 24, heightIn: 24, lengthInches: 16.75, model: { ...model, centerDepth: 12 }, pane }).oversize, false);
-}
-{
-    // no ordered length → the GLB's metres stand in (0.0254 per inch); no pane / no depth → null
-    near('no length: metres', boardFrameRect({ widthIn: 24, heightIn: 24, lengthInches: 0, model: { longAxisWorld: 1.2, centerDepth: 3 }, pane }).worldPerInch, 0.0254, 1e-12);
-    eq('no pane → null', boardFrameRect({ widthIn: 24, heightIn: 24, lengthInches: 10, model, pane: { w: 0, h: 0 } }), null);
-    eq('model behind the camera → null', boardFrameRect({ widthIn: 24, heightIn: 24, lengthInches: 10, model: { longAxisWorld: 1, centerDepth: -1 }, pane }), null);
-    eq('blank sizes fall back to 24 × 24', boardFrameRect({ widthIn: '', heightIn: null, lengthInches: 16.75, model, pane }).w > 0, true);
+    const d = depthForTrueScale({ longAxisWorld: 1.2, lengthInches: 16.75, pane, fovDeg, frame });
+    near('at that depth the rod reads exactly 16.75"', boardReading({ model: { longAxisWorld: 1.2, centerDepth: d }, pane, fovDeg, frame }), 16.75, 1e-9);
+    near('…and spans 16.75/24 of the frame', (420 * 1.2 / visibleH(d)) / frame.w, 16.75 / 24, 1e-9);
+    const d8 = depthForTrueScale({ longAxisWorld: 1.2, lengthInches: 8, pane, fovDeg, frame });
+    eq('a shorter order at the same drawn size wants the camera farther away', d8 > d, true);
+    near('twice the inches, half the depth', depthForTrueScale({ longAxisWorld: 1.2, lengthInches: 33.5, pane, fovDeg, frame }), d / 2, 1e-9);
+    // strict null: JSON would read an Infinity depth as null too
+    eq('no ordered length → null (nothing to be true to)', depthForTrueScale({ longAxisWorld: 1.2, lengthInches: 0, pane, fovDeg, frame }) === null, true);
+    eq('nothing drawn → null', depthForTrueScale({ longAxisWorld: 0, lengthInches: 16.75, pane, fovDeg, frame }) === null, true);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

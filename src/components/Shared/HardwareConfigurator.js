@@ -440,14 +440,21 @@ function HardwareConfiguratorInner({
     // designer. Off = the configurator exactly as before.
     const [displayMode, setDisplayMode] = useState(readDisplayMode);
     const frameOverlayRef = useRef(null);
+    const frameReadingRef = useRef(null);
     const frameRectRef = useRef(null);
+    const trueScaleSnapRef = useRef(null);
+    // The frame is pinned to the pane; the hardware moves inside it (Stuart's first test). The
+    // reading says what the drawn rod measures on this board; ⌖ True scale dollies to its inches.
     const onBoardFrameRect = useCallback((rect) => {
         frameRectRef.current = rect;
         const el = frameOverlayRef.current; if (!el) return;
         if (!rect) { el.style.display = 'none'; return; }
         el.style.display = 'block';
         el.style.left = `${rect.x}px`; el.style.top = `${rect.y}px`; el.style.width = `${rect.w}px`; el.style.height = `${rect.h}px`;
-        el.style.borderColor = rect.oversize ? '#b02d20' : 'var(--brass)';
+        const rd = frameReadingRef.current; if (!rd) return;
+        const off = rect.reading != null && rect.trueInches != null && Math.abs(rect.reading - rect.trueInches) > 0.25;
+        rd.textContent = rect.reading == null ? 'nothing drawn yet' : `rod reads ${rect.reading.toFixed(1)}"${rect.trueInches != null ? ` · true ${rect.trueInches}"` : ''}${off ? ' · off scale' : rect.trueInches != null ? ' · ✓' : ''}`;
+        rd.style.color = off ? '#b02d20' : 'var(--brass)';
     }, []);
     const setDisplayModeAndKeep = (patch) => setDisplayMode(m => { const v = { ...m, ...patch }; writeDisplayMode(v); return v; });
     const handleSendToGuide = async () => {
@@ -1377,7 +1384,7 @@ function HardwareConfiguratorInner({
         const renderSnapshot = (() => { try { const shots = captureRef.current ? captureRef.current({ current: true }) : null; return shots?.front || null; } catch { return null; } })();
         // DISPLAY MODE: the frame is the board — capture exactly it (transparent) for the designer.
         const displaySnapshot = (displayMode.on && frameRectRef.current) ? captureBoardFrame(glStateRef.current, frameRectRef.current, { scale: 1 }) : null;
-        const displayBoard = displaySnapshot ? { widthIn: displayMode.widthIn, heightIn: displayMode.heightIn, lengthInches } : null;
+        const displayBoard = displaySnapshot ? { widthIn: displayMode.widthIn, heightIn: displayMode.heightIn, lengthInches, readsInches: frameRectRef.current.reading != null ? Math.round(frameRectRef.current.reading * 10) / 10 : null } : null;
         const item = handoffItem(resolved, {
             ...priceCtx, assembly, flow, findPart, qty: cfgQtyN, renderSnapshot,
             sidemark: configMemo, memo: configMemo,
@@ -2199,7 +2206,7 @@ function HardwareConfiguratorInner({
                         {cadUrl && (
                             <div style={{ position: 'absolute', right: '150px', top: '9px', zIndex: 3, display: 'flex', gap: '6px', alignItems: 'center' }}>
                                 <button onClick={() => setDisplayModeAndKeep({ on: !displayMode.on })}
-                                    title="Display mode: a board frame at TRUE scale over the view — zoom and rotate so the item sits on the board where you want it; Add configuration captures exactly the frame for 5. Marketing"
+                                    title="Display mode: the board as a frame over the view — zoom, rotate and pan (right-drag) the item inside it; the label reads what the rod measures on the board, ⌖ True scale sets it to its ordered inches; Add configuration captures exactly the frame for 5. Marketing"
                                     style={{ ...mono, padding: '7px 12px', background: displayMode.on ? 'var(--ink)' : '#fff', color: displayMode.on ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer' }}>
                                     🖼 Display mode{displayMode.on ? ' · on' : ''}
                                 </button>
@@ -2208,12 +2215,18 @@ function HardwareConfiguratorInner({
                                     <span style={mono}>×</span>
                                     <input type="number" min="6" max="96" step="0.5" value={displayMode.heightIn} onChange={e => setDisplayModeAndKeep({ heightIn: Number(e.target.value) || 24 })} title="board height, inches" style={{ ...mono, width: '46px', padding: '6px 4px', border: '1px solid var(--line)' }} />
                                     <span style={mono}>in</span>
+                                    <button onClick={() => { if (!(trueScaleSnapRef.current && trueScaleSnapRef.current())) alert('Nothing to scale to yet — pick a rod length first.'); }}
+                                        disabled={!(lengthInches > 0)}
+                                        title={lengthInches > 0 ? `Move the camera so the rod reads its ordered ${lengthInches}" on this board (rotation and pan are kept)` : 'Pick a rod length first'}
+                                        style={{ ...mono, padding: '7px 10px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--brass)', cursor: lengthInches > 0 ? 'pointer' : 'default', opacity: lengthInches > 0 ? 1 : .45 }}>
+                                        ⌖ True scale
+                                    </button>
                                 </>)}
                             </div>
                         )}
                         {cadUrl && displayMode.on && (
                             <div ref={frameOverlayRef} style={{ display: 'none', position: 'absolute', border: '2px dashed var(--brass)', pointerEvents: 'none', zIndex: 2, boxSizing: 'border-box' }}>
-                                <span style={{ ...mono, position: 'absolute', left: '6px', bottom: '4px', color: 'var(--brass)', background: 'rgba(255,255,255,.7)', padding: '1px 5px' }}>{displayMode.widthIn}" × {displayMode.heightIn}" board · true to the {lengthInches > 0 ? `${lengthInches}"` : 'model'} · red = zoom out</span>
+                                <span style={{ ...mono, position: 'absolute', left: '6px', bottom: '4px', color: 'var(--brass)', background: 'rgba(255,255,255,.7)', padding: '1px 5px' }}>{displayMode.widthIn}" × {displayMode.heightIn}" board · <span ref={frameReadingRef} /> · right-drag pans</span>
                             </div>
                         )}
                         {cadUrl && (
@@ -2228,7 +2241,7 @@ function HardwareConfiguratorInner({
                                 onCreated={(st) => { glStateRef.current = st; }}>
                                 <StudioRig />
                                 <ViewCapturer onReady={(fn) => { captureRef.current = fn; }} />
-                                <BoardFrame enabled={displayMode.on} widthIn={displayMode.widthIn} heightIn={displayMode.heightIn} lengthInches={lengthInches} onRect={onBoardFrameRect} />
+                                <BoardFrame enabled={displayMode.on} widthIn={displayMode.widthIn} heightIn={displayMode.heightIn} lengthInches={lengthInches} onRect={onBoardFrameRect} snapRef={trueScaleSnapRef} />
                                 <OrbitControls makeDefault />
                                 <Bounds fit clip margin={1.2}>
                                     {/* ⚠ ONE GEOMETRY, SCALED. A combined flow's .glb is the master
