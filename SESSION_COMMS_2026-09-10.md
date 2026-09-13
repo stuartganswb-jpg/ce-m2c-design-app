@@ -111,12 +111,13 @@ display SO.
 | S4 | brief written, not started | — | when Stuart opens it |
 | S5 | started 09-10. Issue 1 (H1-138TRV kits) live both halves. Display program: Designer b3fd59f · Builds d3c6777 · Seed 9f5c714 · poles/chips db928f4 · row chooser 0a7bfa7 · true scale edfb8e3 · CPQ Display mode d35eedc · frame pinned to the pane + ⌖ True scale 2d94c09 (all live; S1's files touched with Stuart's go-ahead, noted in BRIEF_S1 §6); S2 owes the snapshot Display column | 2d94c09 | Stuart: CPQ → 🖼 Display mode 24×24 → ⌖ True scale → zoom/pan the row into the frame → Add → 5. Marketing Place… into the row; wall board; build orders |
 | S6 | brief written 09-13 (`BRIEF_S6_SPEC_SHEETS.md`), not started — spec sheets split out of S5 | — | when Stuart opens it: BRIEF_S6 §5 Q1 |
-| S7 | brief written 09-13 (`BRIEF_S7_UNIQUITY_PILLOW_VISION.md`, by S1 at Stuart's ask), not started — Uniquity pillow builder | — | when Stuart opens it: §5's six questions first |
+| S7 | started 09-13. Stuart's six answers in (door = tab 7 not CPQ; quote + SO; throws → panels labelled as fabrics; non-inventory 'custom pillow' holder; Stitch & Sew = the small-parts flow to a SEW division, 2–3 wk; portal later; samples on tab 7). Step 1 LIVE: c4bbc89 the price rule (pure, 58). CPQ seam in BRIEF_S7 §6 retired. | c4bbc89 | step 2 (key dimensions + price groups on Uniquity items, 4.5) once Stuart's pricing spreadsheet seeds `system/pillow_pricing`; then step 3 the board |
 
 ## Deploys (every session appends a row when it pushes; newest first)
 
 | when | session | hash | what changed in production | who must re-PIN |
 |---|---|---|---|---|
+| 2026-09-13 17:44 | S7 | c4bbc89 | **Custom pillow price rule as ONE pure module** (`Shared/pillowPricing`, 58 assertions; `system/pillow_pricing` shape, tables empty until Stuart's spreadsheet). Imported by nothing — nothing served changes; no document / WO / floor / NetSuite write. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-13 17:22 | S1 | f29c4db | **Close-out item 4 / #17 done**: an Order Entry order writes `backorderLines[]` at save through the split's own planner + one stock read; the Snapshot's Backorders board sees tab 7 shorts. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-12 12:06 | S1 | 18ad75f | **Close-out item 2 / #46 done**: a CPQ kit order pushes as ONE `CE-TRV-SYSTEM` holder line + kit-paid components at $0 (tab 7's shape); `billGroup` persisted, breakdown ordered KIT · FEET · ADDED · INCLUDED. | everyone — save-is-send refuses on a stale bundle |
 | 2026-09-13 10:17 | S5 | d35eedc | **Display mode in the CPQ 3D pane** (S1's configurator, one guarded block, Stuart's go-ahead): board frame at true scale; Add stamps `displaySnapshot` + `displayBoard` on the cart line (stripped from `jobs.cartItems` at save); the designer lays it over the whole face. No WO/floor/NetSuite write. | everyone — save-is-send refuses on a stale bundle |

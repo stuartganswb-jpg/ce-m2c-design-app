@@ -424,6 +424,8 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-13 · S7 · c4bbc89 (pushed 17:44).** S7 opened (Uniquity pillow builder). Stuart's decisions: the pillow goes Vision → Order Entry (tab 7), not CPQ (the BRIEF_S7 §6 CPQ seam is retired); quote or SO; throws cut into panels labelled as fabrics; a non-inventory 'custom pillow' holder; custom pillows flow like small parts to a Stitch & Sew (SEW) division with a Uniquity NetSuite WO, 2–3 wk; portal later; samples on tab 7. Step 1 live: `Shared/pillowPricing.js` (pure, 58 assertions) — size at the highest fabric group + per-seam labour + per-detail charges, panels consume their own fabric, refusal by code on any missing table row; `system/pillow_pricing` shape declared, empty until the spreadsheet. Imported by nothing; nothing served changes. Named: the test runner exits 1 on two suites (S1's nsTransmitLineDiscount, S5's displayFrame) that pass from the root — path only.
+
 - **2026-09-13 · S1 · f29c4db (pushed 17:22).** #17 closed: an Order Entry order carries `backorderLines[]` from the same planner and definition RTG's
   split uses, after one stock read at save — the Snapshot's Backorders board now sees tab 7 shorts. S1 close-out items 1, 2, 3, 4, 6 done;
   5 and 7 need Stuart on a screen, 8 is Stuart's data list + S4's mirror lines.
