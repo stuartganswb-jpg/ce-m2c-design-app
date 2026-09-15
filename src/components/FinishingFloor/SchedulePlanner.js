@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { db } from '../../firebase';
 import { doc, writeBatch } from 'firebase/firestore';
 import { buildFinishingPlan } from '../Shared/finishingTime';
+import { holdGateOf } from '../Shared/OrderStatusChips';
 
 // SCHEDULE PLANNER — the "what runs next" analysis below the Setup Queue.
 // Custom (sales orders: a mix of sizes in one finish) are sequenced by due date; stock (bulk qty of
@@ -11,7 +12,8 @@ const fmtH = (mins) => `${(mins / 60).toFixed(1)} h`;
 
 const SchedulePlanner = ({ workOrders = [], recipes = {}, capacityMatrix = {}, sysConfig = {} }) => {
     const plan = useMemo(
-        () => buildFinishingPlan(workOrders, recipes, capacityMatrix, sysConfig, {}),
+        // A held document (backorder hold from the split, or a STOP) is not schedulable (S1 spec 2026-09-15).
+        () => buildFinishingPlan(workOrders.filter(w => !holdGateOf(w)), recipes, capacityMatrix, sysConfig, {}),
         [workOrders, recipes, capacityMatrix, sysConfig]
     );
 

@@ -17,7 +17,7 @@ import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { closeOrderEverywhere, propagateFloorState, linkedDocsOf } from '../Shared/orderLifecycle';
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
-import OrderStatusChips from '../Shared/OrderStatusChips';
+import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import { customFabLabel } from '../Shared/orderStatus';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
@@ -47,7 +47,15 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
   // them were sitting in the PENDING-RECIPE group as work no one could start. They keep their WMS
   // pick (that is untouched — the pick queue reads sentToPickPack/pickStatus, not currentPhase) and
   // ride the OB PLATING bin out on the weekly plater PO.
-  const inSetup = workOrders.filter(w => w.currentPhase === "Setup" || w.currentPhase === "setup");
+  const inSetupAll = workOrders.filter(w => w.currentPhase === "Setup" || w.currentPhase === "setup");
+  // ⏸ WAITING ON BACKORDER (S1 spec 2026-09-15; Stuart: the RTG chip said HOLD and the floor said GO).
+  // The split's hold was decorative here — nothing read `held` but the STOP button. A held doc stays
+  // visible (RTG is the master; the floor may see what is coming) but leaves the finish batches,
+  // sits in its own lane, and gets no Start Setup / Stage to Floor until RTG lifts the hold.
+  const backorderHeld = inSetupAll.filter(w => (holdGateOf(w) || {}).kind === 'BACKORDER')
+      .sort((a, b) => (a.heldAt || 0) - (b.heldAt || 0));
+  const backorderIds = new Set(backorderHeld.map(w => w.id));
+  const inSetup = inSetupAll.filter(w => !backorderIds.has(w.id));
   const outsourcedOrders = inSetup.filter(w => finishRouteOf(w).outsourced);
   const outsourcedIds = new Set(outsourcedOrders.map(w => w.id));
   const pendingOrders = inSetup.filter(w => !outsourcedIds.has(w.id));
@@ -188,7 +196,14 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           return hq && hq.awaitingRodCut ? (hq.rodCutNote || hq.rodCutId || 'its rod cut') : '';
       } catch (e) { return ''; }   // the record could not be read — do not invent a gate
   };
+  const heldRefusal = (wo, verb) => {
+      const hg = holdGateOf(wo);
+      if (!hg) return false;
+      alert(`${hg.label} — ${woRefOf(wo)} cannot ${verb}.\n\n${hg.reason}\n\n${hg.liftedBy}`);
+      return true;
+  };
   const startSetup = async (wo) => {
+    if (heldRefusal(wo, 'start setup')) return;
     try {
         const cut = await rodCutStillOpen(wo);
         if (cut) return alert(`✂ ${woRefOf(wo)} cannot start — its rod cut is still OPEN on the WMS (${cut}).\n\nThe poles do not exist yet. Complete the cut at WMS → ROD CUTS → Cuts for Finishing; that clears the gate and prints this order's label.`);
@@ -207,6 +222,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
   };
 
   const stageToFloor = async (wo) => {
+    if (heldRefusal(wo, 'be staged')) return;
     const pieces = Number(wo.totalParts) || 0;
     try {
         const cut = await rodCutStillOpen(wo);
@@ -301,6 +317,8 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       } catch (e) { alert('Could not stop the order: ' + (e.message || e)); }
   };
   const resumeOrder = async (wo) => {
+      const hg = holdGateOf(wo);
+      if (hg && !hg.floorMayRelease) return alert(`${hg.label} — ${woRefOf(wo)} is held by RTG, not the floor.\n\n${hg.liftedBy}`);
       const note = window.prompt(`▶ Resume ${woRefOf(wo)}?\n\nStopped ${wo.heldReason ? `because: ${wo.heldReason}` : ''}\n\nWhat was done to fix it? (recorded on the order)`, '');
       if (note === null) return;
       const n = String(note).trim();
@@ -558,6 +576,32 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       {/* STOPPED ORDERS OUTRANK EVERYTHING, including urgent — an urgent order is work to do
           sooner; a stopped one is work that cannot be done at all (Stuart 2026-08-21). */}
       <HeldOrdersBanner orders={pendingOrders} onRelease={resumeOrder} refOf={(o) => woRefOf(o)} />
+
+      {/* ⏸ WAITING ON BACKORDER — RTG's hold, honoured here: visible, not workable, no floor release. */}
+      {backorderHeld.length > 0 && (
+        <div style={{ background: '#fbf6ea', border: '2px solid #d9a648', borderRadius: '2px', padding: '16px 20px', marginBottom: '24px' }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', color: '#8a6d3b', fontWeight: 700, marginBottom: '12px' }}>
+            ⏸ Waiting on backorder — {backorderHeld.length} order{backorderHeld.length === 1 ? '' : 's'} · RTG lifts the hold ("Finish as available", or when the material arrives)
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '14px' }}>
+            {backorderHeld.map(wo => (
+              <div key={wo.id} style={{ background: '#fff', border: '1px solid #e6d3a3', borderLeft: '4px solid #d9a648', padding: '14px 16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: '1.05rem', color: 'var(--ink)', fontWeight: 500 }}>WO: {woRefOf(wo)}</strong>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', padding: '3px 8px', border: '1px solid var(--line)', background: 'var(--paper)', color: 'var(--ink-soft)' }}>{wo.recipe || '—'}</span>
+                </div>
+                <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginTop: '6px' }}>{wo.customer || wo.clientName || ''}</div>
+                <div style={{ fontSize: '0.85rem', color: '#8a6d3b', marginTop: '6px' }}>{(holdGateOf(wo) || {}).reason}</div>
+                <OrderStatusChips wo={wo} style={{ marginTop: '10px' }} />
+                <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                  <button onClick={() => setActiveSpecs(wo)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>Specs</button>
+                  <span style={{ ...btnStyle, flex: 2, textAlign: 'center', background: 'transparent', color: '#8a6d3b', border: '1px dashed #d9a648', cursor: 'default' }}>⏸ Waiting — no setup until RTG lifts the hold</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {urgentPinned.length > 0 && (
         <div style={{ background: '#fdf3f3', border: '2px solid #d9534f', borderRadius: '2px', padding: '16px 20px', marginBottom: '24px' }}>

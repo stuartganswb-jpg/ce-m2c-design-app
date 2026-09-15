@@ -8,6 +8,23 @@
 import React from 'react';
 import { orderStatusOf, stageLabel, stageTone } from './orderStatus';
 
+// THE HOLD, READ ONCE (S1 spec 2026-09-15 — Stuart on SO60427–60432: "showing as hold waiting on
+// back orders yet they still hit the floor"). The split stamps `held: true` + `heldReasonKind:
+// 'BACKORDER'` on the finishing doc; the floor's own STOP button stamps `held: true` with a stage
+// and a reason. Both mean "do not work this"; only the STOP kind may be lifted from the floor —
+// a backorder hold is RTG's (Finish as available, or the material arriving).
+export const holdGateOf = (d) => {
+    if (!d || d.held !== true) return null;
+    const backorder = String(d.heldReasonKind || '').toUpperCase() === 'BACKORDER';
+    return {
+        kind: backorder ? 'BACKORDER' : 'STOP',
+        label: backorder ? '⏸ WAITING ON BACKORDER' : '🛑 STOPPED',
+        reason: d.heldReason || (backorder ? 'material on backorder' : ''),
+        floorMayRelease: !backorder,
+        liftedBy: backorder ? 'RTG lifts it — "Finish as available", or the material arriving.' : 'Resolve it, then ▶ Resolved — resume.',
+    };
+};
+
 const ago = (ms) => {
     if (!ms) return '';
     const t = typeof ms === 'object' && ms.toMillis ? ms.toMillis() : Number(ms);

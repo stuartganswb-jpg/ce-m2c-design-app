@@ -5,7 +5,7 @@ import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
 import { propagateFloorState } from '../Shared/orderLifecycle';
-import OrderStatusChips from '../Shared/OrderStatusChips';
+import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import { pickGateOf } from '../Shared/orderStatus';
 import { isPoleCategory } from '../Shared/poleCut';
 import PullLinesLive from '../Shared/PullLinesLive';
@@ -289,7 +289,16 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // asks good-vs-scrap (QcModal): stock builds record completedParts/scrapReported (the NetSuite
   // completion posts the GOOD count), and a custom sales order with ANY scrap is redline-BLOCKED
   // with the supervisor alerted. The order only completes after QC passes.
+  // A HELD DOCUMENT DOES NOT ADVANCE (S1 spec 2026-09-15): a STOP raised mid-paint, or a backorder
+  // hold, blocks every step button and the manual controls until the hold is lifted.
+  const heldRefusal = (wo) => {
+      const hg = holdGateOf(wo);
+      if (!hg) return false;
+      alert(`${hg.label} — ${woRefOf(wo)} cannot advance.\n\n${hg.reason}\n\n${hg.liftedBy}`);
+      return true;
+  };
   const handleCompleteRecipeStep = async (wo) => {
+      if (heldRefusal(wo)) return;
       const len = recipeLen(wo);
       if (recipeMissing(wo, len)) return;
       const nextParts = (wo.currentStepIndex || 0) + 1;
@@ -325,6 +334,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       if (updates.currentPhase === 'Complete') await tellRtg(wo, 'Complete');
   };
   const handleCompletePoleStep = async (wo) => {
+      if (heldRefusal(wo)) return;
       const len = poleRecipeLen(wo);
       if (recipeMissing(wo, len)) return;
       const next = poleIdxOf(wo) + 1;
@@ -698,7 +708,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const tk = (wo.tasks || {})[key] || {};
       const st = tk.status || 'Pending';
       const mins = (st === 'Running' && tk.startTime) ? Math.floor((now - tk.startTime) / 60000) : null;
-      const run = async (action) => { const a = await pinActor(); if (a) await manualTask(wo, key, action, a); };
+      const run = async (action) => { if (heldRefusal(wo)) return; const a = await pinActor(); if (a) await manualTask(wo, key, action, a); };
       const base = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer', padding: '9px 12px' };
       return (
           <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', border: '1px solid var(--line)', padding: '4px 6px', background: st === 'Complete' ? '#f0f7f1' : (st === 'Running' ? '#fdf8ef' : '#fff') }}>
@@ -1575,7 +1585,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   );
 };
 
-const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, activePots, now, aiRec, users, activeWOs, cfg, sled, blockReason, onViewWo }) => {
+const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, activePots, now, aiRec, users, activeWOs, cfg, sled, blockReason: blockReasonProp, onViewWo }) => {
+    // A held document's card shows the hold where the START button would be (S1 spec 2026-09-15).
+    const hold = holdGateOf(wo);
+    const blockReason = hold ? `${hold.label} — ${hold.reason || 'held'}` : blockReasonProp;
     const task = wo.tasks?.[type] || {}; 
     const isRunning = task.status === 'Running';
     
@@ -1636,7 +1649,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                 <div onClick={() => onViewWo && onViewWo(wo)} title={`${wo.id} — tap for order details`} style={{ color: 'var(--ink)', fontWeight: 500, fontSize: '0.95rem', cursor: onViewWo ? 'pointer' : 'default', textDecoration: onViewWo ? 'underline' : 'none', textDecorationColor: 'var(--line)' }}>{woRef(wo)}</div>
                 {sled && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{sled} Station (Oven)</div>}
                 <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)', margin: '16px 0' }}>{rem} mins</div>
-                <button onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' })} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
+                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' }); }} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
             </div>
         );
     }
@@ -1684,7 +1697,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                     updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() });
                 }} style={{ width: '100%', padding: '12px', background: disabledStart ? 'var(--paper-2)' : 'var(--ink)', color: disabledStart ? 'var(--ink-soft)' : '#fff', border: disabledStart ? '1px solid var(--line)' : 'none', cursor: disabledStart ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>{btnText}</button>
             ) : (
-                <button onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' })} style={{ width: '100%', padding: '12px', background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper)'}>Complete Task</button>
+                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' }); }} style={{ width: '100%', padding: '12px', background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper)'}>Complete Task</button>
             )}
         </div>
     )

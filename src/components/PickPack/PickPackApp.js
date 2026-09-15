@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
-import OrderStatusChips from '../Shared/OrderStatusChips';
+import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import { orderStatusOf, customPartsReady, liftPatchFor } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
@@ -1157,8 +1157,17 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             : `shop fab ${String(j.customFabStatus || 'not started').toLowerCase()}`;
         return 'not released by finishing yet';
     };
+    // A HELD DOCUMENT IS NOT PICKED (S1 spec 2026-09-15, SO60429: pick-only with 7 shorts, on the pick
+    // with no hold at all). Visible in the queue with its lane label; no claim, no pick, no early release.
+    const heldRefusal = (job, verb) => {
+        const hg = holdGateOf(job);
+        if (!hg) return false;
+        alert(`${hg.label} — ${packRef(job)} cannot ${verb}.\n\n${hg.reason}\n\n${hg.liftedBy}`);
+        return true;
+    };
     const releasePendingNow = async (job) => {
         if (!job) return;
+        if (heldRefusal(job, 'be pulled forward')) return;
         if (!window.confirm(`▶ Pick ${packRef(job)} now?\n\nIt is still upstream (${pendingReasonOf(job)}), so this is picking AHEAD of the floor asking for it.\n\nIt moves into Awaiting Pick and you can send it back at any time.`)) return;
         try {
             await updateDoc(packDocOf(job), {
@@ -1191,6 +1200,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { alert('Could not stop the order: ' + (e.message || e)); }
     };
     const resumeOrderHere = async (job) => {
+        const hg = holdGateOf(job);
+        if (hg && !hg.floorMayRelease) return alert(`${hg.label} — ${packRef(job)} is held by RTG, not the warehouse.\n\n${hg.liftedBy}`);
         const note = window.prompt(`▶ Resume ${packRef(job)}?\n\n${job.heldReason ? `Stopped because: ${job.heldReason}\n\n` : ''}What was done to fix it?`, '');
         if (note === null) return;
         const n = String(note).trim();
@@ -4632,7 +4643,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 {/* 📦 TAB: PICK QUEUE */}
                 {activeTab === 'QUEUE' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0', width: '100%' }}>
-                    <HeldOrdersBanner orders={finAll.filter(j => (j.brand || 'ce') === activeBrand)} onRelease={resumeOrderHere} refOf={packRef} />
+                    <HeldOrdersBanner orders={finAll.filter(j => (j.brand || 'ce') === activeBrand && (holdGateOf(j) || {}).kind !== 'BACKORDER')} onRelease={resumeOrderHere} refOf={packRef} />
                     <div style={{ display: 'flex', gap: '30px', height: '100%', flexWrap: 'wrap', alignItems: 'flex-start' }}>
                         <div style={{ flex: '1 1 380px', minWidth: 0, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>{t('Awaiting Pick (Small Parts)')}</div>
@@ -4719,7 +4730,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {renderClaimLine(job, 'pick')}
                                                 <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Item{pickable.length === 1 ? '' : 's'}{grouping.changed ? ` (${grouping.from} BOM lines grouped into ${grouping.to} picks)` : ''}{rawPickable.length !== (job.partsList?.length || 0) ? ` · ${(job.partsList?.length || 0) - rawPickable.length} return/fee line(s) ride the shop order` : ''} · tap for parts</div>
                                             </div>
-                                            <button disabled={claimBlocks(job, 'pick')} onClick={async (e) => { e.stopPropagation();
+                                            <button disabled={claimBlocks(job, 'pick') || !!holdGateOf(job)} onClick={async (e) => { e.stopPropagation();
+                                                if (heldRefusal(job, 'be picked')) return;
                                                 // CLAIM FIRST — the pick opens only once the order doc says it is ours.
                                                 let r;
                                                 try { r = await claimOrder(job, 'pick'); } catch (err) { return alert('Could not start the pick: ' + (err.message || err)); }
@@ -4737,6 +4749,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 <button onClick={(e) => { e.stopPropagation(); clearOvertakenPick(job); }} style={{ padding: '8px 14px', background: 'transparent', color: '#8a6d3b', border: '1px solid #d9a648', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>✕ Clear Pick — parts on the floor</button>
                                             </div>
                                         )}
+                                        {holdGateOf(job) && (() => { const hg = holdGateOf(job); return (
+                                            <div style={{ margin: '0 20px 16px', padding: '10px 14px', background: hg.kind === 'BACKORDER' ? '#fbf6ea' : '#fdf3f3', border: `1px solid ${hg.kind === 'BACKORDER' ? '#d9a648' : '#d9534f'}`, fontFamily: theme.sans, fontSize: '0.85rem', color: hg.kind === 'BACKORDER' ? '#8a6d3b' : '#d9534f' }}>
+                                                <strong>{hg.label}</strong> — {hg.reason}. {hg.liftedBy}
+                                            </div>
+                                        ); })()}
                                         {expandedJob === job.id && (
                                             <div style={{ borderTop: `1px solid ${theme.line}`, background: theme.paper, padding: '8px 20px 16px' }}>
                                                 <div style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft, display: 'flex', gap: '12px', alignItems: 'center', padding: '10px 0 6px', borderBottom: `1px solid ${theme.line}` }}>
