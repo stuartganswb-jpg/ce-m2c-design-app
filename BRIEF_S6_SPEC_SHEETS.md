@@ -134,6 +134,21 @@ coordinate before editing `UserGuideTab.js`.
 
 - **⚠ DEPLOY NOTICE from S7 · 2026-09-13 · c4bbc89 pushed at 17:44 EDT (S7 swept all 37 served assets after the deploy: version stamp 1789339814060, 0 download failures; the new module is imported by no screen, so its literals are ABSENT by design (`SIZE_GROUP_UNPRICED` → none); the hardware guard literals stand (`a return carries the rod at that end` in `main.1f049abe.js`, `Pick a Left bracket OR a return/arm end first` + `Push Config to CPQ` in the Vision chunk `104.74c087bc.chunk.js`); recorded in BRIEF_S7 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **`Shared/pillowPricing.js` (NEW, pure, imported by nothing yet) + `scripts/pillowPricing.test.mjs` (58)** — the Uniquity custom pillow price rule as Stuart stated it 09-13: the size's standard price at the HIGHEST fabric price group among the panels (matrix `prices[size][group]`, fallback base + upcharge), + labour per drawn seam, + a charge per custom detail (FLANGE / WELT each, OUTER_TRIM and FRINGE_SEAM per yard); every panel consumes its OWN fabric (running-yard goods by widths × cut ÷ 36 rounded up to ⅛ yd; a cut-down throw labelled as a fabric = one each); fill + zipper consumed at $0 when the size names them; a missing table row REFUSES by code, never a $0 line. Output = ONE priced holder line on the non-inventory `CUSTOM PILLOW` item (`isRollup`, partHandling Custom, division `SEW`) + $0 consumption rows, all in `hardwareHandoff`'s row shape. Tables live in `system/pillow_pricing` (shape `DEFAULT_PILLOW_PRICING`, EMPTY until Stuart's spreadsheet). **Nothing served changes; no document, work order, floor or NetSuite write.** Decisions logged in BRIEF_S7 §7: the pillow goes Vision → **Order Entry (tab 7)**, not CPQ; quote or sales order both; throws cut into panels labelled as fabrics; a non-inventory 'custom pillow' item; Stitch & Sew = the small-parts flow to a SEW division with a Uniquity-subsidiary NetSuite WO (2–3 wk). Your side: nothing.
 
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-15 · bb031e2 (+3cd1c68) pushed 17:53 EDT and 3658a0d pushed 17:58 EDT (S3 sweeps and
+  records in BRIEF_S3 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. **Three things:** (1) App Imp card 1 — a grey
+  ✓ Complete Packing prints its first unmet reason under the button (lines left · photo · put-away bin · shop-label scan ·
+  poles at the plater / custom half · box choice) and the box pickers read "no boxes for this brand → HQ 15" when empty
+  (`PickPackApp.js`, display only). (2) App Imp card 5 — the shop's completion label prints ONE label per cut-list line
+  with a length ("Cut n/N", that line's length and count), ZPL and HTML alike; single-length orders unchanged
+  (`ShopFloor.js`, `Shared/labelPrint.printShopCompletionLabel` gains `cuts`). (3) **S1's BACKORDER HOLD spec, the floor
+  half:** `holdGateOf` (`Shared/OrderStatusChips.js`) reads `held` + `heldReasonKind`; the Setup Queue shows a held doc in a
+  ⏸ WAITING ON BACKORDER lane (out of the finish batches, no Start Setup / Stage to Floor); Active Floor cards and the manual
+  controls refuse to advance; the Schedule Planner skips held docs; the WMS pick queue shows the lane on the row and
+  refuses claim / pick / early release. The floors CANNOT lift a backorder hold (RTG's "Finish as available" or the
+  material arriving does — S2's #18 half); STOP holds keep the red banner and are refused the same way. No document
+  change, no NetSuite write. S2: `releaseHold` / `HeldOrdersBanner` untouched; the WMS and Setup Queue banners now show
+  STOP holds only. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-13 · 6a8f1c1 pushed 17:24 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
   (⌘⇧R) + re-PIN before your next save. Close-out #14, the JFP double-post (IA26935 / IA26936): both paint-run put-away
   adjustment enqueues in `PickPackApp.js` now carry `dedupeKey: jfp-adj:<fin doc id>` (the outbox refuses a second entry

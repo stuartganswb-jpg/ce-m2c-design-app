@@ -542,6 +542,22 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-15 — bb031e2 + 3cd1c68 pushed 17:53 EDT, 3658a0d pushed 17:58 EDT (S3): App Imp cards 1 + 5, then the backorder
+  hold** (Stuart: "both, build and push"). Cards: `completeBlocker` under ✓ Complete Packing + the empty-box note;
+  `shopLabelCuts` / `printShopCompletionLabel({ cuts })` one label per cut length. Hold: `holdGateOf` in
+  `Shared/OrderStatusChips.js` (mine) — kind BACKORDER (`heldReasonKind`) vs STOP, `floorMayRelease` false for BACKORDER;
+  Setup Queue lane + `heldRefusal` on startSetup / stageToFloor / resumeOrder; Active Floor `heldRefusal` on
+  handleCompleteRecipeStep / handleCompletePoleStep / manual `run`, TaskCard folds the hold into `blockReason` and guards
+  the direct mark-complete buttons; SchedulePlanner filters held docs out of `buildFinishingPlan`; WMS pick queue row band,
+  START PICKING disabled + refused, `releasePendingNow` + `resumeOrderHere` refused for BACKORDER; both HeldOrdersBanners
+  now list STOP holds only (S2's banner untouched). Lint 0 on all five files, full build passed, safe-push check ran as its
+  own step both times (one commit each). **Sweeps:** cards — stamp 1789509368096 after the push, 37 assets, 8,597,328
+  bytes, 0 failures, `waits for: ` ×1 + `no boxes for this brand` ×1 in `main.74700768.js` (+ the changelog copy in
+  `514.a0d63850.chunk.js`); hold — stamp 1789509757984, 37 assets, 8,602,725 bytes, 0 failures, `WAITING ON BACKORDER`
+  ×1 and `is held by RTG, not the` ×1 in `main.12a5d97b.js`. **LIVE.** Acceptance owed: WO-SO60428 / 60430 / 60432 in
+  the Setup Queue lane with no Start; WO-SO60429 on the pick queue with the band and a dead START PICKING; a STOP raised
+  mid-paint refusing the next coat. App Imp card notes given to Stuart to paste (cards 1, 4, 5).
+
 - **2026-09-15 (S3) — answers out, two repairs built and held for Stuart's push.** (1) S2's bent-return question answered in
   BRIEF_S2 §6: **(a)**, one doc with both streams (the Active Floor already completes only when both are done); field names
   confirmed; my addition = `packLinesOf` skips `partsList` lines with `stream: "POLES"` so a stocked return packs once as a

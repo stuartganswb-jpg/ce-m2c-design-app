@@ -198,6 +198,21 @@ views beyond the 4.6 chip. S1 owns the tag-engine section; coordinate before edi
   and `Shared/orderStatus` `inProduction` / `packedStateOf` / `CAN_REOPEN_IN_PRODUCTION`. Nothing on any screen changes
   until S1 (form + CRM card) and S3 (per-line count + SO Pack print) wire it — specs in their § Hand-offs in. No
   document or field shape changes in this push. Your side: nothing unless you are S1 or S3.
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-15 · bb031e2 (+3cd1c68) pushed 17:53 EDT and 3658a0d pushed 17:58 EDT (S3 sweeps and
+  records in BRIEF_S3 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. **Three things:** (1) App Imp card 1 — a grey
+  ✓ Complete Packing prints its first unmet reason under the button (lines left · photo · put-away bin · shop-label scan ·
+  poles at the plater / custom half · box choice) and the box pickers read "no boxes for this brand → HQ 15" when empty
+  (`PickPackApp.js`, display only). (2) App Imp card 5 — the shop's completion label prints ONE label per cut-list line
+  with a length ("Cut n/N", that line's length and count), ZPL and HTML alike; single-length orders unchanged
+  (`ShopFloor.js`, `Shared/labelPrint.printShopCompletionLabel` gains `cuts`). (3) **S1's BACKORDER HOLD spec, the floor
+  half:** `holdGateOf` (`Shared/OrderStatusChips.js`) reads `held` + `heldReasonKind`; the Setup Queue shows a held doc in a
+  ⏸ WAITING ON BACKORDER lane (out of the finish batches, no Start Setup / Stage to Floor); Active Floor cards and the manual
+  controls refuse to advance; the Schedule Planner skips held docs; the WMS pick queue shows the lane on the row and
+  refuses claim / pick / early release. The floors CANNOT lift a backorder hold (RTG's "Finish as available" or the
+  material arriving does — S2's #18 half); STOP holds keep the red banner and are refused the same way. No document
+  change, no NetSuite write. S2: `releaseHold` / `HeldOrdersBanner` untouched; the WMS and Setup Queue banners now show
+  STOP holds only. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-13 · 6a8f1c1 pushed 17:24 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
   (⌘⇧R) + re-PIN before your next save. Close-out #14, the JFP double-post (IA26935 / IA26936): both paint-run put-away
   adjustment enqueues in `PickPackApp.js` now carry `dedupeKey: jfp-adj:<fin doc id>` (the outbox refuses a second entry

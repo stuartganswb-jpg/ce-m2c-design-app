@@ -452,6 +452,14 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 - **2026-09-12 · S1 · 4d09ce3 (pushed 17:27).** Add to cart captures the 3D pane as the operator left it (both engines, one capture for the whole CPQ;
   old-engine lines gain a picture); the documents print `renderSnapshot` as before. S5's separate display capture is superseded (Stuart's call).
 
+- **2026-09-15 17:58 · S3 · 3658a0d — the backorder hold is no longer decorative on the floors** (S1's spec from Stuart's
+  SO60427–60432: "showing as hold waiting on back orders yet they still hit the floor"): a held finishing doc sits in a
+  ⏸ WAITING ON BACKORDER lane on the Setup Queue, cannot be started, staged, advanced, scheduled, claimed or picked, and
+  only RTG lifts it (S2's #18 arrival stamp / "Finish as available"). STOP holds now block the same actions. Same hour,
+  17:53 · bb031e2 + 3cd1c68 — App Imp cards 1 (Complete Packing says why) and 5 (one shop label per cut length) live;
+  card 4 skipped by Stuart; card 2 waits for the live read; card 3 (bent returns) answered to S2 as (a). Test the hold on
+  WO-SO60428 / 60430 / 60432 and the pick-only WO-SO60429.
+
 - **2026-09-13 17:24 · S3 · 6a8f1c1 — close-out #14, the JFP double-post closed:** both paint-run put-away adjustment
   enqueues carry `dedupeKey jfp-adj:<id>`; a second scan is refused on the stamp; ↩ re-post reads the outbox and only a
   FAILED entry earns a re-post. §2 item #14 done (S3); #35 looked at, different shape, left. Stuart reverses IA26936 by
