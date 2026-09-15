@@ -328,6 +328,17 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-12 · 4d09ce3 pushed at 17:27 EDT (S1 swept every served asset after the deploy: version stamp 1789248651987; the capturer's `asSet` key in `main.ac1c21f5.js` (both the capturer and the two Add sites live in main); recorded in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **Add to cart captures the 3D pane AS THE OPERATOR LEFT IT** — both engines, one capture for the whole CPQ (Stuart 09-11: "however we set the image when we hit add to cart you should capture that view"). The shared `ViewCapturer` takes `{ current: true }` (no re-framing; the same white-ground ≤900px JPEG the quote / SO documents print); the tag-engine Add configuration and the old engine's add-to-cart both use it — old-engine lines carried no picture until now. The 📷 Capture Views packet pair (framed front + back) is unchanged. Cart-line field `renderSnapshot` only; documents print it; floors and NetSuite never read it; the saved job does not grow. **⚠ The push also CARRIED S2's local commit 60af70a** (brand → NetSuite map: StockViewTab / LibraryTab import `Shared/brandNetsuite`, CLAUDE.md) — it was committed-but-unpushed in the shared checkout; nothing of S2's was edited. Your side: **your 60af70a is live** at this stamp (carried, see above) — sweep it yourself if you want your own marker on record. Nothing else.
 
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-15 · 8c0677e pushed 19:46 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. App Imp card 2 (Grace 09-14, WO11610 / WO11612 "HF pending as if she never went
+  through") — diagnosed from the two docs + `fin_logs`: Anne DID hand-finish coat 3 on both (10:10–10:48 and 11:31–1:09 PM,
+  PIN-logged) and advanced; coat 4 of SG-P is sprayed, and the Hand bench in Manual Controls listed "Pole Hand Finish ·
+  Pending" for a step that coat does not have (the advance resets the task status; the panel showed only the word).
+  `ActiveFloor.js` only: the Hand bench lists a hand task only when the stream's CURRENT coat is hand-applied (else a
+  muted "not this coat" row naming the coat); every completion stamps `tasks.<key>.completedCoat` and the panel / station
+  chips show "✓ coat n · who · when" as history after the advance; the tablet's hand off-ramp card is small-parts only
+  (`woHasSmallParts`) and its Complete stamps who / when / coat like the PIN path. New task field `completedCoat`
+  (number); no other document change; no RTG / NetSuite effect. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-15 · bb031e2 (+3cd1c68) pushed 17:53 EDT and 3658a0d pushed 17:58 EDT (S3 sweeps and
   records in BRIEF_S3 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. **Three things:** (1) App Imp card 1 — a grey
   ✓ Complete Packing prints its first unmet reason under the button (lines left · photo · put-away bin · shop-label scan ·

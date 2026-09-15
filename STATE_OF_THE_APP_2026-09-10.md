@@ -452,6 +452,12 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 - **2026-09-12 · S1 · 4d09ce3 (pushed 17:27).** Add to cart captures the 3D pane as the operator left it (both engines, one capture for the whole CPQ;
   old-engine lines gain a picture); the documents print `renderSnapshot` as before. S5's separate display capture is superseded (Stuart's call).
 
+- **2026-09-15 19:46 · S3 · 8c0677e — App Imp card 2 closed at the cause:** Anne's hand finish on WO11610 / WO11612 was
+  real and PIN-logged (coat 3); the Manual Controls Hand bench showed "Pending" because coat 4 is sprayed and the panel
+  listed a hand task for every pole order regardless of coat, with the advance having reset the status. Now the bench
+  lists a hand task only on a hand-applied coat, completions stamp the coat, and the last hand coat shows as history.
+  Four of the five S3 App Imp cards are closed (1, 2, 4 by design, 5); card 3 waits on S2's split.
+
 - **2026-09-15 17:58 · S3 · 3658a0d — the backorder hold is no longer decorative on the floors** (S1's spec from Stuart's
   SO60427–60432: "showing as hold waiting on back orders yet they still hit the floor"): a held finishing doc sits in a
   ⏸ WAITING ON BACKORDER lane on the Setup Queue, cannot be started, staged, advanced, scheduled, claimed or picked, and

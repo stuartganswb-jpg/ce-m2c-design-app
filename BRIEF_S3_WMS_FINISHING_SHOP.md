@@ -542,6 +542,20 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-15 — 8c0677e pushed 19:46 EDT (S3): App Imp card 2, the Hand bench knows which coat** (Stuart: "go ahead and
+  build it, go ahead and do it for the small parts hand task as well"). Live read with Stuart pinned in (fiber props for
+  the two docs; `fin_logs` by `woId` through the page's own Firestore module): WO11610 Anne poleHand 10:10–10:48 → ADVANCE
+  coat 3 → Jhonaton sprayed/baked coat 4 → Complete 3:16 PM; WO11612 Anne 11:31–1:09 PM → ADVANCE → Rafa coat 4 next
+  morning → Complete 9:19 AM. SG-P = DTM7 / Soft Gold / WB-RGWS-001 hand / 30 Sheen — coat 4 sprayed. Cause: the HAND
+  station listed `poleHand` for every pole order regardless of coat and the advance resets the status (stamps kept, not
+  shown). `ActiveFloor.js`: `currentPartsStep` / `currentPoleStep`, HAND station `pushNote` rows ("not this coat"),
+  `lastDoneOf(t)` history line on the panel + station chips, `manualTask` COMPLETE stamps `completedCoat`, the off-ramp
+  hand card gated on `woHasSmallParts` and its direct Complete stamps completedAt/By/Via 'tablet'/Coat. Lint 0, full build
+  passed, safe-push = one commit. **Sweep 19:49 EDT:** stamp 1789516133901 after the push; 37 JS assets, all fetched with
+  `curl -sf` (8,605,115 bytes, 0 failures); `no hand step this coat` ×1 and `this coat not yet` ×1 in `main.030b0dce.js`.
+  **LIVE.** Admitted: a stray `onSnapshot` on `fin_logs` was started while identifying the SDK's exports (read-only,
+  dropped by the reload). Card note given to Stuart to paste.
+
 - **2026-09-15 — bb031e2 + 3cd1c68 pushed 17:53 EDT, 3658a0d pushed 17:58 EDT (S3): App Imp cards 1 + 5, then the backorder
   hold** (Stuart: "both, build and push"). Cards: `completeBlocker` under ✓ Complete Packing + the empty-box note;
   `shopLabelCuts` / `printShopCompletionLabel({ cuts })` one label per cut length. Hold: `holdGateOf` in

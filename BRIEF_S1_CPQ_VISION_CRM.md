@@ -222,6 +222,17 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
   and `Shared/orderStatus` `inProduction` / `packedStateOf` / `CAN_REOPEN_IN_PRODUCTION`. Nothing on any screen changes
   until S1 (form + CRM card) and S3 (per-line count + SO Pack print) wire it — specs in their § Hand-offs in. No
   document or field shape changes in this push. Your side: nothing unless you are S1 or S3.
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-15 · 8c0677e pushed 19:46 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. App Imp card 2 (Grace 09-14, WO11610 / WO11612 "HF pending as if she never went
+  through") — diagnosed from the two docs + `fin_logs`: Anne DID hand-finish coat 3 on both (10:10–10:48 and 11:31–1:09 PM,
+  PIN-logged) and advanced; coat 4 of SG-P is sprayed, and the Hand bench in Manual Controls listed "Pole Hand Finish ·
+  Pending" for a step that coat does not have (the advance resets the task status; the panel showed only the word).
+  `ActiveFloor.js` only: the Hand bench lists a hand task only when the stream's CURRENT coat is hand-applied (else a
+  muted "not this coat" row naming the coat); every completion stamps `tasks.<key>.completedCoat` and the panel / station
+  chips show "✓ coat n · who · when" as history after the advance; the tablet's hand off-ramp card is small-parts only
+  (`woHasSmallParts`) and its Complete stamps who / when / coat like the PIN path. New task field `completedCoat`
+  (number); no other document change; no RTG / NetSuite effect. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-15 · bb031e2 (+3cd1c68) pushed 17:53 EDT and 3658a0d pushed 17:58 EDT (S3 sweeps and
   records in BRIEF_S3 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. **Three things:** (1) App Imp card 1 — a grey
   ✓ Complete Packing prints its first unmet reason under the button (lines left · photo · put-away bin · shop-label scan ·
