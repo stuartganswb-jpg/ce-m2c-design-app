@@ -1303,22 +1303,35 @@ const ShopFloor = () => {
 
         // Tab-scope (not per-card) so the Recently Completed strip can REPRINT a label
         // when the printer ate it on Complete (Stuart 2026-07-15).
+        // ONE LABEL PER CUT LENGTH (Livio 2026-09-09: the label showed only the order number and
+        // the first length). Every cut-list line with a length gets its own label — "Cut n/N",
+        // that line's length and count; riders (no length) ride the pole and print nothing of
+        // their own. A single-length order prints the one label it always did. Same for the
+        // reprint from Recently Completed (same function).
+        const shopLabelCuts = (order) => (Array.isArray(order.cutList) ? order.cutList : [])
+            .filter(c => c && c.cutLength != null && String(c.cutLength) !== '')
+            .map(c => ({ cutLength: c.cutLength, qty: c.qty, name: c.name || '' }));
         const printZebraLabel = (order) => {
-            const zpl = `
+            const cuts = shopLabelCuts(order);
+            const one = (qty, cutLength, cutTag) => `
                 ^XA
-                ^FO50,50^A0N,40,40^FDWO: ${order.woNum}^FS
+                ^FO50,50^A0N,40,40^FDWO: ${order.woNum}${cutTag ? `  ${cutTag}` : ''}^FS
                 ^FO50,100^A0N,30,30^FDSO: ${soNumOf(order)}^FS
                 ${order.isOutsourced ? `^FO50,150^A0N,30,30^FDFinish: ${order.finishRecipe}^FS` : ''}
                 ${order.isOutsourced ? `^FO50,200^A0N,30,30^FDService/Ea: $${order.outsourcePrice}^FS` : ''}
                 ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
                 ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${shopItemCodeOf(order) || order.item || order.partNum}^FS
-                ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
+                ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${qty}  ${cutLength ? `Cut: ${cutLength}"` : ''}^FS
                 ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.orderKey || order.woNum}^FS
                 ^XZ
             `;
+            const zpl = cuts.length > 1
+                ? cuts.map((c, i) => one(c.qty, c.cutLength, `Cut ${i + 1}/${cuts.length}`)).join('')
+                : one(order.qty, order.cutLength, '');
             emitLabel(zpl, () => printShopCompletionLabel({
                 woNum: order.woNum, soNum: soNumOf(order), orderKey: order.orderKey,
                 item: shopItemCodeOf(order) || order.item || order.partNum, qty: order.qty, cutLength: order.cutLength,
+                cuts,
                 finishRecipe: order.finishRecipe, isOutsourced: order.isOutsourced,
                 outsourcePrice: order.outsourcePrice, clientName: order.clientName
             }));

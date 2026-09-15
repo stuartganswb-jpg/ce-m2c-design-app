@@ -442,19 +442,32 @@ export const printShopBinLabel = ({ woNum, part, qty, bin }) => printDoc(`Bin ${
   <div class="bc">${code128BSvg(String(woNum || ''))}<div class="bct">${esc(woNum || '')}</div></div>
 </div>`]);
 
+// ONE LABEL PER CUT LENGTH (Livio 2026-09-09: "necesita imprimir un label para cada medida de
+// tubo"): `cuts` = [{ cutLength, qty, name }] — an order with more than one cut length prints one
+// page per cut ("CUT n/N"), each carrying that cut's length and count; a single-length order
+// prints the one label it always did. Every page barcodes the same order key.
+export const shopCompletionCuts = (o = {}) => {
+    const list = Array.isArray(o.cuts) ? o.cuts : [];
+    return list.filter(c => c && c.cutLength != null && String(c.cutLength) !== '');
+};
 export const printShopCompletionLabel = (o = {}) => {
     const key = String(o.orderKey || o.woNum || '');
     const toPlating = !!o.isOutsourced;
-    return printDoc(`Custom ${o.woNum || ''}`, SHOP_CSS, [`<div class="l">
-  <div class="k">${toPlating ? 'CUSTOM · TO PLATING' : 'CUSTOM · SHOP COMPLETE'}</div>
+    const cuts = shopCompletionCuts(o);
+    const page = (qty, cutLength, cutTag) => `<div class="l">
+  <div class="k">${toPlating ? 'CUSTOM · TO PLATING' : 'CUSTOM · SHOP COMPLETE'}${cutTag ? ` &nbsp;·&nbsp; ${cutTag}` : ''}</div>
   <div class="wo">${esc(o.woNum || key)}</div>
   <div class="rows">
     ${o.soNum ? `<div class="r"><b>SO:</b> ${esc(o.soNum)}</div>` : ''}
-    <div class="r">${esc(o.item || o.partNum || '')}${o.qty ? ` &nbsp;×${esc(o.qty)}` : ''}${o.cutLength ? ` &nbsp;·&nbsp; CUT ${esc(o.cutLength)}"` : ''}</div>
+    <div class="r">${esc(o.item || o.partNum || '')}${qty ? ` &nbsp;×${esc(qty)}` : ''}${cutLength ? ` &nbsp;·&nbsp; CUT ${esc(cutLength)}"` : ''}</div>
     ${o.finishRecipe ? `<div class="r"><b>FINISH:</b> ${esc(o.finishRecipe)}</div>` : ''}
     ${toPlating && o.outsourcePrice ? `<div class="r"><b>SERVICE/EA:</b> $${esc(o.outsourcePrice)}</div>` : ''}
     ${o.clientName ? `<div class="r">${esc(o.clientName)}</div>` : ''}
   </div>
   <div class="bc">${code128BSvg(key)}<div class="bct">${esc(key)}</div></div>
-</div>`]);
+</div>`;
+    const bodies = cuts.length > 1
+        ? cuts.map((c, i) => page(c.qty, c.cutLength, `CUT ${i + 1}/${cuts.length}`))
+        : [page(o.qty, o.cutLength, '')];
+    return printDoc(`Custom ${o.woNum || ''}`, SHOP_CSS, bodies);
 };
