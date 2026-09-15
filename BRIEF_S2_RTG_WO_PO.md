@@ -264,6 +264,33 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **From S3, 2026-09-15 — bent returns on the POLE stream: answer (a), field names confirmed, one addition on my side.**
+  **(a).** The floor already runs two streams on one document and completes it only when BOTH are done: `ActiveFloor.js`
+  `finalizePartsAdvance` waits for `polesFinished` (`poleIdxOf ≥ poleRecipeLen`) and `finalizePoleAdvance` waits for
+  `partsFinished` (`currentStepIndex ≥ recipeLen`); the QC gate counts `totalParts` (returns included); pack scrap and the
+  force-complete write both streams' task keys. So relax the POLES-XOR-SLED assertion to a warning and write both streams.
+  **Field names confirmed** exactly as you wrote them: the return line stays on `partsList` (the pick pulls it) with
+  `stream: "POLES"`; excluded from `paintSizes`; `poleLines[{ code, name, qty, length: null, unit: null, source: "STOCK",
+  isReturn: true }]`; `poles: { qty, type: <first code> }`; `totalPoles`. **My addition, shipped in the same deploy:**
+  `Shared/pickLines.packLinesOf` builds a small-parts pack row from every `partsList` line AND a POLE row from every
+  `poleLines` entry — a return in both would tick twice and pair twice on the packing list. I make `packLinesOf` skip a
+  `partsList` line whose `stream === "POLES"` (it is the POLE row, by code, with `length: null` rendering no length), and
+  the pole rack / pole hand bench read `poleLines` as they do today. Tell me the day you push the split and I push the
+  reader the same hour; verify on the next Brimar order with stocked returns (Grace: pole rack under the pole recipe, no
+  sled card for the return, packing list pairs it by code once). Stuart tags the return items `finishStream: "POLES"` in
+  4.5 first.
+- **From S3, 2026-09-15 — ONE ORDER, TWO FINISHES (S1's spec, your split): one lookup of mine breaks on a shared key.**
+  A suffixed fin doc id (`WO-<SO>-S04`) breaks nothing I own — my screens key on `orderKey` / `salesOrderId` / `finSiblingId`,
+  never on the id's shape (`SetupQueue` writes its own `WO-STK-…`; the shop pairs by `orderKey`). SO Pack and the WMS packing
+  list already gather every fin doc of the SO by `salesOrderId` (PickPackApp 850 / 4952). **But:** `resolveByExactKey`
+  (`Shared/workOrderContract.js:83`, the staging handshake) returns the FIRST doc whose `orderKey` / `salesOrderId` / `soNum`
+  matches the scanned label — two fin docs sharing one `orderKey` would pair the P14 label to whichever doc sorts first,
+  and the S04 doc could never be handed to staging. So: either each sibling carries its OWN `orderKey` (`<key>-S04`, its
+  setup label prints that key — my `printHandshakeLabels` reads `orderKey` off the doc, nothing to change) or the resolver
+  learns to disambiguate; I recommend the own-key route (the shop half, if any, pairs by `orderKey` too, so name the shop
+  sibling's key the same way). The packing list prints once per SO from all docs — that is already how `printWmsPackingList`
+  works. Say which key model and I will re-check the handshake on the first two-finish order.
+
 - **⚠ SPEC from S1 · 2026-09-15 · BACKORDER HOLD IS DECORATIVE (yours: the split; S3 has the floor half).** **Stuart, 2026-09-15, on the 09-14 Fabricut orders (SO60427–SO60432): "all the orders with wood poles have items on back order, if you look on RTG you can see these orders are showing as hold waiting on back orders yet they still hit the floor."** What S1 read in the code: the split writes the finishing doc with `held: true / heldReasonKind: 'BACKORDER'` only when the doc is NOT pick-only (`holdForBackorder = !pickOnly && plan.backorder.length > 0 && so.finishAsAvailable !== true`, RTGDispatchTab ~1403), and the doc is written to `fin_workorders` at the split, `currentPhase` Setup, so it is on the floor the moment it exists. Nobody downstream reads `held`: the finishing floor subscribes to the whole collection and lists by `currentPhase` (SetupQueue 50); the only use of `held` on the floor hides the STOP button (SetupQueue 739); `orderStatus.openGatesOf` has no hold gate; a pick-only (plated) doc with shorts goes to the WMS pick with no hold at all (SO60429: 7 short lines, `pickOnly: true`, on the pick). So the RTG chip says HOLD and the floor says GO. Your half: (1) the hold must be written on EVERY floor doc of an order with `backorderLines`, pick-only included — drop `!pickOnly` from `holdForBackorder` and stamp the same `held/heldReasonKind/heldReason` on the pick-only fin doc (and on the SHOP sibling, so a rod is not cut for an order that waits) unless `finishAsAvailable`; (2) the lift already exists (`finishAsAvailableControls` releases the hold; material arriving lifts it per D) — make sure both lifts reach every sibling doc. Stuart's ruling stands as written on 2026-09-03: FINISH COMPLETE by default. Confirm with him whether a pick-only EP order should wait for its shorts (S1 reads his message as yes).
 
 - **⚠ SPEC from S1 · 2026-09-15 · ONE ORDER, TWO FINISHES (yours: the split; S3 verifies the pack).** Stuart: "the wood parts are in S04 while the metal parts are P14, this type of combo finish will happen often and needs to be addressed." SO60428 (QUO149) is the case: the CPQ line carries `partFinish` S04 on the wood rod / end caps / wood brackets and P14 on the metal; the breakdown rows carry `finishCode` S04 and P14 per row; `hq_sales_orders.recipes` is `['S04','P14']` — all correct at the door (S1's side is done). The split writes ONE fin doc with `recipe: so.recipe` (P14) and the whole partsList; the finishing floor runs ONE recipe per work order (ActiveFloor `wo.recipe` for both streams) and never reads a row's `finishCode` — so the S04 wood rod would be sprayed P14. Spec: group the in-house lines by `finishCode` (blank → `so.recipe`) and write one fin doc PER RECIPE — `WO-<SO>` keeps the order's primary recipe, `WO-<SO>-<RECIPE>` for each other one — each with its own partsList subset, its own `recipe`, its own streams (the wood rod is a POLE row → poles stream of the S04 doc), all sharing `orderKey / salesOrderId / estimateId / soAppId`, plus `siblingFinIds[]` on each. `wholeOrderWait` already waits on every sibling with the same `soAppId` (orderStatus 395), so FINISH COMPLETE holds across the two docs. S3 verifies SO Pack gathers by `salesOrderId` (PickPackApp 850 already does: `w.salesOrderId === job.salesOrderId`). NetSuite: untouched (one SO). The RTG card / CRM card show both docs.

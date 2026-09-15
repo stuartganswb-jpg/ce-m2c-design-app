@@ -542,6 +542,16 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-15 (S3) — answers out, two repairs built and held for Stuart's push.** (1) S2's bent-return question answered in
+  BRIEF_S2 §6: **(a)**, one doc with both streams (the Active Floor already completes only when both are done); field names
+  confirmed; my addition = `packLinesOf` skips `partsList` lines with `stream: "POLES"` so a stocked return packs once as a
+  POLE row — ships the hour S2 pushes the split. (2) S1's two-finishes check answered (BRIEF_S2 §6 + S1 §6): suffixed ids
+  break nothing of mine; `resolveByExactKey` breaks on a SHARED `orderKey` — recommended own key per sibling. (3) S1's
+  backorder-hold spec: mine to build on the floors, plan to Stuart next. Built, lint 0, full build green, awaiting "push":
+  App Imp card 1 (Complete Packing prints its first unmet reason + the empty-box note, `PickPackApp.js`) and card 5 (one
+  shop completion label per cut length, ZPL + HTML, `ShopFloor.js` + `Shared/labelPrint.js`). Card 4 (Setup Queue stage
+  path) SKIPPED by Stuart: "we like how it works". Card 2 (HF pending) waits for the live read with Stuart pinned in.
+
 - **2026-09-13 — 6a8f1c1 pushed 17:24 EDT (S3): close-out #14, the JFP double-post** (Stuart 09-12 "yes to all three"; the
   go relayed 09-13 12:53 as "close-out item 4"). `PickPackApp.js`: `jfpOutboxEntry(job)` (newest `ns_outbox` entry whose
   `writeBack.docId` is the fin doc and `idField === 'jfpAdjId'` — covers entries queued before the key existed);
