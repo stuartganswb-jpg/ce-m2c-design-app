@@ -192,6 +192,28 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 6. Hand-offs in
 
+- **From S2, 2026-09-15 — bent returns on the POLE stream: the field names and the one question, before either side ships.**
+  Stuart narrowed the ruling today: a CUSTOM bent return is the end of its pole, rides with it everywhere and finishes with it
+  (nothing to build — the riders model stands). What is left is a STOCKED bent-return ITEM (Grace, Brimar 60170 / 60152): the
+  library classes it Small Parts, the split puts it in `partsList` with a `paintSize`, and the sled sprays it; it must hang on
+  the pole rack under the pole recipe. **S2's split half (not built yet):** a small line whose part carries
+  `manufacturingSpecs.finishStream === "POLES"` (Stuart tags the return items in 4.5 — tags before code; fallback: a
+  `productType` matching POLE|ROD|RETURN) goes to the pole stream: excluded from `paintSizes`, kept on `partsList` for the
+  pick with `stream: "POLES"`, and written to `poleLines[{ code, name, qty, length: null, unit: null, source: "STOCK",
+  isReturn: true }]` + `poles: { qty, type: <first code> }` + `totalPoles`. **The blocker is yours:** `buildFinDoc` asserts
+  POLES XOR SLED (`floorRelease.js:113–130`, Sandra's WO11535 "could never complete"), and a Brimar order is brackets on the
+  sled PLUS returns on the rack — both streams on ONE document. Two ways, your call: **(a)** the floor completes a document
+  that carries both (Active Floor `currentStepIndex` + `poleStepIndex` already exist; you confirm completion, scrap and
+  the pack tick work with both, then S2 relaxes the assertion to "warn" and writes both streams); **(b)** the split writes a
+  SECOND finishing document for the pole stream (`WO-<SO>-P`, sibling-linked) — S2 recommends AGAINST (b): two pick / pack
+  cards per order and a fork of the one-doc-per-order reading every WMS screen makes. Answer (a) or (b) in BRIEF_S2 §6 with
+  the field names confirmed; S2 builds the split the same day; one deploy; verify on the next Brimar order with stocked
+  returns. Downstream: WMS pick unchanged (same partsList), pack sees the returns as pole rows by code (your 8b2e6b1 reader
+  already renders `poleLines`), RTG row shows a POLES stream, NetSuite untouched.
+- **⚠ SPEC from S1 · 2026-09-15 · BACKORDER HOLD IS DECORATIVE (yours: the floors; S2 has the split half).** **Stuart, 2026-09-15, on the 09-14 Fabricut orders (SO60427–SO60432): "all the orders with wood poles have items on back order, if you look on RTG you can see these orders are showing as hold waiting on back orders yet they still hit the floor."** What S1 read in the code: the split writes the finishing doc with `held: true / heldReasonKind: 'BACKORDER'` only when the doc is NOT pick-only (`holdForBackorder = !pickOnly && plan.backorder.length > 0 && so.finishAsAvailable !== true`, RTGDispatchTab ~1403), and the doc is written to `fin_workorders` at the split, `currentPhase` Setup, so it is on the floor the moment it exists. Nobody downstream reads `held`: the finishing floor subscribes to the whole collection and lists by `currentPhase` (SetupQueue 50); the only use of `held` on the floor hides the STOP button (SetupQueue 739); `orderStatus.openGatesOf` has no hold gate; a pick-only (plated) doc with shorts goes to the WMS pick with no hold at all (SO60429: 7 short lines, `pickOnly: true`, on the pick). So the RTG chip says HOLD and the floor says GO. Your half: honour `held` on every floor screen — the finishing Setup Queue / Active Floor / Schedule Planner and the WMS pick queue show a held doc in a ⏸ WAITING ON BACKORDER lane with `heldReason`, and offer no start / advance / pick / schedule action on it until `held` is false (RTG's "Finish as available" or the material arriving lifts it). The doc stays visible (RTG is the master; the floor may see what is coming) — it just cannot be worked. Examples to test on: WO-SO60428 (3 shorts), WO-SO60430 (1), WO-SO60432 (11), WO-SO60429 (pick-only, 7).
+
+- **⚠ SPEC from S1 · 2026-09-15 · ONE ORDER, TWO FINISHES (S2 splits per recipe; you verify).** SO60428 (QUO149) carries S04 on the wood rod / end caps / wood brackets and P14 on the metal; the split writes one fin doc at P14 and the floor runs one recipe per work order, so the wood would be sprayed P14. S2's spec writes one fin doc per recipe (`WO-<SO>` + `WO-<SO>-S04`, shared `salesOrderId / soAppId`, `siblingFinIds[]`). Your check: the floor needs nothing new if each doc carries one recipe; SO Pack must gather all fin docs of the SO (PickPackApp 850 already matches on `salesOrderId`) and the packing list must print the whole order once, not once per doc. Say if a fin doc id with a suffix breaks any lookup you own (`WO-<SO>` is assumed in orderLifecycle 72 `SHOP-${k}` / `WO-` patterns — S2 will keep `WO-<SO>` as the primary).
+
 - **From the communicator, 2026-09-15 — FIVE App Imp cards routed to S3 (read live off the board with Stuart; take them
   after the close-out list, in this order).**
   1. **Andrea 9/14 10:10 · WMS Packing — "items are packed and the photos are taken but doesn't let me hit the complete
