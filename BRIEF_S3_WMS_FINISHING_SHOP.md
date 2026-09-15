@@ -192,6 +192,42 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 6. Hand-offs in
 
+- **From the communicator, 2026-09-15 — FIVE App Imp cards routed to S3 (read live off the board with Stuart; take them
+  after the close-out list, in this order).**
+  1. **Andrea 9/14 10:10 · WMS Packing — "items are packed and the photos are taken but doesn't let me hit the complete
+     button."** The same thing Stuart hit on WO-SO60169 — S2's hand-off directly below (a disabled ✓ Complete Packing
+     must say why) IS the fix. Two halves: the button prints its first unmet reason, AND the box sizes must exist in
+     HQ → 15 Standard boxes for the brand (data — Stuart/Andrea; until they do, `boxesChosen` can never be true).
+  2. **Grace 9/14 1:35 PM · FINISHING Active Floor — WO11610 and WO11612: Anne pressed Start and Complete on the Hand
+     Finishing tab on the tablet, but Manual Controls shows HF as pending "as if she never went through HF".** New,
+     unverified. What the code says (`ActiveFloor.js`): the tablet's hand card completes `tasks.hand` (small parts) or
+     `tasks.poleHand` (poles) — the off-ramp hides a card on `tasks.hand.status === 'Complete'` (~:1173), while the HAND
+     station's manual list (`~:730`) pushes BOTH keys for an order that has both streams. If those two orders are pole
+     orders that also carry a `hand` task (or the reverse), the two readers disagree. Read the two `fin_workorders` docs'
+     `tasks.hand` / `tasks.poleHand` and `fin_logs` for Anne's taps before touching code; fix the cause, not the display.
+  3. **Grace 9/9 3:55 PM · Brimar 60170 & 60152 — the bent returns rode the SMALL PARTS order and were sprayed; GL5 on
+     poles is stirred.** STUART'S RULING 2026-09-15, verbatim: "bent return always finishes as poles, custom bent returns
+     come from the floor then finish like poles, stocked bent returns can go straight to finishing." So on the finishing
+     floor a bent return is in the POLES stream, never the sled — a custom (shop-fabricated) return arrives from the shop
+     floor and then finishes as a pole; a stocked return item skips the shop and goes straight to finishing, as a pole.
+     The STREAM ASSIGNMENT happens at the split (S2's territory — the same ruling is in BRIEF_S2 §6, they own the writer);
+     your half: the floor doc's pole stream (`poles/totalPoles`, `poleRecipeOf`, the pole rack, the pole hand bench)
+     must carry a return that has no cut length (it is fabrication ON a pole, per 6d9ad3d, but it FINISHES as a pole),
+     and `buildFinDoc` (`floorRelease.js`) must not strip it or double it. Co-ordinate the field names with S2 before either
+     side ships; one deploy, one verification on the next Brimar order with returns.
+  4. **Sandra G 9/9 11:57 AM · Setup Queue — "some orders are asking to Start Setup but we did the setup side before the
+     order came from production; they should show Stage to Floor."** By design today (`SetupQueue.js` ~:900: `stepStatus
+     'Pending'` → Start Setup, and Start Setup is ALSO what releases the parts pick to the WMS — `releasePickPatch`). Ask
+     Stuart before building: does a "setup already done" path exist that jumps to Stage to Floor and STILL releases the
+     pick (one tap that does both), or is Start Setup → Stage to Floor two taps by design? Do not remove the pick release.
+  5. **Livio 9/9 9:06 AM · SHOP Labels — "necesita imprimir un label para cada medida de tubo porque solo muestra el
+     numero de orden y la primera medida."** Real defect: `ShopFloor.js printZebraLabel` (~:1306) prints ONE completion
+     label carrying `order.cutLength` — the first length — and never one per `cutList` line. Build: one label per cut-list
+     line (length × qty, "n of N"), the single-length order unchanged; reprint from the Recently Completed strip does the
+     same. `Shared/labelPrint.printShopCompletionLabel` is the route — extend it, do not fork it.
+  Resolution notes for the five cards that were already handled were given to Stuart to paste; these five stay NEW on
+  the board until you ship — write your own note on each card when you do (paste-ready, hard-refresh + re-PIN line).
+
 - **From S2, 2026-09-15 — a disabled "✓ Complete Packing" says nothing (Stuart on WO-SO60169, every line ticked, two
   photos, button grey).** `PickPackApp.js` ~:5127 `canComplete` needs five things and the button only greys: every line
   ticked · photo · the shop-label match (`packCustomMatchedAt` / waived / `packCustomScan` matching) · the custom half
