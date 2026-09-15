@@ -232,6 +232,12 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const poleRecipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, poleStreamOf(wo));
   const partsRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, partsStreamOf(wo));
   const poleRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, poleStreamOf(wo));
+  // The step each stream is ON right now (null past the end or with no recipe).
+  const currentPartsStep = (wo) => { const r = partsRecipeOf(wo); return r && Array.isArray(r.steps) ? (r.steps[wo.currentStepIndex || 0] || null) : null; };
+  const currentPoleStep = (wo) => { const r = poleRecipeOf(wo); return r && Array.isArray(r.steps) ? (r.steps[poleIdxOf(wo)] || null) : null; };
+  // The last hand coat this task completed — kept on the task across the advance that resets its
+  // status, so a finished hand step is never silently forgotten (Grace 2026-09-14).
+  const lastDoneOf = (t) => (t && t.completedAt) ? `✓ coat ${t.completedCoat || '?'} · ${t.completedBy || t.assignedTo || ''} · ${new Date(t.completedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '';
   // The coat each stream is ON — the pole stream reads the POLE recipe, which is the entire point of
   // the -P variant (Grace's CP: 4 pole coats against 2 for the small parts).
   const partsStepOf = (wo) => { const r = partsRecipeOf(wo); const i = (wo && wo.currentStepIndex) || 0; return (r && r.steps && i < r.steps.length) ? r.steps[i] : null; };
@@ -571,6 +577,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           // record the best identity available and say which it was.
           updates[`tasks.${taskKey}.completedBy`] = actor || user?.name || 'Unattributed';
           updates[`tasks.${taskKey}.completedVia`] = actor ? 'pin' : (user?.name ? 'signed-in' : 'unattributed');
+          // WHICH COAT (Grace 2026-09-14): the advance resets the status for the next coat, so the
+          // stamp says what the completion was for and the bench can show it as history.
+          updates[`tasks.${taskKey}.completedCoat`] = (taskKey.startsWith('pole') ? poleIdxOf(wo) : (wo.currentStepIndex || 0)) + 1;
           // A step completed having never been started has no elapsed time — flag it rather than
           // letting a blank ▶ line read as a rendering gap.
           if (!startedMs) updates[`tasks.${taskKey}.completedNoStart`] = true;
@@ -714,6 +723,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', border: '1px solid var(--line)', padding: '4px 6px', background: st === 'Complete' ? '#f0f7f1' : (st === 'Running' ? '#fdf8ef' : '#fff') }}>
               <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.06em' }}>{label}</span>
               {st === 'Running' && mins !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>{mins}m</span>}
+              {st === 'Pending' && lastDoneOf(tk) && <span title={lastDoneOf(tk)} style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#3a7d44' }}>✓ coat {tk.completedCoat || '?'}</span>}
               {st === 'Pending' && <button onClick={() => run('START')} style={{ ...base, background: 'var(--ink)', color: '#fff', border: 'none' }}>▶ Start</button>}
               {st === 'Running' && <button onClick={() => run('COMPLETE')} title="The step ran and is done — logs the elapsed time" style={{ ...base, background: 'var(--brass)', color: '#fff', border: 'none' }}>■ Stop</button>}
               {st === 'Complete' && (
@@ -740,7 +750,24 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       } else if (st === 'HAND') {
           // Both streams hand-finish. Poles were absent entirely, so an order hand-finishing its
           // poles showed nothing at the hand station (Grace 2026-08-11).
-          activeWOs.forEach(wo => { if (woHasSmallParts(wo)) pushT(wo, 'hand', 'Hand Finish'); if (woHasPoles(wo)) pushT(wo, 'poleHand', 'Pole Hand Finish'); });
+          // ONLY THE COAT THAT IS HAND-APPLIED (Grace 2026-09-14, WO11610 / WO11612: "Manual Controls
+          // shows HF as pending as if she never went through HF"). Anne had finished coat 3 by hand and
+          // advanced; coat 4 is sprayed, and the bench still listed "Pole Hand Finish · Pending" for a
+          // step that coat does not have. A hand task is listed only when the stream's CURRENT coat is
+          // hand-applied; otherwise the row says so, and shows the last hand coat that was done.
+          const pushNote = (wo, key, text) => out.push({ wo, key, label: key === 'poleHand' ? 'Pole Hand Finish' : 'Hand Finish', note: text });
+          activeWOs.forEach(wo => {
+              if (woHasSmallParts(wo)) {
+                  const step = currentPartsStep(wo);
+                  if (step && step.app === 'Hand Applied') pushT(wo, 'hand', 'Hand Finish');
+                  else pushNote(wo, 'hand', step ? `coat ${(wo.currentStepIndex || 0) + 1} (${step.color || ''}) is sprayed — no hand step this coat` : 'no hand step');
+              }
+              if (woHasPoles(wo)) {
+                  const step = currentPoleStep(wo);
+                  if (step && step.app !== 'Sprayed') pushT(wo, 'poleHand', 'Pole Hand Finish');
+                  else pushNote(wo, 'poleHand', step ? `pole coat ${poleIdxOf(wo) + 1} (${step.color || ''}) is sprayed — no hand step this coat` : 'no pole hand step');
+              }
+          });
       }
       return out;
   };
@@ -1180,7 +1207,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                         <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px', gridColumn: '1 / -1', borderRadius: '2px' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', color: 'var(--ink-soft)', marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Hand Finish Station (Off-Track)</div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                                {colorGroups[color]?.map(item => item.step.app === 'Hand Applied' && item.wo.tasks?.hand?.status !== 'Complete' && (
+                                {/* Small parts only — a pole-only order hand-finishes on the pole card above, never here
+                                    (its small-parts hand task is not a step it has). */}
+                                {colorGroups[color]?.map(item => item.step.app === 'Hand Applied' && woHasSmallParts(item.wo) && item.wo.tasks?.hand?.status !== 'Complete' && (
                                     <TaskCard key={item.wo.id+"hand"} wo={item.wo} type="hand" step={item.step} user={user} setQcModal={setQcModal} estTime={item.wo.type === 'Poles' ? ((item.wo.totalParts || 0) * cfg.handPoleMins) : ((item.wo.totalParts || 0) * cfg.handSmallMins)} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('hand')} users={users} activeWOs={activeWOs} cfg={cfg} />
                                 ))}
                             </div>
@@ -1290,15 +1319,26 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                       </div>
                       <div style={{ padding: '18px 26px' }}>
                           {targets.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.1rem' }}>Nothing at this station right now.</div>}
-                          {targets.map(({ wo, key, label }) => {
+                          {targets.map(({ wo, key, label, note }) => {
                               const t = (wo.tasks || {})[key] || {};
                               const running = t.status === 'Running';
                               const elapsed = running && t.startTime ? Math.floor((now - t.startTime) / 60000) : null;
+                              if (note) return (
+                                  <div key={wo.id + key + 'note'} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderTop: '1px solid var(--paper-2)', flexWrap: 'wrap', opacity: 0.85 }}>
+                                      <div style={{ flex: 1, minWidth: '160px' }}>
+                                          <div style={{ fontFamily: 'var(--mono)', fontSize: '0.9rem', fontWeight: 600, color: 'var(--ink-soft)' }}>{woRef(wo)}</div>
+                                          <div style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{label} · {wo.stockErpId || wo.type || ''} · {wo.recipe || ''} — {note}</div>
+                                          {lastDoneOf(t) && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44', marginTop: '2px' }}>{lastDoneOf(t)}</div>}
+                                      </div>
+                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', fontWeight: 600, padding: '3px 8px', border: '1px dashed var(--line)', color: 'var(--ink-soft)' }}>not this coat</span>
+                                  </div>
+                              );
                               return (
                                   <div key={wo.id + key} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderTop: '1px solid var(--paper-2)', flexWrap: 'wrap' }}>
                                       <div style={{ flex: 1, minWidth: '160px' }}>
                                           <div style={{ fontFamily: 'var(--mono)', fontSize: '0.9rem', fontWeight: 600, color: 'var(--ink)' }}>{woRef(wo)}</div>
                                           <div style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{label} · {wo.stockErpId || wo.type || ''} · {wo.recipe || ''}{t.assignedTo ? ` · ${t.assignedTo}` : ''}</div>
+                                          {t.status !== 'Complete' && lastDoneOf(t) && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44', marginTop: '2px' }}>{lastDoneOf(t)} — this coat not yet</div>}
                                       </div>
                                       {stChip(t.status)}
                                       {elapsed !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)' }}>{elapsed}m</span>}
@@ -1649,7 +1689,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                 <div onClick={() => onViewWo && onViewWo(wo)} title={`${wo.id} — tap for order details`} style={{ color: 'var(--ink)', fontWeight: 500, fontSize: '0.95rem', cursor: onViewWo ? 'pointer' : 'default', textDecoration: onViewWo ? 'underline' : 'none', textDecorationColor: 'var(--line)' }}>{woRef(wo)}</div>
                 {sled && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{sled} Station (Oven)</div>}
                 <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)', margin: '16px 0' }}>{rem} mins</div>
-                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' }); }} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
+                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete', [`tasks.${type}.completedAt`]: Date.now(), [`tasks.${type}.completedBy`]: (user && user.name) || task.assignedTo || 'Tablet', [`tasks.${type}.completedVia`]: 'tablet', [`tasks.${type}.completedCoat`]: ((type.startsWith('pole') ? (wo.poleStepIndex ?? wo.currentStepIndex) : wo.currentStepIndex) || 0) + 1 }); }} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
             </div>
         );
     }
@@ -1697,7 +1737,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                     updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() });
                 }} style={{ width: '100%', padding: '12px', background: disabledStart ? 'var(--paper-2)' : 'var(--ink)', color: disabledStart ? 'var(--ink-soft)' : '#fff', border: disabledStart ? '1px solid var(--line)' : 'none', cursor: disabledStart ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>{btnText}</button>
             ) : (
-                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' }); }} style={{ width: '100%', padding: '12px', background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper)'}>Complete Task</button>
+                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete', [`tasks.${type}.completedAt`]: Date.now(), [`tasks.${type}.completedBy`]: (user && user.name) || task.assignedTo || 'Tablet', [`tasks.${type}.completedVia`]: 'tablet', [`tasks.${type}.completedCoat`]: ((type.startsWith('pole') ? (wo.poleStepIndex ?? wo.currentStepIndex) : wo.currentStepIndex) || 0) + 1 }); }} style={{ width: '100%', padding: '12px', background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper)'}>Complete Task</button>
             )}
         </div>
     )
