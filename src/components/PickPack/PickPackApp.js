@@ -5126,13 +5126,31 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     const boxesChosen = isStockJob || ((!lines.some(l => l.cat !== 'POLE') || !!String(packBoxSel.SMALL || '').trim()) && (!lines.some(l => l.cat === 'POLE') || !!String(packBoxSel.POLE || '').trim()));
                     const canComplete = packJob && toPack.length === 0 && poleMatched && !poleAway && boxesChosen && (isStockJob ? !!putawayBin.trim() : photos.length > 0);
                     const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
+                    // A GREY BUTTON SAYS WHY (Stuart on WO-SO60169, Andrea 09-14: "doesn't let me hit the complete
+                    // button"): the first unmet condition, in the order completePacking refuses them.
+                    const completeBlocker = (() => {
+                        if (!packJob || canComplete) return null;
+                        if (toPack.length) return `${toPack.length} line${toPack.length === 1 ? '' : 's'} still on the TO PACK side`;
+                        if (isStockJob && !putawayBin.trim()) return 'scan the put-away bin';
+                        if (!isStockJob && !photos.length) return 'take a photo of the packaged parts (📷 Add Photo)';
+                        if (!poleMatched) return 'scan the CUSTOM SHOP label on the poles (or waive it)';
+                        if (poleAway) return packJob.customFabStatus === 'Sent to Plating' ? 'the poles are AT THE PLATER — receive and put them away first' : `custom parts are not ready (${packJob.customFabStatus || 'Pending'})`;
+                        if (!boxesChosen) {
+                            if (!brandBoxes.length) return `no standard boxes for ${String(activeBrand || '').toUpperCase() || 'this brand'} — add them in HQ → 15. Packaging → Standard boxes`;
+                            const needSmall = lines.some(l => l.cat !== 'POLE') && !String(packBoxSel.SMALL || '').trim();
+                            const needPole = lines.some(l => l.cat === 'POLE') && !String(packBoxSel.POLE || '').trim();
+                            return `pick the ${needSmall && needPole ? 'small parts box and the pole box' : needSmall ? 'small parts box' : 'pole box'}`;
+                        }
+                        return 'not ready';
+                    })();
                     const boxSelect = (slot, label) => (
                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft }}>
                             {label}
                             <select value={packBoxSel[slot] || ''} onChange={e => setPackBoxSel({ ...packBoxSel, [slot]: e.target.value })} style={{ padding: '8px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.85rem', background: '#fff' }}>
-                                <option value="">— pick box —</option>
+                                <option value="">{brandBoxes.length ? '— pick box —' : '— no boxes for this brand —'}</option>
                                 {brandBoxes.map(b => <option key={b.id} value={b.name}>{b.name}{b.w ? ` (${b.w}×${b.h}${b.d ? `×${b.d}` : ''})` : ''}</option>)}
                             </select>
+                            {!brandBoxes.length && <span style={{ color: '#d9534f', textTransform: 'none', letterSpacing: 0, fontFamily: theme.sans, fontSize: '0.8rem' }}>add them in HQ → 15. Packaging → Standard boxes</span>}
                         </label>
                     );
                     const lineRow = (l, side) => (
@@ -5332,6 +5350,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             {isStockJob ? '✓ Put Away to Bin' : '✓ Complete Packing'}
                                         </button>
                                     </div>
+                                    {completeBlocker && (
+                                        <div style={{ marginTop: '8px', textAlign: 'right', fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>
+                                            {isStockJob ? 'Put Away' : 'Complete'} waits for: {completeBlocker}
+                                        </div>
+                                    )}
                                 </>
                             ) : (
                                 packQueue.length > 0 && <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>Tap an order above to open the packing workspace.</div>
