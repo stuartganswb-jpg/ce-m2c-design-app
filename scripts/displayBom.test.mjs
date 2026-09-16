@@ -1,6 +1,6 @@
 // Harness for Shared/displayBom.js — the bill of a sales display board.
 //   node scripts/displayBom.test.mjs
-import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength, raisePlan, targetCodeOf, SAMPLE_BIN_BY_STYLE } from '../src/components/Shared/displayBom.js';
+import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength, raisePlan, targetCodeOf, SAMPLE_BIN_BY_STYLE, orderEntryLinesOf } from '../src/components/Shared/displayBom.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -189,11 +189,28 @@ const cartBaseFront3 = {
         eq('a painted marker line routes as FINISHING, not a /P convert', raisePlan({ qty: 3, lines: { parts: [{ key: 'S|P06', code: 'H1-75SR/P', finishCode: 'P06', byRow: [{ row: 'Row 1', qtyPerBoard: 1 }] }] } }, { routeOf }).items[0].kind, 'FINISHING');
         eq('a raw line with no finish is shop work', routeOf(targetCodeOf({ code: 'H1-1ARM', finishCode: '' })).routeTo, 'SHOP');
         eq('/P is a convert, never a work order', raisePlan({ qty: 2, lines: { parts: [{ key: 'X|', code: 'H1-1R/P', byRow: [{ row: 'A', qtyPerBoard: 1 }] }] } }, { routeOf }).items[0].kind, 'CONVERT');
-        // raised rows are remembered, and survive a re-snapshot
-        const raisedLines = { ...ord.lines, parts: ord.lines.parts.map(l => (l.key === ringLine.key ? { ...l, raised: [{ row: 'Top Row 1', kind: 'PLATING', id: 'PLD-1', qty: 50 }] } : l)) };
-        const p2 = raisePlan({ qty: 50, lines: raisedLines }, { routeOf });
-        eq('an already-raised row says so; the other row does not', p2.items.filter(i => i.lineKey === ringLine.key).map(i => !!i.raised), [true, false]);
-        eq('re-snapshot keeps what was raised', resnapshotLines(raisedLines, buildLinesFrom(d, finishes)).parts.find(l => l.key === ringLine.key).raised[0].id, 'PLD-1');
+        // a row's lines already sent to Order Entry say so
+        const sentPlan = raisePlan({ qty: 50, lines: ord.lines, salesOrders: [{ soAppId: 'SO-APP-1', keys: [ringItems[0].key] }] }, { routeOf });
+        eq('a line × row already on a sales order is marked sent; the other row is not', sentPlan.items.filter(i => i.lineKey === ringLine.key).map(i => i.sent), [true, false]);
+        // the finish: wood takes the row stain from its first stained line; an edit wins
+        const woodOrder = { qty: 35, lines: { parts: [
+            { key: 'H1-138WR|S03', code: 'H1-138WR', name: '1 3/8" Round Wood Pole 18"', finishCode: 'S03', perFoot: true, byRow: [{ row: 'Row 3', qtyPerBoard: 1, feetPerBoard: 2, cutLength: 16 }] },
+            { key: 'H1-138BS/P|P26', code: 'H1-138BS/P', name: 'Basic Bracket painted', finishCode: 'P26', byRow: [{ row: 'Row 3', qtyPerBoard: 2 }] },
+            { key: 'H1-138WGF-O|P26', code: 'H1-138WGF-O', name: 'Gem Finial', finishCode: 'P26', byRow: [{ row: 'Row 3', qtyPerBoard: 2 }, { row: 'Row 9', qtyPerBoard: 2 }] },
+        ] } };
+        const wp = raisePlan(woodOrder, { routeOf });
+        const gem3 = wp.items.find(i => i.code === 'H1-138WGF-O' && i.row === 'Row 3');
+        eq('the wood gem finial on Row 3 takes the row stain S03, said so', [gem3.finish, gem3.target, gem3.finishSource], ['S03', 'H1-138WGF-O/S03', 'ROW_STAIN']);
+        eq('the painted bracket on the same row keeps its metal finish', wp.items.find(i => i.code === 'H1-138BS/P').target, 'H1-138BS/P26');
+        eq('a row with no stained line leaves the wood part alone', wp.items.find(i => i.code === 'H1-138WGF-O' && i.row === 'Row 9').finish, 'P26');
+        eq('the per-foot pole: 35 pieces, 2 ft each, cut 16"', (({ qty, feetPerPiece, cutLength }) => [qty, feetPerPiece, cutLength])(wp.items.find(i => i.code === 'H1-138WR')), [35, 2, 16]);
+        const edited = JSON.parse(JSON.stringify(woodOrder)); edited.lines.parts[2].byRow[0].finishOverride = 'S04';
+        const ge = raisePlan(edited, { routeOf }).items.find(i => i.code === 'H1-138WGF-O' && i.row === 'Row 3');
+        eq('an edited finish wins over the row stain', [ge.finish, ge.finishSource], ['S04', 'EDITED']);
+        eq('a per-foot line with 2 pieces a board: feet per piece is the board feet ÷ pieces', raisePlan({ qty: 1, lines: { parts: [{ key: 'R|', code: 'H1-1R', perFoot: true, byRow: [{ row: 'A', qtyPerBoard: 2, feetPerBoard: 4 }] }] } }, { routeOf }).items[0].feetPerPiece, 2);
+        const withEdit = { ...ord.lines, parts: ord.lines.parts.map(l => (l.key === ringLine.key ? { ...l, byRow: l.byRow.map(r => (r.row === 'Top Row 1' ? { ...r, finishOverride: 'EP2' } : r)) } : l)) };
+        eq('re-snapshot keeps an edited finish on its row', resnapshotLines(withEdit, buildLinesFrom(d, finishes)).parts.find(l => l.key === ringLine.key).byRow.find(r => r.row === 'Top Row 1').finishOverride, 'EP2');
+        eq('the order-entry lines carry row, code, finish, pieces and feet per piece', orderEntryLinesOf([wp.items[0]])[0], { key: 'H1-138WR|S03@Row 3', row: 'Row 3', target: 'H1-138WR/S03', base: 'H1-138WR', finishCode: 'S03', qty: 35, name: '1 3/8" Round Wood Pole 18"', perFoot: true, feetPer: 2, cutLength: 16 });
         eq('an order snapshotted before the per-row split is named, not guessed', raisePlan({ qty: 5, lines: { parts: [{ key: 'OLD|', code: 'H1-1R' }] } }, { routeOf }).missingByRow, ['OLD|']);
         eq('sample bins by style', [SAMPLE_BIN_BY_STYLE.TABLETOP, SAMPLE_BIN_BY_STYLE.WALL], ['FDISTABLE', 'FDISWALL']);
     }

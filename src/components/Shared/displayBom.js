@@ -275,26 +275,36 @@ export function buildLinesFrom(display, finishes = [], flows = []) {
 
 /** Merge a fresh snapshot over an order's lines, keeping the tracker columns typed on lines that still exist. */
 export function resnapshotLines(oldLines, fresh) {
-    const keep = (olds, news) => news.map(n => { const o = (olds || []).find(x => x.key === n.key); return o ? { ...n, woNumber: o.woNumber || '', atPlater: o.atPlater || '', notes: o.notes || '', done: !!o.done, ...(Array.isArray(o.raised) && o.raised.length ? { raised: o.raised } : {}) } : n; });
+    // an edited finish on a row survives too (finishOverride lives on the per-row split)
+    const keepRows = (oldRows, newRows) => (Array.isArray(newRows) ? newRows.map(r => { const or = (oldRows || []).find(x => x.row === r.row); return or && or.finishOverride ? { ...r, finishOverride: or.finishOverride } : r; }) : newRows);
+    const keep = (olds, news) => news.map(n => { const o = (olds || []).find(x => x.key === n.key); return o ? { ...n, woNumber: o.woNumber || '', atPlater: o.atPlater || '', notes: o.notes || '', done: !!o.done, ...(n.byRow ? { byRow: keepRows(o.byRow, n.byRow) } : {}), ...(Array.isArray(o.raised) && o.raised.length ? { raised: o.raised } : {}) } : n; });
     return { parts: keep(oldLines?.parts, fresh.parts), chips: keep(oldLines?.chips, fresh.chips), extras: keep(oldLines?.extras, fresh.extras) };
 }
 
 // ── RAISING THE WORK (Stuart 2026-09-16) ─────────────────────────────────────────────────────
-// "i want to create work orders for all of the rows, each one gets a work order … on the floor and
-//  via purchasing i do not want to make any changes i want the work orders to flow like usual and i
-//  want the plated items to flow as if they were normal orders … only new we are building is the
-//  management portion."
+// "i want to create work orders for all of the rows, each one gets a work order … i want the work
+//  orders to flow like usual and i want the plated items to flow as if they were normal orders …
+//  only new we are building is the management portion."
 //
-// So nothing here decides a route of its own. Each part line is split by the ROW it sits on, and
-// each (line × row) is ONE stock order for (per board × boards), routed by the same code rule every
-// stock door uses (Shared/stockRun.routeForCode): a finish → a finishing work order, raw → a shop
-// work order, a plated finish (EP / MEP / P25) → a PLATING DEMAND (the WMS Plating tab, the weekly
-// plater shipment and its PO — exactly the stock path), a phosphated /P → a convert to-do, which
-// only the Stock View raises (named, never guessed). The finished items go into stock through the
-// usual put-away; the build's sample bin is where they belong (FDISTABLE / FDISWALL).
+// THE DOOR IS ORDER ENTRY (second cut, same day). The first cut raised through the STOCK writers,
+// and a display is almost all made-to-order: a painted part's library record is the /P base, not
+// H1-75SR/P06; a plated pole is not stocked; a fee is not a work order. The door built for exactly
+// that is tab 7's sales order — a stocked item as a stock line, anything else as the raw item + the
+// finish it is to be finished in ("TO BE FINISHED"), cut feet for a per-foot item, the stain taking
+// the species item — and Stock View → Order Entry Needs raises every work order, plating demand,
+// pole cut and purchase order from it through its review gate, exactly as for any customer order.
 //
-// The finished SKU is the one CPQ billed when the row came from the cart; a seeded row has none, so
-// the base code + its finish stands in, and the review shows the code before anything is raised.
+// So each part line is split by the ROW it sits on, and each (line × row) becomes ONE order line of
+// per-board × boards with the row as its memo. Nothing here decides a route; the plan names the
+// finished code and the finish so the operator can check them before the lines go to tab 7.
+//
+// THE FINISH (Stuart 2026-09-16): editable per line × row (`finishOverride` on the split), and "the
+// wood takes the stain default entered on the first wood component" — on a row, the first line in
+// a stain (S01…) sets the row's stain, and every other WOOD part on that row takes it unless its
+// finish was edited. A wood part is a species-suffixed code (-O / -W) or a line named wood.
+
+const STAIN_RE = /^S\d+$/;
+const isWoodLine = (line) => /-(O|W)$/.test(U(line?.code).split('/')[0]) || /\bWOOD\b/i.test(String(line?.name || ''));
 
 /** The sample bin a build's finished pieces are put away to, by display style (Stuart 2026-09-16). */
 export const SAMPLE_BIN_BY_STYLE = { TABLETOP: 'FDISTABLE', WALL: 'FDISWALL' };
@@ -325,32 +335,54 @@ export function targetCodeOf(line, rowPart = null, finishSuffixOf = null) {
     return `${code}/${fin}`;
 }
 
-/** One order per (part line × row). `routeOf` = stockRun.routeForCode; `finishSuffixOf` = finishRouting's. */
+/** One order line per (part line × row). `routeOf` = stockRun.routeForCode; `finishSuffixOf` = finishRouting's. */
 export function raisePlan(order, { boards, routeOf, finishSuffixOf = null } = {}) {
     const n = Math.max(0, Math.floor(N(boards, N(order?.qty, 0))));
     const items = [];
     const missingByRow = [];
-    (order?.lines?.parts || []).forEach(line => {
-        const splits = Array.isArray(line.byRow) && line.byRow.length ? line.byRow : null;
-        if (!splits) { missingByRow.push(line.key); return; }
-        splits.forEach(sp => {
-            const target = targetCodeOf(line, sp, finishSuffixOf);
+    const rowStain = {};                                  // row → the stain its first stained line carries
+    const parts = order?.lines?.parts || [];
+    parts.forEach(line => {
+        if (!(Array.isArray(line.byRow) && line.byRow.length)) { missingByRow.push(line.key); return; }
+        line.byRow.forEach(sp => {
+            const fin = U(sp.finishOverride || line.finishCode);
+            if (STAIN_RE.test(fin) && !rowStain[sp.row]) rowStain[sp.row] = fin;
+        });
+    });
+    const sentKeys = new Set((order?.salesOrders || []).flatMap(so => so.keys || []));
+    parts.forEach(line => {
+        if (!(Array.isArray(line.byRow) && line.byRow.length)) return;
+        line.byRow.forEach(sp => {
+            const own = U(line.finishCode);
+            const override = U(sp.finishOverride || '');
+            const stain = rowStain[sp.row] || '';
+            const woodDefault = !override && stain && isWoodLine(line) && own !== stain;
+            const finish = override || (woodDefault ? stain : own);
+            const target = targetCodeOf({ ...line, finishCode: finish }, sp, finishSuffixOf);
             const route = routeOf ? routeOf(target) : { routeTo: null, refuse: null, finish: '' };
             const kind = route.refuse === 'OUTSOURCED' ? 'PLATING' : route.refuse === 'PHOSPHATE' ? 'CONVERT' : route.routeTo === 'FINISHING' ? 'FINISHING' : route.routeTo === 'SHOP' ? 'SHOP' : 'UNKNOWN';
-            const raised = (line.raised || []).find(r => r.row === sp.row) || null;
-            const fin = U(line.finishCode), codeFin = U(route.finish || '');
+            const key = `${line.key}@${sp.row}`;
+            const perBoard = N(sp.qtyPerBoard, 0);
             items.push({
-                key: `${line.key}@${sp.row}`, lineKey: line.key, row: sp.row, code: line.code, name: line.name || '',
-                target, kind, finish: route.finish || '',
-                perBoard: N(sp.qtyPerBoard, 0), qty: N(sp.qtyPerBoard, 0) * n,
+                key, lineKey: line.key, row: sp.row, code: line.code, name: line.name || '',
+                finish, finishSource: override ? 'EDITED' : woodDefault ? 'ROW_STAIN' : 'LINE',
+                target, base: target.includes('/') ? target.slice(0, target.lastIndexOf('/')) : target,
+                kind, perBoard, qty: perBoard * n,
                 perFoot: !!line.perFoot, feetPerBoard: N(sp.feetPerBoard, 0), cutLength: N(sp.cutLength, 0),
-                raised,
-                // a seeded line's finish that the code does not carry is worth a look before raising
-                check: kind !== 'PLATING' && kind !== 'CONVERT' && fin && codeFin && fin !== codeFin ? `line finish ${fin}, code reads ${codeFin}` : '',
+                feetPerPiece: line.perFoot && perBoard > 0 ? N(sp.feetPerBoard, 0) / perBoard : 0,
+                sent: sentKeys.has(key),
             });
         });
     });
-    return { boards: n, items, missingByRow };
+    return { boards: n, items, missingByRow, rowStain };
+}
+
+/** The lines tab 7 loads — one per item, the row as the memo. Pure; tab 7 resolves stock vs to-be-finished. */
+export function orderEntryLinesOf(items = []) {
+    return items.map(i => ({
+        key: i.key, row: i.row, target: i.target, base: i.base, finishCode: i.finish, qty: i.qty, name: i.name,
+        perFoot: !!i.perFoot, feetPer: i.feetPerPiece || 0, cutLength: i.cutLength || 0,
+    }));
 }
 
 /** Boards still to build on an order. */

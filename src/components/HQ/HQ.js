@@ -207,6 +207,9 @@ function HQ() {
       localStorage.setItem('hq_reopen_qs_so', JSON.stringify({ soId, at: Date.now() }));
       setActiveTab('7. Quick Ship');
     };
+    // A sales-display build order hands its lines to Order Entry (S5, Stuart 2026-09-16): the lines
+    // wait in localStorage `hq_display_build_to_oe`; tab 7 loads them into its cart.
+    const handleDisplayBuildToOe = () => setActiveTab('7. Quick Ship');
     // Reopen an Order Entry QUOTE (CRM → Reopen Order Entry, 2026-08-31): tab 7 restores the
     // stored cart; saving supersedes the original quote.
     const handleReopenQsQuote = (e) => {
@@ -217,12 +220,14 @@ function HQ() {
     };
     window.addEventListener('REOPEN_QUOTE_IN_ORDERENTRY', handleReopenQsQuote);
     window.addEventListener('REOPEN_SO_IN_ORDERENTRY', handleReopenSo);
+    window.addEventListener('DISPLAY_BUILD_TO_ORDERENTRY', handleDisplayBuildToOe);
     window.addEventListener('NAVIGATE_TAB', handleTabNavigation);
     window.addEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);
     window.addEventListener('REOPEN_QUOTE_IN_VISION', handleReopenVision);
     return () => {
       window.removeEventListener('REOPEN_QUOTE_IN_ORDERENTRY', handleReopenQsQuote);
       window.removeEventListener('REOPEN_SO_IN_ORDERENTRY', handleReopenSo);
+      window.removeEventListener('DISPLAY_BUILD_TO_ORDERENTRY', handleDisplayBuildToOe);
       window.removeEventListener('NAVIGATE_TAB', handleTabNavigation);
       window.removeEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);
       window.removeEventListener('REOPEN_QUOTE_IN_VISION', handleReopenVision);

@@ -5,7 +5,7 @@ import { resolveShipMethod } from '../Shared/nsTransmit';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { quickShipPullLines, quickShipCoverCodes, quickShipBackorderLines } from '../Shared/quickShipBackorder';
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp, arrayUnion } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
 import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp } from '../Shared/lineDiscount';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
@@ -179,6 +179,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [tbfPrice, setTbfPrice] = useState('');   // prefilled from the customer's price; editable
     const [tbfFeet, setTbfFeet] = useState('');     // per-foot items: feet per piece (cut length)
     const [lastCreated, setLastCreated] = useState(null); // { kind, id } — the visible confirmation the button never gave (Stuart 2026-08-30)
+    // DISPLAY BUILD (S5, Stuart 2026-09-16 — one guarded block, see the loader above the FEES row):
+    // the sales-display build whose lines this cart was loaded from; null for every other order.
+    const [displayBuild, setDisplayBuild] = useState(null);
     // FEES as their own entry line — rush, freight, packaging, coatings. Priced the same way every
     // fee is priced everywhere else (Shared/feeRules), so tab 7 and CPQ can never disagree.
     const [feeItemId, setFeeItemId] = useState('');
@@ -828,6 +831,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             // explosion never consumes the same component a second time (E6.1, 2026-09-03).
             ...(opts && opts.trvOfKit ? { trvOfKit: opts.trvOfKit } : {}),
             ...(opts && opts.perFoot ? { perFoot: true, feetPer: parseFloat(opts.feetPer) || 1 } : {}),
+            // DISPLAY BUILD (S5): the row it sits on as the line memo, and the build line it came from.
+            ...(opts && opts.lineMemo ? { lineMemo: String(opts.lineMemo).slice(0, 120) } : {}),
+            ...(opts && opts.displayLineKey ? { displayLineKey: String(opts.displayLineKey) } : {}),
             // Kit lines carry their kit identity so pricedCart can apply KIT pricing live.
             kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null, kitFinish: kitMeta?.kitFinish || ''
         }]);
@@ -943,6 +949,59 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         addLog(`To be finished: ${isAl ? `${erpOf(it)} (= ${erpOf(real)})` : erpOf(it)} ×${tbfQty}${tbfPerFoot ? ` pcs @ ${feetPer} ft (${(feetPer * (parseInt(tbfQty) || 0)).toFixed(0)} ft billed)` : ''} in ${tbfFinish}`, 'success');
         setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setTbfPrice(''); setTbfFeet('');
     };
+
+    // ── DISPLAY BUILD → ORDER ENTRY (S5, Stuart 2026-09-16) ─────────────────────────────────
+    // "i want the work orders to flow like usual and i want the plated items to flow as if they were
+    //  normal orders." A sales-display build order (5. Marketing / 10.5) hands its lines here — one
+    // per part per row, the row as the memo — and each is entered exactly as a CSR would enter it:
+    // the finished item when the library stocks it (a stock line; a fee rides its rule), otherwise
+    // the RAW item + the finish, TO BE FINISHED, cut feet for a per-foot item and the species item
+    // for a stain — the same fields addToBeFinished writes. Prices, the discount and the save stay
+    // the operator's. At save the order records the build (`displayBuild`) and the build records the
+    // order (system/displays/builds/{id}.salesOrders). Nothing else on this tab changes.
+    useEffect(() => {
+        if (!allItems.length) return;
+        let h = null;
+        try { h = JSON.parse(localStorage.getItem('hq_display_build_to_oe') || 'null'); } catch (e) { h = null; }
+        if (!h || !h.build || !h.build.id || !Array.isArray(h.lines)) return;
+        localStorage.removeItem('hq_display_build_to_oe');
+        if (h.brandId && activeBrand && h.brandId !== activeBrand) { alert(`Those display lines belong to brand ${h.brandId} — switch division and send them again from the build order.`); return; }
+        if (cart.length && !window.confirm(`The cart already holds ${cart.length} line(s).\n\nOK = replace them with the ${h.lines.length} display line(s) · Cancel = keep the cart and drop the display lines.`)) return;
+        setEditingSo(null); setReopenedQuote('');
+        setCart([]);
+        if (h.customer && h.customer.id) { setCustomerId(h.customer.id); setCustSearch(`${h.customer.name || ''} (${h.customer.id})`); }
+        setJobName(`Display ${h.build.displayName || ''} × ${h.build.boards || ''}`.trim());
+        setSoExtras(p => ({ ...p, po: h.build.poNumber || p.po, prodNotes: `Display build ${h.build.id} · ${h.build.boards} boards${h.build.sampleBin ? ` · put away to ${h.build.sampleBin}` : ''}` }));
+        const missing = [];
+        let loaded = 0;
+        h.lines.forEach(l => {
+            const memo = String(l.row || '');
+            const finished = rawFindReal(l.target);
+            if (finished) {
+                const fee = isFeeItemRecord(finished);
+                const rule = fee ? feeRuleOf(finished.manufacturingSpecs) : null;
+                pushLine(finished, rule && rule.mode === 'PERCENT' ? 1 : l.qty, rule && rule.mode === 'PERCENT' ? feeRuleSummary(rule, null) : '', null,
+                    { ...(fee ? { noPack: true, feeRule: rule } : {}), lineMemo: memo, displayLineKey: l.key });
+                loaded++; return;
+            }
+            const raw = rawFindReal(l.base);
+            if (!raw) { missing.push(`${memo} · ${l.target} (and ${l.base}) not in the library`); return; }
+            const fin = finishList.find(f => f.code === l.finishCode);
+            const item = speciesVariantOf(raw, fin, (c) => rawFindReal(c)) || raw;
+            const perFoot = FOOT_UOMS.includes(String(raw.manufacturingSpecs?.uom || '').toUpperCase());
+            const feetPer = perFoot ? (parseFloat(l.feetPer) || 0) : 0;
+            if (perFoot && !(feetPer > 0)) { missing.push(`${memo} · ${erpOf(raw)} sells by the foot but the build line carries no feet`); return; }
+            pushLine(item, l.qty, `TO BE FINISHED · ${l.finishCode}${fin?.name && fin.name !== l.finishCode ? ` (${fin.name})` : ''}${perFoot ? ` · Cut ${feetPer} ft` : ''}${l.cutLength ? ` · to ${l.cutLength}"` : ''}`, null, {
+                noPack: true, finishCode: l.finishCode, toBeFinished: true,
+                ...(perFoot ? { perFoot: true, feetPer } : {}), lineMemo: memo, displayLineKey: l.key,
+            });
+            loaded++;
+        });
+        setDisplayBuild({ ...h.build });
+        addLog(`🖼 Display build ${h.build.name || h.build.id}: ${loaded} line(s) loaded${missing.length ? ` · ${missing.length} NOT loaded` : ''} — check prices and the discount, then save the sales order as usual.`, missing.length ? 'warn' : 'success');
+        missing.forEach(m => addLog(`⚠ ${m}`, 'warn'));
+        if (missing.length) alert(`${missing.length} display line(s) could not be loaded:\n\n${missing.slice(0, 12).join('\n')}${missing.length > 12 ? '\n…' : ''}`);
+    }, [allItems.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── FEES ─────────────────────────────────────────────────────────────────────────────────
     // A flat fee bills qty × its price. A PERCENTAGE fee has no price of its own — it is worked
@@ -1112,6 +1171,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         setTrvCfg(null); setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
         setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setQuickQty('');
         setEditingSo(null); setReopenedQuote('');
+        setDisplayBuild(null);
     };
     const removeLine = (key) => setCart(prev => prev.filter(l => l.key !== key));
 
@@ -1587,6 +1647,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // `lines[]`, the NetSuite payload was built above, and RTG reads neither field.
                 quickShipCart: JSON.parse(JSON.stringify(cart || [])),
                 quickShipExtras: JSON.parse(JSON.stringify({ soExtras, ship, jobName: jobName || '' })),
+                // DISPLAY BUILD (S5): which sales-display build this order makes, and the bin its pieces go to.
+                ...(displayBuild ? { displayBuild: { id: displayBuild.id, name: displayBuild.name || '', displayName: displayBuild.displayName || '', style: displayBuild.style || '', sampleBin: displayBuild.sampleBin || '', boards: Number(displayBuild.boards) || 0 } } : {}),
                 createdBy: currentUser || '', createdAt: Date.now(), createdDate: new Date().toISOString()
             });
 
@@ -1608,6 +1670,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 writeBack: [{ collection: 'hq_sales_orders', docId: hqId, idField: 'nsInternalId', tranField: 'soId', patch: { status: 'Pending' } }],
             });
             addLog(`✅ ${hqId} recorded and queued to NetSuite (outbox ${obId}) — enters the WMS Stock tab when NetSuite accepts.`, 'success');
+            // DISPLAY BUILD (S5): the build records this order and the build lines it carries.
+            if (displayBuild) {
+                const keys = [...new Set((cart || []).map(l => l.displayLineKey).filter(Boolean))];
+                try {
+                    await setDoc(doc(db, 'system', 'displays', 'builds', displayBuild.id), { salesOrders: arrayUnion({ soAppId: hqId, keys, boards: Number(displayBuild.boards) || 0, at: Date.now(), by: currentUser || '' }), updatedAt: Date.now() }, { merge: true });
+                    addLog(`🖼 ${hqId} recorded on display build ${displayBuild.name || displayBuild.id} (${keys.length} line(s)).`, 'success');
+                } catch (e) { addLog(`⚠ ${hqId} saved, but the display build ${displayBuild.id} did not record it (${e.message || e}) — tell S5.`, 'error'); }
+            }
 
             // SUPERSEDE (CRM ✎ Edit): the edited cart just became the real order — the original
             // closes with a pointer, so two live SOs can never both claim the same sale.
@@ -1683,6 +1753,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         ✎ REOPENED QUOTE <b>{reopenedQuote}</b> — saving creates the corrected quote and marks this one superseded. Close the old estimate in NetSuite by hand.
                     </span>
                     <button onClick={() => { setReopenedQuote(''); addLog('✎ Reopen cancelled — the cart stays, the original quote is untouched.', 'info'); }}
+                        style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Unlink</button>
+                </div>
+            )}
+            {displayBuild && (
+                <div style={{ ...card, padding: '14px 24px', border: '2px solid var(--brass)', background: '#fdf8ef', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', letterSpacing: '.04em' }}>
+                        🖼 DISPLAY BUILD <b>{displayBuild.name || displayBuild.id}</b> · {displayBuild.boards} boards{displayBuild.sampleBin ? ` · bin ${displayBuild.sampleBin}` : ''} — each line's memo is its row. Save the sales order as usual; it is recorded on the build.
+                    </span>
+                    <button onClick={() => { setDisplayBuild(null); addLog('🖼 Display build link removed — the cart stays; saving now makes an ordinary order.', 'info'); }}
                         style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Unlink</button>
                 </div>
             )}
