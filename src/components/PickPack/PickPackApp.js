@@ -53,6 +53,7 @@ import { readConvertDiag, diagSummary, isHealthyState } from '../Shared/convertD
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
+import { soLinesSql, fulfilmentItemsOf, refusalText } from "../Shared/fulfilmentLines";
 import { fetchNsPurchaseOrder, importNsPurchaseOrder, recordPoReceipt, openQtyOf, poRef } from "../Shared/purchaseOrders";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
 
@@ -2087,6 +2088,18 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 const soDoc = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || null);
                 const nsSoId = String((isQsOrder(job) ? (job.nsInternalId || job.soId) : (soDoc && soDoc.nsInternalId)) || '');
                 if (nsSoId && !job.nsFulfillQueued) {
+                    // S4 close-out 1 (Stuart-approved 2026-09-16): each fulfilled line carries the
+                    // sales order line's OWN location — NetSuite refused the header-only transform
+                    // with "Items list: Location". A shippable line with no location refuses the
+                    // queue with the lines named; packing still stands.
+                    const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: soLinesSql(nsSoId) } });
+                    const jq = await rq.json();
+                    if (!rq.ok) throw new Error(`could not read the sales order lines — ${JSON.stringify(jq).slice(0, 200)}`);
+                    const ifItems = fulfilmentItemsOf(jq.items || []);
+                    if (!ifItems.ok) {
+                        nsNote = `\n\n⚠ ${refusalText(ifItems)}`;
+                        writeLog(`Fulfillment NOT queued for ${packRef(job)} — ${ifItems.reason}${ifItems.missing.length ? ` (lines ${ifItems.missing.map((m) => m.line).join(', ')})` : ''}`, 'packing');
+                    } else {
                     const writeBack = [{ collection: isQsOrder(job) ? 'hq_sales_orders' : 'fin_workorders', docId: job.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }];
                     if (!isQsOrder(job) && soDoc && soDoc.id) writeBack.push({ collection: 'hq_sales_orders', docId: soDoc.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' });
                     await enqueueNsWrite({
@@ -2095,11 +2108,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                         sourceApp: 'WMS', createdBy: operator?.name || '',
                         targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${nsSoId}/!transform/itemFulfillment`,
                         method: 'POST',
-                        payload: { shipStatus: { id: 'B' }, memo: nsMemo(`Packed in app by ${operator?.name || 'Packer'}`) },
+                        payload: { shipStatus: { id: 'B' }, memo: nsMemo(`Packed in app by ${operator?.name || 'Packer'}`), item: { items: ifItems.items } },
                         writeBack
                     });
                     await updateDoc(packDocOf(job), { nsFulfillQueued: true });
                     nsNote = '\n\n📤 NetSuite Item Fulfillment queued (status: Packed). Shipping completes it in NetSuite — then hit ⤓ Tracking here to pull the tracking # back onto the sales order.';
+                    }
                 } else if (!nsSoId) {
                     nsNote = '\n\n⚠ No NetSuite sales order linked to this order — fulfillment NOT queued. Fulfill it manually in NetSuite.';
                 }
