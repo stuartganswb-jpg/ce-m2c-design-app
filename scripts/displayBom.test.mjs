@@ -178,6 +178,15 @@ const cartBaseFront3 = {
         eq('boards override the order qty', raisePlan(ord, { boards: 10, routeOf }).items.find(i => i.key === ringItems[0].key).qty, 10);
         eq('an applied paint finish is a FINISHING work order', raisePlan({ qty: 1, lines: { parts: [{ key: 'F|P06', code: 'H1-1BF', finishCode: 'P06', byRow: [{ row: 'A', qtyPerBoard: 2 }] }] } }, { routeOf }).items[0].kind, 'FINISHING');
         eq('a code that already carries its finish is not doubled', targetCodeOf({ code: 'H1-1CP-V/EP4', finishCode: 'EP4' }), 'H1-1CP-V/EP4');
+        // Stuart 09-16, the wall board's seeded rows: the finish REPLACES a family marker, never follows it
+        eq('/P painted-family marker + P06 → H1-75SR/P06', targetCodeOf({ code: 'H1-75SR/P', finishCode: 'P06' }), 'H1-75SR/P06');
+        eq('/EP plated-family marker + EP2 → H1-1R/EP2', targetCodeOf({ code: 'H1-1R/EP', finishCode: 'EP2' }), 'H1-1R/EP2');
+        eq('/MEP marker + MEP2 → H1-1R/MEP2', targetCodeOf({ code: 'H1-1R/MEP', finishCode: 'MEP2' }), 'H1-1R/MEP2');
+        eq('no suffix takes the finish on the end (wood)', targetCodeOf({ code: 'H1-138WR', finishCode: 'S03' }), 'H1-138WR/S03');
+        eq('a hyphen species code takes the finish on the end', targetCodeOf({ code: 'H1-138WGF-O', finishCode: 'P26' }), 'H1-138WGF-O/P26');
+        eq('CPQ billed the shared /P SKU for a paint → the painted part, not the core', targetCodeOf({ code: 'H1-1BF', billedId: 'H1-1BF/P', finishCode: 'P06' }), 'H1-1BF/P06');
+        eq('CPQ billed the exact plated SKU → kept', targetCodeOf({ code: 'H1-1BR', billedId: 'H1-1BR/EP4', finishCode: 'EP4' }), 'H1-1BR/EP4');
+        eq('a painted marker line routes as FINISHING, not a /P convert', raisePlan({ qty: 3, lines: { parts: [{ key: 'S|P06', code: 'H1-75SR/P', finishCode: 'P06', byRow: [{ row: 'Row 1', qtyPerBoard: 1 }] }] } }, { routeOf }).items[0].kind, 'FINISHING');
         eq('a raw line with no finish is shop work', routeOf(targetCodeOf({ code: 'H1-1ARM', finishCode: '' })).routeTo, 'SHOP');
         eq('/P is a convert, never a work order', raisePlan({ qty: 2, lines: { parts: [{ key: 'X|', code: 'H1-1R/P', byRow: [{ row: 'A', qtyPerBoard: 1 }] }] } }, { routeOf }).items[0].kind, 'CONVERT');
         // raised rows are remembered, and survive a re-snapshot

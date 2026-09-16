@@ -299,15 +299,30 @@ export function resnapshotLines(oldLines, fresh) {
 /** The sample bin a build's finished pieces are put away to, by display style (Stuart 2026-09-16). */
 export const SAMPLE_BIN_BY_STYLE = { TABLETOP: 'FDISTABLE', WALL: 'FDISWALL' };
 
-/** The finished code a line × row is made as. */
+/**
+ * The finished code a line × row is made as (Stuart 2026-09-16: "the codes it is combining have an
+ * extra /P/ in between the finish should be H1-75SR/P06").
+ *
+ * A line's code often ends in a FINISH-FAMILY MARKER rather than a finish: `/P` (the painted
+ * family — and the shared SKU CPQ bills for any paint) or a bare `/EP` / `/MEP` (the plated family).
+ * The finish REPLACES that marker: H1-75SR/P + P06 → H1-75SR/P06, H1-1R/EP + EP2 → H1-1R/EP2. A code
+ * with no suffix takes the finish on the end (H1-138WR + S03 → H1-138WR/S03); a code that already
+ * ends in the finish is kept. CPQ's billed SKU wins only when it ends in the line's own finish — a
+ * paint bills the shared /P SKU, which is the phosphated core, not the painted part.
+ */
+const FAMILY_MARKER_RE = /^(P|M?EP)$/;
 export function targetCodeOf(line, rowPart = null, finishSuffixOf = null) {
+    const suffixOf = finishSuffixOf || ((c) => { const i = c.lastIndexOf('/'); return i > 0 ? c.slice(i + 1) : ''; });
+    const fin = U(line?.finishCode);
     const billed = U((rowPart && rowPart.billedId) || line?.billedId || '');
-    if (billed) return billed;
-    const code = U(line?.code), fin = U(line?.finishCode);
-    if (!code) return '';
+    if (billed && (!fin || U(suffixOf(billed)) === fin)) return billed;
+    const code = U(line?.code);
+    if (!code) return billed || '';
     if (!fin) return code;
-    const suffix = finishSuffixOf ? U(finishSuffixOf(code)) : (code.includes('/') ? U(code.split('/').pop()) : '');
-    return suffix === fin ? code : `${code}/${fin}`;
+    const suffix = U(suffixOf(code));
+    if (suffix === fin) return code;
+    if (FAMILY_MARKER_RE.test(suffix)) return `${code.slice(0, code.lastIndexOf('/'))}/${fin}`;
+    return `${code}/${fin}`;
 }
 
 /** One order per (part line × row). `routeOf` = stockRun.routeForCode; `finishSuffixOf` = finishRouting's. */

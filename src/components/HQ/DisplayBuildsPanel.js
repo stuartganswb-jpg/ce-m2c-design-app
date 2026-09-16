@@ -136,6 +136,13 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', 'in', want.slice(i, i + 30))));
             snap.docs.forEach(d => out.push({ id: d.id, ...d.data() }));
         }
+        // a record keyed only by its itemId is still the item (partOf reads either field)
+        const found = new Set(out.map(p => String(p.legacyErpId || '').toUpperCase()));
+        const rest = want.filter(c => !found.has(c));
+        for (let i = 0; i < rest.length; i += 30) {
+            const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('itemId', 'in', rest.slice(i, i + 30))));
+            snap.docs.forEach(d => { if (!out.some(p => p.id === d.id)) out.push({ id: d.id, ...d.data() }); });
+        }
         return out;
     };
     const openRaise = async () => {
@@ -149,8 +156,9 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             const partOf = (c) => parts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === String(c).toUpperCase()) || null;
             const items = plan.items.map(i => ({
                 ...i,
-                hasPart: i.kind === 'PLATING' ? true : !!partOf(i.target),
-                ready: !i.raised && (i.kind === 'PLATING' || ((i.kind === 'FINISHING' || i.kind === 'SHOP') && !!partOf(i.target))),
+                // every target must be a real library item, plated included — a code that is not there is a wrong code
+                hasPart: !!partOf(i.target),
+                ready: !i.raised && ['PLATING', 'FINISHING', 'SHOP'].includes(i.kind) && !!partOf(i.target),
             }));
             // A per-foot rod is raised in PIECES of its code — unchecked until the operator has looked.
             const pick = Object.fromEntries(items.map(i => [i.key, i.ready && !i.perFoot && !i.check]));
