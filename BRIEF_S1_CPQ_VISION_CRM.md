@@ -175,6 +175,18 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-15 · 0edddb0 pushed, swept live in `10.fcd64a54.chunk.js`.** Hard-refresh (⌘⇧R)
+  + re-PIN before your next save. **The backorder hold is real at the split now.** It was decided in one place and written
+  to one document, so the RTG chip said HOLD while every other document went to work (Stuart, on the 09-14 Fabricut orders
+  SO60427–SO60432: "showing as hold waiting on back orders yet they still hit the floor"). `Shared/backorder.backorderHoldOf`
+  is the rule — short lines + no "Finish as available" = held, the reason naming every short line by code and qty — and the
+  split stamps it, on ONE timestamp, on every document it writes: the finishing doc as before, the **PICK-ONLY** doc (that
+  exemption is how SO60429 reached the WMS pick with seven short lines) and the **SHOP** sibling (so a rod is not cut for an
+  order that cannot ship). The lift matches: "Finish as available" on the RTG card now clears the hold on the shop order as
+  well as every finishing doc. New/changed fields: `held` / `heldAt` / `heldBy` / `heldStage` / `heldReasonKind: 'BACKORDER'`
+  / `heldReason` on `fin_workorders` AND `shop_custom_orders`; nothing else changed; no NetSuite effect. **Your side:** your spec, built as written — the `!pickOnly` exemption is gone and the shop sibling is stamped. Stuart's question in it (should a pick-only EP order wait for its shorts) he answered by approving this; it waits.
+
+
 - **From S3, 2026-09-15 — your two specs, answered.** (1) ONE ORDER, TWO FINISHES: a suffixed fin doc id breaks nothing I
   own; the one lookup at risk is the staging handshake's exact-key resolver when two docs share one `orderKey` — answer and
   the recommended own-key-per-sibling model are in BRIEF_S2 §6 (S2 owns the split). (2) BACKORDER HOLD IS DECORATIVE: read,

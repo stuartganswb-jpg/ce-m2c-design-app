@@ -132,6 +132,18 @@ coordinate before editing `UserGuideTab.js`.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-15 · 0edddb0 pushed, swept live in `10.fcd64a54.chunk.js`.** Hard-refresh (⌘⇧R)
+  + re-PIN before your next save. **The backorder hold is real at the split now.** It was decided in one place and written
+  to one document, so the RTG chip said HOLD while every other document went to work (Stuart, on the 09-14 Fabricut orders
+  SO60427–SO60432: "showing as hold waiting on back orders yet they still hit the floor"). `Shared/backorder.backorderHoldOf`
+  is the rule — short lines + no "Finish as available" = held, the reason naming every short line by code and qty — and the
+  split stamps it, on ONE timestamp, on every document it writes: the finishing doc as before, the **PICK-ONLY** doc (that
+  exemption is how SO60429 reached the WMS pick with seven short lines) and the **SHOP** sibling (so a rod is not cut for an
+  order that cannot ship). The lift matches: "Finish as available" on the RTG card now clears the hold on the shop order as
+  well as every finishing doc. New/changed fields: `held` / `heldAt` / `heldBy` / `heldStage` / `heldReasonKind: 'BACKORDER'`
+  / `heldReason` on `fin_workorders` AND `shop_custom_orders`; nothing else changed; no NetSuite effect. **Your side:** nothing.
+
+
 - **⚠ DEPLOY NOTICE from S7 · 2026-09-13 · c4bbc89 pushed at 17:44 EDT (S7 swept all 37 served assets after the deploy: version stamp 1789339814060, 0 download failures; the new module is imported by no screen, so its literals are ABSENT by design (`SIZE_GROUP_UNPRICED` → none); the hardware guard literals stand (`a return carries the rod at that end` in `main.1f049abe.js`, `Pick a Left bracket OR a return/arm end first` + `Push Config to CPQ` in the Vision chunk `104.74c087bc.chunk.js`); recorded in BRIEF_S7 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **`Shared/pillowPricing.js` (NEW, pure, imported by nothing yet) + `scripts/pillowPricing.test.mjs` (58)** — the Uniquity custom pillow price rule as Stuart stated it 09-13: the size's standard price at the HIGHEST fabric price group among the panels (matrix `prices[size][group]`, fallback base + upcharge), + labour per drawn seam, + a charge per custom detail (FLANGE / WELT each, OUTER_TRIM and FRINGE_SEAM per yard); every panel consumes its OWN fabric (running-yard goods by widths × cut ÷ 36 rounded up to ⅛ yd; a cut-down throw labelled as a fabric = one each); fill + zipper consumed at $0 when the size names them; a missing table row REFUSES by code, never a $0 line. Output = ONE priced holder line on the non-inventory `CUSTOM PILLOW` item (`isRollup`, partHandling Custom, division `SEW`) + $0 consumption rows, all in `hardwareHandoff`'s row shape. Tables live in `system/pillow_pricing` (shape `DEFAULT_PILLOW_PRICING`, EMPTY until Stuart's spreadsheet). **Nothing served changes; no document, work order, floor or NetSuite write.** Decisions logged in BRIEF_S7 §7: the pillow goes Vision → **Order Entry (tab 7)**, not CPQ; quote or sales order both; throws cut into panels labelled as fabrics; a non-inventory 'custom pillow' item; Stitch & Sew = the small-parts flow to a SEW division with a Uniquity-subsidiary NetSuite WO (2–3 wk). Your side: nothing.
 
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-15 · 8c0677e pushed 19:46 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh

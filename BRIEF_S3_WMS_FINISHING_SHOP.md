@@ -192,6 +192,18 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-15 · 0edddb0 pushed, swept live in `10.fcd64a54.chunk.js`.** Hard-refresh (⌘⇧R)
+  + re-PIN before your next save. **The backorder hold is real at the split now.** It was decided in one place and written
+  to one document, so the RTG chip said HOLD while every other document went to work (Stuart, on the 09-14 Fabricut orders
+  SO60427–SO60432: "showing as hold waiting on back orders yet they still hit the floor"). `Shared/backorder.backorderHoldOf`
+  is the rule — short lines + no "Finish as available" = held, the reason naming every short line by code and qty — and the
+  split stamps it, on ONE timestamp, on every document it writes: the finishing doc as before, the **PICK-ONLY** doc (that
+  exemption is how SO60429 reached the WMS pick with seven short lines) and the **SHOP** sibling (so a rod is not cut for an
+  order that cannot ship). The lift matches: "Finish as available" on the RTG card now clears the hold on the shop order as
+  well as every finishing doc. New/changed fields: `held` / `heldAt` / `heldBy` / `heldStage` / `heldReasonKind: 'BACKORDER'`
+  / `heldReason` on `fin_workorders` AND `shop_custom_orders`; nothing else changed; no NetSuite effect. **Your side:** `holdGateOf` already reads it, so your lane and refusals now fire on pick-only and shop documents too — nothing to build for the stamp. The RECEIPT-SIDE LIFT is the open half and it is specced to you in the hand-off above: nothing anywhere lifts a backorder hold when the material actually ARRIVES.
+
+
 - **From S2, 2026-09-15 — the backorder hold is now REAL on every document, and the RECEIPT-SIDE LIFT is yours.**
   Shipped my half (0edddb0, committed, awaiting Stuart's push): `Shared/backorder.backorderHoldOf` decides the hold once at
   the split and stamps it on EVERY document the order owns — the finishing doc as before, the **PICK-ONLY** doc (the exemption
@@ -207,9 +219,14 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
   (`{ held: false, heldClearedAt, heldClearedBy, heldClearedNote }`) so the two lifts are one fact. While ANY line is still
   short the order keeps waiting — that is FINISH COMPLETE, and `finishAsAvailable` stays the only exception. Tell me if you
   would rather RTG own the lift off a receipt event and I will build it here instead; the rule module is shared either way.
-- **From S2, 2026-09-15 — bent returns: PARKED by Stuart, do not build your half yet.** Stuart today: "do not worry about
-  stocked bent returns i think we can add a flag to master library when the time comes." So neither side ships: your
-  `packLinesOf` stream skip stays unbuilt, and my split half with it. Your answer (a) — one document, both streams, the
+- **From S2, 2026-09-15 — bent returns: the CUSTOM ones ALREADY follow the pole; only the STOCKED item waits.** Stuart
+  confirmed today that bent returns must follow the poles, and that his "wait" covers the stocked ones only: "do not worry
+  about stocked bent returns i think we can add a flag to master library when the time comes." Nothing is parked on the
+  custom side and nothing needs building there — a bent or mitred return on a custom rod is a fee line with no cut length,
+  so `classifyLine` routes it to the SHOP half, `poleDetailsOf` makes it a RIDER on that rod's row, the pack ticks it with
+  the pole and never as a piece of its own, and `customShopQtyOf` bills it in feet. It is finished with the pole because it
+  IS the pole. What waits is the STOCKED return ITEM: your `packLinesOf` stream skip and my split half both hold until
+  Stuart flags those items in the Master Library. Your answer (a) — one document, both streams, the
   assertion relaxed to a warning — is recorded and stands for when it comes back. **One defect I found while checking it,
   worth knowing before anyone builds:** `poleRowsForPack` rebuilds the pole rows from the SHOP cut list and `poleLinesStamp`
   REPLACES `poleLines` at the first pole tick, so on an order carrying both a custom pole and stocked returns the returns
