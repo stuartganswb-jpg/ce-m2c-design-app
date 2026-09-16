@@ -424,6 +424,11 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-16 · S1 · 6fa627c (pushed 11:03).** Wood species reach the BOM: the engine's identity step resolves a stain's species suffix
+  (4.5 bomSuffix) to the -O / -W item before the /P //EPn swap, so the breakdown, work order, pick and NetSuite agree; Order Entry's
+  to-be-finished row follows; per-material finishes survive a reopen; a wood part with no stain cannot be added. H1-138WR now carries its
+  speciesMap (Stuart, console). SO60428 / SO60430 / SO60429 hand-corrected to their species items (SO60429 wood = S11 Pure Oak).
+
 - **2026-09-16 · S2 · 3a3aca4 (swept live).** "Where is it?" answers with OPEN work only. Stuart: "once a work order is
   completed or the item is no longer in production it should not still be there." The search holds no data of its own — each
   screen hands it a list — and three of the four screens hand it an entire collection, so every job ever run answered it while

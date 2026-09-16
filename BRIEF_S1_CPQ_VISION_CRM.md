@@ -628,6 +628,17 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 *(newest first)*
 
+- **2026-09-16 — 6fa627c (S1) pushed 11:03 from a detached worktree (S2's a89a44a sat unpushed in the shared checkout; no overlap), SWEPT:
+  version stamp 1789571165556; main.473fbd57.js carries "Pick the WOOD finish first", the stamp ce3f8724a13d and "priced from the base product" ×5; tab 7 chunk 876.d2199eb0.chunk.js carries "the line carries the species item".** SPECIES ON THE BOM (Stuart: "the items on the bom should be H1-138WEC-O rather than just
+  H1-138WEC"): `hardwarePricing.priceChoice` step 0a = `speciesVariantOf` via `ctx.finishObjOf` BEFORE `finishVariantOf`; base-product
+  price fallback when the species record has none; identity without suffix/lookup. HardwareConfigurator: `finishObjOf` in priceCtx; the
+  add refuses a WOOD part with no finish (the SO60429 gate). hardwareHandoff: `engineConfig.globalFinishes` saved (the per-material map —
+  the reopen restore already read it; the wood finish was being dropped). QuickShipTab: `finishList.bomSuffix`, `addToBeFinished` pushes
+  the species item. Harness: pricing 65, handoff 51, engine 699, staleness 30; stamp → ce3f8724a13d. DATA (Stuart's console, S1's scripts):
+  SO60428 → oak items, SO60430 → walnut items, SO60429 wood rows → S11 Pure Oak + oak items + SO recipes [EP5, S11]; H1-138WR gained
+  `customData.speciesMap` {-O: H1-138WHTOAK, -W: H1-138WLNUT} (the importer's map had never landed on that record). NetSuite for SO60429
+  (finials + rod → oak items) is Stuart's by hand. NOT screen-verified: Stuart's next wood order (CPQ or tab 7) is the proof.
+
 - **2026-09-15 — f56bb7d (S1's work, committed + pushed by S2 21:13 on Stuart's relay; S1 swept 21:2x: version stamp 1789521689554,
   `main.82fd3b78.js` carries the Approve text, the stamp `5d919b67d028` and `pinsFingerprint`).** The 09-14 Fabricut audit (SO60420,
   SO60427–SO60432, QUO143): the app's three copies agree; the wrong lines on SO60429/60430/60431 are the BOM saved on 09-10 BEFORE that
