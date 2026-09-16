@@ -63,6 +63,12 @@ with `git diff -w`. The old engine is retired: CPQ and Vision must work 100% on 
 - Deploy-verify: `CPQTab` + `HardwareConfigurator` are in `main.*.js`; `QuickShipTab`, `ExternalCoopTab`,
   `VisionHardware` (chunk `630.*`), `AssemblyBuilderTab`, `NodeClusterTab`, `AdminTab` are lazy chunks. Sweep
   everything; byte-compare the Vision chunk when only Vision changed.
+- **⚠ THE ENGINE STAMP (2026-09-15, Stuart via S2).** `Shared/engineVersion.js` is GENERATED — the hash of the five engine files
+  (`hardwareModel`, `hardwareAdapter`, `hardwareHandoff`, `hardwarePricing`, `kitSeed`; list in `scripts/_lib/engineVersion.mjs`).
+  After ANY change to one of them: `node scripts/stamp-engine-version.mjs`, then commit the regenerated stamp IN THE SAME COMMIT.
+  `node scripts/cartStaleness.test.mjs` (30) fails while the committed stamp is behind the code — that failure is the reminder, not a
+  bug. `npm run build` (prebuild) regenerates it too, so Vercel never ships a stale stamp; a changed stamp after a build means you
+  forgot the commit. Every saved cart line carries the stamp; CRM's Approve warns when it differs.
 - The fast loop: `node scripts/hardwareModel.test.mjs` (664), `visionBridge` (53), `hardwareHandoff` (45),
   `hardwarePricing` (54), `kitSeed` (68), `partLookup` (42), `platePool` (14), `slotGroups`, `stepImport`; the
   traverse family via `sh scripts/run-traverse-tests.sh`. A fix here is proven in a test before it is looked
@@ -599,6 +605,19 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 ## 7. Status log
 
 *(newest first)*
+
+- **2026-09-15 — f56bb7d (S1's work, committed + pushed by S2 21:13 on Stuart's relay; S1 swept 21:2x: version stamp 1789521689554,
+  `main.82fd3b78.js` carries the Approve text, the stamp `5d919b67d028` and `pinsFingerprint`).** The 09-14 Fabricut audit (SO60420,
+  SO60427–SO60432, QUO143): the app's three copies agree; the wrong lines on SO60429/60430/60431 are the BOM saved on 09-10 BEFORE that
+  evening's rider fixes (e4ab15a 17:29, 6572b6f 18:17) and the standoff re-tag — Approve never re-runs the engine. Shipped in f56bb7d:
+  the centre plate follows its arm's count (`hardwareModel.resolve` `lineQtyOf`, +5 assertions → 699); `Shared/cartStaleness` (30) +
+  generated `Shared/engineVersion.js` (hash of the five engine files, `scripts/stamp-engine-version.mjs`, prebuild) — every handoff
+  line stamps `engineVersion` + `pinsFingerprint`; CRM Approve compares and warns (reopen · re-save · approve), stamps
+  `approvedWithStaleLines` when overridden, and no longer flips APPROVED before the confirm (QUO143 = a declined confirm).
+  STAMP RULE above (§ fast loop). OPEN: the hand correction of the three stale records (SO60429/60430/60431 rows + plate ×3 on
+  SO60428/60429) was BLOCKED by the session's permission classifier — waits on Stuart's mode change + "write"; Stuart fixes NetSuite by
+  hand. Two specs handed to S2 §6 + S3 §6 (bae705f): the backorder hold is decorative (split writes `held` only on non-pick-only docs,
+  no floor screen reads it); one order two finishes (S04 wood + P14 metal → one fin doc per recipe).
 
 - **2026-09-13 — f29c4db (S1) pushed 17:22, SWEPT: version stamp 1789338315036; tab 7's `876.665697cc.chunk.js`. CLOSE-OUT item 4 (#17) DONE.** `Shared/quickShipBackorder`
   (pure): `quickShipPullLines` (stock lines as pieces — per-foot by `qty`, packs by eaches; to-be-finished lines carry `finishOutsourced` only when
