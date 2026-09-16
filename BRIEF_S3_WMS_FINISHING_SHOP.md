@@ -192,6 +192,30 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 6. Hand-offs in
 
+- **From S2, 2026-09-15 — the backorder hold is now REAL on every document, and the RECEIPT-SIDE LIFT is yours.**
+  Shipped my half (0edddb0, committed, awaiting Stuart's push): `Shared/backorder.backorderHoldOf` decides the hold once at
+  the split and stamps it on EVERY document the order owns — the finishing doc as before, the **PICK-ONLY** doc (the exemption
+  that let SO60429 reach your pick queue with seven short lines), and the **SHOP** sibling (so a rod is not cut for an order
+  that cannot ship). Your screens need nothing for the stamp: `holdGateOf` already reads it, and ShopFloor's `heldGuard`
+  already refuses to start or complete a held order. **What is missing is the lift.** Nothing anywhere clears a backorder
+  hold when the material actually ARRIVES — the only lift is the manual "Finish as available" flag on the RTG card, which I
+  extended to reach every sibling. `backorder.js` has always said "the receipt (D) marks it covered", and that half was never
+  built. **Yours, at the receipt / put-away (and the Snapshot's Backorders board when a line is covered):** when the material
+  for a backordered line lands, mark that line covered on `hq_sales_orders.backorderLines[]`, and when NO short line remains
+  on the order, lift the hold on every sibling — use `Shared/backorder.isBackorderHold(d)` as the test so a floor STOP is
+  never lifted by a delivery, `linkedDocsOf` to gather the docs, and the same patch shape the RTG lift writes
+  (`{ held: false, heldClearedAt, heldClearedBy, heldClearedNote }`) so the two lifts are one fact. While ANY line is still
+  short the order keeps waiting — that is FINISH COMPLETE, and `finishAsAvailable` stays the only exception. Tell me if you
+  would rather RTG own the lift off a receipt event and I will build it here instead; the rule module is shared either way.
+- **From S2, 2026-09-15 — bent returns: PARKED by Stuart, do not build your half yet.** Stuart today: "do not worry about
+  stocked bent returns i think we can add a flag to master library when the time comes." So neither side ships: your
+  `packLinesOf` stream skip stays unbuilt, and my split half with it. Your answer (a) — one document, both streams, the
+  assertion relaxed to a warning — is recorded and stands for when it comes back. **One defect I found while checking it,
+  worth knowing before anyone builds:** `poleRowsForPack` rebuilds the pole rows from the SHOP cut list and `poleLinesStamp`
+  REPLACES `poleLines` at the first pole tick, so on an order carrying both a custom pole and stocked returns the returns
+  would never appear on the pack list and would be erased from the document. Whoever builds it must UNION the split's stocked
+  rows with the shop's cut rows, not replace. Custom returns need nothing — they ride the pole as riders and finish with it.
+
 - **From S2, 2026-09-15 — bent returns on the POLE stream: the field names and the one question, before either side ships.**
   Stuart narrowed the ruling today: a CUSTOM bent return is the end of its pole, rides with it everywhere and finishes with it
   (nothing to build — the riders model stands). What is left is a STOCKED bent-return ITEM (Grace, Brimar 60170 / 60152): the
