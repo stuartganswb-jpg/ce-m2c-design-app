@@ -54,6 +54,7 @@ import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
 import { soLinesSql, fulfilmentItemsOf, refusalText } from "../Shared/fulfilmentLines";
+import FulfilmentPanel from "../Shared/fulfilmentPanel";
 import { fetchNsPurchaseOrder, importNsPurchaseOrder, recordPoReceipt, openQtyOf, poRef } from "../Shared/purchaseOrders";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
 
@@ -5140,6 +5141,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 })()}
 
                 {/* 📦 TAB: PACKING STATION */}
+                {/* FULFILMENT (S4's module, mounted once here — BRIEF_S4 §1): packed orders ship. */}
+                {activeTab === 'FULFILMENT' && (
+                    <FulfilmentPanel operator={operator} activeBrand={activeBrand} docs={[...finAll, ...quickShipOrders]}
+                        soIndex={soIndex} stdBoxes={stdBoxes} isQsOrder={isQsOrder} packRefOf={packRef} writeLog={writeLog} />
+                )}
                 {activeTab === 'PACKING' && (() => {
                     const allLines = packJob ? packLinesFor(packJob) : [];
                     const lines = allLines.filter(l => !l.rider);   // riders show under their pole, never as rows

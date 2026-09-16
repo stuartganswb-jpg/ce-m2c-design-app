@@ -8,7 +8,8 @@
 //
 // KEYS ARE PERMISSION IDENTITY. pick_config/permissions stores each role's allowed tabs BY KEY, so
 // renaming one silently revokes that tab for every role. Rename the LABEL below instead.
-export const PICK_TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'RECEIVING', 'ROD CUTS', 'TRANSFER', 'PLATING', 'LABELS', 'CHIPS', 'GALLERY', 'MESSAGING', 'APP IMP'];
+// 'FULFILMENT' (S4, 2026-09-16): packed orders ship here — UPS rate, label, tracking to NetSuite.
+export const PICK_TABS = ['QUEUE', 'STOCK', 'FULFILMENT', 'PACKING', 'COUNT', 'CONVERT', 'RECEIVING', 'ROD CUTS', 'TRANSFER', 'PLATING', 'LABELS', 'CHIPS', 'GALLERY', 'MESSAGING', 'APP IMP'];
 
 // Display name for a tab key — used by the WMS nav and by the permission matrix, so an admin
 // ticking a row sees exactly the words the operator sees on the floor.
@@ -20,6 +21,7 @@ export const pickTabLabel = (tab) => String(tab || '')
     // renaming it would silently revoke the tab for every role that has it ticked.
     .replace('STOCK', 'SO PACK')
     .replace('PACKING', 'PACKAGING PREP')
+    .replace('FULFILMENT', 'FULFILLMENT')
     .replace('GALLERY', 'ASSET GALLERY')
     .replace('COUNT', 'BIN COUNT')
     .replace('ROD CUTS', 'ROD CUTS & RING PACKS')

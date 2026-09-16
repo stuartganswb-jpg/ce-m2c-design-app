@@ -2531,3 +2531,206 @@ exports.upsProbe = onCall({
         return { ok: false, stage: 'rating', tokenOk: true, error: String(e.message || e) };
     }
 });
+
+// ============================================================================
+// 🚚 UPS — rate · ship · void (the WMS Fulfilment tab)
+// ============================================================================
+// Staff callables (App Check + a staff role; portal customers refused). The ENVIRONMENT is decided
+// on the server from system/ups_config.environment ('CIE' test | 'PRODUCTION'), never by the
+// browser — a test click can never buy a real label. Default is CIE. One shipper account per
+// brand; a brand with no account on file refuses (NO_UPS_ACCOUNT_FOR_BRAND) — never a default.
+const UPS_HOSTS = { CIE: 'https://wwwcie.ups.com', PRODUCTION: 'https://onlinetools.ups.com' };
+const UPS_SHIPPERS = {
+    ce: { secret: UPS_ACCOUNT_CE, name: 'Classical Elements', phone: '3369673313', address: { AddressLine: ['1200 Redding Dr'], City: 'High Point', StateProvinceCode: 'NC', PostalCode: '27260', CountryCode: 'US' } },
+};
+const upsTokenCache = {};
+
+const assertStaffUser = (request) => {
+    const t = (request.auth && request.auth.token) || {};
+    if (!request.auth || t.customer === true || !String(t.role || '').trim()) {
+        throw new HttpsError('permission-denied', 'Staff only.');
+    }
+    return String(t.role).toLowerCase();
+};
+
+const upsEnvironment = async () => {
+    try {
+        const snap = await admin.firestore().doc('system/ups_config').get();
+        return snap.exists && snap.data().environment === 'PRODUCTION' ? 'PRODUCTION' : 'CIE';
+    } catch (e) { return 'CIE'; }
+};
+
+const upsShipperFor = (brand) => {
+    const s = UPS_SHIPPERS[String(brand || '').toLowerCase()];
+    if (!s) throw new HttpsError('failed-precondition', `NO_UPS_ACCOUNT_FOR_BRAND: no UPS shipper account is on file for "${brand}".`);
+    return { ...s, account: s.secret.value().trim() };
+};
+
+const upsToken = async (env, account) => {
+    const hit = upsTokenCache[env];
+    if (hit && hit.exp > Date.now() + 60000) return hit.token;
+    const basic = Buffer.from(`${UPS_CLIENT_ID.value().trim()}:${UPS_CLIENT_SECRET.value().trim()}`).toString('base64');
+    const r = await fetch(`${UPS_HOSTS[env]}/security/v1/oauth/token`, {
+        method: 'POST',
+        headers: { 'Authorization': `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', 'x-merchant-id': account },
+        body: 'grant_type=client_credentials',
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || !body.access_token) throw new HttpsError('unavailable', `UPS login failed (HTTP ${r.status}): ${upsErrorText(body) || 'no token'}`);
+    upsTokenCache[env] = { token: body.access_token, exp: Date.now() + (Number(body.expires_in) || 3600) * 1000 };
+    return body.access_token;
+};
+
+const upsCall = async (env, account, method, path, payload) => {
+    const token = await upsToken(env, account);
+    const r = await fetch(`${UPS_HOSTS[env]}${path}`, {
+        method,
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'transId': `ce-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, 'transactionSrc': 'ce-workcenter' },
+        ...(payload ? { body: JSON.stringify(payload) } : {}),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new HttpsError('failed-precondition', `UPS refused (HTTP ${r.status}): ${upsErrorText(body) || 'no detail'}`);
+    return body;
+};
+
+// Printable text only, trimmed and capped to UPS's field length.
+const cleanStr = (v, max) => String(v === undefined || v === null ? '' : v)
+    .split('').map((ch) => (ch.charCodeAt(0) < 32 ? ' ' : ch)).join('')
+    .trim().slice(0, max);
+
+// The browser's ship-to + packages, checked and shaped for UPS. Refuses with the field named.
+const upsShipToOf = (a) => {
+    const s = a || {};
+    const addr1 = cleanStr(s.addr1, 35), city = cleanStr(s.city, 30), state = cleanStr(s.state, 5).toUpperCase(), zip = cleanStr(s.zip, 10);
+    const country = (cleanStr(s.country, 2) || 'US').toUpperCase();
+    const missing = [['street', addr1], ['city', city], ['state', state], ['zip', zip]].filter(([, v]) => !v).map(([k]) => k);
+    const name = cleanStr(s.addressee || s.attention, 35);
+    if (!name) missing.unshift('name / company');
+    if (missing.length) throw new HttpsError('invalid-argument', `Ship-to is missing: ${missing.join(', ')}.`);
+    const phone = cleanStr(s.phone, 20).replace(/[^0-9]/g, '');
+    return {
+        Name: name,
+        ...(cleanStr(s.attention, 35) ? { AttentionName: cleanStr(s.attention, 35) } : {}),
+        ...(phone ? { Phone: { Number: phone } } : {}),
+        Address: {
+            AddressLine: [addr1, cleanStr(s.addr2, 35)].filter(Boolean),
+            City: city, StateProvinceCode: state, PostalCode: zip, CountryCode: country,
+            ...(s.residential === true ? { ResidentialAddressIndicator: '' } : {}),
+        },
+    };
+};
+
+const upsPackagesOf = (packages, packagingKey, reference) => {
+    const list = Array.isArray(packages) ? packages : [];
+    if (!list.length) throw new HttpsError('invalid-argument', 'Add at least one package.');
+    if (list.length > 20) throw new HttpsError('invalid-argument', 'At most 20 packages per shipment.');
+    return list.map((p, i) => {
+        const [l, w, h, wt] = [Number(p.length), Number(p.width), Number(p.height), Number(p.weight)];
+        const bad = [['length', l], ['width', w], ['height', h]].filter(([, v]) => !(v > 0 && v <= 108)).map(([k]) => k);
+        if (bad.length) throw new HttpsError('invalid-argument', `Package ${i + 1}: ${bad.join(', ')} must be between 0 and 108 inches.`);
+        if (!(wt > 0 && wt <= 150)) throw new HttpsError('invalid-argument', `Package ${i + 1}: weight must be between 0 and 150 lb.`);
+        return {
+            [packagingKey]: { Code: '02' },
+            Dimensions: { UnitOfMeasurement: { Code: 'IN' }, Length: String(Math.ceil(l)), Width: String(Math.ceil(w)), Height: String(Math.ceil(h)) },
+            PackageWeight: { UnitOfMeasurement: { Code: 'LBS' }, Weight: String(Math.max(1, Math.ceil(wt))) },
+            ...(reference ? { ReferenceNumber: [{ Value: cleanStr(reference, 35) }] } : {}),
+        };
+    });
+};
+
+exports.upsRate = onCall({
+    enforceAppCheck: true,
+    secrets: [UPS_CLIENT_ID, UPS_CLIENT_SECRET, UPS_ACCOUNT_CE],
+}, async (request) => {
+    assertStaffUser(request);
+    const { brand, shipTo, packages } = request.data || {};
+    const env = await upsEnvironment();
+    const shipper = upsShipperFor(brand);
+    const origin = { Name: shipper.name, Address: shipper.address };
+    const body = await upsCall(env, shipper.account, 'POST', '/api/rating/v2409/Shop', {
+        RateRequest: {
+            Request: { TransactionReference: { CustomerContext: 'wms-rate' } },
+            Shipment: {
+                Shipper: { ...origin, ShipperNumber: shipper.account },
+                ShipFrom: origin,
+                ShipTo: upsShipToOf(shipTo),
+                PaymentDetails: { ShipmentCharge: [{ Type: '01', BillShipper: { AccountNumber: shipper.account } }] },
+                ShipmentRatingOptions: { NegotiatedRatesIndicator: '' },
+                Package: upsPackagesOf(packages, 'PackagingType'),
+            },
+        },
+    });
+    const services = [].concat((body.RateResponse && body.RateResponse.RatedShipment) || []).map((s) => {
+        const code = (s.Service && s.Service.Code) || '';
+        const neg = s.NegotiatedRateCharges && s.NegotiatedRateCharges.TotalCharge;
+        return {
+            code, name: UPS_SERVICE_NAMES[code] || `Service ${code}`,
+            published: s.TotalCharges ? Number(s.TotalCharges.MonetaryValue) : null,
+            negotiated: neg ? Number(neg.MonetaryValue) : null,
+            businessDays: (s.GuaranteedDelivery && s.GuaranteedDelivery.BusinessDaysInTransit) || null,
+        };
+    });
+    const alerts = [].concat((body.RateResponse && body.RateResponse.Response && body.RateResponse.Response.Alert) || []).map((a) => `${a.Code || ''} ${a.Description || ''}`.trim());
+    return { environment: env, services, alerts };
+});
+
+exports.upsShip = onCall({
+    enforceAppCheck: true,
+    secrets: [UPS_CLIENT_ID, UPS_CLIENT_SECRET, UPS_ACCOUNT_CE],
+}, async (request) => {
+    assertStaffUser(request);
+    const { brand, shipTo, packages, serviceCode, reference } = request.data || {};
+    const code = cleanStr(serviceCode, 3);
+    if (!UPS_SERVICE_NAMES[code]) throw new HttpsError('invalid-argument', 'Choose a UPS service first.');
+    const env = await upsEnvironment();
+    const shipper = upsShipperFor(brand);
+    const shipperBlock = { Name: shipper.name, AttentionName: 'Shipping', Phone: { Number: shipper.phone }, Address: shipper.address };
+    const body = await upsCall(env, shipper.account, 'POST', '/api/shipments/v2409/ship', {
+        ShipmentRequest: {
+            Request: { RequestOption: 'nonvalidate', TransactionReference: { CustomerContext: cleanStr(reference, 50) || 'wms-ship' } },
+            Shipment: {
+                Description: cleanStr(reference, 50) || 'Order',
+                Shipper: { ...shipperBlock, ShipperNumber: shipper.account },
+                ShipFrom: shipperBlock,
+                ShipTo: upsShipToOf(shipTo),
+                PaymentInformation: { ShipmentCharge: [{ Type: '01', BillShipper: { AccountNumber: shipper.account } }] },
+                Service: { Code: code },
+                ShipmentRatingOptions: { NegotiatedRatesIndicator: '' },
+                Package: upsPackagesOf(packages, 'Packaging', reference),
+            },
+            LabelSpecification: { LabelImageFormat: { Code: 'GIF' }, LabelStockSize: { Height: '6', Width: '4' } },
+        },
+    });
+    const res = (body.ShipmentResponse && body.ShipmentResponse.ShipmentResults) || {};
+    const pkgs = [].concat(res.PackageResults || []);
+    const neg = res.NegotiatedRateCharges && res.NegotiatedRateCharges.TotalCharge;
+    return {
+        environment: env,
+        shipmentId: res.ShipmentIdentificationNumber || '',
+        serviceCode: code,
+        serviceName: UPS_SERVICE_NAMES[code],
+        published: res.ShipmentCharges && res.ShipmentCharges.TotalCharges ? Number(res.ShipmentCharges.TotalCharges.MonetaryValue) : null,
+        negotiated: neg ? Number(neg.MonetaryValue) : null,
+        packages: pkgs.map((p) => ({
+            trackingNumber: p.TrackingNumber || '',
+            labelGif: (p.ShippingLabel && p.ShippingLabel.GraphicImage) || '',
+        })),
+    };
+});
+
+exports.upsVoid = onCall({
+    enforceAppCheck: true,
+    secrets: [UPS_CLIENT_ID, UPS_CLIENT_SECRET, UPS_ACCOUNT_CE],
+}, async (request) => {
+    assertStaffUser(request);
+    const { brand, shipmentId, environment } = request.data || {};
+    const id = cleanStr(shipmentId, 30).replace(/[^A-Za-z0-9]/g, '');
+    if (!id) throw new HttpsError('invalid-argument', 'No shipment id to void.');
+    const env = await upsEnvironment();
+    // A label is voided on the host that made it — a test label never crosses to production.
+    if (environment && environment !== env) throw new HttpsError('failed-precondition', `This label was made in ${environment}; UPS is now set to ${env}. Switch back to void it.`);
+    const shipper = upsShipperFor(brand);
+    const body = await upsCall(env, shipper.account, 'DELETE', `/api/shipments/v2409/void/cancel/${encodeURIComponent(id)}`);
+    const status = body.VoidShipmentResponse && body.VoidShipmentResponse.SummaryResult && body.VoidShipmentResponse.SummaryResult.Status;
+    return { environment: env, voided: true, status: (status && status.Description) || 'Voided' };
+});

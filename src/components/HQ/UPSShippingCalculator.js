@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { httpsCallable } from 'firebase/functions';
-import { auth, functions } from '../../firebase';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { auth, functions, db } from '../../firebase';
 import {
   INTL_RATES, EXPORT_REGIONS, IMPORT_REGIONS,
   CA_REGIONS, MX_REGIONS, FROM_CA_REGIONS, FROM_MX_REGIONS,
@@ -767,7 +768,66 @@ function UpsConnectionProbe() {
   }, []);
 
   if (!isAdmin) return null;
+  return (
+    <>
+      <UpsWmsSettings />
+      <UpsProbeRunner busy={busy} setBusy={setBusy} result={result} setResult={setResult} />
+    </>
+  );
+}
 
+// ---------------------------------------------------------------------------
+// WMS FULFILLMENT SETTINGS (admins only) — system/ups_config. The upsRate / upsShip functions read
+// `environment` on the server, so TEST vs LIVE is decided here, never by a floor click.
+// ---------------------------------------------------------------------------
+function UpsWmsSettings() {
+  const [cfg, setCfg] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => onSnapshot(doc(db, 'system', 'ups_config'),
+    (s) => setCfg({ environment: 'CIE', rateDisplay: 'both', ...(s.exists() ? s.data() : {}) }), () => setCfg({ environment: 'CIE', rateDisplay: 'both' })), []);
+
+  if (!cfg) return null;
+  const isLive = cfg.environment === 'PRODUCTION';
+
+  const save = async (patch) => {
+    if (patch.environment === 'PRODUCTION' && !window.confirm('Switch UPS to LIVE?\n\nFrom now on, "Ship" on the WMS Fulfillment tab buys real labels billed to the UPS account, records tracking on the order, and updates NetSuite.')) return;
+    setSaving(true);
+    try {
+      const by = (auth.currentUser && (auth.currentUser.displayName || auth.currentUser.email || auth.currentUser.uid)) || '';
+      await setDoc(doc(db, 'system', 'ups_config'), { ...patch, updatedAt: Date.now(), updatedBy: by }, { merge: true });
+    } catch (e) {
+      alert(`Could not save the UPS setting: ${e.message || e}`);
+    } finally { setSaving(false); }
+  };
+
+  const chip = (active) => ({ padding: '7px 12px', border: `1px solid ${active ? theme.ink : theme.line}`, background: active ? theme.ink : '#fff', color: active ? '#fff' : theme.ink, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: saving ? 'wait' : 'pointer' });
+
+  return (
+    <div style={{ marginBottom: '14px', padding: '14px 16px', border: `1px solid ${theme.line}`, background: '#fff' }}>
+      <div style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.12em', textTransform: 'uppercase', color: theme.brass, marginBottom: '10px' }}>WMS Fulfillment · UPS settings · Admin</div>
+      <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <span style={{ fontSize: '12px', color: theme.inkSoft, marginRight: '4px' }}>Mode</span>
+          <button style={chip(!isLive)} disabled={saving} onClick={() => save({ environment: 'CIE' })}>Test</button>
+          <button style={{ ...chip(isLive), ...(isLive ? { background: '#3a7d44', borderColor: '#3a7d44' } : {}) }} disabled={saving} onClick={() => save({ environment: 'PRODUCTION' })}>Live</button>
+        </div>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <span style={{ fontSize: '12px', color: theme.inkSoft, marginRight: '4px' }}>WMS shows</span>
+          {[['both', 'Both rates'], ['negotiated', 'Negotiated'], ['published', 'Published']].map(([k, lbl]) => (
+            <button key={k} style={chip(cfg.rateDisplay === k)} disabled={saving} onClick={() => save({ rateDisplay: k })}>{lbl}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{ marginTop: '8px', fontSize: '12px', color: theme.inkSoft }}>
+        {isLive ? 'LIVE — the Fulfillment tab buys real labels and records shipments.' : 'TEST — the Fulfillment tab makes sample labels only; nothing is recorded or billed.'}
+        {cfg.updatedBy ? ` Last changed by ${cfg.updatedBy}.` : ''}
+      </div>
+    </div>
+  );
+}
+
+function UpsProbeRunner({ busy, setBusy, result, setResult }) {
   const run = async () => {
     setBusy(true); setResult(null);
     try {
