@@ -130,6 +130,11 @@ const ES = {
     'Work order': 'Orden de trabajo',
     'Sales order': 'Orden de venta',
     'UOM / pack': 'Unidad / paquete',
+    // The unit words the floor reads on a count (Stuart 2026-09-16: "3 each or 3 prs").
+    'pcs': 'pzas',
+    'pair': 'par',
+    'pairs': 'pares',
+    'pair(s)': 'par(es)',
     'the part, its name and its barcode': 'la pieza, su nombre y su código de barras',
     'a shelf location': 'una ubicación del estante',
     'the setup label the floor carries': 'la etiqueta de preparación que lleva el taller',

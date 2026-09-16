@@ -8,6 +8,7 @@ import { signInWithCustomToken, signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { emitLabel, printShopBinLabel, printShopCompletionLabel } from '../Shared/labelPrint';
+import { uomLabel } from '../Shared/uom';
 import './shopStyles.css';
 
 // IMPORT THE COMPONENTS
@@ -1225,7 +1226,7 @@ const ShopFloor = () => {
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', border: '1px solid var(--line)', padding: '3px 7px', whiteSpace: 'nowrap', color: 'var(--ink-soft)' }}>WO {order.woNum}</span>
                 </div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '10px' }}>
-                    {(c => c ? `${c} · ` : '')(shopItemCodeOf(order))}SO {soNumOf(order)} · Qty {order.qty}{order.cutLength ? ` · Cut ${order.cutLength}"` : ''}{order.clientName ? ` · ${order.clientName}` : ''}{order.isOutsourced ? ' · PLATED (outsourced)' : ''}
+                    {(c => c ? `${c} · ` : '')(shopItemCodeOf(order))}SO {soNumOf(order)} · {order.uom ? uomLabel(order.qty, order.uom) : `Qty ${order.qty}`}{order.cutLength ? ` · Cut ${order.cutLength}"` : ''}{order.clientName ? ` · ${order.clientName}` : ''}{order.isOutsourced ? ' · PLATED (outsourced)' : ''}
                 </div>
                 {cutSheetMissing(order) && (
                     <div style={{ marginBottom: '10px', padding: '6px 10px', background: '#fdf2f2', border: '1px solid #d9534f', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>⚠ No cut sheet from Vision — confirm the numbers with HQ before starting</div>
@@ -1310,10 +1311,10 @@ const ShopFloor = () => {
         // reprint from Recently Completed (same function).
         const shopLabelCuts = (order) => (Array.isArray(order.cutList) ? order.cutList : [])
             .filter(c => c && c.cutLength != null && String(c.cutLength) !== '')
-            .map(c => ({ cutLength: c.cutLength, qty: c.qty, name: c.name || '' }));
+            .map(c => ({ cutLength: c.cutLength, qty: c.qty, name: c.name || '', uom: c.uom || null }));
         const printZebraLabel = (order) => {
             const cuts = shopLabelCuts(order);
-            const one = (qty, cutLength, cutTag) => `
+            const one = (qty, cutLength, cutTag, uom) => `
                 ^XA
                 ^FO50,50^A0N,40,40^FDWO: ${order.woNum}${cutTag ? `  ${cutTag}` : ''}^FS
                 ^FO50,100^A0N,30,30^FDSO: ${soNumOf(order)}^FS
@@ -1321,17 +1322,17 @@ const ShopFloor = () => {
                 ${order.isOutsourced ? `^FO50,200^A0N,30,30^FDService/Ea: $${order.outsourcePrice}^FS` : ''}
                 ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
                 ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${shopItemCodeOf(order) || order.item || order.partNum}^FS
-                ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${qty}  ${cutLength ? `Cut: ${cutLength}"` : ''}^FS
+                ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${uom ? uomLabel(qty, uom) : qty}  ${cutLength ? `Cut: ${cutLength}"` : ''}^FS
                 ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.orderKey || order.woNum}^FS
                 ^XZ
             `;
             const zpl = cuts.length > 1
-                ? cuts.map((c, i) => one(c.qty, c.cutLength, `Cut ${i + 1}/${cuts.length}`)).join('')
-                : one(order.qty, order.cutLength, '');
+                ? cuts.map((c, i) => one(c.qty, c.cutLength, `Cut ${i + 1}/${cuts.length}`, c.uom || order.uom)).join('')
+                : one(order.qty, order.cutLength, '', order.uom);
             emitLabel(zpl, () => printShopCompletionLabel({
                 woNum: order.woNum, soNum: soNumOf(order), orderKey: order.orderKey,
                 item: shopItemCodeOf(order) || order.item || order.partNum, qty: order.qty, cutLength: order.cutLength,
-                cuts,
+                cuts, uom: order.uom || null,
                 finishRecipe: order.finishRecipe, isOutsourced: order.isOutsourced,
                 outsourcePrice: order.outsourcePrice, clientName: order.clientName
             }));
@@ -1440,7 +1441,7 @@ const ShopFloor = () => {
                     </div>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '16px' }}>SO: {soNumOf(order)}{(c => c ? ` · ${c}` : '')(shopItemCodeOf(order))}</div>
                     <div style={{ display: 'flex', gap: '24px', marginBottom: '20px', background: 'var(--paper)', padding: '16px', border: '1px solid var(--line)' }}>
-                        <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.qty}</span></div>
+                        <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.uom ? uomLabel(order.qty, order.uom) : order.qty}</span></div>
                         {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
                     </div>
 
@@ -1702,7 +1703,7 @@ const ShopFloor = () => {
                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>
                                             {m > 1
                                                 ? <>Qty <b style={{ color: 'var(--brass)' }}>{t.short}</b> = {t.total}</>
-                                                : <>Qty {c.qty}</>}
+                                                : <>{c.uom ? uomLabel(c.qty, c.uom) : `Qty ${c.qty}`}</>}
                                             {c.cutLength ? ` · ${c.cutLength}"` : ''}
                                         </span>
                                     ); })()}

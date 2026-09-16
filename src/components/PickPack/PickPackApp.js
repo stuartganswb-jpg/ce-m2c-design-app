@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import { coverArrival } from '../Shared/backorderCover';
+import { uomOf, uomLabel } from '../Shared/uom';
 import { orderStatusOf, customPartsReady, liftPatchFor } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
@@ -952,7 +953,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (count <= 0) return;
             printRodLabels({ orderRef: packRef(job), itemId: l.erp || '', sidemark: sidemark.trim(), length: String(length).trim(), count });
         } else {
-            printStockItemLabels({ itemId: l.erp || '', itemName: l.name || '', uom: 'EA', woNum: packRef(job), copies: Math.max(1, Math.min(50, Number(l.qty) || 1)) });
+            printStockItemLabels({ itemId: l.erp || '', itemName: l.name || '', uom: lineUom(l), woNum: packRef(job), copies: Math.max(1, Math.min(50, Number(l.qty) || 1)) });
         }
     };
 
@@ -1208,6 +1209,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             return r;
         } catch (e) { console.warn('backorder cover failed (the receipt stands):', e); return null; }
     };
+    // UNIT OF MEASURE ON EVERY LINE (Stuart 2026-09-16: "3 each or 3 prs"). The line's own stamp
+    // (S2's split writes `uom` + `pcs`) wins; an order already on the floor falls back to the
+    // library item. The string is Shared/uom's — no screen composes its own.
+    const partOfCode = (code) => { const c = String(code || '').trim().toUpperCase(); return c ? (hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === c) || null) : null; };
+    const lineUom = (l) => (l && l.uom) ? l.uom : uomOf(partOfCode(l && (l.erp || l.legacyErpId || l.partId || l.itemId || l.code)));
+    const qtyLabel = (l, qty) => uomLabel(qty != null ? qty : (Number(l && (l.quantity ?? l.qty)) || 0), lineUom(l));
     const coverNoteOf = (r) => !r || !r.covered.length ? '' : `\n\n⏸ Backorders: ${r.covered.map(c => `${c.take} × ${c.code} → SO ${c.soRef}${c.remaining > 0 ? ` (${c.remaining} still short)` : ''}`).join('; ')}${r.lifted.length ? `\n▶ Hold lifted on ${r.lifted.length} order(s) — nothing short remains.` : ''}`;
     const notifyOps = async (msg) => {
         try { await addDoc(collection(db, 'global_messages'), { sender: 'System', sourceApp: 'WMS', target: 'ALL', isSystem: true, t: serverTimestamp(), msg }); }
@@ -1630,7 +1637,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
 
     const printOrderLineLabels = (job, line) => printStockItemLabels({
-        itemId: line.erp || line.code || '', itemName: line.name || '', uom: 'EA',
+        itemId: line.erp || line.code || '', itemName: line.name || '', uom: lineUom(line),
         woNum: packRef(job), copies: Math.max(1, Math.min(50, Number(line.qty) || 1)),
     });
     const printAllOrderLabels = (job, lines) => {
@@ -2709,7 +2716,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     kind: 'SETUP · POLES (CUT)',
                     woRef: o.finWoId, orderKey: o.finWoId,
                     item: o.finWoErpId || o.targetItemId,
-                    qty: o.finWoQty || o.qtyTarget,
+                    qty: o.finWoQty || o.qtyTarget, qtyLabel: `${o.finWoQty || o.qtyTarget || 0} pcs`,
                     finish: o.finWoRecipe || '',
                     customer: 'Internal Stock',
                 });
@@ -3947,6 +3954,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             item: job.stockErpId || job.type || '',
             qty: job.totalParts || '',
             finish: job.recipe || '',
+            qtyLabel: `${job.totalParts || 0} pcs`,
             customer: job.customerName || job.clientName || job.customer || ''
         };
         // ONE ORDER, MACHINE-SIZED LOADS (Stuart 2026-08-28): a small-parts order bigger than one
@@ -4594,7 +4602,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 multiplied total — say WHY it is doubled so the picker pulls it all
                                 instead of second-guessing the count against the per-config viewer. */}
                             <h2 style={{ margin: '0 0 30px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink, fontWeight: 500 }}>
-                                Target Qty: {lineQty(line)}
+                                Target Qty: {uomLabel(lineQty(line), lineUom(line))}
                                 {Number(line.configQty) > 1 && (
                                     <span style={{ display: 'block', fontFamily: theme.mono, fontSize: '0.85rem', color: theme.brass, marginTop: '6px', letterSpacing: '.04em' }}>
                                         = {line.configQty} identical configs × {line.qtyEach != null ? line.qtyEach : Math.round(lineQty(line) / Number(line.configQty))} each — pull the full {lineQty(line)}
@@ -4848,7 +4856,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         <span style={{ width: '130px', fontFamily: theme.mono, fontSize: '11px', color: theme.brass }} title={(liveOf(l)?.bins || []).map(b => `${b.bin}: ${b.qty}`).join(' · ') || 'no live data yet — tap ⟳ Live'}>
                                                             {lineBin(l)}{(() => { const lv = liveOf(l); return lv ? <span style={{ color: lv.bins.length ? '#3a7d44' : '#d9534f' }}> · {lv.bins.length ? `${lv.bins[0].qty} live` : (lv.total > 0 ? `${lv.total} unbinned` : 'none live')}</span> : null; })()}
                                                         </span>
-                                                        <span style={{ width: '40px', textAlign: 'right', fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>{Number(l.quantity ?? l.qty) || ''}</span>
+                                                        <span style={{ width: '110px', textAlign: 'right', fontFamily: theme.mono, fontSize: '11px', color: theme.ink, whiteSpace: 'nowrap' }}>{qtyLabel(l)}</span>
                                                     </div>
                                                 ))}
                                             </div>
@@ -5232,7 +5240,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 {side === 'left' && l.isPole && poleAway && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '2px' }}>AT THE PLATER — ticks when the pole is received and put away</div>}
                                 {side === 'right' && packJob.packedLines[l.key] && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: '#3a7d44', marginTop: '2px' }}>✓ {packJob.packedLines[l.key].by} · {new Date(packJob.packedLines[l.key].at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
                             </div>
-                            <span style={{ fontFamily: theme.mono, fontWeight: 'bold', fontSize: '1rem', color: theme.ink, whiteSpace: 'nowrap' }}>× {l.qty}</span>
+                            <span style={{ fontFamily: theme.mono, fontWeight: 'bold', fontSize: '1rem', color: theme.ink, whiteSpace: 'nowrap' }}>{l.isPole ? `× ${l.qty}` : qtyLabel(l, l.qty)}</span>
                             <button onClick={() => printPackLineLabel(packJob, l)} title={l.cat === 'POLE' ? 'Rod labels — sidemark · length · 1 of X per piece' : 'Item labels — one per piece'} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>🖨</button>
                             {side === 'left'
                                 ? <button onClick={() => confirmPackLine(packJob, l)} disabled={l.isPole && poleAway} style={{ background: l.isPole && poleAway ? theme.paper : theme.ink, color: l.isPole && poleAway ? theme.inkSoft : '#fff', border: l.isPole && poleAway ? `1px solid ${theme.line}` : 'none', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: l.isPole && poleAway ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>{l.isPole && poleAway ? 'At the plater' : '✓ Packed'}</button>
@@ -5400,11 +5408,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 const erp = String(packJob.stockErpId || packJob.type || '').toUpperCase();
                                                 const part = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === erp);
                                                 const copies = parseInt(window.prompt(`How many item labels for ${erp}?\n\nEach shows the item # (text + barcode), description, UOM — and WO ${packRef(packJob)} small on the right as the BATCH #.`, '1')) || 0;
-                                                if (copies > 0) printStockItemLabels({ itemId: erp, itemName: (part && part.itemName) || '', uom: (part && part.manufacturingSpecs?.uom) || 'EA', woNum: packRef(packJob), copies });
+                                                if (copies > 0) printStockItemLabels({ itemId: erp, itemName: (part && part.itemName) || '', uom: uomOf(part), woNum: packRef(packJob), copies });
                                             }} title="Item labels with the WO # as batch reference" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
                                         ) : (<>
                                             {!isQsOrder(packJob) && (
-                                                <button onClick={() => printHandshakeLabels({ woRef: packRef(packJob), orderKey: packJob.orderKey || packJob.salesOrderId || packJob.soNum || packJob.id, item: packJob.stockErpId || packJob.type || '', qty: packJob.totalParts || '', finish: packJob.recipe || '', customer: packJob.customerName || packJob.clientName || packJob.customer || '', hasCustom: !!packJob.hasCustomSibling })} title="Reprint both staging-handshake labels (small parts + custom shop when the order has one) — same barcode key the handshake scans" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Handshake Labels</button>
+                                                <button onClick={() => printHandshakeLabels({ woRef: packRef(packJob), orderKey: packJob.orderKey || packJob.salesOrderId || packJob.soNum || packJob.id, item: packJob.stockErpId || packJob.type || '', qty: packJob.totalParts || '', qtyLabel: `${packJob.totalParts || 0} pcs`, finish: packJob.recipe || '', customer: packJob.customerName || packJob.clientName || packJob.customer || '', hasCustom: !!packJob.hasCustomSibling })} title="Reprint both staging-handshake labels (small parts + custom shop when the order has one) — same barcode key the handshake scans" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Handshake Labels</button>
                                             )}
                                             <button onClick={() => { const ls = packLinesOf(packJob); if (ls.length) printItemLabels(ls.map(l => ({ itemId: l.erp, itemName: l.name }))); }} title="One 2×4 item label per line on this order" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
                                         </>)}
@@ -6809,7 +6817,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                                                     <input type="number" min="0" max={room} value={rcvQty[i] != null ? rcvQty[i] : ''} onChange={(e) => setRcvQty(q => ({ ...q, [i]: e.target.value }))} placeholder={String(room)} style={{ ...inp, width: '78px' }} />
-                                                    <button title={`Print ${copies} label(s) for ${l.itemId}`} onClick={() => printStockItemLabels({ itemId: l.itemId, itemName: l.description || '', uom: 'EA', woNum: poRef(po), copies })}
+                                                    <button title={`Print ${copies} label(s) for ${l.itemId}`} onClick={() => printStockItemLabels({ itemId: l.itemId, itemName: l.description || '', uom: uomOf(partOfCode(l.itemId)), woNum: poRef(po), copies })}
                                                         style={{ ...btn('transparent', theme.ink), border: `1px solid ${theme.line}` }}>🏷 {t('Labels')}</button>
                                                     <button disabled={rcvBusy} onClick={() => rcvAddToCart(i)} style={btn('#7d9a6f', '#fff')}>{t('Receive')}</button>
                                                 </div>
@@ -7097,7 +7105,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                                             what the pieces are now and what goes on the shelf. One per piece, for the
                                                                             quantity in the box beside it (or all of them if it is blank). */}
                                                                         <button disabled={!tgt} title={tgt ? `Print ${Math.max(1, Math.min(50, parseInt(cartQty[l.id] || l.qty) || 1))} × ${tgt} item label(s)` : 'This line has no plated code yet'}
-                                                                            onClick={() => printStockItemLabels({ itemId: tgt, itemName: l.itemName || '', uom: 'EA', woNum: l.shipmentId || l.woNum || '', copies: Math.max(1, Math.min(50, parseInt(cartQty[l.id] || l.qty) || 1)) })}
+                                                                            onClick={() => printStockItemLabels({ itemId: tgt, itemName: l.itemName || '', uom: uomOf(partOfCode(tgt)), woNum: l.shipmentId || l.woNum || '', copies: Math.max(1, Math.min(50, parseInt(cartQty[l.id] || l.qty) || 1)) })}
                                                                             style={{ ...btn('transparent', tgt ? theme.ink : theme.inkSoft), border: `1px solid ${theme.line}`, fontSize: '13px', padding: '8px 12px' }}>🖨</button>
                                                                         <button disabled={!tgt || isSyncing} onClick={() => receiveToCart(l, g.lines)} style={btn(!tgt ? theme.paper2 : theme.brass, !tgt ? theme.inkSoft : '#fff')}>{tgt ? t('Add to cart') : t('No finish')}</button>
                                                                     </div>
@@ -7393,7 +7401,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <input type="number" min="1" max="100" value={lblCopies} onChange={e => setLblCopies(e.target.value)} style={{ ...inp, textAlign: 'center' }} />
                                     </div>
                                     <button disabled={!lblItem} onClick={() => {
-                                        printStockItemLabels({ itemId: erpOf(lblItem), itemName: lblItem.itemName || '', uom: 'EA', woNum: '', copies });
+                                        printStockItemLabels({ itemId: erpOf(lblItem), itemName: lblItem.itemName || '', uom: uomOf(lblItem), woNum: '', copies });
                                         writeLog(`Printed ${copies} × ${erpOf(lblItem)} item label(s).`, 'wms');
                                     }} style={{ ...go(), marginTop: '16px', opacity: lblItem ? 1 : 0.4 }}>🖨 {t('Print')}</button>
                                 </div>
@@ -7425,7 +7433,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             const ref = woDoc ? woRefOf(woDoc) : lblRef.trim().toUpperCase();
                                             printSetupLabel({
                                                 kind: 'WORK ORDER', woRef: ref, orderKey: woDoc ? (woDoc.orderKey || woDoc.id) : ref,
-                                                item: woDoc ? woItemCodeOf(woDoc) : '', qty: woDoc ? (woDoc.totalParts || woDoc.qty || '') : '',
+                                                item: woDoc ? woItemCodeOf(woDoc) : '', qty: woDoc ? (woDoc.totalParts || woDoc.qty || '') : '', qtyLabel: woDoc ? `${woDoc.totalParts || woDoc.qty || 0} pcs` : '',
                                                 finish: woDoc ? (woDoc.recipe || '') : '', customer: woDoc ? (woDoc.customerName || woDoc.customer || '') : '',
                                             });
                                             writeLog(`Printed work order label ${ref}.`, 'wms');

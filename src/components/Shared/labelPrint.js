@@ -1,3 +1,4 @@
+import { uomLabel } from './uom.js';
 // Shared 2"x4" label printing (item + bin), single or batched, via the browser print dialog (renders
 // thumbnails + a scannable Code 128-B barcode with no external lib). Pick the 2x4 Zebra (or any printer).
 
@@ -187,12 +188,16 @@ const SETUP_CSS = `${PAGE_CSS}
 .ln{font-size:10.5pt;font-weight:700;margin-top:2pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .sub{font-size:8.5pt;color:#222;margin-top:1pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .bc{margin-top:auto;} .bc svg{width:100%;height:0.38in;display:block;} .bct{font-size:7pt;letter-spacing:1px;text-align:center;}`;
-const setupLabelInner = ({ kind, woRef, orderKey, item, qty, finish, customer }) => {
+// A QUANTITY NEVER PRINTS WITHOUT ITS UNIT (Stuart 2026-09-16): callers pass `qtyLabel` (the one
+// string from Shared/uom — "3 PR = 6 pcs", or "40 pcs" for a floor count); `qty` alone still prints
+// as ×N for the callers that have nothing better yet.
+const setupLabelInner = ({ kind, woRef, orderKey, item, qty, qtyLabel, finish, customer }) => {
     const key = String(orderKey || woRef || '');
+    const q = qtyLabel ? ` &nbsp;·&nbsp; ${esc(qtyLabel)}` : (qty ? ` &nbsp;×${esc(qty)}` : '');
     return `<div class="l">
   <div class="hd"><span class="k">${esc(kind || 'SETUP · SMALL PARTS')}</span><span class="tag">ATTACH TO FIXTURE</span></div>
   <div class="wo">${esc(woRef || key)}</div>
-  <div class="ln">${esc(item || '')}${qty ? ` &nbsp;×${esc(qty)}` : ''}${finish ? ` &nbsp;·&nbsp; ${esc(finish)}` : ''}</div>
+  <div class="ln">${esc(item || '')}${q}${finish ? ` &nbsp;·&nbsp; ${esc(finish)}` : ''}</div>
   <div class="sub">${esc(customer || '')}</div>
   <div class="bc">${code128BSvg(key)}<div class="bct">${esc(key)}</div></div>
 </div>`;
@@ -206,7 +211,7 @@ export const printMachineLoadLabels = (o, loads) => printDoc(`Setup ${o?.woRef |
     loads.map(l => setupLabelInner({
         ...o,
         kind: `${(o && o.kind) || 'SETUP · SMALL PARTS'} · PART ${l.part} OF ${loads.length}`,
-        qty: `${l.qty} (of ${o && o.qty ? o.qty : ''})`,
+        qty: null, qtyLabel: `${l.qty} pcs (of ${o && o.qty ? o.qty : ''})`,
     })));
 // Both halves of the handshake: the small-parts label + (when the order has shop custom parts)
 // the CUSTOM label — both barcode the same orderKey, which is exactly how VERIFY & STAGE pairs them.
@@ -454,12 +459,13 @@ export const printShopCompletionLabel = (o = {}) => {
     const key = String(o.orderKey || o.woNum || '');
     const toPlating = !!o.isOutsourced;
     const cuts = shopCompletionCuts(o);
-    const page = (qty, cutLength, cutTag) => `<div class="l">
+    // The count prints in the line's unit when the shop doc carries one ("3 PR = 6 pcs"), else ×N.
+    const page = (qty, cutLength, cutTag, uom) => `<div class="l">
   <div class="k">${toPlating ? 'CUSTOM · TO PLATING' : 'CUSTOM · SHOP COMPLETE'}${cutTag ? ` &nbsp;·&nbsp; ${cutTag}` : ''}</div>
   <div class="wo">${esc(o.woNum || key)}</div>
   <div class="rows">
     ${o.soNum ? `<div class="r"><b>SO:</b> ${esc(o.soNum)}</div>` : ''}
-    <div class="r">${esc(o.item || o.partNum || '')}${qty ? ` &nbsp;×${esc(qty)}` : ''}${cutLength ? ` &nbsp;·&nbsp; CUT ${esc(cutLength)}"` : ''}</div>
+    <div class="r">${esc(o.item || o.partNum || '')}${qty ? (uom ? ` &nbsp;·&nbsp; ${esc(uomLabel(qty, uom))}` : ` &nbsp;×${esc(qty)}`) : ''}${cutLength ? ` &nbsp;·&nbsp; CUT ${esc(cutLength)}"` : ''}</div>
     ${o.finishRecipe ? `<div class="r"><b>FINISH:</b> ${esc(o.finishRecipe)}</div>` : ''}
     ${toPlating && o.outsourcePrice ? `<div class="r"><b>SERVICE/EA:</b> $${esc(o.outsourcePrice)}</div>` : ''}
     ${o.clientName ? `<div class="r">${esc(o.clientName)}</div>` : ''}
@@ -467,7 +473,7 @@ export const printShopCompletionLabel = (o = {}) => {
   <div class="bc">${code128BSvg(key)}<div class="bct">${esc(key)}</div></div>
 </div>`;
     const bodies = cuts.length > 1
-        ? cuts.map((c, i) => page(c.qty, c.cutLength, `CUT ${i + 1}/${cuts.length}`))
-        : [page(o.qty, o.cutLength, '')];
+        ? cuts.map((c, i) => page(c.qty, c.cutLength, `CUT ${i + 1}/${cuts.length}`, c.uom || o.uom))
+        : [page(o.qty, o.cutLength, '', o.uom)];
     return printDoc(`Custom ${o.woNum || ''}`, SHOP_CSS, bodies);
 };
