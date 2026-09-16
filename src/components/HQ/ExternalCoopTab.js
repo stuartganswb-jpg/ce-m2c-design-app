@@ -22,6 +22,8 @@ import { invoiceDocOf } from '../Shared/invoiceMath';
 import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
 import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { soHeaderOf, jobHeaderPatchOf, EMPTY_SHIP_ADDRESS } from '../Shared/salesOrderHeader';
+import { staleLinesOf, staleApprovalText } from '../Shared/cartStaleness';
+import { ENGINE_VERSION } from '../Shared/engineVersion';
 import { printForm } from '../Shared/printForm';
 
 const printStyles = `
@@ -935,18 +937,56 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
       }
   };
 
+  // The lines Approve must warn about (Shared/cartStaleness.staleLinesOf) — the current pins of
+  // every assembly on the cart are read once each, here, because the pure module reads nothing.
+  // A pin read that fails leaves that assembly out of the map: the line is then judged on the
+  // engine version alone (never blocked by a read the CRM could not make).
+  const staleCartLinesOf = async (job) => {
+      const cartItems = (job.cpqData && job.cpqData.cartItems) || [];
+      const asmIds = [...new Set(cartItems.filter(it => it && it.engine === 'TAGS' && it.assemblyId).map(it => it.assemblyId))];
+      const pinsByAssembly = {};
+      for (const id of asmIds) {
+          try {
+              const snap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', id)));
+              pinsByAssembly[id] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          } catch (e) { console.warn('assembly_pins read failed for', id, e); }
+      }
+      return staleLinesOf(cartItems, { engineVersion: ENGINE_VERSION, pinsByAssembly });
+  };
+
   // APPROVE = CREATE THE SALES ORDER (Stuart 2026-08-25). One press: the job moves to the Sales
   // Orders window, the RTG board gets its card immediately, and the NetSuite estimate is
   // transformed into a real Sales Order through the staged sync — the step that used to be a
   // human opening NetSuite and pressing Transform by hand. The SO # writes back onto both docs.
+  //
+  // ⚠ APPROVED MEANS A SALES ORDER EXISTS (Stuart 2026-09-15, QUO143). The status used to flip
+  // before the confirm, so a Cancel — or a dismissed dialog — left a quote reading APPROVED with no
+  // sales order record and nothing queued, and the pipeline showed an order that was never made.
+  // Now nothing is written until the operator has said yes; every early exit leaves the quote as
+  // it was. The one exception keeps its old meaning: a quote that already IS a NetSuite sales
+  // order is simply marked.
+  //
+  // ⚠ A SAVED LINE IS WHAT IT WAS WHEN SAVED (Stuart 2026-09-15, SO60429 / SO60430 / SO60431).
+  // Approve never re-runs the engine — it transforms the estimate and splits the saved breakdown —
+  // so a quote saved before an engine change carries the old BOM to the floor and to NetSuite.
+  // Before the confirm, every line's stamp (the engine version and the tag fingerprint it was
+  // built from — Shared/cartStaleness) is compared with what runs now; a changed or unstamped line
+  // is named, and the way out is the one that always existed: reopen in CPQ, re-save, approve.
+  // Going on anyway is the operator's choice and is stamped on the job.
   const approveToSalesOrder = async (job) => {
-      await updateJobStatus(job.id, 'APPROVED');
-      if (job.netsuiteSalesOrderId) return;                       // SO already exists in NetSuite
+      if (job.netsuiteSalesOrderId) { await updateJobStatus(job.id, 'APPROVED'); return; }   // SO already exists in NetSuite
       if (!job.netsuiteEstimateId) {
-          alert(`Approved. No NetSuite estimate is on this quote yet (the save-time push may still be queuing — watch RTG's Transmit Log).\n\nPress Approve again once the estimate # appears to create the Sales Order.`);
+          alert(`No NetSuite estimate is on this quote yet (the save-time push may still be queuing — watch RTG's Transmit Log).\n\nPress Approve again once the estimate # appears to create the Sales Order. Nothing was changed.`);
           return;
       }
+      const stale = await staleCartLinesOf(job);
+      if (stale.length && !window.confirm(staleApprovalText(stale, { quoteNo: quoteDisplayNo(job) }))) return;
       if (!window.confirm(`Create the NetSuite Sales Order for ${quoteDisplayNo(job)} now?\n\nTransforms estimate ${job.netsuiteEstimateNo || job.netsuiteEstimateId} into a Sales Order (queued — posts in ~1 min, the SO # lands here and on the RTG board automatically).`)) return;
+      await updateJobStatus(job.id, 'APPROVED');
+      if (stale.length) {
+          try { await updateDoc(doc(db, 'jobs', job.id), { approvedWithStaleLines: stale.map(s => ({ line: s.index + 1, status: s.status, reasons: s.reasons })), approvedWithStaleLinesAt: Date.now(), approvedWithStaleLinesBy: currentUser || '' }); }
+          catch (e) { console.warn('stale-line stamp not written', e); }
+      }
       try {
           const soDocId = `SO-APP-${String(job.quoteNo || job.jobId || job.id).replace(/[^A-Za-z0-9-]/g, '')}`;
           // ONE HEADER, WHICHEVER DOOR (Brief E, Q9/Q10 — Shared/salesOrderHeader): built from the

@@ -1387,6 +1387,9 @@ function HardwareConfiguratorInner({
         const displayBoard = displaySnapshot ? { widthIn: displayMode.widthIn, heightIn: displayMode.heightIn, lengthInches, readsInches: frameRectRef.current.reading != null ? Math.round(frameRectRef.current.reading * 10) / 10 : null } : null;
         const item = handoffItem(resolved, {
             ...priceCtx, assembly, flow, findPart, qty: cfgQtyN, renderSnapshot,
+            // The pins this line was resolved from — fingerprinted on the line so Approve can tell
+            // when the tags have changed since the save (Shared/cartStaleness).
+            pins,
             sidemark: configMemo, memo: configMemo,
             finishes: chosenFinishObjects, finishLabel: finishLabelOf(chosenFinishObjects),
             priceLevel: effectiveLevel, lengthInches, lengthFeet,

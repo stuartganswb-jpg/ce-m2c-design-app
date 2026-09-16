@@ -34,6 +34,8 @@
 
 import { applyKitPricing, BILL_GROUP } from './kitSeed.js';
 import { priceConfiguration } from './hardwarePricing.js';
+import { ENGINE_VERSION } from './engineVersion.js';
+import { pinsFingerprint } from './cartStaleness.js';
 
 /** Lines a customer may see: no BOM-only parts. */
 export const customerLines = (lines = []) => lines.filter(l => !l.hidden);
@@ -286,6 +288,15 @@ export function handoffItem(resolved, ctx = {}) {
         trvComponents,
         // What the engine is: the flag that tells a consumer which shape to expect.
         engine: 'TAGS',
+        // ── WHAT BUILT THIS LINE (Stuart 2026-09-15: SO60429 / SO60430 / SO60431) ───────────────
+        // Saving is sending, and a saved line is what it was when saved — Approve never re-runs the
+        // engine. So the line says which engine built it (the hash of the engine source, regenerated
+        // on every build) and which tags it read (a fingerprint of the assembly's pins). CRM's
+        // Approve compares both to what runs now (Shared/cartStaleness) and warns BEFORE the sales
+        // order exists: reopen, re-save, then approve. Four 09-10 quotes approved on 09-14 carried
+        // the BOM from before that evening's rider fixes, and nothing could have said so.
+        engineVersion: ENGINE_VERSION,
+        pinsFingerprint: pinsFingerprint(ctx.pins || []),
     };
 }
 

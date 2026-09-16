@@ -1638,6 +1638,21 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     const slotRank = new Map();
     sl.forEach((slot, i) => (slot.options || []).forEach(o => { if (!slotRank.has(o.id)) slotRank.set(o.id, i); }));
     const rankOf = (c) => (slotRank.has(c.id) ? slotRank.get(c.id) : Number.MAX_SAFE_INTEGER);
+    // ── A PLATE FOLLOWS ITS ARM — IN COUNT TOO (Stuart 2026-09-14, SO60429: "3 brackets on order
+    //    and in the bom it only put 1 of the matching cover plates when it should be 3") ────────
+    // The typed count lands on the CENTRE bracket (takesQty); a backplate never takes a count of
+    // its own (it is not asked), so it stayed at 1 while its arm went to 3 — and the BOM, the
+    // pick, the price and the NetSuite line all read that 1. One plate per arm: a selected
+    // BACKPLATE's quantity is the quantity of the selected BRACKET at its own position and tier.
+    const qtyOf = (c) => (Number(quantities[c.id]) > 0 ? Number(quantities[c.id]) : c.qty);
+    const armOf = (plate) => selected.find(x => x.role === 'BRACKET'
+        && String(x.position || '').toUpperCase() === String(plate.position || '').toUpperCase()
+        && String(x.tier || '') === String(plate.tier || ''));
+    const lineQtyOf = (c) => {
+        if (c.role !== 'BACKPLATE') return qtyOf(c);
+        const arm = armOf(c);
+        return arm ? qtyOf(arm) : qtyOf(c);
+    };
     const bom = [
         // Sorted, never the source array — and stable, so two parts from one slot keep their order.
         ...norm.filter(c => selectedIds.includes(c.id) && !c.parked).sort((a, b) => rankOf(a) - rankOf(b)),
@@ -1647,7 +1662,7 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
         // nothing ever that would only stay on the quote"). Pricing and the shop both read these
         // lines, so the quantity belongs here — set it in one place and neither can disagree.
     ].map(c => ({ partId: c.partId, name: c.name,
-        qty: Number(quantities[c.id]) > 0 ? Number(quantities[c.id]) : c.qty,
+        qty: lineQtyOf(c),
         price: c.price, raw: c.raw,
         // ⚠ THE LINE MUST BE ABLE TO ANSWER "WHAT ARE YOU MADE OF" (Stuart 2026-08-21, prod down:
         // "we created a bug in the engine when finishes are selected"). Pricing asks the caller

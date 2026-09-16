@@ -2467,5 +2467,28 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('…and IS offered at 6"', (m6.slots || []).find(s => s.kind === 'BRACKET' && s.position === 'LEFT').options.some(o => o.id === 'B1'));
 }
 
+// ── A PLATE FOLLOWS ITS ARM IN COUNT (Stuart 2026-09-14, SO60429: 3 centre brackets, 1 cover plate) ──
+{
+    const cs = [
+        { id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] },
+        { id: 'BKL', partId: 'H1-138ILS', role: 'BRACKET', position: 'LEFT', proj: '3.625', nodes: ['bl'] },
+        { id: 'BKC', partId: 'H1-138ILPS', role: 'BRACKET', position: 'CENTER', proj: '3.625', nodes: ['bc'] },
+        { id: 'PLL', partId: 'H1-138CP-V', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', nodes: ['pl'] },
+        { id: 'PLC', partId: 'H1-138CP-H', role: 'BACKPLATE', position: 'CENTER', proj: '3.625', nodes: ['pc'] },
+    ];
+    const sel = ['ROD', 'BKL', 'BKC', 'PLL', 'PLC'];
+    const qty = (m, id) => (m.bom || []).find(l => l.id === id)?.qty;
+    const three = resolve({ choices: cs, answers: { rodKind: 'SOLID', proj: 3.625 }, selectedIds: sel, quantities: { BKC: 3 } });
+    eq('3 centre brackets → 3 centre cover plates', [qty(three, 'BKC'), qty(three, 'PLC')], [3, 3]);
+    eq('…and the left plate still follows its one left arm', [qty(three, 'BKL'), qty(three, 'PLL')], [1, 1]);
+    const one = resolve({ choices: cs, answers: { rodKind: 'SOLID', proj: 3.625 }, selectedIds: sel, quantities: {} });
+    eq('no count typed → one each', [qty(one, 'BKC'), qty(one, 'PLC')], [1, 1]);
+    const noArm = resolve({ choices: cs, answers: { rodKind: 'SOLID', proj: 3.625 }, selectedIds: ['ROD', 'PLC'], quantities: {} });
+    eq('a plate with no arm selected at its position keeps its own count', qty(noArm, 'PLC'), 1);
+    const dbl = resolve({ choices: [...cs, { id: 'BKC2', partId: 'H1-138DBA', role: 'BRACKET', position: 'CENTER', tier: 'BACK', proj: '3.625', nodes: ['bc2'] }, { id: 'PLC2', partId: 'H1-138CP-H', role: 'BACKPLATE', position: 'CENTER', tier: 'BACK', proj: '3.625', nodes: ['pc2'] }],
+        answers: { rodKind: 'SOLID', proj: 3.625 }, selectedIds: [...sel, 'BKC2', 'PLC2'], quantities: { BKC: 3, BKC2: 2 } });
+    eq('on a double each tier\'s plate follows its own tier\'s arm', [qty(dbl, 'PLC'), qty(dbl, 'PLC2')], [3, 2]);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
