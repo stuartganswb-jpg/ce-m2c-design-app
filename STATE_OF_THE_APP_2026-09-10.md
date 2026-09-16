@@ -424,6 +424,15 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-16 · S2 · 3a3aca4 (swept live).** "Where is it?" answers with OPEN work only. Stuart: "once a work order is
+  completed or the item is no longer in production it should not still be there." The search holds no data of its own — each
+  screen hands it a list — and three of the four screens hand it an entire collection, so every job ever run answered it while
+  the popup's own empty-state text already claimed that closed orders would not appear. The rule now lives beside the closer in
+  `Shared/orderLifecycle` (`openForSearch`, `openExtraForSearch`), so "is this finished" has ONE answer app-wide. Complete stays
+  visible on purpose — the 2026-09-10 ruling that a job off the paint line is not done still holds, and a pick-only doc is born
+  Complete. Purchase orders stay while genuinely open, including partially received ones, which are the ones people chase.
+  Hidden matches are counted in a grey footer rather than silently dropped. No writes, no document changes, nothing to NetSuite.
+
 - **2026-09-15 · S1's work, pushed by S2 · f56bb7d (swept live).** Stuart relayed that the other sessions had left it to S2
   to finish and push, so the cart-staleness / engine-version unit went in as one piece, unchanged, after being verified
   (eslint 0 errors, 30 + 699 assertions, a full production build clean with its new prebuild step, the engine stamp current,

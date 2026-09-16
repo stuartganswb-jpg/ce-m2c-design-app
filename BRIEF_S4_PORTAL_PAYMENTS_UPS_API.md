@@ -158,6 +158,24 @@ owed (`h2-simple-elegance-flow` memory).
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-16 · 3a3aca4 pushed, swept live in `main.9876b7f7.js`.** Hard-refresh (⌘⇧R) + re-PIN
+  before your next save. **"Where is it?" now shows OPEN work only.** Stuart: "once a work order is completed or the item is
+  no longer in production it should not still be there, should only be for current working production or currently on a
+  purchase order, rod cut, etc." The cause: the search filtered nothing by status. It holds no data of its own — each screen
+  hands it a list and it text-matches over that list — and THREE of the four screens hand it an entire collection (the
+  finishing floor and the packing station both subscribe to all of `fin_workorders`, the shop tablet to all of
+  `custom_orders`), so every job ever run answered the search, while the popup's own empty-state text already promised that a
+  closed order would not appear. The rule now lives in `Shared/orderLifecycle` beside the closer, so there is ONE answer to
+  "is this finished": `openForSearch` (not `isDoneState`, not `floorPhase` Packed/Shelved, not shipped) and
+  `openExtraForSearch` (a PO while `isOpenPo` says so — `poLock` owns that rule; a rod cut until DONE/CANCELLED; a convert or
+  plating demand while it exists, since the WMS DELETES it when the pull posts). **COMPLETE IS STILL VISIBLE, deliberately** —
+  `isDoneState` already carries Stuart's 2026-09-10 ruling that a job off the paint line is not done, and a pick-only doc is
+  BORN Complete. Hidden matches are COUNTED, not dropped: a grey footer says how many finished or closed matches were hidden,
+  and when every match is finished the no-match text says so. No writes, no document shape changes, nothing reaches NetSuite —
+  the screens keep their own lists for queues, cards and pick lists; only the search dropdown narrows. **Your side: nothing to build.** Worth knowing if the portal ever grows a lookup:
+  the open/closed rule is `Shared/orderLifecycle.openForSearch`, not a fresh test.
+
+
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-15 · f56bb7d pushed, swept live in `main.ee8a193e.js`.** Hard-refresh (⌘⇧R) + re-PIN
   before your next save. **This is S1's cart-staleness / engine-version work, committed and pushed by S2 on Stuart's relay
   ("other sessions say its up to you to finish and push"), as ONE unit and with nothing of it changed.** Three things are
