@@ -537,6 +537,8 @@ owed (`h2-simple-elegance-flow` memory).
 
 *(newest first)*
 
+- **2026-09-16** — CLOSE-OUT CONFIRMED 2026-09-16: item 1 first (Stuart approved), then the Fulfilment tab (Stuart approved building it with manual dims — new boxes not in stock). UPS app created (CE, account 16FH19); secrets `UPS_CLIENT_ID` / `UPS_CLIENT_SECRET` / `UPS_ACCOUNT_CE` in Secret Manager. **6041bb6** upsProbe + HQ 9.5 test button — deployed, token OK, negotiated rates returned (values differ from contract in CIE, as expected). **39e6387** close-out 1 DONE in code — location per line on the itemfulfillment; acceptance = next real multi-location pack posts in 11.1. **abbe0f3** Fulfilment tab (TEST mode default) + upsRate/upsShip/upsVoid — needs `firebase deploy --only functions:upsRate,functions:upsShip,functions:upsVoid`; acceptance: TEST label prints the right way up on 4x6, then Stuart switches LIVE on HQ 9.5 for the first real ship (NetSuite package sublist name `package` to be confirmed on that first PATCH in 11.1). Open: #20, #21, S1's four mirror lines; per-brand UPS accounts (M2C/Uniq'uity) when they exist; Address Validation not in v1.
+
 ## 8. Opener (paste to start the session)
 
 ```
