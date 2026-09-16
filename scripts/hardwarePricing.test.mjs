@@ -63,6 +63,40 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     eq('the pattern code resolves too', priceChoice({}, item, ctx()).aliasCode, 'FAB-1001');
 }
 
+// ── THE SPECIES FIRST (Stuart 2026-09-16: "the items on the bom should be H1-138WEC-O rather than
+//    just H1-138WEC"). A stain tagged OAK / WALNUT consumes the per-species item; one product, one price.
+{
+    const cap = { id: 'W1', legacyErpId: 'H1-138WEC', itemName: 'White Oak End Cap', manufacturingSpecs: { basePrice: 20 }, clientPricing: [{ customerId: 'CUST-1', price: 15, clientSku: 'WEC-SKU' }] };
+    const capO = { id: 'W1O', legacyErpId: 'H1-138WEC-O', itemName: 'White Oak End Cap — oak', manufacturingSpecs: {}, clientPricing: [] };          // no price of its own
+    const capW = { id: 'W1W', legacyErpId: 'H1-138WEC-W', itemName: 'White Oak End Cap — walnut', manufacturingSpecs: { basePrice: 22 }, clientPricing: [] };
+    const pole = { id: 'P0', legacyErpId: 'H1-138WR', itemName: '1-3/8" Wood Rod', manufacturingSpecs: { basePrice: 12.5, customData: { speciesMap: { '-O': 'H1-138WHTOAK', '-W': 'H1-138WLNUT' } } }, clientPricing: [] };
+    const poleO = { id: 'PO', legacyErpId: 'H1-138WHTOAK', itemName: 'White Oak Rod', manufacturingSpecs: { basePrice: 12.5 }, clientPricing: [] };
+    const bkt = { id: 'M1', legacyErpId: 'H1-138ILS', itemName: 'In Line Bracket', manufacturingSpecs: {}, clientPricing: [] };
+    const bktEP = { id: 'M1E', legacyErpId: 'H1-138ILS/EP2', itemName: 'In Line Bracket EP2', manufacturingSpecs: { basePrice: 50 }, clientPricing: [] };
+    const lib = Object.fromEntries([cap, capO, capW, pole, poleO, bkt, bktEP].map(p => [p.legacyErpId, p]));
+    const findByCode = (c) => lib[String(c || '').toUpperCase()] || null;
+    const finishes = { S04: { code: 'S04', bomSuffix: 'OAK' }, S12: { code: 'S12', bomSuffix: '-W' }, P14: { code: 'P14' }, EP2: { code: 'EP2' } };
+    const fctx = (fc, over = {}) => ctx({ finishCode: fc, findByCode, finishObjOf: (c) => finishes[String(c || '').toUpperCase()] || null, ...over });
+
+    const oak = priceChoice({}, cap, fctx('S04'));
+    eq('S04 on a wood cap bills the -O item', oak.billedId, 'H1-138WEC-O');
+    eq('…at the base product\'s price when the -O record has none (the customer row, SKU included)', [oak.price, oak.source, oak.sku], [15, PRICE_SOURCES.CLIENT, 'WEC-SKU']);
+    ok('…and the detail says where the money came from', /priced from the base product H1-138WEC/.test(oak.detail), oak.detail);
+    const wal = priceChoice({}, cap, fctx('S12'));
+    eq('S12 bills the -W item at its own price when it has one', [wal.billedId, wal.price, wal.source], ['H1-138WEC-W', 22, PRICE_SOURCES.BASE]);
+    eq('the wood pole resolves through its stem map', priceChoice({}, pole, fctx('S04')).billedId, 'H1-138WHTOAK');
+    eq('a finish with no suffix is identity', priceChoice({}, cap, fctx('P14')).billedId, 'H1-138WEC');
+    eq('a caller with no finish lookup gets exactly what it always got', priceChoice({}, cap, ctx({ finishCode: 'S04', findByCode })).billedId, 'H1-138WEC');
+    eq('no finish at all is identity', priceChoice({}, cap, fctx('')).billedId, 'H1-138WEC');
+    eq('the /EPn swap on a metal part is untouched', [priceChoice({}, bkt, fctx('EP2')).billedId, priceChoice({}, bkt, fctx('EP2')).price], ['H1-138ILS/EP2', 50]);
+    const unpriced = priceChoice({}, { ...cap, manufacturingSpecs: {}, clientPricing: [] }, fctx('S04'));
+    eq('a species item whose base has no price either still says NONE, on the species id', [unpriced.billedId, unpriced.source], ['H1-138WEC-O', PRICE_SOURCES.NONE]);
+    // The whole-configuration walk carries the lookup through to every line.
+    const model = { choices: [{ id: 'c1', partId: 'W1', role: 'END', qty: 1 }], selected: [{ id: 'c1', partId: 'W1', role: 'END', qty: 1 }], riders: [], companions: [], bom: [{ id: 'c1', partId: 'W1', name: 'cap', qty: 1, role: 'END' }] };
+    const walk = priceConfiguration(model, { ...fctx('S04'), findPart: (id) => (id === 'W1' ? cap : null) });
+    ok('priceConfiguration bills the species item on the line', (walk.lines || []).some(l => String(l.billedId || l.legacyErpId || '') === 'H1-138WEC-O'), JSON.stringify((walk.lines || []).map(l => [l.partId, l.billedId, l.legacyErpId])));
+}
+
 // ── A ROW KEYED BY NAME MATCHES, because rows were hand-entered both ways ─────────────────────
 {
     const byName = { ...item, clientPricing: [{ customerId: 'Fabricut', price: 5, clientSku: 'N-1' }] };

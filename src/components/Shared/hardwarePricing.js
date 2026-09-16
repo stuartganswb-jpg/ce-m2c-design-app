@@ -38,6 +38,7 @@ import { customerKeys, clientPriceFor, findClientPriceRow } from './clientPricin
 import { takesNoFinish } from './finishLabel.js';
 import { fabricutPriceOf, fabricutCodeOf, priceLevelShort } from './priceLevels.js';
 import { finishVariantOf } from './finishVariant.js';
+import { speciesVariantOf } from './sizeMatrix.js';
 import { ROD_ROLES } from './hardwareModel.js';
 
 export const PRICE_SOURCES = {
@@ -76,80 +77,103 @@ export function priceChoice(choice, part, ctx = {}) {
     // pricing rule — but every rule below reads the RESOLVED record, because the mill item
     // legitimately has no price, no tier and no pattern number, and pricing it was reporting "no
     // price under any rule" for parts that are priced perfectly well under their real SKU.
-    const sold = finishVariantOf(part, finishCode, findByCode) || part;
+    // ── 0a — THE SPECIES FIRST (Stuart 2026-09-16: "the items on the bom should be H1-138WEC-O
+    //        rather than just H1-138WEC"). A stain tagged OAK / WALNUT in 4.5 carries a bomSuffix, and
+    //        the physical item consumed is the per-species one (H1-138WEC-O / -W; the wood pole through
+    //        its customData.speciesMap). The NetSuite push already did this swap, so NetSuite billed the
+    //        oak cap while the breakdown, the work order and the pick all said the base code — the same
+    //        rule, in the one place every consumer reads. Identity when the finish has no suffix, or
+    //        when the caller passes no finish lookup (`ctx.finishObjOf`), so every other line is exactly
+    //        as it was. Runs BEFORE the /P //EPn swap, as the old engine ordered it (sizeMatrix).
+    const finishObj = (finishCode && typeof ctx.finishObjOf === 'function') ? (ctx.finishObjOf(finishCode) || null) : null;
+    const basePart = part;
+    const speciesPart = speciesVariantOf(part, finishObj, findByCode) || part;
+    const speciesSwapped = !!part && speciesPart !== part;
+    const sold = finishVariantOf(speciesPart, finishCode, findByCode) || speciesPart;
     const billedId = sold ? String(
         (sold.legacyErpId && sold.legacyErpId !== 'PENDING' ? sold.legacyErpId : sold.itemId) || ''
     ).trim() : '';
-    part = sold;
-    const keys = customerId ? customerKeys(customerId, customer) : null;
-    const row = (part && keys) ? findClientPriceRow(part.clientPricing, keys) : null;
-    // Their part number, from the same box as their price — shown wherever the line is shown.
-    const sku = row?.clientSku ? String(row.clientSku).trim() : '';
-    const aliasCode = part ? (fabricutCodeOf(part, findByCode, outsourceCodes) || '') : '';
-    const out = (price, source, detail) => ({ price: price || 0, source, sku, aliasCode, billedId, detail: detail || '' });
+    // The chain below prices ONE record. It runs on the sold record; when that record is a species
+    // variant with no price of its own, it runs again on the base product — to Fabricut a wood item
+    // is ONE product at ONE price (Stuart 2026-07-09), and the -O / -W record is the thing consumed,
+    // not a second price list. The billed identity stays the species item either way.
+    const chain = (part) => {
+        const keys = customerId ? customerKeys(customerId, customer) : null;
+        const row = (part && keys) ? findClientPriceRow(part.clientPricing, keys) : null;
+        // Their part number, from the same box as their price — shown wherever the line is shown.
+        const sku = row?.clientSku ? String(row.clientSku).trim() : '';
+        const aliasCode = part ? (fabricutCodeOf(part, findByCode, outsourceCodes) || '') : '';
+        const out = (price, source, detail) => ({ price: price || 0, source, sku, aliasCode, billedId, detail: detail || '' });
 
-    // 1 — an authored override on the pin wins outright.
-    const override = num(choice?.price);
-    if (override !== null && override > 0) return out(override, PRICE_SOURCES.OVERRIDE, 'priced on the pin');
+        // 1 — an authored override on the pin wins outright.
+        const override = num(choice?.price);
+        if (override !== null && override > 0) return out(override, PRICE_SOURCES.OVERRIDE, 'priced on the pin');
 
-    if (!part) return out(0, PRICE_SOURCES.NONE, 'no library item resolved for this choice');
+        if (!part) return out(0, PRICE_SOURCES.NONE, 'no library item resolved for this choice');
 
-    // ⚠ A DEFAULTED LEVEL IS A FALLBACK, NOT A DECISION (Eric via Stuart, 2026-08-21: "For Brimar,
-    // the French Return pricing is coming in at $35, which is the Fabricut painted standard price,
-    // and not the $45 defined for the Brimar fee").
-    //
-    // Selecting a customer quietly defaults the level to FAB_COST — "our cost to them" — which was
-    // right for the problem it solved: a mill item has no base price, so a connected customer got a
-    // screen of $0.00 lines with a perfectly good number sitting in the tier box beside them.
-    //
-    // But the tier box belongs to the ITEM, not to the customer being quoted, and it is Fabricut's
-    // data. Applied to BRIMAR it prices their french return off somebody else's sheet — and it beat
-    // Brimar's OWN negotiated row, which was sitting right there (the line even printed their SKU,
-    // DFR01, from the row whose price it had just skipped).
-    //
-    // So the order depends on whether the level was CHOSEN or merely defaulted:
-    //   · chosen (staff picked Fabricut Cost / Wholesale / Retail) → the level means it, and wins.
-    //   · defaulted → the customer's own row is the more specific fact and wins; the level stays
-    //     underneath it, still catching the mill items that have no row and no base price, which is
-    //     the whole reason it exists.
-    const levelPrice = () => {
-        if (!priceLevel || priceLevel === 'STANDARD') return null;
-        const lv = fabricutPriceOf(part, priceLevel, finishCode, outsourceCodes, findByCode);
-        return (lv === null || lv === undefined) ? null : lv;
-    };
-    const clientPrice = () => (keys ? clientPriceFor(part.clientPricing, keys) : null);
-    const levelOut = (lv) => out(lv, PRICE_SOURCES.LEVEL, `${priceLevel}${finishCode ? ` · finish ${finishCode}` : ''}${levelIsDefault ? ' · defaulted' : ''}`);
-    const clientOut = (cv) => out(cv, PRICE_SOURCES.CLIENT, row?.customerId ? `row keyed "${row.customerId}"` : '');
+        // ⚠ A DEFAULTED LEVEL IS A FALLBACK, NOT A DECISION (Eric via Stuart, 2026-08-21: "For Brimar,
+        // the French Return pricing is coming in at $35, which is the Fabricut painted standard price,
+        // and not the $45 defined for the Brimar fee").
+        //
+        // Selecting a customer quietly defaults the level to FAB_COST — "our cost to them" — which was
+        // right for the problem it solved: a mill item has no base price, so a connected customer got a
+        // screen of $0.00 lines with a perfectly good number sitting in the tier box beside them.
+        //
+        // But the tier box belongs to the ITEM, not to the customer being quoted, and it is Fabricut's
+        // data. Applied to BRIMAR it prices their french return off somebody else's sheet — and it beat
+        // Brimar's OWN negotiated row, which was sitting right there (the line even printed their SKU,
+        // DFR01, from the row whose price it had just skipped).
+        //
+        // So the order depends on whether the level was CHOSEN or merely defaulted:
+        //   · chosen (staff picked Fabricut Cost / Wholesale / Retail) → the level means it, and wins.
+        //   · defaulted → the customer's own row is the more specific fact and wins; the level stays
+        //     underneath it, still catching the mill items that have no row and no base price, which is
+        //     the whole reason it exists.
+        const levelPrice = () => {
+            if (!priceLevel || priceLevel === 'STANDARD') return null;
+            const lv = fabricutPriceOf(part, priceLevel, finishCode, outsourceCodes, findByCode);
+            return (lv === null || lv === undefined) ? null : lv;
+        };
+        const clientPrice = () => (keys ? clientPriceFor(part.clientPricing, keys) : null);
+        const levelOut = (lv) => out(lv, PRICE_SOURCES.LEVEL, `${priceLevel}${finishCode ? ` · finish ${finishCode}` : ''}${levelIsDefault ? ' · defaulted' : ''}`);
+        const clientOut = (cv) => out(cv, PRICE_SOURCES.CLIENT, row?.customerId ? `row keyed "${row.customerId}"` : '');
 
-    if (!levelIsDefault) {
-        // 2 — the CHOSEN price level, when this item has tier data to answer with. Items without it
-        //     (fees, one-offs) fall through untouched, so a quote is a faithful mix rather than a
-        //     level applied by force.
-        const lv = levelPrice();
-        if (lv !== null) return levelOut(lv);
-        // 3 — this customer's negotiated price.
-        const cv = clientPrice();
-        if (cv !== null) return clientOut(cv);
-    } else {
-        // 2 — this customer's own negotiated price beats a level nobody asked for.
-        const cv = clientPrice();
-        if (cv !== null) return clientOut(cv);
-        // 3 — …and the defaulted level still catches what the row does not cover.
-        const lv = levelPrice();
-        if (lv !== null) return levelOut(lv);
-    }
+        if (!levelIsDefault) {
+            // 2 — the CHOSEN price level, when this item has tier data to answer with. Items without it
+            //     (fees, one-offs) fall through untouched, so a quote is a faithful mix rather than a
+            //     level applied by force.
+            const lv = levelPrice();
+            if (lv !== null) return levelOut(lv);
+            // 3 — this customer's negotiated price.
+            const cv = clientPrice();
+            if (cv !== null) return clientOut(cv);
+        } else {
+            // 2 — this customer's own negotiated price beats a level nobody asked for.
+            const cv = clientPrice();
+            if (cv !== null) return clientOut(cv);
+            // 3 — …and the defaulted level still catches what the row does not cover.
+            const lv = levelPrice();
+            if (lv !== null) return levelOut(lv);
+        }
 
-    // 4 — the item's own price.
-    const base = num(part.manufacturingSpecs?.basePrice);
-    if (base !== null && base > 0) return out(base, PRICE_SOURCES.BASE, '');
+        // 4 — the item's own price.
+        const base = num(part.manufacturingSpecs?.basePrice);
+        if (base !== null && base > 0) return out(base, PRICE_SOURCES.BASE, '');
 
-    // 5 — the flow's fallback for this KIND of part, where it has one. Keyed on the role rather
-    //     than the item, because that is the only thing known about a part nobody has priced.
-    const kind = String(choice?.role || '').toUpperCase();
-    const fb = kind ? num((ctx.fallbackPrices || {})[kind]) : null;
-    if (fb !== null && fb > 0) return out(fb, PRICE_SOURCES.FALLBACK, `${kind.toLowerCase().replace('_', ' ')} default on this flow — ${billedId || 'this item'} has no price of its own`);
+        // 5 — the flow's fallback for this KIND of part, where it has one. Keyed on the role rather
+        //     than the item, because that is the only thing known about a part nobody has priced.
+        const kind = String(choice?.role || '').toUpperCase();
+        const fb = kind ? num((ctx.fallbackPrices || {})[kind]) : null;
+        if (fb !== null && fb > 0) return out(fb, PRICE_SOURCES.FALLBACK, `${kind.toLowerCase().replace('_', ' ')} default on this flow — ${billedId || 'this item'} has no price of its own`);
 
-    return out(0, PRICE_SOURCES.NONE, `nothing on ${billedId || 'this item'} at ${priceLevel === 'STANDARD' ? 'standard pricing' : priceLevelShort(priceLevel)} — no override, no tier, no customer row, no base price`);
+        return out(0, PRICE_SOURCES.NONE, `nothing on ${billedId || 'this item'} at ${priceLevel === 'STANDARD' ? 'standard pricing' : priceLevelShort(priceLevel)} — no override, no tier, no customer row, no base price`);    };
+    const first = chain(sold);
+    if (first.source !== PRICE_SOURCES.NONE || !speciesSwapped) return first;
+    const baseSold = finishVariantOf(basePart, finishCode, findByCode) || basePart;
+    const alt = chain(baseSold);
+    if (alt.source === PRICE_SOURCES.NONE) return first;
+    const baseCode = String((basePart.legacyErpId && basePart.legacyErpId !== 'PENDING' ? basePart.legacyErpId : basePart.itemId) || '').trim();
+    return { ...alt, billedId, detail: `${alt.detail ? alt.detail + ' · ' : ''}priced from the base product ${baseCode} — ${billedId} carries no price of its own` };
 }
 
 /**

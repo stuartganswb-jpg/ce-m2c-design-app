@@ -33,6 +33,8 @@ const item = handoffItem(resolved, {
     // The configurator's price context travels with the item, finish included — that is what the
     // lines are priced AND finished off.
     finishCode: 'P07',
+    // One finish per material — both must survive the save (SO60429, 2026-09-16).
+    globalFinish: 'P07', globalFinishes: { METAL: 'P07', WOOD: 'S04' },
     extras: [{ code: 'H1-138R', qty: '1', note: 'splice at 48"' }],
     // The traverse step's answer, in the shape the configurator hands over.
     trvComponents: [
@@ -49,6 +51,8 @@ ok('finish label for RTG', item.finishLabel === 'Gold Brass (P07)' && item.finis
 ok('total is money', item.pricing.finalPrice > 0);
 ok('names its engine', item.engine === 'TAGS');
 ok('config kept for reopen', item.engineConfig.lengthFeet === 9 && item.engineConfig.lengthInches === 96.5);
+ok('every material\'s finish kept for reopen (the wood one was being lost)', item.engineConfig.globalFinish === 'P07' && item.engineConfig.globalFinishes.METAL === 'P07' && item.engineConfig.globalFinishes.WOOD === 'S04');
+ok('a line saved with no per-material map carries an empty one, never undefined', typeof handoffItem(resolved, { findPart, assembly: { id: 'A1' }, finishCode: 'P07' }).engineConfig.globalFinishes === 'object');
 
 // ── the lines the floors classify ────────────────────────────────────────────────────────────
 const b = item.pricingBreakdown;

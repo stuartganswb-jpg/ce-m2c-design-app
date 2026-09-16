@@ -17,7 +17,7 @@ import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary, isCheckoutForCu
 import { priceChoice } from '../Shared/hardwarePricing';
 import { customerPriceLevel } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
-import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
+import { sizeKeyOf, SIZE_FAMILIES, speciesVariantOf } from "../Shared/sizeMatrix";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
 import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode, isAliasDoc, realPartOf, aliasTargetIdOf } from "../Shared/aliasIdentity";
 
@@ -227,7 +227,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         // one PATTERN kit + a color choice replaces one kit per finish.
         const unsubFin = onSnapshot(doc(db, "system", "master_finishes"), (s) => {
             const arr = (s.exists() && s.data().finishes) || [];
-            setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false, subFinishCode: String(f.subFinishCode || '').toUpperCase() })), ...prev.filter(p => p.outsourced)]);
+            // bomSuffix = the species a stain consumes (OAK / WALNUT, tab 4.5) — read by the to-be-finished add.
+            setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false, subFinishCode: String(f.subFinishCode || '').toUpperCase(), bomSuffix: String(f.bomSuffix || '').trim() })), ...prev.filter(p => p.outsourced)]);
         }, e => console.warn('Quick Ship finishes listen failed', e));
         const unsubOut = onSnapshot(collection(db, "hq_outsource_finishes"), (s) => {
             // code falls back to NAME (the finishText convention) — EP3–EP6 are stored name-only
@@ -922,7 +923,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const typed = parseFloat(tbfPrice);
         const priced = Number.isFinite(typed) ? typed : tbfResolved;
         const fin = finishList.find(f => f.code === tbfFinish);
-        pushLine(real, tbfQty, `TO BE FINISHED · ${tbfFinish}${fin?.name && fin.name !== tbfFinish ? ` (${fin.name})` : ''}${tbfPerFoot ? ` · Cut ${feetPer} ft` : ''}`, null, {
+        // FINISH-DRIVEN SPECIES (Stuart 2026-09-16: "when used for these items it must follow the same
+        // and apply the correct material to the bom"). A stain tagged OAK / WALNUT in 4.5 consumes the
+        // per-species item — H1-138WEC + S04 is H1-138WEC-O on the line, the pick, the floor and
+        // NetSuite; the wood pole resolves through its speciesMap. The same rule CPQ's engine applies
+        // (Shared/sizeMatrix.speciesVariantOf); identity for every finish without a suffix. The price
+        // stays what the operator saw — one product, one price — so nothing below reprices.
+        const speciesItem = speciesVariantOf(real, fin, (c) => rawFindReal(c)) || real;
+        if (speciesItem !== real) addLog(`Species: ${erpOf(real)} in ${tbfFinish} is ${erpOf(speciesItem)} — the line carries the species item.`, 'info');
+        pushLine(speciesItem, tbfQty, `TO BE FINISHED · ${tbfFinish}${fin?.name && fin.name !== tbfFinish ? ` (${fin.name})` : ''}${tbfPerFoot ? ` · Cut ${feetPer} ft` : ''}`, null, {
             noPack: true,                                  // a made-to-order part is not a pack
             // Only override when the operator actually changed the number — otherwise the line
             // keeps repricing live, which is how every other line on this tab behaves.

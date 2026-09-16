@@ -869,13 +869,16 @@ function HardwareConfiguratorInner({
         // negotiated row — see the precedence in hardwarePricing.
         levelIsDefault,
         finishCode: globalFinish, finishFor: lineFinishFor, findPart, findByCode: findPart,
+        // The finish RECORD behind a code — the engine reads its species suffix (OAK / WALNUT) to bill
+        // the -O / -W item (hardwarePricing step 0a, Stuart 2026-09-16).
+        finishObjOf: (code) => finishByCode.get(String(code || '').toUpperCase()) || null,
         // The flow's per-kind fallback, used only where a part has no price under any rule (tab 11).
         fallbackPrices: flow?.fallbackPrices || null,
         // What the rods are cut from — see the per-foot rule in priceConfiguration. The
         // inches travel too: they become the line's cutLength, which is what the bench reads.
         billedFeet: lengthFeet || 0,
         lengthInches: lengthInches || 0,
-    }), [customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, findPart, lengthFeet, lengthInches, flow]);
+    }), [customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, findPart, finishByCode, lengthFeet, lengthInches, flow]);
     // ⚠ THE KIT TRANSFORM RUNS ONLY WHERE A KIT WAS CHOSEN. Every other configuration gets
     // priceConfiguration's answer verbatim, which is what keeps four tested collections still.
     // ⚠ ONE DESCRIPTION OF THE BILL, USED TWICE. The panel below and the cart item built at Add
@@ -1373,6 +1376,16 @@ function HardwareConfiguratorInner({
         // ⚠ NEVER ADD SHORT (Stuart 2026-09-10). A removal nobody has acknowledged is an order that
         // would leave here missing a part the operator chose. The strip names it; Add waits.
         if (pendingDrops.length) return;
+        // ⚠ WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE (Stuart 2026-09-16, SO60429: "we lost the
+        // wood finish altogether"). A wood part with no finish chosen — no WOOD row pick, no per-part
+        // pick — reached the cart wearing nothing: no species item, no stain for the floor, a bare
+        // code in NetSuite. The add names the parts and waits; the WOOD row of the finish step (or
+        // the part's own swatch) is the answer. A part tagged as taking no finish is not asked.
+        const bareWood = chosenList.filter(c => Array.isArray(c.materials) && c.materials.includes('WOOD') && !c.noFinish && !finishFor(c));
+        if (bareWood.length) {
+            alert(`Pick the WOOD finish first — ${bareWood.map(c => c.name || c.partId).join(', ')} would leave here with no stain.\n\nChoose it on the WOOD row of the finish step, or on the part itself.`);
+            return;
+        }
         // THE HANDOFF IS BUILT HERE, in the shape CPQ has always written — so the shop floor, the
         // finishing floor, RTG, the ERP push and the CRM documents all keep working without
         // knowing which engine produced the order. onAdd is what puts it in the cart; without one

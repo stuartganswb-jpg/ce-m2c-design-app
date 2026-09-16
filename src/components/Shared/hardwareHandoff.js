@@ -265,6 +265,12 @@ export function handoffItem(resolved, ctx = {}) {
             // The whole-configuration finish, so a reopened line restores it exactly (per-part
             // exceptions are partFinish; older items without it fall back to finishes[0]).
             globalFinish: ctx.globalFinish || '',
+            // ⚠ ONE FINISH PER MATERIAL, ALL OF THEM (Stuart 2026-09-16, SO60429: "we lost the wood
+            // finish altogether"). The configurator keeps a finish per material — METAL P14 beside
+            // WOOD S04 — but only the metal one was saved here, so a reopen restored the metal
+            // finish alone and the wood parts came back wearing nothing. The whole map travels now;
+            // the restore already reads it first (globalFinish stays for lines saved before).
+            globalFinishes: (ctx.globalFinishes && typeof ctx.globalFinishes === 'object') ? { ...ctx.globalFinishes } : {},
             // Operator-TYPED slot counts (ring count, centre brackets…). Without these a reopened
             // line fell back to the recommendations — 20 rings restored as the chart's 50
             // (Stuart 2026-08-28, first live heal). Defaults stay defaults: only typed counts save.
