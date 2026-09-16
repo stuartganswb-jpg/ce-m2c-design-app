@@ -614,10 +614,12 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
   generated `Shared/engineVersion.js` (hash of the five engine files, `scripts/stamp-engine-version.mjs`, prebuild) — every handoff
   line stamps `engineVersion` + `pinsFingerprint`; CRM Approve compares and warns (reopen · re-save · approve), stamps
   `approvedWithStaleLines` when overridden, and no longer flips APPROVED before the confirm (QUO143 = a declined confirm).
-  STAMP RULE above (§ fast loop). OPEN: the hand correction of the three stale records (SO60429/60430/60431 rows + plate ×3 on
-  SO60428/60429) was BLOCKED by the session's permission classifier — waits on Stuart's mode change + "write"; Stuart fixes NetSuite by
-  hand. Two specs handed to S2 §6 + S3 §6 (bae705f): the backorder hold is decorative (split writes `held` only on non-pick-only docs,
-  no floor screen reads it); one order two finishes (S04 wood + P14 metal → one fin doc per recipe).
+  STAMP RULE above (§ fast loop). DONE 2026-09-15 ~21:50: the stale records corrected in production — Stuart ran S1's guarded console
+  script (the browser tool's classifier refused the write from the session): SO60429 breakdown 25→14 / pick 17→7 / backorders 7→6,
+  total 898.50→912.50; SO60430 18→8 / 17→7; SO60431 31→9 / 27→5; SO60428 plate ×3, total 590.50→610.50; each `jobs` + `fin_workorders`
+  doc carries `correctedAt/By/Note`. NetSuite corrections are Stuart's by hand (SO60429 −4 standoffs −1 joiner +2 plates; SO60430 −8
+  standoffs; SO60428 +2 plates). Two specs handed to S2 §6 + S3 §6 (bae705f): the backorder hold is decorative (split writes `held`
+  only on non-pick-only docs, no floor screen reads it); one order two finishes (S04 wood + P14 metal → one fin doc per recipe).
 
 - **2026-09-13 — f29c4db (S1) pushed 17:22, SWEPT: version stamp 1789338315036; tab 7's `876.665697cc.chunk.js`. CLOSE-OUT item 4 (#17) DONE.** `Shared/quickShipBackorder`
   (pure): `quickShipPullLines` (stock lines as pieces — per-foot by `qty`, packs by eaches; to-be-finished lines carry `finishOutsourced` only when
