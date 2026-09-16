@@ -655,6 +655,20 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 *(newest first)*
 
+- **2026-09-16 — 3c2e004 pushed 12:25 EDT (S3): close-out #18, the receipt-side lift** (Stuart: "push and go on UOM").
+  `Shared/backorderCover.js` (`lineCoverCodes`, `openBackorders`, `allocateArrival` pure, `coverArrival` writer) +
+  `scripts/backorderCover.test.mjs` (16/16); `PickPackApp.js` `coverBackordersOn(code, qty, source)` + `coverNoteOf` at
+  the vendor receipt (4a′, in the ✅ alert), the plating put-away, the convert straight-through and the convert cart, the
+  finished stock put-away and the JFP put-away. Pushed as its OWN commit re-parented onto origin (`git commit-tree`
+  onto origin/main, `git push origin <sha>:main`) because S2's UOM half one sits unpushed on the shared main by design;
+  a first push attempt was refused by S4's 1b84767 landing seconds earlier and was redone on top of it. Lint 0, full
+  build passed. **Sweep 12:29 EDT:** first stamp 1789575979416 was another session's build (26 s after the push, 0 hits
+  — ignored); stamp 1789576154276 is mine: 37 JS assets, all fetched with `curl -sf` (8,647,751 bytes, 0 failures);
+  `Backorder covered: ` ×1 and `no line short` ×1 in `main.7d116865.js`. **LIVE.** Acceptance owed: a vendor receipt
+  covering WO-SO60430's one short line → the line reads covered on the Backorders board and the order's fin doc leaves
+  the ⏸ lane; a partial receipt leaves it waiting. **UOM half two BUILT the same hour** (b90aa2f local, on S2's held
+  commit): lint 0 on five files, full build passed — waits for Stuart's one-deploy word.
+
 - **2026-09-15 — 8c0677e pushed 19:46 EDT (S3): App Imp card 2, the Hand bench knows which coat** (Stuart: "go ahead and
   build it, go ahead and do it for the small parts hand task as well"). Live read with Stuart pinned in (fiber props for
   the two docs; `fin_logs` by `woId` through the page's own Firestore module): WO11610 Anne poleHand 10:10–10:48 → ADVANCE

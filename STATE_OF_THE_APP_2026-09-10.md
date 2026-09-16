@@ -424,6 +424,13 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-16 12:25 · S3 · 3c2e004 — close-out #18, the backorder hold now lifts itself when the material arrives:**
+  every place pieces land in the WMS covers the short lines that name the code (oldest first) on the sales order's
+  backorder record; an order with nothing short left is released on every sibling with RTG's own patch. RTG's "Finish
+  as available" stays the manual exception; a floor STOP is never lifted by a delivery. S2's half (the hold on every
+  document) + this = the backorder loop closed both ways. UOM half two is built (S3) and waits with S2's held commit for
+  Stuart's one-deploy word.
+
 - **2026-09-16 · S1 · 6fa627c (pushed 11:03).** Wood species reach the BOM: the engine's identity step resolves a stain's species suffix
   (4.5 bomSuffix) to the -O / -W item before the /P //EPn swap, so the breakdown, work order, pick and NetSuite agree; Order Entry's
   to-be-finished row follows; per-material finishes survive a reopen; a wood part with no stain cannot be added. H1-138WR now carries its

@@ -215,6 +215,18 @@ either posts (ids on file) or refuses with `NO_NS_FORM_FOR_BRAND` — and the CE
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-16 · 3c2e004 pushed 12:25 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. **Close-out #18 — the receipt-side lift of a backorder hold (S2's hand-off 09-15).**
+  New `Shared/backorderCover.js` (pure `allocateArrival` + writer `coverArrival`, 16-assertion harness): material landing in
+  the WMS — the vendor PO put-away, the plating put-away, a convert (straight through or from the cart), a finished stock
+  put-away incl. a paint run — covers the short lines on `hq_sales_orders.backorderLines[]` that name its code, OLDEST
+  FIRST, stamping `covered / coveredAt / coveredBy / coveredFrom / coveredCode` on the line and reducing `qty` (the
+  shortfall); an order with no short line left has its BACKORDER hold lifted on every sibling (`linkedDocsOf`, fin + shop)
+  with RTG's own patch (`held:false, heldClearedAt/By/Note`), `isBackorderHold` as the test so a floor STOP is never
+  lifted by a delivery. FINISH COMPLETE stays the rule; `finishAsAvailable` stays the one exception. `PickPackApp.js` hooks
+  only; no NetSuite write. S2: the Snapshot's Backorders board reads the same record — a covered line now shows `qty` 0
+  with the stamps. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S4 · 2026-09-16 · 39e6387 + abbe0f3 pushed.** Hard-refresh (⌘⇧R) + re-PIN before your next save. (1) **Packed orders' NetSuite fulfillments now carry each line's own location** (close-out 1): at pack the WMS reads the SO lines and sends `item.items[]` {orderLine, location, itemReceive}; a shippable inventory line with no location refuses the queue with the lines named — never a default. (2) **New WMS tab FULFILLMENT** (key `FULFILMENT`): packed orders ship by UPS (rate → service → label → tracking). TEST mode by default (HQ 9.5 admin switch); a LIVE ship stamps `shippedAt`, `trackingNumbers[]`, `shipService`, `shipmentId`, `shipCharge`, `shipPackages[]` on the pack doc and its `hq_sales_orders`, sends the same facts to the RTG record through `propagateFloorState` extra (floorPhase stays Packed), and PATCHes the NetSuite Item Fulfillment to Shipped with package lines through the outbox. A void clears `shippedAt` (history in `shipVoided[]`). **Your side:** nothing (Uniq'uity has no UPS account on file yet — its ships refuse with NO_UPS_ACCOUNT_FOR_BRAND).
 
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-16 · 3a3aca4 pushed, swept live in `main.9876b7f7.js`.** Hard-refresh (⌘⇧R) + re-PIN

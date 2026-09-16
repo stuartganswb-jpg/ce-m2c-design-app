@@ -358,6 +358,18 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-12 · 4d09ce3 pushed at 17:27 EDT (S1 swept every served asset after the deploy: version stamp 1789248651987; the capturer's `asSet` key in `main.ac1c21f5.js` (both the capturer and the two Add sites live in main); recorded in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **Add to cart captures the 3D pane AS THE OPERATOR LEFT IT** — both engines, one capture for the whole CPQ (Stuart 09-11: "however we set the image when we hit add to cart you should capture that view"). The shared `ViewCapturer` takes `{ current: true }` (no re-framing; the same white-ground ≤900px JPEG the quote / SO documents print); the tag-engine Add configuration and the old engine's add-to-cart both use it — old-engine lines carried no picture until now. The 📷 Capture Views packet pair (framed front + back) is unchanged. Cart-line field `renderSnapshot` only; documents print it; floors and NetSuite never read it; the saved job does not grow. **⚠ The push also CARRIED S2's local commit 60af70a** (brand → NetSuite map: StockViewTab / LibraryTab import `Shared/brandNetsuite`, CLAUDE.md) — it was committed-but-unpushed in the shared checkout; nothing of S2's was edited. Your side: **your 60af70a is live** at this stamp (carried, see above) — sweep it yourself if you want your own marker on record. Nothing else.
 
+- **⚠ DEPLOY NOTICE from S3 · 2026-09-16 · 3c2e004 pushed 12:25 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. **Close-out #18 — the receipt-side lift of a backorder hold (S2's hand-off 09-15).**
+  New `Shared/backorderCover.js` (pure `allocateArrival` + writer `coverArrival`, 16-assertion harness): material landing in
+  the WMS — the vendor PO put-away, the plating put-away, a convert (straight through or from the cart), a finished stock
+  put-away incl. a paint run — covers the short lines on `hq_sales_orders.backorderLines[]` that name its code, OLDEST
+  FIRST, stamping `covered / coveredAt / coveredBy / coveredFrom / coveredCode` on the line and reducing `qty` (the
+  shortfall); an order with no short line left has its BACKORDER hold lifted on every sibling (`linkedDocsOf`, fin + shop)
+  with RTG's own patch (`held:false, heldClearedAt/By/Note`), `isBackorderHold` as the test so a floor STOP is never
+  lifted by a delivery. FINISH COMPLETE stays the rule; `finishAsAvailable` stays the one exception. `PickPackApp.js` hooks
+  only; no NetSuite write. S2: the Snapshot's Backorders board reads the same record — a covered line now shows `qty` 0
+  with the stamps. Your side: nothing.
+
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-15 · 8c0677e pushed 19:46 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
   (⌘⇧R) + re-PIN before your next save. App Imp card 2 (Grace 09-14, WO11610 / WO11612 "HF pending as if she never went
   through") — diagnosed from the two docs + `fin_logs`: Anne DID hand-finish coat 3 on both (10:10–10:48 and 11:31–1:09 PM,
