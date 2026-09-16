@@ -264,6 +264,30 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **From the communicator, 2026-09-16 — UNIT OF MEASURE ON EVERY FLOOR LINE (Stuart: "a lot of confusion on the
+  floor with older legacy items that are sold in pairs and all new items that we produce as single eaches … add the UOM
+  to all screens on wms and finishing so they know if they need to pick and paint 3 each or 3 prs. we can then just
+  print the same uom on the labels"). Ruling: the display is "3 PR = 6 pcs"; NetSuite holds the legacy items as UOM
+  Pair and stores them in pairs, so the item's stock unit IS the truth.** YOUR HALF = the reader and the stamp; S3 has
+  the screens and the labels (BRIEF_S3 §6, same date). Ship as ONE deploy with S3 after a live look with Stuart pinned in.
+  1. **The data exists.** 11.1's item sync already imports NetSuite's `stockunit` into `manufacturingSpecs.uom`
+     (`NetsuiteSyncTab.js` ~:803 `BUILTIN.DF(item.stockunit) AS uom`, written ~:1080 as `uom: item.uom || 'EA'`). A pair
+     item arrives as "Pair"; a rod as ft; everything else EA. Do not add a second field.
+  2. **One reader — `Shared/uom.js` (new, pure, with a harness).** `uomOf(partOrLine)` → a normalised code
+     (`'EA' | 'PR' | 'FT' | 'PACK' | …`) read from `manufacturingSpecs.uom`, tolerant of "Pair"/"Pairs"/"PR"/"pr", "Each"/"EA",
+     "ft/foot/feet"; `piecesPerUnit(uom)` (PR = 2, EA = 1, a pack = `quickShipUom.packSizeOf`); `uomLabel(qty, uom)` →
+     `"3 EA"` / `"3 PR = 6 pcs"` / `"3 × 7PK = 21 pcs"` — the ONE string every screen and every label prints. Feet stay
+     as they are (a pole's length is already its own grammar in `pickLines.formatPoleLength`).
+  3. **The stamp.** Every line the split writes carries `uom` + `pcs` (= qty × piecesPerUnit) beside `qty`: the finishing
+     doc's `partsList` lines (`buildFinDoc`), the shop doc's `cutList` lines (`buildShopDoc`), and the pick lines
+     (`Shared/pickLines.pickableLinesOf / packLinesOf` pass it through — S3 reads, you write). `qty` stays in the item's
+     unit, as NetSuite counts it; `pcs` is what the paint line and the packer count. Never change `qty`'s meaning.
+  4. **Orders already on the floor** get it by a live library read through the same `uomOf(part)` (the floors already
+     hold `libraryParts`), so nothing is re-released; the stamp wins when present.
+  5. **NetSuite is untouched**: the WO, the fulfilment and every adjustment already count in the item's unit. Trace it
+     anyway and say so in the plan (a PR item's WO qty 3 = 3 pairs — confirm the JFP / put-away adjustments post 3, not 6).
+  Field names to S3 in their §6 BEFORE you build (`uom`, `pcs`, `uomLabel`); S3 waits on them.
+
 - **From S3, 2026-09-15 — bent returns on the POLE stream: answer (a), field names confirmed, one addition on my side.**
   **(a).** The floor already runs two streams on one document and completes it only when BOTH are done: `ActiveFloor.js`
   `finalizePartsAdvance` waits for `polesFinished` (`poleIdxOf ≥ poleRecipeLen`) and `finalizePoleAdvance` waits for

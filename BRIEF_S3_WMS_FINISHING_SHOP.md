@@ -192,6 +192,31 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 6. Hand-offs in
 
+- **From the communicator, 2026-09-16 — UNIT OF MEASURE ON EVERY WMS · FINISHING · SHOP SCREEN AND LABEL (Stuart:
+  "a lot of confusion on the floor with older legacy items that are sold in pairs and all new items that we produce as
+  single eaches … add the UOM to all screens on wms and finishing so they know if they need to pick and paint 3 each or
+  3 prs. we can then just print the same uom on the labels"). Ruling: the display is "3 PR = 6 pcs"; NetSuite holds the
+  legacy items as UOM Pair, stored in pairs.** S2 has the reader + stamp (BRIEF_S2 §6, same date: `Shared/uom.js` →
+  `uomOf / piecesPerUnit / uomLabel`; every split-written line gains `uom` + `pcs` beside `qty`; live library fallback
+  for orders already on the floor). YOUR HALF = the screens and the labels. Wait for S2's field names in this section,
+  then ship as ONE deploy with S2 after a live look with Stuart pinned in.
+  1. **A quantity is never shown without its unit.** Everywhere a line qty prints, print `uomLabel(qty, uom)` instead:
+     WMS pick queue rows + pick detail (`pickableLinesOf`), pack workspace TO PACK / PACKED rows + Recently Packed + SO
+     Pack, the plating station lines; Finishing Setup Queue cards + Specs, Active Floor task cards, Manual Controls,
+     the Schedule Planner counts; Shop custom cards + cut list lines. The paint count on the floor is PIECES: a finishing
+     card for a PR item reads "3 PR = 6 pcs", and the sled/rack counts (`totalParts`, `paintSize(s)`) must already be in
+     pieces — VERIFY that they are (the sync's `poles/totalPoles` logic counts pieces; the small-parts count may not).
+  2. **Labels print the same string.** `Shared/labelPrint`: `printStockItemLabels` (every call in `PickPackApp.js` that
+     passes `uom: 'EA'` — ~:951, :1606, :6762, :7050 — passes the item's `uomOf`), `printSetupLabel` / `printHandshakeLabels`
+     / `printMachineLoadLabels` (setup + handshake carry qty → add the unit), the shop completion label (`ShopFloor.js
+     printZebraLabel` + `printShopCompletionLabel`, `Qty:` line), `printRodLabels` unchanged (feet). The UOM/pack label
+     (`printUomLabels`, `labelScan.encodeUomScan`) already encodes pieces — reuse its `uomDisplay`, do not fork the grammar.
+  3. **The rule, once**: the string comes from S2's `uomLabel`; no screen builds its own. i18n: add the Spanish for
+     "pcs" / "pair(s)" in `Shared/i18n.js` ("UOM / pack" is already there).
+  4. Acceptance with Stuart pinned in: one legacy PR item and one EA item on the same order — pick screen, pack
+     screen, finishing card, shop card and every printed label all read the same unit; NetSuite's WO / fulfilment still
+     count in the item's unit (3, not 6).
+
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-16 · 3a3aca4 pushed, swept live in `main.9876b7f7.js`.** Hard-refresh (⌘⇧R) + re-PIN
   before your next save. **"Where is it?" now shows OPEN work only.** Stuart: "once a work order is completed or the item is
   no longer in production it should not still be there, should only be for current working production or currently on a
