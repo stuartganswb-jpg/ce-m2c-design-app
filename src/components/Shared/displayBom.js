@@ -198,10 +198,16 @@ export function boardBom(display, finishes = [], flows = []) {
         (face.rows || []).forEach(row => rowBomLines(row).forEach(l => {
             const key = `${l.code}|${l.finishCode}`;
             const cur = byKey.get(key);
-            if (!cur) { byKey.set(key, { ...l, rows: [l.row].filter(Boolean) }); return; }
+            // byRow: the same line split by the row it sits on — one work order per row (Stuart 2026-09-16)
+            const rowKey = l.row || '';
+            if (!cur) { byKey.set(key, { ...l, rows: [l.row].filter(Boolean), byRow: { [rowKey]: { qty: l.qty, feet: l.feet, cutLength: l.cutLength, billedId: l.billedId } } }); return; }
             cur.qty += l.qty;
             cur.feet += l.feet;
             if (l.row && !cur.rows.includes(l.row)) cur.rows.push(l.row);
+            const br = cur.byRow[rowKey];
+            if (!br) cur.byRow[rowKey] = { qty: l.qty, feet: l.feet, cutLength: l.cutLength, billedId: l.billedId };
+            else { br.qty += l.qty; br.feet += l.feet; if (!br.billedId && l.billedId) br.billedId = l.billedId; }
+            if (!cur.billedId && l.billedId) cur.billedId = l.billedId;
         }));
     });
     const parts = [...byKey.values()].map(l => { const { row, ...rest } = l; return rest; });
@@ -259,6 +265,7 @@ export function buildLinesFrom(display, finishes = [], flows = []) {
         key: `${l.code}|${l.finishCode}`,
         partId: l.partId, code: l.code, billedId: U(l.billedId || ''), name: l.name, role: l.role, finishCode: l.finishCode,
         rows: l.rows || [], perFoot: !!l.perFoot, qtyPerBoard: l.qty, feetPerBoard: l.perFoot ? l.feet : 0,
+        byRow: Object.entries(l.byRow || {}).map(([row, v]) => ({ row, qtyPerBoard: v.qty, feetPerBoard: l.perFoot ? v.feet : 0, cutLength: l.perFoot ? v.cutLength : 0, billedId: U(v.billedId || '') })),
         woNumber: '', atPlater: '', notes: '', done: false,
     }));
     const chips = bom.chips.map(c => ({ key: `CHIP|${c.code}`, code: c.code, name: c.name, group: c.group, finishCode: c.code, qtyPerBoard: c.qty, woNumber: '', notes: '', done: false }));
@@ -268,8 +275,67 @@ export function buildLinesFrom(display, finishes = [], flows = []) {
 
 /** Merge a fresh snapshot over an order's lines, keeping the tracker columns typed on lines that still exist. */
 export function resnapshotLines(oldLines, fresh) {
-    const keep = (olds, news) => news.map(n => { const o = (olds || []).find(x => x.key === n.key); return o ? { ...n, woNumber: o.woNumber || '', atPlater: o.atPlater || '', notes: o.notes || '', done: !!o.done } : n; });
+    const keep = (olds, news) => news.map(n => { const o = (olds || []).find(x => x.key === n.key); return o ? { ...n, woNumber: o.woNumber || '', atPlater: o.atPlater || '', notes: o.notes || '', done: !!o.done, ...(Array.isArray(o.raised) && o.raised.length ? { raised: o.raised } : {}) } : n; });
     return { parts: keep(oldLines?.parts, fresh.parts), chips: keep(oldLines?.chips, fresh.chips), extras: keep(oldLines?.extras, fresh.extras) };
+}
+
+// ── RAISING THE WORK (Stuart 2026-09-16) ─────────────────────────────────────────────────────
+// "i want to create work orders for all of the rows, each one gets a work order … on the floor and
+//  via purchasing i do not want to make any changes i want the work orders to flow like usual and i
+//  want the plated items to flow as if they were normal orders … only new we are building is the
+//  management portion."
+//
+// So nothing here decides a route of its own. Each part line is split by the ROW it sits on, and
+// each (line × row) is ONE stock order for (per board × boards), routed by the same code rule every
+// stock door uses (Shared/stockRun.routeForCode): a finish → a finishing work order, raw → a shop
+// work order, a plated finish (EP / MEP / P25) → a PLATING DEMAND (the WMS Plating tab, the weekly
+// plater shipment and its PO — exactly the stock path), a phosphated /P → a convert to-do, which
+// only the Stock View raises (named, never guessed). The finished items go into stock through the
+// usual put-away; the build's sample bin is where they belong (FDISTABLE / FDISWALL).
+//
+// The finished SKU is the one CPQ billed when the row came from the cart; a seeded row has none, so
+// the base code + its finish stands in, and the review shows the code before anything is raised.
+
+/** The sample bin a build's finished pieces are put away to, by display style (Stuart 2026-09-16). */
+export const SAMPLE_BIN_BY_STYLE = { TABLETOP: 'FDISTABLE', WALL: 'FDISWALL' };
+
+/** The finished code a line × row is made as. */
+export function targetCodeOf(line, rowPart = null, finishSuffixOf = null) {
+    const billed = U((rowPart && rowPart.billedId) || line?.billedId || '');
+    if (billed) return billed;
+    const code = U(line?.code), fin = U(line?.finishCode);
+    if (!code) return '';
+    if (!fin) return code;
+    const suffix = finishSuffixOf ? U(finishSuffixOf(code)) : (code.includes('/') ? U(code.split('/').pop()) : '');
+    return suffix === fin ? code : `${code}/${fin}`;
+}
+
+/** One order per (part line × row). `routeOf` = stockRun.routeForCode; `finishSuffixOf` = finishRouting's. */
+export function raisePlan(order, { boards, routeOf, finishSuffixOf = null } = {}) {
+    const n = Math.max(0, Math.floor(N(boards, N(order?.qty, 0))));
+    const items = [];
+    const missingByRow = [];
+    (order?.lines?.parts || []).forEach(line => {
+        const splits = Array.isArray(line.byRow) && line.byRow.length ? line.byRow : null;
+        if (!splits) { missingByRow.push(line.key); return; }
+        splits.forEach(sp => {
+            const target = targetCodeOf(line, sp, finishSuffixOf);
+            const route = routeOf ? routeOf(target) : { routeTo: null, refuse: null, finish: '' };
+            const kind = route.refuse === 'OUTSOURCED' ? 'PLATING' : route.refuse === 'PHOSPHATE' ? 'CONVERT' : route.routeTo === 'FINISHING' ? 'FINISHING' : route.routeTo === 'SHOP' ? 'SHOP' : 'UNKNOWN';
+            const raised = (line.raised || []).find(r => r.row === sp.row) || null;
+            const fin = U(line.finishCode), codeFin = U(route.finish || '');
+            items.push({
+                key: `${line.key}@${sp.row}`, lineKey: line.key, row: sp.row, code: line.code, name: line.name || '',
+                target, kind, finish: route.finish || '',
+                perBoard: N(sp.qtyPerBoard, 0), qty: N(sp.qtyPerBoard, 0) * n,
+                perFoot: !!line.perFoot, feetPerBoard: N(sp.feetPerBoard, 0), cutLength: N(sp.cutLength, 0),
+                raised,
+                // a seeded line's finish that the code does not carry is worth a look before raising
+                check: kind !== 'PLATING' && kind !== 'CONVERT' && fin && codeFin && fin !== codeFin ? `line finish ${fin}, code reads ${codeFin}` : '',
+            });
+        });
+    });
+    return { boards: n, items, missingByRow };
 }
 
 /** Boards still to build on an order. */

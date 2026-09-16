@@ -1,6 +1,6 @@
 // Harness for Shared/displayBom.js — the bill of a sales display board.
 //   node scripts/displayBom.test.mjs
-import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength } from '../src/components/Shared/displayBom.js';
+import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength, raisePlan, targetCodeOf, SAMPLE_BIN_BY_STYLE } from '../src/components/Shared/displayBom.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -148,6 +148,46 @@ const cartBaseFront3 = {
     eq('the EP4 rod: B1 40 boards × 2 ft + B2 100 × 2 ft = 280 ft, pieces 140', [dem.byItem['H1-1R|EP4'].feet, dem.byItem['H1-1R|EP4'].qty], [280, 140]);
     eq('a complete order adds nothing; open boards total 140 across two orders', [dem.openBoards, dem.builds.map(x => x.id)], [140, ['B1', 'B2']]);
     eq('chips are demand too, by finish', dem.byItem['CHIP|EP4'].qty, 140);
+
+    // ── raising the work: one order per (line × row), routed by the stock rule ─────────────
+    {
+        const routeOf = (code) => {                                   // stockRun.routeForCode's contract, in miniature
+            const suf = code.includes('/') ? code.split('/').pop() : '';
+            if (suf === 'P') return { routeTo: null, refuse: 'PHOSPHATE', finish: '' };
+            if (/^(EP|MEP|P25)/.test(suf)) return { routeTo: null, refuse: 'OUTSOURCED', finish: suf };
+            return { routeTo: suf ? 'FINISHING' : 'SHOP', refuse: null, finish: suf };
+        };
+        d.faces[0].rows = [
+            { id: 'r1', label: 'Top Row 1', config: rowConfigFromCartItem({ ...cartTopRow1, pricingBreakdown: cartTopRow1.pricingBreakdown.map(l => (l.legacyErpId === 'H1-1BR' ? { ...l, billedId: 'H1-1BR/EP4' } : l)) }) },
+            { id: 'r2', label: 'Base Front 3', config: rowConfigFromCartItem(cartBaseFront3) },
+        ];
+        const ord = { qty: 50, lines: buildLinesFrom(d, finishes) };
+        const ringLine = ord.lines.parts.find(l => l.code === 'H1-1BR');
+        eq('a line sitting on two rows splits into two per-row parts that sum to the line', [ringLine.byRow.map(r => r.row), ringLine.byRow.reduce((a, r) => a + r.qtyPerBoard, 0)], [['Top Row 1', 'Base Front 3'], ringLine.qtyPerBoard]);
+        const plan = raisePlan(ord, { routeOf });
+        const ringItems = plan.items.filter(i => i.lineKey === ringLine.key);
+        eq('one order per row, each for per-board × 50 boards', ringItems.map(i => [i.row, i.qty]), [['Top Row 1', 50], ['Base Front 3', 50]]);
+        eq('the billed SKU is the target, and a plated SKU is a PLATING demand', [ringItems[0].target, ringItems[0].kind], ['H1-1BR/EP4', 'PLATING']);
+        eq('a row with no billed SKU makes code + finish (the other row bills nothing)', ringItems[1].target, 'H1-1BR/EP4');
+        // the same part twice on ONE row (two ring lines) adds up inside that row
+        const twice = newDisplay({ id: 'D2', name: 'T', style: 'TABLETOP' });
+        twice.faces[0].rows = [{ id: 'x', label: 'Row X', config: { lines: [{ partId: 'A1', legacyErpId: 'H1-1BR', finishCode: 'EP4', qty: 3 }, { partId: 'A1', legacyErpId: 'H1-1BR', finishCode: 'EP4', qty: 4 }] } }];
+        eq('two lines of one part on one row → one per-row part of 7', buildLinesFrom(twice, finishes).parts[0].byRow.map(r => [r.row, r.qtyPerBoard]), [['Row X', 7]]);
+        const rod = plan.items.find(i => i.code === 'H1-1R' && i.row === 'Top Row 1');
+        eq('a per-foot rod carries its feet and cut length per board', [rod.perFoot, rod.feetPerBoard > 0], [true, true]);
+        eq('boards override the order qty', raisePlan(ord, { boards: 10, routeOf }).items.find(i => i.key === ringItems[0].key).qty, 10);
+        eq('an applied paint finish is a FINISHING work order', raisePlan({ qty: 1, lines: { parts: [{ key: 'F|P06', code: 'H1-1BF', finishCode: 'P06', byRow: [{ row: 'A', qtyPerBoard: 2 }] }] } }, { routeOf }).items[0].kind, 'FINISHING');
+        eq('a code that already carries its finish is not doubled', targetCodeOf({ code: 'H1-1CP-V/EP4', finishCode: 'EP4' }), 'H1-1CP-V/EP4');
+        eq('a raw line with no finish is shop work', routeOf(targetCodeOf({ code: 'H1-1ARM', finishCode: '' })).routeTo, 'SHOP');
+        eq('/P is a convert, never a work order', raisePlan({ qty: 2, lines: { parts: [{ key: 'X|', code: 'H1-1R/P', byRow: [{ row: 'A', qtyPerBoard: 1 }] }] } }, { routeOf }).items[0].kind, 'CONVERT');
+        // raised rows are remembered, and survive a re-snapshot
+        const raisedLines = { ...ord.lines, parts: ord.lines.parts.map(l => (l.key === ringLine.key ? { ...l, raised: [{ row: 'Top Row 1', kind: 'PLATING', id: 'PLD-1', qty: 50 }] } : l)) };
+        const p2 = raisePlan({ qty: 50, lines: raisedLines }, { routeOf });
+        eq('an already-raised row says so; the other row does not', p2.items.filter(i => i.lineKey === ringLine.key).map(i => !!i.raised), [true, false]);
+        eq('re-snapshot keeps what was raised', resnapshotLines(raisedLines, buildLinesFrom(d, finishes)).parts.find(l => l.key === ringLine.key).raised[0].id, 'PLD-1');
+        eq('an order snapshotted before the per-row split is named, not guessed', raisePlan({ qty: 5, lines: { parts: [{ key: 'OLD|', code: 'H1-1R' }] } }, { routeOf }).missingByRow, ['OLD|']);
+        eq('sample bins by style', [SAMPLE_BIN_BY_STYLE.TABLETOP, SAMPLE_BIN_BY_STYLE.WALL], ['FDISTABLE', 'FDISWALL']);
+    }
     eq('nothing when every order is complete', Object.keys(displayDemandFrom([b3]).byItem).length, 0);
 
     // ship plan: 50 boards, 10 a week from a date → five drops, the last one partial when needed
