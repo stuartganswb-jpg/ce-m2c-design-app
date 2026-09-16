@@ -74,6 +74,14 @@ export const boxDims = (box) => {
     return { length: sides[0] ? String(sides[0]) : '', width: sides[1] ? String(sides[1]) : '', height: sides[2] ? String(sides[2]) : '' };
 };
 
+// How a standard box's size is WRITTEN everywhere (Stuart 2026-09-16: "make it all match ups") —
+// L × W × H, the order UPS asks for. Stored fields are w / h / d, where L is `d` (the depth behind
+// the W × H face the foam layout uses). A side not on file shows — rather than being guessed.
+export const boxSizeLabel = (box) => {
+    const side = (v) => (Number(v) > 0 ? `${Number(v)}"` : '—');
+    return `${side(box && box.d)} × ${side(box && box.w)} × ${side(box && box.h)} (L×W×H)`;
+};
+
 // One package per box the packer chose (SMALL, POLE). The dims START from the standard box and are
 // then the packer's to change; a box name with no standard box on file starts blank.
 export function packagesFromPack(packBoxes, stdBoxes = []) {

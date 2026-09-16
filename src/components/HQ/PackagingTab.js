@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import * as THREE from 'three';
 import { db } from '../../firebase';
+import { boxSizeLabel } from '../Shared/fulfilment';
 import { collection, query, where, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
 
 // --- THEME & STYLING ---
@@ -584,9 +585,6 @@ const PackagingTab = ({ activeBrand }) => {
   // Names carrying "small" / "pole" pre-select themselves on the pack screen; the rest are picked
   // by hand. The BOM panel below reads the box flagged usage:'small_parts' for the small-parts card.
   const brandLabel = (id) => (!id || id === 'global') ? 'All brands' : String(id).toUpperCase();
-  // A box reads L × W × H, the order UPS asks for. Stored fields are unchanged: L is `d` (the depth
-  // behind the W × H face the foam layout uses); a box saved without one shows — until re-entered.
-  const boxLwh = (b) => `${b && b.d ? `${b.d}"` : '—'} × ${b && b.w ? `${b.w}"` : '—'} × ${b && b.h ? `${b.h}"` : '—'} (L×W×H)`;
   const visibleBoxes = standardBoxes
     .filter(b => !activeBrand || !b.brandId || b.brandId === 'global' || b.brandId === activeBrand)
     .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
@@ -614,7 +612,7 @@ const PackagingTab = ({ activeBrand }) => {
     } finally { setBoxSaving(false); }
   };
   const deleteStandardBox = async (b) => {
-    if (!window.confirm(`Delete standard box "${b.name}" (${boxLwh(b)})?\n\nPacks already closed keep the box name they recorded; the pack screen simply stops offering it.`)) return;
+    if (!window.confirm(`Delete standard box "${b.name}" (${boxSizeLabel(b)})?\n\nPacks already closed keep the box name they recorded; the pack screen simply stops offering it.`)) return;
     await deleteDoc(doc(db, "standard_boxes", b.id));
   };
 
@@ -973,7 +971,7 @@ const PackagingTab = ({ activeBrand }) => {
             >
               <option value="" disabled>Load Standard...</option>
               {standardBoxes.map(b => (
-                <option key={b.id} value={b.id}>{b.name} ({b.w}" x {b.h}")</option>
+                <option key={b.id} value={b.id}>{b.name} — {boxSizeLabel(b)}</option>
               ))}
             </select>
             <button onClick={boxFormFromWorkspace} title="Save the workspace width × height as a new standard box (fills the form below)" style={{ ...btnStyle(false), padding: '6px 10px', whiteSpace: 'nowrap' }}>Save as box</button>
@@ -1002,7 +1000,7 @@ const PackagingTab = ({ activeBrand }) => {
                   <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 8px', borderTop: i ? `1px solid ${theme.line}` : 'none' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: '0.78rem', color: theme.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.name}{b.usage === 'small_parts' && <span title="The BOM panel's small-parts box" style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.brass, marginLeft: '6px', letterSpacing: '.06em' }}>SMALL PARTS</span>}</div>
-                      <div style={{ fontFamily: theme.mono, fontSize: '0.68rem', color: theme.inkSoft }}>{boxLwh(b)} · {brandLabel(b.brandId)}</div>
+                      <div style={{ fontFamily: theme.mono, fontSize: '0.68rem', color: theme.inkSoft }}>{boxSizeLabel(b)} · {brandLabel(b.brandId)}</div>
                     </div>
                     <button onClick={() => { setFoamW(b.w); setFoamH(b.h); }} title="Load this box into the workspace" style={{ ...btnStyle(false), padding: '4px 6px' }}>Load</button>
                     <button onClick={() => deleteStandardBox(b)} title="Delete this standard box" style={{ ...btnStyle(false), padding: '4px 6px', color: '#a33' }}>✕</button>
@@ -1097,7 +1095,7 @@ const PackagingTab = ({ activeBrand }) => {
                     setFoamW(poleBox.w); setFoamH(poleBox.h);
                     setShapes(generatePoleBores(poleCount, poleBox.w, poleBox.h, prof));
                 })}
-                {smallItems.length > 0 && boxCard(`${smallBox.name}${nesting ? ' · tracing…' : ''}`, boxLwh(smallBox), smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); autoNestSilhouettes(smallItems, smallBox.w, smallBox.h); })}
+                {smallItems.length > 0 && boxCard(`${smallBox.name}${nesting ? ' · tracing…' : ''}`, boxSizeLabel(smallBox), smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); autoNestSilhouettes(smallItems, smallBox.w, smallBox.h); })}
                 {items.length === 0 && <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>No items on this order.</div>}
               </div>
             );

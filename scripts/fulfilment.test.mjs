@@ -1,7 +1,7 @@
 // The Fulfilment tab's rules.   node scripts/fulfilment.test.mjs
 import {
   isReadyToShip, fulfilmentQueueOf, recentlyShippedOf, shipToOf, addressErrors, boxDims, packagesFromPack,
-  blankPackage, packageErrors, rateOf, sortedRates, shipPatchOf, voidPatchOf, nsShipPayloadOf, labelDocHtml,
+  blankPackage, packageErrors, rateOf, sortedRates, shipPatchOf, voidPatchOf, nsShipPayloadOf, labelDocHtml, boxSizeLabel,
 } from '../src/components/Shared/fulfilment.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
@@ -71,6 +71,11 @@ const ns = nsShipPayloadOf(patch);
 eq('netsuite status shipped', ns.shipStatus, { id: 'C' });
 eq('netsuite one package line per box', ns.package.items.map((i) => [i.packageTrackingNumber, i.packageWeight]), [['1ZAAA', 5], ['1ZBBB', 9]]);
 ok('netsuite descr capped at 60', ns.package.items.every((i) => i.packageDescr.length <= 60));
+
+// box size, written the UPS way
+eq('box size L×W×H (L = d)', boxSizeLabel({ w: 6, h: 4, d: 48 }), '48" × 6" × 4" (L×W×H)');
+eq('missing depth shows a dash', boxSizeLabel({ w: 12, h: 10 }), '— × 12" × 10" (L×W×H)');
+eq('no box', boxSizeLabel(null), '— × — × — (L×W×H)');
 
 // label
 ok('label doc is 4x6', labelDocHtml(['data:image/gif;base64,AAA']).includes('size:4in 6in'));

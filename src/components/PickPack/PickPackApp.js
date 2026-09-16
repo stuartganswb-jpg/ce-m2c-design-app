@@ -56,6 +56,7 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
 import { soLinesSql, fulfilmentItemsOf, refusalText } from "../Shared/fulfilmentLines";
 import FulfilmentPanel from "../Shared/fulfilmentPanel";
+import { boxSizeLabel } from "../Shared/fulfilment";
 import { fetchNsPurchaseOrder, importNsPurchaseOrder, recordPoReceipt, openQtyOf, poRef } from "../Shared/purchaseOrders";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
 
@@ -5214,7 +5215,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             {label}
                             <select value={packBoxSel[slot] || ''} onChange={e => setPackBoxSel({ ...packBoxSel, [slot]: e.target.value })} style={{ padding: '8px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.85rem', background: '#fff' }}>
                                 <option value="">{brandBoxes.length ? '— pick box —' : '— no boxes for this brand —'}</option>
-                                {brandBoxes.map(b => <option key={b.id} value={b.name}>{b.name}{b.w ? ` (${b.w}×${b.h}${b.d ? `×${b.d}` : ''})` : ''}</option>)}
+                                {brandBoxes.map(b => <option key={b.id} value={b.name}>{b.name} — {boxSizeLabel(b)}</option>)}
                             </select>
                             {!brandBoxes.length && <span style={{ color: '#d9534f', textTransform: 'none', letterSpacing: 0, fontFamily: theme.sans, fontSize: '0.8rem' }}>add them in HQ → 15. Packaging → Standard boxes</span>}
                         </label>

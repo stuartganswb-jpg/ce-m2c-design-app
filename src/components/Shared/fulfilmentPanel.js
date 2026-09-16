@@ -16,7 +16,7 @@ import { propagateFloorState } from './orderLifecycle';
 import { printHtmlDocument } from './labelPrint';
 import {
     fulfilmentQueueOf, recentlyShippedOf, shipToOf, addressErrors, boxDims, packagesFromPack, blankPackage,
-    packageErrors, sortedRates, rateOf, shipPatchOf, voidPatchOf, nsShipPayloadOf, labelDocHtml,
+    packageErrors, sortedRates, rateOf, shipPatchOf, voidPatchOf, nsShipPayloadOf, labelDocHtml, boxSizeLabel,
 } from './fulfilment';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
@@ -248,7 +248,7 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                                                 <td style={{ padding: '4px' }}>
                                                     <select style={{ ...input, width: '100%' }} value={brandBoxes.some((b) => b.name === p.boxName) ? p.boxName : ''} onChange={(e) => pickBox(i, e.target.value)}>
                                                         <option value="">{p.fromStandard ? 'Custom box' : (p.boxName || 'Custom box')}</option>
-                                                        {brandBoxes.map((b) => <option key={b.id} value={b.name}>{b.name}</option>)}
+                                                        {brandBoxes.map((b) => <option key={b.id} value={b.name}>{b.name} — {boxSizeLabel(b)}</option>)}
                                                     </select>
                                                 </td>
                                                 {['length', 'width', 'height', 'weight'].map((k) => (
