@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
+import { coverArrival } from '../Shared/backorderCover';
 import { orderStatusOf, customPartsReady, liftPatchFor } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
@@ -1130,6 +1131,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 } catch (e) { console.warn('receipt gate clear failed (the receipt stands):', e); }
             }
             if (freed.length) writeLog(`Receiving ${poRef(rcvPo)}: ${freed.length} order(s) released to finishing — ${freed.join(', ')}.`, 'wms');
+            // 4a′ — THE BACKORDERED LINES THIS DELIVERY COVERS (close-out #18): the sales orders whose
+            // short lines name this code are marked covered, oldest first; an order with nothing short
+            // left has its backorder hold lifted on every sibling.
+            let boNote = '';
+            for (const a of res.applied) { const r = await coverBackordersOn(a.itemId, a.qty, `receipt ${poRef(rcvPo)}`); boNote += coverNoteOf(r); }
 
             // 4b — THE ORDERS THAT WERE WAITING. Before anything goes on a shelf: an order placed
             // with no stock has been sitting parked here waiting for exactly this delivery
@@ -1143,6 +1149,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             alert(`✅ ${pcs} pcs received against ${poRef(rcvPo)} into ${bin}.`
                 + (freed.length ? `\n\n🏭 ${freed.length} order(s) were waiting on this material and have gone to the finishing floor:\n   ${freed.join('\n   ')}` : '')
                 + (taken ? `\n\n${taken} went to orders waiting to ship.` : '')
+                + boNote
                 + (rcvPo.nsPoId ? '\n\n📤 The NetSuite receipt is queued (11.1 → Sync Queue).' : ''));
             setRcvBin('');
             pullNetSuiteStock();
@@ -1184,6 +1191,23 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // Scrap found at PACKING is the same event as scrap found at finishing — the order stops. It
     // matters where it happened, so the stage is recorded and the banner says it.
     const holdCtx = { db, doc, getDoc, getDocs, query, collection, where, updateDoc };
+    // THE RECEIPT-SIDE LIFT (close-out #18, S2's hand-off 2026-09-15): material landing here covers
+    // the short lines that name its code, oldest first, and an order with nothing short left has its
+    // backorder hold lifted on every sibling — the same patch RTG's "Finish as available" writes.
+    // Called from every place pieces land: the vendor receipt, the plating put-away, a convert, a
+    // finished stock put-away. Best-effort: the receipt / put-away stands whatever happens here.
+    const coverBackordersOn = async (code, qty, source) => {
+        if (!code || !(Number(qty) > 0)) return null;
+        try {
+            const seen = new Set();
+            const orders = Object.values(soIndex).filter(so => so && so.id && !seen.has(so.id) && seen.add(so.id));
+            const r = await coverArrival(holdCtx, { orders, code, qty, by: operator?.name || 'WMS', source });
+            r.covered.forEach(c => writeLog(`Backorder covered: ${c.take} × ${c.code} on SO ${c.soRef} (${source})${c.remaining > 0 ? ` — ${c.remaining} still short` : ' — line complete'}`, 'wms'));
+            if (r.lifted.length) writeLog(`⏸→▶ Backorder hold LIFTED — nothing short remains on ${r.lifted.map(id => (r.covered.find(c => c.soId === id) || {}).soRef || id).join(', ')} (${r.liftedDocs} floor doc(s) released; ${source}).`, 'wms');
+            return r;
+        } catch (e) { console.warn('backorder cover failed (the receipt stands):', e); return null; }
+    };
+    const coverNoteOf = (r) => !r || !r.covered.length ? '' : `\n\n⏸ Backorders: ${r.covered.map(c => `${c.take} × ${c.code} → SO ${c.soRef}${c.remaining > 0 ? ` (${c.remaining} still short)` : ''}`).join('; ')}${r.lifted.length ? `\n▶ Hold lifted on ${r.lifted.length} order(s) — nothing short remains.` : ''}`;
     const notifyOps = async (msg) => {
         try { await addDoc(collection(db, 'global_messages'), { sender: 'System', sourceApp: 'WMS', target: 'ALL', isSystem: true, t: serverTimestamp(), msg }); }
         catch (e) { console.warn('OS Comms notify failed:', e); }
@@ -2063,6 +2087,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                             writeBack: { collection: 'fin_workorders', docId: job.id, patch: { jfpAdjPosted: true }, idField: 'jfpAdjId', tranField: 'jfpAdjTran' },
                         });
                         await updateDoc(packDocOf(job), { jfpAdjQueued: true, jfpAdjQty: doneQty, jfpAdjBin: bin });
+                        await coverBackordersOn(job.jfpItemCode, doneQty, `put-away ${packRef(job)}`);   // close-out #18
                         alert(`📦 ${packRef(job)} — ${PAINT_ONLY_BADGE}.\n\n+${doneQty} × ${job.jfpItemCode} queued as a NetSuite inventory adjustment into ${bin}. Watch it land in 11.1 → NetSuite Sync Queue (~1 min).`);
                     } catch (obErr) {
                         alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\n⚠ The NetSuite adjustment could NOT be queued: ${obErr.message || obErr}\n\nThe put-away stands — retry from 11.1 or adjust ${job.jfpItemCode} manually.`);
@@ -2081,6 +2106,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     const taken = allocCode && doneQty > 0 ? await offerAllocation(allocCode, doneQty, { from: `put-away ${packRef(job)}` }) : 0;
                     if (taken > 0) allocNote = `\n\n📦 ${taken} of them are now gathered for open orders — see SO Pack. The rest stay in ${bin}.`;
                 } catch (e) { console.warn('arrival alert failed (the put-away stands):', e); }
+                { const r = await coverBackordersOn(woItemCodeOf(job), Number(job.completedParts) > 0 ? Number(job.completedParts) : (Number(job.totalParts) || 0), `put-away ${packRef(job)}`); allocNote += coverNoteOf(r); }   // close-out #18
                 setPackOrderId(null);
                 alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\nThe NetSuite assembly build is queued now and receives into ${bin} — watch it land in 11.1 → NetSuite Sync Queue (~1 min).${allocNote}`);
                 return;
@@ -2547,6 +2573,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
             alert(`✅ Assembly build #${built.id || ''} posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${consumeBin}, received into ${receiveBin}).`);
             writeLog(`Assembly Build (phosphate): +${qty} ${erpOf(target)} / -${qty} ${base.erpId}.${convertMemo.trim() ? ` Memo: ${convertMemo.trim()}` : ''}`, 'wms');
+            await coverBackordersOn(erpOf(target), qty, 'convert');   // close-out #18
             // Converted straight through (no cart hop) — the HQ to-do that opened this is satisfied.
             if (convertDemandId) {
                 const dm = convertDemands.find(d => d.id === convertDemandId) || null;
@@ -2827,6 +2854,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             await postConvertBuild({ itemId: assembly.id, quantity: line.qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: newBin, memo: nsMemo(`Phos convert ${convBatch.cartBin || ''}`), workOrderId: lineDemandWo || undefined });
             const lines = (convBatch.lines || []).map(l => l.lineId === line.lineId ? { ...l, status: 'converted', newBin, convertedAt: Date.now() } : l);
             await updateDoc(doc(db, "conversion_batches", convBatch.id), { lines, updatedAt: Date.now() });
+            await coverBackordersOn(line.targetErpId, line.qty, `convert cart ${convBatch.cartBin || ''}`.trim());   // close-out #18
             // The HQ to-do is satisfied only now, once the /P actually exists in NetSuite.
             if (line.demandId) {
                 // A demand raised by a work-order pre-check carries the WO's id — completing the
@@ -3654,6 +3682,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 binPlacements: bins, putAwayAt: Date.now(), putAwayBy: operator?.name || '',
             }).catch(() => {});
             writeLog(`Plating put-away: ${got} × ${target} built into ${bins.map(p => `${p.qty}@${p.bin}`).join(' + ')} by ${operator?.name || 'Unknown'} (${line.cartLabel || 'cart'}, ${line.shipmentId || line.id}).`, 'wms');
+            await coverBackordersOn(target, got, `plating put-away ${line.shipmentId || line.id}`);   // close-out #18
             // PLATING IS THE HANDLER TO SO PACK FOR PLATED ITEMS (Stuart 2026-09-03). If these
             // pieces were plated FOR an order, they do not belong on the open shelf — they belong
             // in that order's committed bin, with the rest of its parts. Anything without an order
