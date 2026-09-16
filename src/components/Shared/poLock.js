@@ -29,6 +29,30 @@ export const isOpenPo = (po) => !!po && !po.deleted && !PO_TERMINAL_STATUSES.inc
 // a PO for 5 that returned 4 with 1 short still owes 1, and reading the header would hide it.
 export const openQtyOf = (line) => Math.max(0, (Number(line && line.quantity) || 0) - (Number(line && line.received) || 0));
 export const poFullyReceived = (po) => ((po && po.items) || []).every(l => openQtyOf(l) === 0);
+
+// ── AN OVERAGE IS NOT A MISTAKE; A DUPLICATE IS (Stuart 2026-09-16) ───────────────────────────
+// "many of our suppliers may ship 255 when we order 250, it does not allow us ... bounded by 10%
+// over, it is important as receipts are large and may happen over several days/sessions, so to
+// prevent duplicates can't keep it open for foreever."
+//
+// The receipt used to be clamped to what the line still OWED, and the clamp's own reason was that a
+// double-tap must not receive twice — never a rule that a vendor may not over-ship. So a real 255
+// was silently written down as 250 and five physical pieces existed in neither the app nor NetSuite.
+//
+// The tolerance is what tells the two cases apart, which is the whole point of bounding it: a genuine
+// overage is a few percent, a pallet received twice is a hundred. 10% admits the first and refuses
+// the second, and it keeps working across the several days and sessions a large receipt takes.
+//
+// `openQtyOf` above is deliberately NOT changed — it answers "what is still OWED", which is what the
+// short-delivery and backorder rules read, and a line that is over-received still owes nothing. This
+// answers the different question: how much more may this line still physically take in.
+//
+// ⚠ Small lines get no tolerance: 10% of 5 floors to 0. That is on purpose — a "+1 minimum" would be
+// 100% over on a line of one, which is exactly the duplicate this bound exists to catch.
+export const OVER_RECEIPT_TOLERANCE = 0.10;
+export const maxReceivableOf = (line) => Math.floor((Number(line && line.quantity) || 0) * (1 + OVER_RECEIPT_TOLERANCE));
+export const overRoomOf = (line) => Math.max(0, maxReceivableOf(line) - (Number(line && line.received) || 0));
+export const isOverReceived = (line) => (Number(line && line.received) || 0) > (Number(line && line.quantity) || 0);
 export const isDraftPo = (po) => String((po && po.status) || '') === PO_STATUS.DRAFT;
 export const hasNsNumber = (po) => !!(po && (po.nsPoTran || po.nsPoId));
 export const poRef = (po) => String((po && (po.nsPoTran || po.poId || po.id)) || '');

@@ -31,10 +31,12 @@ import { enqueueNsWrite } from './nsOutbox';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { reserveShortNo } from './shortId';
 import {
-    PO_STATUS, isOpenPo, openQtyOf, isDraftPo, hasNsNumber, poRef, poLineLock, poLinesLocked,
+    PO_STATUS, isOpenPo, openQtyOf, overRoomOf,
+    isDraftPo, hasNsNumber, poRef, poLineLock, poLinesLocked,
 } from './poLock.js';
 export {
-    PO_STATUS, PO_TERMINAL_STATUSES, isOpenPo, openQtyOf, poFullyReceived,
+    PO_STATUS, PO_TERMINAL_STATUSES, isOpenPo, openQtyOf, poFullyReceived, overRoomOf, isOverReceived,
+    OVER_RECEIPT_TOLERANCE, maxReceivableOf,
     isDraftPo, hasNsNumber, poRef, poLineLock, poLinesLocked, poLockMessage,
 } from './poLock.js';
 
@@ -365,9 +367,12 @@ export const importNsPurchaseOrder = async ({ nsPo, brand, createdBy = '' }) => 
 // the same code twice on purpose — once for stock and once for a sales order — and matching by code
 // would credit the wrong one and lose the link that says who the pieces are for.
 //
-// `received` accumulates and is clamped to what the line still owes, so a double-tap cannot receive
-// more than was ordered. A short delivery is simply a smaller number: on a vendor PO the missing
-// pieces are a BACKORDER, not scrap, and the line stays open until they arrive.
+// `received` accumulates. It used to be clamped to what the line still OWED, which silently wrote a
+// vendor's 255 down to 250 (Stuart 2026-09-16) — the clamp's real job was stopping a double-tap, not
+// forbidding an overage. It is now clamped to the 10% tolerance (Shared/poLock.overRoomOf), which
+// still stops the duplicate it was built for: a pallet received twice is 100% over, not 2%.
+// A short delivery is simply a smaller number: on a vendor PO the missing pieces are a BACKORDER,
+// not scrap, and the line stays open until they arrive.
 export const recordPoReceipt = async ({ poId, receipts = [], by = '', nsReceiptId = null }) => {
     const ref = doc(db, 'hq_purchase_orders', poId);
     const snap = await getDoc(ref);
@@ -379,13 +384,18 @@ export const recordPoReceipt = async ({ poId, receipts = [], by = '', nsReceiptI
         const i = Number(r.index);
         const line = items[i];
         if (!line) return;
-        const room = openQtyOf(line);
+        const room = overRoomOf(line);
         const got = Math.max(0, Math.min(room, Number(r.qty) || 0));
         if (!got) return;
+        const receivedNow = (Number(line.received) || 0) + got;
+        const over = Math.max(0, receivedNow - (Number(line.quantity) || 0));
         items[i] = {
             ...line,
-            received: (Number(line.received) || 0) + got,
+            received: receivedNow,
             receivedAt: Date.now(), receivedBy: by,
+            // The overage is RECORDED, never just absorbed — the buyer should be able to see that a
+            // vendor ships long, and the receiver should not have to remember it.
+            ...(over > 0 ? { overReceived: over, overReceivedAt: Date.now() } : {}),
             ...(r.bin ? { receivedBin: r.bin } : {}),
         };
         applied.push({ index: i, itemId: line.itemId, qty: got, bin: r.bin || '', soAppId: line.soAppId || null, soRef: line.soRef || '' });

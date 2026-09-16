@@ -58,7 +58,7 @@ import { enqueueNsWrite } from "../Shared/nsOutbox";
 import { soLinesSql, fulfilmentItemsOf, refusalText } from "../Shared/fulfilmentLines";
 import FulfilmentPanel from "../Shared/fulfilmentPanel";
 import { boxSizeLabel } from "../Shared/fulfilment";
-import { fetchNsPurchaseOrder, importNsPurchaseOrder, recordPoReceipt, openQtyOf, poRef } from "../Shared/purchaseOrders";
+import { fetchNsPurchaseOrder, importNsPurchaseOrder, recordPoReceipt, openQtyOf, overRoomOf, maxReceivableOf, poRef } from "../Shared/purchaseOrders";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
@@ -1027,9 +1027,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const c = String(code || '').trim().toUpperCase();
         if (!c || !po) return -1;
         const lines = po.items || [];
-        const exact = lines.findIndex(l => String(l.itemId || '').toUpperCase() === c && openQtyOf(l) > 0);
+        // A line that owes nothing may still take its overage while the PO is open (Stuart
+        // 2026-09-16), so the lookup asks for TOLERANCE room, not what is owed.
+        const exact = lines.findIndex(l => String(l.itemId || '').toUpperCase() === c && overRoomOf(l) > 0);
         if (exact >= 0) return exact;
-        return lines.findIndex(l => String(l.itemId || '').toUpperCase().startsWith(c) && openQtyOf(l) > 0);
+        return lines.findIndex(l => String(l.itemId || '').toUpperCase().startsWith(c) && overRoomOf(l) > 0);
     };
 
     // The cart lives ON the purchase order, not in this component: a dock tablet that reloads
@@ -1043,11 +1045,19 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const rcvAddToCart = async (idx) => {
         const line = (rcvPo.items || [])[idx];
         if (!line) return;
-        const room = openQtyOf(line);
-        const asked = rcvQty[idx] != null && rcvQty[idx] !== '' ? parseInt(rcvQty[idx], 10) : room;
-        const got = Math.max(0, Math.min(room, parseInt(asked, 10) || 0));
-        if (!got) return alert('How many arrived? A receipt of nothing is not a receipt.');
-        if (asked > room) alert(`${room} still outstanding on that line — receiving ${got}. The rest of the order stays open.`);
+        const owedQty = openQtyOf(line);
+        const room = overRoomOf(line);                       // owed + the 10% tolerance
+        const ordered = Number(line.quantity) || 0;
+        const already = Number(line.received) || 0;
+        const asked = rcvQty[idx] != null && rcvQty[idx] !== '' ? parseInt(rcvQty[idx], 10) : (owedQty || room);
+        const want = Math.max(0, parseInt(asked, 10) || 0);
+        if (!want) return alert('How many arrived? A receipt of nothing is not a receipt.');
+        // BEYOND THE TOLERANCE, REFUSE AND SAY WHY (Stuart 2026-09-16): a few percent over is a
+        // vendor shipping long; this far over is almost always the same pallet being received twice.
+        if (want > room) return alert(`${line.itemId}: ${ordered} ordered, ${already} already received.\n\nThe most this line can still take is ${room} — ${maxReceivableOf(line)} is the ceiling, 10% over the order.\n\nA count this far over is usually a pallet being received a second time. Check the paperwork; if the vendor really did ship this much, raise a second purchase order for the extra.`);
+        // Inside the tolerance but more than was ordered — allowed, but never silently.
+        if (want > owedQty && !window.confirm(`${line.itemId}: only ${owedQty} still outstanding, and you are receiving ${want}.\n\nOrdered ${ordered} · already received ${already} · after this ${already + want}, which is ${already + want - ordered} over.\n\nThat is inside the 10% tolerance. Take in the overage?`)) return;
+        const got = want;
         try {
             const next = [...rcvCart.filter(c => c.index !== idx), { index: idx, itemId: line.itemId, qty: got }];
             await rcvSaveCart(next);
@@ -6761,7 +6771,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 {activeTab === 'RECEIVING' && (() => {
                     const po = rcvPo;
                     const lines = (po && po.items) || [];
-                    const owed = lines.map((l, i) => ({ l, i })).filter(x => openQtyOf(x.l) > 0);
+                    // Lines that owe nothing but can still take an overage stay on the list.
+                    const owed = lines.map((l, i) => ({ l, i })).filter(x => overRoomOf(x.l) > 0);
                     const inCart = new Set(rcvCart.map(c => c.index));
                     const pcs = rcvCart.reduce((a, c) => a + (Number(c.qty) || 0), 0);
                     const inp = { padding: '9px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '12px', background: '#fff', color: theme.ink };
@@ -6808,15 +6819,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         const dim = rcvFocusIdx != null && rcvFocusIdx !== i;
                                         const hit = rcvFocusIdx === i;
                                         const room = openQtyOf(l);
-                                        const copies = Math.max(1, Math.min(50, parseInt(rcvQty[i] || room, 10) || 1));
+                                        const ceiling = overRoomOf(l);
+                                        const copies = Math.max(1, Math.min(50, parseInt(rcvQty[i] || room || ceiling, 10) || 1));
                                         return (
                                             <div key={i} style={{ ...rowBox, opacity: dim ? 0.28 : 1, background: hit ? '#fdf6e3' : 'transparent' }}>
                                                 <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
                                                     {l.itemId} · {t('ordered')} {l.quantity} · {t('received')} {Number(l.received) || 0} · <span style={{ color: theme.brass }}>{room} {t('outstanding')}</span>
+                                                    {ceiling > room && <span style={{ color: theme.inkSoft }}> · {t('up to')} {ceiling} {t('with the 10% overage')}</span>}
                                                     {l.soRef && <span style={{ color: theme.brass }}> · SO {l.soRef}</span>}
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                                    <input type="number" min="0" max={room} value={rcvQty[i] != null ? rcvQty[i] : ''} onChange={(e) => setRcvQty(q => ({ ...q, [i]: e.target.value }))} placeholder={String(room)} style={{ ...inp, width: '78px' }} />
+                                                    <input type="number" min="0" max={ceiling} value={rcvQty[i] != null ? rcvQty[i] : ''} onChange={(e) => setRcvQty(q => ({ ...q, [i]: e.target.value }))} placeholder={String(room)} style={{ ...inp, width: '78px' }} />
                                                     <button title={`Print ${copies} label(s) for ${l.itemId}`} onClick={() => printStockItemLabels({ itemId: l.itemId, itemName: l.description || '', uom: uomOf(partOfCode(l.itemId)), woNum: poRef(po), copies })}
                                                         style={{ ...btn('transparent', theme.ink), border: `1px solid ${theme.line}` }}>🏷 {t('Labels')}</button>
                                                     <button disabled={rcvBusy} onClick={() => rcvAddToCart(i)} style={btn('#7d9a6f', '#fff')}>{t('Receive')}</button>
