@@ -584,6 +584,9 @@ const PackagingTab = ({ activeBrand }) => {
   // Names carrying "small" / "pole" pre-select themselves on the pack screen; the rest are picked
   // by hand. The BOM panel below reads the box flagged usage:'small_parts' for the small-parts card.
   const brandLabel = (id) => (!id || id === 'global') ? 'All brands' : String(id).toUpperCase();
+  // A box reads L × W × H, the order UPS asks for. Stored fields are unchanged: L is `d` (the depth
+  // behind the W × H face the foam layout uses); a box saved without one shows — until re-entered.
+  const boxLwh = (b) => `${b && b.d ? `${b.d}"` : '—'} × ${b && b.w ? `${b.w}"` : '—'} × ${b && b.h ? `${b.h}"` : '—'} (L×W×H)`;
   const visibleBoxes = standardBoxes
     .filter(b => !activeBrand || !b.brandId || b.brandId === 'global' || b.brandId === activeBrand)
     .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
@@ -594,8 +597,8 @@ const PackagingTab = ({ activeBrand }) => {
   const addStandardBox = async () => {
     const name = String(boxForm.name || '').trim();
     const w = parseFloat(boxForm.w) || 0, h = parseFloat(boxForm.h) || 0, d = parseFloat(boxForm.d) || 0;
-    if (!name) return alert('Give the box a name (e.g. "Small Parts Box 18x12x4").');
-    if (!(w > 0) || !(h > 0)) return alert('Width and height must be greater than 0.');
+    if (!name) return alert('Give the box a name (e.g. "Small Parts Box 12x18x4").');
+    if (!(d > 0) || !(w > 0) || !(h > 0)) return alert('Length, width and height must all be greater than 0 — UPS rates every package by all three.');
     const brandId = (boxForm.scope === 'global' || !activeBrand) ? 'global' : activeBrand;
     if (visibleBoxes.some(b => String(b.name || '').trim().toLowerCase() === name.toLowerCase() && (b.brandId || 'global') === brandId)) {
       return alert(`A box named "${name}" already exists for ${brandLabel(brandId)}.`);
@@ -611,7 +614,7 @@ const PackagingTab = ({ activeBrand }) => {
     } finally { setBoxSaving(false); }
   };
   const deleteStandardBox = async (b) => {
-    if (!window.confirm(`Delete standard box "${b.name}" (${b.w}" x ${b.h}"${b.d ? ` x ${b.d}"` : ''})?\n\nPacks already closed keep the box name they recorded; the pack screen simply stops offering it.`)) return;
+    if (!window.confirm(`Delete standard box "${b.name}" (${boxLwh(b)})?\n\nPacks already closed keep the box name they recorded; the pack screen simply stops offering it.`)) return;
     await deleteDoc(doc(db, "standard_boxes", b.id));
   };
 
@@ -999,7 +1002,7 @@ const PackagingTab = ({ activeBrand }) => {
                   <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 8px', borderTop: i ? `1px solid ${theme.line}` : 'none' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: '0.78rem', color: theme.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.name}{b.usage === 'small_parts' && <span title="The BOM panel's small-parts box" style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.brass, marginLeft: '6px', letterSpacing: '.06em' }}>SMALL PARTS</span>}</div>
-                      <div style={{ fontFamily: theme.mono, fontSize: '0.68rem', color: theme.inkSoft }}>{b.w}" × {b.h}"{b.d ? ` × ${b.d}"` : ''} · {brandLabel(b.brandId)}</div>
+                      <div style={{ fontFamily: theme.mono, fontSize: '0.68rem', color: theme.inkSoft }}>{boxLwh(b)} · {brandLabel(b.brandId)}</div>
                     </div>
                     <button onClick={() => { setFoamW(b.w); setFoamH(b.h); }} title="Load this box into the workspace" style={{ ...btnStyle(false), padding: '4px 6px' }}>Load</button>
                     <button onClick={() => deleteStandardBox(b)} title="Delete this standard box" style={{ ...btnStyle(false), padding: '4px 6px', color: '#a33' }}>✕</button>
@@ -1007,9 +1010,9 @@ const PackagingTab = ({ activeBrand }) => {
                 ))}
               </div>
               <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '8px' }}>
-                <input placeholder="Box name (e.g. Small Parts Box 18x12x4)" value={boxForm.name} onChange={e => setBoxForm({ ...boxForm, name: e.target.value })} style={{ ...inpStyle, padding: '5px', marginBottom: '6px' }} />
+                <input placeholder="Box name (e.g. Small Parts Box 12x18x4 — L×W×H)" value={boxForm.name} onChange={e => setBoxForm({ ...boxForm, name: e.target.value })} style={{ ...inpStyle, padding: '5px', marginBottom: '6px' }} />
                 <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
-                  {[['w', 'W'], ['h', 'H'], ['d', 'D']].map(([k, lbl]) => (
+                  {[['d', 'L'], ['w', 'W'], ['h', 'H']].map(([k, lbl]) => (
                     <div key={k} style={{ flex: 1 }}>
                       <label style={{ display: 'block', fontSize: '0.62rem', color: theme.inkSoft }}>{lbl} (in)</label>
                       <input type="number" step="0.125" min="0" value={boxForm[k]} onChange={e => setBoxForm({ ...boxForm, [k]: e.target.value })} style={{ ...inpStyle, padding: '5px' }} />
@@ -1094,7 +1097,7 @@ const PackagingTab = ({ activeBrand }) => {
                     setFoamW(poleBox.w); setFoamH(poleBox.h);
                     setShapes(generatePoleBores(poleCount, poleBox.w, poleBox.h, prof));
                 })}
-                {smallItems.length > 0 && boxCard(`${smallBox.name}${nesting ? ' · tracing…' : ''}`, `${smallBox.w}" × ${smallBox.h}"${smallBox.d ? ` × ${smallBox.d}"` : ''}`, smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); autoNestSilhouettes(smallItems, smallBox.w, smallBox.h); })}
+                {smallItems.length > 0 && boxCard(`${smallBox.name}${nesting ? ' · tracing…' : ''}`, boxLwh(smallBox), smallItems.map(itemRow), () => { setFoamW(smallBox.w); setFoamH(smallBox.h); autoNestSilhouettes(smallItems, smallBox.w, smallBox.h); })}
                 {items.length === 0 && <div style={{ fontSize: '0.8rem', color: theme.inkSoft, fontStyle: 'italic' }}>No items on this order.</div>}
               </div>
             );
