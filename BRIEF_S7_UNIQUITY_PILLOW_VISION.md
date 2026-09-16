@@ -215,6 +215,16 @@ either posts (ids on file) or refuses with `NO_NS_FORM_FOR_BRAND` — and the CE
 
 ## 6. Hand-offs in
 
+- **⚠ FROM S2 · 2026-09-15 · uncommitted hardware edits in the shared tree — commit them WITH S1's cart-staleness unit.**
+  While catching the repo up for Stuart I found `HQ/ExternalCoopTab.js`, `Shared/HardwareConfigurator.js`,
+  `Shared/hardwareHandoff.js`, `Shared/hardwareModel.js`, `scripts/hardwareModel.test.mjs` and your own brief modified but
+  uncommitted, alongside five untracked modules (cart staleness + the engine-version stamp, S1's, dated today). They are ONE
+  unit: two of those sources import the untracked modules and `package.json`'s prebuild calls an untracked script, so
+  committing any part alone fails every Vercel build. Full detail is in BRIEF_S1 §6. Nothing of it is mine and I changed
+  none of it — coordinate with S1 before either of you commits. Main is safe meanwhile: the committed copies reference none
+  of the missing files.
+
+
 *(other sessions append here — deploy notices and asks)*
 
 - **From S1, 2026-09-13 — the seam you will ask me for (§3 item 4), pre-agreed:** an `engine: 'BOM'` cart item is
@@ -228,6 +238,8 @@ either posts (ids on file) or refuses with `NO_NS_FORM_FOR_BRAND` — and the CE
 ## 7. Status log
 
 *(newest first)*
+
+- **2026-09-14 — new ask from Stuart (for step 3, the board):** at a trade show the sales team must be able to TAKE A PHOTO of a fabric on the table, add it to a panel with a pattern id and colour, "just as if it was already in the asset gallery", and price the pillow from it. Stuart is still working on the pricing spreadsheet. Plan to follow.
 
 - **2026-09-13 · c4bbc89 (pushed 17:44 EDT) — step 1 LIVE.** `Shared/pillowPricing.js` + `scripts/pillowPricing.test.mjs` (58). CE guard: the §4 wall green — hardwareModel 694 · hardwarePricing 54 · hardwareHandoff 49 · visionEngine 30 · visionBridge 53 · visionHandoff 11 · pickDrops 16 · platePool 14 · kitSeed 80 · nsTransmitLineDiscount 30 · lineDiscount 54 · the rest unchanged; `git diff --stat origin/main -- <read-only files>` empty (no shared file touched). Deploy-verify: S7 swept all 37 served assets after the deploy: version stamp 1789339814060, 0 download failures; the new module is imported by no screen, so its literals are ABSENT by design (`SIZE_GROUP_UNPRICED` → none); the hardware guard literals stand (`a return carries the rod at that end` in `main.1f049abe.js`, `Pick a Left bracket OR a return/arm end first` + `Push Config to CPQ` in the Vision chunk `104.74c087bc.chunk.js`); recorded in BRIEF_S7 §7. `sh scripts/run-traverse-tests.sh` exits 1 on two suites that pass from the root (S1's nsTransmitLineDiscount, S5's displayFrame — copied to the temp dir, path only); named to both, not touched. Notices written in S1–S6 §6, board, state §6. **Next:** step 2 when Stuart's pricing spreadsheet arrives (seed `system/pillow_pricing`; width / length / priceGroup on Uniquity items via 4.5 — 4.5 has no width/length field today: check, else a one-field hand-off to S2); then step 3 the board.
 
