@@ -27,3 +27,26 @@ firestore-debug.log*
 # local working files (not for the repo)
 _local_backup/
 ship.sh
+
+# ── LOCAL WORKING DROPS — reference material, never source (Stuart 2026-09-15) ────────────────
+# Spreadsheets, drawings, CAD and render dumps that arrive by email and get worked on beside the
+# repo: ~440MB across these folders, which would sit in the history forever (and GitHub refuses a
+# file over 100MB). They are inputs to work, not the work. Anything the app actually READS is in
+# src/ — e.g. the NetSuite item field map was transcribed from Items_NS/ into
+# src/components/Shared/nsItemFields.js, which is why that folder can go.
+#
+# EVERY PATTERN IS ANCHORED WITH A LEADING SLASH, ON PURPOSE. A bare "SpecSheet/" would match at
+# ANY depth and would ignore src/components/SpecSheet/ — the live spec-sheet feature (S6's
+# territory, 8 tracked files). Keep the slash. Same reason for /Fabricut/ and /H2/.
+/0903/
+/DOUBLE/
+/Fabricut/
+/Fabricut GLB/
+/Finishes_Combo/
+/H2/
+/Items_NS/
+/July28/
+/July29/
+/July 30/
+/Spec Sheets/
+/SpecSheet/
