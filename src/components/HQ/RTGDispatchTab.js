@@ -10,7 +10,7 @@ import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
-import { coverCodesOf } from '../Shared/backorder';
+import { coverCodesOf, backorderHoldOf, isBackorderHold } from '../Shared/backorder';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
@@ -1121,12 +1121,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             if (!on) {
                 try {
                     const links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, so, 'sales');
+                    // EVERY SIBLING, NOT THE FINISHING HALF ALONE (2026-09-15): the split now holds the
+                    // pick-only document and the shop order as well, so a lift that reached only
+                    // fin_workorders would free the sled and leave the rod standing. Only a BACKORDER
+                    // hold is lifted here — a floor STOP is resolved by whoever raised it, with a note.
+                    const clearPatch = { held: false, heldClearedAt: Date.now(), heldClearedBy: currentUser || '', heldClearedNote: `Finish as available: ${reason}` };
                     let n = 0;
                     for (const [fid, fdoc] of links.fin) {
-                        if (fdoc && fdoc.held === true && fdoc.heldReasonKind === 'BACKORDER') {
-                            await updateDoc(doc(db, 'fin_workorders', fid), { held: false, heldClearedAt: Date.now(), heldClearedBy: currentUser || '', heldClearedNote: `Finish as available: ${reason}` });
-                            n++;
-                        }
+                        if (isBackorderHold(fdoc)) { await updateDoc(doc(db, 'fin_workorders', fid), clearPatch); n++; }
+                    }
+                    for (const [sid, sdoc] of links.shop) {
+                        if (isBackorderHold(sdoc)) { await updateDoc(doc(db, 'shop_custom_orders', sid), clearPatch); n++; }
                     }
                     if (n) addLog(`▶ ${n} floor doc(s) for SO ${ref} released from the backorder hold — the in-stock parts run now.`, 'success');
                 } catch (e) { addLog(`⚠ Could not release the backorder hold for SO ${ref}: ${e.message || e}`, 'error'); }
@@ -1323,6 +1328,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 // The record of what could not be covered — for the board and A's Backorder window.
                 await updateDoc(doc(db, "hq_sales_orders", so.id), { backorderLines: plan.backorder, backorderAt: Date.now() }).catch(() => {});
             }
+            // THE HOLD, DECIDED ONCE FOR EVERY DOCUMENT THIS SPLIT WRITES (Stuart 2026-09-15, on the
+            // 09-14 Fabricut orders SO60427–SO60432: "you can see these orders are showing as hold
+            // waiting on back orders yet they still hit the floor"). The rule lives in Shared/
+            // backorder.backorderHoldOf; one timestamp, so the finishing half and the shop half read
+            // as one act rather than two events milliseconds apart.
+            const holdNow = Date.now();
+            const backorderHold = (stage) => backorderHoldOf({
+                lines: plan.backorder, finishAsAvailable: so.finishAsAvailable === true, stage, now: holdNow,
+            });
             const inHouseLines = plan.inHouse;
             const pickLines = [...plan.pick, ...plan.unknown];
             // The floor doc exists when there is anything to finish, anything to pick, or a custom half
@@ -1397,19 +1411,21 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser
                 };
                 // FINISH COMPLETE by default (Stuart 2026-09-03): an order with backordered lines waits
-                // for them — the floor doc is written ON HOLD (the existing hold, which the Setup Queue
-                // honours) unless the sales order is flagged "Finish as available". Turning the flag on
-                // (RTG card / SO Pack) releases this hold; the material arriving does too (D).
-                const holdForBackorder = !pickOnly && plan.backorder.length > 0 && so.finishAsAvailable !== true;
+                // for them — the floor doc is written ON HOLD unless the sales order is flagged "Finish
+                // as available". Every floor screen honours it (Setup Queue lane, Active Floor, the
+                // Schedule Planner, the WMS pick queue); RTG lifts it, never the floor.
+                // A PICK-ONLY DOCUMENT IS HELD TOO (Stuart 2026-09-15). It was exempt, and that is how
+                // SO60429 reached the WMS pick with seven short lines: nothing on a plated order's
+                // path asks about backorders, so the exemption WAS the whole gap on that order.
+                const finHold = backorderHold('FINISHING');
                 await setDoc(doc(db, "fin_workorders", finId), buildFinDoc({
                     hqOrder: so, finPayload, by: currentUser || '',
                     extra: {
                         needBy: so.needBy || '', cutSheetMissing, visionUsed,
-                        ...(holdForBackorder ? { held: true, heldAt: Date.now(), heldBy: 'split', heldStage: 'FINISHING', heldReasonKind: 'BACKORDER',
-                            heldReason: `waiting on backordered material — ${plan.backorder.map(b => `${b.qty} × ${b.code}`).join(', ')}. The order finishes complete when it arrives; flag "Finish as available" on the sales order to run the in-stock parts now.` } : {}),
+                        ...(finHold || {}),
                     },
                 }));
-                if (holdForBackorder) addLog(`⏸ ${finId} written ON HOLD — ${plan.backorder.length} backordered line${plan.backorder.length === 1 ? '' : 's'}; finishes complete when the material arrives (or flag "Finish as available").`, 'warn');
+                if (finHold) addLog(`⏸ ${finId} written ON HOLD — ${plan.backorder.length} backordered line${plan.backorder.length === 1 ? '' : 's'}; ${pickOnly ? 'the pick waits' : 'the order finishes complete'} until the material arrives (or flag "Finish as available").`, 'warn');
                 addLog(pickOnly
                     ? `Created pick-only document ${finId} (${pickLines.length} plated line${pickLines.length === 1 ? '' : 's'} from stock${hasCustom ? ' + the custom half to pack' : ''}) — nothing for the finishing floor.`
                     : `Created Finishing WO ${finId} (${inHouseLines.length} in-house line${inHouseLines.length === 1 ? '' : 's'}${pickLines.length ? ` + ${pickLines.length} plated pick line${pickLines.length === 1 ? '' : 's'}` : ''}).`, "success");
@@ -1467,7 +1483,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                         fabNotes, fabMethod,
                         reqDate: so.reqDate || "",
                     },
-                    extra: { cutSheetMissing, visionUsed },
+                    // THE SHOP SIBLING WAITS TOO (Stuart 2026-09-15): a rod cut for an order that
+                    // cannot ship is the same waste as a sled sprayed for one, and the shop half is
+                    // where the money is. ShopFloor's own heldGuard already refuses to start or
+                    // complete a held order, so this needs nothing from the shop screen.
+                    extra: { cutSheetMissing, visionUsed, ...(backorderHold('SHOP') || {}) },
                 }));
                 addLog(`Created Shop custom order ${shopId}${fabMethod ? ` [${fabMethod}]` : ''} (${customLines.length} custom lines).`, "success");
             }

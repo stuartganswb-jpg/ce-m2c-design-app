@@ -63,3 +63,38 @@ export const backorderRecordOf = (line, cls, { since = null, lineIndex = null } 
     unit: (cls.readable[0] && cls.readable[0]) ? null : null,
     since: since || null, lineIndex,
 });
+
+// ── THE HOLD A BACKORDER PUTS ON AN ORDER — DECIDED ONCE (Stuart 2026-09-15) ──────────────────
+// On the 09-14 Fabricut orders (SO60427–SO60432): "all the orders with wood poles have items on
+// back order, if you look on RTG you can see these orders are showing as hold waiting on back
+// orders yet they still hit the floor."
+//
+// FINISH COMPLETE is the default (Stuart 2026-09-03): an order with a TRUE BACKORDER waits for the
+// material. The board's chip said exactly that, and every document the split wrote went to work
+// anyway, because the hold was decided in one place and written to one document:
+//   • a PICK-ONLY document was exempt outright, so a plated order with shorts went to the WMS pick
+//     with nothing to stop it (SO60429 carried 7 short lines);
+//   • the SHOP sibling was never stamped, so a rod was cut for an order that cannot ship.
+// One decision, every document. `stage` only names where the hold shows (HOLD_STAGES, Shared/
+// orderHold); the fields are the ones every floor screen already reads.
+//
+// Pure — the split calls it, scripts/backorder.test.mjs asserts it.
+export const backorderHoldOf = ({ lines = [], finishAsAvailable = false, stage = 'FINISHING', by = 'split', now = Date.now() } = {}) => {
+    const short = (lines || []).filter(b => b && Number(b.qty) > 0);
+    if (!short.length) return null;
+    if (finishAsAvailable === true) return null;
+    return {
+        held: true,
+        heldAt: now,
+        heldBy: by,
+        heldStage: stage,
+        heldReasonKind: 'BACKORDER',
+        heldReason: `waiting on backordered material — ${short.map(b => `${b.qty} × ${b.code}`).join(', ')}. The order finishes complete when it arrives; flag "Finish as available" on the sales order to run the in-stock parts now.`,
+    };
+};
+
+// The writer's half of the same fact: which held documents this hold owns, so lifting it never
+// touches a STOP raised by the floor (a STOP is resolved by the person who raised it, with a note).
+// The floor's reader is OrderStatusChips.holdGateOf, which reads these same two fields — it lives
+// with the chip because it returns the label; this stays here because backorder.js is pure.
+export const isBackorderHold = (d) => !!(d && d.held === true && String(d.heldReasonKind || '').toUpperCase() === 'BACKORDER');
