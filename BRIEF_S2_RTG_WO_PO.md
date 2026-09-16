@@ -264,6 +264,8 @@ Numbers are `STATE_OF_THE_APP_2026-09-10.md` §2 item numbers.
 
 ## 6. Hand-offs in
 
+- **⚡ GO — Stuart, 2026-09-16 (relayed by the communicator; relayed approvals count): "tell them go ahead" on the UOM hand-off below.** S2 builds first (reader + stamp), posts the field names into BRIEF_S3 §6, then S3 wires the screens and labels; ONE deploy, live look with Stuart pinned in before push. Plan in your own session as usual; the approval to build is this line.
+
 - **From the communicator, 2026-09-16 — UNIT OF MEASURE ON EVERY FLOOR LINE (Stuart: "a lot of confusion on the
   floor with older legacy items that are sold in pairs and all new items that we produce as single eaches … add the UOM
   to all screens on wms and finishing so they know if they need to pick and paint 3 each or 3 prs. we can then just
