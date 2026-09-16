@@ -424,6 +424,16 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-15 · S1's work, pushed by S2 · f56bb7d (swept live).** Stuart relayed that the other sessions had left it to S2
+  to finish and push, so the cart-staleness / engine-version unit went in as one piece, unchanged, after being verified
+  (eslint 0 errors, 30 + 699 assertions, a full production build clean with its new prebuild step, the engine stamp current,
+  the import closure complete). A saved quote line now records the engine hash and the tag fingerprint that built it, and
+  Approve names any line that no longer matches BEFORE the sales order exists — the answer to SO60429 / SO60430 / SO60431,
+  where quotes saved on 09-10 were approved on 09-14 carrying the BOM from before that evening's engine fixes. APPROVED now
+  means a sales order really exists (QUO143). And a backplate's quantity follows its arm (SO60429: three brackets had been
+  producing one cover plate), so BOMs, picks and NetSuite lines raised from today will legitimately differ from older ones
+  for the same configuration.
+
 - **2026-09-15 · S2 · 0edddb0 (pushed, swept live).** The backorder hold stopped being decorative. FINISH COMPLETE has been
   the default since 09-03, but the hold was decided in one place and written to one document, so RTG's chip said HOLD while
   the order worked (Stuart, SO60427–SO60432). `Shared/backorder.backorderHoldOf` is now the rule and the split stamps it on
