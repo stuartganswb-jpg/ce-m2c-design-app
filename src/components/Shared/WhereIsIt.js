@@ -15,6 +15,7 @@ import React, { useState, useMemo } from 'react';
 import { orderStatusOf, stageLabel, stageTone, gateSummary } from './orderStatus';
 import OrderStatusChips from './OrderStatusChips';
 import { woRefOf } from './woRef';
+import { openForSearch, openExtraForSearch } from './orderLifecycle';
 
 const U = (v) => String(v ?? '').trim().toUpperCase();
 
@@ -58,24 +59,38 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = 
     const [q, setQ] = useState('');
     const [open, setOpen] = useState(false);
 
+    // OPEN WORK ONLY (Stuart 2026-09-16). The screens hand this whole collections, so without the
+    // filter every job ever run answered the search. The rule is Shared/orderLifecycle.openForSearch
+    // — the same "is this finished" the closer uses, so Complete is still open (the WMS has it) and
+    // packed / put away / shipped / closed are not. Filtered BEFORE the slice, or eight finished
+    // rows would crowd out the live one. What was hidden is COUNTED, never silently dropped.
     const hits = useMemo(() => {
         const term = U(q);
-        if (term.length < 2) return [];
+        if (term.length < 2) return { rows: [], hidden: 0 };
         // Match anything a person would actually shout across a room: the NetSuite WO, the app id,
         // the sales order, the item code, an alias, or the customer.
-        return orders.filter(o => ORDER_MATCH_FIELDS.some(f => U(o[f]).includes(term))).slice(0, 8);
+        const matched = orders.filter(o => ORDER_MATCH_FIELDS.some(f => U(o[f]).includes(term)));
+        const live = matched.filter(openForSearch);
+        return { rows: live.slice(0, 8), hidden: matched.length - live.length };
     }, [orders, q]);
 
     const extraHits = useMemo(() => {
         const term = U(q);
-        if (term.length < 2) return [];
+        if (term.length < 2) return { rows: [], hidden: 0 };
         // A PO answers to its number, its vendor AND every item riding it — "where is my
-        // HCUMB410" should surface the inbound PO carrying it (Stuart 2026-08-31).
-        return extras.filter(d =>
+        // HCUMB410" should surface the inbound PO carrying it (Stuart 2026-08-31) — but only while
+        // it is still coming: received, closed and deleted POs drop out, as do cut and cancelled
+        // rod cuts (Shared/orderLifecycle.openExtraForSearch).
+        const matched = extras.filter(d =>
             EXTRA_MATCH_FIELDS.some(f => U(d[f]).includes(term)) ||
             (Array.isArray(d.items) && d.items.some(it => U(it && it.itemId).includes(term)))
-        ).slice(0, 6);
+        );
+        const live = matched.filter(openExtraForSearch);
+        return { rows: live.slice(0, 6), hidden: matched.length - live.length };
     }, [extras, q]);
+
+    const shown = hits.rows.length + extraHits.rows.length;
+    const hidden = hits.hidden + extraHits.hidden;
 
     return (
         <div style={{ position: 'relative', minWidth: compact ? '220px' : '300px' }}>
@@ -89,15 +104,17 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = 
             {open && q.trim().length >= 2 && (
                 <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 900, width: 'min(560px, 92vw)', background: '#fff', border: '1px solid var(--line)', boxShadow: '0 10px 40px rgba(0,0,0,.18)', maxHeight: '60vh', overflowY: 'auto' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>
-                        <span>{hits.length + extraHits.length ? `${hits.length + extraHits.length} match${hits.length + extraHits.length === 1 ? '' : 'es'}` : 'no match on this screen'}</span>
+                        <span>{shown ? `${shown} open match${shown === 1 ? '' : 'es'}` : 'no open match on this screen'}</span>
                         <button onClick={() => { setQ(''); setOpen(false); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>close</button>
                     </div>
-                    {hits.length === 0 && extraHits.length === 0 && (
+                    {shown === 0 && (
                         <div style={{ padding: '16px 14px', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>
-                            Nothing here matches “{q.trim()}”. This searches the orders THIS screen is showing — a closed or not-yet-released order will not appear.
+                            {hidden > 0
+                                ? <>Nothing OPEN matches “{q.trim()}”. {hidden} finished or closed {hidden === 1 ? 'order matches' : 'orders match'} it — this search shows work that is still in production, on a purchase order or on a rod cut.</>
+                                : <>Nothing here matches “{q.trim()}”. This searches the orders THIS screen is showing — a closed or not-yet-released order will not appear.</>}
                         </div>
                     )}
-                    {hits.map(o => {
+                    {hits.rows.map(o => {
                         const st = orderStatusOf(o, { recipeLen: recipeLenOf(o) });
                         const tone = stageTone(st.slowest);
                         const place = physicalPlaceOf(o);
@@ -134,7 +151,7 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = 
                             </div>
                         );
                     })}
-                    {extraHits.map(d => (
+                    {extraHits.rows.map(d => (
                         <div key={(d.__kind || 'X') + d.id} style={{ padding: '10px 14px', borderBottom: '1px solid var(--paper-2)', background: 'var(--paper)' }}>
                             <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px' }}>{d.__kind || 'DEMAND'}</span>
@@ -154,6 +171,15 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = 
                             </div>
                         </div>
                     ))}
+                    {/* Counted, not silently dropped (Stuart 2026-09-16: hidden count). Somebody
+                        searching a shipped order gets told it exists and is finished, rather than
+                        being left to think the tool is broken. There is deliberately no way to
+                        expand it — the list itself stays open work only. */}
+                    {shown > 0 && hidden > 0 && (
+                        <div style={{ padding: '8px 14px', background: 'var(--paper-2)', borderTop: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.06em', color: 'var(--ink-soft)' }}>
+                            {hidden} finished or closed match{hidden === 1 ? '' : 'es'} hidden — this search shows open work only.
+                        </div>
+                    )}
                 </div>
             )}
         </div>

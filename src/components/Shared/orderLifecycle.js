@@ -20,6 +20,7 @@
 // Every identity an order might be keyed under. The floor and the board have historically keyed the
 // same order four different ways, which is why linkage has to be by SET rather than by one field.
 import { strandedGatesOf } from './orderStatus.js';
+import { isOpenPo } from './poLock.js';
 
 export const identityKeysOf = (o) => {
     const raw = [
@@ -57,6 +58,42 @@ export const isDoneState = (d) => !!d && (
 // pack and put-away). The audit compares the floor to THIS, not to a status the record never carries.
 export const FLOOR_REPORTED_DONE = ['Complete', 'Packed', 'Shelved', 'Plated'];
 export const recordKnowsDone = (p) => !!p && (isDoneState(p) || FLOOR_REPORTED_DONE.includes(String(p.floorPhase || '')));
+
+// ── WHAT "WHERE IS IT?" MAY SHOW (Stuart 2026-09-16) ──────────────────────────────────────────
+// "once a work order is completed or the item is no longer in production it should not still be
+// there, should only be for current working production or currently on a purchase order, rod cut,
+// etc."
+//
+// The search holds no data: each screen hands it a list and it text-matches over that list. Three
+// of the four screens hand it an ENTIRE collection (the finishing floor and the packing station
+// both subscribe to all of fin_workorders; the shop tablet to all of custom_orders), so every job
+// ever run answered the search — and the popup's own empty-state text already promised that a
+// closed order would not appear. These two predicates are what makes that promise true, and they
+// live here so there is ONE answer to "is this finished", not a second opinion inside a component.
+//
+// DONE is `isDoneState` — which already carries Stuart's 2026-09-10 ruling that Complete is NOT
+// done: a job off the paint line still has to be picked, packed and put away, and a pick-only doc
+// is BORN Complete. So those stay findable; packed, put away, shipped, built, closed, cancelled
+// and deleted drop out. A parent record whose floor has reported Packed or Shelved is done too —
+// the record itself may carry no packStatus of its own.
+const FLOOR_PHASE_FINISHED = ['Packed', 'Shelved'];
+export const openForSearch = (o) => !!o
+    && !isDoneState(o)
+    && !FLOOR_PHASE_FINISHED.includes(String(o.floorPhase || ''))
+    && !o.shippedAt;
+
+// The things riding beside the orders. A PO is open until it is received, closed or deleted
+// (Shared/poLock owns that rule — the board and the receipt read the same one); a rod cut until it
+// is cut or cancelled; a convert / plating demand exists only while it is wanted, because the WMS
+// DELETES it when the pull posts — so any demand still on the screen is live unless cancelled.
+export const openExtraForSearch = (d) => {
+    if (!d || d.deleted === true) return false;
+    const kind = String(d.__kind || '').toUpperCase();
+    const status = String(d.status || '').toUpperCase();
+    if (kind === 'PO') return isOpenPo(d);
+    if (kind === 'RODCUT') return !['DONE', 'CANCELLED'].includes(status);
+    return status !== 'CANCELLED';
+};
 
 /**
  * Find every document belonging to one order, starting from ANY of them.
