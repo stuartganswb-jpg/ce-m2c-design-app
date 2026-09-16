@@ -424,6 +424,7 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-16 · S5 · 5ebfeeb (pushed 15:32).** The display designer's cart: a placed row keeps its own copy of a cart line, so a configuration fixed in CPQ never reached the board. Added ▸ Lines (parts before placing), ✕ remove from the shared cart (`HQ.js` passes `setCart`), and a row flag when a newer cart line for it is waiting. Place into the row still replaces it.
 - **2026-09-16 · S2 + S3 · e5ff62c + e104691 + f0f77ce (swept live).** The floor can tell 3 each from 3 pairs. Stuart: "a lot of
   confusion on the floor with older legacy items that are sold in pairs and all new items that we produce as single eaches."
   Every floor line now carries the unit and a derived piece count beside the quantity, and every screen and label prints one

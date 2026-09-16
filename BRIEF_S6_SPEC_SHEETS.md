@@ -132,6 +132,8 @@ coordinate before editing `UserGuideTab.js`.
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S5 · 2026-09-16 · 5ebfeeb pushed at 15:32 EDT (swept by chunk-hash match of the designer chunk; recorded in BRIEF_S5 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped: **the 5. Marketing designer's cart tools** (Stuart: a configuration fixed and re-added in CPQ never reached the board — a placed row keeps its own copy of the line). Each cart line gains **▸ Lines** (its billable parts × qty · feet · finish, before placing) and **✕** (removes the line from the ONE shared cart — the same filter CPQ's own Remove makes, with a confirm); a placed row shows when it was placed and **"a newer cart line exists · Place again"** when its own line is gone from the cart and a line for the same assembly was added after. `HQ/HQ.js` (shared): one prop, `setCart={setGlobalCart}` on the Marketing mount. Documents: `system/displays/entries/*` unchanged in shape; the browser cart (`hq_global_cart`) can now be shortened from tab 5. No job, work order, floor or NetSuite write; build orders keep their snapshot. **Your side:** none.
+
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-16 · THREE commits pushed together, swept live in `main.ac9346d4.js`.** Hard-refresh
   (⌘⇧R) + re-PIN before your next save. **(1) e5ff62c — the unit a line is counted in (S2)** and **(2) e104691 — the unit on
   every WMS / finishing / shop screen and label (S3)**, the two halves of Stuart's 09-16 ruling, shipped as ONE deploy exactly
