@@ -192,6 +192,30 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-16 · THREE commits pushed together, swept live in `main.ac9346d4.js`.** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. **(1) e5ff62c — the unit a line is counted in (S2)** and **(2) e104691 — the unit on
+  every WMS / finishing / shop screen and label (S3)**, the two halves of Stuart's 09-16 ruling, shipped as ONE deploy exactly
+  as the hand-off required: every floor line now carries `uom` and `pcs` beside `qty`, and every screen and label prints the
+  one string `uomLabel(qty, uom)` — "3 EA", "3 PR = 6 pcs", "3 × 7PK = 21 pcs". **`qty` NEVER changed meaning** — it stays in
+  the item's own unit, as NetSuite holds it, because the legacy items are held there as Pair; `pcs` is the derived count the
+  paint line sprays and the packer boxes. Most of the vocabulary already existed and was live (the pack parser, the barcode
+  that already encoded code+uom+pcs, `scanTally` already counting a scanned pair as two) — the gap was that nothing put the
+  unit on an ORDER LINE and no label was quantity-aware. **(3) f0f77ce — a vendor may ship long (S2):** PO receipts accept an
+  overage bounded at 10% (Stuart: "many of our suppliers may ship 255 when we order 250, it does not allow us"). 255 of 250 is
+  now taken in; the ceiling is 275; over the ordered qty CONFIRMS, beyond the ceiling REFUSES and says a count that far over is
+  usually a pallet being received twice — which is the bound's whole purpose, since a real overage is a few percent and a
+  duplicate is a hundred. The overage is stamped on the line, and the true count flows to NetSuite unchanged. **Your side: your half two is live with mine — and I edited your warehouse file for (3),
+  so here is exactly what changed in it.** `PickPackApp` receiving only: the scan lookup and the owed list now find a line that
+  owes nothing but can still take its overage (`overRoomOf`, not `openQtyOf`); the quantity box's hard max became the ceiling
+  and the row shows "up to N with the 10% overage"; `rcvAddToCart` confirms over the ordered qty and refuses beyond the ceiling.
+  Nothing else in your file was touched, and your own commit sat underneath mine cleanly. **Two things named, not fixed, both
+  yours to judge:** (a) the item-receipt outbox `dedupeKey` is `porcv-<id>-<Date.now()>`, so it is NOT the deterministic key its
+  own comment claims — a double-tap could post two receipts to NetSuite, which is exactly what the 10% bound is trying to catch
+  on the app side; (b) small lines get no tolerance at all, because 10% of 5 floors to zero — deliberate, since a "+1 minimum"
+  would be 100% over on a line of one. The plater return path is untouched and keeps its own refusal that a plater never
+  returns more than was sent.
+
+
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-16 · 6fa627c pushed at 11:03 EDT (S1 swept every served asset after the deploy: version stamp 1789571165556; main.473fbd57.js carries "Pick the WOOD finish first", the stamp ce3f8724a13d and "priced from the base product" ×5; tab 7 chunk 876.d2199eb0.chunk.js carries "the line carries the species item"; recorded in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped (Stuart 2026-09-16, SO60428 / SO60429 / SO60430): **a stain consumes the SPECIES item everywhere the engine writes.** `Shared/hardwarePricing.priceChoice` step 0a runs `sizeMatrix.speciesVariantOf` (the finish's 4.5 `bomSuffix` OAK / WALNUT, via the new `ctx.finishObjOf`) BEFORE the /P //EPn swap — so H1-138WEC in S04 is **H1-138WEC-O** and the wood pole is **H1-138WHTOAK / H1-138WLNUT** (through the item's `customData.speciesMap`, now stamped on H1-138WR) on the breakdown row (`legacyErpId` / `partId`), the fin doc `partsList`, the pick, the documents and the NetSuite line (which already did this swap — it is now identity there). Price stays the base product's when the species record has none. Order Entry's TO-BE-FINISHED row applies the same rule (`QuickShipTab.addToBeFinished`). The saved line keeps EVERY material's finish (`engineConfig.globalFinishes`) — a reopen no longer drops the wood stain. A WOOD part with no stain refuses to add. Engine stamp regenerated → `ce3f8724a13d`: every quote saved before this push reads STALE at Approve (expected — reopen · re-save · approve). Your side: **the WMS pick asks for the species item's bin** (`H1-138WEC-O`, not `H1-138WEC`) on every new wood order and on the three corrected 09-14 orders; the finishing floor sees the same recipe on the species row. Nothing to build; say if any bin/label lookup keys on the base code.
 
 - **From S2, 2026-09-16 — UOM FIELD NAMES, as promised before I build (you are blocked on these).**

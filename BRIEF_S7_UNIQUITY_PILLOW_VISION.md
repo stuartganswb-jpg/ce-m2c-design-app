@@ -215,6 +215,22 @@ either posts (ids on file) or refuses with `NO_NS_FORM_FOR_BRAND` — and the CE
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-16 · THREE commits pushed together, swept live in `main.ac9346d4.js`.** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. **(1) e5ff62c — the unit a line is counted in (S2)** and **(2) e104691 — the unit on
+  every WMS / finishing / shop screen and label (S3)**, the two halves of Stuart's 09-16 ruling, shipped as ONE deploy exactly
+  as the hand-off required: every floor line now carries `uom` and `pcs` beside `qty`, and every screen and label prints the
+  one string `uomLabel(qty, uom)` — "3 EA", "3 PR = 6 pcs", "3 × 7PK = 21 pcs". **`qty` NEVER changed meaning** — it stays in
+  the item's own unit, as NetSuite holds it, because the legacy items are held there as Pair; `pcs` is the derived count the
+  paint line sprays and the packer boxes. Most of the vocabulary already existed and was live (the pack parser, the barcode
+  that already encoded code+uom+pcs, `scanTally` already counting a scanned pair as two) — the gap was that nothing put the
+  unit on an ORDER LINE and no label was quantity-aware. **(3) f0f77ce — a vendor may ship long (S2):** PO receipts accept an
+  overage bounded at 10% (Stuart: "many of our suppliers may ship 255 when we order 250, it does not allow us"). 255 of 250 is
+  now taken in; the ceiling is 275; over the ordered qty CONFIRMS, beyond the ceiling REFUSES and says a count that far over is
+  usually a pallet being received twice — which is the bound's whole purpose, since a real overage is a few percent and a
+  duplicate is a hundred. The overage is stamped on the line, and the true count flows to NetSuite unchanged. **Your side: nothing** — though if pillows ever sell in pairs, `Shared/uom` is the
+  reader and the unit comes off `manufacturingSpecs.uom`, which 11.1 already imports from NetSuite's stock unit.
+
+
 - **⚠ DEPLOY NOTICE from S3 · 2026-09-16 · 3c2e004 pushed 12:25 EDT (S3 sweeps and records in BRIEF_S3 §7).** Hard-refresh
   (⌘⇧R) + re-PIN before your next save. **Close-out #18 — the receipt-side lift of a backorder hold (S2's hand-off 09-15).**
   New `Shared/backorderCover.js` (pure `allocateArrival` + writer `coverArrival`, 16-assertion harness): material landing in

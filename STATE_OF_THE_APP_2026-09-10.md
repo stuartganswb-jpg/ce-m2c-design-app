@@ -424,6 +424,17 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-16 · S2 + S3 · e5ff62c + e104691 + f0f77ce (swept live).** The floor can tell 3 each from 3 pairs. Stuart: "a lot of
+  confusion on the floor with older legacy items that are sold in pairs and all new items that we produce as single eaches."
+  Every floor line now carries the unit and a derived piece count beside the quantity, and every screen and label prints one
+  string — "3 PR = 6 pcs". The quantity never changed meaning: it stays in the item's own unit, as NetSuite holds it. Most of
+  the vocabulary was already live (the pack parser, the barcode encoding code+uom+pcs, the scan tally already counting a pair as
+  two); what was missing was the unit reaching an ORDER LINE and a quantity-aware label, so the new module is a thin façade over
+  the existing rules rather than a rival to them. Shipped as one deploy, S2's reader and stamp with S3's screens and labels.
+  **Also: PO receipts accept an overage bounded at 10%** — a vendor shipping 255 against an order of 250 used to be silently
+  written down to 250, leaving five real pieces in neither the app nor NetSuite. The bound is what separates a genuine overage
+  (a few percent) from the same pallet received twice (a hundred).
+
 - **2026-09-16 12:25 · S3 · 3c2e004 — close-out #18, the backorder hold now lifts itself when the material arrives:**
   every place pieces land in the WMS covers the short lines that name the code (oldest first) on the sales order's
   backorder record; an order with nothing short left is released on every sibling with RTG's own patch. RTG's "Finish

@@ -158,6 +158,24 @@ owed (`h2-simple-elegance-flow` memory).
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-16 · THREE commits pushed together, swept live in `main.ac9346d4.js`.** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. **(1) e5ff62c — the unit a line is counted in (S2)** and **(2) e104691 — the unit on
+  every WMS / finishing / shop screen and label (S3)**, the two halves of Stuart's 09-16 ruling, shipped as ONE deploy exactly
+  as the hand-off required: every floor line now carries `uom` and `pcs` beside `qty`, and every screen and label prints the
+  one string `uomLabel(qty, uom)` — "3 EA", "3 PR = 6 pcs", "3 × 7PK = 21 pcs". **`qty` NEVER changed meaning** — it stays in
+  the item's own unit, as NetSuite holds it, because the legacy items are held there as Pair; `pcs` is the derived count the
+  paint line sprays and the packer boxes. Most of the vocabulary already existed and was live (the pack parser, the barcode
+  that already encoded code+uom+pcs, `scanTally` already counting a scanned pair as two) — the gap was that nothing put the
+  unit on an ORDER LINE and no label was quantity-aware. **(3) f0f77ce — a vendor may ship long (S2):** PO receipts accept an
+  overage bounded at 10% (Stuart: "many of our suppliers may ship 255 when we order 250, it does not allow us"). 255 of 250 is
+  now taken in; the ceiling is 275; over the ordered qty CONFIRMS, beyond the ceiling REFUSES and says a count that far over is
+  usually a pallet being received twice — which is the bound's whole purpose, since a real overage is a few percent and a
+  duplicate is a hundred. The overage is stamped on the line, and the true count flows to NetSuite unchanged. **Your side: worth knowing for the Fulfillment tab and anything reading receipts.**
+  A PO line can now legitimately show `received` GREATER than `quantity` (up to 110%), and carries `overReceived` when it does.
+  Anything that assumed received ≤ ordered should be checked. `openQtyOf` still returns 0 rather than a negative, so "what is
+  still owed" is unchanged.
+
+
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-16 · 6fa627c pushed at 11:03 EDT (S1 swept every served asset after the deploy: version stamp 1789571165556; main.473fbd57.js carries "Pick the WOOD finish first", the stamp ce3f8724a13d and "priced from the base product" ×5; tab 7 chunk 876.d2199eb0.chunk.js carries "the line carries the species item"; recorded in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped (Stuart 2026-09-16, SO60428 / SO60429 / SO60430): **a stain consumes the SPECIES item everywhere the engine writes.** `Shared/hardwarePricing.priceChoice` step 0a runs `sizeMatrix.speciesVariantOf` (the finish's 4.5 `bomSuffix` OAK / WALNUT, via the new `ctx.finishObjOf`) BEFORE the /P //EPn swap — so H1-138WEC in S04 is **H1-138WEC-O** and the wood pole is **H1-138WHTOAK / H1-138WLNUT** (through the item's `customData.speciesMap`, now stamped on H1-138WR) on the breakdown row (`legacyErpId` / `partId`), the fin doc `partsList`, the pick, the documents and the NetSuite line (which already did this swap — it is now identity there). Price stays the base product's when the species record has none. Order Entry's TO-BE-FINISHED row applies the same rule (`QuickShipTab.addToBeFinished`). The saved line keeps EVERY material's finish (`engineConfig.globalFinishes`) — a reopen no longer drops the wood stain. A WOOD part with no stain refuses to add. Engine stamp regenerated → `ce3f8724a13d`: every quote saved before this push reads STALE at Approve (expected — reopen · re-save · approve). Your side: the portal's mirror of CPQ pricing should carry `finishObjOf` when it calls `priceChoice` for wood items — until it does, the portal prices the base code (identity, as before). Mirror-sweep item.
 
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-16 · 3a3aca4 pushed, swept live in `main.9876b7f7.js`.** Hard-refresh (⌘⇧R) + re-PIN

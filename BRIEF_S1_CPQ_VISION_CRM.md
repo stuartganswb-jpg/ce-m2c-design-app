@@ -181,6 +181,23 @@ is #49, shared with S5's kits/spec-sheet sections; coordinate before editing `Us
 
 ## 6. Hand-offs in
 
+- **⚠ DEPLOY NOTICE from S2 · 2026-09-16 · THREE commits pushed together, swept live in `main.ac9346d4.js`.** Hard-refresh
+  (⌘⇧R) + re-PIN before your next save. **(1) e5ff62c — the unit a line is counted in (S2)** and **(2) e104691 — the unit on
+  every WMS / finishing / shop screen and label (S3)**, the two halves of Stuart's 09-16 ruling, shipped as ONE deploy exactly
+  as the hand-off required: every floor line now carries `uom` and `pcs` beside `qty`, and every screen and label prints the
+  one string `uomLabel(qty, uom)` — "3 EA", "3 PR = 6 pcs", "3 × 7PK = 21 pcs". **`qty` NEVER changed meaning** — it stays in
+  the item's own unit, as NetSuite holds it, because the legacy items are held there as Pair; `pcs` is the derived count the
+  paint line sprays and the packer boxes. Most of the vocabulary already existed and was live (the pack parser, the barcode
+  that already encoded code+uom+pcs, `scanTally` already counting a scanned pair as two) — the gap was that nothing put the
+  unit on an ORDER LINE and no label was quantity-aware. **(3) f0f77ce — a vendor may ship long (S2):** PO receipts accept an
+  overage bounded at 10% (Stuart: "many of our suppliers may ship 255 when we order 250, it does not allow us"). 255 of 250 is
+  now taken in; the ceiling is 275; over the ordered qty CONFIRMS, beyond the ceiling REFUSES and says a count that far over is
+  usually a pallet being received twice — which is the bound's whole purpose, since a real overage is a few percent and a
+  duplicate is a hundred. The overage is stamped on the line, and the true count flows to NetSuite unchanged. **Your side: nothing to build.** For the record, if you ever need a unit: `Shared/uom` is the
+  reader and it DELEGATES to `quickShipUom.packSizeOf` — do not write a second parser. `Shared/poLock` owns the receipt
+  tolerance the same way.
+
+
 - **⚠ DEPLOY NOTICE from S4 · 2026-09-16 · 39e6387 + abbe0f3 pushed.** Hard-refresh (⌘⇧R) + re-PIN before your next save. (1) **Packed orders' NetSuite fulfillments now carry each line's own location** (close-out 1): at pack the WMS reads the SO lines and sends `item.items[]` {orderLine, location, itemReceive}; a shippable inventory line with no location refuses the queue with the lines named — never a default. (2) **New WMS tab FULFILLMENT** (key `FULFILMENT`): packed orders ship by UPS (rate → service → label → tracking). TEST mode by default (HQ 9.5 admin switch); a LIVE ship stamps `shippedAt`, `trackingNumbers[]`, `shipService`, `shipmentId`, `shipCharge`, `shipPackages[]` on the pack doc and its `hq_sales_orders`, sends the same facts to the RTG record through `propagateFloorState` extra (floorPhase stays Packed), and PATCHes the NetSuite Item Fulfillment to Shipped with package lines through the outbox. A void clears `shippedAt` (history in `shipVoided[]`). **Your side:** the CRM packing list's TRACKING row already prints `trackingNumbers[]` — it fills once a LIVE ship lands.
 
 - **⚠ DEPLOY NOTICE from S2 · 2026-09-16 · 3a3aca4 pushed, swept live in `main.9876b7f7.js`.** Hard-refresh (⌘⇧R) + re-PIN
