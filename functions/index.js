@@ -2419,3 +2419,115 @@ exports.portalResolve = onCall({ cors: true }, async (request) => {
     const safeLines = lines.map((l) => ({ name: l.name, qty: l.qty, price: l.price, total: l.total, itemNo: l.itemNo || '', isFee: !!l.isFee }));
     return { price: { level: priceLevel, total, lines: safeLines }, stepOptions };
 });
+
+// ============================================================================
+// 🚚 UPS — connection probe (test environment only)
+// ============================================================================
+// Proves the UPS pipe before any shipping screen depends on it: OAuth client-credentials token →
+// one Rating "Shop" call on the CIE test host (no shipments, no charges). Returns every service's
+// PUBLISHED and NEGOTIATED price side by side, which also shows whether negotiated rates are active
+// on the account for API use. Read-only: writes nothing, returns neither the secrets nor the token.
+// Secrets (Secret Manager): UPS_CLIENT_ID, UPS_CLIENT_SECRET, UPS_ACCOUNT_CE.
+const UPS_CLIENT_ID = defineSecret("UPS_CLIENT_ID");
+const UPS_CLIENT_SECRET = defineSecret("UPS_CLIENT_SECRET");
+const UPS_ACCOUNT_CE = defineSecret("UPS_ACCOUNT_CE");
+const UPS_CIE_HOST = 'https://wwwcie.ups.com';
+
+const UPS_SERVICE_NAMES = {
+    '01': 'Next Day Air', '02': '2nd Day Air', '03': 'Ground', '12': '3 Day Select',
+    '13': 'Next Day Air Saver', '14': 'Next Day Air Early', '59': '2nd Day Air A.M.',
+    '07': 'Worldwide Express', '08': 'Worldwide Expedited', '11': 'Standard', '65': 'Worldwide Saver',
+};
+
+const upsErrorText = (body) => {
+    const errs = (body && body.response && body.response.errors) || [];
+    return errs.length ? errs.map((e) => `${e.code || ''} ${e.message || ''}`.trim()).join('; ') : '';
+};
+
+exports.upsProbe = onCall({
+    enforceAppCheck: true,
+    secrets: [UPS_CLIENT_ID, UPS_CLIENT_SECRET, UPS_ACCOUNT_CE],
+}, async (request) => {
+    assertStaffAdmin(request);
+    const account = UPS_ACCOUNT_CE.value().trim();
+    const startedAt = Date.now();
+
+    // 1) OAuth token
+    let token;
+    try {
+        const basic = Buffer.from(`${UPS_CLIENT_ID.value().trim()}:${UPS_CLIENT_SECRET.value().trim()}`).toString('base64');
+        const r = await fetch(`${UPS_CIE_HOST}/security/v1/oauth/token`, {
+            method: 'POST',
+            headers: { 'Authorization': `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', 'x-merchant-id': account },
+            body: 'grant_type=client_credentials',
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok || !body.access_token) {
+            return { ok: false, stage: 'token', httpStatus: r.status, error: upsErrorText(body) || 'No access token returned.' };
+        }
+        token = body.access_token;
+    } catch (e) {
+        return { ok: false, stage: 'token', error: String(e.message || e) };
+    }
+
+    // 2) Rating "Shop" — sample 12×12×12 in, 5 lb box, High Point NC → Atlanta GA
+    const origin = { AddressLine: ['1200 Redding Dr'], City: 'High Point', StateProvinceCode: 'NC', PostalCode: '27260', CountryCode: 'US' };
+    const payload = {
+        RateRequest: {
+            Request: { TransactionReference: { CustomerContext: 'upsProbe' } },
+            Shipment: {
+                Shipper: { Name: 'Classical Elements', ShipperNumber: account, Address: origin },
+                ShipFrom: { Name: 'Classical Elements', Address: origin },
+                ShipTo: { Name: 'UPS Probe', Address: { AddressLine: ['55 Trinity Ave SW'], City: 'Atlanta', StateProvinceCode: 'GA', PostalCode: '30303', CountryCode: 'US' } },
+                PaymentDetails: { ShipmentCharge: [{ Type: '01', BillShipper: { AccountNumber: account } }] },
+                ShipmentRatingOptions: { NegotiatedRatesIndicator: '' },
+                Package: [{
+                    PackagingType: { Code: '02' },
+                    Dimensions: { UnitOfMeasurement: { Code: 'IN' }, Length: '12', Width: '12', Height: '12' },
+                    PackageWeight: { UnitOfMeasurement: { Code: 'LBS' }, Weight: '5' },
+                }],
+            },
+        },
+    };
+    try {
+        const r = await fetch(`${UPS_CIE_HOST}/api/rating/v2409/Shop`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json',
+                'transId': `probe-${startedAt}`, 'transactionSrc': 'ce-workcenter',
+            },
+            body: JSON.stringify(payload),
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+            return { ok: false, stage: 'rating', tokenOk: true, httpStatus: r.status, error: upsErrorText(body) || `HTTP ${r.status}` };
+        }
+        const rated = [].concat((body.RateResponse && body.RateResponse.RatedShipment) || []);
+        const services = rated.map((s) => {
+            const code = (s.Service && s.Service.Code) || '';
+            const neg = s.NegotiatedRateCharges && s.NegotiatedRateCharges.TotalCharge;
+            return {
+                code,
+                name: UPS_SERVICE_NAMES[code] || `Service ${code}`,
+                published: s.TotalCharges ? Number(s.TotalCharges.MonetaryValue) : null,
+                negotiated: neg ? Number(neg.MonetaryValue) : null,
+                currency: (s.TotalCharges && s.TotalCharges.CurrencyCode) || 'USD',
+                businessDays: (s.GuaranteedDelivery && s.GuaranteedDelivery.BusinessDaysInTransit) || null,
+            };
+        });
+        const alerts = [].concat((body.RateResponse && body.RateResponse.Response && body.RateResponse.Response.Alert) || [])
+            .map((a) => `${a.Code || ''} ${a.Description || ''}`.trim());
+        return {
+            ok: true,
+            environment: 'CIE (test)',
+            tokenOk: true,
+            negotiatedRatesReturned: services.some((s) => s.negotiated !== null),
+            services,
+            alerts,
+            sample: '12x12x12 in, 5 lb · High Point NC 27260 -> Atlanta GA 30303',
+            ms: Date.now() - startedAt,
+        };
+    } catch (e) {
+        return { ok: false, stage: 'rating', tokenOk: true, error: String(e.message || e) };
+    }
+});

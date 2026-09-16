@@ -1,4 +1,6 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
+import { httpsCallable } from 'firebase/functions';
+import { auth, functions } from '../../firebase';
 import {
   INTL_RATES, EXPORT_REGIONS, IMPORT_REGIONS,
   CA_REGIONS, MX_REGIONS, FROM_CA_REGIONS, FROM_MX_REGIONS,
@@ -744,6 +746,93 @@ function IntlCalculator() {
 }
 
 // ---------------------------------------------------------------------------
+// UPS API CONNECTION PROBE (admins only) — runs the upsProbe function against the UPS test
+// environment: token + one Shop rate call, published vs negotiated side by side. Read-only.
+// ---------------------------------------------------------------------------
+const fmtUsd = (v) => (v === null || v === undefined) ? '—' : `$${Number(v).toFixed(2)}`;
+
+function UpsConnectionProbe() {
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    const u = auth.currentUser;
+    if (!u) return undefined;
+    u.getIdTokenResult()
+      .then((t) => { if (alive) setIsAdmin(['admin', 'superadmin'].includes(String(t.claims.role || '').toLowerCase())); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  if (!isAdmin) return null;
+
+  const run = async () => {
+    setBusy(true); setResult(null);
+    try {
+      const res = await httpsCallable(functions, 'upsProbe')();
+      setResult(res.data);
+    } catch (e) {
+      setResult({ ok: false, stage: 'call', error: e.message || String(e) });
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ marginBottom: '26px', padding: '14px 16px', border: `1px dashed ${theme.brass}`, background: '#fff' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+        <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.12em', textTransform: 'uppercase', color: theme.brass }}>UPS API · Admin</span>
+        <button onClick={run} disabled={busy} style={{ padding: '8px 14px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: busy ? 'wait' : 'pointer' }}>
+          {busy ? 'Testing…' : 'Test UPS Connection'}
+        </button>
+        <span style={{ fontSize: '12px', color: theme.inkSoft }}>Test environment only — no shipments, no charges.</span>
+      </div>
+
+      {result && !result.ok && (
+        <div style={{ marginTop: '12px', fontSize: '13px', color: '#9b2c2c' }}>
+          ✗ Failed at <strong>{result.stage}</strong>{result.httpStatus ? ` (HTTP ${result.httpStatus})` : ''}: {result.error}
+        </div>
+      )}
+
+      {result && result.ok && (
+        <div style={{ marginTop: '12px', fontSize: '13px' }}>
+          <div style={{ color: '#3a7d44', marginBottom: '6px' }}>
+            ✓ Token OK · {result.services.length} services rated in {result.ms} ms · {result.environment}
+          </div>
+          <div style={{ color: result.negotiatedRatesReturned ? '#3a7d44' : '#9b6a2c', marginBottom: '8px' }}>
+            {result.negotiatedRatesReturned ? '✓ Negotiated rates returned for this account' : '⚠ No negotiated rates returned — ask UPS to enable negotiated rates for API use on this account'}
+          </div>
+          <div style={{ fontSize: '11px', color: theme.inkSoft, marginBottom: '6px' }}>Sample: {result.sample}</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: theme.mono, fontSize: '12px' }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${theme.line}`, textAlign: 'left', color: theme.inkSoft }}>
+                <th style={{ padding: '4px 6px' }}>Service</th>
+                <th style={{ padding: '4px 6px', textAlign: 'right' }}>Published</th>
+                <th style={{ padding: '4px 6px', textAlign: 'right' }}>Negotiated</th>
+                <th style={{ padding: '4px 6px', textAlign: 'right' }}>Bus. days</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.services.map((s) => (
+                <tr key={s.code} style={{ borderBottom: `1px solid ${theme.line}` }}>
+                  <td style={{ padding: '4px 6px' }}>{s.name} <span style={{ color: theme.inkSoft }}>({s.code})</span></td>
+                  <td style={{ padding: '4px 6px', textAlign: 'right' }}>{fmtUsd(s.published)}</td>
+                  <td style={{ padding: '4px 6px', textAlign: 'right' }}>{fmtUsd(s.negotiated)}</td>
+                  <td style={{ padding: '4px 6px', textAlign: 'right' }}>{s.businessDays || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {(result.alerts || []).length > 0 && (
+            <div style={{ marginTop: '8px', fontSize: '11px', color: theme.inkSoft }}>UPS notes: {result.alerts.join(' · ')}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // MAIN EXPORT (TABBED WRAPPER)
 // ---------------------------------------------------------------------------
 export default function UPSShippingCalculator() {
@@ -765,6 +854,8 @@ export default function UPSShippingCalculator() {
           </p>
         </div>
       </div>
+
+      <UpsConnectionProbe />
 
       {/* Tab Switcher */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '30px', backgroundColor: theme.paper2, padding: '6px', borderRadius: '4px' }}>
