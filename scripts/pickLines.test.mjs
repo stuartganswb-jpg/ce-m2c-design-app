@@ -82,7 +82,7 @@ eq('the kit label rides the pack name so the packer sees the set',
     packLinesOf({ orderClass: 'QUICKSHIP', lines: [{ erp: 'A', name: 'Ring', qty: 1, kit: 'PATTERN 3' }] })[0].name, 'Ring · PATTERN 3');
 eq('aliasErp is carried but erp stays the real code',
     packLinesOf({ orderClass: 'QUICKSHIP', lines: [{ erp: 'REAL', aliasErp: 'H9560F', name: 'x', qty: 1 }] })[0],
-    { key: 'L0', erp: 'REAL', aliasErp: 'H9560F', name: 'x', qty: 1 });
+    { key: 'L0', erp: 'REAL', aliasErp: 'H9560F', name: 'x', qty: 1, uom: 'EA', pcs: 1 });
 
 // ── WHICH POLE IS THIS? (Stuart 2026-09-09 — labels fall off poles) ──────────────────────────
 // The unit is the safety rule: a cut length is INCHES, a stocked code's length is FEET, and a bare

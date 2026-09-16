@@ -194,6 +194,32 @@ The tables in `SHOP_FLOOR_CONTINUATION_BRIEF.md` §9 and `BRIEF_D_WMS.md` §6 st
 
 - **⚠ DEPLOY NOTICE from S1 · 2026-09-16 · 6fa627c pushed at 11:03 EDT (S1 swept every served asset after the deploy: version stamp 1789571165556; main.473fbd57.js carries "Pick the WOOD finish first", the stamp ce3f8724a13d and "priced from the base product" ×5; tab 7 chunk 876.d2199eb0.chunk.js carries "the line carries the species item"; recorded in BRIEF_S1 §7).** Hard-refresh (⌘⇧R) + re-PIN before your next save. What shipped (Stuart 2026-09-16, SO60428 / SO60429 / SO60430): **a stain consumes the SPECIES item everywhere the engine writes.** `Shared/hardwarePricing.priceChoice` step 0a runs `sizeMatrix.speciesVariantOf` (the finish's 4.5 `bomSuffix` OAK / WALNUT, via the new `ctx.finishObjOf`) BEFORE the /P //EPn swap — so H1-138WEC in S04 is **H1-138WEC-O** and the wood pole is **H1-138WHTOAK / H1-138WLNUT** (through the item's `customData.speciesMap`, now stamped on H1-138WR) on the breakdown row (`legacyErpId` / `partId`), the fin doc `partsList`, the pick, the documents and the NetSuite line (which already did this swap — it is now identity there). Price stays the base product's when the species record has none. Order Entry's TO-BE-FINISHED row applies the same rule (`QuickShipTab.addToBeFinished`). The saved line keeps EVERY material's finish (`engineConfig.globalFinishes`) — a reopen no longer drops the wood stain. A WOOD part with no stain refuses to add. Engine stamp regenerated → `ce3f8724a13d`: every quote saved before this push reads STALE at Approve (expected — reopen · re-save · approve). Your side: **the WMS pick asks for the species item's bin** (`H1-138WEC-O`, not `H1-138WEC`) on every new wood order and on the three corrected 09-14 orders; the finishing floor sees the same recipe on the species row. Nothing to build; say if any bin/label lookup keys on the base code.
 
+- **From S2, 2026-09-16 — UOM FIELD NAMES, as promised before I build (you are blocked on these).**
+  `Shared/uom.js` is in (pure, 40 assertions). **The three names you wire to:** every floor line I write now carries
+  **`uom`** (the printable unit: `'EA' | 'PR' | 'FT'`, or a real pack's own name like `'7PK'` — pack units are DATA from the
+  4.5 master list, never code) and **`pcs`** (the derived piece count = qty × pieces-per-unit). **`qty` NEVER changes
+  meaning** — it stays in the item's own unit, exactly as NetSuite counts it, because the legacy items are held there as
+  Pair. `pcs` is what the paint line sprays and the packer boxes. The display string is **`uomLabel(qty, uom)`** →
+  `"3 EA"` / `"3 PR = 6 pcs"` / `"3 × 7PK = 21 pcs"`, which is Stuart's wording verbatim. Use it rather than composing your
+  own, so the bench, the screen and the label cannot word it three ways.
+  **⚠ MOST OF YOUR HALF MAY ALREADY BE BUILT — check before you write anything.** I found the vocabulary already live in
+  your own files while planning: `Shared/labelScan.encodeUomScan` already encodes `code + uom + pcs` into the barcode;
+  `parseScan` already returns `pcs` per scan; **`scanTally` already counts a scanned pair as TWO** and hands you a ready
+  `summary` ("2 × 7PK (14 pcs)"); `labelScan.uomDisplay(uom, pcs)` already renders `"PR (2 pcs)"`; and
+  `labelPrint.printUomLabels` already prints the unit with `(N pcs)`. 36 assertions stand behind the scan path. So the
+  labels Stuart asks for largely exist — what was missing was the unit reaching an ORDER LINE, which is my half, and
+  showing it on the pick / setup / active-floor rows, which is yours. **Do not add a second parser:**
+  `quickShipUom.packSizeOf` is the only one, and `Shared/uom.js` delegates to it.
+  **One trap I hit, so you do not:** `packSizeOf` treats an explicit `"- N"` suffix as the authoritative count, and
+  `packLabelOf` STRIPS that suffix for display — so counting pieces from the normalised label silently turns
+  `"BAKERS DOZEN - 13"` into twelve. Always take `pcs` off the line (or call `uomStampOf`), never recompute it from the
+  displayed unit.
+  **Orders already on the floor** carry no stamp, so fall back to the item: `uomOf(part)` off the `libraryParts` you already
+  hold, with the line's own stamp winning when present (that precedence is asserted in the harness). **Nothing of this is
+  pushed** — it ships as ONE deploy with your screens and labels, after a live look with Stuart pinned in, exactly as the
+  communicator set it out.
+
+
 - **⚠ DEPLOY NOTICE from S4 · 2026-09-16 · 39e6387 + abbe0f3 pushed.** Hard-refresh (⌘⇧R) + re-PIN before your next save. (1) **Packed orders' NetSuite fulfillments now carry each line's own location** (close-out 1): at pack the WMS reads the SO lines and sends `item.items[]` {orderLine, location, itemReceive}; a shippable inventory line with no location refuses the queue with the lines named — never a default. (2) **New WMS tab FULFILLMENT** (key `FULFILMENT`): packed orders ship by UPS (rate → service → label → tracking). TEST mode by default (HQ 9.5 admin switch); a LIVE ship stamps `shippedAt`, `trackingNumbers[]`, `shipService`, `shipmentId`, `shipCharge`, `shipPackages[]` on the pack doc and its `hq_sales_orders`, sends the same facts to the RTG record through `propagateFloorState` extra (floorPhase stays Packed), and PATCHes the NetSuite Item Fulfillment to Shipped with package lines through the outbox. A void clears `shippedAt` (history in `shipVoided[]`). **S3 — your file:** two guarded edits in `PickPackApp.js`: the itemfulfillment enqueue in the pack path now reads SO lines first (`Shared/fulfilmentLines`), and ONE mount `{activeTab === 'FULFILMENT' && <FulfilmentPanel …/>}` + import; `Shared/pickTabs.PICK_TABS` gains `FULFILMENT` (label FULFILLMENT) after STOCK. Nothing else in your pack path changed (pack doc shape, writeBack, shipStatus B, ⤓ Tracking pull all as before).
 
 - **⚡ GO — Stuart, 2026-09-16 (relayed by the communicator; relayed approvals count): "tell them go ahead" on the UOM hand-off below.** S2 builds the reader + stamp first and posts the field names here; you wire the screens and labels on top; ONE deploy, live look with Stuart pinned in before push. Plan in your own session as usual; the approval to build is this line.

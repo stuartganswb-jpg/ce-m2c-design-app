@@ -20,6 +20,7 @@
 
 // Explicit .js extension so node --test can import this module directly (webpack accepts both).
 import { isOutsourcedFinishCode, finishSuffixOf, millBaseOf } from './finishRouting.js';
+import { uomStampOf } from './uom.js';
 
 // Same precision rule as WMS/SetupQueue: fee/return/splice NAME test only when no real id.
 const FEEISH_RE = /\b(FRENCH|MITERED|MITER|BENT)\s+RETURN\b|\bSPLICE\b|\bFEE\b/i;
@@ -120,7 +121,15 @@ export const planFinishedRun = ({ part, qty, pins = [], inventory = [] }) => {
         merged.set(pull, row);
     });
 
-    return { erp, outsourced, finishSuffix: sfx, exploded, lines: [...merged.values()] };
+    // THE UNIT RIDES WITH THE LINE (Stuart 2026-09-16). `inv` is already a code → PART map, so every
+    // component's own unit is in hand here — which is why this closes the gap for all four callers at
+    // once (the Master Library run, the Order Entry precheck, the board's BOM refresh, the plating
+    // demand) rather than at four call sites. Stamped HERE and not only in buildFinDoc because the
+    // board's refresh writes these lines straight onto the document without passing through it.
+    const lines = [...merged.values()].map(r => ({
+        ...r, ...uomStampOf(inv.get(String(r.legacyErpId || '').toUpperCase()) || null, r.quantity),
+    }));
+    return { erp, outsourced, finishSuffix: sfx, exploded, lines };
 };
 
 // SuiteQL for live availability of the plan's pull codes (optionally at one location).

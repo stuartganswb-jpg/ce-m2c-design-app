@@ -25,6 +25,7 @@ import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { enqueueNsWrite } from './nsOutbox';
 import { withItemCode } from './workOrderContract';
 import { isOutsourcedFinishCode, finishRouteOf } from './finishRouting';
+import { uomStampOf } from './uom.js';
 
 const noop = () => {};
 
@@ -109,6 +110,15 @@ export async function queueNsStockWorkOrder({ hqOrder, fp, brand, by = '', log =
 // half (RTG), A's sales release (finishedRunPrecheck.releaseFinWoToFloor) — assembles it HERE. The
 // four hand-copied field lists each carried something the others lacked (urgent vs nsWoId vs holds
 // vs needBy); this is their union, once.
+
+// THE UNIT, STAMPED ONCE FOR EVERY WRITER (Stuart 2026-09-16). Six paths write floor lines and each
+// would otherwise have to remember; this is the last word, so a line cannot reach a floor screen
+// without saying what it is counted in. Idempotent: `uomStampOf` reads a line's OWN unit before the
+// item's, so re-stamping never restates history — the line is the photograph taken when the order
+// was raised. Both quantity spellings are read (the OE planner says `quantity`, the CPQ split `qty`).
+const stampUomLines = (lines) => (Array.isArray(lines) ? lines : []).map(l => (
+    l && typeof l === 'object' ? { ...l, ...uomStampOf(l, Number(l.quantity ?? l.qty) || 1) } : l
+));
 const IS_DEV = typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production';
 const hasPoles = (d) => (Number(d.totalPoles) || 0) > 0 || (d.poles && (Number(d.poles.qty) || 0) > 0);
 const hasSled = (d) => !!d.paintSize || (d.paintSizes && Object.values(d.paintSizes).some(v => (Number(v) || 0) > 0));
@@ -149,6 +159,7 @@ export function buildFinDoc({ hqOrder = {}, finPayload, by = '', now = Date.now(
         ...extra,
         dispatchedAt: now, dispatchedBy: by || '',
     };
+    if (Array.isArray(docOut.partsList) && docOut.partsList.length) docOut.partsList = stampUomLines(docOut.partsList);
     return withItemCode(docOut);
 }
 
@@ -239,5 +250,6 @@ export function buildShopDoc({ hqOrder = {}, orderType = 'stock', shopId, finish
         ...extra,
         createdAt: now, createdBy: by || '',
     };
+    if (Array.isArray(docOut.cutList) && docOut.cutList.length) docOut.cutList = stampUomLines(docOut.cutList);
     return withItemCode(docOut);
 }

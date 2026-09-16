@@ -95,6 +95,9 @@ export function packLinesOf(job, { poleRows = null } = {}) {
             out.push({
                 key: `L${i}`, erp: l.erp || '', aliasErp: l.aliasErp || '',
                 name: `${l.name || 'Item'}${l.kit ? ` · ${l.kit}` : ''}`, qty: Number(l.qty) || 1,
+                // The unit rides to the pack bench (Stuart 2026-09-16) — these rows are rebuilt to a
+                // fixed shape, so an unlisted field is silently dropped rather than passed through.
+                uom: l.uom || 'EA', pcs: Number(l.pcs) || Number(l.qty) || 1,
             });
         });
         return out;
@@ -117,6 +120,7 @@ export function packLinesOf(job, { poleRows = null } = {}) {
         out.push({
             key: `L${i}`, erp: l.legacyErpId || l.partId || '', aliasErp: '',
             name: l.partName || l.name || 'Part',
+            uom: l.uom || 'EA', pcs: Number(l.pcs) || Number(l.quantity ?? l.qty) || 1,
             // BOTH partsList SPELLINGS (c435d6d): the OE planner says `quantity`, the CPQ split
             // says `qty`. Reading one gave every pull ×0 on WO-SO59752.
             qty: Number(l.quantity ?? l.qty) || 1,

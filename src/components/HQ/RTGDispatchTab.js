@@ -11,6 +11,7 @@ import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
 import { coverCodesOf, backorderHoldOf, isBackorderHold } from '../Shared/backorder';
+import { uomStampOf } from '../Shared/uom';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
@@ -954,6 +955,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // time matrix resolves minutes-per-part from (recipe × paintSize × productType).
             paintSize: (part?.manufacturingSpecs?.paintSize || '').toUpperCase() || null,
             productType: (part?.manufacturingSpecs?.productType || part?.productType || '').toUpperCase() || null,
+            // THE UNIT THE FLOOR COUNTS IN (Stuart 2026-09-16): `qty` stays in the item's own unit,
+            // as NetSuite holds it — a legacy pair item is 3 PR, not 6. `pcs` is what gets sprayed
+            // and boxed. Read off the item here, where the part is already in hand.
+            ...uomStampOf(part, Number(line.qty) || 1),
             assetUrl: (line.partId && assetMap.get(line.partId)) || null
         };
     });
@@ -1451,7 +1456,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     configQty: l.configQty != null ? Number(l.configQty) : null,
                     cutLength: l.cutLength || null,
                     partId: l.partId || null,
-                    legacyErpId: l.legacyErpId || l.partId || null
+                    legacyErpId: l.legacyErpId || l.partId || null,
+                    // Same unit rule on the shop's cut list (Stuart 2026-09-16).
+                    ...uomStampOf(l.partId ? partCache.get(l.partId) : null, Number(l.qty) || 1),
                 }));
                 // A POLE COUNTS AS A POLE (Stuart 2026-09-12): qty = poles, never lines — a return or a
                 // miter is fabrication on the rod. feet / billableFeet ride on the shop doc so the plating
