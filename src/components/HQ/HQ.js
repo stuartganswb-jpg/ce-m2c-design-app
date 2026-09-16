@@ -449,7 +449,7 @@ function HQ() {
             
             {activeTab === '4.5 Mass Update' && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '4.6 Customer Collections' && <CustomerCollectionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === '5. Marketing' && <DisplayDesignerTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} />}
+            {activeTab === '5. Marketing' && <DisplayDesignerTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} setCart={setGlobalCart} />}
             {activeTab === '6. Instructions' && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '6.5 Tools, Specs & FAQs' && <ToolsSpecsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '7. Quick Ship' && <QuickShipTab currentUser={user.name} activeBrand={activeBrand.id} />}

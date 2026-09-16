@@ -14,13 +14,13 @@
 //
 // WRITES: system/displays/entries/{id} (the system rule; no rules deploy) and a DISPLAY CAPTURE in
 // global_assets for each row's render (Storage, so the record never carries an image inline).
-// READS: the cart (never changed), the two finish lists. No job, work order, floor document,
+// READS: the cart (changed only by ✕ Remove, Stuart 2026-09-16 — the same removal CPQ's cart makes), the two finish lists. No job, work order, floor document,
 // snapshot or NetSuite write — build orders are the next issue and start from a saved display.
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocs, query, where } from 'firebase/firestore';
-import { DISPLAY_STYLES, UNITS_PER_INCH, newDisplay, chipsForDisplay, chipFaceLayout, boardBom, orderBom, bomCsv, rowConfigFromCartItem, displayFromTracker, seededRowsLayout, fitRowToLength } from '../Shared/displayBom';
+import { DISPLAY_STYLES, UNITS_PER_INCH, newDisplay, chipsForDisplay, chipFaceLayout, boardBom, orderBom, bomCsv, rowConfigFromCartItem, rowBomLines, displayFromTracker, seededRowsLayout, fitRowToLength } from '../Shared/displayBom';
 import { saveGuideCapture } from '../Shared/guideCapture';
 import { workbookFileToSheets } from '../Shared/customerControlFile';
 import DisplayBuildsPanel from './DisplayBuildsPanel';
@@ -63,7 +63,7 @@ const inp = { padding: '8px 10px', border: '1px solid var(--line)', fontFamily: 
 const td = { padding: '6px 8px', borderBottom: '1px solid var(--line)', fontSize: '0.84rem', verticalAlign: 'top' };
 const th = { ...mono, padding: '6px 8px', textAlign: 'left', borderBottom: '1px solid var(--line)' };
 
-const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
+const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [], setCart }) => {
     const [displays, setDisplays] = useState([]);
     const [openId, setOpenId] = useState(null);
     const [draft, setDraft] = useState(null);        // the open display, edited locally
@@ -76,6 +76,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
     const [newForm, setNewForm] = useState(null);    // { name, style }
     const [view, setView] = useState('DESIGNS');     // DESIGNS | BUILDS — piece 2 lives on the same tab
     const [seed, setSeed] = useState(null);          // tracker seed preview { sheets, tabIx, boards, name, parsed, resolved, missing }
+    const [cartOpenLines, setCartOpenLines] = useState(null);   // the cart line whose parts are listed
     const [placing, setPlacing] = useState(null);    // the cart line whose Place is open: which row takes it?
     const svgRef = useRef(null);
     const dragRef = useRef(null);
@@ -273,6 +274,23 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
     const copyCsv = async () => { try { await navigator.clipboard.writeText(bomCsv(bom, boards)); alert(`Copied the bill for ${boards} board(s) as CSV.`); } catch { alert('Copy failed — click the page first, then try again.'); } };
 
     const cartLines = Array.isArray(cart) ? cart : [];
+    // ✕ Remove (Stuart 2026-09-16: "i need to be able to delete that row from the cpq cart and add in
+    // the refreshed one"): the same removal CPQ's own cart makes, on the one shared cart.
+    const removeCartLine = (it) => {
+        if (typeof setCart !== 'function') return;
+        if (!window.confirm(`Remove "${it.assemblyName || it.name || 'this line'}"${it.sidemark ? ` [${it.sidemark}]` : ''} from the cart?\n\nA row already placed from it keeps its parts until you place another line into it.`)) return;
+        setCart(prev => (Array.isArray(prev) ? prev : []).filter(c => c.id !== it.id));
+        if (placing === it.id) setPlacing(null);
+        if (cartOpenLines === it.id) setCartOpenLines(null);
+    };
+    // A placed row copied its cart line at that moment. When that line is gone from the cart and a
+    // line for the same assembly was added AFTER the placement, the row is likely out of date
+    // (CPQ's Edit → Add configuration replaces a line under a new id). Cart ids are Date.now().
+    const newerCartLineFor = (r) => {
+        const cfg = r?.config; if (!cfg?.assemblyId || !r.replacedAt) return null;
+        if (cfg.cartId && cartLines.some(c => c.id === cfg.cartId)) return null;
+        return cartLines.find(c => c.assemblyId === cfg.assemblyId && Number(c.id) > Number(r.replacedAt)) || null;
+    };
 
     // ── the list ─────────────────────────────────────────────────────────────────────────────
     if (!draft) {
@@ -414,6 +432,14 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                                 <div key={r.id} style={{ padding: '8px 10px', margin: '6px 0', border: '1px solid var(--line)' }}>
                                     <input value={r.label} onChange={e => mutateFace(f => ({ ...f, rows: f.rows.map(x => (x.id === r.id ? { ...x, label: e.target.value } : x)) }))} style={{ ...inp, width: '100%', padding: '4px 6px', fontSize: '0.85rem' }} />
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px' }}>{r.config?.assemblyName}{r.config?.lengthInches ? ` · ${r.config.lengthInches}"` : ''}{r.config?.finishLabel ? ` · ${r.config.finishLabel}` : ''}{r.boardFramed ? ` · board-framed${r.config?.board?.readsInches != null && r.config?.lengthInches > 0 && Math.abs(r.config.board.readsInches - r.config.lengthInches) > 0.25 ? ` · rod at ${r.config.board.readsInches}" (off scale)` : ''}` : r.trueScale ? ' · to scale' : ''}</div>
+                                    {r.replacedAt ? (() => {
+                                        const newer = newerCartLineFor(r);
+                                        return (
+                                            <div style={{ fontSize: '0.76rem', color: newer ? '#b02d20' : 'var(--ink-soft)', marginTop: '3px' }}>
+                                                placed {new Date(r.replacedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}{newer ? ' · a newer cart line exists · Place again' : ''}
+                                            </div>
+                                        );
+                                    })() : null}
                                     <div style={{ ...mono, marginTop: '4px' }}>{(r.config?.lines || []).filter(l => !l.hidden && !l.noNs).length} lines · <span onClick={() => mutateFace(f => ({ ...f, rows: f.rows.map(x => (x.id === r.id ? { ...x, orientation: x.orientation === 'V' ? 'H' : 'V', w: x.h, h: x.w } : x)) }))} style={{ cursor: 'pointer', color: 'var(--brass)' }} title="Horizontal = mounted across the board · Vertical = a pole standing in the base">{r.orientation === 'V' ? '↕ vertical' : '↔ horizontal'}</span> · <span onClick={() => mutateFace(f => ({ ...f, rows: f.rows.filter(x => x.id !== r.id) }))} style={{ color: '#b02d20', cursor: 'pointer' }}>remove</span></div>
                                 </div>
                             ))}
@@ -476,14 +502,34 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [] }) => {
                     <div style={mono}>Add a row from the CPQ cart</div>
                     {cartLines.length === 0 && <div style={{ fontSize: '0.84rem', color: 'var(--ink-soft)', fontStyle: 'italic', margin: '8px 0 14px' }}>The cart is empty. Configure the row on 8. CPQ Configurator, Add configuration, and come back — the cart travels between tabs.</div>}
                     {cartLines.map(it => (
-                        <div key={it.id} style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '8px 10px', margin: '6px 0', border: '1px solid var(--line)' }}>
+                        <React.Fragment key={it.id}>
+                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '8px 10px', margin: '6px 0', border: '1px solid var(--line)' }}>
                             {(it.displaySnapshot || it.renderSnapshot) ? <img src={it.displaySnapshot || it.renderSnapshot} alt="" title={it.displaySnapshot ? 'the view framed at Add configuration' : 'the documents\' auto-front view — S1 is adding a framed capture'} style={{ width: '64px', height: '40px', objectFit: 'contain', background: 'var(--paper-2)' }} /> : <div style={{ width: '64px', height: '40px', background: 'var(--paper-2)' }} />}
                             <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ fontSize: '0.88rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.assemblyName || it.name || 'Configured item'}{it.displayBoard ? <span style={{ ...mono, color: 'var(--brass)', marginLeft: '6px' }}>board {it.displayBoard.widthIn}×{it.displayBoard.heightIn}{it.displayBoard.readsInches != null ? ` · rod at ${it.displayBoard.readsInches}"` : ''}</span> : null}</div>
                                 <div style={{ ...mono }}>{it.finishLabel || ''}{it.engineConfig?.lengthInches ? ` · ${it.engineConfig.lengthInches}"` : ''}{it.qty > 1 ? ` · qty ${it.qty}` : ''}</div>
                             </div>
+                            <button onClick={() => setCartOpenLines(cartOpenLines === it.id ? null : it.id)} title="List the parts this cart line carries — check them before placing" style={btn(cartOpenLines === it.id, { padding: '8px 10px' })}>{cartOpenLines === it.id ? '▾' : '▸'} Lines</button>
                             <button onClick={() => setPlacing(placing === it.id ? null : it.id)} disabled={!!busy || face?.kind !== 'ROWS'} style={btn(placing === it.id)}>Place…</button>
+                            {typeof setCart === 'function' && (
+                                <button onClick={() => removeCartLine(it)} disabled={!!busy} title="Remove this line from the CPQ cart (the same cart CPQ shows). A row already placed from it keeps its parts until you place another line into it." style={btn(false, { padding: '8px 10px', color: '#b02d20' })}>✕</button>
+                            )}
                         </div>
+                        {cartOpenLines === it.id && (() => {
+                            const parts = rowBomLines({ label: '', config: rowConfigFromCartItem(it) });
+                            return (
+                                <div style={{ border: '1px solid var(--line)', borderTop: 'none', margin: '-6px 0 8px', padding: '6px 10px', background: 'var(--paper-2)' }}>
+                                    {parts.length === 0 && <div style={{ fontSize: '0.8rem', fontStyle: 'italic', color: 'var(--ink-soft)' }}>No billable parts on this line.</div>}
+                                    {parts.map((l, i) => (
+                                        <div key={`${l.code}-${i}`} style={{ display: 'flex', gap: '8px', fontSize: '0.8rem', padding: '2px 0' }}>
+                                            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.name}>{l.code}</span>
+                                            <span style={{ whiteSpace: 'nowrap' }}>× {l.qty}{l.perFoot && l.feet ? ` · ${l.feet} ft` : ''}{l.finishCode ? ` · ${l.finishCode}` : ''}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            );
+                        })()}
+                        </React.Fragment>
                     ))}
                     {placing && cartLines.some(it => it.id === placing) && (() => {
                         const it = cartLines.find(x => x.id === placing);
