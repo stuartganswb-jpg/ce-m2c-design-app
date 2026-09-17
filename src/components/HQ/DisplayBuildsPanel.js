@@ -21,8 +21,9 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, deleteDoc, query, where } from 'firebase/firestore';
-import { DISPLAY_STYLES, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, cpqEntryRows, cpqEntryCsv, SAMPLE_BIN_BY_STYLE } from '../Shared/displayBom';
+import { collection, doc, onSnapshot, setDoc, deleteDoc, query, where, getDoc, getDocs } from 'firebase/firestore';
+import { DISPLAY_STYLES, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, cpqEntryRows, cpqEntryCsv, SAMPLE_BIN_BY_STYLE, floorLinksByLine } from '../Shared/displayBom';
+import { linkedDocsOf, identityKeysOf } from '../Shared/orderLifecycle';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -135,6 +136,50 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         alert(`⬇ ${name}\n\n${rows.length} entries across ${new Set(rows.map(r => r.row)).size} rows for ${draft.qty} boards — downloaded and copied.`);
     };
 
+    // ── THE ORDER ON THE FLOOR (Stuart 2026-09-17: "the work order#s should just appear there") ──
+    // Our SO # → the CPQ sales order → every floor document RTG raised from it (Shared/orderLifecycle
+    // .linkedDocsOf, the same lookup RTG's closer uses) + the plater's demands and shipment lines.
+    // Read-only; nothing here writes.
+    const [floor, setFloor] = useState(null);       // { loading, so, fin[], shop[], plating[], error, forSo }
+    const loadFloor = async (soNumber) => {
+        const v = String(soNumber || '').trim();
+        if (!v) { setFloor(null); return; }
+        setFloor({ loading: true, forSo: v, fin: [], shop: [], plating: [] });
+        try {
+            const salesOrders = collection(db, 'hq_sales_orders');
+            let so = null;
+            const direct = await getDoc(doc(db, 'hq_sales_orders', v));
+            if (direct.exists()) so = { id: direct.id, ...direct.data() };
+            const tries = [v, /^\d+$/.test(v) ? `SO${v}` : null, `SO-APP-${v}`].filter(Boolean);
+            for (const t of tries) {
+                if (so) break;
+                for (const field of ['soId', 'id']) {
+                    const qs = await getDocs(query(salesOrders, where(field, '==', t)));
+                    const hit = qs.docs.find(d => !(d.data() || {}).deleted);
+                    if (hit) { so = { id: hit.id, ...hit.data() }; break; }
+                }
+            }
+            if (!so) { setFloor({ loading: false, forSo: v, fin: [], shop: [], plating: [], error: `No sales order found for "${v}" — type the SO number as RTG shows it.` }); return; }
+            const links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, so, 'sales');
+            const keys = [...new Set([...identityKeysOf(so), ...links.fin.keys(), ...links.shop.keys()])].slice(0, 10);
+            const plating = [];
+            for (const [coll, field] of [['plating_demand', 'orderKey'], ['plating_demand', 'shopOrderId'], ['plating_shipments', 'orderKey'], ['plating_shipments', 'shopOrderId']]) {
+                try {
+                    const qs = await getDocs(query(collection(db, coll), where(field, 'in', keys)));
+                    qs.docs.forEach(d => { if (!plating.some(p => p.id === d.id)) plating.push({ id: d.id, __coll: coll, ...d.data() }); });
+                } catch (e) { /* a missing index or field: the rest still shows */ }
+            }
+            setFloor({
+                loading: false, forSo: v, so,
+                fin: [...links.fin.entries()].map(([id, d]) => ({ id, ...d })),
+                shop: [...links.shop.entries()].map(([id, d]) => ({ id, ...d })),
+                plating,
+            });
+        } catch (e) { setFloor({ loading: false, forSo: v, fin: [], shop: [], plating: [], error: e?.message || String(e) }); }
+    };
+    useEffect(() => { if (draft && !dirty) loadFloor(draft.soNumber); else if (!draft) setFloor(null); }, [draft?.id, draft?.soNumber, dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+    const floorLinks = useMemo(() => (floor && !floor.loading && draft ? floorLinksByLine(draft.lines?.parts || [], floor) : {}), [floor, draft]);
+
     const openN = draft ? openBoards(draft) : 0;
     const custOf = (b) => b.customerName || customers.find(c => c.id === b.customerId)?.name || '';
     const nextShip = (b) => (b.shipPlan || []).find(p => N(p.shipped) < N(p.qty))?.date || '';
@@ -221,6 +266,27 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 <span style={mono}>Demand published to the Sales Snapshot: open boards × per board, lines not done</span>
             </div>
 
+            {/* the order on the floor — read-only, from Our SO # */}
+            {draft.soNumber && (
+                <div style={{ border: '1px solid var(--line)', background: 'var(--paper-2)', padding: '10px 14px', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
+                        <span style={mono}>On the floor</span>
+                        {floor?.loading && <span style={{ ...mono, color: 'var(--brass)' }}>reading…</span>}
+                        {floor?.so && <span style={{ fontSize: '0.85rem' }}>Sales order <b>{floor.so.soId || floor.so.id}</b>{floor.so.soId && floor.so.soId !== floor.so.id ? <span style={{ color: 'var(--ink-soft)' }}> ({floor.so.id})</span> : null} · {floor.so.status || '—'}{floor.so.customer ? ` · ${floor.so.customer}` : ''}</span>}
+                        {floor?.error && <span style={{ fontSize: '0.82rem', color: '#b02d20' }}>{floor.error}</span>}
+                        <span style={{ flex: 1 }} />
+                        <button onClick={() => loadFloor(draft.soNumber)} disabled={dirty || floor?.loading} style={btn(false, { padding: '4px 10px' })} title={dirty ? 'Save the order first' : 'Read the floor again'}>⟳ Refresh</button>
+                    </div>
+                    {floor?.so && !floor.loading && (floor.fin.length + floor.shop.length + floor.plating.length === 0
+                        ? <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px', fontStyle: 'italic' }}>No floor documents yet — RTG raises them when it splits the order.</div>
+                        : <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '11px' }}>
+                            {floor.shop.map(d => <span key={d.id}>🔧 {d.id} · {d.status || 'Pending'}{d.nsWoTran ? ` · NS ${d.nsWoTran}` : ''}</span>)}
+                            {floor.fin.map(d => <span key={d.id}>{d.pickOnly ? '📦' : '🎨'} {d.id} · {d.pickOnly ? (d.pickStatus || 'Pending') : (d.currentPhase || 'Setup')}{d.packStatus ? ` · ${d.packStatus}` : ''}{d.nsWoTran ? ` · NS ${d.nsWoTran}` : ''}</span>)}
+                            {floor.plating.map(d => <span key={d.id}>⚡ {d.woNum || d.id} · {d.status || 'open'}{d.__coll === 'plating_shipments' ? ' (shipment)' : ''}</span>)}
+                        </div>)}
+                </div>
+            )}
+
             {/* ship plan */}
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
                 <div style={mono}>Ship plan</div>
@@ -262,7 +328,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                             <td style={{ ...td, textAlign: 'right' }}>{l.qtyPerBoard}{l.perFoot ? ` · ${l.feetPerBoard} ft` : ''}</td>
                             <td style={{ ...td, textAlign: 'right' }}>{l.qtyPerBoard * N(draft.qty)}{l.perFoot ? ` · ${l.feetPerBoard * N(draft.qty)} ft` : ''}</td>
                             <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{l.done ? 0 : l.qtyPerBoard * openN}{l.perFoot && !l.done ? ` · ${l.feetPerBoard * openN} ft` : ''}</td>
-                            <td style={td}><input value={l.woNumber || ''} onChange={e => setLine('parts', l.key, { woNumber: e.target.value })} placeholder="WO…" style={{ ...inp, width: '90px', padding: '3px 6px', fontFamily: 'var(--mono)', fontSize: '11px' }} /></td>
+                            <td style={td}><input value={l.woNumber || ''} onChange={e => setLine('parts', l.key, { woNumber: e.target.value })} placeholder="WO…" style={{ ...inp, width: '90px', padding: '3px 6px', fontFamily: 'var(--mono)', fontSize: '11px' }} />{(floorLinks[l.key] || []).map(e => <div key={`${e.kind}${e.id}`} title={`${e.kind} · ${e.status}${e.qty ? ` · ${e.qty}` : ''}`} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', marginTop: '2px', whiteSpace: 'nowrap' }}>{e.id} · {e.status}</div>)}</td>
                             <td style={td}><select value={l.atPlater || ''} onChange={e => setLine('parts', l.key, { atPlater: e.target.value })} style={{ ...inp, padding: '3px 6px' }}>{PLATER.map(p => <option key={p} value={p}>{p || '—'}</option>)}</select></td>
                             <td style={td}><input value={l.notes || ''} onChange={e => setLine('parts', l.key, { notes: e.target.value })} style={{ ...inp, width: '100%', padding: '3px 6px' }} /></td>
                             <td style={{ ...td, textAlign: 'center' }}><input type="checkbox" checked={!!l.done} onChange={e => setLine('parts', l.key, { done: e.target.checked })} title="Pulled / built for the whole order — leaves the demand" /></td>

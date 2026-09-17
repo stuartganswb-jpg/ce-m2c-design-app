@@ -1,6 +1,6 @@
 // Harness for Shared/displayBom.js — the bill of a sales display board.
 //   node scripts/displayBom.test.mjs
-import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength, raisePlan, targetCodeOf, SAMPLE_BIN_BY_STYLE, cpqEntryRows, cpqEntryCsv } from '../src/components/Shared/displayBom.js';
+import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength, raisePlan, targetCodeOf, SAMPLE_BIN_BY_STYLE, cpqEntryRows, cpqEntryCsv, floorLinksByLine } from '../src/components/Shared/displayBom.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -228,6 +228,26 @@ const cartBaseFront3 = {
         eq('sample bins by style', [SAMPLE_BIN_BY_STYLE.TABLETOP, SAMPLE_BIN_BY_STYLE.WALL], ['FDISTABLE', 'FDISWALL']);
     }
     eq('nothing when every order is complete', Object.keys(displayDemandFrom([b3]).byItem).length, 0);
+
+    // ── the order on the floor: RTG's documents matched back to the build lines ──────────────
+    {
+        const parts = [
+            { key: 'H1-1R|EP4', code: 'H1-1R', finishCode: 'EP4' },
+            { key: 'H1-1BR/EP4|EP4', code: 'H1-1BR/EP4', finishCode: 'EP4' },
+            { key: 'H1-75SR/P|P06', code: 'H1-75SR/P', finishCode: 'P06' },
+            { key: 'H1-FRPF|EP4', code: 'H1-FRPF', finishCode: 'EP4' },
+        ];
+        const fin = [{ id: 'WO-SO60500', pickOnly: true, pickStatus: 'Picked_Awaiting_Staging', partsList: [{ legacyErpId: 'H1-1BR/EP4', quantity: 50 }] },
+                     { id: 'WO-SO60501', currentPhase: 'Setup', partsList: [{ legacyErpId: 'H1-75SR/P06', quantity: 35 }] }];
+        const shop = [{ id: 'SHOP-SO60500', status: 'Sent to Plating', cutList: [{ legacyErpId: 'H1-1R', qty: 50, cutLength: 16.75 }] }];
+        const plating = [{ id: 'PLD-CUSTOM-SHOP-SO60500', woNum: 'PLW-CE-123', targetErpId: 'H1-1R/EP4', baseErpId: 'H1-1R', qty: 50, status: 'open' }];
+        const links = floorLinksByLine(parts, { fin, shop, plating });
+        eq('the rod: its shop job and its plating demand', links['H1-1R|EP4'].map(e => [e.id, e.kind, e.status]), [['SHOP-SO60500', 'SHOP', 'Sent to Plating'], ['PLW-CE-123', 'PLATING', 'open']]);
+        eq('the stocked plated ring: the pick', links['H1-1BR/EP4|EP4'].map(e => [e.id, e.kind, e.status, e.qty]), [['WO-SO60500', 'PICK', 'Picked_Awaiting_Staging', 50]]);
+        eq('a /P family code meets its painted line on the finishing doc', links['H1-75SR/P|P06'].map(e => [e.id, e.kind, e.status]), [['WO-SO60501', 'FINISHING', 'Setup']]);
+        eq('a fee is on no floor document', links['H1-FRPF|EP4'], undefined);
+        eq('a shop doc with no cut list matches by its part number', floorLinksByLine([{ key: 'X', code: 'H1-138TRV' }], { shop: [{ id: 'SHOP-A', partNum: 'H1-138TRV/P06', qty: 3 }] }).X.map(e => e.id), ['SHOP-A']);
+    }
 
     // ship plan: 50 boards, 10 a week from a date → five drops, the last one partial when needed
     const plan = shipPlanFill({ qty: 50, perShip: 10, start: '2026-09-14', everyDays: 7 });

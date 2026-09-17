@@ -421,6 +421,36 @@ export function cpqEntryCsv(rows = []) {
         .map(r => r.map(esc).join(',')).join('\n');
 }
 
+// ── THE ORDER ON THE FLOOR (Stuart 2026-09-17) ──────────────────────────────────────────────
+// "i want the orders to tie back to 10.5 and the work order#s should just appear there." The build
+// order names its CPQ sales order (Our SO #); RTG's split raised the floor documents from it — the
+// finishing / pick document, the shop document with its cut list, and the plater's demand when the
+// shop sends poles out. This matches those documents back to the build's part lines by item code
+// (the finish suffix set aside, so H1-1R on the build meets H1-1R/EP4 on a pick line). Read-only.
+
+const baseOfCode = (c) => { const s = U(c); const i = s.lastIndexOf('/'); return i > 0 ? s.slice(0, i) : s; };
+
+/** { lineKey: [{ id, kind, status, qty }] } — the floor documents that carry each build part line. */
+export function floorLinksByLine(parts = [], { fin = [], shop = [], plating = [] } = {}) {
+    const out = {};
+    const add = (key, entry) => { const list = (out[key] = out[key] || []); if (!list.some(e => e.id === entry.id && e.kind === entry.kind)) list.push(entry); };
+    parts.forEach(line => {
+        const want = new Set([line.code, line.billedId].filter(Boolean).map(baseOfCode));
+        const hit = (code) => !!code && want.has(baseOfCode(code));
+        fin.forEach(d => (d.partsList || []).forEach(l => {
+            if (hit(l.legacyErpId || l.partId)) add(line.key, { id: d.id, kind: d.pickOnly ? 'PICK' : 'FINISHING', status: d.pickOnly ? (d.pickStatus || 'Pending') : (d.currentPhase || 'Setup'), qty: N(l.quantity != null ? l.quantity : l.qty, 0) });
+        }));
+        shop.forEach(d => {
+            const lines = Array.isArray(d.cutList) && d.cutList.length ? d.cutList : [{ legacyErpId: d.partNum || d.rootItem, qty: d.qty }];
+            lines.forEach(l => { if (hit(l.legacyErpId || l.partId)) add(line.key, { id: d.id, kind: 'SHOP', status: d.status || 'Pending', qty: N(l.qty, 0) }); });
+        });
+        plating.forEach(d => {
+            if (hit(d.targetErpId) || hit(d.baseErpId) || hit(d.erpId)) add(line.key, { id: d.woNum || d.id, kind: 'PLATING', status: d.status || 'open', qty: N(d.qty, 0) });
+        });
+    });
+    return out;
+}
+
 /** Boards still to build on an order. */
 export const openBoards = (b) => Math.max(0, N(b?.qty, 0) - N(b?.built, 0));
 
