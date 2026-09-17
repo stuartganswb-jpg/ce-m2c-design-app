@@ -9,6 +9,17 @@
 // control (Engineering view) pulls a saved line back for editing; re-saving updates the SAME
 // draft, so a follow-up Reopen-in-CPQ / re-finalize picks up the corrected numbers.
 // Handled by HQ.js (tab switch) + ClientVisionTab (session restore from hq_vision_reopen).
+// The checkout add-ons a saved quote carries, as AddOnPicker selections { [partDocId]: qty | true }.
+// Saved lines first (cpqData.breakdown, isAddOn — a percentage fee saves as qty 1, which the picker
+// reads as ON); a quote with none falls back to the portal request's picks. Pure — exported for the harness.
+export const savedAddOnSelOf = (job) => {
+    const saved = ((job && job.cpqData && job.cpqData.breakdown) || []).filter(l => l && l.isAddOn && l.partId);
+    if (saved.length) return Object.fromEntries(saved.map(l => [l.partId, parseFloat(l.qty) > 0 ? parseFloat(l.qty) : 1]));
+    return Object.fromEntries(((job && job.portalRequest && job.portalRequest.addOns) || [])
+        .filter(a => a && a.id)
+        .map(a => [a.id, a.mode === 'PERCENT' ? true : (parseFloat(a.qty) || 1)]));
+};
+
 export const reopenQuoteInVision = (job) => {
     const jobId = job.jobId || job.id;
     window.dispatchEvent(new CustomEvent('REOPEN_QUOTE_IN_VISION', {
@@ -72,11 +83,13 @@ export const reopenQuoteInCpq = (job) => {
                 // Portal checkout add-ons → CPQ's AddOnPicker selections (keyed by part doc id,
                 // the same key addOnSel uses), so staff land at checkout with the customer's
                 // picks already ticked instead of re-reading them from the request panel.
-                addOnSel: Object.fromEntries(
-                    ((job.portalRequest && job.portalRequest.addOns) || [])
-                        .filter(a => a && a.id)
-                        .map(a => [a.id, a.mode === 'PERCENT' ? true : (parseFloat(a.qty) || 1)])
-                ),
+                // ⚠ THE QUOTE'S OWN ADD-ONS COME BACK TOO (Stuart 2026-09-17: 50 display bases ticked at
+                // checkout vanished on every reopen). A staff-ticked add-on lives only on
+                // cpqData.breakdown (isAddOn, keyed by the part's doc id) — reopen restored the portal's
+                // picks and nothing else, so checkout opened at zero and the next save wrote the quote
+                // WITHOUT them. Once a quote has saved add-ons they are the truth; the portal's list
+                // only seeds a request nobody has finalized yet.
+                addOnSel: savedAddOnSelOf(job),
                 shippingMethod: job.shippingMethod || 'SAVED',
                 shippingAddressId: job.shippingAddressId || '',
                 shippingAmount: (parseFloat(job.shippingAmount) || 0) > 0 ? String(job.shippingAmount) : '',

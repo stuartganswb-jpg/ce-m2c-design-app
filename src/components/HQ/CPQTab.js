@@ -11,7 +11,7 @@ import { resolve as resolveHardware, diagnose as diagnoseHardware } from '../Sha
 import { normalizeLocation } from '../Shared/assemblyTags';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { configuratorTotal } from '../Shared/traverseConfigurator';
-import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/finishLabel';
+import { selectedFinishes, finishLabelOf, finishLabelOfItem, dropFinishWhereItemTakesNone } from '../Shared/finishLabel';
 import { cutText } from '../Shared/configQty';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -3280,6 +3280,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           grandTotal += addOnsTotal(addOnLines);
       }
 
+      // THE ITEM IS THE TRUTH AT SAVE (Shared/finishLabel): a line whose item is tagged Unfinished
+      // carries no finish onto the job, the NetSuite push or RTG's split — whenever it was configured.
+      const itemOfLine = (key) => { const k = String(key || '').trim().toUpperCase(); return k ? ((libraryParts || []).find(p => [p.id, p.itemId, p.legacyErpId].some(x => String(x || '').trim().toUpperCase() === k)) || null) : null; };
       const payload = {
           jobId: targetJobId, brandId: activeBrand,
           status: saveAs === 'SALES_ORDER' ? 'APPROVED' : 'CONFIGURED',
@@ -3331,12 +3334,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
               // finishOutsourced on every line that carries a finish (Q10 / B §8 answer 2): the
               // one shared test, so the split can drop the finishing doc for a plated line and
               // the WMS label can say FROM PLATING — without a local regex anywhere.
-              breakdown: stampLineFinishRouting(mergedBreakdown, outsourceFinishes),
+              breakdown: stampLineFinishRouting(dropFinishWhereItemTakesNone(mergedBreakdown, itemOfLine), outsourceFinishes),
               // tradeDiscount stamped per item (always set, so a re-finalize after the code
               // changed can't keep a stale stamp). finalPrice stays GROSS per-unit; net derives.
               // `displaySnapshot` (the display-mode board capture, S5 2026-09-13) is read by the 5. Marketing
               // designer from the CART only — never saved on the job (a data URL would bloat the doc).
-              cartItems: cartForSave.map(({ displaySnapshot, ...it }) => ({ ...it, tradeDiscount: tradeDiscountFor(it) || null, pricingBreakdown: stampLineFinishRouting(it.pricingBreakdown || [], outsourceFinishes) })),
+              cartItems: cartForSave.map(({ displaySnapshot, ...it }) => ({ ...it, tradeDiscount: tradeDiscountFor(it) || null, pricingBreakdown: stampLineFinishRouting(dropFinishWhereItemTakesNone(it.pricingBreakdown || [], itemOfLine), outsourceFinishes) })),
               // Consumed by ERPPushPullTab to map lines -> physical NetSuite inventory.
               configuration: mergedConfiguration,
               quantities: mergedQuantities,

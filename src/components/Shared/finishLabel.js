@@ -48,6 +48,25 @@ export function takesNoFinish(part, line) {
     return !!(line && line.noFinish);
 }
 
+// THE SAME PRECEDENCE, ENFORCED WHERE A LINE IS WRITTEN AND WHERE IT IS SENT (Stuart 2026-09-17:
+// "it is trying to map finish codes to the hidden tag along parts" — H1-2TRVPLUG/EP4, …CLP/EP4,
+// …NUT/EP4 on a display order). The display surfaces already asked takesNoFinish; the SAVE and the
+// NetSuite builder did not, so a cart line stamped before its item was tagged kept the finish: the
+// estimate looked for a plated SKU that will never exist, and — worse — the save stamped the line
+// finishOutsourced, which sends a nut to the plater's stock check at RTG's split and can hold the
+// whole order on a backorder for an item nobody makes. A line whose ITEM takes no finish loses the
+// code, the label and the routing stamp, and says noFinish like any other unfinished line.
+// findPart(key) → the library record by doc id / item id / our number, or null. Pure.
+export function dropFinishWhereItemTakesNone(lines, findPart) {
+    return (lines || []).map(l => {
+        if (!l || !l.finishCode || typeof findPart !== 'function') return l;
+        const part = findPart(l.partId) || findPart(l.legacyErpId);
+        if (!part || !takesNoFinish(part)) return l;
+        const { finishCode, finishLabel, finishOutsourced, ...rest } = l;
+        return { ...rest, noFinish: true };
+    });
+}
+
 // "BL – BLACK" from a finish record; falls back to whichever half exists.
 export function finishText(finish) {
     if (!finish) return '';

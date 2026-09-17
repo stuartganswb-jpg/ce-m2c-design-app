@@ -25,6 +25,7 @@ import { nsTransactionHeader } from './nsHeader';
 import { cleanSidemark } from './quoteDisplay';
 import { isParkedGeometryLine } from './lineClassification';
 import { netFactorOf } from './lineDiscount';
+import { takesNoFinish } from './finishLabel';
 
 // A finish's code is the assembly suffix (base + CODE -> base/CODE). Some finish docs carry the
 // identifier in `name` with `code` blank, so fall back to name.
@@ -228,7 +229,8 @@ export function resolveJobLines(job, data) {
                   if (aliasId) { const real = matchPart(aliasId); if (real) { aliasFace = masterPart; masterPart = real; } }
                   // THE FINISH IS PER LINE HERE, not per step: this engine lets one part be finished
                   // differently from the rest of the configuration, so the line's own code decides.
-                  const code = String(l.finishCode || '').toUpperCase();
+                  // …unless the ITEM takes no finish (Shared/finishLabel — the item outranks the stamp).
+                  const code = takesNoFinish(masterPart) ? '' : String(l.finishCode || '').toUpperCase();
                   const outFin = code ? outsourceFinishes.find(f => finishCodeOf(f) === code) : null;
                   const finObj = code ? (outFin || globalFinishes.find(f => finishCodeOf(f) === code) || { code }) : null;
                   // A species finish consumes the per-species item (…WBF → …WBF-O/-W) before routing.
