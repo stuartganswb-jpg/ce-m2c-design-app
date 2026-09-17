@@ -71,3 +71,18 @@ export function nsTransactionHeader({ brand, asType = 'estimate', customerId, me
     }
     return { ok: true, header, warnings };
 }
+
+// ── EVERY SALES ORDER LINE SAYS WHERE IT SHIPS FROM (Stuart 2026-09-17, SO60551 in NetSuite) ────────
+// "there are items that are showing up backordered only because the location is not specified …
+//  items available in multiple subsidiaries cannot have a preferred location and it needs to be set at
+//  time of the order." The header carried the brand's location; a LINE only inherits one from the item's
+// own preferred location, so H1-1R, H1-1STDOFF, H1-2TRV, H1-2TRVCLP … landed with a blank location,
+// committed nothing and read BACK ORDERED against thousands on hand. The same blank is what the packed
+// order's fulfilment then tripped on ("Items list: Location" / "only one location"). One rule, both
+// doors: on a SALES ORDER every item line carries the header's location unless it already names one.
+// An estimate is left as it is — it commits no stock, and its form may not expose the column.
+export function withLineLocations(payload, asType) {
+    if (asType !== 'salesorder' || !payload || !payload.location || !payload.item || !Array.isArray(payload.item.items)) return payload;
+    const loc = { id: String(payload.location.id) };
+    return { ...payload, item: { ...payload.item, items: payload.item.items.map(l => (l && !l.location ? { ...l, location: loc } : l)) } };
+}

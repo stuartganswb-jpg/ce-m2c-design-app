@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { isPoleCategory } from '../Shared/poleCut';
-import { nsTransactionHeader } from '../Shared/nsHeader';
+import { nsTransactionHeader, withLineLocations } from '../Shared/nsHeader';
 import { resolveShipMethod } from '../Shared/nsTransmit';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { quickShipPullLines, quickShipCoverCodes, quickShipBackorderLines } from '../Shared/quickShipBackorder';
@@ -1365,7 +1365,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             }
             hdr.warnings.forEach(w => addLog(`⚠️ ${w}`, 'warn'));
             const lineTag = String(soExtras.sidemark || '').trim().slice(0, 300);
-            const payload = {
+            const payload = withLineLocations({
                 ...hdr.header,
                 item: {
                     // PACKS never reach NetSuite: we stock and transmit EACH (2 × 7-pack = 14), and
@@ -1382,7 +1382,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         ...((String(l.lineMemo || '').trim() || lineTag) ? { custcol3: String(l.lineMemo || '').trim().slice(0, 300) || lineTag } : {}),
                     })).concat(trvPushLines.map(t => (kitMemo || lineTag) ? { ...t, custcol3: String(kitMemo || lineTag).slice(0, 300) } : t))
                 }
-            };
+            }, asType);
 
             // ── LOCAL-FIRST + STAGED SYNC (Stuart 2026-08-25: uniform with the CPQ save buttons) ──
             // The record is created HERE first; the NetSuite write rides ns_outbox exactly like

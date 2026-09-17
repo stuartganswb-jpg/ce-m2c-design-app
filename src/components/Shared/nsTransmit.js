@@ -21,7 +21,7 @@ import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from './sizeMatrix';
 import { aliasTargetIdOf } from './aliasIdentity';
 import { nsProxyFetch } from './nsProxy';
 import { enqueueNsWrite } from './nsOutbox';
-import { nsTransactionHeader } from './nsHeader';
+import { nsTransactionHeader, withLineLocations } from './nsHeader';
 import { cleanSidemark } from './quoteDisplay';
 import { isParkedGeometryLine } from './lineClassification';
 import { netFactorOf } from './lineDiscount';
@@ -634,7 +634,7 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     if (!hdr.ok) return { ok: false, error: hdr.error };
     hdr.warnings.forEach(w => log(`⚠️ ${w}`, 'warn'));
 
-    const payload = {
+    const payload = withLineLocations({
         ...hdr.header,
         item: {
             items: [
@@ -642,7 +642,7 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
                 ...lineItems
             ]
         }
-    };
+    }, asType);
     return { ok: true, payload, meta: { silentFeeBalance, unmappedNames, finishFallbacks, lineCount: lineItems.length, quotedTotal: cpqGrandTotal } };
 }
 
