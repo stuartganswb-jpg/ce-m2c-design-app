@@ -58,7 +58,8 @@ import { enqueueNsWrite } from "../Shared/nsOutbox";
 import { soLinesSql, fulfilmentItemsOf, refusalText } from "../Shared/fulfilmentLines";
 import FulfilmentPanel from "../Shared/fulfilmentPanel";
 import { boxSizeLabel } from "../Shared/fulfilment";
-import { fetchNsPurchaseOrder, importNsPurchaseOrder, recordPoReceipt, openQtyOf, overRoomOf, maxReceivableOf, poRef } from "../Shared/purchaseOrders";
+import { fetchNsPurchaseOrder, importNsPurchaseOrder, fetchNsPoLines, recordPoReceipt, openQtyOf, overRoomOf, maxReceivableOf, poRef } from "../Shared/purchaseOrders";
+import { itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText } from "../Shared/poReceiptLines";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
@@ -303,6 +304,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [rcvPoInput, setRcvPoInput] = useState('');    // the PO number typed or scanned at the dock
     const [rcvPo, setRcvPo] = useState(null);            // the resolved purchase order (app record)
     const [rcvBusy, setRcvBusy] = useState(false);
+    // What NetSuite never got (Eric 2026-09-17): { lines: [{index,itemId,qty,bin,…}], inFlight } for the open PO, or null.
+    const [rcvNsGap, setRcvNsGap] = useState(null);
     const [rcvScan, setRcvScan] = useState('');          // the find box
     const [rcvFocusIdx, setRcvFocusIdx] = useState(null); // the line the scan found
     const [rcvQty, setRcvQty] = useState({});            // line index → how many arrived
@@ -995,6 +998,59 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // not an error — it is the normal case, and we go and read NetSuite. Importing it gives the
     // receipt somewhere to accumulate AND puts the PO on the RTG board, which is the standing rule
     // that every order lands there whichever door it came through.
+    // ── IS NETSUITE BEHIND THIS PO? (Eric, App Imp 2026-09-17) ───────────────────────────────────
+    // The app's record is written first and the NetSuite receipt follows through the queue — so a
+    // receipt that FAILS there leaves the app ahead of NetSuite, the stock not in NetSuite, and
+    // nobody on the dock any the wiser (PO2205: 29,320 chips, no inventory for the paint orders).
+    // Opening a PO compares the two, line by line; a receipt still in the queue is not a gap yet.
+    const rcvCheckNs = async (po) => {
+        setRcvNsGap(null);
+        if (!po || !po.nsPoId) return;
+        try {
+            const nsLines = await fetchNsPoLines(po.nsPoId);
+            const lines = receiptShortfallOf(po.items || [], nsLines);
+            if (!lines.length) return;
+            const pre = `porcv-${String(po.id)}-`;
+            const q = await getDocs(query(collection(db, 'ns_outbox'), where('dedupeKey', '>=', pre), where('dedupeKey', '<=', pre + '')));
+            const inFlight = q.docs.map(d => d.data()).filter(e => ['PENDING', 'POSTING'].includes(e.status)).length;
+            setRcvNsGap({ poId: po.id, lines, inFlight });
+        } catch (e) { console.warn('Receiving: NetSuite comparison failed (nothing changed):', e); }
+    };
+    const rcvPostNsGap = async () => {
+        if (!rcvPo || !rcvNsGap || rcvNsGap.poId !== rcvPo.id || rcvNsGap.inFlight) return;
+        const fallbackBin = String(rcvBin || '').trim().toUpperCase();
+        const want = rcvNsGap.lines.map(l => ({ ...l, bin: l.bin || fallbackBin }));
+        const noBin = want.filter(l => !l.bin);
+        if (noBin.length) return alert(`No bin is on record for ${noBin.map(l => l.itemId).join(', ')}.\n\nScan the bin the pieces are in (the home-bin box below), then post again.`);
+        const pcs = want.reduce((a, l) => a + l.qty, 0);
+        if (!window.confirm(`Post to NetSuite what it never received for ${poRef(rcvPo)}?\n\n${want.map(l => `   ${l.qty} × ${l.itemId} → ${l.bin}   (here ${l.appReceived} · NetSuite ${l.nsReceived})`).join('\n')}\n\nThis does NOT receive anything again in the app — it only sends NetSuite the receipt it is missing.`)) return;
+        setRcvBusy(true);
+        try {
+            // Read again at the moment of posting: somebody may have entered it in NetSuite by hand since.
+            const nsLines = await fetchNsPoLines(rcvPo.nsPoId);
+            const fresh = receiptShortfallOf(rcvPo.items || [], nsLines).map(l => ({ ...l, bin: l.bin || fallbackBin }));
+            if (!fresh.length) { setRcvNsGap(null); return alert('NetSuite already has these pieces — nothing was posted.'); }
+            const built = itemReceiptItemsOf({ poItems: rcvPo.items || [], nsLines, applied: fresh });
+            if (!built.ok) return alert(receiptRefusalText(built));
+            const freshPcs = fresh.reduce((a, l) => a + l.qty, 0);
+            await enqueueNsWrite({
+                // Deterministic on WHAT is missing: the same gap cannot be queued twice; a different gap can.
+                dedupeKey: `porcv-${String(rcvPo.id)}-catchup-${fresh.map(l => `${l.index}x${l.qty}`).join('_')}`,
+                kind: 'itemreceipt',
+                label: `Receipt catch-up — ${poRef(rcvPo)} (${freshPcs} pcs)`,
+                sourceApp: 'WMS', createdBy: operator?.name || '',
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder/${rcvPo.nsPoId}/!transform/itemreceipt`,
+                method: 'POST',
+                payload: { memo: nsMemo(`PO ${poRef(rcvPo)} receipt catch-up ${freshPcs} pcs`), item: { items: built.items } },
+            });
+            writeLog(`Receiving ${poRef(rcvPo)}: NetSuite receipt catch-up queued — ${fresh.map(l => `${l.qty} × ${l.itemId} → ${l.bin}`).join(', ')}.`, 'wms');
+            setRcvNsGap(g => (g ? { ...g, inFlight: 1 } : g));
+            alert(`📤 Queued: ${freshPcs} pcs for ${poRef(rcvPo)}.\n\nIt posts within about a minute — watch HQ 11.1 → NetSuite Sync Queue. If it fails there, the row carries NetSuite's own words.`);
+        } catch (e) {
+            alert(`The catch-up receipt was NOT queued:\n\n${e.message || e}\n\nNothing was changed.`);
+        } finally { setRcvBusy(false); }
+    };
+
     const rcvLoadPo = async () => {
         const tran = String(rcvPoInput || '').trim().toUpperCase();
         if (!tran) return;
@@ -1016,6 +1072,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 writeLog(`Receiving: ${tran} was raised in NetSuite — imported so the receipt has a record and the PO shows in RTG.`, 'wms');
             }
             setRcvPo(found); setRcvScan(''); setRcvFocusIdx(null); setRcvQty({}); setRcvBin('');
+            rcvCheckNs(found);
         } catch (e) {
             console.error('Receiving: PO lookup failed', e);
             alert(`Could not read ${tran}:\n\n${e.message || e}\n\nNothing was changed.`);
@@ -1037,11 +1094,20 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // The cart lives ON the purchase order, not in this component: a dock tablet that reloads
     // mid-receipt must not lose what is already counted onto the trolley.
     const rcvCart = (rcvPo && Array.isArray(rcvPo.receivingCart)) ? rcvPo.receivingCart : [];
+    // ONE CART, ONE ID (S2's finding 2026-09-16, the receipt duplicate): the cart lives on the PO
+    // record and the PO is loaded once, not watched — so a second tablet (or a stale screen) could
+    // put the same cart away again, and the 10% bound would then record a phantom overage and queue a
+    // second NetSuite receipt under a clock-stamped key. The cart gets an id when its first line goes
+    // on; Put Away re-reads the record and refuses unless the saved cart IS this cart; the NetSuite
+    // receipt's dedupeKey is that id, so a retry of the same cart cannot post twice while the next
+    // cart on the same PO posts normally.
     const rcvSaveCart = async (cart) => {
         if (!rcvPo) return;
-        await updateDoc(doc(db, 'hq_purchase_orders', rcvPo.id), { receivingCart: cart });
-        setRcvPo(p => ({ ...p, receivingCart: cart }));
+        const cartId = cart.length ? (rcvPo.receivingCartId || `${Date.now()}`) : null;
+        await updateDoc(doc(db, 'hq_purchase_orders', rcvPo.id), { receivingCart: cart, receivingCartId: cartId });
+        setRcvPo(p => ({ ...p, receivingCart: cart, receivingCartId: cartId }));
     };
+    const cartSig = (cart) => JSON.stringify((Array.isArray(cart) ? cart : []).map(c => [Number(c.index), String(c.itemId || ''), Number(c.qty) || 0]).sort());
     const rcvAddToCart = async (idx) => {
         const line = (rcvPo.items || [])[idx];
         if (!line) return;
@@ -1088,44 +1154,63 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!window.confirm(`Put away ${rcvCart.length} line(s) / ${pcs} pcs from ${poRef(rcvPo)} into ${bin}?\n\n${rcvCart.map(c => `   ${c.qty} × ${c.itemId}`).join('\n')}\n\nThe receipt posts to NetSuite from the queue, and any order waiting on these pieces is offered them next.`)) return;
         setRcvBusy(true);
         try {
+            // 1½ — IS THIS STILL THE CART? Re-read the record: another tablet may have put it away, or
+            // changed it, since this screen opened the PO. Refuse by name rather than receive twice.
+            const liveSnap = await getDoc(doc(db, 'hq_purchase_orders', rcvPo.id));
+            const live = liveSnap.exists() ? { id: liveSnap.id, ...liveSnap.data() } : null;
+            if (!live) { setRcvBusy(false); return alert(`${poRef(rcvPo)} no longer exists — reopen the PO.`); }
+            const liveCart = Array.isArray(live.receivingCart) ? live.receivingCart : [];
+            if (!liveCart.length || (live.receivingCartId || null) !== (rcvPo.receivingCartId || null) || cartSig(liveCart) !== cartSig(rcvCart)) {
+                setRcvPo(live); setRcvBusy(false);
+                const when = live.lastReceivedAt ? new Date(live.lastReceivedAt).toLocaleString('en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+                return alert(!liveCart.length
+                    ? `This cart was ALREADY PUT AWAY${live.lastReceivedBy ? ` by ${live.lastReceivedBy}` : ''}${when ? ` at ${when}` : ''} — nothing was received again.\n\nThe screen has been refreshed to the PO as it stands.`
+                    : `This cart was CHANGED on another tablet since this screen opened it — nothing was received.\n\nThe screen has been refreshed; check the cart and put it away again.`);
+            }
+            const cartId = rcvPo.receivingCartId || `${Date.now()}`;
             // 2 — the app's own record first, so what physically arrived is known even if NetSuite argues.
             const res = await recordPoReceipt({
                 poId: rcvPo.id, by: operator?.name || '',
                 receipts: rcvCart.map(c => ({ index: c.index, qty: c.qty, bin })),
             });
             await rcvSaveCart([]);
-            setRcvPo(p => ({ ...(res.po || p), receivingCart: [] }));
+            // The cart id dies with the cart: the next cart on this PO must mint its own, or its NetSuite
+            // receipt would carry this one's dedupeKey and be refused while this one is still in the queue.
+            setRcvPo(p => ({ ...(res.po || p), receivingCart: [], receivingCartId: null }));
 
             // 3 — NetSuite. Queued, never immediate: nobody waits on a receipt, and the outbox
             // gives it the guards every other write has.
+            // THE RECEIPT IS ADDRESSED BY PO LINE (Eric, App Imp 2026-09-17 — PO2205's chips never reached
+            // NetSuite): the transform's sublist IS the PO's lines, so each one is named by `orderLine`
+            // and a line that did not arrive says itemReceive:false. Listing items by id — what this
+            // did until today — reads as adding lines and NetSuite refuses the whole receipt.
+            // nsNote is what the dock is told at the end: queued, or plainly NOT queued and why.
+            let nsNote = '';
             if (rcvPo.nsPoId) {
                 try {
+                    const nsLines = await fetchNsPoLines(rcvPo.nsPoId);
+                    const built = itemReceiptItemsOf({ poItems: rcvPo.items || [], nsLines, applied: res.applied, bin });
+                    if (!built.ok) throw new Error(receiptRefusalText(built));
                     await enqueueNsWrite({
-                        dedupeKey: `porcv-${String(rcvPo.id)}-${Date.now()}`,
+                        dedupeKey: `porcv-${String(rcvPo.id)}-${cartId}`,   // deterministic per cart (S2's finding 2026-09-16)
                         kind: 'itemreceipt',
                         label: `Receipt — ${poRef(rcvPo)} (${pcs} pcs → ${bin})`,
                         sourceApp: 'WMS', createdBy: operator?.name || '',
                         targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder/${rcvPo.nsPoId}/!transform/itemreceipt`,
                         method: 'POST',
-                        payload: {
-                            memo: nsMemo(`PO ${poRef(rcvPo)} received ${pcs} pcs @ ${bin}`),
-                            item: { items: res.applied.map(a => {
-                                const l = (rcvPo.items || [])[a.index] || {};
-                                return {
-                                    ...(l.nsItemId ? { item: { id: String(l.nsItemId) } } : {}),
-                                    quantity: a.qty,
-                                    inventoryDetail: { quantity: a.qty, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: a.qty }] } },
-                                };
-                            }) },
-                        },
+                        payload: { memo: nsMemo(`PO ${poRef(rcvPo)} received ${pcs} pcs @ ${bin}`), item: { items: built.items } },
                     });
+                    nsNote = '\n\n📤 The NetSuite receipt is queued (11.1 → Sync Queue).';
                     writeLog(`Receiving ${poRef(rcvPo)}: item receipt queued — ${pcs} pcs into ${bin}.`, 'wms');
                 } catch (nsErr) {
-                    alert(`⚠ The pieces are recorded as received in the app, but the NETSUITE receipt could not be queued:\n\n${nsErr.message || nsErr}\n\nNothing is lost — raise it from 11.1, or tell Stuart. Do not receive it a second time.`);
+                    nsNote = `\n\n⚠ NETSUITE DOES NOT HAVE THIS RECEIPT YET:\n${nsErr.message || nsErr}\n\nThe pieces ARE recorded here — do not receive them a second time. Open this PO on Receiving again and it will offer to post what NetSuite is missing.`;
+                    writeLog(`Receiving ${poRef(rcvPo)}: NetSuite receipt NOT queued — ${String(nsErr.message || nsErr).slice(0, 160)}`, 'wms');
                 }
             } else {
+                nsNote = '\n\n⚠ This PO has no NetSuite id on file, so NO NetSuite receipt was posted — it is recorded in the app only. Tell purchasing.';
                 writeLog(`Receiving ${poRef(rcvPo)}: recorded in the app only — this PO has no NetSuite id on file, so no receipt was posted.`, 'wms');
             }
+            setRcvNsGap(null);
 
             // 4a — THE ORDERS PARKED ON THIS MATERIAL. An order placed with no stock has been
             // sitting AWAITING RECEIPT since the review raised the PO (Stuart 2026-09-04: "it
@@ -1162,7 +1247,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 + (freed.length ? `\n\n🏭 ${freed.length} order(s) were waiting on this material and have gone to the finishing floor:\n   ${freed.join('\n   ')}` : '')
                 + (taken ? `\n\n${taken} went to orders waiting to ship.` : '')
                 + boNote
-                + (rcvPo.nsPoId ? '\n\n📤 The NetSuite receipt is queued (11.1 → Sync Queue).' : ''));
+                + nsNote);
             setRcvBin('');
             pullNetSuiteStock();
         } catch (e) {
@@ -6800,6 +6885,26 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '14px' }}>
                                         {lines.length} {t('line(s)')} · {owed.length} {t('still outstanding')} · {String(po.status || '')}
                                     </div>
+
+                                    {/* NETSUITE IS BEHIND (Eric 2026-09-17) — a receipt that failed in the queue is said HERE, where the dock works. */}
+                                    {rcvNsGap && rcvNsGap.poId === po.id && (
+                                        <div style={{ border: '1px solid #d9534f', background: '#fdf3f2', padding: '12px 14px', marginBottom: '16px' }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#b3362f', fontWeight: 700, marginBottom: '6px' }}>
+                                                ⚠ {t('NetSuite never received these pieces')}
+                                            </div>
+                                            {rcvNsGap.lines.map(l => (
+                                                <div key={l.index} style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
+                                                    {l.qty} × {l.itemId} · {t('received here')} {l.appReceived} · NetSuite {l.nsReceived}{l.bin ? ` · ${l.bin}` : ` · ${t('no bin on record — scan it below')}`}
+                                                </div>
+                                            ))}
+                                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '10px', flexWrap: 'wrap' }}>
+                                                {rcvNsGap.inFlight
+                                                    ? <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>📤 {t('A receipt for this PO is in the NetSuite queue now — check 11.1 in a minute.')}</span>
+                                                    : <button type="button" disabled={rcvBusy} onClick={rcvPostNsGap} style={btn('#b3362f', '#fff')}>📤 {t('Post the difference to NetSuite')}</button>}
+                                                <span style={{ fontSize: '0.8rem', color: theme.inkSoft }}>{t('Nothing is received again here — it only sends NetSuite the receipt it is missing.')}</span>
+                                            </div>
+                                        </div>
+                                    )}
 
                                     {/* SCAN TO FIND — the label, not a scroll through the whole order. */}
                                     <form onSubmit={(e) => { e.preventDefault();

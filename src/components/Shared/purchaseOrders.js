@@ -342,6 +342,21 @@ export const fetchNsPurchaseOrder = async (tranId) => {
     };
 };
 
+// THE PO'S LINES AS NETSUITE HOLDS THEM NOW — line id, item, ordered, received, closed. The item
+// receipt is addressed by these line ids (Shared/poReceiptLines; Eric's PO2205, 2026-09-17), and the
+// receiving screen compares them with the app's record to find a receipt NetSuite never got.
+export const fetchNsPoLines = async (nsPoId) => {
+    const { nsProxyFetch } = await import('./nsProxy');
+    const { poLinesSql, nsPoLinesOf } = await import('./poReceiptLines');
+    const resp = await nsProxyFetch({
+        targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
+        method: 'POST', payload: { q: poLinesSql(nsPoId) },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 300));
+    return nsPoLinesOf(data.items || []);
+};
+
 // The app's record of a NetSuite-raised PO, created the first time somebody receives against it.
 // Two reasons this is worth doing rather than receiving against nothing: the receipt has somewhere
 // to accumulate (received per line, who and when), and the PO becomes visible to RTG — which is the
