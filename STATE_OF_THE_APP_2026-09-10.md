@@ -424,6 +424,7 @@ vocabulary including 'Sent to Plater' + RTG's panel on `isOpenPo` · F3 (was clo
 
 ## 6. Changes since this report (each session appends; newest first)
 
+- **2026-09-17 · S5 · c9c72b5 (pushed 09:18).** A display build order ties back to its CPQ sales order: Our SO # → the order → RTG's floor documents (shared lookup), listed per part line. Read-only.
 - **2026-09-17 · S5 · 5292066 (pushed 08:30).** The display → Order Entry door is removed; displays are entered in CPQ as one sales order each (the RTG split keeps shop poles, plating, finishing, picks and pack together). The build order gives a CPQ entry sheet CSV. Kept: 0690922's cut-length carry-through for Order Entry.
 - **2026-09-17 · S5 · 0690922 (pushed 07:47).** Order Entry never carried a cut length to the shop (feet per piece only). Now `cutLength` rides the SO line → Order Entry Needs → work order + shop sibling + finishing payload → shop doc, additively. The display review requires feet per piece for by-the-foot items. Open (S2 + Stuart): a plated custom per-foot pole from Order Entry raises no shop cut work order.
 - **2026-09-16 · S5 · 1a29bb1 (pushed 21:00).** Display Send to Order Entry: wrong tracker codes corrected in-app per line (build + design); fees (incl. alias H1-FRPF) go as fee lines; tab 7's loader dereferences aliases.
