@@ -1207,8 +1207,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       // follow the customer everywhere). Tab 7 reads the same customer assignment, so the two
       // screens offer the same customer-specific set.
       // (activeFlow is declared BELOW this memo — resolve the flow doc here or the deps TDZ.)
-      const flowDoc = cpqFlows.find(f => f.id === activeFlowId) || null;
-      const flowCodes = new Set((Array.isArray(flowDoc?.checkoutItems) ? flowDoc.checkoutItems : [])
+      // ⚠ A MIXED-FLOW ORDER CHECKS OUT EVERY FLOW IN THE CART (Stuart 2026-09-17, the Fabricut display
+      // orders): the list used to follow ONLY the flow showing in the Flow dropdown — whichever was
+      // configured last, or whatever a reopen left there — so the display base assigned to one flow's
+      // tab-11 list came and went with the dropdown, and a restored tick for it was silently dropped
+      // (buildAddOnLines walks this catalog). The tab-11 lists of the active flow AND of every flow a
+      // cart line was built on are offered together. Collection scope and fees still follow the active flow.
+      const checkoutFlowIds = new Set([activeFlowId, ...(cart || []).map(c => c && c.flowId)].filter(Boolean));
+      const flowCodes = new Set(cpqFlows.filter(f => checkoutFlowIds.has(f.id))
+          .flatMap(f => (Array.isArray(f.checkoutItems) ? f.checkoutItems : []))
           .map(c => String((c && c.code) || c || '').trim().toUpperCase()).filter(Boolean));
       const eligible = (libraryParts || []).filter(p => {
           const via = checkoutAssignmentOf(p, { customerId: jobData.customerId, flowCodes });
@@ -1225,7 +1232,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       const fees = curatedFeeCount > 0 ? [] : buildFeeCatalog(scopedParts, { priceFor });
       const seen = new Set(checkout.map(e => e.id));
       return [...checkout, ...fees.filter(e => !seen.has(e.id))];
-  }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections, cpqFlows, activeFlowId]);
+  }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections, cpqFlows, activeFlowId, cart]);
 
   // ── THE READY DATE (Stuart 2026-09-03) ───────────────────────────────────────────────────
   // What the finish class promises: painted 4 weeks, plated 6; the Rush fee at checkout shortens

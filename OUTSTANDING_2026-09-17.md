@@ -21,6 +21,17 @@ Repo at retirement: main = origin · 56 harnesses green · 6 red, all the same o
    60168, 60166, 60147 (Andrea / Sylvia / Sandra G). S4 copied each SO line's own location onto one fulfilment; NetSuite
    wants ONE location per fulfilment, so an order whose lines sit in two locations needs one fulfilment PER location
    (or the lines are wrong in NetSuite). 14 FAILED rows in the queue. **Next to fix.**
+3. **Fabricut display orders through CPQ (Stuart entering by hand, 09-17) — five defects found and fixed live:**
+   dead BOM pin (CE-INV-62617 → the live H1-2RCTACR record, data, Stuart re-linked) · reopen dropped the quote's own
+   checkout add-ons (b5000db) · an Unfinished item kept its finish at save and in the NetSuite builder, which would
+   have sent plugs / clips / nuts to the plater's stock check at the split (b5000db; tag the items in 4.5) · the
+   checkout list followed only the ACTIVE flow, so a mixed-flow order lost its tab-11 items (this commit) · the
+   Unfinished tick box was hidden inside the bracket-only section of the library card (this commit).
+   **Acceptance owed:** the tabletop SO saves from CPQ with 50 bases, plug/clip/nut gone from the unmapped list, and
+   lands on RTG. Square-collection rows go in through 7. Order Entry → To Be Finished (painted, cut length carried —
+   never live-proven; watch the first one onto RTG and the shop card).
+   **Named, not built:** checkout add-ons have no net-price override · Config Total reads the open configuration, not
+   the cart · 10.5 has one "Our SO #" box per display · collection scope + fees at checkout still follow the active flow.
 
 ## B. Uncommitted / half-landed — decide before anything else
 1. ~~**`PickPack/PickPackApp.js`, +26 −3, uncommitted (S3, 09-16).**~~ **SHIPPED in eab93c5 (reviewed, one defect fixed: the cart id was not cleared after put-away).** The vendor-receipt duplicate guard S2 asked for: a cart

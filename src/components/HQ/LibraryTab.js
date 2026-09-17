@@ -2429,6 +2429,23 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               {/* Only the item types these fields actually describe: brackets carry projection /
                   mount / return / arm thickness, backplates carry orientation, fees carry the fee
                   type. A ring or a pole shows none of it. */}
+              {/* ⚠ ON EVERY RECORD, NOT JUST BRACKETS (Stuart 2026-09-17: "i do not see unfinished in the master
+                  library"). This tick box sat INSIDE the bracket / backplate / fee section below, so a plug, a
+                  clip, a nut or a joiner — exactly the parts it exists for — never showed it. */}
+              <div style={{ background: 'var(--paper-2)', padding: '16px 24px', border: '1px solid var(--line)', marginTop: '10px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                      {/* UNFINISHED (Stuart 2026-09-03): "tag items that the cpq/order entry will not apply
+                          finish to". Read everywhere through Shared/finishLabel.takesNoFinish — the engine,
+                          the pick row, the floor sheet, the labels. Every record class: a joiner is inventory. */}
+                      <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '6px 0' }}>
+                          <input type="checkbox" checked={!!editSpecs.customData?.unfinished} onChange={(e) => handleCustomFieldChange("unfinished", e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '2px', flexShrink: 0 }} />
+                          <div>
+                              <label style={labelStyle}>Unfinished — never takes a finish</label>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>CPQ and Order Entry never apply the configuration's finish to this part; it prices and pulls as the plain item and the floor sheet reads "no finish". Splices, joiners, connectors, hidden hardware. (Bulk: 4.5 Mass Update → Unfinished.)</div>
+                          </div>
+                      </div>
+                  </div>
+              </div>
               {(isBracketRecord || isBackplateRecord || isFeeRecord) && (
               <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', marginTop: '10px' }}>
                   <h4 style={sectionHeaderStyle}>{isFeeRecord && !isBracketRecord && !isBackplateRecord ? 'Fee Metadata' : 'Hardware CPQ Metadata (Vision Engine)'}</h4>
@@ -2462,16 +2479,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                           </div>
                       </div>
                       )}
-                      {/* UNFINISHED (Stuart 2026-09-03): "tag items that the cpq/order entry will not apply
-                          finish to". Read everywhere through Shared/finishLabel.takesNoFinish — the engine,
-                          the pick row, the floor sheet, the labels. Every record class: a joiner is inventory. */}
-                      <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '6px 0' }}>
-                          <input type="checkbox" checked={!!editSpecs.customData?.unfinished} onChange={(e) => handleCustomFieldChange("unfinished", e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '2px', flexShrink: 0 }} />
-                          <div>
-                              <label style={labelStyle}>Unfinished — never takes a finish</label>
-                              <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>CPQ and Order Entry never apply the configuration's finish to this part; it prices and pulls as the plain item and the floor sheet reads "no finish". Splices, joiners, connectors, hidden hardware. (Bulk: 4.5 Mass Update → Unfinished.)</div>
-                          </div>
-                      </div>
                       {isBracketRecord && !!editSpecs.customData?.isReturnBracket && (
                           <div>
                               <label style={labelStyle}>Bracket Arm Thickness (in)</label>
