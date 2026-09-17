@@ -10,10 +10,20 @@ Repo at retirement: main = origin · 56 harnesses green · 6 red, all the same o
 ## A. FIX FIRST — what Stuart reports broken
 *(Stuart names these; nothing below B is touched until A is empty.)*
 
-1. …
+1. **Vendor receipts never reached NetSuite (Eric, App Imp 09-17, PO2205 chips) — FIXED, LIVE eab93c5 (`main.44cdf52e.js`),
+   ACCEPTANCE OWED.** The receipt is now addressed by PO line (`Shared/poReceiptLines`, 25 assertions); the dock is told
+   when NetSuite was not; opening a PO shows "NetSuite never received these pieces" with **Post the difference**.
+   To close: open PO2205 on WMS → Receiving, post the difference (29,320 pcs → M E5L-N19-R1), watch it go POSTED in
+   11.1, then ✕ the two dead FAILED PO2205 rows there. Any other PO that failed the same way shows the same banner the
+   first time it is opened. S3's cart guard shipped in the same commit (B1 closed).
+2. **EVERY packed order's NetSuite fulfilment is STILL failing — new error since S4's 39e6387:** "Fulfillments can be
+   shipped from only one location when using Multi-Location Inventory." Seen in 11.1 on WO-SO60341, 60169, 60158,
+   60168, 60166, 60147 (Andrea / Sylvia / Sandra G). S4 copied each SO line's own location onto one fulfilment; NetSuite
+   wants ONE location per fulfilment, so an order whose lines sit in two locations needs one fulfilment PER location
+   (or the lines are wrong in NetSuite). 14 FAILED rows in the queue. **Next to fix.**
 
 ## B. Uncommitted / half-landed — decide before anything else
-1. **`PickPack/PickPackApp.js`, +26 −3, uncommitted (S3, 09-16).** The vendor-receipt duplicate guard S2 asked for: a cart
+1. ~~**`PickPack/PickPackApp.js`, +26 −3, uncommitted (S3, 09-16).**~~ **SHIPPED in eab93c5 (reviewed, one defect fixed: the cart id was not cleared after put-away).** The vendor-receipt duplicate guard S2 asked for: a cart
    id on the PO, Put Away re-reads the PO and refuses a cart already put away or changed on another tablet, and the
    NetSuite receipt's `dedupeKey` becomes `porcv-<po>-<cartId>` instead of a clock stamp. It closes a real hole opened by
    the 10% over-receipt rule (f0f77ce, live): today a second tablet can receive the same cart twice. NOT linted, NOT
