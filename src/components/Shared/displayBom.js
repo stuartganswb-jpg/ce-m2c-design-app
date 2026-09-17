@@ -377,10 +377,70 @@ export function raisePlan(order, { boards, routeOf, finishSuffixOf = null } = {}
     return { boards: n, items, missingByRow, rowStain };
 }
 
+// ── A WRONG CODE, CORRECTED (Stuart 2026-09-16) ──────────────────────────────────────────────
+// "the row 5 acrylic rod was entered with code H1-2RCTACROD4 and it should be H1-2RCTACR … row 1
+//  bracket backplate … should be H1-75SBP-S". A seeded tracker can carry a code the library does
+// not know. The correction is made twice, on purpose: on the build order's line (what is sent)
+// and on the design's rows (so a re-snapshot does not bring the old code back). The caller has
+// already found the new code in the library and passes its record id and name.
+
+/** The design, with `oldCode` replaced by `newCode` on the named rows' lines. */
+export function replaceRowLineCode(display, { rows = [], oldCode, newCode, partId = '', name = '' } = {}) {
+    const from = U(oldCode), to = U(newCode);
+    const onRows = new Set(rows);
+    let changed = 0;
+    const faces = (display?.faces || []).map(face => (face.kind !== 'ROWS' ? face : {
+        ...face,
+        rows: (face.rows || []).map(row => {
+            if (onRows.size && !onRows.has(row.label || '')) return row;
+            const lines = row?.config?.lines;
+            if (!Array.isArray(lines)) return row;
+            let hit = false;
+            const next = lines.map(l => {
+                if (U(l.legacyErpId || l.billedId || l.partId) !== from) return l;
+                hit = true; changed++;
+                const { billedId, ...rest } = l;
+                return { ...rest, legacyErpId: to, partId: partId || to, ...(name ? { name } : {}) };
+            });
+            return hit ? { ...row, config: { ...row.config, lines: next } } : row;
+        }),
+    }));
+    return { display: { ...display, faces }, changed };
+}
+
+/** The build order's lines with one line's code replaced; a line that now matches another merges into it. */
+export function replaceBuildLineCode(lines, lineKey, { newCode, partId = '', name = '' } = {}) {
+    const parts = lines?.parts || [];
+    const line = parts.find(l => l.key === lineKey);
+    if (!line) return { lines, newKey: null, merged: false };
+    const code = U(newCode);
+    const newKey = `${code}|${line.finishCode}`;
+    const updated = {
+        ...line, key: newKey, code, partId: partId || code, name: name || line.name, billedId: '',
+        byRow: (line.byRow || []).map(r => ({ ...r, billedId: '' })),
+    };
+    const other = parts.find(l => l.key === newKey && l.key !== lineKey);
+    if (!other) return { lines: { ...lines, parts: parts.map(l => (l.key === lineKey ? updated : l)) }, newKey, merged: false };
+    const byRow = [...(other.byRow || [])];
+    updated.byRow.forEach(r => {
+        const hit = byRow.find(x => x.row === r.row);
+        if (!hit) { byRow.push(r); return; }
+        hit.qtyPerBoard = N(hit.qtyPerBoard) + N(r.qtyPerBoard);
+        hit.feetPerBoard = N(hit.feetPerBoard) + N(r.feetPerBoard);
+    });
+    const mergedLine = {
+        ...other, byRow,
+        qtyPerBoard: N(other.qtyPerBoard) + N(updated.qtyPerBoard),
+        feetPerBoard: N(other.feetPerBoard) + N(updated.feetPerBoard),
+        rows: [...new Set([...(other.rows || []), ...(updated.rows || [])])],
+    };
+    return { lines: { ...lines, parts: parts.filter(l => l.key !== lineKey).map(l => (l.key === newKey ? mergedLine : l)) }, newKey, merged: true };
+}
+
 /** The lines tab 7 loads — one per item, the row as the memo. Pure; tab 7 resolves stock vs to-be-finished. */
 export function orderEntryLinesOf(items = []) {
     return items.map(i => ({
-        key: i.key, row: i.row, target: i.target, base: i.base, finishCode: i.finish, qty: i.qty, name: i.name,
+        key: i.key, row: i.row, code: i.code, target: i.target, base: i.base, finishCode: i.finish, qty: i.qty, name: i.name,
         perFoot: !!i.perFoot, feetPer: i.feetPerPiece || 0, cutLength: i.cutLength || 0,
     }));
 }

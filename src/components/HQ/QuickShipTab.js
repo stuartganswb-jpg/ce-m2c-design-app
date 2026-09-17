@@ -974,25 +974,36 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         setSoExtras(p => ({ ...p, po: h.build.poNumber || p.po, prodNotes: `Display build ${h.build.id} · ${h.build.boards} boards${h.build.sampleBin ? ` · put away to ${h.build.sampleBin}` : ''}` }));
         const missing = [];
         let loaded = 0;
+        // An ALIAS entry dereferences, as addToBeFinished does: the line is the real item, the alias its face.
+        const realOf = (it) => (it && isAliasDoc(it) ? (realPartOf(it, rawFindReal) || it) : it);
+        const faceOpts = (it, real) => (it && real && it !== real ? { aliasErp: erpOf(it), aliasItemId: it.id } : {});
         h.lines.forEach(l => {
             const memo = String(l.row || '');
-            const finished = rawFindReal(l.target);
-            if (finished) {
-                const fee = isFeeItemRecord(finished);
-                const rule = fee ? feeRuleOf(finished.manufacturingSpecs) : null;
-                pushLine(finished, rule && rule.mode === 'PERCENT' ? 1 : l.qty, rule && rule.mode === 'PERCENT' ? feeRuleSummary(rule, null) : '', null,
-                    { ...(fee ? { noPack: true, feeRule: rule } : {}), lineMemo: memo, displayLineKey: l.key });
+            // A FEE is a fee line wherever it sits in the codes (H1-FRPF → CE-FEE-H1FR), never "to be finished".
+            const feeHit = [l.target, l.base, l.code].map(c => (c ? rawFindReal(c) : null)).find(r => r && isFeeItemRecord(realOf(r)));
+            if (feeHit) {
+                const real = realOf(feeHit);
+                const rule = feeRuleOf(real.manufacturingSpecs);
+                pushLine(real, rule.mode === 'PERCENT' ? 1 : l.qty, rule.mode === 'PERCENT' ? feeRuleSummary(rule, null) : '', null,
+                    { noPack: true, feeRule: rule, ...faceOpts(feeHit, real), lineMemo: memo, displayLineKey: l.key });
                 loaded++; return;
             }
-            const raw = rawFindReal(l.base);
-            if (!raw) { missing.push(`${memo} · ${l.target} (and ${l.base}) not in the library`); return; }
+            const finishedHit = rawFindReal(l.target);
+            if (finishedHit) {
+                const real = realOf(finishedHit);
+                pushLine(real, l.qty, '', null, { ...faceOpts(finishedHit, real), lineMemo: memo, displayLineKey: l.key });
+                loaded++; return;
+            }
+            const rawHit = rawFindReal(l.base);
+            if (!rawHit) { missing.push(`${memo} · ${l.target} (and ${l.base}) not in the library`); return; }
+            const raw = realOf(rawHit);
             const fin = finishList.find(f => f.code === l.finishCode);
             const item = speciesVariantOf(raw, fin, (c) => rawFindReal(c)) || raw;
             const perFoot = FOOT_UOMS.includes(String(raw.manufacturingSpecs?.uom || '').toUpperCase());
             const feetPer = perFoot ? (parseFloat(l.feetPer) || 0) : 0;
             if (perFoot && !(feetPer > 0)) { missing.push(`${memo} · ${erpOf(raw)} sells by the foot but the build line carries no feet`); return; }
             pushLine(item, l.qty, `TO BE FINISHED · ${l.finishCode}${fin?.name && fin.name !== l.finishCode ? ` (${fin.name})` : ''}${perFoot ? ` · Cut ${feetPer} ft` : ''}${l.cutLength ? ` · to ${l.cutLength}"` : ''}`, null, {
-                noPack: true, finishCode: l.finishCode, toBeFinished: true,
+                noPack: true, finishCode: l.finishCode, toBeFinished: true, ...faceOpts(rawHit, raw),
                 ...(perFoot ? { perFoot: true, feetPer } : {}), lineMemo: memo, displayLineKey: l.key,
             });
             loaded++;

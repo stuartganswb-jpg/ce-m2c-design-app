@@ -1,6 +1,6 @@
 // Harness for Shared/displayBom.js — the bill of a sales display board.
 //   node scripts/displayBom.test.mjs
-import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength, raisePlan, targetCodeOf, SAMPLE_BIN_BY_STYLE, orderEntryLinesOf } from '../src/components/Shared/displayBom.js';
+import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength, raisePlan, targetCodeOf, SAMPLE_BIN_BY_STYLE, orderEntryLinesOf, replaceRowLineCode, replaceBuildLineCode } from '../src/components/Shared/displayBom.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -207,10 +207,22 @@ const cartBaseFront3 = {
         const edited = JSON.parse(JSON.stringify(woodOrder)); edited.lines.parts[2].byRow[0].finishOverride = 'S04';
         const ge = raisePlan(edited, { routeOf }).items.find(i => i.code === 'H1-138WGF-O' && i.row === 'Row 3');
         eq('an edited finish wins over the row stain', [ge.finish, ge.finishSource], ['S04', 'EDITED']);
+        // a wrong code corrected: on the design rows named, and on the build line (merging when it now matches another)
+        const fix = replaceRowLineCode(d, { rows: ['Top Row 1'], oldCode: 'H1-1BR', newCode: 'H1-1RING', partId: 'DOC-9', name: 'Ring' });
+        const fixedRow1 = fix.display.faces[0].rows.find(r => r.label === 'Top Row 1').config.lines.filter(l => l.legacyErpId === 'H1-1RING');
+        eq('the design: the named row takes the new code, record id and name; billedId dropped', [fix.changed > 0, fixedRow1[0].partId, fixedRow1[0].name, 'billedId' in fixedRow1[0]], [true, 'DOC-9', 'Ring', false]);
+        eq('the design: a row not named keeps the old code', fix.display.faces[0].rows.find(r => r.label === 'Base Front 3').config.lines.some(l => l.legacyErpId === 'H1-1BR'), true);
+        const rb = replaceBuildLineCode(ord.lines, ringLine.key, { newCode: 'h1-1ring', partId: 'DOC-9', name: 'Ring' });
+        const moved = rb.lines.parts.find(l => l.key === rb.newKey);
+        eq('the build line: new key code|finish, code, record, blank billed', [rb.newKey, moved.code, moved.partId, moved.billedId, moved.byRow.every(r => r.billedId === '')], ['H1-1RING|EP4', 'H1-1RING', 'DOC-9', '', true]);
+        const two = { parts: [{ key: 'A|P06', code: 'A', finishCode: 'P06', qtyPerBoard: 2, feetPerBoard: 0, rows: ['R1'], byRow: [{ row: 'R1', qtyPerBoard: 2, feetPerBoard: 0 }] }, { key: 'B|P06', code: 'B', finishCode: 'P06', qtyPerBoard: 1, feetPerBoard: 0, rows: ['R1', 'R2'], byRow: [{ row: 'R1', qtyPerBoard: 1 }, { row: 'R2', qtyPerBoard: 3 }] }] };
+        const mg = replaceBuildLineCode(two, 'B|P06', { newCode: 'A' });
+        eq('a code that now matches another line merges into it, per row', [mg.merged, mg.lines.parts.length, mg.lines.parts[0].byRow.map(r => [r.row, r.qtyPerBoard]), mg.lines.parts[0].qtyPerBoard], [true, 1, [['R1', 3], ['R2', 3]], 3]);
+        eq('the order-entry line carries the line\'s own code', orderEntryLinesOf([wp.items[0]])[0].code, 'H1-138WR');
         eq('a per-foot line with 2 pieces a board: feet per piece is the board feet ÷ pieces', raisePlan({ qty: 1, lines: { parts: [{ key: 'R|', code: 'H1-1R', perFoot: true, byRow: [{ row: 'A', qtyPerBoard: 2, feetPerBoard: 4 }] }] } }, { routeOf }).items[0].feetPerPiece, 2);
         const withEdit = { ...ord.lines, parts: ord.lines.parts.map(l => (l.key === ringLine.key ? { ...l, byRow: l.byRow.map(r => (r.row === 'Top Row 1' ? { ...r, finishOverride: 'EP2' } : r)) } : l)) };
         eq('re-snapshot keeps an edited finish on its row', resnapshotLines(withEdit, buildLinesFrom(d, finishes)).parts.find(l => l.key === ringLine.key).byRow.find(r => r.row === 'Top Row 1').finishOverride, 'EP2');
-        eq('the order-entry lines carry row, code, finish, pieces and feet per piece', orderEntryLinesOf([wp.items[0]])[0], { key: 'H1-138WR|S03@Row 3', row: 'Row 3', target: 'H1-138WR/S03', base: 'H1-138WR', finishCode: 'S03', qty: 35, name: '1 3/8" Round Wood Pole 18"', perFoot: true, feetPer: 2, cutLength: 16 });
+        eq('the order-entry lines carry row, code, finish, pieces and feet per piece', orderEntryLinesOf([wp.items[0]])[0], { key: 'H1-138WR|S03@Row 3', row: 'Row 3', code: 'H1-138WR', target: 'H1-138WR/S03', base: 'H1-138WR', finishCode: 'S03', qty: 35, name: '1 3/8" Round Wood Pole 18"', perFoot: true, feetPer: 2, cutLength: 16 });
         eq('an order snapshotted before the per-row split is named, not guessed', raisePlan({ qty: 5, lines: { parts: [{ key: 'OLD|', code: 'H1-1R' }] } }, { routeOf }).missingByRow, ['OLD|']);
         eq('sample bins by style', [SAMPLE_BIN_BY_STYLE.TABLETOP, SAMPLE_BIN_BY_STYLE.WALL], ['FDISTABLE', 'FDISWALL']);
     }

@@ -25,8 +25,10 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, deleteDoc, query, where, getDocs } from 'firebase/firestore';
-import { DISPLAY_STYLES, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, raisePlan, orderEntryLinesOf, SAMPLE_BIN_BY_STYLE } from '../Shared/displayBom';
+import { collection, doc, onSnapshot, setDoc, deleteDoc, query, where, getDocs, getDoc } from 'firebase/firestore';
+import { DISPLAY_STYLES, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, raisePlan, orderEntryLinesOf, replaceRowLineCode, replaceBuildLineCode, SAMPLE_BIN_BY_STYLE } from '../Shared/displayBom';
+import { isFeeItemRecord } from '../Shared/feeRules';
+import { aliasTargetIdOf } from '../Shared/aliasIdentity';
 import { routeForCode } from '../Shared/stockRun.js';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 
@@ -133,17 +135,32 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     };
 
     // ── 📤 SEND TO ORDER ENTRY ──────────────────────────────────────────────────────────────
+    // The library, by code: { CODE: { id, name, fee } }. An alias counts as a fee when the item it
+    // stands for is one (H1-FRPF → CE-FEE-H1FR), because that is how tab 7 will enter it.
     const libraryCodes = async (codes) => {
         const want = [...new Set(codes.map(c => String(c || '').toUpperCase()).filter(Boolean))];
-        const found = new Set();
+        const found = new Map();
         for (const field of ['legacyErpId', 'itemId']) {
             const rest = want.filter(c => !found.has(c));
             for (let i = 0; i < rest.length; i += 30) {
                 const snap = await getDocs(query(collection(db, 'Approved_Designs'), where(field, 'in', rest.slice(i, i + 30))));
-                snap.docs.forEach(d => { const v = String(d.data()[field] || '').toUpperCase(); if (v) found.add(v); });
+                snap.docs.forEach(d => { const x = { id: d.id, ...d.data() }; const v = String(x[field] || '').toUpperCase(); if (v && (!found.has(v) || x.brandId === activeBrand)) found.set(v, x); });
             }
         }
-        return found;
+        const out = new Map();
+        for (const [code, rec] of found) {
+            let fee = isFeeItemRecord(rec);
+            const target = aliasTargetIdOf(rec);
+            if (!fee && target) {
+                try {
+                    const t = await getDoc(doc(db, 'Approved_Designs', String(target)));
+                    if (t.exists()) fee = isFeeItemRecord(t.data());
+                    else { const q = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', String(target).toUpperCase()))); fee = q.docs.some(d => isFeeItemRecord(d.data())); }
+                } catch (e) { /* unread alias target: not treated as a fee */ }
+            }
+            out.set(code, { id: rec.id, name: rec.itemName || '', fee, alias: !!target });
+        }
+        return out;
     };
     const planOf = (d, boards) => raisePlan(d, { boards, routeOf: routeForCode, finishSuffixOf });
     const openRaise = async () => {
@@ -153,7 +170,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         if (plan.missingByRow.length) return alert(`This order was snapshotted before lines were split by row (${plan.missingByRow.length} line(s)).\n\nPress ⟳ Re-snapshot, Save order, then send. Typed columns stay.`);
         setBusy('Reading the library…');
         try {
-            const found = await libraryCodes(plan.items.flatMap(i => [i.target, i.base]));
+            const found = await libraryCodes(plan.items.flatMap(i => [i.target, i.base, i.code]));
             setRaise({ boards: N(draft.qty), items: plan.items, found, pick: Object.fromEntries(plan.items.map(i => [i.key, !i.sent])) });
         } catch (e) { alert('Library read failed: ' + (e?.message || e)); }
         setBusy('');
@@ -168,15 +185,48 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         refreshRaise(next, raise?.boards ?? draft.qty);
         try {
             await setDoc(doc(db, 'system', 'displays', 'builds', draft.id), { lines, updatedAt: Date.now(), updatedBy: String(currentUser || '') }, { merge: true });
-            const found = await libraryCodes([...new Set(planOf(next, raise?.boards ?? draft.qty).items.flatMap(i => [i.target, i.base]))]);
-            setRaise(r => (r ? { ...r, found: new Set([...r.found, ...found]) } : r));
+            const found = await libraryCodes([...new Set(planOf(next, raise?.boards ?? draft.qty).items.flatMap(i => [i.target, i.base, i.code]))]);
+            setRaise(r => (r ? { ...r, found: new Map([...r.found, ...found]) } : r));
         } catch (e) { alert('Finish save failed: ' + (e?.message || e)); }
     };
+    // The same order tab 7's loader decides in: a fee anywhere in the line's codes → a fee line;
+    // the finished item → a stock line; the raw base → to be finished.
     const statusOf = (i, found) => {
         if (i.sent) return { text: 'on a sales order', tone: 'done' };
+        const fee = [i.target, i.base, i.code].find(c => found.get(c)?.fee);
+        if (fee) return { text: `fee line — ${fee}${found.get(fee).alias ? ' (alias)' : ''}`, tone: 'ok' };
         if (found.has(i.target)) return { text: 'stock line — the finished item is in the library', tone: 'ok' };
         if (found.has(i.base)) return { text: `to be finished — ${i.base} + ${i.finish}`, tone: 'ok' };
-        return { text: `neither ${i.target} nor ${i.base} is in the library`, tone: 'bad' };
+        return { text: `neither ${i.target} nor ${i.base} is in the library — correct the code`, tone: 'bad' };
+    };
+    // ✎ A WRONG CODE (Stuart 2026-09-16): corrected on the build line and on the design's rows, after
+    // the new code is found in the library. The line's every row takes it — the confirm names them.
+    const setLineCode = async (item, value) => {
+        const code = String(value || '').trim().toUpperCase();
+        const line = draft?.lines?.parts?.find(l => l.key === item.lineKey);
+        if (!line || !code || code === String(line.code || '').toUpperCase()) return;
+        setBusy('Checking the code…');
+        try {
+            const found = await libraryCodes([code]);
+            const rec = found.get(code);
+            if (!rec) { setBusy(''); alert(`${code} is not in the library — nothing changed.`); setRaise(r => (r ? { ...r } : r)); return; }
+            const rowsOn = line.rows && line.rows.length ? line.rows : (line.byRow || []).map(r => r.row);
+            if (!window.confirm(`Replace ${line.code} with ${code} (${rec.name || 'library item'})?\n\nRows: ${rowsOn.join(', ')}\n\nSaved on this build order and on the display design, so a re-snapshot keeps it.`)) { setBusy(''); setRaise(r => (r ? { ...r } : r)); return; }
+            const { lines, merged } = replaceBuildLineCode(draft.lines, line.key, { newCode: code, partId: rec.id, name: rec.name });
+            const next = { ...draft, lines };
+            const disp = displays.find(d => d.id === draft.displayId);
+            if (disp) {
+                const { display, changed } = replaceRowLineCode(disp, { rows: rowsOn, oldCode: line.code, newCode: code, partId: rec.id, name: rec.name });
+                if (changed) await setDoc(doc(db, 'system', 'displays', 'entries', disp.id), { faces: display.faces, updatedAt: Date.now(), updatedBy: String(currentUser || '') }, { merge: true });
+            }
+            await setDoc(doc(db, 'system', 'displays', 'builds', draft.id), { lines, updatedAt: Date.now(), updatedBy: String(currentUser || '') }, { merge: true });
+            setDraft(next);
+            const items = planOf(next, raise?.boards ?? draft.qty).items;
+            const more = await libraryCodes([...new Set(items.flatMap(i => [i.target, i.base, i.code]))]);
+            setRaise(r => (r ? { ...r, items, found: new Map([...r.found, ...more]), pick: Object.fromEntries(items.map(i => [i.key, r.pick[i.key] ?? !i.sent])) } : r));
+            if (merged) alert(`${code} was already a line on this order — the two are now one line.`);
+        } catch (e) { alert('Code change failed: ' + (e?.message || e)); }
+        setBusy('');
     };
     const sendToOrderEntry = () => {
         const r = raise; if (!r) return;
@@ -330,7 +380,10 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                     <tr key={i.key} style={{ opacity: i.sent ? .6 : 1 }}>
                                         <td style={td}><input type="checkbox" checked={!!raise.pick[i.key]} disabled={i.sent} onChange={e => setRaise(x => ({ ...x, pick: { ...x.pick, [i.key]: e.target.checked } }))} /></td>
                                         <td style={{ ...td, ...mono }}>{i.row}</td>
-                                        <td style={td}><span style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{i.code}</span><div style={{ fontSize: '0.74rem', color: 'var(--ink-soft)' }}>{i.name}</div></td>
+                                        <td style={td}>
+                                            <input defaultValue={i.code} key={`${i.key}|code`} disabled={i.sent || !!busy} title="✎ Correct a wrong code — checked against the library, saved on this order and the design" onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} onBlur={e => { if (String(e.target.value).trim().toUpperCase() !== String(i.code).toUpperCase()) setLineCode(i, e.target.value); }} style={{ ...inp, width: '150px', padding: '3px 6px', fontFamily: 'var(--mono)', fontSize: '11px' }} />
+                                            <div style={{ fontSize: '0.74rem', color: 'var(--ink-soft)' }}>{i.name}</div>
+                                        </td>
                                         <td style={td}>
                                             <input defaultValue={i.finish} key={`${i.key}|${i.finish}`} disabled={i.sent} onBlur={e => { if (String(e.target.value).trim().toUpperCase() !== i.finish) setRowFinish(i, e.target.value); }} style={{ ...inp, width: '64px', padding: '3px 6px', fontFamily: 'var(--mono)', fontSize: '11px' }} />
                                             {i.finishSource !== 'LINE' && <div style={{ fontSize: '0.7rem', color: 'var(--brass)' }}>{i.finishSource === 'EDITED' ? 'edited' : 'row stain'}</div>}
