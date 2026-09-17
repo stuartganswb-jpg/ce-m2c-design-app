@@ -148,17 +148,20 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             }
         }
         const out = new Map();
+        const uomOf = (r) => String((r && r.manufacturingSpecs && r.manufacturingSpecs.uom) || '').toUpperCase();
         for (const [code, rec] of found) {
-            let fee = isFeeItemRecord(rec);
+            let fee = isFeeItemRecord(rec), uom = uomOf(rec);
             const target = aliasTargetIdOf(rec);
-            if (!fee && target) {
+            if (target) {
+                // tab 7 enters the REAL item, so its fee rule and its unit are the ones that count
                 try {
                     const t = await getDoc(doc(db, 'Approved_Designs', String(target)));
-                    if (t.exists()) fee = isFeeItemRecord(t.data());
-                    else { const q = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', String(target).toUpperCase()))); fee = q.docs.some(d => isFeeItemRecord(d.data())); }
-                } catch (e) { /* unread alias target: not treated as a fee */ }
+                    let real = t.exists() ? t.data() : null;
+                    if (!real) { const q = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', String(target).toUpperCase()))); real = q.docs.length ? q.docs[0].data() : null; }
+                    if (real) { fee = fee || isFeeItemRecord(real); uom = uomOf(real) || uom; }
+                } catch (e) { /* unread alias target: judged on the alias itself */ }
             }
-            out.set(code, { id: rec.id, name: rec.itemName || '', fee, alias: !!target });
+            out.set(code, { id: rec.id, name: rec.itemName || '', fee, alias: !!target, byFoot: ['FT', 'FOOT', 'FEET'].includes(uom) });
         }
         return out;
     };
@@ -177,9 +180,21 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     };
     const refreshRaise = (d, boards) => setRaise(r => (r ? { ...r, boards: N(boards), items: planOf(d, boards).items } : r));
     // A finish edited here is the build order's own record: saved at once, on that row's split.
-    const setRowFinish = async (item, value) => {
-        const fin = String(value || '').trim().toUpperCase();
-        const lines = { ...draft.lines, parts: draft.lines.parts.map(l => (l.key !== item.lineKey ? l : { ...l, byRow: l.byRow.map(r => (r.row !== item.row ? r : (() => { const { finishOverride, ...rest } = r; return fin && fin !== String(l.finishCode || '').toUpperCase() ? { ...rest, finishOverride: fin } : rest; })())) })) };
+    // A value edited here is the build order's own record: saved at once, on that row's split.
+    // field: finishOverride (text, blank or the line's own finish = no edit) · feetPerPieceOverride /
+    // cutLengthOverride (numbers, blank or 0 = no edit).
+    const setRowEdit = async (item, field, value) => {
+        const isFinish = field === 'finishOverride';
+        const v = isFinish ? String(value || '').trim().toUpperCase() : (Number(value) > 0 ? Number(value) : 0);
+        const lines = { ...draft.lines, parts: draft.lines.parts.map(l => (l.key !== item.lineKey ? l : {
+            ...l,
+            byRow: l.byRow.map(r => {
+                if (r.row !== item.row) return r;
+                const { [field]: _old, ...rest } = r;
+                const keep = isFinish ? (v && v !== String(l.finishCode || '').toUpperCase()) : v > 0;
+                return keep ? { ...rest, [field]: v } : rest;
+            }),
+        })) };
         const next = { ...draft, lines };
         setDraft(next);
         refreshRaise(next, raise?.boards ?? draft.qty);
@@ -187,7 +202,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             await setDoc(doc(db, 'system', 'displays', 'builds', draft.id), { lines, updatedAt: Date.now(), updatedBy: String(currentUser || '') }, { merge: true });
             const found = await libraryCodes([...new Set(planOf(next, raise?.boards ?? draft.qty).items.flatMap(i => [i.target, i.base, i.code]))]);
             setRaise(r => (r ? { ...r, found: new Map([...r.found, ...found]) } : r));
-        } catch (e) { alert('Finish save failed: ' + (e?.message || e)); }
+        } catch (e) { alert('Save failed: ' + (e?.message || e)); }
     };
     // The same order tab 7's loader decides in: a fee anywhere in the line's codes → a fee line;
     // the finished item → a stock line; the raw base → to be finished.
@@ -196,7 +211,11 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         const fee = [i.target, i.base, i.code].find(c => found.get(c)?.fee);
         if (fee) return { text: `fee line — ${fee}${found.get(fee).alias ? ' (alias)' : ''}`, tone: 'ok' };
         if (found.has(i.target)) return { text: 'stock line — the finished item is in the library', tone: 'ok' };
-        if (found.has(i.base)) return { text: `to be finished — ${i.base} + ${i.finish}`, tone: 'ok' };
+        if (found.has(i.base)) {
+            // tab 7 refuses a by-the-foot item without feet per piece — so does this review
+            if (found.get(i.base).byFoot && !(i.feetPerPiece > 0)) return { text: `${i.base} sells by the foot — enter feet per piece`, tone: 'bad', feet: true };
+            return { text: `to be finished — ${i.base} + ${i.finish}${found.get(i.base).byFoot ? ` · ${i.feetPerPiece} ft/pc${i.cutLength ? ` · cut ${i.cutLength}"` : ' · no cut given'}` : ''}`, tone: 'ok' };
+        }
         return { text: `neither ${i.target} nor ${i.base} is in the library — correct the code`, tone: 'bad' };
     };
     // ✎ A WRONG CODE (Stuart 2026-09-16): corrected on the build line and on the design's rows, after
@@ -232,6 +251,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         const r = raise; if (!r) return;
         const chosen = r.items.filter(i => r.pick[i.key] && !i.sent && i.qty > 0);
         if (!chosen.length) return alert('Nothing ticked to send.');
+        const noFeet = chosen.filter(i => statusOf(i, r.found).feet);
+        if (noFeet.length) return alert(`${noFeet.length} line(s) sell by the foot and have no feet per piece — enter the feet (and the cut) first, or untick them:\n\n${noFeet.map(i => `• ${i.row} · ${i.base}`).join('\n')}`);
         const missing = chosen.filter(i => statusOf(i, r.found).tone === 'bad');
         if (missing.length && !window.confirm(`${missing.length} line(s) have no library item and will be listed as not loaded in Order Entry:\n\n${missing.slice(0, 8).map(i => `• ${i.row} · ${i.target}`).join('\n')}\n\nSend the rest?`)) return;
         const handoff = {
@@ -385,11 +406,21 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                             <div style={{ fontSize: '0.74rem', color: 'var(--ink-soft)' }}>{i.name}</div>
                                         </td>
                                         <td style={td}>
-                                            <input defaultValue={i.finish} key={`${i.key}|${i.finish}`} disabled={i.sent} onBlur={e => { if (String(e.target.value).trim().toUpperCase() !== i.finish) setRowFinish(i, e.target.value); }} style={{ ...inp, width: '64px', padding: '3px 6px', fontFamily: 'var(--mono)', fontSize: '11px' }} />
+                                            <input defaultValue={i.finish} key={`${i.key}|${i.finish}`} disabled={i.sent} onBlur={e => { if (String(e.target.value).trim().toUpperCase() !== i.finish) setRowEdit(i, 'finishOverride', e.target.value); }} style={{ ...inp, width: '64px', padding: '3px 6px', fontFamily: 'var(--mono)', fontSize: '11px' }} />
                                             {i.finishSource !== 'LINE' && <div style={{ fontSize: '0.7rem', color: 'var(--brass)' }}>{i.finishSource === 'EDITED' ? 'edited' : 'row stain'}</div>}
                                         </td>
                                         <td style={td}><span style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{i.target}</span><div style={{ fontSize: '0.7rem', color: 'var(--ink-soft)' }}>{i.kind === 'PLATING' ? 'plated' : i.kind === 'FINISHING' ? 'finished in house' : i.kind === 'SHOP' ? 'no finish' : i.kind === 'CONVERT' ? 'phosphated' : ''}</div></td>
-                                        <td style={{ ...td, textAlign: 'right' }}>{i.perBoard}{i.perFoot ? ` · ${i.feetPerPiece} ft${i.cutLength ? ` · cut ${i.cutLength}"` : ''}` : ''}</td>
+                                        <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                            {i.perBoard}
+                                            {(i.perFoot || raise.found.get(i.base)?.byFoot) && (
+                                                <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end', alignItems: 'center', marginTop: '3px' }}>
+                                                    <input type="number" min="0" step="0.25" defaultValue={i.feetPerPiece || ''} key={`${i.key}|ft|${i.feetPerPiece}`} disabled={i.sent} placeholder="ft" title="Feet per piece — what the item is billed and pulled in" onBlur={e => { if ((Number(e.target.value) || 0) !== (i.feetSource === 'EDITED' ? i.feetPerPiece : 0) && (Number(e.target.value) || 0) !== i.feetPerPiece) setRowEdit(i, 'feetPerPieceOverride', e.target.value); }} style={{ ...inp, width: '52px', padding: '2px 4px', fontSize: '11px' }} />
+                                                    <span style={mono}>ft</span>
+                                                    <input type="number" min="0" step="0.125" defaultValue={i.cutLength || ''} key={`${i.key}|cut|${i.cutLength}`} disabled={i.sent} placeholder="cut" title="Cut length in inches — rides the order line to the shop's cut" onBlur={e => { if ((Number(e.target.value) || 0) !== i.cutLength) setRowEdit(i, 'cutLengthOverride', e.target.value); }} style={{ ...inp, width: '58px', padding: '2px 4px', fontSize: '11px' }} />
+                                                    <span style={mono}>in</span>
+                                                </div>
+                                            )}
+                                        </td>
                                         <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{i.qty}</td>
                                         <td style={{ ...td, fontSize: '0.78rem', color: st.tone === 'bad' ? '#b02d20' : 'var(--ink-soft)' }}>{st.text}</td>
                                     </tr>

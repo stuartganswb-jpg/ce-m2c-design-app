@@ -244,6 +244,9 @@ export function buildShopDoc({ hqOrder = {}, orderType = 'stock', shopId, finish
         needBy: hqOrder.needBy || fields.needBy || '',
         // The per-item shop instruction (C, Stuart: "on the item") — the card reads this first.
         ...(spec && spec.shopInstruction ? { shopInstruction: String(spec.shopInstruction) } : {}),
+        // THE CUT the order carries (S5, 2026-09-17: an Order Entry custom pair's shop half) — a caller's
+        // own `fields.cutLength` (the CPQ split) still wins below.
+        ...(Number(hqOrder.cutLength) > 0 ? { cutLength: Number(hqOrder.cutLength) } : {}),
         ...fields,
         // Same flag, same field names as the finishing side — the shop list sorts on it.
         ...(hqOrder.urgent ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || hqOrder.reqDate || fields.needBy || '', urgentBy: hqOrder.urgentBy || by || '', urgentAt: hqOrder.urgentAt || now } : {}),

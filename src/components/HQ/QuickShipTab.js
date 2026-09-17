@@ -834,6 +834,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             // DISPLAY BUILD (S5): the row it sits on as the line memo, and the build line it came from.
             ...(opts && opts.lineMemo ? { lineMemo: String(opts.lineMemo).slice(0, 120) } : {}),
             ...(opts && opts.displayLineKey ? { displayLineKey: String(opts.displayLineKey) } : {}),
+            // THE CUT, in inches (S5, 2026-09-17): rides the SO line to Order Entry Needs → the work order → the shop card.
+            ...(opts && Number(opts.cutLength) > 0 ? { cutLength: Number(opts.cutLength) } : {}),
             // Kit lines carry their kit identity so pricedCart can apply KIT pricing live.
             kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null, kitFinish: kitMeta?.kitFinish || ''
         }]);
@@ -1005,6 +1007,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             pushLine(item, l.qty, `TO BE FINISHED · ${l.finishCode}${fin?.name && fin.name !== l.finishCode ? ` (${fin.name})` : ''}${perFoot ? ` · Cut ${feetPer} ft` : ''}${l.cutLength ? ` · to ${l.cutLength}"` : ''}`, null, {
                 noPack: true, finishCode: l.finishCode, toBeFinished: true, ...faceOpts(rawHit, raw),
                 ...(perFoot ? { perFoot: true, feetPer } : {}), lineMemo: memo, displayLineKey: l.key,
+                ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}),
             });
             loaded++;
         });
@@ -1612,7 +1615,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // toBeFinished/finishCode ride the stored line (they were dropped here until
                 // 2026-08-27, which left the WMS reading a made-to-order line as a shelf pull).
                 // finishOutsourced routes the WMS label: FROM PLATING vs FROM FINISHING.
-                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}) })),
+                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}) })),
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never

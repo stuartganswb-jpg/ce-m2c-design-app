@@ -188,7 +188,7 @@ export const buildParkedWorkOrder = ({
         productType: ff.productType, paintSize: ff.paintSize, paintSizes: ff.paintSizes,
         poles: ff.poles, totalPoles: ff.totalPoles, finishStream: ff.finishStream,
         partsList, bomExploded, urgent, needBy, convertSuggestion, releasedDirect: false,
-        extra: sales ? { itemName: (part && part.itemName) || '' } : { orderKey: woId },
+        extra: sales ? { itemName: (part && part.itemName) || '', ...(Number(sales.cutLength) > 0 ? { cutLength: Number(sales.cutLength) } : {}) } : { orderKey: woId },
     });
     const salesHeader = sales ? {
         orderClass: 'ORDER_ENTRY', soAppId: sales.soAppId || null, soId: sales.soId || null,
@@ -197,6 +197,8 @@ export const buildParkedWorkOrder = ({
         soAccepted: !!sales.soAccepted,
         // FLOW2: the floor waits for the NetSuite work-order number (Stuart 2026-08-29).
         ...(sales.flow2 ? { awaitingNsWo: true } : {}),
+        // THE CUT in inches (S5, 2026-09-17) — both halves carry it; the shop card reads `cutLength`.
+        ...(Number(sales.cutLength) > 0 ? { cutLength: Number(sales.cutLength) } : {}),
     } : {};
     const hq = {
         id: woId, woId, woDisplayId: woId,

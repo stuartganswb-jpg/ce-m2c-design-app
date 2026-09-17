@@ -219,6 +219,15 @@ const cartBaseFront3 = {
         const mg = replaceBuildLineCode(two, 'B|P06', { newCode: 'A' });
         eq('a code that now matches another line merges into it, per row', [mg.merged, mg.lines.parts.length, mg.lines.parts[0].byRow.map(r => [r.row, r.qtyPerBoard]), mg.lines.parts[0].qtyPerBoard], [true, 1, [['R1', 3], ['R2', 3]], 3]);
         eq('the order-entry line carries the line\'s own code', orderEntryLinesOf([wp.items[0]])[0].code, 'H1-138WR');
+        // feet and cut edited per row (09-17: H1-2RCTACR sells by the foot; the seed gave it no feet)
+        const acr = { qty: 50, lines: { parts: [{ key: 'H1-2RCTACR|', code: 'H1-2RCTACR', name: '2" Rectangular Acrylic Pole', finishCode: '', perFoot: false, byRow: [{ row: 'Base Back 1', qtyPerBoard: 1, feetPerBoard: 0 }] }] } };
+        eq('no feet on a non-per-foot line: not per foot, 0 ft', (({ perFoot, feetPerPiece }) => [perFoot, feetPerPiece])(raisePlan(acr, { routeOf }).items[0]), [false, 0]);
+        const acrEd = JSON.parse(JSON.stringify(acr)); acrEd.lines.parts[0].byRow[0].feetPerPieceOverride = 1; acrEd.lines.parts[0].byRow[0].cutLengthOverride = 12;
+        eq('feet per piece + cut edited → per foot, 1 ft, cut 12", said so', (({ perFoot, feetPerPiece, cutLength, feetSource, cutSource }) => [perFoot, feetPerPiece, cutLength, feetSource, cutSource])(raisePlan(acrEd, { routeOf }).items[0]), [true, 1, 12, 'EDITED', 'EDITED']);
+        eq('the order-entry line carries the edited feet and cut', (({ perFoot, feetPer, cutLength }) => [perFoot, feetPer, cutLength])(orderEntryLinesOf(raisePlan(acrEd, { routeOf }).items)[0]), [true, 1, 12]);
+        const withFeet = { ...ord.lines, parts: ord.lines.parts.map(l => (l.key === ringLine.key ? { ...l, byRow: l.byRow.map(r => (r.row === 'Top Row 1' ? { ...r, feetPerPieceOverride: 3, cutLengthOverride: 30 } : r)) } : l)) };
+        const keptRow = resnapshotLines(withFeet, buildLinesFrom(d, finishes)).parts.find(l => l.key === ringLine.key).byRow.find(r => r.row === 'Top Row 1');
+        eq('re-snapshot keeps edited feet and cut', [keptRow.feetPerPieceOverride, keptRow.cutLengthOverride], [3, 30]);
         eq('a per-foot line with 2 pieces a board: feet per piece is the board feet ÷ pieces', raisePlan({ qty: 1, lines: { parts: [{ key: 'R|', code: 'H1-1R', perFoot: true, byRow: [{ row: 'A', qtyPerBoard: 2, feetPerBoard: 4 }] }] } }, { routeOf }).items[0].feetPerPiece, 2);
         const withEdit = { ...ord.lines, parts: ord.lines.parts.map(l => (l.key === ringLine.key ? { ...l, byRow: l.byRow.map(r => (r.row === 'Top Row 1' ? { ...r, finishOverride: 'EP2' } : r)) } : l)) };
         eq('re-snapshot keeps an edited finish on its row', resnapshotLines(withEdit, buildLinesFrom(d, finishes)).parts.find(l => l.key === ringLine.key).byRow.find(r => r.row === 'Top Row 1').finishOverride, 'EP2');
@@ -258,6 +267,7 @@ const cartBaseFront3 = {
         eq('Base Front 3: a plated pole reads its cut despite the word "Plated"', [tt.rows[4].lines[0].code, tt.rows[4].lines[0].feet, tt.rows[4].lines[0].cutLength, tt.rows[4].lines[0].finishCode], ['H1-1R/EP', 1, 7.5, 'EP2']);
         eq('Base Back 2: the wood pole is 1 ft at 9.25, S08; the collar takes its own P04', [tt.rows[7].lines[0].feet, tt.rows[7].lines[0].cutLength, tt.rows[7].lines[0].finishCode, tt.rows[7].lines[2].finishCode], [1, 9.25, 'S08', 'P04']);
         eq('Base Back 1: the acrylic row takes the note\'s EP1 where the finish column says Clear Acrylic', tt.rows[6].lines.map(l => l.finishCode), ['EP1', 'EP1', 'EP1']);
+        eq('Base Back 1: "(1-FT)" with no inches is read — the acrylic pole is per foot, 1 ft, no cut given', [tt.rows[6].lines[0].code, tt.rows[6].lines[0].perFoot, tt.rows[6].lines[0].feet, tt.rows[6].lines[0].cutLength], ['H1-2RCTACR', true, 1, 0]);
         ok('the sheet\'s doubled codes are named, not silently merged', tt.warnings.some(w => /H1-1FRVC\/EP appears twice/.test(w)) && tt.warnings.some(w => /H1-2TRV-4MR\/W appears twice/.test(w)), tt.warnings.join(' | '));
         ok('a 100-of-50 quantity is a whole 2 per board, no warning', !tt.warnings.some(w => /not a whole number/.test(w)), tt.warnings.join(' | '));
 

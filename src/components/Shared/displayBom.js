@@ -276,7 +276,13 @@ export function buildLinesFrom(display, finishes = [], flows = []) {
 /** Merge a fresh snapshot over an order's lines, keeping the tracker columns typed on lines that still exist. */
 export function resnapshotLines(oldLines, fresh) {
     // an edited finish on a row survives too (finishOverride lives on the per-row split)
-    const keepRows = (oldRows, newRows) => (Array.isArray(newRows) ? newRows.map(r => { const or = (oldRows || []).find(x => x.row === r.row); return or && or.finishOverride ? { ...r, finishOverride: or.finishOverride } : r; }) : newRows);
+    const ROW_EDITS = ['finishOverride', 'feetPerPieceOverride', 'cutLengthOverride'];
+    const keepRows = (oldRows, newRows) => (Array.isArray(newRows) ? newRows.map(r => {
+        const or = (oldRows || []).find(x => x.row === r.row);
+        if (!or) return r;
+        const kept = Object.fromEntries(ROW_EDITS.filter(k => or[k] != null && or[k] !== '').map(k => [k, or[k]]));
+        return Object.keys(kept).length ? { ...r, ...kept } : r;
+    }) : newRows);
     const keep = (olds, news) => news.map(n => { const o = (olds || []).find(x => x.key === n.key); return o ? { ...n, woNumber: o.woNumber || '', atPlater: o.atPlater || '', notes: o.notes || '', done: !!o.done, ...(n.byRow ? { byRow: keepRows(o.byRow, n.byRow) } : {}), ...(Array.isArray(o.raised) && o.raised.length ? { raised: o.raised } : {}) } : n; });
     return { parts: keep(oldLines?.parts, fresh.parts), chips: keep(oldLines?.chips, fresh.chips), extras: keep(oldLines?.extras, fresh.extras) };
 }
@@ -363,13 +369,19 @@ export function raisePlan(order, { boards, routeOf, finishSuffixOf = null } = {}
             const kind = route.refuse === 'OUTSOURCED' ? 'PLATING' : route.refuse === 'PHOSPHATE' ? 'CONVERT' : route.routeTo === 'FINISHING' ? 'FINISHING' : route.routeTo === 'SHOP' ? 'SHOP' : 'UNKNOWN';
             const key = `${line.key}@${sp.row}`;
             const perBoard = N(sp.qtyPerBoard, 0);
+            // FEET AND CUT, edited per row (Stuart 2026-09-17): an item that sells by the foot needs feet per piece,
+            // and the shop needs the cut. The edit wins; otherwise the line's own figures.
+            const feetOver = N(sp.feetPerPieceOverride, 0), cutOver = N(sp.cutLengthOverride, 0);
+            const perFootLine = !!line.perFoot || feetOver > 0;
             items.push({
                 key, lineKey: line.key, row: sp.row, code: line.code, name: line.name || '',
                 finish, finishSource: override ? 'EDITED' : woodDefault ? 'ROW_STAIN' : 'LINE',
                 target, base: target.includes('/') ? target.slice(0, target.lastIndexOf('/')) : target,
                 kind, perBoard, qty: perBoard * n,
-                perFoot: !!line.perFoot, feetPerBoard: N(sp.feetPerBoard, 0), cutLength: N(sp.cutLength, 0),
-                feetPerPiece: line.perFoot && perBoard > 0 ? N(sp.feetPerBoard, 0) / perBoard : 0,
+                perFoot: perFootLine, feetPerBoard: N(sp.feetPerBoard, 0),
+                cutLength: cutOver || N(sp.cutLength, 0),
+                feetPerPiece: feetOver || (line.perFoot && perBoard > 0 ? N(sp.feetPerBoard, 0) / perBoard : 0),
+                feetSource: feetOver ? 'EDITED' : 'LINE', cutSource: cutOver ? 'EDITED' : 'LINE',
                 sent: sentKeys.has(key),
             });
         });
@@ -506,7 +518,10 @@ export function shipPlanFill({ qty, perShip, start, everyDays = 7 }) {
 const finishCodeOf = (s) => { const m = String(s || '').match(/\(([A-Z]{1,3}\d{1,2})\)/i); return m ? m[1].toUpperCase() : ''; };
 const cutOf = (note) => {
     const m = String(note || '').match(/(\d+(?:\.\d+)?)\s*"\s*\((\d+(?:\.\d+)?)\s*-?\s*FT\)/i);
-    return m ? { cutLength: parseFloat(m[1]), feet: parseFloat(m[2]) } : null;
+    if (m) return { cutLength: parseFloat(m[1]), feet: parseFloat(m[2]) };
+    // "(1-FT) 4' Rectangular Acrylic Rod" — feet with no inch cut (Stuart 2026-09-17, tabletop Base Back 1)
+    const f = String(note || '').match(/\((\d+(?:\.\d+)?)\s*-?\s*FT\)/i);
+    return f ? { cutLength: 0, feet: parseFloat(f[1]) } : null;
 };
 const isRodish = (code, name) => /R\/|R$|-?R-|TRV$|ROD|POLE|TRACK/i.test(`${code} ${name}`) && !/RING|BRACKET|\bCAP\b|FINIAL|COLLAR|RETURN|BACK ?PLATE|BACKPLATE/i.test(name);
 

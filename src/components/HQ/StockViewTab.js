@@ -2614,7 +2614,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const res = await issuePlatedDemand({
                     target: `${erp}/${finish}`, base: erp, qty, brand: activeBrand, from: 'oe-needs',
                     createdBy: currentUser || '', inventory: hqParts, coreAvailable: null, finishName: finish, reqDate: needBy,
-                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''}${needBy ? ` · need by ${needBy}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
+                    // THE CUT (S5, 2026-09-17) rides the note — the demand's field list is frozen (Brief D).
+                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''}${Number(line.cutLength) > 0 ? ` · cut ${Number(line.cutLength)}" (${Number(line.feetPer) || ''} ft pieces)` : ''}${needBy ? ` · need by ${needBy}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
                     extra: { soAppId: so.id, customerId: so.customerId || null, customerName: so.customer || '' },
                 });
                 res.made.forEach((m, i) => addLog(`${i === 0 ? '' : '   '}${m}${i === 0 ? ` (linked to ${so.soId || so.id})` : ''}`, i === 0 ? 'success' : 'info'));
@@ -2817,6 +2818,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                             rawErp: erp, aliasErp: job.aliasNote ? job.lineErp : null, soAccepted: !!so.nsInternalId,
                             flow2, stockInternalId: flow2 ? job.nsPlan.assemblyInternalId : null,
                             custom, shopWoId,
+                            // THE CUT (S5, Stuart 2026-09-17: "be sure … able to pass along the cut lengths"): the
+                            // SO line's cut in inches, onto the work order, its shop sibling and the floor payload.
+                            cutLength: Number(job.line && job.line.cutLength) > 0 ? Number(job.line.cutLength) : null,
                         },
                     });
                     gate = res.gate; finPayload = res.finPayload;

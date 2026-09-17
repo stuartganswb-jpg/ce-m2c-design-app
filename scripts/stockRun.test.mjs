@@ -236,6 +236,13 @@ test('Order Entry custom pair: sales header, finished code, raw rootItem, linked
     assert.equal(shopSibling.memo, hq.note);
     assert.equal('finPayload' in shopSibling, false);
     // a complete assembly (/N90) is one finishing WO — no sibling
+    assert.equal('cutLength' in hq, false);                  // no cut on the line → no cut on the order
+    // the cut rides both halves and the floor payload (S5, 2026-09-17)
+    const cut = buildParkedWorkOrder({ intent: 'ORDER_ENTRY', woId: 'WO-OE-CUT', part: rawPole, code: 'HCUMP810/P06', qty: 35, brand: 'ce',
+        source: 'ORDER_ENTRY', routeTo: ROUTE_FINISHING, finish: 'P06', sales: { ...sales, shopWoId: 'WO-OE-CUT-C', cutLength: 16.875 }, tasks: TASKS, now: NOW });
+    assert.equal(cut.hq.cutLength, 16.875);
+    assert.equal(cut.shopSibling.cutLength, 16.875);
+    assert.equal(cut.finPayload.cutLength, 16.875);
     const single = buildParkedWorkOrder({ intent: 'ORDER_ENTRY', woId: 'WO-OE-2', part: rawPole, code: 'HCUMP810/N90', qty: 1, brand: 'ce',
         source: 'ORDER_ENTRY', routeTo: ROUTE_FINISHING, finish: 'N90', sales: { ...sales, custom: false, shopWoId: null }, tasks: TASKS, now: NOW });
     assert.equal(single.shopSibling, null);
