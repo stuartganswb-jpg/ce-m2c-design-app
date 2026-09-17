@@ -1182,10 +1182,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       // precedence, tier inheritance via findByCode, /P //EP identity), with the level resolved the
       // way the configurator resolves it (customerPriceLevel — chosen wins, else the CRM default).
       const lvl = customerPriceLevel(addOnCustomer, priceLevel);
+      // ⚠ THE WHOLE LIBRARY, NOT HALF OF IT (Stuart 2026-09-17, the walnut display base): `libraryParts`
+      // holds the Inventory and Fee records only (328); every ASSEMBLY-class record (3,061) lives in
+      // `liveAssemblies`. Checkout read the first list alone, so an item whose record class is Assembly
+      // — H1-TTB1, assigned to Fabricut in 4.6 AND to the H1-138 flow on tab 11 — could never be
+      // offered, whatever it was assigned to. The same seam as the 08-31 joiner incident. ASSIGNED
+      // real items are now found in both; the fee list below still reads the fee records where they live.
+      const universe = [...(libraryParts || []), ...(liveAssemblies || [])];
       const findByCode = (c) => {
           const k = String(c || '').trim().toUpperCase();
           if (!k) return null;
-          return (libraryParts || []).find(p => [p.id, p.itemId, p.legacyErpId].some(x => String(x || '').trim().toUpperCase() === k)) || null;
+          return universe.find(p => [p.id, p.itemId, p.legacyErpId].some(x => String(x || '').trim().toUpperCase() === k)) || null;
       };
       const ctx = { customerId: jobData.customerId, customer: addOnCustomer, priceLevel: lvl.level, levelIsDefault: lvl.isDefault, outsourceCodes: outsourceFinishes, findByCode };
       const priceFor = (p) => priceChoice({ partId: p.id }, p, ctx).price || 0;
@@ -1217,7 +1224,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       const flowCodes = new Set(cpqFlows.filter(f => checkoutFlowIds.has(f.id))
           .flatMap(f => (Array.isArray(f.checkoutItems) ? f.checkoutItems : []))
           .map(c => String((c && c.code) || c || '').trim().toUpperCase()).filter(Boolean));
-      const eligible = (libraryParts || []).filter(p => {
+      const eligible = universe.filter(p => {
           const via = checkoutAssignmentOf(p, { customerId: jobData.customerId, flowCodes });
           if (!via) return false;
           return via === 'FLOW' ? true : inScope(p);
@@ -1232,7 +1239,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       const fees = curatedFeeCount > 0 ? [] : buildFeeCatalog(scopedParts, { priceFor });
       const seen = new Set(checkout.map(e => e.id));
       return [...checkout, ...fees.filter(e => !seen.has(e.id))];
-  }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections, cpqFlows, activeFlowId, cart]);
+  }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections, cpqFlows, activeFlowId, cart, liveAssemblies]);
 
   // ── THE READY DATE (Stuart 2026-09-03) ───────────────────────────────────────────────────
   // What the finish class promises: painted 4 weeks, plated 6; the Rush fee at checkout shortens
@@ -3289,7 +3296,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
 
       // THE ITEM IS THE TRUTH AT SAVE (Shared/finishLabel): a line whose item is tagged Unfinished
       // carries no finish onto the job, the NetSuite push or RTG's split — whenever it was configured.
-      const itemOfLine = (key) => { const k = String(key || '').trim().toUpperCase(); return k ? ((libraryParts || []).find(p => [p.id, p.itemId, p.legacyErpId].some(x => String(x || '').trim().toUpperCase() === k)) || null) : null; };
+      const itemOfLine = (key) => { const k = String(key || '').trim().toUpperCase(); return k ? ([...(libraryParts || []), ...(liveAssemblies || [])].find(p => [p.id, p.itemId, p.legacyErpId].some(x => String(x || '').trim().toUpperCase() === k)) || null) : null; };
       const payload = {
           jobId: targetJobId, brandId: activeBrand,
           status: saveAs === 'SALES_ORDER' ? 'APPROVED' : 'CONFIGURED',
