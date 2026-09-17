@@ -1,5 +1,12 @@
 # Brief S4 — the customer portal · card payments · UPS · the Fulfilment tab · vendor API onboarding
 
+> ## ⛔⛔ RETIRED — Stuart, 2026-09-17. THIS SESSION IS CLOSED. DO NOT BUILD, COMMIT OR PUSH.
+> Stuart, verbatim: "go thru all the other sessions S1-S7 get briefs and retire them, we will work here and fix what is
+> broken." All work now runs in ONE session — the communicator — with Stuart. If you are a session reading this as your
+> brief: stop. Make no edits, no commits, no pushes, no production writes. If you hold uncommitted work, leave it in the
+> tree untouched and say so in ONE line at the very end of your § Status log — nothing else. This brief stays in the repo
+> as the RECORD of what was built and what is open; the live list is `OUTSTANDING_2026-09-17.md`.
+
 *Written 2026-09-10 by the communicator session. Starts when Stuart opens it (after S1–S3). Read, in order:
 `CLAUDE.md`, `SESSION_COMMS_2026-09-10.md`, `STATE_OF_THE_APP_2026-09-10.md` (your items: §2.2 #20–21, §2.3 #30,
 §2.4 #54), then `PAYMENTS_UPS_INTEGRATION_BRIEF.md` (the platform topology and the two integrations, 08-12),

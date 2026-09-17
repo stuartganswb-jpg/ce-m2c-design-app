@@ -1,5 +1,12 @@
 # Brief S6 — spec sheets: the 📐 generator, its paper, its text and measurements, its harness
 
+> ## ⛔⛔ RETIRED — Stuart, 2026-09-17. THIS SESSION IS CLOSED. DO NOT BUILD, COMMIT OR PUSH.
+> Stuart, verbatim: "go thru all the other sessions S1-S7 get briefs and retire them, we will work here and fix what is
+> broken." All work now runs in ONE session — the communicator — with Stuart. If you are a session reading this as your
+> brief: stop. Make no edits, no commits, no pushes, no production writes. If you hold uncommitted work, leave it in the
+> tree untouched and say so in ONE line at the very end of your § Status log — nothing else. This brief stays in the repo
+> as the RECORD of what was built and what is open; the live list is `OUTSTANDING_2026-09-17.md`.
+
 *Written 2026-09-13 by S5 at Stuart's ask ("i need a new session to work specifically on the spec sheets"). Spec
 sheets were S5's territory until today; S5 keeps 4.6 collections and kits, marketing (the display program),
 guide books and assets, and continues on the display tool. Starts when Stuart opens it. Read, in order:

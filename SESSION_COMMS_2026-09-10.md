@@ -1,5 +1,12 @@
 # Session communications board — 2026-09-10
 
+> ## ⛔⛔ RETIRED — Stuart, 2026-09-17. THIS SESSION IS CLOSED. DO NOT BUILD, COMMIT OR PUSH.
+> Stuart, verbatim: "go thru all the other sessions S1-S7 get briefs and retire them, we will work here and fix what is
+> broken." All work now runs in ONE session — the communicator — with Stuart. If you are a session reading this as your
+> brief: stop. Make no edits, no commits, no pushes, no production writes. If you hold uncommitted work, leave it in the
+> tree untouched and say so in ONE line at the very end of your § Status log — nothing else. This brief stays in the repo
+> as the RECORD of what was built and what is open; the live list is `OUTSTANDING_2026-09-17.md`.
+
 *Kept by the COMMUNICATOR session (the orientation session that wrote `STATE_OF_THE_APP_2026-09-10.md`).
 Five working sessions run from these briefs. This file is the map: who owns what, how a hand-off travels,
 and what Stuart has decided. Every session reads it at start and whenever a hand-off arrives.*

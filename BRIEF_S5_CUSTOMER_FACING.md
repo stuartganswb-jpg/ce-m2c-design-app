@@ -1,5 +1,12 @@
 # Brief S5 — customer-facing: 4.6 Customer Collections and kits · marketing (the display program) · guide books · assets
 
+> ## ⛔⛔ RETIRED — Stuart, 2026-09-17. THIS SESSION IS CLOSED. DO NOT BUILD, COMMIT OR PUSH.
+> Stuart, verbatim: "go thru all the other sessions S1-S7 get briefs and retire them, we will work here and fix what is
+> broken." All work now runs in ONE session — the communicator — with Stuart. If you are a session reading this as your
+> brief: stop. Make no edits, no commits, no pushes, no production writes. If you hold uncommitted work, leave it in the
+> tree untouched and say so in ONE line at the very end of your § Status log — nothing else. This brief stays in the repo
+> as the RECORD of what was built and what is open; the live list is `OUTSTANDING_2026-09-17.md`.
+
 > **⚠ 2026-09-13 — SPEC SHEETS MOVED TO S6** (`BRIEF_S6_SPEC_SHEETS.md`, at Stuart's ask: "i need a new session to work specifically on the spec sheets"). §3 items 5–8, the spec-sheet data list and the spec-sheet third of #49 are S6's now; `SpecSheet/*`, the two spec harnesses, `system/spec_sheet_config` and the 📐 mount lines in BOMTab left this territory. S5 continues on the display tool.
 
 *Written 2026-09-10 by the communicator session. Starts when Stuart opens it. Read, in order: `CLAUDE.md`,

@@ -1,5 +1,12 @@
 # Brief S2 — RTG Dispatch · work-order and purchase-order creation (the control spine)
 
+> ## ⛔⛔ RETIRED — Stuart, 2026-09-17. THIS SESSION IS CLOSED. DO NOT BUILD, COMMIT OR PUSH.
+> Stuart, verbatim: "go thru all the other sessions S1-S7 get briefs and retire them, we will work here and fix what is
+> broken." All work now runs in ONE session — the communicator — with Stuart. If you are a session reading this as your
+> brief: stop. Make no edits, no commits, no pushes, no production writes. If you hold uncommitted work, leave it in the
+> tree untouched and say so in ONE line at the very end of your § Status log — nothing else. This brief stays in the repo
+> as the RECORD of what was built and what is open; the live list is `OUTSTANDING_2026-09-17.md`.
+
 *Written 2026-09-10 by the communicator session. You are the FIRST session to start. Read, in order:
 `CLAUDE.md` (the working agreement binds you), `SESSION_COMMS_2026-09-10.md` (the map and the hand-off
 protocol), `STATE_OF_THE_APP_2026-09-10.md` (the state; your items are §2.1 #1–7, §2.2 #9–16, §2.3, §2.4
