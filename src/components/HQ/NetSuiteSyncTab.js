@@ -768,7 +768,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     WHERE item.custitem_sync_to_cpq = 'T' AND item.isinactive = 'F'
                     AND item.itemid NOT LIKE 'STD-%'
                     AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
-                    AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')${scopeSql('item.itemid', scopeTerms)}`;
+                    AND item.itemtype IN ('InvtPart', 'Assembly', 'NonInvtPart')${scopeSql('item.itemid', scopeTerms)}`;
                 const cnt = await executeSuiteQL(cntQ);
                 expectedItems = parseInt(cnt.items?.[0]?.n) || 0;
                 addLog(`NetSuite reports ${expectedItems} tagged item(s) for subsidiary ${targetSubsidiary}${scopeTerms.length ? ` in scope ${scopeLabel(scopeTerms)}` : ''}.`, 'info');
@@ -813,6 +813,8 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         bomrevisioncomponentmember.item AS component_internal_id,
                         bomrevisioncomponentmember.bomquantity AS component_qty,
                         comp.itemtype AS comp_itemtype,
+                        comp.custitem_sync_to_cpq AS comp_sync,
+                        comp.itemid AS comp_itemid,
                         comp.cost AS comp_cost,
                         comp.averagecost AS comp_averagecost
                     FROM item
@@ -838,7 +840,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                        imported into the app library (60 of them still carry the sync flag). */
                     AND item.itemid NOT LIKE 'STD-%'
                     AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
-                    AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')
+                    AND item.itemtype IN ('InvtPart', 'Assembly', 'NonInvtPart')
                     AND item.id > ${lastId}${scopeSql('item.itemid', scopeTerms)}
                     ORDER BY item.id ASC
                 `;
@@ -936,12 +938,23 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         // 🚀 NEW: Detect Service / Non-Inventory parts and capture their cost
                         const compType = row.comp_itemtype || '';
                         const isService = compType === 'NonInvtPart' || compType === 'Service' || compType === 'OthCharge';
+                        // ── A FLAGGED NON-INVENTORY COMPONENT IS RAW MATERIAL (Eric via Stuart, 2026-09-18) ──
+                        // "the flag is the determinate. The shop floor doesn't need to see the CRS
+                        //  non-inventory item, as it should already show the user the programmed raw
+                        //  material. The BOM quantity from NetSuite should be disregarded; again that
+                        //  comes from app program." So: still never a BOM line here (the shop's routing
+                        //  names the material and its length per part), its quantity is never read —
+                        //  but it IS a real member of the BOM, which is what lets a part made only of
+                        //  cold rolled steel drop the lines NetSuite no longer carries (see the prune).
+                        const isMaterial = compType === 'NonInvtPart' && nsBool(row.comp_sync);
                         const cCost = parseFloat(row.comp_cost) || parseFloat(row.comp_averagecost) || 0;
 
                         uniqueRecordsMap[itemId].bom_components.push({
                             internalId: row.component_internal_id,
                             qty: row.component_qty || 1,
                             isService: isService,
+                            isMaterial,
+                            code: String(row.comp_itemid || '').toUpperCase(),
                             cost: cCost
                         });
                     }
@@ -985,6 +998,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 if (nsItemType === 'assembly') {
                     partClass = "Assembly";
                     routingType = "STANDARD";
+                } else if (nsItemType === 'noninvtpart') {
+                    // Flagged to sync in NetSuite, so it imports — as what it is. Never stocked, never
+                    // binned, never pushed back: Eric owns these records (cold rolled steel and the like).
+                    partClass = "Non-Inventory";
                 } else if (nsItemType !== 'invtpart' && (sku.includes('/P') || sku.includes('/EP'))) {
                     partClass = "Assembly";
                     routingType = "STANDARD";
@@ -1020,8 +1037,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // THE SYNC NOW CARRIES BOTH POLE TAGS (Stuart 2026-08-25, from Grace's WO11485/86).
                 // This test knew about 'pole' and 'track' but not ROD, so a 4 ft rod imported as an
                 // ordinary small part and nothing downstream could tell it was a pole.
-                const isPole = isPoleCategory(item.product_type) || pTypeClean.includes('track') ||
-                               uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
+                // …but never a raw material: cold rolled steel bar is stocked by the foot too, and tagging it
+                // a POLE would hand it a pole's part handling and finish stream (2026-09-18).
+                const isPole = partClass !== 'Non-Inventory' && (isPoleCategory(item.product_type) || pTypeClean.includes('track') ||
+                               uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet');
                 // PART HANDLING — for a POLE/ROD the FINISH SUFFIX decides, never the stock flag
                 // (Stuart 2026-09-01; the rule and his words live in Shared/finishRouting). A mill
                 // code or an applied finish (/P, /P01, /EP3) is made to order → Custom; a complete
@@ -1039,12 +1058,13 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // pole never depends on someone remembering to set it per item.
                 const finishStreamAuto = autoFinishStream(item.product_type);
 
-                const docId = existingAppRecord ? existingAppRecord.id : `${activeBrand.toUpperCase()}-${partClass === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
+                const docId = existingAppRecord ? existingAppRecord.id : `${activeBrand.toUpperCase()}-${partClass === 'Inventory' ? 'INV' : partClass === 'Non-Inventory' ? 'NIV' : 'ASM'}-${item.id}`;
                 const mergedBins = Array.from(item.all_bins || []).join(', ');
                 
                 // 🚀 NEW: Overwrite outsource assembly cost with service component cost
                 let determinedCost = parseFloat(item.base_cost) || 0;
-                const serviceComponents = item.bom_components.filter(c => c.isService);
+                // A raw material's BOM quantity is disregarded (Eric) — it never prices an outsourced assembly.
+                const serviceComponents = item.bom_components.filter(c => c.isService && !c.isMaterial);
                 
                 if (!isInHouse && serviceComponents.length > 0) {
                     determinedCost = serviceComponents.reduce((sum, c) => sum + (c.cost * c.qty), 0);
@@ -1064,7 +1084,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 };
                 // Stamp the REAL NetSuite record type so the write-back path (which otherwise
                 // guesses it from partClass) can never target the wrong endpoint.
-                if (nsItemType) payload.netSuiteRecordType = nsItemType === 'assembly' ? 'assemblyitem' : 'inventoryitem';
+                // A non-inventory item the APP created (the CE-TRV-SYSTEM holder) already carries its exact
+                // NetSuite type ('noninventorysaleitem') — never overwrite that with the sync's generic word.
+                if (nsItemType === 'noninvtpart') { if (!existingAppRecord?.netSuiteRecordType) payload.netSuiteRecordType = 'noninventoryitem'; }
+                else if (nsItemType) payload.netSuiteRecordType = nsItemType === 'assembly' ? 'assemblyitem' : 'inventoryitem';
 
                 const newSpecs = {
                     cost: determinedCost,
@@ -1195,6 +1218,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     
                     // 🚀 NEW: Filter OUT service items so they don't become ghost pins
                     const physicalComponents = item.bom_components.filter(c => !c.isService);
+                    const materialComponents = item.bom_components.filter(c => c.isMaterial);
 
                     physicalComponents.forEach(comp => {
                         const resolvedLegacyId = nsInternalToLegacyMap[comp.internalId] || existingInternalIdMap[comp.internalId] || comp.internalId;
@@ -1228,7 +1252,11 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     //   • prune on an EMPTY read — a join that returns no components is far more
                     //     likely a bad query than a genuinely emptied BOM, and wiping a live BOM is
                     //     not recoverable from this screen. Stale pins are the safer failure.
-                    if (physicalComponents.length > 0) {
+                    // …and a BOM that carries a flagged raw material is a REAL read even when nothing in it
+                    // is picked: a collar milled from cold rolled steel has a BOM of one line, the steel.
+                    // Until now that read as "empty", so the lines NetSuite had dropped stayed for ever
+                    // (Eric: "Cannot update H1-2RCTAECC until those sync").
+                    if (physicalComponents.length > 0 || materialComponents.length > 0) {
                         try {
                             const keep = new Set(physicalComponents.map(c => `PIN-${docId}-${c.internalId}`));
                             const existingPins = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', docId)));
@@ -1244,6 +1272,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                             addLog(`⚠ Could not check ${item.itemid} for dropped BOM lines (${pruneErr.message || pruneErr}) — its components were updated, but stale ones may remain.`, 'warn');
                         }
                         await batch.commit();
+                        if (materialComponents.length) addLog(`🧱 ${item.itemid}: made from ${materialComponents.map(c => c.code || c.internalId).join(' + ')} — raw material, not a BOM line here; the shop routing sets the material and the length per part.`, 'info');
                     }
                 }
 
@@ -1296,6 +1325,9 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // Aliases are app-only pointers (alternate id/name/price over a main item) — they
                 // must NEVER write back to NetSuite even if someone stamps an internal id on one.
                 .filter(p => (p.brandId === activeBrand || (p.sharedBrands || []).includes(activeBrand)) && p.netSuiteInternalId && !(p.manufacturingSpecs?.aliasOf || p.aliasOf))
+                // A Non-Inventory record the SYNC imported is NetSuite's (raw material — Eric's): read here, never
+                // written back. One the app itself created (the traverse holder) keeps its own path.
+                .filter(p => !(p.partClass === 'Non-Inventory' && p.netSuiteRecordType === 'noninventoryitem'))   // imported by the sync, not made here
                 .filter(p => scopeHit(p.legacyErpId || p.itemId, scopeTerms));
             if (items.length === 0) { addLog(scopeTerms.length ? `No mapped items match the item-# scope (${scopeLabel(scopeTerms)}).` : "No mapped items (with a NetSuite Internal ID) for this brand. Sync from ERP / set the ID first.", 'warn'); setIsSyncing(false); return; }
             if (scopeTerms.length) addLog(`Item scope active — ${items.length} item(s) where the item # is ${scopeLabel(scopeTerms)}.`, 'warn');
