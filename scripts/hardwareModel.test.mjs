@@ -2385,6 +2385,30 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('…and is never a question', !slots(N(fam), { setup: 'DOUBLE' }, []).some(s => s.options.some(o => o.id === 'SO-1')));
 }
 
+// ── A RIDER THAT COMES WITH EACH BRACKET (Stuart 2026-09-18, SO60551) ──────────────────────────
+// "nut rule yes one needed per traverse bracket." Tagged `ridesWith: BRACKET` the nut rides only once a
+// bracket is on the order, and its count is the brackets' — the typed centre count included.
+{
+    const N = (cs) => applyFitsDefaults(cs.map(normalizeChoice));
+    const trv = [
+        C({ id: 'FAS', partId: 'H1-2RCTWR', role: 'FASCIA', rodKind: 'TRAVERSE', nodes: ['f'] }),
+        C({ id: 'TRK', partId: 'H1-2TRV', role: 'TRACK', rodKind: 'TRAVERSE', nodes: ['t'] }),
+        C({ id: 'BK-L', partId: 'H1-2TRV-WB', role: 'BRACKET', position: 'LEFT', nodes: ['bl'] }),
+        C({ id: 'BK-C', partId: 'H1-2TRV-WB', role: 'BRACKET', position: 'CENTER', nodes: ['bc'] }),
+        C({ id: 'BK-R', partId: 'H1-2TRV-WB', role: 'BRACKET', position: 'RIGHT', nodes: ['br'] }),
+        C({ id: 'NUT', partId: 'H1-2TRVNUT', role: 'FINIAL', hidden: true, always: true, ridesWith: 'BRACKET', nodes: [] }),
+        C({ id: 'PLUG', partId: 'H1-2TRVPLUG', role: 'FINIAL', hidden: true, always: true, nodes: [] }),
+    ];
+    const rid = (sel) => ridersFor(N(trv), { setup: 'SINGLE' }, sel).map(c => c.id).sort();
+    eq('no bracket yet: the plug rides its rod, the nut waits', rid(['FAS', 'TRK']), ['PLUG']);
+    eq('a bracket on the order: the nut rides', rid(['FAS', 'TRK', 'BK-L']), ['NUT', 'PLUG']);
+    const qty = (sel, quantities) => resolve({ choices: trv, answers: { setup: 'SINGLE' }, selectedIds: sel, quantities }).bom.find(l => l.partId === 'H1-2TRVNUT')?.qty;
+    eq('two end brackets → two nuts (SO60551 row 2: 100 on 50 boards, not 50)', qty(['FAS', 'TRK', 'BK-L', 'BK-R']), 2);
+    eq('a centre bracket typed to 3 counts three: 2 ends + 3 = 5', qty(['FAS', 'TRK', 'BK-L', 'BK-C', 'BK-R'], { 'BK-C': 3 }), 5);
+    eq('the untagged plug is exactly as it was', resolve({ choices: trv, answers: { setup: 'SINGLE' }, selectedIds: ['FAS', 'TRK', 'BK-L', 'BK-R'] }).bom.find(l => l.partId === 'H1-2TRVPLUG')?.qty, 1);
+    eq('the tag survives normalisation', N(trv).find(c => c.id === 'NUT').ridesWith, 'BRACKET');
+}
+
 // ── PARKED GEOMETRY NEVER RIDES (Stuart 2026-09-10, option 2) ────────────────────────────────
 // A pin with no item number was never a question but still rode as a $0 hidden placeholder line
 // on every order. Now it is neither: the render owns it, the BOM never sees it.

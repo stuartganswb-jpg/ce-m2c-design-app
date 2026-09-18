@@ -224,9 +224,10 @@ function ChoiceTagControls({ c, category, onPatch, dictLists, custList, ensureCu
                 order — the H1-138 standoffs for the short rear rod of a double miter / French
                 return. Blank = rides its rod on every order, as every hidden part always has. */}
             {c.isHidden && (
-                <select value={c.ridesWith || ''} onChange={e => onPatch({ ridesWith: e.target.value })} title="RIDES WITH — when does this hidden part reach the BOM? Blank = whenever its rod is on the order (as always). A RETURN = only when a miter or French return is chosen on the order (any side), e.g. the standoffs for the short rear rod of a double return. Takes effect on the next regenerate." style={{ ...inp, padding: '2px 6px', fontSize: '10px', color: c.ridesWith ? '#d9534f' : 'var(--ink-soft)' }}>
+                <select value={c.ridesWith || ''} onChange={e => onPatch({ ridesWith: e.target.value })} title="RIDES WITH — when does this hidden part reach the BOM? Blank = whenever its rod is on the order (as always). A RETURN = only when a miter or French return is chosen on the order (any side), e.g. the standoffs for the short rear rod of a double return. EACH BRACKET = one per bracket on the order, counted — a traverse bracket's nut, a screw pack. Takes effect on the next regenerate." style={{ ...inp, padding: '2px 6px', fontSize: '10px', color: c.ridesWith ? '#d9534f' : 'var(--ink-soft)' }}>
                     <option value="">rides: the rod</option>
                     <option value="RETURN">rides: a return</option>
+                    <option value="BRACKET">rides: each bracket (×count)</option>
                 </select>
             )}
             <label title="BASIC = ONE PIECE. The arm and the backplate are combined into a single part, so there is no plate left to choose — the picker greys out and stays None. Tag it wherever the part is filed: the tag is what is watched, not whether the cluster says arm or base." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isBasic ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>

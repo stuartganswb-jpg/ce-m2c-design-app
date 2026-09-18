@@ -30,6 +30,10 @@ const rad = (deg) => (deg * Math.PI) / 180;
 // The effective projection: engData.proj parsed, 0 when blank/invalid.
 export const safeProjOf = (engData) => parseFloat(engData?.proj) || 0;
 
+// The stock a MITER return consumes, in inches: twice the projection plus 2" (Stuart 2026-09-18).
+// 3-5/8" → 9-1/4" · 4-5/8" → 11-1/4" · 6" → 14". Zero when the projection is unknown — never a guess.
+export const miterReturnMaterial = (proj) => { const p = parseFloat(proj); return p > 0 ? Math.round((p * 2 + 2) * 1000) / 1000 : 0; };
+
 export function computeBayMath({ engData, safeProj, libraryParts = [] }) {
     let mDeduct1 = 0, mDeduct2 = 0, wall1 = engData.w1, wall2 = engData.w2, wall3 = engData.w3, pole1 = 0, pole2 = 0, pole3 = 0, sawAngle1 = 0, sawAngle2 = 0;
     let bowR = 0, bowHW_R = 0;
@@ -77,8 +81,15 @@ export function computeBayMath({ engData, safeProj, libraryParts = [] }) {
     }
 
     // --- RAW CUTS & O2O MATH ---
-    const addL_RAW = (!isLeftInside && endStyleL === 'RETURN_BEND') ? engData.gripAllowance : 0;
-    const addR_RAW = (!isRightInside && endStyleR === 'RETURN_BEND') ? engData.gripAllowance : 0;
+    // A FRENCH return is bent out of the pole, so its raw cut grows by the grip allowance. A MITER
+    // return is CUT out of the same stock and welded back on, so it uses material too — and until
+    // 2026-09-18 added nothing, so the shop's raw length, the rod-piece planner and the consumption
+    // all read the face length alone (SO60551: 18" oak fascias with two miters each). Stuart's rule:
+    // "projection x 2 plus 2\" — a 4-5/8\" projection miter return needs … 11-1/4\" material used."
+    // The customer is billed the SOLD feet either way: the extra is in the price of the return fee.
+    const endAddRaw = (style) => (style === 'RETURN_BEND' ? engData.gripAllowance : (style === 'RETURN_MITER' ? miterReturnMaterial(safeProj) : 0));
+    const addL_RAW = !isLeftInside ? endAddRaw(endStyleL) : 0;
+    const addR_RAW = !isRightInside ? endAddRaw(endStyleR) : 0;
 
     const orderL = engData.shape === 'MITERED' ? pole1 + bendDeductL + imDeductL : 0;
     const orderR = engData.shape === 'MITERED' ? pole3 + bendDeductR + imDeductR : 0;

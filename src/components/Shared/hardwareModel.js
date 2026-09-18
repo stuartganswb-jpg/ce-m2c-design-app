@@ -724,8 +724,15 @@ export function ridersFor(choices, answers = {}, selectedIds = []) {
     // returns are FRONT-tier parts that span both rods while the standoff rides the BACK rod, so
     // the return is matched on the ORDER, not on the rider's tier; sides do not matter (Stuart).
     const returnChosen = choices.some(c => want.has(c.id) && c.role === 'RETURN' && admits(c, ctx).ok);
+    // ── A RIDER THAT COMES WITH EACH BRACKET (Stuart 2026-09-18, SO60551: "nut rule yes one needed per
+    // traverse bracket" — 50 boards with two brackets each went out with 50 nuts, not 100). Tagged
+    // ridesWith BRACKET, it rides only when a bracket is on the order, and its COUNT is the brackets'
+    // (resolve → lineQtyOf) — so the typed centre-bracket count carries it too. The wall-screw packs
+    // will use the same tag when their items exist.
+    const bracketChosen = choices.some(c => want.has(c.id) && c.role === 'BRACKET' && admits(c, ctx).ok);
     return choices.filter(c => c.always && admits(c, ctx).ok
         && (c.ridesWith !== 'RETURN' || returnChosen)
+        && (c.ridesWith !== 'BRACKET' || bracketChosen)
         && chosenRods.some(r =>
         c.fits.includes(r.rodKind)
         && (!c.tier || !r.tier || (r.tier || '') === c.tier)
@@ -1648,7 +1655,13 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     const armOf = (plate) => selected.find(x => x.role === 'BRACKET'
         && String(x.position || '').toUpperCase() === String(plate.position || '').toUpperCase()
         && String(x.tier || '') === String(plate.tier || ''));
+    // One per bracket: the rider's own quantity (usually 1) × every bracket on the order, of its own
+    // tier when it has one. Counted from the SELECTED brackets, so a centre bracket typed to 3 counts 3.
+    const bracketCountFor = (rider) => selected
+        .filter(x => x.role === 'BRACKET' && (!rider.tier || !x.tier || String(x.tier) === String(rider.tier)))
+        .reduce((n, x) => n + (Number(qtyOf(x)) > 0 ? Number(qtyOf(x)) : 1), 0);
     const lineQtyOf = (c) => {
+        if (c.ridesWith === 'BRACKET') return (Number(qtyOf(c)) > 0 ? Number(qtyOf(c)) : 1) * Math.max(1, bracketCountFor(c));
         if (c.role !== 'BACKPLATE') return qtyOf(c);
         const arm = armOf(c);
         return arm ? qtyOf(arm) : qtyOf(c);
