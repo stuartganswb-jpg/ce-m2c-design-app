@@ -25,7 +25,7 @@ import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf, customerPriceLevel } from '../Shared/priceLevels';
-import { priceChoice } from '../Shared/hardwarePricing';
+import { priceChoice, isItemKit } from '../Shared/hardwarePricing';
 import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, checkoutAssignmentOf } from '../Shared/feeRules';
 import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
 import { extrasFromSavedItem } from '../Shared/extrasRestore';
@@ -3254,6 +3254,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                   // feet, and the NetSuite push consumes rod stock by the foot off these two.
                   ...(line.perFoot ? { perFoot: true, feet: Number(line.feet) || 0 } : {}),
                   ...(line.hidden ? { hidden: true } : {}),
+                  // ⚠ THE KIT MARKS MUST SURVIVE THE MERGE (2026-09-18). RTG's split reads THIS list, and it
+                  // was losing them: a kit HOLDER (money and paper only) reached the floor as a small part to
+                  // pick, and a kit-paid part looked like any other. isKit keeps the holder off the floor
+                  // (Shared/lineClassification.isDisplayOnlyLine); inKit / kitOf say which kit paid for a part.
+                  ...(line.isKit ? { isKit: true, noNs: true } : {}),
+                  ...(line.itemKit ? { itemKit: true } : {}),
+                  ...(line.inKit ? { inKit: true } : {}),
+                  ...(line.kitOf ? { kitOf: line.kitOf } : {}),
                   cutLength: line.cutLength || null,
                   dimensions: line.dimensions || null
               });
@@ -5169,7 +5177,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                                   pins={shadowPins}
                                   isSuperAdmin={isSuperAdmin}
                                   finishes={[...globalFinishes, ...outsourceFinishes]}
-                                  parts={[...libraryParts, ...liveAssemblies]}
+                                  // ITEM KITS are parts a pin can point at (Stuart 2026-09-18, H1-2RCTCB: a bracket sold as one
+                                  // number, made of an arm and a cuff). Kits ride in their own list (08-22) so a TRAVERSE SYSTEM
+                                  // kit can never be priced as a part — that stays true: only a kit that lists components and
+                                  // carries no system alignment joins the index, and pricing opens it into those components.
+                                  parts={[...libraryParts, ...liveAssemblies, ...kitLibrary.filter(isItemKit)]}
                                   kits={seedableKits}
                                   kitsUnaligned={kitSeedDiag.unaligned}
                                   kitSeedDiag={kitSeedDiag}

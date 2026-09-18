@@ -188,9 +188,47 @@ export function priceChoice(choice, part, ctx = {}) {
  * Riders are included — a carrier is built and billed even though it is never offered as a choice,
  * which is the entire reason `always` exists.
  */
+// ── AN ITEM KIT IS ONE THING SOLD AND SEVERAL THINGS MADE (Stuart 2026-09-18, H1-2RCTCB) ──────────
+// "this is set up as an IN app kit and contains the bracket arm, cuff and has the customer alias price
+//  info on it … only show the kit item and price to the customer — this is just a single bracket as we
+//  assemble it." A Kit-class record with `kitComponents` and no NetSuite item: the customer buys ONE
+// bracket under their pattern number at one price; the floor, the pick and NetSuite need the cuff and
+// the arm. So the chosen kit becomes the bill shape every kit already has (Brief F, 2026-09-03):
+//   · the KIT line carries the money and the customer's number — `isKit` (no NetSuite identity, never
+//     floor work: Shared/lineClassification) + `itemKit` (NOT a traverse system — the NetSuite holder
+//     line is not renamed for it);
+//   · each COMPONENT rides beneath it at $0, `inKit` (NetSuite sends it at $0, the rollup carries the
+//     kit's price) and `hidden` (built and picked, never on a customer document), wearing the finish
+//     the kit was given, resolved to its own /P · /EPn item by the same identity rule as any part.
+// Quantities multiply: three centre brackets are three cuffs and three arms.
+export const isItemKit = (part) => !!part && part.partClass === 'Kit'
+    && Array.isArray(part.manufacturingSpecs?.kitComponents) && part.manufacturingSpecs.kitComponents.length > 0
+    && !part.manufacturingSpecs?.kitAlign;
+
+function kitComponentLines(holder, kitPart, ctx) {
+    const { findPart } = ctx;
+    const missing = [];
+    const lines = (kitPart.manufacturingSpecs.kitComponents || []).map(c => {
+        const part = typeof findPart === 'function' ? findPart(c.partId) : null;
+        const per = Number(c.qty) > 0 ? Number(c.qty) : 1;
+        if (!part) missing.push(String(c.partId || '?'));
+        const finishCode = part && !takesNoFinish(part) ? (holder.finishCode || '') : '';
+        const p = priceChoice({ partId: c.partId, role: holder.role }, part, { ...ctx, finishCode, subFinishCode: '' });
+        return {
+            partId: c.partId, name: part?.itemName || String(c.partId || ''), role: holder.role || '', position: holder.position || '',
+            sku: '', aliasCode: '', billedId: p.billedId,
+            qty: per * (Number(holder.qty) > 0 ? Number(holder.qty) : 1), perFoot: false,
+            finishCode, noFinish: !finishCode,
+            unit: 0, total: 0, source: PRICE_SOURCES.BASE, detail: `in the ${holder.billedId || 'kit'} kit`,
+            hidden: true, inKit: true, kitOf: holder.billedId || '',
+        };
+    });
+    return { lines, missing };
+}
+
 export function priceConfiguration(model, ctx = {}) {
     const { findPart } = ctx;
-    const lines = (model?.bom || []).map(entry => {
+    const lines = (model?.bom || []).flatMap(entry => {
         const choice = entry.raw && entry.raw.__choice ? entry.raw.__choice : entry;
         const part = typeof findPart === 'function' ? findPart(entry.partId) : null;
         // ⚠ THE FINISH IS A PER-PART DECISION (Stuart 2026-08-21: "in case people do choose
@@ -230,7 +268,7 @@ export function priceConfiguration(model, ctx = {}) {
         const perFoot = feet > 0 && ROD_ROLES.includes(entry.role);
         const qty = Number(entry.qty) > 0 ? Number(entry.qty) : 1;
         const inches = Number(ctx.lengthInches) > 0 ? Number(ctx.lengthInches) : 0;
-        return {
+        const line = {
             partId: entry.partId,
             name: entry.name,
             role: entry.role || '',
@@ -260,6 +298,9 @@ export function priceConfiguration(model, ctx = {}) {
             role: entry.role || '',
             position: entry.position || '',
         };
+        if (!isItemKit(part)) return [line];
+        const kit = kitComponentLines(line, part, ctx);
+        return [{ ...line, isKit: true, itemKit: true, ...(kit.missing.length ? { kitMissing: kit.missing } : {}) }, ...kit.lines];
     });
     return { lines, total: lines.reduce((s, l) => s + l.total, 0) };
 }
@@ -270,6 +311,8 @@ export function priceConfiguration(model, ctx = {}) {
  */
 export function pricingWarnings({ lines }) {
     const out = [];
+    lines.filter(l => Array.isArray(l.kitMissing) && l.kitMissing.length).forEach(l =>
+        out.push({ sev: 'red', msg: `${l.billedId || l.name} is a kit, and ${l.kitMissing.join(', ')} in it is not in the library — that part will not reach the pick, the floor or NetSuite. Fix the kit's component list in the Master Library.` }));
     lines.filter(l => l.source === PRICE_SOURCES.NONE).forEach(l =>
         out.push({ sev: 'red', msg: `${l.name}${l.billedId || l.partId ? ` (${l.billedId || l.partId})` : ''} has no price under any rule — ${l.detail}. It is quoting at $0.` }));
     // A fallback is a placeholder that reached a customer. Not an error — it was chosen

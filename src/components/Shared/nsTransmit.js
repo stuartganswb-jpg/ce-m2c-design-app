@@ -171,7 +171,9 @@ export function resolveJobLines(job, data) {
               // kit already paid for (`inKit`) pushes at $0 — exactly what tab 7 has always sent.
               // Until now an inKit component pushed at its library rate and the whole-quote scale
               // then squeezed every line to make the total fit (QUO141).
-              cart.breakdown.forEach(l => { if (l && l.isKit) result.kitCodes.push(String(l.legacyErpId || l.partId || l.name || 'KIT')); });
+              // (an ITEM kit — one bracket of several parts — is not a traverse system: its money rides the
+              //  flow's ordinary rollup, its parts go at $0 like any kit-paid part.)
+              cart.breakdown.forEach(l => { if (l && l.isKit && !l.itemKit) result.kitCodes.push(String(l.legacyErpId || l.partId || l.name || 'KIT')); });
               cart.breakdown.forEach(l => {
                   if (!l) return;
                   // A fee prices the quote and rides the rollup; it is not a NetSuite component.

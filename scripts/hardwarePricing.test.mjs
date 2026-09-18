@@ -320,5 +320,45 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     eq('no subFinishFor → exactly as before', [plain.lines[0].billedId, plain.lines[0].subFinishCode], ['H1-2TRV-WB', undefined]);
 }
 
+
+// ── AN ITEM KIT: ONE THING SOLD, SEVERAL THINGS MADE (Stuart 2026-09-18 — H1-2RCTCB as it is in the library) ──
+{
+    const { isItemKit } = await import('../src/components/Shared/hardwarePricing.js');
+    const { isDisplayOnlyLine } = await import('../src/components/Shared/lineClassification.js');
+    const lib = {
+        'KIT-H1-2RCTCB-866911': { id: 'KIT-H1-2RCTCB-866911', legacyErpId: 'H1-2RCTCB', itemName: '2" Cuff Bracket (3-5/8" P)', partClass: 'Kit',
+            clientPricing: [{ customerId: 'CUST-4720', clientSku: 'H3622F', price: 61 }],
+            manufacturingSpecs: { kitComponents: [{ partId: 'CE-INV-59101', qty: 1 }, { partId: 'CE-ASM-64805', qty: 1 }] } },
+        'CE-INV-59101': { id: 'CE-INV-59101', legacyErpId: 'H1-2RCTJC', itemName: 'Center Bracket Cuff', partClass: 'Assembly', manufacturingSpecs: {}, clientPricing: [] },
+        'H1-2RCTJC/P': { id: 'CE-ASM-59113', legacyErpId: 'H1-2RCTJC/P', itemName: 'Center Bracket Cuff - Paint', partClass: 'Assembly', manufacturingSpecs: {}, clientPricing: [] },
+        'CE-ASM-64805': { id: 'CE-ASM-64805', legacyErpId: 'H1-2RCTBA', itemName: 'Bracket Arm', partClass: 'Assembly', manufacturingSpecs: {}, clientPricing: [] },
+        'H1-2RCTBA/P': { id: 'CE-ASM-64806', legacyErpId: 'H1-2RCTBA/P', itemName: 'Bracket Arm - Paint', partClass: 'Assembly', manufacturingSpecs: {}, clientPricing: [] },
+        'TRV-KIT': { id: 'TRV-KIT', legacyErpId: 'H1-2TRV-4M/P', partClass: 'Kit', manufacturingSpecs: { kitAlign: { setup: 'SINGLE' }, kitComponents: [{ partId: 'CE-INV-59101', qty: 1 }] } },
+    };
+    const find = (k) => lib[String(k || '').toUpperCase()] || lib[k] || null;
+    ok('a kit that lists components is an item kit', isItemKit(lib['KIT-H1-2RCTCB-866911']));
+    ok('a TRAVERSE SYSTEM kit is not — it keeps its own path', !isItemKit(lib['TRV-KIT']));
+    ok('an ordinary part is not', !isItemKit(lib['CE-INV-59101']));
+
+    const cfg = priceConfiguration({ bom: [{ id: 'BK-C', partId: 'KIT-H1-2RCTCB-866911', name: 'cuff bracket', role: 'BRACKET', position: 'CENTER', qty: 3 }] },
+        { findPart: find, findByCode: find, customerId: 'CUST-4720', finishFor: () => 'P06' });
+    const [kit, cuff, arm] = cfg.lines;
+    eq('three lines: the kit, then its two parts', cfg.lines.length, 3);
+    eq('the kit line carries the money and their number', [kit.billedId, kit.unit, kit.total, kit.sku, kit.isKit, kit.itemKit, !!kit.hidden], ['H1-2RCTCB', 61, 183, 'H3622F', true, true, false]);
+    eq('the cuff rides beneath at $0, hidden, paid by the kit, in the kit\'s finish, as its PAINTED item', [cuff.billedId, cuff.total, cuff.hidden, cuff.inKit, cuff.finishCode, cuff.kitOf], ['H1-2RCTJC/P', 0, true, true, 'P06', 'H1-2RCTCB']);
+    eq('…and the arm the same', [arm.billedId, arm.total, arm.inKit], ['H1-2RCTBA/P', 0, true]);
+    eq('three brackets are three cuffs and three arms', [cuff.qty, arm.qty], [3, 3]);
+    eq('the configuration totals the kit alone', cfg.total, 183);
+    ok('the floor never works the HOLDER', isDisplayOnlyLine({ ...kit, price: 61, legacyErpId: 'H1-2RCTCB' }));
+    ok('…and always works the parts', !isDisplayOnlyLine({ ...cuff, legacyErpId: 'H1-2RCTJC/P' }));
+
+    const broken = priceConfiguration({ bom: [{ partId: 'KIT-H1-2RCTCB-866911', name: 'k', role: 'BRACKET', qty: 1 }] },
+        { findPart: (k) => (k === 'CE-ASM-64805' ? null : find(k)), findByCode: find, finishFor: () => '' });
+    eq('a component the library cannot find is named on the kit', broken.lines[0].kitMissing, ['CE-ASM-64805']);
+    ok('…and it is LOUD', pricingWarnings(broken).some(w => w.sev === 'red' && /CE-ASM-64805/.test(w.msg)));
+    const plain = priceConfiguration({ bom: [{ partId: 'CE-INV-59101', name: 'cuff', role: 'BRACKET', qty: 2 }] }, { findPart: find, findByCode: find, finishFor: () => '' });
+    eq('an ordinary part is exactly one line, as before', [plain.lines.length, plain.lines[0].isKit], [1, undefined]);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

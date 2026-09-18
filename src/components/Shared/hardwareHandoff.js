@@ -103,6 +103,9 @@ function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishC
         // for, so a document can print it as included rather than as a free line nobody understands.
         ...(l.isKit ? { isKit: true, noNs: true } : {}),
         ...(l.inKit ? { inKit: true } : {}),
+        // An ITEM kit (one bracket, several parts): not a traverse system, and which kit a part belongs to.
+        ...(l.itemKit ? { itemKit: true } : {}),
+        ...(l.kitOf ? { kitOf: l.kitOf } : {}),
         // The bill group (KIT 1 · FEET 2 · ADDED 3 · INCLUDED 4) rides the saved line, so a document
         // or a pick list can read the order it was billed in without re-deriving it (#46).
         ...(l.billGroup ? { billGroup: l.billGroup } : {}),

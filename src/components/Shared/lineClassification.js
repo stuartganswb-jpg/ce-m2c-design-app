@@ -23,6 +23,9 @@ import { isPoleCategory } from './poleCut.js';
 export function isDisplayOnlyLine(line) {
     if (!line) return true;
     if (line.isHeader || line.isDiscount || line.isNetLine || line.isSizeRow) return true;
+    // A KIT HOLDER is money and paper only — what is made, picked and shipped are the parts beneath it
+    // (Stuart 2026-09-18). Without this RTG's split filed the holder as a small part to pick.
+    if (line.isKit) return true;
     // Legacy quotes saved before isSizeRow existed: a size/projection echo is identifiable by
     // having no part identity at all, no money, and the "Step Title: Option" shape. Fees are
     // excluded from this test — they legitimately have no part and DO ride the shop order.
