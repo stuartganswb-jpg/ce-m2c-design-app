@@ -6969,7 +6969,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 })()}
 
                 {activeTab === 'PLATING' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
+                    // ⚠ NOT A FIXED-HEIGHT COLUMN (Stuart 2026-09-18: "we are in the midst of a receipt and the
+                    // screen to create a new plating shipment … is not visible"). With height:100% the pull
+                    // table at the bottom took "whatever is left" — and mid-receipt the put-away block above
+                    // it leaves nothing, so the search bar and the table collapsed to zero. The same fault,
+                    // and the same cure, as the Convert tab (47c2b6b): the column grows with its content and
+                    // the table is its own bounded scroller.
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
 
                         {/* 📥 OB PLATING — custom outgoing staging: /MEP //EP //P25 pieces arrive here as the
                             shop completes them; scan-in stages the piece (bin OB PLATING) so the weekly
@@ -7369,7 +7375,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </div>
 
                         {/* INVENTORY TABLE */}
-                        <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, overflowY: 'auto' }}>
+                        <div style={{ maxHeight: '70vh', minHeight: '240px', background: '#fff', border: `1px solid ${theme.line}`, overflowY: 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead style={{ background: theme.paper2, position: 'sticky', top: 0, zIndex: 10 }}>
                                     <tr>
