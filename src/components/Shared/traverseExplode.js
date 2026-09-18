@@ -121,6 +121,18 @@ export const usageAt = (row, feet) => {
     return up !== undefined ? by[up] : (keys.length ? by[keys[keys.length - 1]] : 0);
 };
 
+// ── A CHART THAT STARTS LATE MEANS "NOT NEEDED BEFORE THEN" (Stuart 2026-09-09 · 2026-09-18) ──────
+// usageAt reads UP between entries, which is right for a count that exists at every length (4.5 ft
+// takes 5 ft's brackets). A SPLICE row begins at 11 ft because a splice is optional up to 10 — so
+// below the row's FIRST entry the count is zero, not the 11 ft row's one. The kit explosion has said
+// so since 09-09; the Traverse components step kept its own lookup and defaulted a joiner onto a 4 ft
+// system on both families. One rule now, both callers.
+export const usageFromFirst = (row, feet) => {
+    const keys = Object.keys(row?.byFeet || {}).map(Number).filter(Number.isFinite);
+    if (!keys.length) return 0;
+    return Number(feet) >= Math.min(...keys) ? usageAt(row, feet) : 0;
+};
+
 /**
  * One traverse system → the component lines NetSuite consumes.
  * `rules` = the system/traverse_rules_<family> doc (usage rows). Returns { lines, skipped } where
@@ -192,8 +204,7 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
     // up to 10 feet"). The chart starts at 11 ft; usageAt's between-entries rule reads UP, so a 5 ft
     // system was consuming the 11 ft row's splice. Below the first entry the count is zero — the
     // brackets keep the up-rule because their chart starts at the shortest system there is.
-    const spliceFirstFt = spliceRow ? Math.min(...Object.keys(spliceRow.byFeet || {}).map(Number).filter(Number.isFinite)) : Infinity;
-    const splices = (spliceRow && ft >= spliceFirstFt) ? usageAt(spliceRow, ft) : 0;
+    const splices = spliceRow ? usageFromFirst(spliceRow, ft) : 0;
     if (splices > 0) add(P.splice, splices, 'splices (count table)', 'splice');
 
     if (U(align.drive) === 'MOTORIZED') {

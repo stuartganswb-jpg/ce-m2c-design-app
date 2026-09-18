@@ -16,7 +16,7 @@
 //  · "Finish track to match the fascia" is an add-on FEE handled by the caller (it changes finish
 //    routing, not components) — not a configurator line.
 
-import { usageAt } from './traverseExplode';
+import { usageAt, usageFromFirst } from './traverseExplode';
 
 const U = (v) => String(v ?? '').trim().toUpperCase();
 
@@ -45,7 +45,13 @@ export function configuratorOffer({ rules, drive, feet }) {
     // A pick with a CHART row (the splice) is included per the chart AT THIS LENGTH — a 9ft set
     // that wants a splice pays for it, an 11ft set gets it included because it is required
     // (Stuart 2026-08-13). includedQty null = a plain included pick with no chart behind it.
-    const chartQty = (id) => { const r2 = (rules?.usage || []).find(u => U(u.itemId) === U(id)); return r2 ? usageAt(r2, ft) : null; };
+    // ⚠ BELOW THE CHART'S FIRST ENTRY A PICK IS NOT INCLUDED (Stuart 2026-09-18: a joiner defaulted at
+    // 4 ft on H1-138TRV and H1-2TRV — "defaulted at 1 only over 10ft, it should always be there offered
+    // but default at 0"). The splice row starts at 11 ft; reading UP handed every shorter system the
+    // 11 ft row's one — pre-ticked by defaultPicks AND billed at $0 as "included". usageFromFirst is the
+    // rule the kit explosion already used. The pick is still OFFERED at every length; under 11 ft it
+    // opens at 0 and, if added, bills — exactly the 2026-08-13 rule this comment block describes.
+    const chartQty = (id) => { const r2 = (rules?.usage || []).find(u => U(u.itemId) === U(id)); return r2 ? usageFromFirst(r2, ft) : null; };
     return {
         carrierStyles: styles,
         picks: gated.filter(c => !c.billable).map(c => ({ itemId: U(c.itemId), fabSku: c.fabSku || '', includedQty: chartQty(c.itemId) })),
