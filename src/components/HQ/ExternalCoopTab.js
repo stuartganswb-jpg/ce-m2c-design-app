@@ -16,7 +16,7 @@ import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { reopenQuoteInCpq, reopenQuoteInVision, reopenQuoteInOrderEntry } from '../Shared/reopenQuote';
 import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
 import OrderStatusChips from '../Shared/OrderStatusChips';
-import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction } from '../Shared/orderStatus';
+import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction, canReopenPostedOrder, netSuiteOrderNoOf } from '../Shared/orderStatus';
 import { packingListOf } from '../Shared/packingList';
 import { invoiceDocOf } from '../Shared/invoiceMath';
 import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
@@ -610,7 +610,7 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
   );
 };
 
-const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
+const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin = false }) => {
   // ── ORDER ENTRY SO: EDIT / CLOSE FROM THE CRM (Stuart 2026-08-30: "no way to edit or close a
   // sales order … once a work order is issued it should block us and bring up an additional
   // warning that work orders exist and only manager can close at this point") ──────────────────
@@ -1993,7 +1993,18 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                               const sinceMs = so ? (so.dispatchedAt && typeof so.dispatchedAt.toMillis === 'function' ? so.dispatchedAt.toMillis() : (Number(so.dispatchedAt) || 0)) : 0;
                                               const since = sinceMs > 0 ? new Date(sinceMs).toLocaleDateString() : '';
                                               const ps = isOrderCard ? packedStateOf(so || { status: job.status }, finWosForJob(job)) : { packed: false };
-                                              return { so, inProd, locked: inProd && !canReopenInProduction(userRole), why: `in production${since ? ` since ${since}` : ''} — a manager can reopen`, packed: !!ps.packed };
+                                              // THE THREE CONFIGURATION DOORS shut once NetSuite has the sales order (Shared/orderStatus):
+                                              // below admin they grey; an admin gets the consequence spelled out before one opens.
+                                              const nsNo = isOrderCard ? netSuiteOrderNoOf(job, so) : '';
+                                              const cfgLocked = (inProd && !canReopenInProduction(userRole)) || (!!nsNo && !canReopenPostedOrder(userRole, isSuperAdmin));
+                                              const cfgWhy = nsNo && !canReopenPostedOrder(userRole, isSuperAdmin)
+                                                  ? `${nsNo} is in NetSuite — the configuration is closed. A re-save would post a SECOND sales order; an admin decides that.`
+                                                  : `in production${since ? ` since ${since}` : ''} — a manager can reopen`;
+                                              const openCfg = (fn) => () => {
+                                                  if (nsNo && !window.confirm(`${nsNo} is already in NetSuite${inProd ? ' and on the floor' : ''}.\n\nReopening it is for LOOKING, or for building a replacement. If you save it again as a sales order, NetSuite gets a SECOND sales order and RTG raises a second set of floor documents — ${nsNo} is not updated.\n\nOpen it anyway?`)) return;
+                                                  fn(job);
+                                              };
+                                              return { so, inProd, locked: inProd && !canReopenInProduction(userRole), why: `in production${since ? ` since ${since}` : ''} — a manager can reopen`, packed: !!ps.packed, cfgLocked, cfgWhy, openCfg };
                                           };
                                           const groupHead = (label, n) => (
                                               <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px dashed var(--line)', paddingBottom: '6px', marginTop: label === 'Sales Orders' ? '10px' : 0 }}>{label} ({n})</div>
@@ -2091,14 +2102,14 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                                           <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${quoteDisplayNo(job)} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Email</button>
                                                           <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
                                                           <button onClick={() => openEditJobModal(job)} disabled={lk.locked} title={lk.locked ? lk.why : 'Edit the checkout header — shipping, sidemark, memo, PO'} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', ...lockStyle }}>Modify</button>
-                                                          <button onClick={() => reopenQuoteInCpq(job)} disabled={lk.locked} title={lk.locked ? lk.why : "Reopen this quote's configuration in the CPQ Configurator"} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', ...lockStyle }}>Reopen CPQ</button>
-                                                          <button onClick={() => reopenQuoteInVision(job)} disabled={lk.locked} title={lk.locked ? lk.why : "Reopen this quote's session on the Vision Hardware board — dimensions, bracket/splice placement, and shop notes live there (Engineering view → Load saved line)"} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--ink)', color: 'var(--ink)', cursor: 'pointer', ...lockStyle }}>Reopen Vision</button>
+                                                          <button onClick={lk.openCfg(reopenQuoteInCpq)} disabled={lk.cfgLocked} title={lk.cfgLocked ? lk.cfgWhy : "Reopen this quote's configuration in the CPQ Configurator"} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', ...lockStyle }}>Reopen CPQ</button>
+                                                          <button onClick={lk.openCfg(reopenQuoteInVision)} disabled={lk.cfgLocked} title={lk.cfgLocked ? lk.cfgWhy : "Reopen this quote's session on the Vision Hardware board — dimensions, bracket/splice placement, and shop notes live there (Engineering view → Load saved line)"} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--ink)', color: 'var(--ink)', cursor: 'pointer', ...lockStyle }}>Reopen Vision</button>
                                                           {/* THE THIRD DOOR, BESIDE THE OTHER TWO (Stuart 2026-08-31). A quote
                                                               written in Order Entry has no flow and no cartItems, so Reopen CPQ
                                                               cannot open one — it reopens from the cart stored on the job. All
                                                               three always show: each declines on its own terms when it has
                                                               nothing to open, and none of them gates the others. */}
-                                                          <button onClick={() => reopenQuoteInOrderEntry(job)} disabled={lk.locked} title={lk.locked ? lk.why : "Reopen this quote's cart in Order Entry (tab 7) — kits, footage, components and per-line memos come back as they were typed. Saving there creates the corrected quote and supersedes this one."} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', ...lockStyle }}>Reopen Order Entry</button>
+                                                          <button onClick={lk.openCfg(reopenQuoteInOrderEntry)} disabled={lk.cfgLocked} title={lk.cfgLocked ? lk.cfgWhy : "Reopen this quote's cart in Order Entry (tab 7) — kits, footage, components and per-line memos come back as they were typed. Saving there creates the corrected quote and supersedes this one."} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', ...lockStyle }}>Reopen Order Entry</button>
                                                           {/* PACKED → the packing list (ordered beside shipped) and OUR invoice (SO prices × shipped
                                                               qty) — the app's own, from the same builder the WMS prints (Shared/packingList). */}
                                                           {lk.packed && (

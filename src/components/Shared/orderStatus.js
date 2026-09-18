@@ -410,6 +410,22 @@ export const wholeOrderWait = (wo, siblings = [], so = null) => {
 // CRM (S1) and the WMS pack screen (S3) ask HERE so the two never disagree.
 export const CAN_REOPEN_IN_PRODUCTION = ['admin', 'superadmin', 'manager', 'executive'];
 export const canReopenInProduction = (role) => CAN_REOPEN_IN_PRODUCTION.includes(String(role || '').toLowerCase());
+// ── ONCE NETSUITE HAS THE SALES ORDER, THE CONFIGURATION IS SHUT (Stuart 2026-09-18, SO60551) ──────
+// "i was able to still hit the reopen in CPQ on this order, which we need to grey out once we get to
+//  this point … manager below should not be able to reopen once the so has a netsuite SO."
+// A re-save from CPQ / Vision / Order Entry always POSTS A NEW sales order to NetSuite — there is no
+// update path — and RTG would raise a second set of floor documents beside the first. So the three
+// configuration doors shut the moment the order carries a NetSuite sales order number, for everyone
+// below admin; an admin may still open one, behind a confirm that says what a re-save does. The header
+// edit (Modify) is NOT part of this: it writes no lines and posts nothing, so it keeps the in-production
+// rule above.
+export const CAN_REOPEN_POSTED_ORDER = ['admin', 'superadmin'];
+export const canReopenPostedOrder = (role, isSuperAdmin = false) => !!isSuperAdmin || CAN_REOPEN_POSTED_ORDER.includes(String(role || '').toLowerCase());
+export const netSuiteOrderNoOf = (job, so) => {
+    const real = (v) => { const s = String(v || '').trim(); return s && !/^SO-APP-/i.test(s) ? s : ''; };
+    return real(job && job.netsuiteSalesOrderNo) || real(so && so.soId && so.nsInternalId ? so.soId : '')
+        || (job && job.netsuiteSalesOrderId ? `NetSuite #${job.netsuiteSalesOrderId}` : '') || (so && so.nsInternalId ? `NetSuite #${so.nsInternalId}` : '');
+};
 export const inProduction = (so) => {
     if (!so) return false;
     if (so.orderClass === 'QUICKSHIP') {

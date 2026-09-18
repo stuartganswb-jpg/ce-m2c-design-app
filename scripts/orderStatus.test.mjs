@@ -7,8 +7,7 @@
 
 import {
     GATES, gatesOf, openGatesOf, isReleasable, gateSummary,
-    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor, wholeOrderWait,
-} from '../src/components/Shared/orderStatus.js';
+    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor, wholeOrderWait, canReopenPostedOrder, netSuiteOrderNoOf } from '../src/components/Shared/orderStatus.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => {
@@ -116,6 +115,17 @@ ok('another order\'s WO is not a sibling', !wholeOrderWait(A1, [A1, B1], { id: '
 ok('all siblings ready → go', !wholeOrderWait(A1, [A1, { id: 'A3', soAppId: 'SO-9', status: 'Approved' }], { id: 'SO-9' }).wait);
 ok('a dispatched sibling does not hold the rest', !wholeOrderWait(A1, [A1, { id: 'A4', soAppId: 'SO-9', status: 'Dispatched', awaitingReceipt: true }], { id: 'SO-9' }).wait);
 ok('a stock WO (no soAppId) never waits on others', !wholeOrderWait({ id: 'S1', status: 'Approved' }, [A2], null).wait);
+
+// ── ONCE NETSUITE HAS THE SALES ORDER THE CONFIGURATION IS SHUT (Stuart 2026-09-18) ────────────────
+ok('a manager may NOT reopen a posted order', canReopenPostedOrder('manager') === false);
+ok('nor an executive', canReopenPostedOrder('executive') === false);
+ok('an admin may', canReopenPostedOrder('Admin') === true);
+ok('the super-admin flag counts whatever the role says', canReopenPostedOrder('sales', true) === true);
+ok('the real NetSuite number is read off the job', netSuiteOrderNoOf({ netsuiteSalesOrderNo: 'SO60551' }, null) === 'SO60551');
+ok('…or off the board record once NetSuite accepted it', netSuiteOrderNoOf({}, { soId: 'SO60551', nsInternalId: '9' }) === 'SO60551');
+ok('an app id is not a NetSuite number', netSuiteOrderNoOf({}, { soId: 'SO-APP-QUO150' }) === '');
+ok('an internal id alone still counts as posted', netSuiteOrderNoOf({ netsuiteSalesOrderId: '77' }, null) === 'NetSuite #77');
+ok('a quote has none', netSuiteOrderNoOf({ status: 'CONFIGURED' }, null) === '');
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
