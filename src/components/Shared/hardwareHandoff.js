@@ -73,7 +73,9 @@ function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishC
         // The ITEM's own handling is the truth (Shared/lineClassification); a part that cannot be
         // resolved carries none, and the consumer falls back exactly as it always has.
         partHandling: part?.manufacturingSpecs?.partHandling || '',
-        partId: l.partId || null,
+        // A stock-colour line is a PICK of a real stocked item (H1-2TRV-WB/C), not a base part the floor
+        // finishes — so the line joins to THAT record: its bin, its stock, its NetSuite id (2026-09-18).
+        partId: l.soldPartId || l.partId || null,
         legacyErpId: l.billedId || codeOf(part, l.partId),
         ...(l.sku || l.aliasCode ? { clientSku: l.sku || l.aliasCode } : {}),
         ...(l.hidden ? { hidden: true } : {}),
@@ -163,7 +165,8 @@ export function handoffItem(resolved, ctx = {}) {
     const takesSub = (l, part) => String(l.role || '').toUpperCase() === 'TRACK' || !!part?.manufacturingSpecs?.usesSubFinish;
     const lines = priced.lines.map(l => {
         const part = typeof findPart === 'function' ? findPart(l.partId) : null;
-        return handoffLine(l, part, finishNameOf(l.finishCode), clientFinishNameOf(l.finishCode), takesSub(l, part) ? alignedSub : '');
+        // The engine's own answer first (the rod's finish decides the colour); the order finish's otherwise.
+        return handoffLine(l, part, finishNameOf(l.finishCode), clientFinishNameOf(l.finishCode), l.subFinishCode || (takesSub(l, part) ? alignedSub : ''));
     });
 
     // Added by hand — real lines, so they route and bill like everything else. They carry their own

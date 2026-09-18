@@ -26,6 +26,7 @@ import { cleanSidemark } from './quoteDisplay';
 import { isParkedGeometryLine } from './lineClassification';
 import { netFactorOf } from './lineDiscount';
 import { takesNoFinish } from './finishLabel';
+import { stockColourVariantOf } from './finishVariant';
 
 // A finish's code is the assembly suffix (base + CODE -> base/CODE). Some finish docs carry the
 // identifier in `name` with `code` blank, so fall back to name.
@@ -237,6 +238,12 @@ export function resolveJobLines(job, data) {
                   if (finObj?.bomSuffix) {
                       const sp = speciesVariantOf(masterPart, finObj, (c) => libraryParts.find(p => String(p.legacyErpId || p.itemId || '').trim().toUpperCase() === c) || null);
                       if (sp) masterPart = sp;
+                  }
+                  // A STOCK COLOUR is its own stocked item (H1-2TRV-WB + TCP → H1-2TRV-WB/C). A line saved
+                  // since 2026-09-18 already joins to it by partId; this covers one that still names the base.
+                  if (!code && l.subFinishCode) {
+                      const sc = stockColourVariantOf(masterPart, l.subFinishCode, (c) => libraryParts.find(p => String(p.legacyErpId || p.itemId || '').trim().toUpperCase() === c) || null);
+                      if (sc) masterPart = sc;
                   }
                   const { nsId, finishedErpId, finishUnmapped } = routeFinishedItem(masterPart, finObj, !!outFin);
                   rawLines.push({

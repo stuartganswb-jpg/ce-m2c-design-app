@@ -867,6 +867,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           return at >= 0 ? prev.map((c, i) => (i === at ? built : c)) : [...prev, built];
       });
       setEditingCartId(null);
+      setEngineSeed(null);   // the Edit hand-off is spent — see reopenSeed below
   };
   // Quote-display price level (Shared/priceLevels): Fabricut-data items price per the imported
   // sheet at FAB levels; everything else stays standard. Never drives NetSuite push rates.
@@ -1968,6 +1969,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           if (item.masterQuoteId) setActiveMasterQuoteId(item.masterQuoteId);
           setEngineSeed({
               key: Date.now(),
+              // The assembly these answers were saved ON — they are never handed to another one.
+              forAssemblyId: item.assemblyId || '',
               ...(item.engineConfig || {}),
               qty: item.qty,
               sidemark: (!item.sidemark || item.sidemark === 'No Sidemark') ? '' : item.sidemark,
@@ -5156,7 +5159,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                               <HardwareConfigurator
                                   key={asmId}
                                   assembly={activeAssembly}
-                                  reopenSeed={engineSeed}
+                                  // ⚠ A STALE EDIT SEED RODE INTO THE NEXT FLOW (Stuart 2026-09-18, SO60551 row 2: a
+                                  // stained traverse went out with Row 1's EP4 in its metal slot). The configurator
+                                  // is rebuilt per assembly and re-applies any seed it is handed — and the seed from
+                                  // the last Edit was never cleared, so every flow opened afterwards started with the
+                                  // edited line's finishes. A seed is for the assembly it was saved on, and it is
+                                  // spent once its line is back in the cart (placeInCart).
+                                  reopenSeed={engineSeed && (!engineSeed.forAssemblyId || engineSeed.forAssemblyId === asmId) ? engineSeed : null}
                                   pins={shadowPins}
                                   isSuperAdmin={isSuperAdmin}
                                   finishes={[...globalFinishes, ...outsourceFinishes]}

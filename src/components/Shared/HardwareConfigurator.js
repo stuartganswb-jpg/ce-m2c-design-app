@@ -792,6 +792,34 @@ function HardwareConfiguratorInner({
     // …and the MATERIAL GATE is applied here, exactly as the renderer applies it: a part wears only
     // a finish its material can take, so a wood stain chosen for the configuration does not bill a
     // stained bracket, and clear acrylic bills and sprays as nothing at all.
+    // ── A RETURN CUT INTO THE POLE WEARS THE POLE'S FINISH (Stuart 2026-09-18, SO60551 row 2: the
+    // miter return on a stained oak fascia went to the floor as EP4). A miter, a French return, a bend
+    // is a FEE — fabrication ON the rod, not a part beside it — so it has no material of its own to
+    // gate and no finish of its own to pick: it is whatever the rod it is cut into is. Derived, never
+    // copied, exactly as a plate follows its arm: change the rod's finish and the return follows.
+    // Scoped by data on both sides — role RETURN, and the library record is a Fee — so a real cast
+    // return bracket (an item) keeps the material rule it always had. The rod of the same tier on a
+    // double; its own per-part pick still wins.
+    const isFeeRecord = useCallback((p) => !!(p && (p.partClass === 'Fee'
+        || String(p.manufacturingSpecs?.productType || p.productType || '').toUpperCase() === 'FEE')), []);
+    const rodFinishFor = useCallback((choice) => {
+        const rods = chosenList.filter(c => ['ROD', 'FASCIA'].includes(c.role));
+        if (!rods.length) return '';
+        const tier = String((choice && choice.tier) || '').toUpperCase();
+        const rod = (tier && rods.find(r => String(r.tier || '').toUpperCase() === tier)) || rods[0];
+        return String(partFinish[rod.id] || partFinishByPart[String(rod.partId || '').toUpperCase()] || globalFinishFor(rod) || '').toUpperCase();
+    }, [chosenList, partFinish, partFinishByPart, globalFinishFor]);
+    const followsRod = useCallback((choice) => !!choice && choice.role === 'RETURN' && isFeeRecord(findPart(choice.partId)), [isFeeRecord, findPart]);
+    // ── THE STOCK COLOUR A PART IS MADE IN (Stuart 2026-09-18) — the sub finish 4.5 aligns to the ROD's
+    // finish first (S04 → TCP, so a stained traverse gets champagne brackets whatever the metal slot
+    // holds), the configuration's otherwise. Only a track, or an item the library says uses it.
+    const subFinishFor = useCallback((choice, part) => {
+        if (!choice) return '';
+        const takes = choice.role === 'TRACK' || !!(part || findPart(choice.partId))?.manufacturingSpecs?.usesSubFinish;
+        if (!takes) return '';
+        const subOf = (code) => String(finishByCode.get(String(code || '').toUpperCase())?.subFinishCode || '').trim().toUpperCase();
+        return subOf(rodFinishFor(choice)) || subOf(globalFinish);
+    }, [findPart, finishByCode, rodFinishFor, globalFinish]);
     const lineFinishFor = useCallback((choice) => {
         // The paint-to-match override outranks every gate — noFinish and the material rule say
         // what the STOCK part takes, and the upcharge is precisely the decision to overrule that.
@@ -801,12 +829,18 @@ function HardwareConfiguratorInner({
         // send the floor an unpaid paint job. Only the upcharge above can paint a track.
         if (choice && choice.role === 'TRACK') return '';
         if (!choice || choice.noFinish) return '';
+        // A return cut into the pole: the rod's finish, past the material gate (it IS the pole).
+        if (followsRod(choice)) return partFinish[choice.id] || rodFinishFor(choice);
+        // A part made in a stock colour wears no finish unless one was picked for IT — the configuration's
+        // metal finish does not repaint a champagne bracket uninvited (the track has always worked so).
+        if (choice.role !== 'TRACK' && findPart(choice.partId)?.manufacturingSpecs?.usesSubFinish
+            && !partFinish[choice.id] && !partFinishByPart[String(choice.partId || '').toUpperCase()]) return '';
         const code = partFinish[choice.id] || partFinishByPart[String(choice.partId || '').toUpperCase()] || armFinishOf(choice) || globalFinishFor(choice);
         if (!code) return '';
         const f = finishByCode.get(String(code).toUpperCase());
         if (!f || !finishesFor(choice, [f]).length) return '';
         return code;
-    }, [partFinish, partFinishByPart, armFinishOf, globalFinishFor, finishByCode, matchFinishOverride]);
+    }, [partFinish, partFinishByPart, armFinishOf, globalFinishFor, finishByCode, matchFinishOverride, followsRod, rodFinishFor, findPart]);
 
     // NODE → TEXTURE. A no-finish part is skipped entirely, so the clear rule paints it instead —
     // the collar of a two-part finial takes the finish, the acrylic top never does.
@@ -869,6 +903,8 @@ function HardwareConfiguratorInner({
         // negotiated row — see the precedence in hardwarePricing.
         levelIsDefault,
         finishCode: globalFinish, finishFor: lineFinishFor, findPart, findByCode: findPart,
+        // The stock colour a sub-finish part is made in (rod's finish first) — sold as <base>/B · <base>/C.
+        subFinishFor,
         // The finish RECORD behind a code — the engine reads its species suffix (OAK / WALNUT) to bill
         // the -O / -W item (hardwarePricing step 0a, Stuart 2026-09-16).
         finishObjOf: (code) => finishByCode.get(String(code || '').toUpperCase()) || null,
@@ -878,7 +914,7 @@ function HardwareConfiguratorInner({
         // inches travel too: they become the line's cutLength, which is what the bench reads.
         billedFeet: lengthFeet || 0,
         lengthInches: lengthInches || 0,
-    }), [customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, findPart, finishByCode, lengthFeet, lengthInches, flow]);
+    }), [customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, subFinishFor, findPart, finishByCode, lengthFeet, lengthInches, flow]);
     // ⚠ THE KIT TRANSFORM RUNS ONLY WHERE A KIT WAS CHOSEN. Every other configuration gets
     // priceConfiguration's answer verbatim, which is what keeps four tested collections still.
     // ⚠ ONE DESCRIPTION OF THE BILL, USED TWICE. The panel below and the cart item built at Add

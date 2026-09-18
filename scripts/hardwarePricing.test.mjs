@@ -287,5 +287,38 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     ok('and the line says the level was defaulted', /defaulted/.test(still.detail));
 }
 
+
+// ── A STOCK COLOUR IS SOLD AS ITS OWN ITEM (Stuart 2026-09-18, SO60551 row 2) ─────────────────────
+{
+    const { stockColourVariantOf } = await import('../src/components/Shared/finishVariant.js');
+    const lib = {
+        'H1-2TRV-WB':   { id: 'ASM-WB',   legacyErpId: 'H1-2TRV-WB',   manufacturingSpecs: { usesSubFinish: true, basePrice: 75 }, clientPricing: [] },
+        'H1-2TRV-WB/C': { id: 'ASM-WB-C', legacyErpId: 'H1-2TRV-WB/C', manufacturingSpecs: { isStocked: true }, clientPricing: [] },
+        'H1-2TRV-WB/B': { id: 'ASM-WB-B', legacyErpId: 'H1-2TRV-WB/B', manufacturingSpecs: { isStocked: true }, clientPricing: [] },
+        'H1-2TRV':      { id: 'INV-TRK',  legacyErpId: 'H1-2TRV',      manufacturingSpecs: { basePrice: 9 }, clientPricing: [] },
+    };
+    const find = (k) => lib[String(k || '').toUpperCase()] || Object.values(lib).find(p => p.id === k) || null;
+    eq('TCP is stocked as /C', stockColourVariantOf(lib['H1-2TRV-WB'], 'TCP', find)?.legacyErpId, 'H1-2TRV-WB/C');
+    eq('TBR is stocked as /B', stockColourVariantOf(lib['H1-2TRV-WB'], 'tbr', find)?.legacyErpId, 'H1-2TRV-WB/B');
+    eq('an exact <base>/<code> item would win', stockColourVariantOf({ legacyErpId: 'X' }, 'TCP', (c) => (c === 'X/TCP' ? { legacyErpId: 'X/TCP' } : c === 'X/C' ? { legacyErpId: 'X/C' } : null))?.legacyErpId, 'X/TCP');
+    eq('no stocked variant → null (the line stays label-only)', stockColourVariantOf(lib['H1-2TRV'], 'TCP', find), null);
+    eq('a variant is never re-swapped', stockColourVariantOf(lib['H1-2TRV-WB/C'], 'TBR', find), null);
+    eq('no code → null', stockColourVariantOf(lib['H1-2TRV-WB'], '', find), null);
+
+    const p = priceChoice({ role: 'BRACKET' }, lib['H1-2TRV-WB'], { findByCode: find, subFinishCode: 'TCP' });
+    eq('the billed item is the stock colour', p.billedId, 'H1-2TRV-WB/C');
+    eq('…and the record that is pulled', p.soldPartId, 'ASM-WB-C');
+    eq('priced from the base product, the placeholder that carries the price', [p.price, /priced from the base product H1-2TRV-WB/.test(p.detail)], [75, true]);
+    const withFinish = priceChoice({ role: 'BRACKET' }, lib['H1-2TRV-WB'], { findByCode: find, finishCode: 'EP4', subFinishCode: 'TCP' });
+    eq('a finish picked for the part outranks the stock colour', withFinish.soldPartId, undefined);
+
+    const cfg = priceConfiguration({ bom: [{ partId: 'H1-2TRV-WB', name: 'bracket', role: 'BRACKET', qty: 2 }, { partId: 'H1-2TRV', name: 'track', role: 'TRACK', qty: 1 }] },
+        { findPart: find, findByCode: find, finishFor: () => '', subFinishFor: () => 'TCP' });
+    eq('the line carries the colour and the sold record', [cfg.lines[0].subFinishCode, cfg.lines[0].billedId, cfg.lines[0].soldPartId, cfg.lines[0].finishCode], ['TCP', 'H1-2TRV-WB/C', 'ASM-WB-C', '']);
+    eq('a track with no stocked colour item keeps its base and its label', [cfg.lines[1].subFinishCode, cfg.lines[1].billedId, cfg.lines[1].soldPartId], ['TCP', 'H1-2TRV', undefined]);
+    const plain = priceConfiguration({ bom: [{ partId: 'H1-2TRV-WB', name: 'bracket', role: 'BRACKET', qty: 1 }] }, { findPart: find, findByCode: find, finishFor: () => '' });
+    eq('no subFinishFor → exactly as before', [plain.lines[0].billedId, plain.lines[0].subFinishCode], ['H1-2TRV-WB', undefined]);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

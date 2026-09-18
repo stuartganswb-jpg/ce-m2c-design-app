@@ -43,3 +43,25 @@ export function finishVariantOf(basePart, finishCode, findByCode) {
     for (const cand of cands) { const hit = findByCode(cand); if (hit) return hit; }
     return basePart;
 }
+
+// ── A STOCK COLOUR IS AN ITEM TOO (Stuart 2026-09-18, SO60551 row 2) ─────────────────────────────
+// "in the master library they are listed as TBR (traverse bronze) or TCP (traverse champagne) but all
+//  the items it refers to are stocked as /B or /C … H1-2TRV-WB needs to swap out to H1-2TRV-WB/C."
+// The traverse hardware is MADE in two stock colours. 4.5 names them TBR / TCP (the sub finish aligned
+// to each order finish); NetSuite stocks the parts as <base>/B and <base>/C. Until now the sub finish
+// only LABELLED a line — the item stayed the placeholder base, so the quote, the pick and NetSuite all
+// named a part nobody can pull. The exact code is tried first, so a future <base>/TCP item simply wins.
+// Returns the stocked variant, or null when the library holds none (the line stays label-only, as before).
+export const STOCK_COLOUR_SUFFIX = { TBR: 'B', TCP: 'C' };
+export function stockColourVariantOf(basePart, subFinishCode, findByCode) {
+    if (!basePart || !subFinishCode || typeof findByCode !== 'function') return null;
+    const baseCode = String(
+        (basePart.legacyErpId && basePart.legacyErpId !== 'PENDING' ? basePart.legacyErpId : basePart.itemId) || ''
+    ).trim().toUpperCase();
+    if (!baseCode || baseCode.includes('/')) return null;      // already a variant
+    const sc = String(subFinishCode).trim().toUpperCase();
+    const cands = [`${baseCode}/${sc}`];
+    if (STOCK_COLOUR_SUFFIX[sc]) cands.push(`${baseCode}/${STOCK_COLOUR_SUFFIX[sc]}`);
+    for (const cand of cands) { const hit = findByCode(cand); if (hit && hit !== basePart) return hit; }
+    return null;
+}

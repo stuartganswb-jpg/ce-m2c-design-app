@@ -37,7 +37,7 @@
 import { customerKeys, clientPriceFor, findClientPriceRow } from './clientPricing.js';
 import { takesNoFinish } from './finishLabel.js';
 import { fabricutPriceOf, fabricutCodeOf, priceLevelShort } from './priceLevels.js';
-import { finishVariantOf } from './finishVariant.js';
+import { finishVariantOf, stockColourVariantOf } from './finishVariant.js';
 import { speciesVariantOf } from './sizeMatrix.js';
 import { ROD_ROLES } from './hardwareModel.js';
 
@@ -89,7 +89,10 @@ export function priceChoice(choice, part, ctx = {}) {
     const basePart = part;
     const speciesPart = speciesVariantOf(part, finishObj, findByCode) || part;
     const speciesSwapped = !!part && speciesPart !== part;
-    const sold = finishVariantOf(speciesPart, finishCode, findByCode) || speciesPart;
+    // ── 0b — A STOCK COLOUR (Stuart 2026-09-18): a part that wears no finish of its own but is made in
+    //        the order's aligned stock colour is SOLD as that item — H1-2TRV-WB + TCP → H1-2TRV-WB/C.
+    const stockColour = (!finishCode && ctx.subFinishCode) ? stockColourVariantOf(speciesPart, ctx.subFinishCode, findByCode) : null;
+    const sold = stockColour || finishVariantOf(speciesPart, finishCode, findByCode) || speciesPart;
     const billedId = sold ? String(
         (sold.legacyErpId && sold.legacyErpId !== 'PENDING' ? sold.legacyErpId : sold.itemId) || ''
     ).trim() : '';
@@ -103,7 +106,7 @@ export function priceChoice(choice, part, ctx = {}) {
         // Their part number, from the same box as their price — shown wherever the line is shown.
         const sku = row?.clientSku ? String(row.clientSku).trim() : '';
         const aliasCode = part ? (fabricutCodeOf(part, findByCode, outsourceCodes) || '') : '';
-        const out = (price, source, detail) => ({ price: price || 0, source, sku, aliasCode, billedId, detail: detail || '' });
+        const out = (price, source, detail) => ({ price: price || 0, source, sku, aliasCode, billedId, ...(stockColour ? { soldPartId: stockColour.id } : {}), detail: detail || '' });
 
         // 1 — an authored override on the pin wins outright.
         const override = num(choice?.price);
@@ -168,8 +171,11 @@ export function priceChoice(choice, part, ctx = {}) {
 
         return out(0, PRICE_SOURCES.NONE, `nothing on ${billedId || 'this item'} at ${priceLevel === 'STANDARD' ? 'standard pricing' : priceLevelShort(priceLevel)} — no override, no tier, no customer row, no base price`);    };
     const first = chain(sold);
-    if (first.source !== PRICE_SOURCES.NONE || !speciesSwapped) return first;
-    const baseSold = finishVariantOf(basePart, finishCode, findByCode) || basePart;
+    // …and the same for a stock-colour item: H1-2TRV-WB/C is the thing pulled, H1-2TRV-WB is the product
+    // that carries the price and the customer's pattern number (Stuart 2026-09-18: "the placeholder for
+    // the item# and price").
+    if (first.source !== PRICE_SOURCES.NONE || !(speciesSwapped || stockColour)) return first;
+    const baseSold = stockColour ? basePart : (finishVariantOf(basePart, finishCode, findByCode) || basePart);
     const alt = chain(baseSold);
     if (alt.source === PRICE_SOURCES.NONE) return first;
     const baseCode = String((basePart.legacyErpId && basePart.legacyErpId !== 'PENDING' ? basePart.legacyErpId : basePart.itemId) || '').trim();
@@ -203,7 +209,10 @@ export function priceConfiguration(model, ctx = {}) {
         const finishCode = unfinished ? '' : (typeof ctx.finishFor === 'function'
             ? (ctx.finishFor(choice, entry) || '')
             : ctx.finishCode);
-        const p = priceChoice(choice, part, finishCode === ctx.finishCode ? ctx : { ...ctx, finishCode });
+        // THE STOCK COLOUR this part is made in, when it takes one and wears no finish (the caller knows
+        // which parts do and which colour is aligned — Shared/finishVariant.stockColourVariantOf).
+        const subFinishCode = (!finishCode && !unfinished && typeof ctx.subFinishFor === 'function') ? String(ctx.subFinishFor(choice, part) || '').toUpperCase() : '';
+        const p = priceChoice(choice, part, (finishCode === ctx.finishCode && !subFinishCode) ? ctx : { ...ctx, finishCode, subFinishCode });
         // ⚠ ROD STOCK IS SOLD BY THE FOOT (Stuart 2026-08-20: "it needs to take billed ft qty on
         // step 6 and multiply it times price of selected rod in 10 and 11 if double"). H1-138R is
         // "Round Hollow Rod Stock" at 12.50 — a foot of it, not a pole of it — so a ten-foot order
@@ -237,6 +246,9 @@ export function priceConfiguration(model, ctx = {}) {
             // WHAT THIS LINE IS FINISHED IN — on the line, not only on the configuration, so the
             // quote panel can show it per part and the finishing floor is told per part.
             finishCode: finishCode || '',
+            // …or the stock colour it is made in, and the record that is actually pulled for it.
+            ...(subFinishCode ? { subFinishCode } : {}),
+            ...(p.soldPartId ? { soldPartId: p.soldPartId } : {}),
             // …and WHY it has none, where it has none: a clear acrylic finial takes no finish at
             // all, which is a different fact from a steel part left in mill.
             noFinish: unfinished,
