@@ -1343,6 +1343,37 @@ function HardwareConfiguratorInner({
         setCfgQty(String(parseInt(s.qty, 10) > 0 ? parseInt(s.qty, 10) : 1));
         setStepIx(0);
     }, [reopenSeed]);
+    // ── …AND THE KIT IT WAS BILLED FROM (Stuart 2026-09-19, QUO154 row 6) ────────────────────────
+    // The kit was a dropdown pick that lived only in this component, so Edit → re-add brought back
+    // every answer and NOT the kit: the $195 H1-2TRV-4/W line vanished and its parts billed one by
+    // one — about $90 a board lower, silently. The pick now travels in engineConfig (`kitPick`); a
+    // line saved before today names its kit on its own bill (`kitCode`, read by CPQ's Edit from the
+    // saved kit row). Restored WITHOUT re-seeding — the saved answers are the truth, the kit only
+    // owns the first line of the bill again. Waits for the kit list, applies once per reopen, and a
+    // line that had no kit clears whatever kit the walk before it left behind.
+    const kitRestoredRef = useRef(null);
+    useEffect(() => {
+        const s = reopenSeed;
+        if (!s || !s.key || kitRestoredRef.current === s.key) return;
+        const want = String(s.kitPick || '').trim();
+        const wantCode = String(s.kitCode || '').trim().toUpperCase();
+        if (!want && !wantCode) { kitRestoredRef.current = s.key; setKitPick(''); setKitMotor(''); setKitSource(null); setKitReport(null); return; }
+        if (!kits.length) return;   // the list is still loading — this runs again when it lands
+        kitRestoredRef.current = s.key;
+        const idOf = (k) => String(k.id || k.legacyErpId || '');
+        const chosen = kits.find(k => want && idOf(k) === want)
+            || kits.find(k => wantCode && String(k.legacyErpId || '').trim().toUpperCase() === wantCode);
+        if (!chosen || !chosen.manufacturingSpecs?.kitAlign) {
+            setKitPick(''); setKitMotor(''); setKitSource(null);
+            setKitReport({ name: wantCode || want, blocked: { what: 'This line was billed from that kit, and the kit is no longer offered on this flow', why: 'Pick a kit again, or the line bills part by part.' }, restore: true, carried: [], missed: [] });
+            return;
+        }
+        const name = String(chosen.legacyErpId || chosen.itemName || 'the kit');
+        setKitPick(idOf(chosen));
+        setKitMotor(String(s.kitMotor || ''));
+        setKitReport(null);
+        setKitSource({ code: name, name: chosen.itemName || name, baseFeet: Number(chosen.manufacturingSpecs.kitAlign.minFeet) || 4, record: chosen });
+    }, [reopenSeed, kits]);
     const ix = Math.min(stepIx, Math.max(0, steps.length - 1));
     const step = steps[ix];
     // MASTER CONTROL (Stuart 2026-08-26): tab 11's item list IS what CPQ presents, and each item
@@ -1447,8 +1478,8 @@ function HardwareConfiguratorInner({
             // Filtered to extras actually TAKEN: extraLines coerces a 0 qty to 1 for display.
             extras, extraLines: extraLines.filter(l => Number((extras.find(x => x.code === l.partId && (x.slot || '') === (l.slot || '')) || {}).qty) > 0),
             stepNotes, answers, picks: livePicks, partFinish, globalFinish, globalFinishes, stepQty,
-            // The kit, so the cart bills exactly what the panel showed.
-            kit: kitBill,
+            // The kit, so the cart bills exactly what the panel showed — and WHICH kit, so Edit restores it.
+            kit: kitBill, kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
             // The track's components, in the shape the cart has always carried them — the ERP push
             // reads `trvComponents` off the item and the documents read the breakdown rows, so
             // neither can tell which engine asked the question.
@@ -1781,11 +1812,11 @@ function HardwareConfiguratorInner({
                 <div style={{ background: '#fff', border: `1px solid ${kitReport.blocked ? '#b00020' : (kitReport.missed.length ? '#8a6508' : 'var(--brass)')}`, padding: '10px 14px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ ...mono, fontSize: '8.5px', color: kitReport.blocked ? '#b00020' : 'var(--brass)' }}>
-                            {kitReport.blocked ? 'This assembly cannot build' : 'Started from kit'} · {kitReport.name}
+                            {kitReport.restore ? 'Kit not restored' : (kitReport.blocked ? 'This assembly cannot build' : 'Started from kit')} · {kitReport.name}
                         </div>
                         {kitReport.blocked && (
                             <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: '#b00020', marginTop: '3px' }}>
-                                ⚠ {kitReport.blocked.what} — {kitReport.blocked.why} Nothing was filled in.
+                                ⚠ {kitReport.blocked.what} — {kitReport.blocked.why}{kitReport.restore ? '' : ' Nothing was filled in.'}
                             </div>
                         )}
                         {!!kitReport.carried.length && (

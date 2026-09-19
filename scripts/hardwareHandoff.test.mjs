@@ -52,6 +52,12 @@ ok('total is money', item.pricing.finalPrice > 0);
 ok('names its engine', item.engine === 'TAGS');
 ok('config kept for reopen', item.engineConfig.lengthFeet === 9 && item.engineConfig.lengthInches === 96.5);
 ok('every material\'s finish kept for reopen (the wood one was being lost)', item.engineConfig.globalFinish === 'P07' && item.engineConfig.globalFinishes.METAL === 'P07' && item.engineConfig.globalFinishes.WOOD === 'S04');
+// The kit pick travels, so Edit → re-add restores the kit instead of billing part by part (QUO154 row 6).
+{
+    const withKit = handoffItem(resolved, { findPart, assembly: { id: 'A1' }, finishCode: 'P07', kitPick: 'CE-KIT-1', kitMotor: 'M35' }).engineConfig;
+    ok('the kit pick and its motor code are kept for reopen', withKit.kitPick === 'CE-KIT-1' && withKit.kitMotor === 'M35');
+    ok('a line with no kit carries no kit key', !('kitPick' in item.engineConfig));
+}
 ok('a line saved with no per-material map carries an empty one, never undefined', typeof handoffItem(resolved, { findPart, assembly: { id: 'A1' }, finishCode: 'P07' }).engineConfig.globalFinishes === 'object');
 
 // ── the lines the floors classify ────────────────────────────────────────────────────────────

@@ -1980,6 +1980,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
               // per breakdown line by doc id, which is how QUO147's one splice became three
               // (Shared/extrasRestore).
               extras: extrasFromSavedItem(item),
+              // A line saved before the kit pick travelled names its kit on its own bill: the traverse
+              // kit row (isKit, never an item kit) carries the kit's code.
+              kitCode: String(((item.pricingBreakdown || []).find(l => l && l.isKit && !l.itemKit) || {}).legacyErpId || ''),
           });
           setEditingCartId(itemId);
           if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
