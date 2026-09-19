@@ -1,5 +1,6 @@
 import { db } from '../../firebase';
 import { collection, doc, setDoc, getDocs, query, where } from 'firebase/firestore';
+import { memoCapFor, cappedMemo } from './nsMemoCap';
 
 // ============================================================================
 // LAYER 2 — STAGED NETSUITE WRITES (Stuart 2026-07-16)
@@ -44,7 +45,9 @@ export const enqueueNsWrite = async ({ kind, label, targetUrl, method, payload, 
     // Shop time (High Point NC) regardless of the device's zone, so the memo reads true on the floor.
     const stamp = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' });
     const marker = `[app push ${stamp} #${ref.id.slice(0, 6)}]`;
-    if (typeof p.memo === 'string') p.memo = `${p.memo} ${marker}`;
+    const memoCap = memoCapFor(targetUrl);
+    if (memoCap) p.memo = cappedMemo(p.memo, ref.id, memoCap);
+    else if (typeof p.memo === 'string') p.memo = `${p.memo} ${marker}`;
     else if (method === 'POST' && /\/record\/v1\//.test(String(targetUrl))) p.memo = marker;
     await setDoc(ref, {
         id: ref.id, kind: kind || 'write', label: label || '', sourceApp: sourceApp || '', createdBy: createdBy || '',

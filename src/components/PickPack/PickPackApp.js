@@ -60,6 +60,7 @@ import FulfilmentPanel from "../Shared/fulfilmentPanel";
 import { boxSizeLabel } from "../Shared/fulfilment";
 import { fetchNsPurchaseOrder, importNsPurchaseOrder, fetchNsPoLines, fetchPreferredBins, recordPoReceipt, openQtyOf, overRoomOf, maxReceivableOf, poRef } from "../Shared/purchaseOrders";
 import { itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText, binTransferLineOf } from "../Shared/poReceiptLines";
+import { onceAtATime } from "../Shared/onceAtATime";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
@@ -304,6 +305,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [rcvPoInput, setRcvPoInput] = useState('');    // the PO number typed or scanned at the dock
     const [rcvPo, setRcvPo] = useState(null);            // the resolved purchase order (app record)
     const [rcvBusy, setRcvBusy] = useState(false);
+    const rcvLatchRef = useRef(false);   // set synchronously — state is too late to stop a second submit
     // What NetSuite never got (Eric 2026-09-17): { lines: [{index,itemId,qty,bin,…}], inFlight } for the open PO, or null.
     const [rcvNsGap, setRcvNsGap] = useState(null);
     const [rcvScan, setRcvScan] = useState('');          // the find box
@@ -1050,7 +1052,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             setRcvNsGap({ poId: po.id, lines, inFlight });
         } catch (e) { console.warn('Receiving: NetSuite comparison failed (nothing changed):', e); }
     };
-    const rcvPostNsGap = async () => {
+    const rcvPostNsGapRun = async () => {
         if (!rcvPo || !rcvNsGap || rcvNsGap.poId !== rcvPo.id || rcvNsGap.inFlight) return;
         const fallbackBin = String(rcvBin || '').trim().toUpperCase();
         const want = rcvNsGap.lines.map(l => ({ ...l, bin: l.bin || fallbackBin }));
@@ -1181,7 +1183,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     //   3 NetSuite                 the item receipt, through the outbox: deterministic id so a
     //                              double-tap cannot post twice, retried, and a real error in 11.1
     //   4 the waiting orders       offerAllocation, before the pieces vanish onto a shelf
-    const rcvPutAway = async () => {
+    const rcvPutAwayRun = async () => {
         if (!rcvPo || !rcvCart.length) return;
         const bin = String(rcvBin || '').trim().toUpperCase();
         if (!bin) return alert('Scan the home bin — the pieces have to land somewhere.');
@@ -1294,6 +1296,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             alert('❌ Put-away problem:\n\n' + (e.message || e) + '\n\nCheck the PO before receiving again — the app record is written first, so some lines may already be counted.');
         } finally { setRcvBusy(false); }
     };
+    // ONE RUN AT A TIME (Shared/onceAtATime): a scanner's second Enter, or a second tap, while a put-away
+    // or a catch-up is still in flight does nothing — it used to queue the NetSuite receipt twice.
+    const rcvPutAway = onceAtATime(rcvLatchRef, rcvPutAwayRun);
+    const rcvPostNsGap = onceAtATime(rcvLatchRef, rcvPostNsGapRun);
 
     const pendingReasonOf = (j) => {
         if (j.awaitingRodCut) return 'poles being cut';
