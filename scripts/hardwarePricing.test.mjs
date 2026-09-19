@@ -360,5 +360,32 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     eq('an ordinary part is exactly one line, as before', [plain.lines.length, plain.lines[0].isKit], [1, undefined]);
 }
 
+// ── A TWO-PART FINIAL IS PRICED BY ITS COLLAR'S FINISH (Stuart 2026-09-19, the wood gem) ────────
+// The record as it is live: both tiers on H1-138WGF, a customer row seeded from the painted tier, and
+// a wood top whose own finish is a stain. The collar is what gets plated, so the collar picks the tier.
+{
+    const gem = { id: 'G', legacyErpId: 'H1-138WGF', itemName: 'Wood Gem Finial with Collar',
+        manufacturingSpecs: { fabricut: { fabCodePainted: 'H1551F', fabCodePremium: 'H1551F PREMIUM', paintedCost: 47, paintedWholesale: 94, paintedRetail: 188, platedCost: 55, platedWholesale: 100, platedRetail: 200 } },
+        clientPricing: [{ customerId: 'CUST-1', price: 47, clientSku: 'H1551F' }] };
+    const collarPart = { id: 'C', legacyErpId: 'H1-138WFCON2', itemName: 'Collar', manufacturingSpecs: {}, clientPricing: [] };
+    const parts = { G: gem, C: collarPart };
+    const top = { id: 'top', partId: 'G', name: 'gem', role: 'FINIAL', position: 'LEFT', requiresCollar: 'C', materials: 'WOOD' };
+    const col = { id: 'col', partId: 'C', name: 'collar', role: 'FINIAL', position: 'LEFT', isCollar: true, materials: 'METAL' };
+    const model = { choices: [top, col], bom: [{ ...top, qty: 1 }, { ...col, qty: 1 }] };
+    const run = (collarFinish, over = {}) => priceConfiguration(model, ctx({ priceLevel: 'FAB_COST', levelIsDefault: true,
+        findPart: (id) => parts[id] || null, findByCode: () => null,
+        finishFor: (c) => (c.id === 'col' ? collarFinish : 'S03'), ...over })).lines[0];
+    const painted = run('P26');
+    eq('a painted collar: the customer row, their painted number', [painted.unit, painted.sku, painted.source], [47, 'H1551F', PRICE_SOURCES.CLIENT]);
+    const plated = run('EP2');
+    eq('a plated collar: the plated tier and their PREMIUM number', [plated.unit, plated.sku, plated.source], [55, 'H1551F PREMIUM', PRICE_SOURCES.LEVEL]);
+    eq('…at a CHOSEN level too', run('EP2', { priceLevel: 'FAB_WHOLESALE', levelIsDefault: false }).unit, 100);
+    eq('the finial line still wears its own stain', plated.finishCode, 'S03');
+    // A part with no collar never sees the rule: a plated finish on its own line keeps the row.
+    const solo = priceConfiguration({ choices: [{ ...top, requiresCollar: '' }], bom: [{ ...top, requiresCollar: '', qty: 1 }] },
+        ctx({ priceLevel: 'FAB_COST', levelIsDefault: true, findPart: (id) => parts[id] || null, findByCode: () => null, finishFor: () => 'EP2' })).lines[0];
+    eq('no collar, no rule — the customer row stands as before', [solo.unit, solo.source], [47, PRICE_SOURCES.CLIENT]);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

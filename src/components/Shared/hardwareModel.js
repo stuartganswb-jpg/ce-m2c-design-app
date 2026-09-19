@@ -160,8 +160,14 @@ export function applyFitsDefaults(choices) {
     const worlds = [...new Set(choices.filter(c => ROD_ROLES.includes(c.role)).map(c => c.rodKind).filter(Boolean))];
     if (!worlds.length) return choices;
     const claimed = {};   // role -> Set(worlds explicitly claimed by a tagged sibling)
+    // ⚠ A RIDER'S TAG SPEAKS FOR THE RIDER ONLY (Stuart 2026-09-19, QUO153 row 4: four return standoffs
+    // on a traverse miter return that takes none). The cure is to tag the standoff trv: std-only — but a
+    // standoff is filed in the FINIAL slot beside the return it serves, so its role is FINIAL, and its
+    // tag read as "the tagged finials are the solid ones": every untagged finial on H1-138 took the
+    // complement and became traverse-only. A part that is never offered draws no distinction between
+    // the parts that are. Its own tag still binds it (ridersFor reads c.fits).
     choices.forEach(c => {
-        if (ROD_ROLES.includes(c.role) || !c.fitsExplicit) return;
+        if (ROD_ROLES.includes(c.role) || !c.fitsExplicit || c.always) return;
         (claimed[c.role] = claimed[c.role] || new Set());
         c.fits.forEach(f => claimed[c.role].add(f));
     });

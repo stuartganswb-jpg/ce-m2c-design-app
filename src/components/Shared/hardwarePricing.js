@@ -36,10 +36,10 @@
 
 import { customerKeys, clientPriceFor, findClientPriceRow } from './clientPricing.js';
 import { takesNoFinish } from './finishLabel.js';
-import { fabricutPriceOf, fabricutCodeOf, priceLevelShort } from './priceLevels.js';
+import { fabricutPriceOf, fabricutCodeOf, priceLevelShort, isPlatedSuffix } from './priceLevels.js';
 import { finishVariantOf, stockColourVariantOf } from './finishVariant.js';
 import { speciesVariantOf } from './sizeMatrix.js';
-import { ROD_ROLES } from './hardwareModel.js';
+import { ROD_ROLES, companionsFor } from './hardwareModel.js';
 
 export const PRICE_SOURCES = {
     OVERRIDE: 'authored override',
@@ -132,14 +132,35 @@ export function priceChoice(choice, part, ctx = {}) {
         //   · defaulted → the customer's own row is the more specific fact and wins; the level stays
         //     underneath it, still catching the mill items that have no row and no base price, which is
         //     the whole reason it exists.
+        // ── A TWO-PART FINIAL IS PRICED BY ITS COLLAR'S FINISH (Stuart 2026-09-19, the wood gem: "where do
+        // i assign the plating upcharge for the gem, i am assuming on the collar portion?"). H1-138WGF is
+        // ONE product to Fabricut — H1551F painted at 47, H1551F PREMIUM plated at 55 — and both tiers sit
+        // on the one record. But the top is wood (or acrylic): the finish on ITS line is a stain, or
+        // nothing, so the tier always read painted and a plated collar billed 47. What is plated is the
+        // collar, so the collar's finish picks the tier (`ctx.tierFinishCode`, set by priceConfiguration
+        // for a part that requires a collar, and by nothing else).
+        const tierFinish = ctx.tierFinishCode || finishCode;
         const levelPrice = () => {
             if (!priceLevel || priceLevel === 'STANDARD') return null;
-            const lv = fabricutPriceOf(part, priceLevel, finishCode, outsourceCodes, findByCode);
+            const lv = fabricutPriceOf(part, priceLevel, tierFinish, outsourceCodes, findByCode);
             return (lv === null || lv === undefined) ? null : lv;
         };
         const clientPrice = () => (keys ? clientPriceFor(part.clientPricing, keys) : null);
         const levelOut = (lv) => out(lv, PRICE_SOURCES.LEVEL, `${priceLevel}${finishCode ? ` · finish ${finishCode}` : ''}${levelIsDefault ? ' · defaulted' : ''}`);
         const clientOut = (cv) => out(cv, PRICE_SOURCES.CLIENT, row?.customerId ? `row keyed "${row.customerId}"` : '');
+
+        // …and a PLATED collar outranks the customer's row even under a defaulted level: that row is one
+        // number (4.6 seeds it from the painted tier) and cannot hold both, while the plated tier on the
+        // same record is the same customer's own price for exactly this case. Their PREMIUM part number
+        // travels with it.
+        if (ctx.tierFinishCode && isPlatedSuffix(tierFinish, outsourceCodes)) {
+            const lv = levelPrice();
+            if (lv !== null && lv > 0) {
+                const premium = String(part.manufacturingSpecs?.fabricut?.fabCodePremium || '').trim();
+                const o = levelOut(lv);
+                return { ...o, ...(premium ? { sku: premium, aliasCode: premium } : {}), detail: `${o.detail} · plated tier — the collar is ${tierFinish}` };
+            }
+        }
 
         if (!levelIsDefault) {
             // 2 — the CHOSEN price level, when this item has tier data to answer with. Items without it
@@ -228,6 +249,7 @@ function kitComponentLines(holder, kitPart, ctx) {
 
 export function priceConfiguration(model, ctx = {}) {
     const { findPart } = ctx;
+    const choiceById = new Map((model?.choices || []).map(c => [String(c.id), c]));
     const lines = (model?.bom || []).flatMap(entry => {
         const choice = entry.raw && entry.raw.__choice ? entry.raw.__choice : entry;
         const part = typeof findPart === 'function' ? findPart(entry.partId) : null;
@@ -250,7 +272,12 @@ export function priceConfiguration(model, ctx = {}) {
         // THE STOCK COLOUR this part is made in, when it takes one and wears no finish (the caller knows
         // which parts do and which colour is aligned — Shared/finishVariant.stockColourVariantOf).
         const subFinishCode = (!finishCode && !unfinished && typeof ctx.subFinishFor === 'function') ? String(ctx.subFinishFor(choice, part) || '').toUpperCase() : '';
-        const p = priceChoice(choice, part, (finishCode === ctx.finishCode && !subFinishCode) ? ctx : { ...ctx, finishCode, subFinishCode });
+        // The finish of the COLLAR this part requires (a two-part finial) — it picks the price tier.
+        const full = choiceById.get(String(entry.id || '')) || null;
+        const collar = (full && full.requiresCollar) ? (companionsFor(model.choices || [], [full.id])[0] || null) : null;
+        const collarRow = collar ? ((model.bom || []).find(e => e.id === collar.id) || collar) : null;
+        const tierFinishCode = collarRow ? String((typeof ctx.finishFor === 'function' ? ctx.finishFor(collarRow, collarRow) : ctx.finishCode) || '').toUpperCase() : '';
+        const p = priceChoice(choice, part, (finishCode === ctx.finishCode && !subFinishCode && !tierFinishCode) ? ctx : { ...ctx, finishCode, subFinishCode, tierFinishCode });
         // ⚠ ROD STOCK IS SOLD BY THE FOOT (Stuart 2026-08-20: "it needs to take billed ft qty on
         // step 6 and multiply it times price of selected rod in 10 and 11 if double"). H1-138R is
         // "Round Hollow Rod Stock" at 12.50 — a foot of it, not a pole of it — so a ten-foot order

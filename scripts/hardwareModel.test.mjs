@@ -2514,5 +2514,24 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('on a double each tier\'s plate follows its own tier\'s arm', [qty(dbl, 'PLC'), qty(dbl, 'PLC2')], [3, 2]);
 }
 
+// ── A RIDER'S TAG SPEAKS FOR THE RIDER ONLY (Stuart 2026-09-19, QUO153 row 4) ────────────────────
+// A return standoff is filed in the FINIAL slot, so its role is FINIAL. Tagged trv: std-only it must
+// stay off a traverse rod — and must NOT turn every untagged finial beside it traverse-only.
+{
+    const cs = [
+        { id: 'ROD', role: 'ROD', rodKind: 'SOLID', nodes: ['r'] },
+        { id: 'TRK', role: 'FASCIA', nodes: ['t'] },
+        { id: 'BALL', role: 'FINIAL', position: 'LEFT', nodes: ['b'] },
+        { id: 'MTR', role: 'RETURN', position: 'LEFT', nodes: ['m'] },
+        { id: 'TMTR', role: 'RETURN', position: 'LEFT', fits: ['TRAVERSE'], nodes: ['tm'] },
+        { id: 'SO', role: 'FINIAL', position: 'LEFT', always: true, hidden: true, ridesWith: 'RETURN', fits: ['SOLID'] },
+    ];
+    const n = applyFitsDefaults(cs.map(normalizeChoice));
+    eq('a std-only standoff leaves the untagged finial on both rods', n.find(c => c.id === 'BALL').fits, ['SOLID', 'TRAVERSE']);
+    eq('…an OFFERED tagged sibling still draws the line (untagged return = solid)', n.find(c => c.id === 'MTR').fits, ['SOLID']);
+    eq('the standoff rides the solid rod with its return', ridersFor(n, { rodKind: 'SOLID' }, ['ROD', 'MTR']).map(c => c.id), ['SO']);
+    eq('…and never the traverse rod', ridersFor(n, { rodKind: 'TRAVERSE' }, ['TRK', 'TMTR']).map(c => c.id), []);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
