@@ -3067,6 +3067,17 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const fin = (finishCode || '').toUpperCase();
         const finLong = finishName ? `${finishName} (${fin})` : fin;
         const target = targetErpId || (fin ? `${erpId}/${fin}` : erpId);
+        // ── THE BARCODE IS WHAT COMES BACK (Stuart 2026-09-19: "make the barcode … the final finished item
+        // that is coming back to us, so when we receive we can scan it and it will have the /EP in the code
+        // and can scan into cart"). It used to be the work order number, which the receiving station's find
+        // box does not match on — it finds a line by the raw or the PLATED code (findPlatingLine). The label
+        // rides the part to the plater and back, so it carries the code it will be received under. The WO
+        // stays on the label in words. A custom part with no real item code keeps the WO, as before.
+        const scanCode = String(target || '').trim().toUpperCase();
+        const barcode = (scanCode && scanCode !== 'CUSTOM' && !scanCode.startsWith('CUSTOM/')) ? scanCode : wo;
+        // An item code is longer than a WO number, and the Zebra label is 406 dots wide: Code 128 needs
+        // 11 modules a character plus start / check / stop. Two dots a module while it fits, one when it would run off.
+        const barModule = (11 * (barcode.length + 3) + 2) * 2 <= 380 ? 2 : 1;
         // FINISH is the headline — it's what tells the plater what to do.
         const zpl = `^XA
 ^PW406
@@ -3078,7 +3089,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 ^FO20,196^A0N,30,30^FDQty: ${qty}^FS
 ^FO20,234^A0N,26,26^FDWO: ${wo || '—'}^FS
 ^FO20,270^A0N,24,24^FDBin: ${platingBin}^FS
-${wo ? `^FO20,308^BY2,2,80^BCN,80,Y,N,N^FD${wo}^FS` : ''}
+${barcode ? `^FO20,308^BY${barModule},2,80^BCN,80,Y,N,N^FD${barcode}^FS` : ''}
 ^XZ`;
         emitLabel(zpl, {
             title: `Plating ${fin || ''}`.trim(), widthIn: 4, heightIn: 2,
@@ -3087,7 +3098,7 @@ ${wo ? `^FO20,308^BY2,2,80^BCN,80,Y,N,N^FD${wo}^FS` : ''}
 <div class="line">${esc(name)}</div>
 <div class="line"><b>Finish:</b> ${esc(finLong || '—')}</div>
 <div class="line"><b>Qty:</b> ${esc(qty)}&nbsp;&nbsp;<b>WO:</b> ${esc(wo || '—')}&nbsp;&nbsp;<b>Bin:</b> ${esc(platingBin)}</div>
-${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></div>` : ''}`
+${barcode ? `<div class="bc">${code128BSvg(barcode)}<div class="bctxt">${esc(barcode)}</div></div>` : ''}`
         });
     };
 
