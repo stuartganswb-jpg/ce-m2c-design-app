@@ -40,6 +40,7 @@ import { fabricutPriceOf, fabricutCodeOf, priceLevelShort, isPlatedSuffix } from
 import { finishVariantOf, stockColourVariantOf } from './finishVariant.js';
 import { speciesVariantOf } from './sizeMatrix.js';
 import { ROD_ROLES, companionsFor } from './hardwareModel.js';
+import { traverseCutLength } from './traverseTags.js';
 
 export const PRICE_SOURCES = {
     OVERRIDE: 'authored override',
@@ -298,6 +299,19 @@ export function priceConfiguration(model, ctx = {}) {
         const perFoot = feet > 0 && ROD_ROLES.includes(entry.role);
         const qty = Number(entry.qty) > 0 ? Number(entry.qty) : 1;
         const inches = Number(ctx.lengthInches) > 0 ? Number(ctx.lengthInches) : 0;
+        // ── THE FASCIA IS THE DATUM; THE TRACK AND THE F-CLIP ARE CUT SHORTER (Stuart 2026-09-19, QUO156
+        // row 6: "it is not applying the deduction rules for the traverse track" · "the rod/fascia has no
+        // deductions, it is cut at sold length; f-clip gets cut deduction −1" or −3"). His 08-04 table
+        // (Shared/traverseTags: track −0.5" manual / −2" motorised · F-clip −1" / −3") was only ever read
+        // by Vision, whose cut list rides the job; a CPQ order has no drawing, so the track went to the
+        // bench at the fascia's length and the F-clip with none. The LINE carries the cut now — the one
+        // field the BOM, the shop cut list, the labels and packaging already read. Billing is untouched:
+        // the feet are the length sold. An F-clip is the hanger the track hangs from — NOT the hidden
+        // nut that shares its role (BOM-only, rides each bracket), which is never cut.
+        const roleU = String(entry.role || '').toUpperCase();
+        const isCutClip = roleU === 'FCLIP' && !entry.hidden && !(full && full.ridesWith);
+        const trvCut = (inches && (roleU === 'TRACK' || isCutClip))
+            ? traverseCutLength({ fasciaInches: inches, role: roleU, drive: ctx.drive || 'MANUAL' }) : null;
         const line = {
             partId: entry.partId,
             name: entry.name,
@@ -310,7 +324,7 @@ export function priceConfiguration(model, ctx = {}) {
             ...(perFoot ? { feet } : {}),
             // What the shop cuts to. Read by RTG, the floor, the labels and packaging — and never
             // set by this engine until now, so a pole reached the bench with no length on it.
-            ...(perFoot && inches ? { cutLength: inches } : {}),
+            ...(trvCut ? { cutLength: trvCut } : (perFoot && inches ? { cutLength: inches } : {})),
             // WHAT THIS LINE IS FINISHED IN — on the line, not only on the configuration, so the
             // quote panel can show it per part and the finishing floor is told per part.
             finishCode: finishCode || '',

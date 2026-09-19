@@ -1,4 +1,4 @@
-import { joinNodes, splitNodes } from './nodeList';
+import { joinNodes, splitNodes } from './nodeList.js';
 
 // TRAVERSE (Stuart 2026-08-03). "TRV in the code stands for traverse — components that sit inside a
 // track and traverse back and forth inside the track rather than rings on top of the pole."

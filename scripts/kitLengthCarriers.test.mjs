@@ -31,4 +31,30 @@ const parts = { TRK: { id: 'TRK', legacyErpId: 'H1-2TRV', manufacturingSpecs: {}
 const roles = (ctx) => priceConfiguration(model, { findPart: (id) => parts[id] || null, findByCode: () => null, ...ctx }).lines.map(l => l.role);
 eq('no carrier style chosen: the pinned carrier stays on the bill', roles({}), ['TRACK', 'CARRIER']);
 eq('a carrier style chosen: the pinned carrier is off the bill', roles({ skipRoles: ['CARRIER'] }), ['TRACK']);
+
+// THE TRACK AND THE F-CLIP ARE CUT SHORTER THAN THE FASCIA (his 08-04 table); the fascia/rod is cut as sold.
+{
+    const { applyKitPricing } = await import('../src/components/Shared/kitSeed.js');
+    const m2 = { choices: [{ id: 'NUT', role: 'FCLIP', ridesWith: 'BRACKET' }], bom: [
+        { id: 'F', partId: 'FAS', name: 'Fascia', role: 'FASCIA', qty: 1 },
+        { id: 'T', partId: 'TRK', name: 'Track', role: 'TRACK', qty: 1 },
+        { id: 'CL', partId: 'CLP', name: 'F-clip', role: 'FCLIP', qty: 1 },
+        { id: 'NUT', partId: 'NUT', name: 'Nut', role: 'FCLIP', qty: 2, hidden: true },
+        { id: 'C', partId: 'CAR', name: 'Pinned carrier', role: 'CARRIER', qty: 8 },
+    ] };
+    const p2 = { ...parts, FAS: { id: 'FAS', legacyErpId: 'H1-2RCTWR', manufacturingSpecs: { basePrice: 15 } }, CLP: { id: 'CLP', legacyErpId: 'H1-2TRVCLP', manufacturingSpecs: {} }, NUT: { id: 'NUT', legacyErpId: 'H1-2TRVNUT', manufacturingSpecs: {} } };
+    const cuts = (drive) => Object.fromEntries(priceConfiguration(m2, { findPart: (id) => p2[id] || null, findByCode: () => null, billedFeet: 2, lengthInches: 18, drive }).lines.map(l => [l.partId, l.cutLength ?? null]));
+    eq('manual: fascia as sold, track −0.5", F-clip −1", the nut and the carrier never cut', cuts('MANUAL'), { FAS: 18, TRK: 17.5, CLP: 17, NUT: null, CAR: null });
+    eq('motorised: track −2", F-clip −3"', cuts('MOTORIZED'), { FAS: 18, TRK: 16, CLP: 15, NUT: null, CAR: null });
+    eq('no drive answered reads as manual', cuts(undefined).TRK, 17.5);
+    const feetOf = priceConfiguration(m2, { findPart: (id) => p2[id] || null, findByCode: () => null, billedFeet: 2, lengthInches: 18, drive: 'MANUAL' }).lines.find(l => l.partId === 'TRK').feet;
+    eq('the billed feet do not move with the cut', feetOf, 2);
+
+    // THE KIT COVERS ITS CARRIERS at the chart count for the length billed.
+    const priced = priceConfiguration(m2, { findPart: (id) => p2[id] || null, findByCode: () => null, billedFeet: 2, lengthInches: 18 });
+    const carrierLine = (cover, qty) => applyKitPricing({ ...priced, lines: priced.lines.map(l => (l.partId === 'CAR' ? { ...l, qty, total: 0.5 * qty } : l)) },
+        { kitCode: 'KIT', kitPrice: 195, baseFeet: 4, included: [{ code: 'HTSLNTCAR', partId: 'CAR', qty: cover }] }).lines.find(l => l.partId === 'CAR');
+    eq('8 carriers on the 4 ft kit (covers 16): included, $0', [carrierLine(16, 8).total, carrierLine(16, 8).inKit], [0, true]);
+    eq('20 carriers on the 4 ft kit: 4 above the 16 bill', carrierLine(16, 20).total, 2);
+}
 console.log(`kitLengthCarriers: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

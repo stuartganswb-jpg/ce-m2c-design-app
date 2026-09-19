@@ -5,11 +5,11 @@ import { DynamicModel, ViewCapturer } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
 import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
-import { configuratorLines, configuratorTotal, defaultPicks} from './traverseConfigurator';
+import { configuratorLines, configuratorTotal, defaultPicks, carrierRows } from './traverseConfigurator';
 import { traverseAnswersMissing, drawLabel } from './traverseDraw';
 import { seedFromVision } from './visionBridge';
 import { seedFromKit, applyKitPricing } from './kitSeed';
-import { explodeTraverse } from './traverseExplode';
+import { explodeTraverse, usageAt } from './traverseExplode';
 import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
 import { normalizeExtras } from './extrasRestore';
 import { parseKitCode } from './kitCode';
@@ -622,11 +622,17 @@ function HardwareConfiguratorInner({
             if (rec != null && rec > 0) q[id] = rec;
         });
         (model.riders || []).forEach(r => {
-            const rec = recommendedQty(r, lengthFeet);
+            // ONE CARRIER COUNT (Stuart 2026-09-19): where the collection's chart has a row for this
+            // carrier, the chart IS the count at the length ordered (pinch pleat 4 a foot — 8 at 18") —
+            // the same number the Traverse components step and the kit cover read. The old four-a-foot-
+            // plus-two stays for a collection with no chart.
+            const row = (r.role === 'CARRIER' && lengthFeet > 0 && trvRules)
+                ? carrierRows(trvRules).find(u => String(u.itemId || '').trim().toUpperCase() === String(ourId(r.partId) || '').trim().toUpperCase()) : null;
+            const rec = row ? usageAt(row, Math.max(lengthFeet, 2)) : recommendedQty(r, lengthFeet);
             if (rec) q[r.id] = rec;
         });
         return q;
-    }, [model, livePicks, stepQty, lengthFeet, recommendFor]);
+    }, [model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId]);
 
     const resolved = useMemo(
         () => resolveHardware({ choices, answers: effAnswers, selectedIds: Object.values(livePicks), modelNodes, quantities }),
@@ -921,7 +927,9 @@ function HardwareConfiguratorInner({
         // inches travel too: they become the line's cutLength, which is what the bench reads.
         billedFeet: lengthFeet || 0,
         lengthInches: lengthInches || 0,
-    }), [customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, subFinishFor, findPart, finishByCode, lengthFeet, lengthInches, flow]);
+        // The drive decides what a track and an F-clip are cut to (Shared/traverseTags) — manual unless answered.
+        drive: /MOTOR/.test(String(answers.drive || '').toUpperCase()) ? 'MOTORIZED' : 'MANUAL',
+    }), [answers.drive, customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, subFinishFor, findPart, finishByCode, lengthFeet, lengthInches, flow]);
     // ⚠ THE KIT TRANSFORM RUNS ONLY WHERE A KIT WAS CHOSEN. Every other configuration gets
     // priceConfiguration's answer verbatim, which is what keeps four tested collections still.
     // ⚠ ONE DESCRIPTION OF THE BILL, USED TWICE. The panel below and the cart item built at Add
@@ -952,7 +960,15 @@ function HardwareConfiguratorInner({
         const exploded = ms.kitAlign
             ? explodeTraverse({ family, align: { ...ms.kitAlign, drive: driveNow }, feet, motorItem: mc?.motorItem || '', rules: trvRules, proj: answers.proj != null ? String(answers.proj) : '' })
             : { lines: [] };
+        // THE KIT COVERS ITS CARRIERS (Stuart 2026-09-19, QUO156 row 6: "still billing them even though the
+        // reduced number should be included in the kit"). The explosion leaves carriers to the components
+        // step, so the carrier pinned on the assembly billed in full beside the kit. Covered at the chart
+        // count for the length BILLED — the kit's own 4 ft below it (16), the length above it — so a
+        // shorter system's smaller count is always inside the kit and only a count above the chart bills.
+        const billedFeet = Math.max(Number(feet) || 0, Number(kitSource.baseFeet) || 4);
+        const carrierCover = carrierRows(trvRules).map(u => ({ code: String(u.itemId || '').trim().toUpperCase(), partId: findPart(u.itemId)?.id, qty: usageAt(u, billedFeet) }));
         const included = [
+            ...carrierCover,
             ...exploded.lines.map(l => ({ code: l.code, partId: findPart(l.code)?.id, qty: l.qty })),
             ...(Array.isArray(ms.kitComponents) ? ms.kitComponents : []).map(c => ({ partId: c.partId, code: findPart(c.partId)?.legacyErpId || '', qty: Number(c.qty) || 1 })),
         ];
