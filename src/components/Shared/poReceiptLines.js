@@ -71,8 +71,13 @@ export function matchPoLines(poItems, nsLines) {
 export const preferredBinsSql = (nsItemIds) => {
     const ids = [...new Set((nsItemIds || []).map(v => String(v || '').trim()).filter(v => /^\d+$/.test(v)))];
     if (!ids.length) return '';
-    return `SELECT ibn.item AS item_internal, BUILTIN.DF(ibn.binnumber) AS bin, ibn.location AS location `
-        + `FROM itemBinNumber ibn WHERE ibn.preferredbin = 'T' AND ibn.item IN (${ids.join(',')})`;
+    // ⚠ THE TABLE IS itemBinQuantity (2026-09-19). The first cut read `itemBinNumber`, which this account's
+    // SuiteQL refuses ("Record 'itemBinNumber' was not found") — so the lookup failed, the receipt went
+    // the old way with its warning, and PO2128's catch-up failed exactly as before. Read live: every one
+    // of its five lines has a preferred bin (COMP-001/009/010/011/012). itemBinQuantity carries the item's
+    // bin associations WITH the preferred flag, and lists a preferred bin even at zero on hand.
+    return `SELECT ibq.item AS item_internal, b.binnumber AS bin, b.location AS location `
+        + `FROM itemBinQuantity ibq JOIN bin b ON b.id = ibq.bin WHERE ibq.preferredbin = 'T' AND ibq.item IN (${ids.join(',')})`;
 };
 // rows → { [nsItemId]: [{ bin, location }] }
 export const preferredBinsOf = (rows) => (Array.isArray(rows) ? rows : []).reduce((m, r) => {

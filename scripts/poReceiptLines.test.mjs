@@ -82,6 +82,14 @@ ok('NetSuite ahead of the app is not a shortfall', receiptShortfallOf([{ itemId:
     const po28 = [{ itemId: 'COMPA', nsItemId: '7001', nsLineId: '5' }, { itemId: 'COMPB', nsItemId: '7009', nsLineId: '13' }, { itemId: 'CHIP', nsItemId: '7010', nsLineId: '14' }];
     ok('sql lists the items', preferredBinsSql(['7001', '7009']).includes('IN (7001,7009)') && preferredBinsSql(['7001']).includes("preferredbin = 'T'"));
     ok('sql takes ids only', preferredBinsSql(["1; DROP", 'x']) === '');
+    // 2026-09-19: `itemBinNumber` is refused by this account's SuiteQL; itemBinQuantity is what answers.
+    ok('sql reads itemBinQuantity joined to bin', /FROM itemBinQuantity ibq JOIN bin b ON b\.id = ibq\.bin/.test(preferredBinsSql(['7001'])) && !/itemBinNumber/.test(preferredBinsSql(['7001'])));
+    // PO2128 as NetSuite returned it: the scanned bin IS the preferred bin → no detail, no move.
+    const live = preferredBinsOf([{ item_internal: '57577', bin: 'COMP-001', location: '17' }]);
+    const r2128 = itemReceiptItemsOf({ poItems: [{ itemId: 'H1-BPWP1/P', nsItemId: '57577' }],
+        nsLines: [{ lineId: '5', nsItemId: '57577', itemId: 'H1-BPWP1/P', ordered: 250, done: 0, closed: false, location: '17' }],
+        applied: [{ index: 0, itemId: 'H1-BPWP1/P', qty: 255, bin: 'COMP-001' }], preferred: live });
+    ok('PO2128 line 5: 255 received, no inventory detail, no bin move', r2128.ok && JSON.stringify(r2128.items) === JSON.stringify([{ orderLine: 5, itemReceive: true, quantity: 255 }]) && r2128.transfers.length === 0);
     const pref = preferredBinsOf([{ item_internal: 7001, bin: 'comp-001', location: 17 }, { item_internal: 7009, bin: 'COMP-009', location: 17 }, { item_internal: 7009, bin: 'NY-1', location: 19 }]);
     eq('the preferred bin AT THE LINE\'S LOCATION', [preferredBinFor(ns28[0], pref), preferredBinFor(ns28[1], pref), preferredBinFor(ns28[2], pref)], ['COMP-001', 'COMP-009', '']);
     eq('two preferred bins and no location to choose by → none, never a guess', preferredBinFor({ nsItemId: '7009', location: '' }, pref), '');
