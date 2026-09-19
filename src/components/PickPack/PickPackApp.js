@@ -58,8 +58,8 @@ import { enqueueNsWrite } from "../Shared/nsOutbox";
 import { soLinesSql, fulfilmentItemsOf, refusalText } from "../Shared/fulfilmentLines";
 import FulfilmentPanel from "../Shared/fulfilmentPanel";
 import { boxSizeLabel } from "../Shared/fulfilment";
-import { fetchNsPurchaseOrder, importNsPurchaseOrder, fetchNsPoLines, recordPoReceipt, openQtyOf, overRoomOf, maxReceivableOf, poRef } from "../Shared/purchaseOrders";
-import { itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText } from "../Shared/poReceiptLines";
+import { fetchNsPurchaseOrder, importNsPurchaseOrder, fetchNsPoLines, fetchPreferredBins, recordPoReceipt, openQtyOf, overRoomOf, maxReceivableOf, poRef } from "../Shared/purchaseOrders";
+import { itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText, binTransferLineOf } from "../Shared/poReceiptLines";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
@@ -1003,6 +1003,40 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // receipt that FAILS there leaves the app ahead of NetSuite, the stock not in NetSuite, and
     // nobody on the dock any the wiser (PO2205: 29,320 chips, no inventory for the paint orders).
     // Opening a PO compares the two, line by line; a receipt still in the queue is not a gap yet.
+    // ── PREFERRED BINS, AND THE MOVE THAT FOLLOWS A RECEIPT (Eric, App Imp 2026-09-18 — PO2128) ──────
+    // An item with a preferred bin is pre-binned by NetSuite at receipt (Shared/poReceiptLines): its
+    // line goes with no bin detail and lands in that bin; where the dock scanned another bin, a bin
+    // transfer follows — written WAITING on the receipt, so it can never move stock the receipt did not
+    // deliver. A failed preferred-bin read is SAID, and the receipt goes the old way.
+    const rcvPreferredBins = async (nsLines) => {
+        try { return { preferred: await fetchPreferredBins(nsLines.map(n => n.nsItemId)), note: '' }; }
+        catch (e) { return { preferred: null, note: `\n\n⚠ Could not read the items' preferred bins (${String(e.message || e).slice(0, 120)}) — the receipt was sent with its bins as scanned; if NetSuite refuses it, this PO will offer to post it again.` }; }
+    };
+    const rcvQueueBinMoves = async (po, transfers, receiptOutboxId, cartKey) => {
+        if (!transfers.length) return '';
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return `\n\n⚠ The bin move(s) were NOT queued — no NetSuite subsidiary / location on file for this brand. Move the stock in NetSuite by hand: ${transfers.map(tr => `${tr.quantity} × ${tr.itemId} ${tr.fromBin} → ${tr.toBin}`).join(', ')}.`;
+        for (const tr of transfers) {
+            await ensureBinExists(tr.toBin, nsConfig.location);
+            await enqueueNsWrite({
+                afterId: receiptOutboxId,
+                dedupeKey: `porcv-${String(po.id)}-${cartKey}-move-${tr.orderLine}-${tr.toBin}`,
+                kind: 'bintransfer',
+                label: `Bin move after receipt — ${poRef(po)} · ${tr.quantity} × ${tr.itemId} ${tr.fromBin} → ${tr.toBin}`,
+                sourceApp: 'WMS', createdBy: operator?.name || '',
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`,
+                method: 'POST',
+                payload: {
+                    subsidiary: { id: nsConfig.subsidiary }, location: { id: nsConfig.location },
+                    memo: nsMemo(`PO ${poRef(po)} received to ${tr.fromBin}, put away in ${tr.toBin}`),
+                    inventory: { items: [binTransferLineOf(tr)] },
+                },
+            });
+        }
+        writeLog(`Receiving ${poRef(po)}: ${transfers.length} bin move(s) queued behind the receipt — ${transfers.map(tr => `${tr.quantity} × ${tr.itemId} ${tr.fromBin} → ${tr.toBin}`).join(', ')}.`, 'wms');
+        return `\n\n🔀 ${transfers.length} item(s) have a preferred bin in NetSuite: the receipt lands them there, and a bin move to where you put them follows once it has posted —\n${transfers.map(tr => `   ${tr.quantity} × ${tr.itemId}: ${tr.fromBin} → ${tr.toBin}`).join('\n')}`;
+    };
+
     const rcvCheckNs = async (po) => {
         setRcvNsGap(null);
         if (!po || !po.nsPoId) return;
@@ -1030,10 +1064,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const nsLines = await fetchNsPoLines(rcvPo.nsPoId);
             const fresh = receiptShortfallOf(rcvPo.items || [], nsLines).map(l => ({ ...l, bin: l.bin || fallbackBin }));
             if (!fresh.length) { setRcvNsGap(null); return alert('NetSuite already has these pieces — nothing was posted.'); }
-            const built = itemReceiptItemsOf({ poItems: rcvPo.items || [], nsLines, applied: fresh });
+            const pb = await rcvPreferredBins(nsLines);
+            const built = itemReceiptItemsOf({ poItems: rcvPo.items || [], nsLines, applied: fresh, preferred: pb.preferred });
             if (!built.ok) return alert(receiptRefusalText(built));
             const freshPcs = fresh.reduce((a, l) => a + l.qty, 0);
-            await enqueueNsWrite({
+            const gapKey = fresh.map(l => `${l.index}x${l.qty}`).join('_');
+            const receiptObId = await enqueueNsWrite({
                 // Deterministic on WHAT is missing: the same gap cannot be queued twice; a different gap can.
                 dedupeKey: `porcv-${String(rcvPo.id)}-catchup-${fresh.map(l => `${l.index}x${l.qty}`).join('_')}`,
                 kind: 'itemreceipt',
@@ -1045,7 +1081,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             });
             writeLog(`Receiving ${poRef(rcvPo)}: NetSuite receipt catch-up queued — ${fresh.map(l => `${l.qty} × ${l.itemId} → ${l.bin}`).join(', ')}.`, 'wms');
             setRcvNsGap(g => (g ? { ...g, inFlight: 1 } : g));
-            alert(`📤 Queued: ${freshPcs} pcs for ${poRef(rcvPo)}.\n\nIt posts within about a minute — watch HQ 11.1 → NetSuite Sync Queue. If it fails there, the row carries NetSuite's own words.`);
+            const moveNote = await rcvQueueBinMoves(rcvPo, built.transfers || [], receiptObId, `catchup-${gapKey}`);
+            alert(`📤 Queued: ${freshPcs} pcs for ${poRef(rcvPo)}.${pb.note}${moveNote}\n\nIt posts within about a minute — watch HQ 11.1 → NetSuite Sync Queue. If it fails there, the row carries NetSuite's own words.`);
         } catch (e) {
             alert(`The catch-up receipt was NOT queued:\n\n${e.message || e}\n\nNothing was changed.`);
         } finally { setRcvBusy(false); }
@@ -1189,9 +1226,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (rcvPo.nsPoId) {
                 try {
                     const nsLines = await fetchNsPoLines(rcvPo.nsPoId);
-                    const built = itemReceiptItemsOf({ poItems: rcvPo.items || [], nsLines, applied: res.applied, bin });
+                    const pb = await rcvPreferredBins(nsLines);
+                    const built = itemReceiptItemsOf({ poItems: rcvPo.items || [], nsLines, applied: res.applied, bin, preferred: pb.preferred });
                     if (!built.ok) throw new Error(receiptRefusalText(built));
-                    await enqueueNsWrite({
+                    const receiptObId = await enqueueNsWrite({
                         dedupeKey: `porcv-${String(rcvPo.id)}-${cartId}`,   // deterministic per cart (S2's finding 2026-09-16)
                         kind: 'itemreceipt',
                         label: `Receipt — ${poRef(rcvPo)} (${pcs} pcs → ${bin})`,
@@ -1200,8 +1238,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                         method: 'POST',
                         payload: { memo: nsMemo(`PO ${poRef(rcvPo)} received ${pcs} pcs @ ${bin}`), item: { items: built.items } },
                     });
-                    nsNote = '\n\n📤 The NetSuite receipt is queued (11.1 → Sync Queue).';
+                    nsNote = '\n\n📤 The NetSuite receipt is queued (11.1 → Sync Queue).' + pb.note;
                     writeLog(`Receiving ${poRef(rcvPo)}: item receipt queued — ${pcs} pcs into ${bin}.`, 'wms');
+                    nsNote += await rcvQueueBinMoves(rcvPo, built.transfers || [], receiptObId, cartId);
                 } catch (nsErr) {
                     nsNote = `\n\n⚠ NETSUITE DOES NOT HAVE THIS RECEIPT YET:\n${nsErr.message || nsErr}\n\nThe pieces ARE recorded here — do not receive them a second time. Open this PO on Receiving again and it will offer to post what NetSuite is missing.`;
                     writeLog(`Receiving ${poRef(rcvPo)}: NetSuite receipt NOT queued — ${String(nsErr.message || nsErr).slice(0, 160)}`, 'wms');

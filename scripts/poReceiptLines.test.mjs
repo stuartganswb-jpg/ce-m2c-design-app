@@ -1,5 +1,5 @@
 // The NetSuite item receipt is addressed by PO line (Eric, App Imp 2026-09-17 — PO2205).   node scripts/poReceiptLines.test.mjs
-import { poLinesSql, nsPoLinesOf, matchPoLines, itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText } from '../src/components/Shared/poReceiptLines.js';
+import { poLinesSql, nsPoLinesOf, matchPoLines, itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText, preferredBinsSql, preferredBinsOf, preferredBinFor, binTransferLineOf } from '../src/components/Shared/poReceiptLines.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 const eq = (n, a, b) => ok(`${n} — got ${JSON.stringify(a)}`, JSON.stringify(a) === JSON.stringify(b));
@@ -18,7 +18,7 @@ const rows = [
     { line: 5, item_internal: 903, itemid: 'CHIP-D', ordered: 10, done: 0, isclosed: 'T' },
 ];
 const ns = nsPoLinesOf(rows);
-eq('rows normalised', ns[0], { lineId: '1', nsItemId: '900', itemId: 'CHIP-A', ordered: 30000, done: 0, closed: false });
+eq('rows normalised', ns[0], { lineId: '1', nsItemId: '900', itemId: 'CHIP-A', ordered: 30000, done: 0, closed: false, location: '' });   // + the line's location (2026-09-18)
 ok('closed flag read', ns[4].closed === true);
 
 // ── matching ────────────────────────────────────────────────────────────────────────────────
@@ -70,6 +70,42 @@ eq('the catch-up receipt receives exactly those', fix.items.map(i => [i.orderLin
 const after = nsPoLinesOf(rows.map(x => x.line === 1 ? { ...x, done: 28600 } : x.line === 2 ? { ...x, done: 720 } : x));
 ok('once NetSuite has them the shortfall is empty', receiptShortfallOf(imported, after).length === 0);
 ok('NetSuite ahead of the app is not a shortfall', receiptShortfallOf([{ itemId: 'CHIP-C', nsLineId: '3', received: 10 }], ns).length === 0);
+
+// ── PREFERRED BINS: PO2128 AS IT FAILED ON 2026-09-18 ────────────────────────────────────────────
+{
+    const rows28 = [
+        { line: 5,  item_internal: 7001, itemid: 'COMPA', ordered: 250, done: 0, isclosed: 'F', location: 17 },
+        { line: 13, item_internal: 7009, itemid: 'COMPB', ordered: 250, done: 0, isclosed: 'F', location: 17 },
+        { line: 14, item_internal: 7010, itemid: 'CHIP',  ordered: 250, done: 0, isclosed: 'F', location: 17 },
+    ];
+    const ns28 = nsPoLinesOf(rows28);
+    const po28 = [{ itemId: 'COMPA', nsItemId: '7001', nsLineId: '5' }, { itemId: 'COMPB', nsItemId: '7009', nsLineId: '13' }, { itemId: 'CHIP', nsItemId: '7010', nsLineId: '14' }];
+    ok('sql lists the items', preferredBinsSql(['7001', '7009']).includes('IN (7001,7009)') && preferredBinsSql(['7001']).includes("preferredbin = 'T'"));
+    ok('sql takes ids only', preferredBinsSql(["1; DROP", 'x']) === '');
+    const pref = preferredBinsOf([{ item_internal: 7001, bin: 'comp-001', location: 17 }, { item_internal: 7009, bin: 'COMP-009', location: 17 }, { item_internal: 7009, bin: 'NY-1', location: 19 }]);
+    eq('the preferred bin AT THE LINE\'S LOCATION', [preferredBinFor(ns28[0], pref), preferredBinFor(ns28[1], pref), preferredBinFor(ns28[2], pref)], ['COMP-001', 'COMP-009', '']);
+    eq('two preferred bins and no location to choose by → none, never a guess', preferredBinFor({ nsItemId: '7009', location: '' }, pref), '');
+
+    // scanned INTO the preferred bin, 255 against 250 — the exact failing receipt
+    let r = itemReceiptItemsOf({ poItems: po28, nsLines: ns28, applied: [{ index: 0, itemId: 'COMPA', qty: 255 }], bin: 'COMP-001', preferred: pref });
+    eq('a pre-binned line goes with NO inventory detail — that is what NetSuite refused', r.items[0], { orderLine: 5, itemReceive: true, quantity: 255 });
+    eq('…and needs no move when the dock used the preferred bin', r.transfers, []);
+    eq('the other lines still say they did not arrive', r.items.slice(1), [{ orderLine: 13, itemReceive: false }, { orderLine: 14, itemReceive: false }]);
+    // scanned somewhere ELSE → received to the preferred bin, then moved
+    r = itemReceiptItemsOf({ poItems: po28, nsLines: ns28, applied: [{ index: 1, itemId: 'COMPB', qty: 255 }], bin: 'OVERFLOW-2', preferred: pref });
+    eq('still no inventory detail', r.items[1], { orderLine: 13, itemReceive: true, quantity: 255 });
+    eq('one move: preferred → where it was put', r.transfers, [{ nsItemId: '7009', itemId: 'COMPB', fromBin: 'COMP-009', toBin: 'OVERFLOW-2', quantity: 255, orderLine: 13 }]);
+    eq('the move is the transfer tab\'s own shape', binTransferLineOf(r.transfers[0]), { item: { id: '7009' }, quantity: 255, inventoryDetail: { quantity: 255, inventoryAssignment: { items: [{ binNumber: { refName: 'COMP-009' }, toBinNumber: { refName: 'OVERFLOW-2' }, quantity: 255 }] } } });
+    // an item with NO preferred bin is exactly as it was (PO2205 posted this way)
+    r = itemReceiptItemsOf({ poItems: po28, nsLines: ns28, applied: [{ index: 2, itemId: 'CHIP', qty: 100 }], bin: 'M E5L', preferred: pref });
+    eq('no preferred bin → the scanned bin rides the receipt, no move', [r.items[2].inventoryDetail.inventoryAssignment.items[0].binNumber.refName, r.transfers.length], ['M E5L', 0]);
+    // the preferred-bin read failed → the old shape, never a crash
+    r = itemReceiptItemsOf({ poItems: po28, nsLines: ns28, applied: [{ index: 0, itemId: 'COMPA', qty: 5 }], bin: 'COMP-001', preferred: null });
+    ok('unknown preferred bins → sent as scanned', !!r.items[0].inventoryDetail && r.transfers.length === 0);
+    // the catch-up: split across two bins, one of them the preferred
+    r = itemReceiptItemsOf({ poItems: po28, nsLines: ns28, applied: [{ index: 0, itemId: 'COMPA', qty: 200, bin: 'COMP-001' }, { index: 0, itemId: 'COMPA', qty: 55, bin: 'TOP-SHELF' }], preferred: pref });
+    eq('only what sits outside the preferred bin is moved', [r.items[0].quantity, r.transfers.map(x => [x.toBin, x.quantity])], [255, [['TOP-SHELF', 55]]]);
+}
 
 console.log(`poReceiptLines: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

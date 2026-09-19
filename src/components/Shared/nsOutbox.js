@@ -24,14 +24,19 @@ import { collection, doc, setDoc, getDocs, query, where } from 'firebase/firesto
 // gets status + nsPoId + nsPoTran, and the card updates via its listener).
 //
 // Monitor / retry / cancel UI: HQ 11.1 → "NetSuite Sync Queue".
-export const enqueueNsWrite = async ({ kind, label, targetUrl, method, payload, sourceApp, createdBy, writeBack, dedupeKey }) => {
+// ── AN ENTRY MAY WAIT ON ANOTHER (2026-09-18) ────────────────────────────────────────────────────
+// `afterId` = the outbox entry this one must follow. It is written WAITING — a status the drain never
+// picks up — and the worker promotes it to PENDING only once that entry is POSTED, or fails it (with
+// the reason) if that entry FAILED or was cancelled. A bin move that follows a receipt must never run
+// against stock the receipt did not deliver: FIFO alone would let it move what was already on the shelf.
+export const enqueueNsWrite = async ({ kind, label, targetUrl, method, payload, sourceApp, createdBy, writeBack, dedupeKey, afterId = null }) => {
     // THE DUPLICATE GUARD (Stuart 2026-08-31, after 14 duplicate work orders): an entry carrying
     // a dedupeKey is REFUSED while another entry with the same key is still in flight — whatever
     // caller bug asked twice. Posted entries don't block (a deliberate ⟲ re-anchor is allowed);
     // the caller's own claim stamps cover that side.
     if (dedupeKey) {
         const inflight = await getDocs(query(collection(db, 'ns_outbox'), where('dedupeKey', '==', dedupeKey)));
-        const live = inflight.docs.map(d2 => d2.data()).filter(e => ['PENDING', 'POSTING'].includes(e.status));
+        const live = inflight.docs.map(d2 => d2.data()).filter(e => ['PENDING', 'POSTING', 'PROCESSING', 'WAITING'].includes(e.status));
         if (live.length) throw new Error(`already queued (${live[0].label || dedupeKey} is ${live[0].status} in the NetSuite Sync Queue) — not queuing a duplicate.`);
     }
     const ref = doc(collection(db, 'ns_outbox'));
@@ -44,7 +49,7 @@ export const enqueueNsWrite = async ({ kind, label, targetUrl, method, payload, 
     await setDoc(ref, {
         id: ref.id, kind: kind || 'write', label: label || '', sourceApp: sourceApp || '', createdBy: createdBy || '',
         targetUrl, method, payload: p, writeBack: writeBack || null, dedupeKey: dedupeKey || null,
-        status: 'PENDING', attempts: 0, lastError: null, nsId: null, nsTran: null,
+        status: afterId ? 'WAITING' : 'PENDING', ...(afterId ? { afterId: String(afterId) } : {}), attempts: 0, lastError: null, nsId: null, nsTran: null,
         createdAt: Date.now(), nextAttemptAt: Date.now(), leasedAt: null, postedAt: null
     });
     return ref.id;

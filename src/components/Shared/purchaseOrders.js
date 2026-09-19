@@ -357,6 +357,23 @@ export const fetchNsPoLines = async (nsPoId) => {
     return nsPoLinesOf(data.items || []);
 };
 
+// Which of these items NetSuite pre-bins at receipt — their PREFERRED bin, per location (Shared/
+// poReceiptLines explains why it matters). A failed read is thrown: the caller says so on the dock
+// and sends the receipt the old way, which the sync queue will then report honestly.
+export const fetchPreferredBins = async (nsItemIds) => {
+    const { preferredBinsSql, preferredBinsOf } = await import('./poReceiptLines');
+    const q = preferredBinsSql(nsItemIds);
+    if (!q) return {};
+    const { nsProxyFetch } = await import('./nsProxy');
+    const resp = await nsProxyFetch({
+        targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
+        method: 'POST', payload: { q },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 300));
+    return preferredBinsOf(data.items || []);
+};
+
 // The app's record of a NetSuite-raised PO, created the first time somebody receives against it.
 // Two reasons this is worth doing rather than receiving against nothing: the receipt has somewhere
 // to accumulate (received per line, who and when), and the PO becomes visible to RTG — which is the

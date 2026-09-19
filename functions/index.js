@@ -496,6 +496,25 @@ exports.nsOutboxWorker = onSchedule({
         if ((d.data().leasedAt || 0) < now - 5 * 60 * 1000) await d.ref.update({ status: 'PENDING' });
     }
 
+    // ── ENTRIES THAT WAIT ON ANOTHER (2026-09-18, the bin move that follows a vendor receipt) ──────────
+    // Written WAITING with `afterId` (Shared/nsOutbox). Released to PENDING only once that entry is
+    // POSTED; failed — with the reason, so 11.1 shows it — if that entry FAILED, was CANCELLED or is gone.
+    // FIFO alone is not enough: a receipt that fails does not stop the queue, and a bin move run behind a
+    // failed receipt would move stock that was already on the shelf. ↻ RETRY on such a failed move sets it
+    // PENDING as for any entry, so once the receipt is put right the move can be sent.
+    try {
+        const waiting = await fdb.collection('ns_outbox').where('status', '==', 'WAITING').limit(60).get();
+        for (const d of waiting.docs) {
+            const w = d.data();
+            const dep = w.afterId ? await fdb.doc(`ns_outbox/${w.afterId}`).get() : null;
+            const st = dep && dep.exists ? String(dep.data().status || '') : 'MISSING';
+            if (st === 'POSTED') await d.ref.update({ status: 'PENDING', nextAttemptAt: Date.now(), releasedAt: Date.now() });
+            else if (['FAILED', 'CANCELLED', 'MISSING'].includes(st)) {
+                await d.ref.update({ status: 'FAILED', failedAt: Date.now(), lastError: `Not sent: the entry it follows (${w.afterId || 'none'}) is ${st}${dep && dep.exists && dep.data().label ? ` — ${dep.data().label}` : ''}. Fix that first, then retry this one.` });
+            }
+        }
+    } catch (e) { console.warn('nsOutboxWorker: WAITING sweep failed', e && e.message); }
+
     // Due PENDING entries — equality-only query (no composite index needed); order in memory.
     const snap = await fdb.collection('ns_outbox').where('status', '==', 'PENDING').limit(60).get();
     const due = snap.docs
