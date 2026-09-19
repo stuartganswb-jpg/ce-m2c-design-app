@@ -17,9 +17,9 @@ import { DRAWS, MOTOR_SIDES } from './traverseDraw';
 // ONE IMPLEMENTATION, TWO SURFACES. Quick Ship and the old CPQ path still mount the modal below;
 // it now owns the state and renders this. Neither surface re-derives what is offered or what it
 // bills — that has always been Shared/traverseConfigurator, and still is.
-export function TraverseConfiguratorPanel({ rules, drive, feet, trackCount = 1, itemInfo, priceOf, sel, onSel }) {
+export function TraverseConfiguratorPanel({ rules, drive, feet, realFeet, trackCount = 1, itemInfo, priceOf, sel, onSel }) {
     const setSel = (fn) => onSel(typeof fn === 'function' ? fn(sel) : fn);
-    const offer = useMemo(() => configuratorOffer({ rules, drive, feet }), [rules, drive, feet]);
+    const offer = useMemo(() => configuratorOffer({ rules, drive, feet, realFeet }), [rules, drive, feet, realFeet]);
     const info = (id) => (typeof itemInfo === 'function' && itemInfo(id)) || { name: id, sku: '' };
     const mono = { fontFamily: 'var(--mono)', fontSize: '11px' };
     const lbl = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
@@ -99,8 +99,10 @@ export function TraverseConfiguratorPanel({ rules, drive, feet, trackCount = 1, 
                         </div>
                         {selStyle && (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '10px' }}>
-                                <span style={lbl}>Quantity (blank = chart {selStyle.includedQty})</span>
-                                <input type="number" min="0" value={sel.carrierQty} placeholder={String(selStyle.includedQty)}
+                                <span style={lbl}>{selStyle.defaultQty < selStyle.includedQty
+                                    ? `Quantity (blank = ${selStyle.defaultQty} for this length · up to ${selStyle.includedQty} included)`
+                                    : `Quantity (blank = chart ${selStyle.includedQty})`}</span>
+                                <input type="number" min="0" value={sel.carrierQty} placeholder={String(selStyle.defaultQty)}
                                     onChange={e => setSel(p => ({ ...p, carrierQty: e.target.value }))} style={qtyBox} />
                                 {(parseInt(sel.carrierQty) || selStyle.includedQty) > selStyle.includedQty && (
                                     <span style={{ ...mono, color: 'var(--brass)' }}>+{(parseInt(sel.carrierQty) || 0) - selStyle.includedQty} over chart × ${(parseFloat(priceOf(selStyle.itemId)) || 0).toFixed(2)}</span>

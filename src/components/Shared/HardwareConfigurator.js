@@ -139,6 +139,9 @@ function HardwareConfiguratorInner({
     const [kitSource, setKitSource] = useState(null);  // { code, name, baseFeet, record } — bills as line 1
     const [kitReport, setKitReport] = useState(null);  // what it carried, missed, or refused
     const [kitMotor, setKitMotor] = useState('');      // the per-motor code chosen for a MOTORIZED kit (folds into the kit line)
+    // The Traverse components selection. Declared HERE, above the pricing memos that read it (a const in
+    // a temporal dead zone is a ReferenceError — this file has been taken out by that twice).
+    const [trvSel, setTrvSel] = useState(null);
     const [showDiag, setShowDiag] = useState(false);
     const [showGeo, setShowGeo] = useState(false);   // the untagged-node list, behind its count
     const [whySlot, setWhySlot] = useState(null);   // slot key whose exclusions are being read
@@ -559,7 +562,11 @@ function HardwareConfiguratorInner({
         if (seed.blocked) { setKitReport({ name, blocked: seed.blocked, carried: [], missed: [] }); setKitSource(null); return; }
         if (Object.keys(seed.answers).length) setAnswers(a => ({ ...a, ...seed.answers }));
         if (Object.keys(seed.picks).length) setPicks(p => ({ ...p, ...seed.picks }));
-        if (seed.lengthInches) { setPoleIn(String(Math.floor(seed.lengthInches))); setPoleFrac(''); }
+        // ⚠ THE KIT'S 4 FT IS A STARTING POINT, NEVER AN OVERWRITE (Stuart 2026-09-19, QUO155 row 6: an
+        // 18" display re-picked its kit and came back 48" — the shop would have cut four feet). The kit
+        // seeds its length only where none has been typed; a typed length stands, and the bill follows
+        // the rule either way (the kit below 4 ft, the kit + extra feet above it).
+        if (seed.lengthInches && !String(poleIn || '').trim()) { setPoleIn(String(Math.floor(seed.lengthInches))); setPoleFrac(''); }
         setKitReport({ name, blocked: null, carried: seed.carried, missed: seed.missed });
         // The kit now OWNS the first line of the bill, and the feet above its base set bill under
         // it. Held as the record, not a number: the price is resolved at pricing time through the
@@ -960,10 +967,19 @@ function HardwareConfiguratorInner({
             motor: mc ? { code: mc.code, fabSku: mc.fabSku || '', motorItem: mc.motorItem || '', net: parseFloat(mc.net) } : null,
         };
     }, [kitSource, priceCtx, customerId, customer, kitMotor, answers.drive, answers.proj, trvRules, lengthFeet, findPart]);
+    // ── ONE SOURCE OF CARRIERS (Stuart 2026-09-19: "HTSLNTCAR is charging $9.00, aren't these included
+    // in the first 4 ft kit?"). They are — on the Traverse components line. The $9 was a SECOND set: the
+    // carrier pinned on the assembly rides every track, counted four a foot and billed at the customer's
+    // price, whatever style the components step chose (a ripplefold order still got pinch-pleat ones).
+    // Once the components step names a carrier style, that line IS the carriers: the pinned rider still
+    // renders in the track, and leaves the bill, the BOM and the pick. No style chosen → the rider stays
+    // exactly as it was, so a track can never go out with none.
+    const carriersFromStep = !!(trvSel && trvSel.carrierStyle);
+    const pricingCtx = useMemo(() => (carriersFromStep ? { ...priceCtx, skipRoles: ['CARRIER'] } : priceCtx), [priceCtx, carriersFromStep]);
     const priced = useMemo(() => {
-        const p = priceConfiguration(resolved, priceCtx);
+        const p = priceConfiguration(resolved, pricingCtx);
         return kitBill ? applyKitPricing(p, kitBill) : p;
-    }, [resolved, priceCtx, kitBill]);
+    }, [resolved, pricingCtx, kitBill]);
     // Their number for any part, chosen or not — the picker is where it is most useful.
     const aliasOf = useCallback((id) => aliasFor(findPart(id), priceCtx), [findPart, priceCtx]);
     // Every part this assembly pins, searchable by either party's number. Built from the SAME pins
@@ -1052,14 +1068,13 @@ function HardwareConfiguratorInner({
     // The selection SEEDS from the chart and stays seeded until it is touched: a length typed after
     // the panel was first drawn re-seeds it, because the chart quantity IS a function of length and
     // a stale count is a wrong count. Once the operator has answered, their answer stands.
-    const [trvSel, setTrvSel] = useState(null);
     const trvSeed = useMemo(() => (trvRules && isTraverse
         ? { carrierStyle: '', carrierQty: '', draw: '', motorSide: '', picks: defaultPicks({ rules: trvRules, drive: trvDrive, feet: trvFeet, trackCount: trvTracks }), accessories: {} }
         : null), [trvRules, isTraverse, trvDrive, trvFeet, trvTracks]);
     const trvLive = trvSel || trvSeed;
     const trvComponents = useMemo(() => ((trvRules && isTraverse && trvLive)
-        ? configuratorLines({ rules: trvRules, drive: trvDrive, feet: trvFeet, sel: trvLive, priceOf: trvPriceOf })
-        : []), [trvRules, isTraverse, trvLive, trvDrive, trvFeet, trvPriceOf]);
+        ? configuratorLines({ rules: trvRules, drive: trvDrive, feet: trvFeet, realFeet: lengthFeet || undefined, sel: trvLive, priceOf: trvPriceOf })
+        : []), [trvRules, isTraverse, trvLive, trvDrive, trvFeet, lengthFeet, trvPriceOf]);
     // On the quote the same way they land on the cart item: an included component rides at $0 so
     // the documents and the BOM still show every part the order carries.
     const trvLines = useMemo(() => trvComponents.map(c => ({
@@ -1339,6 +1354,7 @@ function HardwareConfiguratorInner({
             setPoleIn(String(whole));
             setPoleFrac(frac > 0.001 ? `${Math.round(frac * 16)}/16` : '');
         } else { setPoleIn(''); setPoleFrac(''); }
+        setTrvSel(s.trvSel && typeof s.trvSel === 'object' ? { ...s.trvSel } : null);
         setConfigMemo(s.memo || s.sidemark || '');
         setCfgQty(String(parseInt(s.qty, 10) > 0 ? parseInt(s.qty, 10) : 1));
         setStepIx(0);
@@ -1466,7 +1482,7 @@ function HardwareConfiguratorInner({
         const displaySnapshot = (displayMode.on && frameRectRef.current) ? captureBoardFrame(glStateRef.current, frameRectRef.current, { scale: 1 }) : null;
         const displayBoard = displaySnapshot ? { widthIn: displayMode.widthIn, heightIn: displayMode.heightIn, lengthInches, readsInches: frameRectRef.current.reading != null ? Math.round(frameRectRef.current.reading * 10) / 10 : null } : null;
         const item = handoffItem(resolved, {
-            ...priceCtx, assembly, flow, findPart, qty: cfgQtyN, renderSnapshot,
+            ...pricingCtx, assembly, flow, findPart, qty: cfgQtyN, renderSnapshot,
             // The pins this line was resolved from — fingerprinted on the line so Approve can tell
             // when the tags have changed since the save (Shared/cartStaleness).
             pins,
@@ -1480,6 +1496,9 @@ function HardwareConfiguratorInner({
             stepNotes, answers, picks: livePicks, partFinish, globalFinish, globalFinishes, stepQty,
             // The kit, so the cart bills exactly what the panel showed — and WHICH kit, so Edit restores it.
             kit: kitBill, kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
+            // The Traverse components answers (carrier style + count, draw, picks) — Edit restores them, or
+            // a re-add would silently swap the chosen carriers back for the pinned ones.
+            trvSel: (isTraverse && trvSel) ? trvSel : null,
             // The track's components, in the shape the cart has always carried them — the ERP push
             // reads `trvComponents` off the item and the documents read the breakdown rows, so
             // neither can tell which engine asked the question.
@@ -2077,6 +2096,11 @@ function HardwareConfiguratorInner({
                                     A track carries its drapery on carriers rather than rings — there is nothing to choose here,
                                     and they are on the order already. The count follows the length.
                                 </div>
+                                {carriersFromStep && (
+                                    <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--brass)' }}>
+                                        The carrier style and count on this order come from the Traverse components step — that line is the carriers on the bill and the BOM; the one below only renders in the track.
+                                    </div>
+                                )}
                                 {step.carriers.map(c => {
                                     const n = recommendedQty(c, lengthFeet) || c.qty || 1;
                                     return (
@@ -2114,7 +2138,7 @@ function HardwareConfiguratorInner({
                                     <b style={{ fontWeight: 400, color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.08em' }}>{trvDrive}</b>
                                     {` · ${trvFeet} ft · ${trvTracks === 2 ? 'two tracks' : 'one track'} — the drive decides which components exist; the chart quantity for this length is included in the per-foot price, and raising a count bills the difference.`}
                                 </div>
-                                <TraverseConfiguratorPanel rules={trvRules} drive={trvDrive} feet={trvFeet} trackCount={trvTracks}
+                                <TraverseConfiguratorPanel rules={trvRules} drive={trvDrive} feet={trvFeet} realFeet={lengthFeet || undefined} trackCount={trvTracks}
                                     itemInfo={trvItemInfo} priceOf={trvPriceOf} sel={trvLive} onSel={setTrvSel} />
                                 {(() => {
                                     // Everything still outstanding on this track, in one line. The draw and the

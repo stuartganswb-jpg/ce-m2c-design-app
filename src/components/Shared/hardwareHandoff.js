@@ -284,6 +284,8 @@ export function handoffItem(resolved, ctx = {}) {
             // The kit this line was billed from (the configurator's dropdown pick) and its motor code —
             // without them Edit → re-add came back with no kit and billed part by part (QUO154 row 6).
             ...(ctx.kitPick ? { kitPick: String(ctx.kitPick), ...(ctx.kitMotor ? { kitMotor: String(ctx.kitMotor) } : {}) } : {}),
+            // The Traverse components answers as chosen (carrier style + count, draw, motor side, picks).
+            ...(ctx.trvSel && typeof ctx.trvSel === 'object' ? { trvSel: JSON.parse(JSON.stringify(ctx.trvSel)) } : {}),
             // Hand-added extras AS TYPED (code / qty / note / slot). Without them a reopen rebuilt
             // the list from the addedByHand rows — by doc id, which the length step did not
             // recognise as its joiner, so it added one more on every cycle (QUO147: 1 → 3,

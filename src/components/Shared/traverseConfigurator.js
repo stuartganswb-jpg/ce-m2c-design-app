@@ -31,13 +31,24 @@ export const carrierRows = (rules) => (rules?.usage || []).filter(u => /CARRIER/
  *                 pulleys, end stops…), each qty-editable, included in price
  *   accessories — checkboxes: billable items for this drive, priced by the caller per item
  */
-export function configuratorOffer({ rules, drive, feet }) {
+export function configuratorOffer({ rules, drive, feet, realFeet }) {
     const d = U(drive) || 'MANUAL';
     const ft = Math.max(parseInt(feet) || 4, 2);
-    const styles = carrierRows(rules).map(r => ({
-        itemId: U(r.itemId), label: r.label || r.itemId, fabSku: r.fabSku || '',
-        includedQty: usageAt(r, ft),
-    }));
+    // ── A KIT IS BILLED AT ITS SIZE AND BUILT AT THE LENGTH ORDERED (Stuart 2026-09-19, QUO155 row 6:
+    // an 18" display on the 4 ft kit — "the billing charge is still 4ft but the bom and cut information
+    // is updated to 18", the carrier qty should be reduced"). `feet` is the BILLED length (the caller
+    // floors it at the kit's 4 ft): it decides how many carriers the price already covers. `realFeet`
+    // is the length ordered: it decides how many carriers the track is BUILT with when nobody types a
+    // count. Absent (tab 7, 4.6 — they sell whole kits) the two are the same number, as before.
+    const rft = Math.max(parseInt(realFeet) || ft, 2);
+    const styles = carrierRows(rules).map(r => {
+        const includedQty = usageAt(r, ft);
+        return {
+            itemId: U(r.itemId), label: r.label || r.itemId, fabSku: r.fabSku || '',
+            includedQty,
+            defaultQty: rft < ft ? Math.min(includedQty, usageAt(r, rft)) : includedQty,
+        };
+    });
     const gated = (rules?.configurator || []).filter(c => {
         const cd = U(c.drive) || 'BOTH';
         return cd === 'BOTH' || cd === d;
@@ -84,15 +95,15 @@ export function defaultPicks({ rules, drive, feet, trackCount = 1 }) {
  * above the chart quantity becomes its own billed line — the included count never silently absorbs
  * a paid one, and the SO reads exactly like his rule: chart included, extras charged.
  */
-export function configuratorLines({ rules, drive, feet, sel, priceOf }) {
-    const offer = configuratorOffer({ rules, drive, feet });
+export function configuratorLines({ rules, drive, feet, realFeet, sel, priceOf }) {
+    const offer = configuratorOffer({ rules, drive, feet, realFeet });
     const price = (id) => { const p = typeof priceOf === 'function' ? parseFloat(priceOf(id)) : 0; return Number.isFinite(p) ? p : 0; };
     const lines = [];
     if (sel?.carrierStyle) {
         const st = offer.carrierStyles.find(s => s.itemId === U(sel.carrierStyle));
         if (st) {
             const want = (sel.carrierQty === null || sel.carrierQty === undefined || sel.carrierQty === '')
-                ? st.includedQty : Math.max(0, parseInt(sel.carrierQty) || 0);
+                ? st.defaultQty : Math.max(0, parseInt(sel.carrierQty) || 0);
             const included = Math.min(want, st.includedQty);
             if (included > 0) lines.push({ code: st.itemId, qty: included, rate: 0, billable: false, why: `${st.label} — included per ${feet}ft chart` });
             const over = want - st.includedQty;

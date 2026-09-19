@@ -250,7 +250,10 @@ function kitComponentLines(holder, kitPart, ctx) {
 export function priceConfiguration(model, ctx = {}) {
     const { findPart } = ctx;
     const choiceById = new Map((model?.choices || []).map(c => [String(c.id), c]));
-    const lines = (model?.bom || []).flatMap(entry => {
+    // Roles the caller supplies from somewhere else (the pinned CARRIER, once the Traverse components
+    // step names the carriers) — off the bill entirely, so nothing downstream counts the part twice.
+    const skipRoles = new Set((Array.isArray(ctx.skipRoles) ? ctx.skipRoles : []).map(r => String(r).toUpperCase()));
+    const lines = (model?.bom || []).filter(entry => !skipRoles.has(String(entry.role || '').toUpperCase())).flatMap(entry => {
         const choice = entry.raw && entry.raw.__choice ? entry.raw.__choice : entry;
         const part = typeof findPart === 'function' ? findPart(entry.partId) : null;
         // ⚠ THE FINISH IS A PER-PART DECISION (Stuart 2026-08-21: "in case people do choose

@@ -3214,7 +3214,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           // kit here makes the quote, the sales order, the packing slip and the invoice honest in
           // one move instead of four — and it prints the CLIENT's own sku beside ours, because
           // that is the number they ordered against and the one they will reconcile to.
-          const kitLine = (item.pricingBreakdown || []).find(l => l.isKit);
+          // …the SYSTEM kit, that is. An item kit (one bracket sold as several parts — H1-2RCTCB) is a line
+          // on the order, not what the order is: QUO155 row 5 printed "H1-2RCTCB · H3622F" as its heading.
+          const kitLine = (item.pricingBreakdown || []).find(l => l.isKit && !l.itemKit);
           const kitTitle = kitLine
               ? `${kitLine.legacyErpId}${kitLine.clientSku && kitLine.clientSku !== kitLine.legacyErpId ? ` · ${kitLine.clientSku}` : ''}`
               : item.assemblyName;
