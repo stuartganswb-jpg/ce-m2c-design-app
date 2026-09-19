@@ -135,6 +135,21 @@ const kit = (align, code = 'HTS7504F') => ({ legacyErpId: code, partClass: 'Kit'
         noFas.missed.some(x => x.what === 'front of the double') && !('frontLayer' in noFas.answers));
 }
 
+// ── 6b. NO DRIVE QUESTION MEANS MANUAL (Stuart 2026-09-19, H1-138TRV-4H/P) ─────────────────────────
+// H1-138's traverse rod is manual-only and tags no drive on anything, so the axis does not exist.
+{
+    const noDrive = resolve({ choices: wallOnly.filter(c => !c.drive), answers: {} });
+    ok('the fixture really has no drive axis', !(noDrive.axes || []).some(a => a.key === 'drive'));
+    const man = seedFromKit({ model: noDrive, kit: kit({ setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL', minFeet: 4 }, 'H1-138TRV-4H/P') });
+    eq('a manual kit seeds on a collection with no drive question', man.blocked, null);
+    eq('…and writes no answer to a question that is never asked', man.answers, { setup: 'SINGLE', mount: 'WALL' });
+    ok('…and says why', man.carried.some(t => /manual drive/.test(t)));
+    const mot = seedFromKit({ model: noDrive, kit: kit({ setup: 'SINGLE', drive: 'MOTORIZED', mount: 'WALL' }) });
+    eq('a motorised kit is still refused there — there is no motor to build', mot.blocked && mot.blocked.what, 'drive');
+    const asked = seedFromKit({ model: wallModel, kit: kit({ setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL' }) });
+    eq('where the drive IS asked, the manual kit answers it as before', asked.answers.drive, 'MANUAL');
+}
+
 // ── 7. THINGS THAT ARE NOT KITS ──────────────────────────────────────────────────────────────
 {
     ok('a record with no alignment is refused', !!seedFromKit({ model: wallModel, kit: { partClass: 'Kit' } }).blocked);

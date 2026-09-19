@@ -93,9 +93,20 @@ export function seedFromKit({ model, kit }) {
     // ── THE THREE AXES ───────────────────────────────────────────────────────────────────────
     // Checked BEFORE anything is written, so a refusal leaves nothing half-applied. The first one
     // the assembly cannot build stops the whole seed.
+    // ⚠ NO DRIVE QUESTION MEANS MANUAL (Stuart 2026-09-19, H1-138TRV-4H/P: "This assembly cannot build …
+    // is a manual drive kit, and this assembly offers nothing" — "technically correct, as this track is
+    // currently only available in manual; in the future we will add a manual and motorized end, so
+    // hopefully it can just ignore it if it is missing"). A collection that tags no drive on anything
+    // never asks the question and is manual by construction — the same reading the components step and
+    // the cut rules already take. So a MANUAL kit is already answered there: nothing to check, nothing
+    // to write. A MOTORIZED kit still refuses (there is no motor to build), and the day manual and
+    // motorized ends are tagged the axis exists and this is an ordinary check again.
+    const manualByConstruction = (field, want) => field === 'drive' && want === 'MANUAL'
+        && !(model.axes || []).some(ax => ax.key === AXIS_OF.drive);
     for (const field of Object.keys(AXIS_OF)) {
         const want = U(align[field]);
         if (!want) continue;                       // the kit does not specify it — not our business
+        if (manualByConstruction(field, want)) continue;
         const key = AXIS_OF[field];
         if (!axisOffers(model, key, want)) {
             const axis = (model.axes || []).find(a => a.key === key);
@@ -112,6 +123,7 @@ export function seedFromKit({ model, kit }) {
     for (const field of Object.keys(AXIS_OF)) {
         const want = U(align[field]);
         if (!want) continue;
+        if (manualByConstruction(field, want)) { carried.push('manual drive — the only drive this collection has'); continue; }
         answers[AXIS_OF[field]] = want;
         carried.push(`${want.toLowerCase()} ${SAYS[field]}`);
     }
