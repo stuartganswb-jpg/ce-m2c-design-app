@@ -163,6 +163,7 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
     // the work orders first and buckets the POs afterwards, so the gate goes on immediately (that is
     // what holds the release) and the PO number is written on below.
     const gatedWos = [];
+    const bookedJobs = new Set();
     const woIds = [];
     const idsByLine = {};
     // START-NOW SPLIT (Stuart 2026-08-31): a bought TO-BE-FINISHED line with stock on hand may begin
@@ -194,16 +195,23 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
         const prodNote = so.productionNotes || '';
         const woId = `WO-OE-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now()}-${job.key}${job.__tag || ''}`;
         const { makeup, poLines } = actionsOfReviewedJob(job);
-        if (!job.__skipPo) poLines.forEach(pl => {
+        // ⚠ THE PURCHASE IS BOOKED ONLY ONCE ITS WORK ORDER EXISTS (Stuart 2026-09-20, SO60565). The PO
+        // lines used to be bucketed HERE, before the work order was written — so when the writer refused
+        // the work order (it did: a bought line under its raw code), the run still went on to draft the
+        // material's purchase order, for work that did not exist, and a second attempt drafted it again.
+        // A raw-only buy (no finish) raises no work order by design, so it books straight away.
+        // Booked ONCE per reviewed line: a start-now split is two work orders (-NOW, -PO) over one purchase,
+        // and whichever of them is written first carries it — so a refused first half cannot lose the buy.
+        const bookPurchase = () => { if (!bookedJobs.has(job.key)) { bookedJobs.add(job.key); poLines.forEach(pl => {
             const k = `${pl.vendorName}|${so.id}`;
             (poBuckets[k] = poBuckets[k] || { vendorName: pl.vendorName, so, lines: [] }).lines.push(pl);
-        });
+        }); } };
         // A BOUGHT line's PO (or coverage) settles the MATERIAL only. When the line is TO BE FINISHED
         // (Stuart 2026-08-31) the finishing WO is still created — it releases to the floor and waits
         // at the WMS pick until the material lands. A raw-only buy (no finish) makes no work order.
         if (job.buy) {
             if (!poLines.length && !job.__skipPo) log(`✔ ${erp} ×${qty} (SO ${so.soId || so.id}) — material covered by stock/on-order as reviewed; nothing ordered.`, 'success');
-            if (!finish) continue;
+            if (!finish) { bookPurchase(); continue; }
             log(job.__tag === '-NOW'
                 ? `🎨 ${erp} ×${qty}: START NOW from stock — finishing WO releases and picks from the shelf.`
                 : `🎨 ${erp} ×${qty}: TO BE FINISHED — creating the finishing WO now; it waits at the pick until the material arrives.`, 'info');
@@ -233,7 +241,6 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
         const rcptRefs = job.__tag === '-NOW' ? null
             : (poLines || []).map(pl => ({ itemId: U(pl.code), qtyNeeded: Number(pl.editQty ?? pl.qty) || Number(pl.qty) || 0 }))
                 .filter(r => r.itemId && r.qtyNeeded > 0);
-        if (rcptRefs && rcptRefs.length) rcptRefs.forEach(r => gatedWos.push({ woId, soAppId: so.id, itemId: r.itemId }));
         let gate = {}, finPayload = null;
         try {
             // ── THE ONE WRITER (Brief A, A1 step 4 — 2026-09-02). Intent ORDER_ENTRY: the document,
@@ -268,6 +275,10 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
             if (e instanceof ParkRefusal) { log(`⛔ ${finishedErp} (SO ${so.soId || so.id}): ${e.message}`, 'error'); continue; }
             throw e;
         }
+        // The work order exists: NOW its purchase is booked, and its receipt gate is remembered so the PO
+        // number can be written onto it below.
+        bookPurchase();
+        if (rcptRefs && rcptRefs.length) rcptRefs.forEach(r => gatedWos.push({ woId, soAppId: so.id, itemId: r.itemId }));
         woIds.push(woId);
         const lk = `${so.id}|${job.lineIdx}`;
         idsByLine[lk] = [...(idsByLine[lk] || []), woId, ...(custom ? [shopWoId] : [])];
