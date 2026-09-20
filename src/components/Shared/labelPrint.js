@@ -170,6 +170,29 @@ const printDoc = (title, css, bodies) => {
     return printHtmlDocument(doc, { autoPrintDelay: 400, timeout: 120000 });
 };
 
+// ── THE BOX LABEL — 4×3, THE ITEM WITH ITS PICTURE (Stuart 2026-09-20: "just a normal item label with
+// the addition of the thumbnail image (4x3 label size)" — the H1-2TRVWBDA/P carton label). The code and
+// the name across the top as on his sample, the picture as large as the label allows under them, and the
+// item label's barcode along the foot so the carton still scans. No picture on file → the label still
+// prints, with the space left blank rather than a broken image.
+const BOX_CSS = `${PAGE_CSS}
+.l{height:3in;padding:0.14in 0.2in 0.1in;display:flex;flex-direction:column;}
+.id{font-weight:800;line-height:1.0;letter-spacing:.4px;word-break:break-all;}
+.nm{font-size:12pt;font-weight:700;line-height:1.15;margin-top:4pt;max-height:0.42in;overflow:hidden;}
+.pic{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;margin:4pt 0 3pt;}
+.pic img{max-width:100%;max-height:100%;object-fit:contain;}
+.bc svg{width:100%;height:0.28in;display:block;} .bct{font-size:7.5pt;letter-spacing:2px;text-align:center;}`;
+const boxLabelInner = ({ itemId, itemName, imageUrl }) => {
+    const id = String(itemId || '');
+    const fs = id.length <= 12 ? 30 : id.length <= 16 ? 24 : id.length <= 22 ? 18 : 14;   // long codes shrink to stay on one line
+    const pic = imageUrl ? `<img src="${esc(imageUrl)}" alt=""/>` : '';
+    return `<div class="l"><div class="id" style="font-size:${fs}pt">${esc(id)}</div><div class="nm">${esc(itemName || '')}</div><div class="pic">${pic}</div><div class="bc">${code128BSvg(id)}<div class="bct">${esc(id)}</div></div></div>`;
+};
+export const printBoxLabels = ({ itemId, itemName, imageUrl, copies = 1 }) => {
+    const n = Math.max(1, Math.min(100, parseInt(copies, 10) || 1));
+    return printDoc(`Box label ${itemId || ''} × ${n}`, BOX_CSS, Array.from({ length: n }, () => boxLabelInner({ itemId, itemName, imageUrl })));
+};
+
 export const printItemLabel = (item) => printDoc(`Item ${item?.itemId || ''}`, ITEM_CSS, [itemLabelInner(item)]);
 export const printBinLabel = ({ bin }) => printDoc(`Bin ${bin || ''}`, BIN_CSS, [binLabelInner(bin)]);
 export const printItemLabels = (items = []) => printDoc(`Item labels (${items.length})`, ITEM_CSS, items.map(itemLabelInner));

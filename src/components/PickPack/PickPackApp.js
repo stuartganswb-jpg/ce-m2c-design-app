@@ -32,7 +32,8 @@ import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i1
 import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
-import { printUomLabels, printSalesOrderLabels, printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
+import { printUomLabels, printSalesOrderLabels, printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, printBoxLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
+import { partImageOf } from '../Shared/partImage';
 import { encodeUomScan, uomDisplay } from '../Shared/labelScan';
 // THE PACKING LIST ON THE WMS (Stuart 2026-09-11: "i do not see this same packing slip available on
 // the wms so pack screen or packaging prep") — the SAME builder the CRM card prints from (S2's
@@ -284,7 +285,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
     // ── LABELS TAB (Stuart 2026-09-08: "any label that may be needed for finishing, shop and wms
     // to keep track off we can print a label there") ──────────────────────────────────────────
-    const [lblKind, setLblKind] = useState('ITEM');      // ITEM | BIN | WO | SO | UOM
+    const [lblKind, setLblKind] = useState('ITEM');      // ITEM | BOX | BIN | WO | SO | UOM
     const [lblSearch, setLblSearch] = useState('');      // item search (ITEM + UOM)
     const [lblItem, setLblItem] = useState(null);
     const [lblBin, setLblBin] = useState('');
@@ -7470,6 +7471,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 {activeTab === 'LABELS' && (() => {
                     const KINDS = [
                         { k: 'ITEM', icon: '🏷', name: 'Item label', hint: 'the part, its name and its barcode' },
+                        { k: 'BOX', icon: '🖼', name: 'Box label · 4×3', hint: 'the item label with the part\'s picture — for cartons' },
                         { k: 'BIN', icon: '📍', name: 'Bin label', hint: 'a shelf location' },
                         { k: 'WO', icon: '🧾', name: 'Work order', hint: 'the setup label the floor carries' },
                         { k: 'SO', icon: '📦', name: 'Sales order', hint: 'whose order this box belongs to' },
@@ -7517,7 +7519,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             </div>
 
                             {/* ITEM + UOM share the item picker */}
-                            {(lblKind === 'ITEM' || lblKind === 'UOM') && (
+                            {(lblKind === 'ITEM' || lblKind === 'UOM' || lblKind === 'BOX') && (
                                 <div style={box}>
                                     <div style={lab}>{t('Item')}</div>
                                     <input value={lblSearch} onChange={e => { setLblSearch(e.target.value); setLblItem(null); }} placeholder={t('Scan or type an item code or name')} style={inp} />
@@ -7586,6 +7588,37 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     }} style={{ ...go(), marginTop: '16px', opacity: lblItem ? 1 : 0.4 }}>🖨 {t('Print')}</button>
                                 </div>
                             )}
+
+                            {/* 🖼 THE BOX LABEL — 4×3, the item label with the part's picture (Stuart 2026-09-20). A finish
+                                variant with no picture of its own borrows the mill item's (Shared/partImage) — and
+                                says so, so nobody wonders why a plated part shows a raw one. */}
+                            {lblKind === 'BOX' && (() => {
+                                const img = lblItem ? partImageOf(lblItem, (c) => hqParts.find(p => erpOf(p) === c) || null) : { url: '', from: '' };
+                                return (
+                                    <div style={box}>
+                                        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                                            <div style={{ flex: '0 0 180px' }}>
+                                                <div style={lab}>{t('How many labels')}</div>
+                                                <input type="number" min="1" max="100" value={lblCopies} onChange={e => setLblCopies(e.target.value)} style={{ ...inp, textAlign: 'center' }} />
+                                            </div>
+                                            {lblItem && (
+                                                <div style={{ flex: '1 1 260px', display: 'flex', gap: '14px', alignItems: 'center' }}>
+                                                    {img.url
+                                                        ? <img src={img.url} alt="" style={{ width: '120px', height: '90px', objectFit: 'contain', border: `1px solid ${theme.line}`, background: '#fff' }} />
+                                                        : <div style={{ width: '120px', height: '90px', border: `1px dashed ${theme.line}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>{t('no picture')}</div>}
+                                                    <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, lineHeight: 1.5 }}>
+                                                        {img.url ? (img.from ? `${t('Picture of')} ${img.from} — ${t('this finish has none of its own')}` : t('The picture on the item')) : t('No picture on this item or its base — the label prints without one. Add a thumbnail in HQ (Visual Assembly / BOM Engine).')}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <button disabled={!lblItem} onClick={() => {
+                                            printBoxLabels({ itemId: erpOf(lblItem), itemName: lblItem.itemName || '', imageUrl: img.url, copies });
+                                            writeLog(`Printed ${copies} × ${erpOf(lblItem)} box label(s) (4×3${img.url ? '' : ', no picture'}).`, 'wms');
+                                        }} style={{ ...go(), marginTop: '16px', opacity: lblItem ? 1 : 0.4 }}>🖨 {t('Print')} 4×3</button>
+                                    </div>
+                                );
+                            })()}
 
                             {lblKind === 'BIN' && (
                                 <div style={box}>
