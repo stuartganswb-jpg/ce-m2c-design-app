@@ -181,7 +181,14 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
     for (const job of expanded) {
         const { so, part, finish, qty } = job;
         const erp = U(part.legacyErpId || part.itemId);
-        const finishedErp = job.finishedErp;
+        // ⚠ A BOUGHT LINE IS PLANNED AS ITS RAW ITEM — AND FINISHED AS THE FINISHED ONE (Stuart 2026-09-20,
+        // SO60565: "H1-75SR has no finish suffix — it is shop work (STOCK_MILL), not a finishing run").
+        // The plan for a bought to-be-finished line is one pull of the raw item (that is what the vendor
+        // and the shelf hold), so its `finishedErp` IS the raw code — and the one writer rightly refuses
+        // a finishing work order for a code with no finish. The work order is for the FINISHED item,
+        // raw + finish; the raw stays the pull line. (Broken since the one-writer move of 09-02 — the
+        // 08-31 "the track should create a finishing WO for once it arrives" rule could not run.)
+        const finishedErp = (job.buy && finish && U(job.finishedErp) === erp) ? `${erp}/${U(finish)}` : job.finishedErp;
         const specs = part.manufacturingSpecs || {};
         const needBy = soNeedBy(so);
         const prodNote = so.productionNotes || '';
@@ -202,7 +209,7 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
                 : `🎨 ${erp} ×${qty}: TO BE FINISHED — creating the finishing WO now; it waits at the pick until the material arrives.`, 'info');
         }
         const flow2 = job.nsPlan && job.nsPlan.flow === 'FLOW2';
-        const planLines = (job.plan?.lines || []).map(pl => U(pl.legacyErpId) === finishedErp
+        const planLines = (job.plan?.lines || []).map(pl => (U(pl.legacyErpId) === finishedErp || (job.buy && U(pl.legacyErpId) === erp))
             ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
         // ONE POLE TEST (sweep 2026-09-01) — Shared/poleCut is the single answer; the CUSTOM PAIR rule
         // (Stuart 2026-09-01, b531f53): a mill code plus an applied finish is made to order and gets a
