@@ -9,7 +9,7 @@ import { validateAssemblyAlignment } from '../Shared/assemblyTags';
 import { SOURCING, sourcingOf, sourcingPatch } from '../Shared/sourcing';
 import { SIZE_FAMILIES, buildSizeIndex } from '../Shared/sizeMatrix';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
-import { partImageOf } from '../Shared/partPicture';
+import { partImageOf, buildSpeciesBaseIndex } from '../Shared/partPicture';
 
 // Fabricut-style spec-sheet generator (hidden-line drawings from the working GLB) — lazy so
 // the drawing engine only loads when opened.
@@ -45,7 +45,8 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   // The picture a BOM row shows: the part's own, else its mill item's, else its kit's (Shared/partPicture).
   const libKits = useMemo(() => libraryParts.filter(p => Array.isArray(p.manufacturingSpecs?.kitComponents) && p.manufacturingSpecs.kitComponents.length), [libraryParts]);
   const libByCode = useMemo(() => { const m = new Map(); libraryParts.forEach(p => { const k = String(p.legacyErpId || '').toUpperCase(); if (k && k !== 'PENDING' && !m.has(k)) m.set(k, p); }); return m; }, [libraryParts]);
-  const rowPictureOf = (part) => partImageOf(part, (c) => libByCode.get(c) || null, libKits).url || '';
+  const libSpecies = useMemo(() => buildSpeciesBaseIndex(libraryParts), [libraryParts]);
+  const rowPictureOf = (part) => partImageOf(part, (c) => libByCode.get(c) || null, libKits, libSpecies).url || '';
   
   // 🚀 FIXED: Added bracketMounts, feeTypes, and cpqRoutingTypes to the global state
   const [globalLists, setGlobalLists] = useState({ 

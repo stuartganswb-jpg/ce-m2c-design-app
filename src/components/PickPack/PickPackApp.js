@@ -33,7 +33,7 @@ import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { printUomLabels, printSalesOrderLabels, printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, printBoxLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
-import { partImageOf } from '../Shared/partPicture';
+import { partImageOf, buildSpeciesBaseIndex } from '../Shared/partPicture';
 import { encodeUomScan, uomDisplay } from '../Shared/labelScan';
 // THE PACKING LIST ON THE WMS (Stuart 2026-09-11: "i do not see this same packing slip available on
 // the wms so pack screen or packaging prep") — the SAME builder the CRM card prints from (S2's
@@ -7593,7 +7593,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 variant with no picture of its own borrows the mill item's (Shared/partImage) — and
                                 says so, so nobody wonders why a plated part shows a raw one. */}
                             {lblKind === 'BOX' && (() => {
-                                const img = lblItem ? partImageOf(lblItem, (c) => hqParts.find(p => erpOf(p) === c) || null, hqParts.filter(p => Array.isArray(p.manufacturingSpecs?.kitComponents) && p.manufacturingSpecs.kitComponents.length)) : { url: '', from: '' };
+                                const img = lblItem ? partImageOf(lblItem, (c) => hqParts.find(p => erpOf(p) === c) || null, hqParts.filter(p => Array.isArray(p.manufacturingSpecs?.kitComponents) && p.manufacturingSpecs.kitComponents.length), buildSpeciesBaseIndex(hqParts)) : { url: '', from: '' };
                                 return (
                                     <div style={box}>
                                         <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'flex-start' }}>

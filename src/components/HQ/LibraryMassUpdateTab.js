@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { tierOfErp } from '../Shared/finishRouting';
 import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { db, storage } from '../../firebase';
+import { buildSpeciesBaseIndex } from '../Shared/partPicture';
 import { buildGalleryIndex, galleryImageForPart, imageUpdate, IMG_GLB_RENDER, IMG_BASE_INHERIT, IMG_KIT_INHERIT } from '../Shared/partImage';
 import { mergeWindowConfig } from './systemWindows';
 import { fixMojibake } from '../Shared/textRepair';
@@ -269,7 +270,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         inventory.forEach(p => { [p.legacyErpId, p.itemId].forEach(k => { if (k) byCode.set(String(k).toUpperCase(), p); }); });
         const done = new Set();
         const newUrls = new Map();   // partDocId → url stamped THIS run (inventory state lags)
-        let made = 0, had = 0, noNodes = 0, failed = 0, variants = 0, kitPieces = 0;
+        let made = 0, had = 0, noNodes = 0, failed = 0, variants = 0, kitPieces = 0, species = 0;
         setBulkTool({ running: 'thumbs', msg: 'Reading the Asset Gallery…' });
         try {
             // ── THE GALLERY OVERRULES, EVERY TIME (Stuart 2026-08-27) ─────────────────────────
@@ -351,6 +352,30 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             }
             kitPieces = kBatch.length;
 
+            // ── OAK AND WALNUT ITEMS TAKE THEIR PRODUCT'S PICTURE (Stuart 2026-09-20) ─────────
+            // H1-138WEC-O / -W (and the stem-different codes a base names in its speciesMap) are the
+            // BOM items behind ONE modelled product — only the product is pinned, so only it was
+            // rendered. Base inheritance like the finish variants below, and BEFORE them, so a
+            // species item's own finish variants are filled from it in the same run.
+            setBulkTool({ running: 'thumbs', msg: 'Filling oak / walnut items from their product…' });
+            const spIdx = buildSpeciesBaseIndex(inventory);
+            const sBatch = [];
+            for (const p of inventory) {
+                const baseCode = spIdx.get(String(p.legacyErpId || '').toUpperCase());
+                if (!baseCode || photoOf(p)) continue;
+                const base = byCode.get(baseCode);
+                const src = base && base.id !== p.id ? photoOf(base) : null;
+                if (!src) continue;
+                newUrls.set(p.id, src);
+                sBatch.push({ id: p.id, url: src });
+            }
+            for (let i = 0; i < sBatch.length; i += 400) {
+                const batch = writeBatch(db);
+                sBatch.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), imageUpdate(v.url, IMG_BASE_INHERIT)));
+                await batch.commit();
+            }
+            species = sBatch.length;
+
             // ── FINISH VARIANTS INHERIT THE BASE'S PICTURE (Stuart 2026-08-27) ────────────────
             // "broaden the search so that it applies the thumbnails to even the finished items …
             // /P, /P01, /EP1 etc — i would prefer to at least have the thumbnail of the part,
@@ -379,7 +404,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             }
             variants = vBatchDocs.length;
 
-            alert(`🖼 Item thumbnails from assembly GLBs:\n• ${made} rendered from geometry\n• ${kitPieces} kit piece(s) filled from their kit's picture\n• ${variants} finish variant(s) (/P, /EPn, /W…) filled from their base part\n• ${had} already had a photo (untouched — gallery always wins)\n• ${noNodes} pin(s) carry no node to photograph\n• ${failed} render/upload failure(s)`);
+            alert(`🖼 Item thumbnails from assembly GLBs:\n• ${made} rendered from geometry\n• ${kitPieces} kit piece(s) filled from their kit's picture\n• ${species} oak / walnut item(s) filled from their product\n• ${variants} finish variant(s) (/P, /EPn, /W…) filled from their base part\n• ${had} already had a photo (untouched — gallery always wins)\n• ${noNodes} pin(s) carry no node to photograph\n• ${failed} render/upload failure(s)`);
         } catch (e) { alert('Thumbnail run failed: ' + (e?.message || e)); }
         finally { setBulkTool({ running: '', msg: '' }); }
     };
