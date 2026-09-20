@@ -66,6 +66,7 @@ export const pinErpOf = (pin, inventory = []) => {
  * @param {object[]} pins       assembly_pins rows for the part (empty → single-part run)
  * @param {object[]} inventory  library records, for pin resolution + "/P variant exists" checks
  * @returns {{ erp, outsourced, finishSuffix, exploded, lines[] }}
+ *   materials: [{ code, per }] — BOM members the library does not hold (raw stock, CRS by default): never pulled.
  *   lines: { legacyErpId, partId, partName, quantity, partHandling, sourceComponent } — the exact
  *   partsList shape the fin_workorders contract & the WMS pick session read.
  */
@@ -78,7 +79,36 @@ export const planFinishedRun = ({ part, qty, pins = [], inventory = [] }) => {
         .filter(p => p.legacyErpId && p.legacyErpId !== 'PENDING')
         .map(p => [String(p.legacyErpId).toUpperCase(), p]));
 
-    const comps = (pins || []).filter(usablePin)
+    // ── A BOM MEMBER THAT IS NOT A LIBRARY ITEM IS RAW MATERIAL — CRS BY DEFAULT (Stuart 2026-09-20) ──
+    // SO60583: H1-75SPF / H1-75SBP-S / H1-75SSBA planned as "70 × 55812 — not in the Master Library,
+    // 70 short". 55812 is NetSuite's internal id for CR112SQ, 1-1/2" cold rolled square stock: in
+    // NetSuite a milled part is an ASSEMBLY whose only member is the steel it is cut from, and the BOM
+    // sync pins that member under its bare id because the steel is (deliberately) not a library item.
+    // The planner then exploded a single milled part as if it were a kit of parts and went looking
+    // for 70 "pieces" of a 12 ft bar.
+    //   "everything above defaults to CRS, then if it is tagged wood or other we will be sure to put
+    //    in the proper parts in the bom. the CRS item will apply to nearly all the items that get
+    //    milled or custom … we order the lengths and widths as sticks (already in place) and just
+    //    deduce in general by average amount of CRS based on part sizes."
+    // The same ruling he and Eric made on 09-18 for the non-inventory CRS line, now for every BOM
+    // member the library does not hold: it is never a pull line and its BOM quantity is never read
+    // (the shop's routing names the material; the sticks are bought and drawn down on their own). A
+    // part whose BOM is ONLY material therefore plans as what it is — one milled part: mill → /P →
+    // finish (Model B below). Named on the plan (`materials`) so a real part missing from the library
+    // is still SEEN, in the review, rather than silently dropped. Needs the library to judge: a caller
+    // that passes no inventory gets the pins exactly as before.
+    const known = inventory.length > 0;
+    const libraryHas = (pin) => {
+        const pid = String(pin.partId || '');
+        const code = String(pin.legacyErpId && pin.legacyErpId !== 'PENDING' ? pin.legacyErpId : '').toUpperCase();
+        return inventory.some(p => p.id === pid || p.itemId === pid
+            || (code && String(p.legacyErpId || '').toUpperCase() === code)
+            || String(p.legacyErpId || '').toUpperCase() === pid.toUpperCase()
+            || String(p.netSuiteInternalId ?? '') === pid);
+    };
+    const usable = (pins || []).filter(usablePin);
+    const materials = known ? usable.filter(pin => !libraryHas(pin)).map(pin => ({ code: pinErpOf(pin, inventory), per: Math.max(1, Number(pin.defaultQty) || 1) })) : [];
+    const comps = usable.filter(pin => !known || libraryHas(pin))
         .map(pin => ({ code: pinErpOf(pin, inventory), name: pin.partName || pin.partId || '', per: Math.max(1, Number(pin.defaultQty) || 1) }))
         .filter(c => c.code);
     const exploded = comps.length > 0;
@@ -129,7 +159,7 @@ export const planFinishedRun = ({ part, qty, pins = [], inventory = [] }) => {
     const lines = [...merged.values()].map(r => ({
         ...r, ...uomStampOf(inv.get(String(r.legacyErpId || '').toUpperCase()) || null, r.quantity),
     }));
-    return { erp, outsourced, finishSuffix: sfx, exploded, lines };
+    return { erp, outsourced, finishSuffix: sfx, exploded, lines, materials };
 };
 
 // SuiteQL for live availability of the plan's pull codes (optionally at one location).

@@ -4743,6 +4743,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 </span>
                                             </div>
                                             <div style={{ padding: '4px 16px 10px', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>{j.nsPlan.note}</div>
+                                            {!!(j.plan && j.plan.materials && j.plan.materials.length) && (
+                                                <div style={{ padding: '0 16px 10px', fontFamily: 'var(--mono)', fontSize: '10px', color: '#8f6f3e' }}>
+                                                    🧱 Raw material, not pulled (not a library item — CRS by default; the shop routing owns it): {j.plan.materials.map(m => m.code).join(', ')}. If one of these is really a PART, sync it into the library and it becomes a pull line.
+                                                </div>
+                                            )}
                                             {blocked && <div style={{ margin: '0 16px 10px', padding: '8px 10px', background: '#fdf0ef', border: '1px solid #d9534f', color: '#d9534f', fontSize: '0.82rem' }}>⛔ LINE HELD — resolve the flagged rows below (align the unit, fix the vendor, or tick "proceed anyway"). Held lines are not executed.</div>}
                                             {(j.components || []).map((c, ci) => (
                                                 <div key={c.code + ci} style={{ display: 'flex', gap: '14px', padding: '8px 16px', borderTop: '1px solid rgba(28,26,22,.06)', alignItems: 'flex-start', flexWrap: 'wrap' }}>
