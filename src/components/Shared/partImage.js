@@ -27,6 +27,10 @@
 export const IMG_GALLERY = 'GALLERY';
 export const IMG_BASE_INHERIT = 'BASE_INHERIT';
 export const IMG_GLB_RENDER = 'GLB_RENDER';
+// A part that has no geometry of its own in any model — one piece of a bracket that is drawn, pinned
+// and sold as a KIT — borrowing its kit's picture: the pieces together, as they sit in the FBX
+// (Stuart 2026-09-20). A stand-in like the other two: a photograph always overrules it.
+export const IMG_KIT_INHERIT = 'KIT_INHERIT';
 
 /** EP01 → EP1; P01 stays P01 (master_finishes zero-pads P##/S##, parts don't zero-pad EP). */
 export const normFinish = (s) => String(s || '').toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1');
@@ -41,7 +45,7 @@ export const splitCode = (erp) => {
     return i < 0 ? { pattern: s, finish: '' } : { pattern: s.slice(0, i), finish: normFinish(s.slice(i + 1)) };
 };
 
-const AUTO = new Set([IMG_BASE_INHERIT, IMG_GLB_RENDER]);
+const AUTO = new Set([IMG_BASE_INHERIT, IMG_GLB_RENDER, IMG_KIT_INHERIT]);
 
 // LEGACY STAND-INS CARRY THEIR OWN EVIDENCE (Stuart 2026-08-27, second pass: "in master library
 // with .glb black and white thumbnail which is the fall back").

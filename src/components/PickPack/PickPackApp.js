@@ -7593,7 +7593,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 variant with no picture of its own borrows the mill item's (Shared/partImage) — and
                                 says so, so nobody wonders why a plated part shows a raw one. */}
                             {lblKind === 'BOX' && (() => {
-                                const img = lblItem ? partImageOf(lblItem, (c) => hqParts.find(p => erpOf(p) === c) || null) : { url: '', from: '' };
+                                const img = lblItem ? partImageOf(lblItem, (c) => hqParts.find(p => erpOf(p) === c) || null, hqParts.filter(p => Array.isArray(p.manufacturingSpecs?.kitComponents) && p.manufacturingSpecs.kitComponents.length)) : { url: '', from: '' };
                                 return (
                                     <div style={box}>
                                         <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'flex-start' }}>

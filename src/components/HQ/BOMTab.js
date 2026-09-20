@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
 import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, deleteDoc, getDocs, deleteField } from "firebase/firestore";
@@ -9,6 +9,7 @@ import { validateAssemblyAlignment } from '../Shared/assemblyTags';
 import { SOURCING, sourcingOf, sourcingPatch } from '../Shared/sourcing';
 import { SIZE_FAMILIES, buildSizeIndex } from '../Shared/sizeMatrix';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
+import { partImageOf } from '../Shared/partPicture';
 
 // Fabricut-style spec-sheet generator (hidden-line drawings from the working GLB) — lazy so
 // the drawing engine only loads when opened.
@@ -41,6 +42,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
 
   const [bomPins, setBomPins] = useState([]);
   const [libraryParts, setLibraryParts] = useState([]);
+  // The picture a BOM row shows: the part's own, else its mill item's, else its kit's (Shared/partPicture).
+  const libKits = useMemo(() => libraryParts.filter(p => Array.isArray(p.manufacturingSpecs?.kitComponents) && p.manufacturingSpecs.kitComponents.length), [libraryParts]);
+  const libByCode = useMemo(() => { const m = new Map(); libraryParts.forEach(p => { const k = String(p.legacyErpId || '').toUpperCase(); if (k && k !== 'PENDING' && !m.has(k)) m.set(k, p); }); return m; }, [libraryParts]);
+  const rowPictureOf = (part) => partImageOf(part, (c) => libByCode.get(c) || null, libKits).url || '';
   
   // 🚀 FIXED: Added bracketMounts, feeTypes, and cpqRoutingTypes to the global state
   const [globalLists, setGlobalLists] = useState({ 
@@ -422,7 +427,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               const cp = findClientPriceRow(part.clientPricing, onboardKeys);
               byPart[key] = {
                   cat: classify(cl?.category || part.manufacturingSpecs?.productType || part.productType),
-                  thumbnailUrl: part.finalImageUrl || part.componentImageUrl || part.manufacturingSpecs?.finalImageUrl || '',
+                  thumbnailUrl: rowPictureOf(part),
                   erpId: (part.legacyErpId && part.legacyErpId !== 'PENDING') ? part.legacyErpId : (part.itemId || ''),
                   description: part.itemName || '',
                   salesPrice: part.manufacturingSpecs?.basePrice,
@@ -1134,8 +1139,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 style={{ background: '#fff', border: `1px solid ${isSelected ? 'var(--brass)' : 'var(--line)'}`, display: 'flex', cursor: 'pointer', transition: 'all 0.2s ease', boxShadow: isSelected ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}
                             >
                                 <div style={{ width: '80px', height: '80px', background: 'var(--paper-2)', borderRight: '1px solid var(--line)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                                    {(item.thumbUrl || master.finalImageUrl || master.componentImageUrl) ? (
-                                        <img src={item.thumbUrl || master.finalImageUrl || master.componentImageUrl} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    {/* A linked item with no picture of its own shows its mill item's, else the kit it is a
+                                        piece of (Stuart 2026-09-20, Shared/partPicture) — read side only, nothing written. */}
+                                    {(item.thumbUrl || rowPictureOf(master)) ? (
+                                        <img src={item.thumbUrl || rowPictureOf(master)} alt="Part" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                     ) : (
                                         <span style={{ fontSize: '1.2rem', color: 'var(--ink-soft)', opacity: 0.5 }}>⚙️</span>
                                     )}

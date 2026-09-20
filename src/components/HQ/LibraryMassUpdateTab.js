@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { tierOfErp } from '../Shared/finishRouting';
 import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { db, storage } from '../../firebase';
-import { buildGalleryIndex, galleryImageForPart, imageUpdate, IMG_GLB_RENDER, IMG_BASE_INHERIT } from '../Shared/partImage';
+import { buildGalleryIndex, galleryImageForPart, imageUpdate, IMG_GLB_RENDER, IMG_BASE_INHERIT, IMG_KIT_INHERIT } from '../Shared/partImage';
 import { mergeWindowConfig } from './systemWindows';
 import { fixMojibake } from '../Shared/textRepair';
 import { isStreamVariantCode } from '../Shared/finishingTime';
@@ -269,7 +269,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         inventory.forEach(p => { [p.legacyErpId, p.itemId].forEach(k => { if (k) byCode.set(String(k).toUpperCase(), p); }); });
         const done = new Set();
         const newUrls = new Map();   // partDocId → url stamped THIS run (inventory state lags)
-        let made = 0, had = 0, noNodes = 0, failed = 0, variants = 0;
+        let made = 0, had = 0, noNodes = 0, failed = 0, variants = 0, kitPieces = 0;
         setBulkTool({ running: 'thumbs', msg: 'Reading the Asset Gallery…' });
         try {
             // ── THE GALLERY OVERRULES, EVERY TIME (Stuart 2026-08-27) ─────────────────────────
@@ -322,6 +322,35 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 await Promise.all(uploads);
             }
 
+            // ── A PIECE OF A KIT TAKES THE KIT'S PICTURE (Stuart 2026-09-20) ──────────────────
+            // "assemblies with multiple parts, if the parts themselves are in the library they should
+            //  get thumbnails as well … we should be able to show these as they are together in the
+            //  fbx file that way." A cuff bracket is drawn, pinned and sold as ONE kit (H1-2RCTCB =
+            //  cuff + open bracket): the kit is what owns geometry, so the render above photographs
+            //  the KIT, and its pieces — which own no nodes anywhere — never got a picture. They take
+            //  the kit's: the pieces together, exactly as modelled. A stand-in (KIT_INHERIT), so a
+            //  photograph overrules it; filled BEFORE the variants, so a piece's /EP4 gets it too.
+            setBulkTool({ running: 'thumbs', msg: 'Filling kit pieces from their kit…' });
+            const kBatch = [];
+            for (const kit of inventory) {
+                const comps = kit.manufacturingSpecs?.kitComponents;
+                if (!Array.isArray(comps) || !comps.length) continue;
+                const src = photoOf(kit);
+                if (!src) continue;
+                comps.forEach(c => {
+                    const piece = byId.get(c.partId) || byCode.get(String(c.partId || '').toUpperCase());
+                    if (!piece || piece.id === kit.id || photoOf(piece) || newUrls.has(piece.id)) return;
+                    newUrls.set(piece.id, src);
+                    kBatch.push({ id: piece.id, url: src });
+                });
+            }
+            for (let i = 0; i < kBatch.length; i += 400) {
+                const batch = writeBatch(db);
+                kBatch.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), imageUpdate(v.url, IMG_KIT_INHERIT)));
+                await batch.commit();
+            }
+            kitPieces = kBatch.length;
+
             // ── FINISH VARIANTS INHERIT THE BASE'S PICTURE (Stuart 2026-08-27) ────────────────
             // "broaden the search so that it applies the thumbnails to even the finished items …
             // /P, /P01, /EP1 etc — i would prefer to at least have the thumbnail of the part,
@@ -350,7 +379,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             }
             variants = vBatchDocs.length;
 
-            alert(`🖼 Item thumbnails from assembly GLBs:\n• ${made} rendered from geometry\n• ${variants} finish variant(s) (/P, /EPn, /W…) filled from their base part\n• ${had} already had a photo (untouched — gallery always wins)\n• ${noNodes} pin(s) carry no node to photograph\n• ${failed} render/upload failure(s)`);
+            alert(`🖼 Item thumbnails from assembly GLBs:\n• ${made} rendered from geometry\n• ${kitPieces} kit piece(s) filled from their kit's picture\n• ${variants} finish variant(s) (/P, /EPn, /W…) filled from their base part\n• ${had} already had a photo (untouched — gallery always wins)\n• ${noNodes} pin(s) carry no node to photograph\n• ${failed} render/upload failure(s)`);
         } catch (e) { alert('Thumbnail run failed: ' + (e?.message || e)); }
         finally { setBulkTool({ running: '', msg: '' }); }
     };
