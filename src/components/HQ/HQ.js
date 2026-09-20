@@ -177,6 +177,8 @@ function HQ() {
     const handleTabNavigation = (e) => {
       if (e.detail === 'VISION') setActiveTab('9. Client Vision');
       if (e.detail === 'CPQ') setActiveTab('8. CPQ Configurator');
+      // RTG's Order Entry card → the review on Stock View (the order id rides sessionStorage; 2026-09-20).
+      if (e.detail === 'OE_NEEDS') setActiveTab('12.5 Stock View');
     };
     // Reopen-a-quote (Shared/reopenQuote.js, fired from CRM / ERP hub): swap the finalized
     // quote's cart snapshot into the global cart, lock the session to its job id, stash the

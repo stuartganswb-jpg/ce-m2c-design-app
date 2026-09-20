@@ -9,8 +9,7 @@ import { SOURCING, sourcingOf, orderRouteFor, ORDER_ROUTE } from '../Shared/sour
 import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
 import { closeOrderEverywhere, hardDeleteWithLedger, propagateFloorState } from '../Shared/orderLifecycle';
-import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
-import { realPartOf, isAliasDoc } from '../Shared/aliasIdentity';
+import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { woRefOf } from '../Shared/woRef';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutPlanFromSource, sourcesForLength, poleOptionsWithStock } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
@@ -21,13 +20,12 @@ import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolve
 import { coverCodesOf, rowsFor, uncoveredCount, STATE_STYLE } from '../Shared/backorderBoard';
 import { splitFinish, siblingsQuery, oneItemQuery, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
 import { raisePaintRun, repaintWoId } from '../Shared/repaintRun';
-import { runBatchPrecheck, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
+import { runBatchPrecheck } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
-import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal, stampReceiptPo } from '../Shared/workOrderCreate';
-import { isReleasable } from '../Shared/orderStatus';
+import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
-import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
-import { queueNsAssemblyWorkOrder } from '../Shared/nsWorkOrder';
+import { buildOeReviewPlan } from '../Shared/oeReviewPlan';
+import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, issueOePlatedLine } from '../Shared/oeGenerate';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 
 const NS_SUITEQL_URL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
@@ -2498,17 +2496,20 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // outsourced FINISH → plating demand; raw item bought → linked vendor PO. Completed work
     // flows to WMS pick/pack against the SO — typically pack-and-hold in a bin until every part
     // arrives, which can span weeks. Master Library / the stock views stay for STOCK.
-    const oeLineFinish = (l) => l.finishCode || (String(l.note || '').match(/TO BE FINISHED\s*·\s*([A-Z0-9-]+)/i) || [])[1] || '';
+    // oeLineFinish · oeIsTbf · soNeedBy · oeJobBlocked live in Shared/oeLines (2026-09-20) — RTG starts this too.
     // The toolbar's green Generate in the OENEEDS view: every made-to-order line that has no
     // linked order yet, across every open SO, generated in one press (per-line buttons remain
     // for one-at-a-time). Sequential — each generation reloads the board, so links are re-read.
-    const generateAllOeMissing = async () => {
-        if (!oeNeeds || oeNeeds.loading) return alert('The Order Entry Needs board is still loading.');
+    const generateAllOeMissing = async (only = null) => {
+        // `only` = { orders, soId }: RTG's "Review & start these lines" (2026-09-20) — the same run, for
+        // one sales order, against a board loaded a moment ago. A click event (the toolbar) is not one.
+        const scoped = only && only.soId ? only : null;
+        if (!scoped && (!oeNeeds || oeNeeds.loading)) return alert('The Order Entry Needs board is still loading.');
         const work = [];
-        oeNeeds.orders.forEach(({ so, wos, pos }) => (so.lines || []).filter(oeIsTbf).forEach(l => {
-            if (!oeLinkFor({ wos, pos }, l)) work.push({ so, l });
+        (scoped ? scoped.orders.filter(e => e.so.id === scoped.soId) : oeNeeds.orders).forEach((entry) => (entry.so.lines || []).filter(oeIsTbf).forEach(l => {
+            if (!oeLinkFor(entry, l)) work.push({ so: entry.so, l });
         }));
-        if (!work.length) return alert('Every made-to-order line already has a linked order — nothing to generate.');
+        if (!work.length) return alert(scoped ? 'Every to-be-finished line on that order already has live work behind it — nothing to start.' : 'Every made-to-order line already has a linked order — nothing to generate.');
         // Outsourced-finish (plating) and bought-raw (PO) lines keep their existing per-line
         // prompts; every MANUFACTURE line goes through the REVIEW GATE together — one modal,
         // operator sees the whole batch's stock/units/routing/NS plan before anything writes.
@@ -2530,7 +2531,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
         if (reviewable.length) await openOeReviewForLines(reviewable);
     };
-    const oeIsTbf = (l) => !!(l.toBeFinished || /TO BE FINISHED/i.test(String(l.note || '')));
     const loadOeNeeds = async () => {
         setOeNeeds({ loading: true, orders: [] });
         try {
@@ -2538,42 +2538,24 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const sos = snap.docs.map(d => ({ id: d.id, ...d.data() }))
                 .filter(o => !o.deleted && !['Shipped', 'Closed', 'CANCELLED', 'Deleted'].includes(String(o.status || '')))
                 .filter(o => (o.lines || []).some(oeIsTbf));
-            const woBySo = {}, poBySo = {};
-            const ids = sos.map(o => o.id);
-            for (let i = 0; i < ids.length; i += 10) {
-                const chunk = ids.slice(i, i + 10);
-                const [ws, ps] = await Promise.all([
-                    getDocs(query(collection(db, 'hq_work_orders'), where('soAppId', 'in', chunk))),
-                    getDocs(query(collection(db, 'hq_purchase_orders'), where('soAppId', 'in', chunk))),
-                ]);
-                // A closed or deleted WO does not COVER a line — the board's whole question is
-                // "does live work exist for this?" (2026-08-29: after the failed-test cleanup the
-                // closed TRAV WOs still read as linked, hiding the ⚙ Generate the re-trace needed).
-                ws.docs.forEach(d => { const w = { id: d.id, ...d.data() }; if (!w.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(w.status || ''))) (woBySo[w.soAppId] = woBySo[w.soAppId] || []).push(w); });
-                // Same rule as the WOs (2026-08-30: a DELETED PO still read as covering its line,
-                // hiding ⚙ Generate): only LIVE purchase orders cover a line.
-                ps.docs.forEach(d => { const p = { id: d.id, ...d.data() }; if (!p.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(p.status || ''))) (poBySo[p.soAppId] = poBySo[p.soAppId] || []).push(p); });
-            }
+            // Live work linked to each order — work orders, purchase orders AND plating demands, by the
+            // one loader RTG's automatic start reads too (Shared/oeGenerate.loadOeLinks). A closed or
+            // deleted order does not COVER a line (2026-08-29 / 08-30).
+            const linksBySo = await loadOeLinks(sos.map(o => o.id));
             // NEED-BY, ONE NAME (Brief E, eb5cb6b — hand-off to A): every door now writes `needBy`
             // on hq_sales_orders; the legacy spelling is written EQUAL to it for ONE release and
             // then stops. Read the new name first here, or this board goes blind next release.
             sos.sort((a, b) => String(soNeedBy(a) || '9999').localeCompare(String(soNeedBy(b) || '9999')) || (b.createdAt || 0) - (a.createdAt || 0));
-            setOeNeeds({ loading: false, orders: sos.map(o => ({ so: o, wos: woBySo[o.id] || [], pos: poBySo[o.id] || [] })) });
-        } catch (e) { setOeNeeds({ loading: false, orders: [], error: e.message || String(e) }); }
+            const orders = sos.map(o => ({ so: o, wos: (linksBySo[o.id] || {}).wos || [], pos: (linksBySo[o.id] || {}).pos || [], demands: (linksBySo[o.id] || {}).demands || [] }));
+            setOeNeeds({ loading: false, orders });
+            return orders;
+        } catch (e) { setOeNeeds({ loading: false, orders: [], error: e.message || String(e) }); return []; }
     };
     // The order already covering a line: a WO whose rootItem is the line's raw code (recipe
     // matching when the line knows its finish), or a PO carrying the code on a line. A line
     // entered under an ALIAS matches the WO by aliasErp too — the WO's rootItem is the REAL item
     // (Stuart 2026-08-29: "we need to cover both scenarios").
-    const oeLinkFor = (entry, line) => {
-        const erp = String(line.erp || '').toUpperCase();
-        const fin = oeLineFinish(line);
-        const wo = entry.wos.find(w => (String(w.rootItem || '').toUpperCase() === erp || String(w.aliasErp || '').toUpperCase() === erp)
-            && (!fin || String(w.recipe || '').toUpperCase() === fin.toUpperCase()));
-        if (wo) return { kind: 'WO', doc: wo };
-        const po = entry.pos.find(p => (p.items || []).some(it => String(it.itemId || '').toUpperCase() === erp));
-        return po ? { kind: 'PO', doc: po } : null;
-    };
+    const oeLinkFor = (entry, line) => oeCoverageOf({ so: entry.so, line, lineIdx: ((entry.so && entry.so.lines) || []).indexOf(line), wos: entry.wos || [], pos: entry.pos || [], demands: entry.demands || [] });
 
     // Resolve an ordered code to the part production plans against — direct record first, then a
     // customer code carried ON a real record (clientPricing / fabricut aliases), then an Alias
@@ -2581,18 +2563,27 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // identity are always the REAL item (the app-wide alias rule, Shared/aliasIdentity).
     // The need-by a sales order states, whichever door wrote it (Brief E's alias window, eb5cb6b):
     // `needBy` is the name from now on; the older spelling still sits on orders saved before it.
-    const soNeedBy = (so) => String((so && (so.needBy || so.needByDate)) || '');
 
-    const resolveOePart = (erp) => {
-        const direct = partByKey['erp:' + erp];
-        let part = direct || hqParts.find(it => customerCodesOf(it).some(c => String(c).toUpperCase() === erp)) || null;
-        let aliasNote = (part && !direct) ? `${erp} = customer code on ${part.legacyErpId || part.itemId}` : '';
-        if (part && isAliasDoc(part)) {
-            const real = realPartOf(part, (t) => hqParts.find(p => [p.id, p.itemId, p.legacyErpId].map(x => String(x || '').toUpperCase()).includes(String(t).toUpperCase())));
-            if (real && real !== part) { aliasNote = `${erp} is an ALIAS of ${real.legacyErpId || real.itemId}`; part = real; }
-        }
-        return { part, aliasNote };
-    };
+    const resolveOePart = (erp) => resolveOePartIn(erp, hqParts);
+    // ── FROM RTG: "REVIEW & START THESE LINES" (2026-09-20) ────────────────────────────────────────────
+    // The Order Entry card on RTG names the lines that need a person and sends them here. The order id
+    // rides sessionStorage (it survives the lazy tab load); it is consumed once, after the library is in.
+    const oeDeepLinkRef = useRef(false);
+    useEffect(() => {
+        if (oeDeepLinkRef.current || !hqParts.length) return;
+        let soId = '';
+        try { soId = sessionStorage.getItem('hq_oe_review_so') || ''; if (soId) sessionStorage.removeItem('hq_oe_review_so'); } catch (e) { soId = ''; }
+        if (!soId) return;
+        oeDeepLinkRef.current = true;
+        (async () => {
+            addLog(`🧾 From RTG: opening the review for sales order ${soId}…`, 'info');
+            const orders = await loadOeNeeds();
+            if (!orders.some(e => e.so.id === soId)) return alert('That sales order is no longer open on Order Entry Needs (shipped, closed or deleted).');
+            await generateAllOeMissing({ orders, soId });
+        })().finally(() => { oeDeepLinkRef.current = false; });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [hqParts]);
+
     const generateOeLineOrder = async (so, line, opts = {}) => {
         const erp = String(line.erp || '').toUpperCase();
         const { part, aliasNote } = resolveOePart(erp);
@@ -2603,22 +2594,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const qty = Number(line.qty) || 0;
         if (!qty) return alert('Line has no quantity.');
         const specs = part.manufacturingSpecs || {};
-        const needBy = soNeedBy(so);
-        const prodNote = so.productionNotes || '';
         setGenBusy(true);
         try {
             // OUTSOURCED FINISH → the plater, linked to the SO (mirrors tab 7's routing).
             if (isOutsourcedFinishCode(finish)) {
-                // THE PLATED TRIPLE, ISSUED ONCE (Brief A, A3). Core stock is not read on this path
-                // (as before) — the demand says so; the core is ordered from the Snapshot/RAW view.
-                const res = await issuePlatedDemand({
-                    target: `${erp}/${finish}`, base: erp, qty, brand: activeBrand, from: 'oe-needs',
-                    createdBy: currentUser || '', inventory: hqParts, coreAvailable: null, finishName: finish, reqDate: needBy,
-                    // THE CUT (S5, 2026-09-17) rides the note — the demand's field list is frozen (Brief D).
-                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''}${Number(line.cutLength) > 0 ? ` · cut ${Number(line.cutLength)}" (${Number(line.feetPer) || ''} ft pieces)` : ''}${needBy ? ` · need by ${needBy}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
-                    extra: { soAppId: so.id, customerId: so.customerId || null, customerName: so.customer || '' },
-                });
-                res.made.forEach((m, i) => addLog(`${i === 0 ? '' : '   '}${m}${i === 0 ? ` (linked to ${so.soId || so.id})` : ''}`, i === 0 ? 'success' : 'info'));
+                // THE PLATED TRIPLE, ISSUED ONCE (Brief A, A3) — by the shared issuer RTG's automatic start
+                // calls too; it records the demand on the sales-order line (Shared/oeGenerate).
+                await issueOePlatedLine({ so, line, lineIdx: (so.lines || []).indexOf(line), brand: activeBrand, user: currentUser || '', inventory: hqParts, log: addLog });
                 await loadOeNeeds(); setGenBusy(false); return;
             }
             // RAW ITEM WE BUY → a linked vendor PO (BOTH always asks, defaulted to make).
@@ -2652,27 +2634,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (!(await assertFreshBundle('Generate'))) return;
         setGenBusy(true);
         try {
-            const jobs = [];
-            for (let i = 0; i < items.length; i++) {
-                const { so, l, buy } = items[i];
-                const erp = String(l.erp || '').toUpperCase();
-                const { part, aliasNote } = resolveOePart(erp);
-                const finish = oeLineFinish(l);
-                if (!part || !finish) continue;
-                let pins = [];
-                if (!buy && isAssemblyPart(part)) {
-                    try {
-                        const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
-                        pins = pinsSnap.docs.map(d => d.data());
-                        if (!pins.length) addLog(`⚠ ${erp} is an assembly with NO BOM pins — the plan cannot see its components.`, 'warn');
-                    } catch (e) { console.warn('pins load failed', e); }
-                }
-                jobs.push({
-                    key: i, so, line: l, part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy,
-                    // A per-foot line NEEDS feet from the vendor (the SO stored pieces + billedFeet).
-                    ...(l.perFoot ? { buyQty: Number(l.billedFeet) || (Number(l.qty) || 0) * (Number(l.feetPer) || 1) } : {}),
-                });
-            }
+            const jobs = await buildOeJobs({ items, inventory: hqParts, log: addLog });
             if (!jobs.length) { setGenBusy(false); return alert('No reviewable lines (missing part or finish).'); }
             const res = await buildOeReviewPlan({ jobs, inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17' });
             if (res.nsError) {
@@ -2705,12 +2667,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         addLog(`📏 ${code}: app unit aligned to NetSuite's ${comp.nsUnit}.`, 'info');
     };
 
-    // A job is blocked while a shortage sits behind an unresolved hold (unit mismatch, missing
-    // vendor, missing library part) the operator has neither fixed nor overridden.
-    const oeJobBlocked = (j) => (j.components || []).some(c =>
-        (c.held && !c.overrideProceed && c.short > 0) ||
-        ((!c.held || c.overrideProceed) && (c.actions || []).some(a => a.kind === 'HOLD')));
-
     // EXECUTE the approved plan — the ONLY writer on this path. Per job: make-up (converts +
     // sourcing-correct shop WOs), the WO doc with its gates, the NetSuite work order (FLOW2)
     // with awaitingNsWo so the floor waits for the number; PO drafts group per vendor+SO.
@@ -2719,191 +2675,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const runnable = rev.jobs.filter(j => !oeJobBlocked(j));
         if (!runnable.length) return alert('Every line is blocked — resolve the flagged holds first.');
         setOeReview(prev => ({ ...prev, busy: true }));
-        const poBuckets = {}; // `${vendor}|${soId}` → { vendorName, so, lines: [] }
-        // Work orders parked AWAITING RECEIPT in this run: { woId, soAppId, itemId }. The review
-        // raises the work orders first and buckets the POs afterwards, so the gate goes on
-        // immediately (that is what holds the release) and the PO number is written on below.
-        const gatedWos = [];
         try {
-            // START-NOW SPLIT (Stuart 2026-08-31): a bought TO-BE-FINISHED line with stock on
-            // hand may begin finishing immediately for the reviewed portion — that portion gets
-            // its own WO (-NOW) and picks from the shelf; the remainder's WO (-PO) waits for the
-            // material. PO lines are collected once, on the first half only.
-            const expanded = [];
-            for (const job of runnable) {
-                const nowQty = job.buy && job.finish ? Math.max(0, Math.min(Number(job.startNow) || 0, job.startNowMax || 0, job.qty)) : 0;
-                if (nowQty > 0 && nowQty < job.qty) {
-                    const per = job.startNowPer || 1;
-                    const mkPlan = (pcs) => ({ ...job.plan, lines: (job.plan?.lines || []).map(pl => ({ ...pl, quantity: pcs * per })) });
-                    expanded.push({ ...job, qty: nowQty, buyQty: nowQty * per, plan: mkPlan(nowQty), __tag: '-NOW' });
-                    expanded.push({ ...job, qty: job.qty - nowQty, buyQty: (job.qty - nowQty) * per, plan: mkPlan(job.qty - nowQty), __tag: '-PO', __skipPo: true });
-                } else expanded.push(job);
-            }
-            for (const job of expanded) {
-                const { so, part, finish, qty } = job;
-                const erp = String(part.legacyErpId || part.itemId || '').toUpperCase();
-                const finishedErp = job.finishedErp;
-                const specs = part.manufacturingSpecs || {};
-                const needBy = soNeedBy(so);
-                const prodNote = so.productionNotes || '';
-                const woId = `WO-OE-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now()}-${job.key}${job.__tag || ''}`;
-                const { makeup, poLines } = actionsOfReviewedJob(job);
-                if (!job.__skipPo) poLines.forEach(pl => {
-                    const k = `${pl.vendorName}|${so.id}`;
-                    (poBuckets[k] = poBuckets[k] || { vendorName: pl.vendorName, so, lines: [] }).lines.push(pl);
-                });
-                // A BOUGHT line's PO (or coverage) settles the MATERIAL only. When the line is
-                // TO BE FINISHED (Stuart 2026-08-31: "the track should really create a work order
-                // for the finishing for once it arrives"), the finishing WO is still created —
-                // it releases to the floor and waits at the WMS pick until the material lands.
-                // A raw-only buy (no finish) still makes no work order.
-                if (job.buy) {
-                    if (!poLines.length && !job.__skipPo) addLog(`✔ ${erp} ×${qty} (SO ${so.soId || so.id}) — material covered by stock/on-order as reviewed; nothing ordered.`, 'success');
-                    if (!finish) continue;
-                    addLog(job.__tag === '-NOW'
-                        ? `🎨 ${erp} ×${qty}: START NOW from stock — finishing WO releases and picks from the shelf.`
-                        : `🎨 ${erp} ×${qty}: TO BE FINISHED — creating the finishing WO now; it waits at the pick until the material arrives.`, 'info');
-                }
-                const flow2 = job.nsPlan && job.nsPlan.flow === 'FLOW2';
-                const planLines = (job.plan?.lines || []).map(pl => String(pl.legacyErpId || '').toUpperCase() === finishedErp
-                    ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
-                // ONE POLE TEST (sweep 2026-09-01) — Shared/poleCut is the single answer; the
-                // CUSTOM PAIR rule (Stuart 2026-09-01, b531f53): a mill code plus an applied finish
-                // is made to order and gets a shop sibling; a complete assembly (/BS, /N90) is one
-                // finishing WO. Both decided here, built by the one writer below.
-                const isPole = isPoleCategory(String(specs.productType || '').toUpperCase());
-                const custom = isPole && handlingForErp(finishedErp) === 'Custom';
-                const shopWoId = `${woId}-C`;
-                // ── THE ONE WRITER (Brief A, A1 step 4 — 2026-09-02). Intent ORDER_ENTRY: the
-                // document, the pre-built finishing payload, the pre-check gates (component shop
-                // WOs dispatched straight to the shop, as before) and the custom sibling all come
-                // from Shared/workOrderCreate. The FLOW1/FLOW2 NetSuite anchors and the direct
-                // release below stay exactly as b531f53 built them — anchor policy NONE here.
-                // ── THE POLE CHOICE THE OPERATOR MADE (Q5 — Stuart 2026-09-02) ────────────────
-                // Short of the stocked length: they either chose a longer stick for the saw to cut
-                // down, or chose to wait for the length. Never a milling order for a pole.
-                let poleCut = null, backOrder = '';
-                if (job.poleChoice) {
-                    const pc = job.poleChoice;
-                    const opt = pc.chosen && pc.chosen !== 'BACKORDER' ? (pc.options || []).find(o => o.sourceErp === pc.chosen) : null;
-                    if (opt) {
-                        // Only the SHORTFALL is cut — whatever is already on the shelf is picked.
-                        poleCut = cutPlanFromSource({ targetErp: pc.pullErp, targetFt: pc.pullFt, sourceFt: opt.sourceFt, per: opt.per, scrapFt: opt.scrapFt, want: pc.short });
-                        if (!poleCut) addLog(`⚠ ${pc.pullErp}: could not build the cut from ${opt.sourceErp} — the order is created, raise the cut from WMS → Rod Cuts.`, 'warn');
-                    } else {
-                        backOrder = `${pc.short} × ${pc.pullErp} short (${pc.have} on hand of ${pc.need}) — waiting for the ${pc.pullFt} ft length`;
-                    }
-                }
-                const rcptRefs = job.__tag === '-NOW' ? null
-                    : (poLines || []).map(pl => ({ itemId: String(pl.code || '').toUpperCase(), qtyNeeded: Number(pl.editQty ?? pl.qty) || Number(pl.qty) || 0 }))
-                        .filter(r => r.itemId && r.qtyNeeded > 0);
-                if (rcptRefs && rcptRefs.length) rcptRefs.forEach(r => gatedWos.push({ woId, soAppId: so.id, itemId: r.itemId }));
-                let gate = {}, finPayload = null;
-                try {
-                    const res = await parkWorkOrder({
-                        intent: INTENT.ORDER_ENTRY, part, code: finishedErp, qty, brand: activeBrand, createdBy: currentUser || '',
-                        reqDate: needBy, needBy,
-                        note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · ${erp} in ${finish}${job.aliasNote ? ` · 🔗 ${job.aliasNote}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
-                        source: 'ORDER_ENTRY', precheck: { plan: job.plan, actions: makeup }, partsList: planLines,
-                        inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17',
-                        makeup: { dispatchShop: true, customerName: so.customer || '' }, soRef: so.soId || so.id,
-                        anchor: ANCHOR.NONE, woId, poleCut, backOrder,
-                        // MATERIAL WE HAD TO BUY (Stuart 2026-09-04): every component this review
-                        // is raising a PO for parks the order AWAITING RECEIPT — it sits on the WMS
-                        // until enough arrives to cover it. A '-NOW' split is the exception by
-                        // definition: those pieces are on the shelf, which is why it exists.
-                        receiptRefs: rcptRefs,
-                        sales: {
-                            soAppId: so.id, soId: so.soId || so.id, customerId: so.customerId || null, customer: so.customer || '',
-                            rawErp: erp, aliasErp: job.aliasNote ? job.lineErp : null, soAccepted: !!so.nsInternalId,
-                            flow2, stockInternalId: flow2 ? job.nsPlan.assemblyInternalId : null,
-                            custom, shopWoId,
-                            // THE CUT (S5, Stuart 2026-09-17: "be sure … able to pass along the cut lengths"): the
-                            // SO line's cut in inches, onto the work order, its shop sibling and the floor payload.
-                            cutLength: Number(job.line && job.line.cutLength) > 0 ? Number(job.line.cutLength) : null,
-                        },
-                    });
-                    gate = res.gate; finPayload = res.finPayload;
-                    res.made.forEach((m, i) => addLog(`${i === 0 ? '' : '   '}${m}`, i === 0 ? 'success' : (/^[⚠✂⇄🏭🧩]/.test(m) ? 'warn' : 'info')));
-                } catch (e) {
-                    if (e instanceof ParkRefusal) { addLog(`⛔ ${finishedErp} (SO ${so.soId || so.id}): ${e.message}`, 'error'); continue; }
-                    throw e;
-                }
-                if (flow2) {
-                    try {
-                        await queueNsAssemblyWorkOrder({
-                            brandId: activeBrand, assemblyInternalId: job.nsPlan.assemblyInternalId,
-                            erp: finishedErp, qty, reqDate: needBy,
-                            memo: `SO ${so.soId || so.id} · ${so.customer || ''} · ${finish}`,
-                            writeBacks: [{ collection: 'hq_work_orders', docId: woId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
-                            sourceApp: 'OE_REVIEW', createdBy: currentUser || '',
-                        });
-                        await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
-                        addLog(`📤 NetSuite work order queued for ${finishedErp} ×${qty} — the floor release waits for its number.`, 'success');
-                    } catch (e) { addLog(`⚠ ${finishedErp}: NetSuite WO queue failed (${e.message || e}) — WO parked awaiting it; retry from RTG.`, 'error'); }
-                } else if (job.nsPlan && job.nsPlan.flow === 'FLOW1' && job.nsPlan.baseAssemblyInternalId) {
-                    // The TOP-LEVEL anchor (Stuart 2026-08-31): WO on the BASE assembly so the
-                    // order shows ON ORDER in NetSuite from day one. Closing chain: mill builds
-                    // → app convert (/P) → final assembly build posts against this WO. It does
-                    // NOT gate the floor — the converts/components gates own the release.
-                    try {
-                        await queueNsAssemblyWorkOrder({
-                            brandId: activeBrand, assemblyInternalId: job.nsPlan.baseAssemblyInternalId,
-                            erp: job.nsPlan.baseErp, qty, reqDate: needBy,
-                            memo: `SO ${so.soId || so.id} · ${so.customer || ''} · build ${job.nsPlan.baseErp} ×${qty} · finish ${finish} · closes on the final assembly build (after mill + phosphate convert)`,
-                            writeBacks: [{ collection: 'hq_work_orders', docId: woId, patch: { nsWoOnErp: job.nsPlan.baseErp, nsWoOnInternalId: job.nsPlan.baseAssemblyInternalId }, idField: 'nsWoId', tranField: 'nsWoTran' }],
-                            sourceApp: 'OE_REVIEW', createdBy: currentUser || '',
-                        });
-                        await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
-                        addLog(`📤 Top-level NetSuite WO queued on ${job.nsPlan.baseErp} ×${qty} (SO ${so.soId || so.id}) — shows ON ORDER; the final assembly build closes it.`, 'success');
-                    } catch (e) { addLog(`⚠ ${job.nsPlan.baseErp}: top-level NS WO queue failed (${e.message || e}) — the RTG anchor review will re-offer it.`, 'error'); }
-                    if (isReleasable(gate)) {
-                        await releaseFinWoToFloor({ id: woId, finPayload }, currentUser || 'oe-review');
-                        addLog(`✅ ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — approved in review → RELEASED to the finishing floor (${woId}).`, 'success');
-                    } else {
-                        addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — waiting on ${gate.awaitingConvert ? 'its phosphate convert' : ''}${gate.awaitingConvert && gate.awaitingComponents ? ' + ' : ''}${gate.awaitingComponents ? 'its component shop WO(s)' : ''}; auto-releases when they post.`, 'success');
-                    }
-                } else if (isReleasable(gate)) {
-                    await releaseFinWoToFloor({ id: woId, finPayload }, currentUser || 'oe-review');
-                    addLog(`✅ ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — approved in review → RELEASED to the finishing floor (${woId}).`, 'success');
-                } else {
-                    addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — waiting on ${gate.awaitingConvert ? 'its phosphate convert' : ''}${gate.awaitingConvert && gate.awaitingComponents ? ' + ' : ''}${gate.awaitingComponents ? 'its component shop WO(s)' : ''}; auto-releases when they post.`, 'success');
-                }
-            }
-            // PO drafts — one per vendor per SO, exactly as reviewed (qtys already MOQ-adjusted).
-            // ONE PO WRITER (Brief A, A4): the component buys a review approved become DRAFT POs,
-            // one per vendor, each line carrying the sales order that wants it (Stuart: "the sales
-            // order #'s should stay aligned"). They are previewed and approved like any other.
-            const oeDraftPos = [];
-            for (const bucket of Object.values(poBuckets)) {
-                const { vendorName, so, lines } = bucket;
-                const res = await createDraftPurchaseOrders({
-                    lines: lines.map(l => ({
-                        part: l.part, qty: Number(l.editQty ?? l.qty) || l.qty, vendorName,
-                        reason: l.reason, from: 'OE_REVIEW',
-                        soAppId: so.id, soRef: so.soId || so.id,
-                    })),
-                    brand: activeBrand, createdBy: currentUser || '', source: 'OE_REVIEW',
-                    reqDate: soNeedBy(so) || '',
-                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · component make-up (review-approved)`,
-                });
-                if (!res.pos.length) { addLog(`⛔ PO skipped — no NetSuite-synced vendor matches "${vendorName}". Sync vendors (11.1), then Generate again.`, 'error'); continue; }
-                oeDraftPos.push(...res.pos);
-                // The gate now knows WHICH purchase order it is waiting on, so a delivery of the
-                // same code against a different PO cannot clear the wrong order.
-                for (const po of res.pos) {
-                    for (const it of (po.items || [])) {
-                        const code = String(it.itemId || '').toUpperCase();
-                        for (const g of gatedWos.filter(x => x.itemId === code && x.soAppId === (it.soAppId || so.id))) {
-                            try { await stampReceiptPo(g.woId, code, po.poId); } catch (e) { console.warn('receipt-gate PO stamp failed', g.woId, e); }
-                        }
-                    }
-                }
-                res.pos.forEach(po => addLog(`🧾 DRAFT ${po.poId} → ${po.vendor}: ${po.items.map(l => `${l.quantity} × ${l.itemId}`).join(', ')} (SO ${so.soId || so.id}) — review and approve to send it to NetSuite.`, 'info'));
-            }
+            // THE WRITER IS Shared/oeGenerate.executeOeJobs (2026-09-20) — this function's body, moved
+            // whole, because RTG now starts the same run by itself when NetSuite accepts the order.
+            const { draftPos } = await executeOeJobs({ jobs: runnable, brand: activeBrand, user: currentUser || '', inventory: hqParts, log: addLog });
             setOeReview(null);
             await loadOeNeeds();
-            if (oeDraftPos.length) setPoReview({ pos: oeDraftPos, busy: false });
+            if (draftPos.length) setPoReview({ pos: draftPos, busy: false });
         } catch (e) {
             addLog(`Review execute failed partway: ${e.message || e} — re-open Generate; existing links show on the board.`, 'error');
             alert('Execute failed partway:\n\n' + (e.message || e) + '\n\nThe board shows what was created — Generate again covers only what is still missing.');
@@ -3386,7 +3164,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>{oeNeeds.orders.length} open order(s) with made-to-order lines · links re-read on refresh</span>
                                                 <button onClick={loadOeNeeds} style={{ padding: '7px 12px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>↻ Refresh</button>
                                             </div>
-                                            {oeNeeds.orders.map(({ so, wos, pos }) => (
+                                            {oeNeeds.orders.map(({ so, wos, pos, demands }) => (
                                                 <div key={so.id} style={{ border: '1px solid var(--line)', background: '#fff', marginBottom: '16px' }}>
                                                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '8px 18px', padding: '12px 18px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
                                                         <span style={{ fontFamily: 'var(--serif)', fontSize: '1.15rem', fontWeight: 500, color: 'var(--ink)' }}>{so.customer || 'Customer'}</span>
@@ -3396,7 +3174,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     </div>
                                                     {so.productionNotes && <div style={{ padding: '8px 18px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }}>📝 {so.productionNotes}</div>}
                                                     {(so.lines || []).filter(oeIsTbf).map((l, li) => {
-                                                        const link = oeLinkFor({ wos, pos }, l);
+                                                        const link = oeLinkFor({ so, wos, pos, demands }, l);
                                                         const fin = oeLineFinish(l);
                                                         return (
                                                             <div key={li} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 16px', padding: '10px 18px', borderBottom: '1px solid var(--paper-2)' }}>
@@ -3405,7 +3183,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                                 <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', flex: 1, minWidth: '160px' }}>{l.name || ''}</span>
                                                                 {link ? (
                                                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', padding: '4px 9px', border: '1px solid #3a7d44', color: '#3a7d44', whiteSpace: 'nowrap' }}>
-                                                                        {link.kind === 'WO' ? `⚒ ${link.doc.nsWoTran || link.doc.id} · ${link.doc.status || ''}${link.doc.awaitingConvert ? ' · ⇄ convert' : ''}${link.doc.awaitingComponents && !link.doc.componentsDone ? ' · 🧩 milling' : ''}${link.doc.awaitingSoAccept ? ' · ⏳ SO' : ''}` : `📦 ${link.doc.id} · ${link.doc.vendor || ''} · ${link.doc.deliveryStatus || link.doc.status || ''}${link.doc.eta ? ` · ETA ${link.doc.eta}` : ''}`}
+                                                                        {link.kind === 'WO' ? `⚒ ${link.doc.nsWoTran || link.doc.id} · ${link.doc.status || ''}${link.doc.awaitingConvert ? ' · ⇄ convert' : ''}${link.doc.awaitingComponents && !link.doc.componentsDone ? ' · 🧩 milling' : ''}${link.doc.awaitingSoAccept ? ' · ⏳ SO' : ''}` : link.kind === 'PLATING' ? `⚡ plating ${link.doc ? `${link.doc.woNum || link.doc.id} · open` : `issued${link.stamp && link.stamp.ref ? ` ${link.stamp.ref}` : ''} · with the plater`}` : `📦 ${link.doc.id} · ${link.doc.vendor || ''} · ${link.doc.deliveryStatus || link.doc.status || ''}${link.doc.eta ? ` · ETA ${link.doc.eta}` : ''}`}
                                                                     </span>
                                                                 ) : (
                                                                     <button disabled={genBusy} onClick={() => generateOeLineOrder(so, l)} title="Generate the linked order for this line — in-house finish → finishing WO (parked in RTG); bought raw → vendor PO; outsourced finish → plating demand. The order carries this SO's link, need-by and notes." style={{ padding: '7px 14px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>⚙ Generate Order</button>

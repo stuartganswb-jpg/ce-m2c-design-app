@@ -7,6 +7,8 @@ import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines, car
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
+import { runOeAuto, oeInventoryOf } from '../Shared/oeGenerate';
+import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
@@ -120,6 +122,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // stopped stays parked for a human, with a log line saying why. Only orders created AFTER the
     // toggle was switched on are picked up — the pre-existing backlog stays manual so flipping the
     // switch can never flood the floor. Board + Daily Job Log remain the record of every release.
+    // ── THE RELEASE STAMP GOES WHERE THE RECORD LIVES (2026-09-20) ───────────────────────────────────
+    // Both Push doors chose the collection from the order TYPE: 'sales' → hq_sales_orders. But an Order
+    // Entry work order is sales-TYPED and lives in hq_work_orders (WO-OE-…, and its shop twin …-C), so the
+    // floor document was written and then the "Dispatched" stamp went to a sales-order id that does not
+    // exist: the release threw, the work order stayed Approved, and the next RTG session released it —
+    // and overwrote the floor's document — again. A work order is recognised by what only it carries.
+    const recordCollectionOf = (o, orderType) => ((o && (o.soAppId || o.routeTo || o.finPayload || o.orderClass === 'ORDER_ENTRY')) ? 'hq_work_orders'
+        : (orderType === 'sales' ? 'hq_sales_orders' : 'hq_work_orders'));
     const [autoRelease, setAutoRelease] = useState(null);   // null = loading; {enabled, sinceAt, by}
     const autoBusyRef = useRef(false);
     const autoTriedRef = useRef(new Set());                  // one attempt per order per session
@@ -476,6 +486,75 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [autoRelease, liveSO, liveWO]);
 
+
+    // 🧾 ORDER ENTRY STARTS HERE, BY ITSELF (Stuart 2026-09-20: "automatic when netsuite accepts") ───────
+    // A tab-7 sales order's TO-BE-FINISHED lines used to wait on Stock View → Order Entry Needs until
+    // somebody remembered them — "i am afraid these to-be-finished orders will get lost". Now RTG starts
+    // them the moment NetSuite accepts the order (nsInternalId lands by writeBack): the same plan the
+    // review screen builds, by the same writer (Shared/oeGenerate). A CLEAN line runs — work orders park
+    // here with their gates and the engine above releases them; a line that needs a person is named in
+    // red on the order's card with the way into the review. Stocked lines are untouched: WMS picks them
+    // off the sales order and shorts are the Sales Snapshot's.
+    //   · the ⚡ toggle is the kill switch for this too;
+    //   · one browser runs it — the run is claimed on the sales order in a transaction (runOeAuto);
+    //   · orders entered before this shipped are NOT started by themselves (no backlog flood) — their
+    //     cards say what is open and the review starts them.
+    const oeAutoBusyRef = useRef(false);
+    const oeAutoTriedRef = useRef(new Set());
+    const OE_AUTO_FROM = Date.UTC(2026, 8, 20, 4, 0, 0);   // 2026-09-20 00:00 shop time — the day this shipped
+    // EVERYTHING ever raised for the order, closed and deleted included, read the strict way (`any`):
+    // a finished work order is Closed too, and the automatic start must never re-make a finished line.
+    const oeLinksOf = (so) => ({
+        wos: liveWO.filter(w => w.soAppId === so.id),
+        pos: purchaseOrders.filter(p => p.soAppId === so.id),
+        demands: livePlatD.filter(d => d.soAppId === so.id),
+        any: true,
+    });
+    const oeOpenOf = (so) => ((so.lines || []).some(oeIsTbf) ? uncoveredTbfOf(so, oeLinksOf(so)) : []);
+    useEffect(() => {
+        const cfg = autoRelease;
+        if (!cfg || !cfg.enabled || oeAutoBusyRef.current) return;
+        const now = Date.now();
+        const answered = (o, sig) => {
+            const a = o.oeAuto;
+            if (!a || a.sig !== sig) return false;
+            if (a.state === 'NEEDS_REVIEW' || a.state === 'DONE') return true;
+            return (a.state === 'RUNNING' || a.state === 'FAILED') && now - (a.at || 0) < 10 * 60 * 1000;
+        };
+        let pick = null;
+        for (const o of liveSO) {
+            if (o.orderClass !== 'QUICKSHIP' || !o.nsInternalId || o.deleted || o.stopped || o.rtgArchived) continue;
+            if ((o.createdAt || 0) < OE_AUTO_FROM || isClosedState(o) || isDoneState(o)) continue;
+            const open = oeOpenOf(o);
+            if (!open.length) continue;
+            const sig = oeAutoSig(open);
+            if (answered(o, sig) || oeAutoTriedRef.current.has(`${o.id}|${sig}`)) continue;
+            pick = { so: o, sig }; break;
+        }
+        if (!pick) return;
+        oeAutoBusyRef.current = true;
+        oeAutoTriedRef.current.add(`${pick.so.id}|${pick.sig}`);
+        (async () => {
+            const so = pick.so;
+            try {
+                addLog(`🧾 Order Entry ${so.soId || so.id}: NetSuite accepted — starting its to-be-finished lines…`, 'info');
+                const data = await loadTxData();
+                const res = await runOeAuto({ so, brand: activeBrand, user: currentUser || 'rtg-auto', inventory: oeInventoryOf(data.libraryParts, activeBrand), log: addLog });
+                if (res.state === 'FAILED') oeAutoTriedRef.current.delete(`${so.id}|${pick.sig}`);   // retried after its ten minutes
+                if (res.state === 'SKIPPED') addLog(`🧾 ${so.soId || so.id}: another RTG session is already starting it.`, 'info');
+                else if (res.review.length) addLog(`🧾 ${so.soId || so.id}: ${res.ran} started · ${res.review.length} line(s) need a decision — see the order's card.`, 'warn');
+                else addLog(`🧾 ${so.soId || so.id}: every to-be-finished line is started (${res.ran}).`, 'success');
+            } catch (e) {
+                console.error('order-entry auto start failed', e);
+                oeAutoTriedRef.current.delete(`${so.id}|${pick.sig}`);
+                addLog(`🧾 Order Entry ${so.soId || so.id}: automatic start FAILED — ${e.message || e}. Nothing is lost: the card shows what is open; start it from the review.`, 'error');
+            } finally {
+                oeAutoBusyRef.current = false;
+                setTimeout(() => loadRTGOrders(), 900);
+            }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [autoRelease, liveSO, liveWO, livePlatD, purchaseOrders]);
 
     // 🧩 COMPONENT GATE CLEARER (Stuart 2026-08-30): a WO waiting on its component shop WOs
     // (awaitingComponents) watches them through the live mirrors — every component's shop job
@@ -1030,11 +1109,27 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         const st = quickShipStatusOf(so) || {};
         const tone = stageTone(st.stage);
         const wos = liveWO.filter(w => w.soAppId === so.id && !w.deleted);
+        // THE TO-BE-FINISHED LINES, EACH WITH ITS STATE (Stuart 2026-09-20: these orders must not get lost).
+        const tbf = (so.lines || []).map((line, lineIdx) => ({ line, lineIdx })).filter(x => oeIsTbf(x.line));
+        const links = tbf.length ? oeLinksOf(so) : null;
+        const reviewOf = (idx) => ((so.oeAuto && so.oeAuto.review) || []).find(r => r.lineIdx === idx) || null;
+        const tbfRows = tbf.map(x => {
+            const coverage = oeCoverageOf({ so, line: x.line, lineIdx: x.lineIdx, ...links });
+            return { ...x, coverage, state: oeLineStateOf({ coverage, review: coverage ? null : reviewOf(x.lineIdx) }) };
+        });
+        const tbfOpen = tbfRows.filter(r => !r.coverage || r.coverage.dead);
+        const toneOf = (t) => (t === 'red' ? '#b3362f' : t === 'green' ? '#3a7d44' : '#8f6f3e');
+        const waitingWhy = !tbfOpen.length ? '' : !so.nsInternalId ? 'waiting for NetSuite to accept the order — they start by themselves then'
+            : (autoRelease && !autoRelease.enabled) ? '⚡ auto-release is OFF — nothing starts by itself'
+            : (so.oeAuto && so.oeAuto.state === 'RUNNING') ? 'starting now…'
+            : (so.oeAuto && so.oeAuto.state === 'FAILED') ? `the automatic start failed (${String(so.oeAuto.error || '').slice(0, 90)}) — it retries; or start it from the review`
+            : ((so.createdAt || 0) < OE_AUTO_FROM) ? 'entered before the automatic start shipped — start it from the review'
+            : '';
         return (
             <div key={so.id} style={{ ...cardStyle, borderLeft: `4px solid ${isUrgent(so) ? '#d9534f' : tone}`, ...(isUrgent(so) ? { background: '#fdf3f3' } : {}), ...(done ? { opacity: 0.8 } : {}) }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
                     <div>
-                        <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(so) ? '#d9534f' : 'var(--ink)' }}>SO: {so.soId || so.id} <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '2px 6px', marginLeft: '6px' }}>Order Entry · stocked</span></div>
+                        <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(so) ? '#d9534f' : 'var(--ink)' }}>SO: {so.soId || so.id} <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '2px 6px', marginLeft: '6px' }}>Order Entry · {tbf.length ? (tbf.length === (so.lines || []).length ? 'to be finished' : 'stocked + to be finished') : 'stocked'}</span></div>
                         <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Cust: {so.customer || so.customerName || 'N/A'}{so.sidemark ? ` · ${so.sidemark}` : ''}{(so.lines || []).length ? ` · ${so.lines.length} line${so.lines.length === 1 ? '' : 's'}` : ''}</div>
                         {urgentControls(so, 'hq_sales_orders')}{finishAsAvailableControls(so)}{backorderChip(so)}
                     </div>
@@ -1049,6 +1144,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                         {st.by && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: tone }}>· {st.by}</span>}
                     </span>
                 </div>
+                {tbfRows.length > 0 && (
+                    <div style={{ border: `1px solid ${tbfOpen.length ? '#b3362f' : 'var(--line)'}`, background: tbfOpen.length ? '#fdf3f3' : '#fff', padding: '7px 9px', marginBottom: '8px' }}>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 700, color: tbfOpen.length ? '#b3362f' : '#3a7d44', marginBottom: '4px' }}>
+                            {tbfOpen.length ? `${tbfOpen.length} of ${tbfRows.length} to-be-finished line${tbfRows.length === 1 ? '' : 's'} NOT started` : `to-be-finished: all ${tbfRows.length} started`}
+                        </div>
+                        {tbfRows.map(r => (
+                            <div key={r.lineIdx} style={{ fontFamily: 'var(--mono)', fontSize: '10px', lineHeight: 1.55, color: 'var(--ink)' }}>
+                                <b>{r.line.qty} × {r.line.erp}</b> <span style={{ color: '#8f6f3e' }}>{oeLineFinish(r.line) || 'NO FINISH'}</span>{Number(r.line.cutLength) > 0 ? ` · cut ${Number(r.line.cutLength)}"` : ''} — <span style={{ color: toneOf(r.state.tone) }}>{r.state.text}</span>
+                            </div>
+                        ))}
+                        {waitingWhy && <div style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', color: '#b3362f', marginTop: '4px' }}>{waitingWhy}</div>}
+                        {tbfOpen.length > 0 && !!so.nsInternalId && (
+                            <button onClick={() => { try { sessionStorage.setItem('hq_oe_review_so', so.id); } catch (e) { /* the view still opens */ } window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }}
+                                title="Opens Stock View → Order Entry Needs with this order's review: live stock, sourcing and the NetSuite work-order plan, then Approve starts it."
+                                style={{ marginTop: '6px', padding: '6px 12px', background: '#b3362f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9.5px', textTransform: 'uppercase', letterSpacing: '.07em' }}>Review &amp; start these lines →</button>
+                        )}
+                    </div>
+                )}
                 {wos.length > 0 && (
                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.6 }}>
                         {wos.map(w => <div key={w.id}>↳ {woRefOf(w)} {woItemCodeOf(w) ? `· ${woItemCodeOf(w)}` : ''} · {w.status === 'Dispatched' ? (w.floorPhase || 'on the floor') : (gateSummary(w) || (w.status === 'Approved' ? 'releasing…' : (w.status || '').toLowerCase()))}</div>)}
@@ -1780,7 +1893,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             });
 
             // Change status to Dispatched so it leaves the RTG board
-            const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
+            const collectionName = recordCollectionOf(hqOrder, orderType);
             await updateDoc(doc(db, collectionName, hqOrder.id), { 
                 pushedToFinishing: true,
                 dispatchedAt: Date.now(),
@@ -1857,7 +1970,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             }));
 
             // Change status to Dispatched so it leaves the RTG board
-            const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
+            const collectionName = recordCollectionOf(hqOrder, orderType);
             await updateDoc(doc(db, collectionName, hqOrder.id), { 
                 pushedToShop: true,
                 status: "Dispatched" 

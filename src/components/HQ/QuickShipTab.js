@@ -1603,13 +1603,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             // ── TO-BE-FINISHED LINES ARE RECORDED, NOT FIRED (Stuart 2026-08-29, the review gate) ──
             // An Order Entry sales order is a demand statement: a line entered as raw part + finish
             // + qty is recorded on the SO (toBeFinished / finishCode / finishOutsourced on the line).
+            // (2026-09-20: RTG now STARTS this by itself once NetSuite accepts — Shared/oeGenerate.runOeAuto.)
             // Generation lives on Stock View → 🧾 Order Entry Needs, where the review modal shows
             // live stock (with units), sourcing-resolved routing and the NetSuite work-order plan
             // BEFORE anything writes. The save-time auto-fire that used to live here was retired
             // behind a flag on 08-29 and deleted on 2026-09-03 (Brief E, Q12).
             const tbfLines = lines.filter(l => l.toBeFinished && l.finishCode);
             if (tbfLines.length) {
-                addLog(`📋 ${tbfLines.length} to-be-finished line(s) recorded — generate their orders from Stock View → 🧾 Order Entry Needs (review-gated: stock, units, sourcing and the NetSuite WO plan are shown for approval first).`, 'info');
+                addLog(`📋 ${tbfLines.length} to-be-finished line(s) recorded — RTG starts them by itself when NetSuite accepts the order (Stuart 2026-09-20); a line that needs a decision is named in red on the order's RTG card, with the way into the review.`, 'info');
             }
             const obId = await enqueueNsWrite({
                 kind: 'salesorder', label: `Quick Ship SO · ${selectedCustomer?.name || customerId} · ${lines.length} line(s)`,
@@ -2297,7 +2298,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             need to push it again"). Unmissable, and it clears on the next add. */}
                         {lastCreated && cart.length === 0 && (
                             <div style={{ marginBottom: '14px', padding: '12px 14px', background: '#eaf5ec', border: '2px solid #3a7d44', fontFamily: 'var(--mono)', fontSize: '11px', color: '#2f7d3b', letterSpacing: '.04em' }}>
-                                ✅ {lastCreated.kind} <b>{lastCreated.id}</b> CREATED — queued to NetSuite (number stamps back on accept). It is on the customer's CRM card now{lastCreated.kind === 'SALES ORDER' ? '; generate its production from Stock View → 🧾 Order Entry Needs' : ''}.
+                                ✅ {lastCreated.kind} <b>{lastCreated.id}</b> CREATED — queued to NetSuite (number stamps back on accept). It is on the customer's CRM card now{lastCreated.kind === 'SALES ORDER' ? '; any to-be-finished lines start by themselves on RTG once NetSuite accepts it — the order\'s RTG card shows each line, and names in red any that need a person' : ''}.
                             </div>
                         )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>

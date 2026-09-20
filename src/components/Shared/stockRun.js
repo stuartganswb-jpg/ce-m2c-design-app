@@ -199,6 +199,9 @@ export const buildParkedWorkOrder = ({
         ...(sales.flow2 ? { awaitingNsWo: true } : {}),
         // THE CUT in inches (S5, 2026-09-17) — both halves carry it; the shop card reads `cutLength`.
         ...(Number(sales.cutLength) > 0 ? { cutLength: Number(sales.cutLength) } : {}),
+        // WHICH LINE of the sales order this work order is for (2026-09-20, Shared/oeLines.oeCoverageOf):
+        // the link used to be guessed back from item + finish, so two identical lines read as one.
+        ...(Number.isInteger(sales.soLineIdx) && sales.soLineIdx >= 0 ? { soLineIdx: sales.soLineIdx } : {}),
     } : {};
     const hq = {
         id: woId, woId, woDisplayId: woId,
