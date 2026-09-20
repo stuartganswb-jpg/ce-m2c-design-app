@@ -79,7 +79,47 @@ const DEFAULT_PLATED_PBR = { metalness: 1.0, roughness: 0.25 };   // unknown out
 // Wood: no metal response at all, a rough diffuse surface so the MAP is what you see, a little
 // environment so it still sits in the studio, and the swatch doubles as a bump map so the grain catches
 // the light. Dials:
-const WOOD_PBR = { metalness: 0.0, roughness: 0.74, envMapIntensity: 0.22, bumpScale: 0.6, wood: true };
+// ⚠ envMapIntensity IS THE LIGHT, NOT JUST THE SHINE (2026-09-20, second pass: "no visual change" — it had
+// changed, to a flat DARK board). This rig lights the scene almost entirely from the softbox environment,
+// and on a non-metal that environment is the DIFFUSE light too: at 0.22 the wood was lit at a fifth and
+// read as dark brown paint with no grain to see. Gloss is what ROUGHNESS is for; the light stays on.
+const WOOD_PBR = { metalness: 0.0, roughness: 0.82, envMapIntensity: 1.05, bumpScale: 0.6, wood: true };
+
+// ── THE GRAIN MUST NOT STRETCH (same pass) ──────────────────────────────────────────────────────────
+// A swatch is a square photograph of a few inches of board. The models map ONE copy of it over a whole
+// part, so on a long fascia or a pole it is pulled nine or ten times longer than it is tall and the
+// grain smears into a smooth gradient — which is the "smooth metal" look even with the right material.
+// From the mesh's own geometry: how much surface one UV unit covers along U and along V. The longer
+// axis is tiled by that ratio (whole tiles, so a pole's seam still closes), so a texel is square on
+// the part whatever units the model was drawn in. Pure geometry → cached on the geometry.
+export const woodRepeatFor = (geom) => {
+    if (!geom || !geom.attributes || !geom.attributes.position || !geom.attributes.uv) return [1, 1];
+    if (geom.userData && geom.userData.woodRepeat) return geom.userData.woodRepeat;
+    const pos = geom.attributes.position, uv = geom.attributes.uv, idx = geom.index;
+    const tris = Math.floor((idx ? idx.count : pos.count) / 3);
+    const step = Math.max(1, Math.floor(tris / 300));
+    let su = 0, sv = 0, n = 0;
+    for (let t = 0; t < tris; t += step) {
+        const a = idx ? idx.getX(t * 3) : t * 3, b = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, c = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+        const e1 = [pos.getX(b) - pos.getX(a), pos.getY(b) - pos.getY(a), pos.getZ(b) - pos.getZ(a)];
+        const e2 = [pos.getX(c) - pos.getX(a), pos.getY(c) - pos.getY(a), pos.getZ(c) - pos.getZ(a)];
+        const du1 = uv.getX(b) - uv.getX(a), dv1 = uv.getY(b) - uv.getY(a), du2 = uv.getX(c) - uv.getX(a), dv2 = uv.getY(c) - uv.getY(a);
+        const det = du1 * dv2 - du2 * dv1;
+        if (!Number.isFinite(det) || Math.abs(det) < 1e-12) continue;
+        const T = [0, 1, 2].map(k => (e1[k] * dv2 - e2[k] * dv1) / det), B = [0, 1, 2].map(k => (e2[k] * du1 - e1[k] * du2) / det);
+        const lt = Math.hypot(T[0], T[1], T[2]), lb = Math.hypot(B[0], B[1], B[2]);
+        if (!Number.isFinite(lt) || !Number.isFinite(lb) || lt <= 0 || lb <= 0) continue;
+        su += lt; sv += lb; n++;
+    }
+    let out = [1, 1];
+    if (n) {
+        const ratio = (su / n) / (sv / n);               // surface per U unit ÷ surface per V unit
+        const tiles = (r) => Math.max(1, Math.min(16, Math.round(r)));
+        out = ratio >= 1 ? [tiles(ratio), 1] : [1, tiles(1 / ratio)];
+    }
+    geom.userData = { ...(geom.userData || {}), woodRepeat: out };
+    return out;
+};
 const isWoodFinish = (f) => {
     if (!f) return false;
     const mats = String(f.material || f.materials || '').toUpperCase();

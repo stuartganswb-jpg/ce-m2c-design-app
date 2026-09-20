@@ -22,7 +22,7 @@ import { draftFromCartLine, cartLineForDraft } from '../Shared/visionHandoff';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
-import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
+import { StudioRig, ensureFinishPbr, pbrForTexture, woodRepeatFor } from '../Shared/studioScene';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf, customerPriceLevel } from '../Shared/priceLevels';
 import { priceChoice, isItemKit } from '../Shared/hardwarePricing';
@@ -36,6 +36,7 @@ import { restampLines } from '../Shared/hardwareHandoff';
 import { buildLookupIndex } from '../Shared/partLookup.js';
 import PartLookupPanel from '../Shared/PartLookupPanel.js';
 
+const woodTexCache = {};   // `${url}|${ru}x${rv}` → a tiled clone of the swatch (wood only)
 const globalTextureCache = {};
 
 // Coerce any value into something Firestore will accept before a write: drop undefined / functions /
@@ -335,7 +336,17 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                             // grain's relief, so it catches the light instead of lying flat — and any
                             // metal-era maps the model's material carried are dropped with it.
                             if (pbr.wood) {
-                                newMat.bumpMap = texMap[matchedTexUrl];
+                                // The grain tiled to THIS part's proportions (studioScene.woodRepeatFor) — a
+                                // clone shares the image, so it costs a few bytes per distinct tiling.
+                                const [ru, rv] = woodRepeatFor(child.geometry);
+                                let woodTex = texMap[matchedTexUrl];
+                                if (ru !== 1 || rv !== 1) {
+                                    const key = `${matchedTexUrl}|${ru}x${rv}`;
+                                    if (!woodTexCache[key]) { const t = texMap[matchedTexUrl].clone(); t.repeat.set(ru, rv); t.needsUpdate = true; woodTexCache[key] = t; }
+                                    woodTex = woodTexCache[key];
+                                }
+                                newMat.map = woodTex;
+                                newMat.bumpMap = woodTex;
                                 newMat.bumpScale = pbr.bumpScale;
                                 newMat.metalnessMap = null;
                                 newMat.roughnessMap = null;
