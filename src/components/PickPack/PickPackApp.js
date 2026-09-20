@@ -33,7 +33,7 @@ import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { printUomLabels, printSalesOrderLabels, printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, printBoxLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
-import { partImageOf } from '../Shared/partImage';
+import { partImageOf } from '../Shared/partPicture';
 import { encodeUomScan, uomDisplay } from '../Shared/labelScan';
 // THE PACKING LIST ON THE WMS (Stuart 2026-09-11: "i do not see this same packing slip available on
 // the wms so pack screen or packaging prep") — the SAME builder the CRM card prints from (S2's
