@@ -20,7 +20,36 @@ export const savedAddOnSelOf = (job) => {
         .map(a => [a.id, a.mode === 'PERCENT' ? true : (parseFloat(a.qty) || 1)]));
 };
 
+// ── WHICH DOOR MADE THIS QUOTE — AND THE WRONG-DOOR GUARD (Stuart 2026-09-20) ────────────────────────
+// "if an order or quote was created using sales entry or vision/cpq and an operator mistakenly reopens
+//  it in the other manner, can it warn them…?" Two of the three wrong doors already declined, by
+// accident and with the wrong words ("saved before Order Entry began keeping its cart… rebuild it in
+// tab 7" — said to somebody holding a thirty-line CPQ quote). The third did not decline at all: Reopen
+// Vision locked the working session to an ORDER ENTRY quote and opened an empty board, so anything
+// saved from it would have written CPQ lines into that quote's record beside its Order Entry cart.
+// The quote says where it was made; each door reads that first. Pure — the CRM greys the button with
+// the same sentence, so the mistake cannot be clicked, and the function still refuses if it is called.
+export const quoteDoorOf = (job) => {
+    if (!job) return '';
+    if (job.source === 'QUICKSHIP' || job.orderClass === 'QUICKSHIP' || (Array.isArray(job.quickShipCart) && job.quickShipCart.length)) return 'ORDER_ENTRY';
+    if (job.cpqData && ((Array.isArray(job.cpqData.cartItems) && job.cpqData.cartItems.length) || (Array.isArray(job.cpqData.breakdown) && job.cpqData.breakdown.length))) return 'CPQ';
+    return '';   // too old, or empty, to say — each door keeps its own "nothing to reopen" words
+};
+const DOOR_NAME = { CPQ: 'Reopen CPQ', VISION: 'Reopen Vision', ORDER_ENTRY: 'Reopen Order Entry' };
+/** '' when `door` may open this quote, else the sentence that says why not and which door does. */
+export const wrongDoorReason = (job, door) => {
+    const made = quoteDoorOf(job);
+    const no = (job && (job.quoteNo || job.netsuiteEstimateNo || job.jobId || job.id)) || 'This quote';
+    if (made === 'ORDER_ENTRY' && (door === 'CPQ' || door === 'VISION'))
+        return `${no} was built in Order Entry (tab 7) — it has no configuration for ${door === 'CPQ' ? 'the CPQ Configurator' : 'the Vision board'} to open. Use "${DOOR_NAME.ORDER_ENTRY}".`;
+    if (made === 'CPQ' && door === 'ORDER_ENTRY')
+        return `${no} was configured in CPQ / Vision — Order Entry cannot open a configured quote, and it does NOT need rebuilding in tab 7. Use "${DOOR_NAME.CPQ}" (or "${DOOR_NAME.VISION}").`;
+    return '';
+};
+
 export const reopenQuoteInVision = (job) => {
+    const wrong = wrongDoorReason(job, 'VISION');
+    if (wrong) { alert(`⛔ Wrong door.\n\n${wrong}`); return false; }
     const jobId = job.jobId || job.id;
     window.dispatchEvent(new CustomEvent('REOPEN_QUOTE_IN_VISION', {
         detail: { session: { jobId, customerId: job.customer?.id || '', jobName: job.jobName || '' } }
@@ -33,6 +62,8 @@ export const reopenQuoteInVision = (job) => {
 // is the CART it was built from, stored on the job. This hands that back to tab 7; saving there
 // creates the corrected quote and marks this one superseded.
 export const reopenQuoteInOrderEntry = (job) => {
+    const wrong = wrongDoorReason(job, 'ORDER_ENTRY');
+    if (wrong) { alert(`⛔ Wrong door.\n\n${wrong}`); return false; }
     const jobId = job.jobId || job.id;
     if (!Array.isArray(job.quickShipCart) || !job.quickShipCart.length) {
         alert(`Quote ${jobId} was saved before Order Entry began keeping its cart (2026-08-31), so there is nothing to reopen — its printed lines are prose, not a cart. Rebuild it in tab 7; every quote saved from now on reopens.`);
@@ -46,6 +77,8 @@ export const reopenQuoteInOrderEntry = (job) => {
 };
 
 export const reopenQuoteInCpq = (job) => {
+    const wrongDoor = wrongDoorReason(job, 'CPQ');
+    if (wrongDoor) { alert(`⛔ Wrong door.\n\n${wrongDoor}`); return false; }
     const jobId = job.jobId || job.id;
     const items = Array.isArray(job.cpqData?.cartItems) ? job.cpqData.cartItems : [];
     if (!items.length) {

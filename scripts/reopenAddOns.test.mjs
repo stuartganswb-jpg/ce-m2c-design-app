@@ -1,5 +1,5 @@
 // A reopened quote brings its own checkout add-ons back (Stuart 2026-09-17).   node scripts/reopenAddOns.test.mjs
-import { savedAddOnSelOf } from '../src/components/Shared/reopenQuote.js';
+import { savedAddOnSelOf, quoteDoorOf, wrongDoorReason } from '../src/components/Shared/reopenQuote.js';
 let pass = 0, fail = 0;
 const eq = (n, a, b) => { if (JSON.stringify(a) === JSON.stringify(b)) { pass++; return; } fail++; console.log(`✗ ${n} — got ${JSON.stringify(a)}`); };
 const job = { cpqData: { breakdown: [
@@ -13,4 +13,15 @@ eq('saved add-ons win over the portal request', 'CE-INV-111' in savedAddOnSelOf(
 eq('a quote with none falls back to the portal picks', savedAddOnSelOf({ cpqData: { breakdown: [] }, portalRequest: { addOns: [{ id: 'A', qty: 3 }, { id: 'B', mode: 'PERCENT' }, { qty: 9 }] } }), { A: 3, B: true });
 eq('nothing saved, nothing asked → empty', savedAddOnSelOf({}), {});
 eq('null job is safe', savedAddOnSelOf(null), {});
+// THE WRONG-DOOR GUARD (Stuart 2026-09-20): a quote says where it was made, and each door reads that first.
+{
+    const cpq = { quoteNo: 'QUO158', cpqData: { cartItems: [{ id: 1 }, { id: 2 }] } };
+    const oe = { quoteNo: 'QUO160', source: 'QUICKSHIP', quickShipCart: [{ erp: 'X' }] };
+    const old = { jobId: 'J-OLD' };
+    eq('a CPQ quote knows its door', [quoteDoorOf(cpq), quoteDoorOf(oe), quoteDoorOf(old)], ['CPQ', 'ORDER_ENTRY', '']);
+    eq('CPQ quote: CPQ and Vision open, Order Entry refuses', [!!wrongDoorReason(cpq, 'CPQ'), !!wrongDoorReason(cpq, 'VISION'), !!wrongDoorReason(cpq, 'ORDER_ENTRY')], [false, false, true]);
+    eq('…and says it does NOT need rebuilding', /does NOT need rebuilding/.test(wrongDoorReason(cpq, 'ORDER_ENTRY')) && /QUO158/.test(wrongDoorReason(cpq, 'ORDER_ENTRY')), true);
+    eq('Order Entry quote: only Order Entry opens — Vision included (the door that had no guard)', [!!wrongDoorReason(oe, 'CPQ'), !!wrongDoorReason(oe, 'VISION'), !!wrongDoorReason(oe, 'ORDER_ENTRY')], [true, true, false]);
+    eq('a quote too old to say is left to each door\'s own words', [wrongDoorReason(old, 'CPQ'), wrongDoorReason(old, 'ORDER_ENTRY')], ['', '']);
+}
 console.log(`reopenAddOns: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
