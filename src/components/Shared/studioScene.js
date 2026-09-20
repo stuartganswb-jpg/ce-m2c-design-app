@@ -67,12 +67,35 @@ const NAME_PBR = [
 const DEFAULT_PBR = { metalness: 0.9, roughness: 0.38 };          // unknown in-house finish
 const DEFAULT_PLATED_PBR = { metalness: 1.0, roughness: 0.25 };   // unknown outsourced plate = smooth
 
+// ── WOOD IS NOT A METAL WITH A BROWN TINT (Stuart 2026-09-20: "i loaded in the wood textures but they
+// are rendering like smooth metal, the textures have wood grain in them … it looks like metal") ──────
+// Two faults, both here. (1) A finish was recognised as wood only by the WORDS in its `name` — and the
+// stains are named by code ("S03"; "Blonde Oak" lives in the customer mapping), so every one of them
+// fell through to DEFAULT_PBR: metalness 0.9. On a metal the map only TINTS the reflection, so the
+// grain in the swatch was never seen — the pole was a brown mirror of the softboxes. The 4.5 MATERIAL
+// tag is what says wood, and it is read first now. (2) Even a finish that did match by name was then
+// pushed through the painted trim, which sets a paint's reflection energy (0.95) — a coat of lacquer
+// on steel, not a stained board.
+// Wood: no metal response at all, a rough diffuse surface so the MAP is what you see, a little
+// environment so it still sits in the studio, and the swatch doubles as a bump map so the grain catches
+// the light. Dials:
+const WOOD_PBR = { metalness: 0.0, roughness: 0.74, envMapIntensity: 0.22, bumpScale: 0.6, wood: true };
+const isWoodFinish = (f) => {
+    if (!f) return false;
+    const mats = String(f.material || f.materials || '').toUpperCase();
+    if (/WOOD/.test(mats)) return true;
+    if (mats && !/MIXED/.test(mats) && !/WOOD/.test(mats)) return false;        // tagged, and not wood
+    const words = [f.name, f.description, f.finishName, f.label].map(v => String(v || '')).join(' ');
+    return /oak|walnut|maple|cherry|mahogany|\bwood|stain(ed)?\b/i.test(words) || !!String(f.bomSuffix || '').trim();
+};
+
 const resolvePbr = (f, fallback) => {
     // Explicit per-finish override wins (optional `pbr: {metalness, roughness}` on the
     // master-finish entry — honored here whenever the finishes editor grows the fields).
     if (f && f.pbr && typeof f.pbr.metalness === 'number' && typeof f.pbr.roughness === 'number') {
         return { metalness: f.pbr.metalness, roughness: f.pbr.roughness };
     }
+    if (isWoodFinish(f)) return WOOD_PBR;
     const code = String(f?.code || '').trim().toUpperCase();
     if (CODE_PBR[code]) return CODE_PBR[code];
     const name = String(f?.name || '');
@@ -85,6 +108,7 @@ const resolvePbr = (f, fallback) => {
 // from. If the fetch fails (offline/unauthenticated) the defaults still apply.
 let pbrByUrl = null;
 let pbrLoadPromise = null;
+let pbrLoadedAt = 0;
 export const ensureFinishPbr = () => {
     if (!pbrLoadPromise) {
         pbrLoadPromise = (async () => {
@@ -96,7 +120,7 @@ export const ensureFinishPbr = () => {
                     // Explicit per-finish pbr{} skips the painted trim (the escape hatch).
                     const explicit = f.pbr && typeof f.pbr.metalness === 'number' && typeof f.pbr.roughness === 'number';
                     const base = resolvePbr(f, DEFAULT_PBR);
-                    map[f.textureUrl] = explicit ? base : trimPainted(base);
+                    map[f.textureUrl] = (explicit || base.wood) ? base : trimPainted(base);   // wood is not a paint coat
                 });
             } catch (e) { /* keep defaults */ }
             try {
@@ -107,6 +131,7 @@ export const ensureFinishPbr = () => {
                 });
             } catch (e) { /* keep defaults */ }
             pbrByUrl = map;
+            pbrLoadedAt = Date.now();
         })();
     }
     return pbrLoadPromise;
@@ -115,6 +140,10 @@ export const ensureFinishPbr = () => {
 // Sync lookup at material-apply time (call ensureFinishPbr() first; unknown URLs
 // — customer-supplied assets etc. — get the generic metal default).
 export const pbrForTexture = (url) => {
+    // A texture uploaded AFTER this session loaded the registry (a stain swatch added in 4.5 a minute
+    // ago) is unknown here and would render as the generic metal until a reload. An unknown URL asks
+    // for a fresh registry — at most every 30 s — so the next material pass has it.
+    if (url && pbrByUrl && !pbrByUrl[url] && Date.now() - pbrLoadedAt > 30000) { pbrLoadedAt = Date.now(); pbrLoadPromise = null; ensureFinishPbr(); }
     const pbr = (pbrByUrl && pbrByUrl[url]) || DEFAULT_PBR;
     // Entry-level envMapIntensity (painted trim) wins over the plated/unknown default.
     return { envMapIntensity: DEFAULT_ENVMAP_INTENSITY, ...pbr };

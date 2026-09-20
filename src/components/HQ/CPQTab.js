@@ -331,6 +331,15 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         if (newMat.isMeshStandardMaterial) {
                             newMat.metalness = pbr.metalness;
                             newMat.roughness = pbr.roughness;
+                            // 🌳 WOOD (Stuart 2026-09-20, Shared/studioScene): the swatch is also the
+                            // grain's relief, so it catches the light instead of lying flat — and any
+                            // metal-era maps the model's material carried are dropped with it.
+                            if (pbr.wood) {
+                                newMat.bumpMap = texMap[matchedTexUrl];
+                                newMat.bumpScale = pbr.bumpScale;
+                                newMat.metalnessMap = null;
+                                newMat.roughnessMap = null;
+                            }
                         }
                         newMat.envMapIntensity = pbr.envMapIntensity;
                         newMat.needsUpdate = true;
