@@ -1168,6 +1168,22 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     // own it (MAIN = mainline assembly); NetSuite only supplies STANDARD/UNASSIGNED. A re-import
                     // must never un-mainline an assembly or drop it off Node Grouping / Visual Assembly / BOM.
                     if (existingAppRecord.routingType) payload.routingType = existingAppRecord.routingType;
+                    // 🔒 A KIT STAYS A KIT (Stuart 2026-09-21: "it is like these kits just disappeared").
+                    // Above, any SKU containing /P or /EP is classed "Assembly" — and kit codes END in
+                    // those (H1-2TRV-WB/P, H1-138TRV-4H/EP). So every re-import silently re-classed the
+                    // app's kits, and because EVERY kit surface asks `partClass === 'Kit'` they vanished
+                    // from the kit screens, stopped exploding their components to NetSuite, and started
+                    // pushing as ordinary items. Nothing was deleted: kitComponents, kitAlign, kitFamily
+                    // and clientPricing all survived the merge — only the word changed.
+                    //
+                    // partClass is an APP decision (Kit / Assembly / Alias / Inventory) and NetSuite has
+                    // no opinion on it, so on an EXISTING record the app's value simply wins. Kept narrow
+                    // deliberately: a first import still classes freely, because there is nothing to protect.
+                    if (existingAppRecord.partClass) payload.partClass = existingAppRecord.partClass;
+                    // A kit's routingType is '' ON PURPOSE (it routes nothing), and the guard above only
+                    // fires on a truthy value — so without this a re-import would also hand a restored
+                    // kit a routingType it must not have.
+                    if (existingAppRecord.partClass === 'Kit') payload.routingType = existingAppRecord.routingType || '';
                     // 🔒 Keep the app's item name on an EXISTING item — a re-import must not revert a rename
                     // done in the app back to NetSuite's display name.
                     if (existingAppRecord.itemName) payload.itemName = existingAppRecord.itemName;

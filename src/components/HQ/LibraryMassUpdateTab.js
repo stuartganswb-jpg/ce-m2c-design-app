@@ -5,6 +5,7 @@ import { db, storage } from '../../firebase';
 import { buildSpeciesBaseIndex } from '../Shared/partPicture';
 import { buildGalleryIndex, galleryImageForPart, imageUpdate, photoMayOverwrite, splitCode, IMG_GLB_RENDER, IMG_BASE_INHERIT, IMG_KIT_INHERIT, IMG_DRAWING } from '../Shared/partImage';
 import { planDrawingImport, drawingPlanText, DRAW_READY } from '../Shared/drawingImport';
+import { simpleKitRowsOf, planSimpleKits, kitPatchOf, simpleKitPlanText, KIT_READY } from '../Shared/simpleKits';
 import { mergeWindowConfig } from './systemWindows';
 import { fixMojibake } from '../Shared/textRepair';
 import { isStreamVariantCode } from '../Shared/finishingTime';
@@ -262,6 +263,68 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     //    working GLB, so its thumbnail is that geometry photographed once (the SAME renderer/queue
     //    the configurator uses — Shared/hardwareThumbs), uploaded, and stamped as finalImageUrl.
     //    Parts that already have an image are never touched.
+    // ── THE BASIC APP KITS, FROM THE SHEET (Stuart 2026-09-21, 0903/H1-SimpleKits.xlsx) ──────
+    // A holder part that carries the price, the customer's alias and the customer's pricing, with
+    // its pieces beneath it. Fifty of them, each in a mill and a /P version.
+    //
+    // These records already existed as kits and were re-classed "Assembly" by the NetSuite Master
+    // Library sync, which classes any SKU containing /P or /EP that way — and kit codes end in
+    // exactly those. Nothing was deleted; every kit screen simply asks `partClass === 'Kit'` and
+    // stopped recognising them. The sync is fixed at its source (NetSuiteSyncTab now preserves an
+    // existing record's partClass), so this seeding is not undone on the next import.
+    //
+    // ⚠ WHAT IT WRITES: partClass, routingType and kitComponents. NOTHING ELSE, with a merge — so
+    // clientPricing, the customer clientSku aliases and manufacturingSpecs.fabricut.* on these same
+    // records are never written to. That is the one loss with no undo: the app keeps no version
+    // history of a library record, and no deletion ledger covers them.
+    const seedSimpleKits = async (e) => {
+        const file = (e.target.files || [])[0];
+        e.target.value = '';
+        if (!file) return;
+        setBulkTool({ running: 'kits', msg: 'Reading the sheet…' });
+        try {
+            const ExcelJS = (await import('exceljs/dist/exceljs.min.js')).default;
+            const wb = new ExcelJS.Workbook();
+            await wb.xlsx.load(await file.arrayBuffer());
+            const ws = wb.worksheets[0];
+            if (!ws) throw new Error('that workbook has no sheets');
+            const cellText = (c) => String((c && c.result !== undefined ? c.result : c) ?? '').trim();
+            const header = [];
+            ws.getRow(1).eachCell({ includeEmpty: true }, (cell, n) => { header[n - 1] = cellText(cell.value); });
+            const cells = [];
+            ws.eachRow((row, n) => {
+                if (n === 1) return;
+                const r = [];
+                row.eachCell({ includeEmpty: true }, (cell, i) => { r[i - 1] = cellText(cell.value); });
+                cells.push(r);
+            });
+            const { rows, error } = simpleKitRowsOf({ header, cells });
+            if (error) { setBulkTool({ running: '', msg: error }); alert(error); return; }
+
+            const plan = planSimpleKits({ rows, parts: inventory });
+            const ready = plan.filter(r => r.status === KIT_READY);
+            if (!window.confirm(`Seed app kits — ${activeBrand.toUpperCase()}\n\n${simpleKitPlanText(plan)}\n\nWrite them?`)) {
+                setBulkTool({ running: '', msg: 'Cancelled — nothing was written.' });
+                return;
+            }
+            let made = 0;
+            const failed = [];
+            for (const r of ready) {
+                setBulkTool({ running: 'kits', msg: `Setting ${r.item}… (${made + 1} of ${ready.length})` });
+                try {
+                    await setDoc(doc(db, 'Approved_Designs', r.kit.id), kitPatchOf(r), { merge: true });
+                    made++;
+                } catch (err) { failed.push(`${r.item}: ${err.message || err}`); }
+            }
+            const skipped = plan.length - ready.length;
+            setBulkTool({ running: '', msg: `${made} kit(s) set${skipped ? `, ${skipped} skipped` : ''}${failed.length ? `, ${failed.length} FAILED` : ''}.` });
+            if (failed.length) alert(`Some kits could not be written:\n\n${failed.join('\n')}`);
+        } catch (err) {
+            console.error(err);
+            setBulkTool({ running: '', msg: `Kit seeding failed: ${err.message || err}` });
+        }
+    };
+
     // ── ITEM PICTURES FROM A SHOP DRAWING (Stuart 2026-09-21) ────────────────────────────────
     // The H1-2TRV bracket arms are welded into one solid in the Fusion file, so they have no
     // separate nodes and the GLB render below can never photograph them. Each arm is cut out of the
@@ -1380,6 +1443,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     title={'For parts with no geometry of their own to photograph (welded in the Fusion file): drop image files NAMED BY ITEM CODE — "H1-2TRVBDBL-MA.png". The whole filename is the code. Shows the full plan, including every file it will skip and why, before writing anything. An item with a real photograph is left alone.'}
                     style={{ padding: '12px 20px', background: bulkTool.running === 'draw' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'draw' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                     📐 Item pictures from a drawing
+                </button>
+                <input id="simple-kit-input" type="file" accept=".xlsx" onChange={seedSimpleKits} style={{ display: 'none' }} />
+                <button onClick={() => document.getElementById('simple-kit-input')?.click()} disabled={!!bulkTool.running}
+                    title={'Reads H1-SimpleKits.xlsx (column "Item" = the kit, the "Kit Comp" columns = its parts) and makes each one an app kit. Shows the full plan first, including every row it will skip and why. Writes ONLY partClass, routingType and the component list — customer pricing and aliases on those records are never touched.'}
+                    style={{ padding: '12px 20px', background: bulkTool.running === 'kits' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'kits' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                    🧰 Seed app kits from sheet
                 </button>
             </div>
 
