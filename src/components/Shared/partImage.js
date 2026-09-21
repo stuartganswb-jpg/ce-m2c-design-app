@@ -15,6 +15,7 @@
 //     GALLERY        a real photograph (14.5 Batch Processor → global_assets)   ← always wins
 //     BASE_INHERIT   a variant borrowing its base part's picture                ← stand-in
 //     GLB_RENDER     geometry photographed from the assembly's own .glb         ← stand-in
+//     DRAWING        the part cut out of a dimensioned shop drawing             ← stand-in
 //     (unstamped)    written before provenance existed. Classified by EVIDENCE, not by
 //                    assumption: a `dynamic_assets/auto_thumbs/` URL is a render, and a
 //                    variant holding its base part's exact URL is an inherited copy.
@@ -31,6 +32,12 @@ export const IMG_GLB_RENDER = 'GLB_RENDER';
 // and sold as a KIT — borrowing its kit's picture: the pieces together, as they sit in the FBX
 // (Stuart 2026-09-20). A stand-in like the other two: a photograph always overrules it.
 export const IMG_KIT_INHERIT = 'KIT_INHERIT';
+// A part cut out of a dimensioned SHOP DRAWING (4.5 → "Item pictures from a drawing"). For parts
+// welded into one solid in the Fusion file — the H1-2TRV bracket arms — there are no separate nodes
+// to photograph, so GLB_RENDER can never reach them and the drawing is the only picture that exists
+// (Stuart 2026-09-21). A stand-in like the rest: better than a borrowed kit picture because it IS
+// this part, and still outranked by a real photograph the moment one arrives.
+export const IMG_DRAWING = 'DRAWING';
 
 /** EP01 → EP1; P01 stays P01 (master_finishes zero-pads P##/S##, parts don't zero-pad EP). */
 export const normFinish = (s) => String(s || '').toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1');
@@ -45,7 +52,7 @@ export const splitCode = (erp) => {
     return i < 0 ? { pattern: s, finish: '' } : { pattern: s.slice(0, i), finish: normFinish(s.slice(i + 1)) };
 };
 
-const AUTO = new Set([IMG_BASE_INHERIT, IMG_GLB_RENDER, IMG_KIT_INHERIT]);
+const AUTO = new Set([IMG_BASE_INHERIT, IMG_GLB_RENDER, IMG_KIT_INHERIT, IMG_DRAWING]);
 
 // LEGACY STAND-INS CARRY THEIR OWN EVIDENCE (Stuart 2026-08-27, second pass: "in master library
 // with .glb black and white thumbnail which is the fall back").

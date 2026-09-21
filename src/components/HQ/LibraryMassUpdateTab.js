@@ -3,7 +3,8 @@ import { tierOfErp } from '../Shared/finishRouting';
 import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { db, storage } from '../../firebase';
 import { buildSpeciesBaseIndex } from '../Shared/partPicture';
-import { buildGalleryIndex, galleryImageForPart, imageUpdate, IMG_GLB_RENDER, IMG_BASE_INHERIT, IMG_KIT_INHERIT } from '../Shared/partImage';
+import { buildGalleryIndex, galleryImageForPart, imageUpdate, photoMayOverwrite, splitCode, IMG_GLB_RENDER, IMG_BASE_INHERIT, IMG_KIT_INHERIT, IMG_DRAWING } from '../Shared/partImage';
+import { planDrawingImport, drawingPlanText, DRAW_READY } from '../Shared/drawingImport';
 import { mergeWindowConfig } from './systemWindows';
 import { fixMojibake } from '../Shared/textRepair';
 import { isStreamVariantCode } from '../Shared/finishingTime';
@@ -261,6 +262,65 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     //    working GLB, so its thumbnail is that geometry photographed once (the SAME renderer/queue
     //    the configurator uses — Shared/hardwareThumbs), uploaded, and stamped as finalImageUrl.
     //    Parts that already have an image are never touched.
+    // ── ITEM PICTURES FROM A SHOP DRAWING (Stuart 2026-09-21) ────────────────────────────────
+    // The H1-2TRV bracket arms are welded into one solid in the Fusion file, so they have no
+    // separate nodes and the GLB render below can never photograph them. Each arm is cut out of the
+    // dimensioned drawing instead and named for its item; this drops those files onto the right
+    // records. The filename is the WHOLE item code — see Shared/drawingImport for why the existing
+    // 14.5 path cannot be used (it splits the name on its last hyphen and would land three of the
+    // seven arms on real but wrong parts).
+    //
+    // Nothing is written until the whole plan has been shown, including every file it will SKIP and
+    // the reason — a picture silently landing on the wrong item is the failure that matters here.
+    const importDrawings = async (e) => {
+        const files = Array.from(e.target.files || []);
+        e.target.value = '';
+        if (!files.length) return;
+        setBulkTool({ running: 'draw', msg: 'Reading the Asset Gallery…' });
+        try {
+            // A real photograph always wins — both one already stamped on the record and one
+            // sitting in the gallery waiting to be synced onto it.
+            let gIndex = { byPartId: new Map(), byCode: new Map() };
+            try {
+                const gSnap = await getDocs(collection(db, 'global_assets'));
+                gIndex = buildGalleryIndex(gSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+            } catch (err) { /* gallery unreadable → the stamp on the record still decides */ }
+            const byBase = new Map();
+            inventory.forEach(p => { const k = splitCode(p.legacyErpId || p.itemId); if (k && !k.finish) byBase.set(k.pattern, p); });
+            // `photoMayOverwrite` is the same gate a gallery photo uses: it permits nothing, a
+            // render, an inherited copy or an earlier drawing — and refuses a photograph. A drawing
+            // OF THIS PART may replace a picture borrowed from its kit; it may never replace a photo.
+            const hasPhoto = (p) => !photoMayOverwrite(p, byBase) || !!galleryImageForPart(p, gIndex);
+
+            const rows = planDrawingImport({ files, parts: inventory, hasPhoto });
+            const ready = rows.filter(r => r.status === DRAW_READY);
+            if (!window.confirm(`Item pictures from a drawing — ${activeBrand.toUpperCase()}\n\n${drawingPlanText(rows)}\n\nWrite them?`)) {
+                setBulkTool({ running: '', msg: 'Cancelled — nothing was written.' });
+                return;
+            }
+            let made = 0;
+            const failed = [];
+            for (const r of ready) {
+                const f = files.find(x => x.name === r.file);
+                if (!f) continue;
+                setBulkTool({ running: 'draw', msg: `Writing ${r.code}… (${made + 1} of ${ready.length})` });
+                try {
+                    const sref = ref(storage, `dynamic_assets/drawings/${r.part.id}_${Date.now()}.png`);
+                    await uploadBytes(sref, f);
+                    const url = await getDownloadURL(sref);
+                    await updateDoc(doc(db, 'Approved_Designs', r.part.id), imageUpdate(url, IMG_DRAWING));
+                    made++;
+                } catch (err) { failed.push(`${r.code}: ${err.message || err}`); }
+            }
+            const skipped = rows.length - ready.length;
+            setBulkTool({ running: '', msg: `${made} picture(s) written${skipped ? `, ${skipped} skipped` : ''}${failed.length ? `, ${failed.length} FAILED` : ''}.` });
+            if (failed.length) alert(`Some pictures could not be written:\n\n${failed.join('\n')}`);
+        } catch (err) {
+            console.error(err);
+            setBulkTool({ running: '', msg: `Drawing import failed: ${err.message || err}` });
+        }
+    };
+
     const generateItemThumbs = async () => {
         const asms = inventory.filter(a => a.manufacturingSpecs?.cadUrl && (a.routingType === 'MAIN' || a.recordType === 'PRODUCT'));
         if (!asms.length) return alert('No mainline assemblies with a working GLB on this brand.');
@@ -1312,6 +1372,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     title={'For every pinned item WITHOUT an image: photograph its own nodes from the mainline assembly .glb (the configurator’s renderer) and save it as the item thumbnail.'}
                     style={{ padding: '12px 20px', background: bulkTool.running === 'thumbs' ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                     🖼 Generate missing item thumbnails
+                </button>
+                {/* Parts welded into one solid in the Fusion file have no nodes to photograph, so the
+                    render above can never reach them. Their picture comes off a shop drawing instead. */}
+                <input id="drawing-import-input" type="file" accept="image/*" multiple onChange={importDrawings} style={{ display: 'none' }} />
+                <button onClick={() => document.getElementById('drawing-import-input')?.click()} disabled={!!bulkTool.running}
+                    title={'For parts with no geometry of their own to photograph (welded in the Fusion file): drop image files NAMED BY ITEM CODE — "H1-2TRVBDBL-MA.png". The whole filename is the code. Shows the full plan, including every file it will skip and why, before writing anything. An item with a real photograph is left alone.'}
+                    style={{ padding: '12px 20px', background: bulkTool.running === 'draw' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'draw' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                    📐 Item pictures from a drawing
                 </button>
             </div>
 
