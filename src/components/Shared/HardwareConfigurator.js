@@ -141,6 +141,10 @@ function HardwareConfiguratorInner({
     const [kitMotor, setKitMotor] = useState('');      // the per-motor code chosen for a MOTORIZED kit (folds into the kit line)
     // The Traverse components selection. Declared HERE, above the pricing memos that read it (a const in
     // a temporal dead zone is a ReferenceError — this file has been taken out by that twice).
+    // WHAT THE RENDERER ACTUALLY PAINTED (Stuart 2026-09-20) — counts from DynamicModel, shown in the
+    // panel header. Change-guarded: a fresh object every pass would re-render forever.
+    const [paintAudit, setPaintAudit] = useState(null);
+    const handlePaintAudit = useCallback((p) => setPaintAudit(prev => (prev && prev.wood === p.wood && prev.finish === p.finish && prev.clear === p.clear && prev.raw === p.raw) ? prev : p), []);
     const [trvSel, setTrvSel] = useState(null);
     const [showDiag, setShowDiag] = useState(false);
     const [showGeo, setShowGeo] = useState(false);   // the untagged-node list, behind its count
@@ -2318,6 +2322,17 @@ function HardwareConfiguratorInner({
                                 second number is on the label. Stuart 2026-08-18, an empty canvas
                                 nobody could explain from the outside. */}
                             Live 3D · additive · {chosen.length} part(s) · {Object.keys(visibleOverrides).length} node(s)
+                            {/* …and what each drawn mesh GOT. `raw` is the one that matters: no finish reached
+                                it, so it draws in the model's own Carbon Steel whatever the customer picked. */}
+                            {paintAudit && (paintAudit.wood + paintAudit.finish + paintAudit.clear + paintAudit.raw) > 0 && (
+                                <span style={{ color: paintAudit.raw ? '#b00020' : 'var(--brass)' }}>
+                                    {' · painted:'}
+                                    {paintAudit.wood ? ` ${paintAudit.wood} wood` : ''}
+                                    {paintAudit.finish ? ` ${paintAudit.finish} finish` : ''}
+                                    {paintAudit.clear ? ` ${paintAudit.clear} clear` : ''}
+                                    {paintAudit.raw ? ` ${paintAudit.raw} RAW (no finish reached it)` : ''}
+                                </span>
+                            )}
                             {chosen.length > 0 && Object.keys(visibleOverrides).length === 0 && (
                                 <span style={{ color: '#b00020' }}> · nothing tagged to draw — the chosen parts own no geometry</span>
                             )}
@@ -2373,7 +2388,7 @@ function HardwareConfiguratorInner({
                                         renderScaleOf is 1 on any flow without a size matrix. */}
                                     <group scale={renderScaleOf(flow, sizePick, assembly)}>
                                         <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibleOverrides}
-                                            cloneSpecs={cloneSpecs} stretchSpec={stretchSpec} spliceMarks={spliceMarks} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
+                                            cloneSpecs={cloneSpecs} stretchSpec={stretchSpec} spliceMarks={spliceMarks} highlightOverrides={[]} defaultHidden clearNodes={clearList} onPaintAudit={handlePaintAudit} />
                                     </group>
                                 </Bounds>
                             </Canvas>

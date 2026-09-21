@@ -174,7 +174,7 @@ export const preferring = (pool, ...gates) => gates.reduce((acc, g) => {
     return kept.length ? kept : acc;
 }, Array.isArray(pool) ? pool : []);
 
-export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames, defaultHidden = false, clearNodes = null, stretchSpec = null, spliceMarks = [] }) => {
+export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onPaintAudit, onSceneNames, defaultHidden = false, clearNodes = null, stretchSpec = null, spliceMarks = [] }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -232,6 +232,12 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
             // after a re-import/rename names itself instead of reading as "the part won't render".
             const visTokens = new Set();
             const hitTokens = new Set();
+            // ── WHAT EACH DRAWN MESH ACTUALLY GOT (Stuart 2026-09-20) ────────────────────────────────
+            // Three deploys of wood-material work produced "no visual change", and neither of us could
+            // tell from a picture whether the wood branch ran, the finish never reached the mesh, or the
+            // browser was on an old bundle. Every mesh leaves this traversal one of four ways; the panel
+            // header says which, so the next answer is read rather than inferred. Counts only.
+            const paint = { wood: 0, finish: 0, clear: 0, raw: 0 };
             Object.keys(visibilityOverrides || {}).forEach(k =>
                 splitNodesLower(k).forEach(t => visTokens.add(t)));
             // Fasteners (screws/bolts/washers/nuts) are BOM-only — never rendered, here or as clones.
@@ -317,6 +323,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         mat.envMapIntensity = 1.15;
                         mat.needsUpdate = true;
                         child.material = mat;
+                        paint.clear++;
                         return;
                     }
 
@@ -355,8 +362,13 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         newMat.envMapIntensity = pbr.envMapIntensity;
                         newMat.needsUpdate = true;
                         child.material = newMat;
+                        if (pbr.wood) paint.wood++; else paint.finish++;
                     } else {
+                        // No finish reached this mesh: it draws in the model's OWN material, which for
+                        // every H1 assembly is "Carbon Steel" (metallic 0.85) — a dark metal whatever the
+                        // customer picked. This is the count that matters when a part looks unfinished.
                         child.material = child.userData.originalMaterial;
+                        paint.raw++;
                     }
 
                     // Debug option-highlight (Stage 0): glow the meshes the current step's
@@ -377,6 +389,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
             if (typeof onVisAudit === 'function') {
                 onVisAudit([...visTokens].filter(t => !hitTokens.has(t)).sort());
             }
+            if (typeof onPaintAudit === 'function') onPaintAudit(paint);
 
             // --- Pole stretch (Stuart 2026-09-09) ------------------------------------------------------
             // "go back to no scale, then set a new stretch scale of only 20% length when the rod length is
@@ -623,7 +636,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                 );
             }
         });
-    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, stretchSpecString, spliceMarksString, highlightOverridesString, defaultHidden, JSON.stringify(clearNodes)]);
+    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, stretchSpecString, spliceMarksString, highlightOverridesString, defaultHidden, JSON.stringify(clearNodes), onPaintAudit]);
 
     return <primitive object={clonedScene} />;
 };
