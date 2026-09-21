@@ -83,7 +83,52 @@ const DEFAULT_PLATED_PBR = { metalness: 1.0, roughness: 0.25 };   // unknown out
 // changed, to a flat DARK board). This rig lights the scene almost entirely from the softbox environment,
 // and on a non-metal that environment is the DIFFUSE light too: at 0.22 the wood was lit at a fifth and
 // read as dark brown paint with no grain to see. Gloss is what ROUGHNESS is for; the light stays on.
-const WOOD_PBR = { metalness: 0.0, roughness: 0.82, envMapIntensity: 1.05, bumpScale: 0.6, wood: true };
+// `albedo` MULTIPLIES the swatch, and it is not cosmetic fiddling: this rig is lit for METAL — one
+// ambient at 0.15 plus an environment that is mostly black with a few bright softboxes in it. A mirror
+// reflects those softboxes and looks right; a matte surface integrates the whole environment, which is
+// darkness, so a mid-tone oak (Pure Oak averages RGB 152/135/126) rendered near-black. Measured live on
+// the H1-138 rod: a pure RED matte surface in this scene renders dark maroon. Raising the scene's light
+// instead would lift matte black and the acrylics, which read correctly today — so the compensation
+// lives on the wood material alone and nothing else in the scene changes.
+const WOOD_PBR = { metalness: 0.0, roughness: 0.82, envMapIntensity: 1.05, bumpScale: 0.6, albedo: 2.6, wood: true };
+
+// ── WOOD NEEDS UVs, AND THESE MODELS HAVE NONE (Stuart 2026-09-20 — the actual cause) ───────────────
+// Read off the live H1-138 rod: its geometry carries `position` and `normal` and NO `uv`. With no UVs a
+// texture samples a single texel, so the part paints one flat colour — which is exactly "it looks like
+// smooth metal", and why three passes of material work changed nothing: there was never any grain to
+// see. Metal never exposed it, because a tint is all a mirror shows.
+// So a wood part gets UVs built from its own geometry, in INCHES: one swatch covers WOOD_TILE_IN along
+// the grain. A round section (a pole) wraps cylindrically — grain down the length, seam closed — and
+// anything else takes a flat projection on its two largest faces. Computed once and cached on the
+// geometry. A model that DOES bring its own UVs is never touched.
+export const WOOD_TILE_IN = 12;
+export const ensureWoodUv = (geom) => {
+    if (!geom || !geom.attributes || !geom.attributes.position) return false;
+    if (geom.attributes.uv) return false;
+    if (geom.userData && geom.userData.woodUv) return true;
+    const pos = geom.attributes.position;
+    geom.computeBoundingBox();
+    const bb = geom.boundingBox;
+    if (!bb) return false;
+    const sz = { x: bb.max.x - bb.min.x, y: bb.max.y - bb.min.y, z: bb.max.z - bb.min.z };
+    const [L, A, B] = ['x', 'y', 'z'].sort((a, b) => sz[b] - sz[a]);
+    if (!(sz[L] > 0)) return false;
+    const round = sz[A] > 0 && Math.abs(sz[A] - sz[B]) / sz[A] < 0.35;
+    const cA = (bb.min[A] + bb.max[A]) / 2, cB = (bb.min[B] + bb.max[B]) / 2;
+    const gl = `get${L.toUpperCase()}`, ga = `get${A.toUpperCase()}`, gb = `get${B.toUpperCase()}`;
+    const circum = (Math.PI * sz[A]) / WOOD_TILE_IN;
+    const uv = new Float32Array(pos.count * 2);
+    for (let i = 0; i < pos.count; i++) {
+        const l = pos[gl](i), a = pos[ga](i), b = pos[gb](i);
+        uv[i * 2] = (l - bb.min[L]) / WOOD_TILE_IN;
+        uv[i * 2 + 1] = round
+            ? (Math.atan2(b - cB, a - cA) / (2 * Math.PI) + 0.5) * circum
+            : (a - bb.min[A]) / WOOD_TILE_IN;
+    }
+    geom.setAttribute('uv', new pos.constructor(uv, 2));
+    geom.userData = { ...(geom.userData || {}), woodUv: true };
+    return true;
+};
 
 // ── THE GRAIN MUST NOT STRETCH (same pass) ──────────────────────────────────────────────────────────
 // A swatch is a square photograph of a few inches of board. The models map ONE copy of it over a whole

@@ -22,7 +22,7 @@ import { draftFromCartLine, cartLineForDraft } from '../Shared/visionHandoff';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
-import { StudioRig, ensureFinishPbr, pbrForTexture, woodRepeatFor } from '../Shared/studioScene';
+import { StudioRig, ensureFinishPbr, pbrForTexture, woodRepeatFor, ensureWoodUv } from '../Shared/studioScene';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf, customerPriceLevel } from '../Shared/priceLevels';
 import { priceChoice, isItemKit } from '../Shared/hardwarePricing';
@@ -343,6 +343,11 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                             // grain's relief, so it catches the light instead of lying flat — and any
                             // metal-era maps the model's material carried are dropped with it.
                             if (pbr.wood) {
+                                // FIRST: give the part UVs if the model brought none, or the swatch samples
+                                // one texel and paints it flat (studioScene.ensureWoodUv — the real cause of
+                                // "wood looks like smooth metal"). Generated UVs are already in inches, so
+                                // the tiling below then measures 1×1 and leaves them alone.
+                                ensureWoodUv(child.geometry);
                                 // The grain tiled to THIS part's proportions (studioScene.woodRepeatFor) — a
                                 // clone shares the image, so it costs a few bytes per distinct tiling.
                                 const [ru, rv] = woodRepeatFor(child.geometry);
@@ -357,6 +362,8 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                                 newMat.bumpScale = pbr.bumpScale;
                                 newMat.metalnessMap = null;
                                 newMat.roughnessMap = null;
+                                // …and lift the albedo: this studio is lit for metal (see WOOD_PBR).
+                                if (pbr.albedo) newMat.color.setScalar(pbr.albedo);
                             }
                         }
                         newMat.envMapIntensity = pbr.envMapIntensity;
