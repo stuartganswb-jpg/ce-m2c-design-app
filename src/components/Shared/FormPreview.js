@@ -60,7 +60,13 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
   const termsLabel = d.termsLabel || (isSample ? 'Net 30' : '—');
 
   const lineAmount = (l) => (l.amount != null ? Number(l.amount) || 0 : (Number(l.qty) || 0) * (Number(l.price) || 0));
-  const subtotal = lines.reduce((s, l) => s + lineAmount(l), 0);
+  // ⚠ A SUBTOTAL ROW IS NOT A LINE — IT IS THE ROWS ABOVE IT (2026-09-21). "Net Line Total" states
+  // what a configuration comes to after its discount, so adding it to the column total counts that
+  // configuration TWICE: QUO160's first group printed items 5,468.75 + discount −3,088.75 + net
+  // 3,500 and called the SUBTOTAL 5,880 for a group that costs 3,500. The Total underneath was
+  // always right (it is passed in, not summed), which is how this went unseen. A row that restates
+  // rows already counted is flagged `noSum` by the document builder and sits out of the addition.
+  const subtotal = lines.filter(l => !l.noSum).reduce((s, l) => s + lineAmount(l), 0);
   // The invented 8.75% demo tax stays on the SAMPLE only — real data with no tax field means 0.
   const tax = (d.tax != null) ? d.tax : (isSample && showMoney ? subtotal * 0.0875 : 0);
   const total = (d.total != null) ? d.total : subtotal + tax;

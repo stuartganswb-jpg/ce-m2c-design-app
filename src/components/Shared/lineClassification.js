@@ -146,23 +146,61 @@ const reResolve = (l, findPart, custKeys) => {
 //
 // At PRINT time, never at save: QUO160 and every quote before it are already stored without it,
 // and a save-time stamp would print the room only on quotes written from now on.
+// A configuration that was NOT discounted has no net row of its own — the engine only emits one to
+// show discount arithmetic. Stuart 2026-09-21: "add the row … everytime no matter discounts or
+// not", so every named configuration closes with its own total, and the customer can read down the
+// page room by room instead of hunting which block a figure belonged to. The figure is the
+// configuration's own total, the same one a discounted group nets to: the ▶ header carries it
+// (price × qty, BOM-only parts included — exactly what the discounted rows have always totalled).
+const NET_LABEL = 'Net Line Total';
 const HEADER_SIDEMARK_RE = /\[([^\]]+)\]/;          // "▶ H2581F [Row 2]  ·  Blonde Oak (S03)"
 const headerSidemarkOf = (l) => cleanSidemark((l && l.sidemark) || (String((l && l.name) || '').match(HEADER_SIDEMARK_RE) || [])[1] || '');
-const withGroupSidemark = (lines) => {
-    let sm = '';
-    return (lines || []).map(l => {
-        if (l && l.isHeader) { sm = headerSidemarkOf(l); return l; }
-        if (!l || !l.isNetLine || !sm || String(l.name || '').includes(`SM: ${sm}`)) return l;
-        const [, indent, label] = String(l.name || '').match(/^(\s*)([\s\S]*)$/);
-        return { ...l, sidemark: sm, name: `${indent}SM: ${sm} — ${label}` };
+const smName = (l, sm) => {
+    const [, indent, label] = String((l && l.name) || '').match(/^(\s*)([\s\S]*)$/);
+    return `${indent}SM: ${sm} — ${label}`;
+};
+// The same shape the engine's own net row has: per-UNIT price, whole-line total, qty 1.
+//
+// ⚠ A FIGURE IS NEVER INVENTED. The header's total is the figure when it has one; a quote saved
+// before headers carried one falls back to the sum of the group's own rows (BOM-only parts
+// included, because that is what the header's price × qty has always covered). With neither —
+// nothing to state — the row is not made at all: a silent group beats "$0.00" on a customer's
+// quote, the same rule the unpriced portal request follows.
+const netRowFor = (head, sm, groupSum) => {
+    const total = Number.isFinite(Number(head && head.total)) && Number(head.total) !== 0 ? Number(head.total) : groupSum;
+    if (!(total > 0)) return null;
+    const qty = Math.max(1, Number(head && head.qty) || 1);
+    return { name: `  SM: ${sm} — ${NET_LABEL}`, qty: 1, price: Math.round(total / qty * 100) / 100, total, isNetLine: true, sidemark: sm, partHandling: '', partId: null };
+};
+const withGroupNetLines = (lines) => {
+    const out = [];
+    let head = null, sm = '', sawNet = false, sum = 0;
+    // A group ends at the next ▶ header or at the end of the list — which is also why the add-ons
+    // block cannot be swept into the last configuration: it carries a header of its own.
+    const closeGroup = () => {
+        const row = (head && sm && !sawNet) ? netRowFor(head, sm, sum) : null;
+        if (row) out.push(row);
+        head = null; sm = ''; sawNet = false; sum = 0;
+    };
+    (lines || []).forEach(l => {
+        if (l && l.isHeader) { closeGroup(); head = l; sm = headerSidemarkOf(l); out.push(l); return; }
+        if (l && l.isNetLine && sm) {
+            sawNet = true;
+            out.push(String(l.name || '').includes(`SM: ${sm}`) ? l : { ...l, sidemark: sm, name: smName(l, sm) });
+            return;
+        }
+        if (head && l && !isDisplayOnlyLine(l)) sum += Number(l.total) || 0;
+        out.push(l);
     });
+    closeGroup();
+    return out;
 };
 
 export const customerDocLines = (lines = [], docType = '', finishFallback = '', opts = {}) => {
     const { findPart = null, custKeys = null } = opts || {};
     const money = MONEY_DOC_TYPES.includes(String(docType || '').toUpperCase());
-    // Only the money documents keep a net row at all, so only they need the room carried onto it.
-    if (money) lines = withGroupSidemark(lines);
+    // Only the money documents keep a net row at all, so only they get the room and the per-room total.
+    if (money) lines = withGroupNetLines(lines);
     // ── THE PAPER HAS TO ADD UP (Stuart 2026-09-11) ──────────────────────────────────────────
     // The discount / net rows are display-only for the FLOORS (never work) — but on a MONEY
     // document they are the arithmetic: without them a discounted quote printed every line at

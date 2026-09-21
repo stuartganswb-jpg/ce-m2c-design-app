@@ -1372,6 +1372,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
               amount: b.total,
               cut: b.cutLength || null,
               bold: !!b.isNetLine || !!b.isHeader,
+              // A net row restates the rows above it — it prints, it does not add (Shared/FormPreview).
+              noSum: !!b.isNetLine || !!b.isHeader,
           }));
       if (!isUnpricedRequest && shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt });
       // dateSaved is an ISO stamp — the doc was printing it verbatim ("2026-08-05T20:00:58.578Z").
@@ -1423,6 +1425,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
           qty: (b.isDiscount || b.isNetLine || b.isHeader) ? '' : b.qty,
           price: (b.isDiscount || b.isNetLine || b.isHeader || b.qty == null || !b.qty) ? null : b.price,
           amount: b.amount != null ? b.amount : b.total, cut: b.cutLength || null, bold: !!b.isNetLine || !!b.isHeader,
+          // A net row restates the rows above it — it prints, it does not add (Shared/FormPreview).
+          noSum: !!b.isNetLine || !!b.isHeader,
       });
       const invoiceDoc = (activeDocType === 'INVOICE' && packingList && !isQsDoc)
           ? invoiceDocOf({ priced: customerDocLines(activeDocJob.cpqData?.breakdown || [], 'INVOICE', cartFinishLabelOf(activeDocJob.cpqData), docOpts), packingList, shippingAmount: shippingAmt, orderedTotal: activeDocJob.cpqData?.totalPrice || 0 })

@@ -2917,6 +2917,8 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
             qty: l.qty,
             cut: l.cutLength || null,
             price: (l.price != null) ? l.price : ((l.total != null && l.qty) ? l.total / l.qty : 0),
+            // A net row restates the rows above it — it prints, it does not add (Shared/FormPreview).
+            noSum: !!l.isNetLine || !!l.isHeader,
         }));
         return {
             billTo: custName ? [custName] : [],

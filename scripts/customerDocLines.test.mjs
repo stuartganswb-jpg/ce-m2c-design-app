@@ -34,7 +34,12 @@ const codes = (ls) => ls.map(l => l.legacyErpId || l.name);
 // ── THE MONEY DOCUMENTS ──────────────────────────────────────────────────────────────────────
 for (const type of MONEY_DOC_TYPES) {
     const out = customerDocLines(LINES, type);
-    eq(`${type}: the customer sees what they bought`, codes(out), ['H1-2TRVF', 'H1-1CC']);
+    // The named configuration also closes with its own total (2026-09-21). This header carries no
+    // `total` — an older save — so the figure falls back to the group's own rows, BOM-only parts
+    // included: 90 fascia + 0 track + 4 standoff + 30 finial. The customer reads 124, and pays 124.
+    eq(`${type}: the customer sees what they bought, then what the room costs`, codes(out),
+        ['H1-2TRVF', 'H1-1CC', '  SM: Living Room — Net Line Total']);
+    eq(`${type}: the made row totals the whole configuration, hidden parts and all`, out[2].total, 124);
     ok(`${type}: no BOM-only part`, !out.some(l => l.hidden));
     ok(`${type}: no shop-only row`, !out.some(l => l.shopOnly));
     ok(`${type}: and no header`, !out.some(l => l.isHeader));
@@ -123,12 +128,46 @@ for (const type of MONEY_DOC_TYPES) {
     const two = [...group({ name: '▶ H2579F [Row 1]', isHeader: true }), ...group({ name: '▶ H2581F [Row 2]', isHeader: true })];
     eq('each configuration takes its own room', customerDocLines(two, 'QUOTE').filter(l => l.isNetLine).map(l => l.name),
         ['  SM: Row 1 — Net Line Total', '  SM: Row 2 — Net Line Total']);
-    // A discounted group followed by an UNdiscounted one: nothing to stamp, and nothing leaks.
-    eq('a group with no net row adds nothing',
-        customerDocLines([...group({ name: '▶ H2579F [Row 1]', isHeader: true }),
-            { name: '▶ H3588F [Row 3]', isHeader: true },
-            { name: '  - Bracket', partId: 'B', legacyErpId: 'H3588F', qty: 35, price: 13, total: 455 }], 'QUOTE').filter(l => l.isNetLine).map(l => l.name),
-        ['  SM: Row 1 — Net Line Total']);
+    // ── EVERY NAMED CONFIGURATION CLOSES WITH ITS TOTAL (Stuart 2026-09-21) ──────────────────
+    // "add the row … everytime no matter discounts or not." An UNdiscounted group has no net row
+    // of its own, so one is made from the ▶ header's total.
+    const plain = [
+        { name: '▶ H3588F [Row 3]', isHeader: true, qty: 35, total: 455 },
+        { name: '  - Bracket', partId: 'B', legacyErpId: 'H3588F', qty: 35, price: 13, total: 455 },
+    ];
+    const plainOut = customerDocLines(plain, 'QUOTE');
+    eq('an undiscounted configuration gets a net row of its own', plainOut.map(l => l.name),
+        ['  - Bracket', '  SM: Row 3 — Net Line Total']);
+    eq('…carrying the configuration total and the per-unit price',
+        [plainOut[1].total, plainOut[1].price, plainOut[1].qty], [455, 13, 1]);
+    eq('a discounted configuration is NOT given a second one',
+        customerDocLines(group({ name: '▶ H2581F [Row 2]', isHeader: true, qty: 35, total: 3500 }), 'QUOTE').filter(l => l.isNetLine).length, 1);
+    eq('the row closes the group — it never lands before the group\'s own lines',
+        customerDocLines([...plain, { name: '▶ H9999F [Row 4]', isHeader: true, qty: 1, total: 10 },
+            { name: '  - Finial', partId: 'F', legacyErpId: 'H9999F', qty: 1, price: 10, total: 10 }], 'QUOTE').map(l => l.name),
+        ['  - Bracket', '  SM: Row 3 — Net Line Total', '  - Finial', '  SM: Row 4 — Net Line Total']);
+    // ⚠ THE ADD-ONS ARE NOT PART OF THE LAST CONFIGURATION. They are appended after every
+    // configured item and carry a header of their own — which is exactly what stops the rush fee
+    // being swept inside Row 3 and counted in its total.
+    eq('the add-ons block is not swept into the last configuration',
+        customerDocLines([...plain,
+            { name: 'Add-ons & Fees', qty: 1, price: 0, total: 0, isHeader: true },
+            { name: '  - Rush', qty: 1, price: 50, total: 50, isFee: true, isAddOn: true }], 'QUOTE').map(l => l.name),
+        ['  - Bracket', '  SM: Row 3 — Net Line Total', '  - Rush']);
+    eq('an UNNAMED configuration is still left exactly as it was',
+        customerDocLines([{ name: '▶ H3588F []', isHeader: true, qty: 1, total: 455 },
+            { name: '  - Bracket', partId: 'B', legacyErpId: 'H3588F', qty: 35, price: 13, total: 455 }], 'QUOTE').map(l => l.name),
+        ['  - Bracket']);
+    eq('the floors and the packing slip never get the made row',
+        customerDocLines(plain, 'WORK_ORDER').concat(customerDocLines(plain, 'PACKING_SLIP')).filter(l => l.isNetLine).length, 0);
+    // ⚠ NEVER A FABRICATED $0.00 ON A CUSTOMER'S PAPER. With no header total and no money in the
+    // group there is nothing to state, so no row is made.
+    eq('a configuration with no figure at all gets no row',
+        customerDocLines([{ name: '▶ H3588F [Row 9]', isHeader: true },
+            { name: '  - Included bracket', partId: 'B', legacyErpId: 'H3588F', qty: 1, price: 0, total: 0, inKit: true }], 'QUOTE').filter(l => l.isNetLine).length, 0);
+    eq('…but a group whose header lost its total falls back to its own rows',
+        customerDocLines([{ name: '▶ H3588F [Row 9]', isHeader: true },
+            { name: '  - Bracket', partId: 'B', legacyErpId: 'H3588F', qty: 35, price: 13, total: 455 }], 'QUOTE').find(l => l.isNetLine).total, 455);
     // The floors never see a net row at all — and the carry must not have invented one for them.
     eq('a work order is untouched', customerDocLines(group({ name: '▶ H2581F [Row 2]', isHeader: true }), 'WORK_ORDER').map(l => l.name.trim()), ['- Wood Rod']);
     // Printing the same quote twice must not stack "SM: Row 2 — SM: Row 2 — …".
