@@ -1,5 +1,6 @@
 import { findClientPriceRow } from './clientPricing.js';
 import { isPoleCategory } from './poleCut.js';
+import { cleanSidemark } from './quoteDisplay.js';
 
 // Single source of truth for splitting a CPQ order line into the two
 // production divisions: 'small' (-> Finishing Floor) vs 'custom' (-> Shop Floor).
@@ -133,9 +134,35 @@ const reResolve = (l, findPart, custKeys) => {
     return out;
 };
 
+// ── THE ROOM IS NAMED BESIDE THE MONEY (Stuart 2026-09-21, QUO160) ───────────────────────────
+// "each line totals … can you add the side mark here so it states SM: Row 2."
+//
+// The ▶ configuration header is the row that carries the line's own name for the room — typed as
+// "Config memo · this line" in the configurator, or "Line Tag / Room" on the flow path; both land
+// on the cart item's `sidemark`. A MONEY document drops that header (isDisplayOnlyLine), so a
+// quote covering six windows priced them one block under another with nothing on the page saying
+// which window each net figure belonged to. The header still comes THROUGH this function, so its
+// sidemark is carried down onto that configuration's Net Line Total row.
+//
+// At PRINT time, never at save: QUO160 and every quote before it are already stored without it,
+// and a save-time stamp would print the room only on quotes written from now on.
+const HEADER_SIDEMARK_RE = /\[([^\]]+)\]/;          // "▶ H2581F [Row 2]  ·  Blonde Oak (S03)"
+const headerSidemarkOf = (l) => cleanSidemark((l && l.sidemark) || (String((l && l.name) || '').match(HEADER_SIDEMARK_RE) || [])[1] || '');
+const withGroupSidemark = (lines) => {
+    let sm = '';
+    return (lines || []).map(l => {
+        if (l && l.isHeader) { sm = headerSidemarkOf(l); return l; }
+        if (!l || !l.isNetLine || !sm || String(l.name || '').includes(`SM: ${sm}`)) return l;
+        const [, indent, label] = String(l.name || '').match(/^(\s*)([\s\S]*)$/);
+        return { ...l, sidemark: sm, name: `${indent}SM: ${sm} — ${label}` };
+    });
+};
+
 export const customerDocLines = (lines = [], docType = '', finishFallback = '', opts = {}) => {
     const { findPart = null, custKeys = null } = opts || {};
     const money = MONEY_DOC_TYPES.includes(String(docType || '').toUpperCase());
+    // Only the money documents keep a net row at all, so only they need the room carried onto it.
+    if (money) lines = withGroupSidemark(lines);
     // ── THE PAPER HAS TO ADD UP (Stuart 2026-09-11) ──────────────────────────────────────────
     // The discount / net rows are display-only for the FLOORS (never work) — but on a MONEY
     // document they are the arithmetic: without them a discounted quote printed every line at

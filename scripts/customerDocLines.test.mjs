@@ -89,5 +89,53 @@ for (const type of MONEY_DOC_TYPES) {
     eq('a discount row is not renamed or re-finished on the way through', customerDocLines(lines, 'QUOTE', 'P14', { findPart: () => ({ itemName: 'LIBRARY NAME' }) })[2].name, '  Trade Discount - (20%)');
 }
 
+// ── THE SIDEMARK RIDES THE NET LINE (Stuart 2026-09-21, QUO160) ──────────────────────────────
+// The ▶ header names the room and a money document drops it, so the room is carried down onto
+// that configuration's Net Line Total row — "SM: Row 2 — Net Line Total". Two sources, because
+// every quote already saved (QUO160 among them) has no `sidemark` field on its header: the
+// field when it is there, the [brackets] in the title when it is not.
+{
+    const group = (head, sm) => [
+        head,
+        { name: '  - Wood Rod', partId: 'R', legacyErpId: 'H2581F', qty: 70, price: 12.5, total: 875 },
+        { name: `  Price set to $100.00 · by stuart`, qty: 1, price: -3088.75, total: -3088.75, isDiscount: true, isLineDiscount: true },
+        { name: '  Net Line Total', qty: 1, price: 100, total: 3500, isNetLine: true },
+    ].map(l => ({ ...l, _sm: sm }));
+    const netOf = (out) => (out.find(l => l.isNetLine) || {}).name;
+
+    eq('the header FIELD names the room on the net line',
+        netOf(customerDocLines(group({ name: '▶ H2581F [Row 2]', isHeader: true, sidemark: 'Row 2' }), 'QUOTE')),
+        '  SM: Row 2 — Net Line Total');
+    eq('a quote saved before the field reads it out of the [brackets]',
+        netOf(customerDocLines(group({ name: '▶ H2581F [Row 2]  ·  Blonde Oak (S03)', isHeader: true }), 'QUOTE')),
+        '  SM: Row 2 — Net Line Total');
+    eq('the sales order and the invoice say the same thing',
+        [netOf(customerDocLines(group({ name: '▶ H2581F [Row 2]', isHeader: true }), 'SALES_ORDER')),
+         netOf(customerDocLines(group({ name: '▶ H2581F [Row 2]', isHeader: true }), 'INVOICE'))],
+        ['  SM: Row 2 — Net Line Total', '  SM: Row 2 — Net Line Total']);
+    eq('"No Sidemark" is not a sidemark — the row is left alone',
+        netOf(customerDocLines(group({ name: '▶ H2581F [No Sidemark]', isHeader: true }), 'QUOTE')),
+        '  Net Line Total');
+    eq('an unnamed configuration is left alone',
+        netOf(customerDocLines(group({ name: '▶ H2581F []', isHeader: true }), 'QUOTE')),
+        '  Net Line Total');
+    // Each group takes ITS OWN room — the carry must reset at the next header, never leak forward.
+    const two = [...group({ name: '▶ H2579F [Row 1]', isHeader: true }), ...group({ name: '▶ H2581F [Row 2]', isHeader: true })];
+    eq('each configuration takes its own room', customerDocLines(two, 'QUOTE').filter(l => l.isNetLine).map(l => l.name),
+        ['  SM: Row 1 — Net Line Total', '  SM: Row 2 — Net Line Total']);
+    // A discounted group followed by an UNdiscounted one: nothing to stamp, and nothing leaks.
+    eq('a group with no net row adds nothing',
+        customerDocLines([...group({ name: '▶ H2579F [Row 1]', isHeader: true }),
+            { name: '▶ H3588F [Row 3]', isHeader: true },
+            { name: '  - Bracket', partId: 'B', legacyErpId: 'H3588F', qty: 35, price: 13, total: 455 }], 'QUOTE').filter(l => l.isNetLine).map(l => l.name),
+        ['  SM: Row 1 — Net Line Total']);
+    // The floors never see a net row at all — and the carry must not have invented one for them.
+    eq('a work order is untouched', customerDocLines(group({ name: '▶ H2581F [Row 2]', isHeader: true }), 'WORK_ORDER').map(l => l.name.trim()), ['- Wood Rod']);
+    // Printing the same quote twice must not stack "SM: Row 2 — SM: Row 2 — …".
+    eq('printing twice does not double the stamp',
+        netOf(customerDocLines(customerDocLines(group({ name: '▶ H2581F [Row 2]', isHeader: true }), 'QUOTE'), 'QUOTE')),
+        '  SM: Row 2 — Net Line Total');
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

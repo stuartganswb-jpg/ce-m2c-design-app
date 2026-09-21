@@ -3265,6 +3265,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
               qty: item.qty,
               total: grossTotal,
               finishLabel: finLabel || null,
+              // The room as its own field, not only inside the title: the money documents drop this
+              // header and carry the sidemark down onto the group's Net Line Total row
+              // (Shared/lineClassification). Quotes saved before this read it out of the [brackets].
+              sidemark: item.sidemark || '',
               isHeader: true
           });
 
