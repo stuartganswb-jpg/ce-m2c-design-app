@@ -194,7 +194,12 @@ export const rowStateOf = ({ so, entries = [], links, shipments = [], reviews = 
     else if (has(LINE_STATE.PLATING_STAGED) || has(LINE_STATE.PLATING_SHIPPED) || has(LINE_STATE.PLATING)) key = ROW_STATE.AT_PLATER;
     else if (has(LINE_STATE.FLOOR) || has(LINE_STATE.WHOLE)) key = ROW_STATE.ON_FLOOR;
     else key = ROW_STATE.ISSUED;
-    const open = lines.filter(l => l.key === LINE_STATE.NONE).length;
+    // A LINE NAMED FOR REVIEW IS NOT STARTED (Stuart 2026-09-22: "no change" — Base Front 1 read
+    // "1 started · 0 to start" and offered no button). Nothing was raised for it; a person was named.
+    // The rule may have changed since, the stock may have arrived, the item may have been fixed —
+    // so it is OPEN, and a row holding one can be run again from here.
+    const startable = (l) => l.key === LINE_STATE.NONE || l.key === LINE_STATE.REVIEW;
+    const open = lines.filter(startable).length;
     return { key, text: ROW_TEXT[key], lines, open, started: tbf.length - open, stocked: lines.length - tbf.length };
 };
 
@@ -214,11 +219,13 @@ export const soNeedsLines = (so) => !!so && !(Array.isArray(so.lines) && so.line
 
 /** The words of the start confirmation — every line named, nothing implied. */
 export const rowStartText = (label, state) => {
-    const go = state.lines.filter(l => l.key === LINE_STATE.NONE);
-    const rest = state.lines.filter(l => l.key !== LINE_STATE.NONE);
+    const startable = (l) => l.key === LINE_STATE.NONE || l.key === LINE_STATE.REVIEW;
+    const go = state.lines.filter(startable);
+    const rest = state.lines.filter(l => !startable(l));
+    const again = go.filter(l => l.key === LINE_STATE.REVIEW).length;
     return [
         `Start ${label}?`,
-        go.length ? `\n${go.length} line(s) will be started — plated parts go to the plater, painted to finishing, custom to the shop:\n${go.map(l => `  • ${l.qty} × ${l.erp}${l.finish ? ` in ${l.finish}` : ''}`).join('\n')}` : '\nNothing to start on this row.',
+        go.length ? `\n${go.length} line(s) will be started — plated parts go to the plater, painted to finishing, custom to the shop${again ? ` (${again} of them named for a decision last time — the plan is read again from live stock)` : ''}:\n${go.map(l => `  • ${l.qty} × ${l.erp}${l.finish ? ` in ${l.finish}` : ''}`).join('\n')}` : '\nNothing to start on this row.',
         rest.length ? `\n${rest.length} line(s) already in motion or stocked are left as they are:\n${rest.map(l => `  • ${l.erp} — ${l.text}`).join('\n')}` : '',
         '\nEach work order lands on RTG under this sales order. Lines the plan cannot start cleanly are named for review, not guessed.',
     ].filter(Boolean).join('\n');

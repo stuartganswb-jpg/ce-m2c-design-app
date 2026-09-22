@@ -358,15 +358,19 @@ const CLAIM_MS = 10 * 60 * 1000;
 // order's rows each record under their own slot (`displayRows.ROW_2`) so two rows never share a
 // claim or overwrite each other's review — Shared/displayRelease.
 const slotOf = (data, slot) => String(slot || 'oeAuto').split('.').reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), data) || {};
-export const claimOeAuto = async (soId, user, sig, slot = 'oeAuto') => runTransaction(db, async (tx) => {
+export const claimOeAuto = async (soId, user, sig, slot = 'oeAuto', { force = false } = {}) => runTransaction(db, async (tx) => {
     const ref = doc(db, 'hq_sales_orders', soId);
     const snap = await tx.get(ref);
     if (!snap.exists()) return false;
     const cur = slotOf(snap.data(), slot);
     const now = Date.now();
     if (cur.state === 'RUNNING' && now - (cur.at || 0) < CLAIM_MS) return false;
-    if (['NEEDS_REVIEW', 'DONE'].includes(cur.state) && cur.sig === sig) return false;   // already answered for exactly these lines
-    if (cur.state === 'FAILED' && cur.sig === sig && now - (cur.at || 0) < CLAIM_MS) return false;
+    // "ALREADY ANSWERED" IS A GUARD AGAINST THE AUTOMATIC RUN REPEATING ITSELF — not against a
+    // person (Stuart 2026-09-22, 10.5's ▶ Start row). A person asks again on purpose: the rule
+    // changed, the stock arrived, the item was fixed. `force` waives only this; two runs at once
+    // are still refused above.
+    if (!force && ['NEEDS_REVIEW', 'DONE'].includes(cur.state) && cur.sig === sig) return false;   // already answered for exactly these lines
+    if (!force && cur.state === 'FAILED' && cur.sig === sig && now - (cur.at || 0) < CLAIM_MS) return false;
     tx.update(ref, { [slot]: { state: 'RUNNING', at: now, by: user || '', sig } });
     return true;
 });
@@ -380,13 +384,13 @@ export const claimOeAuto = async (soId, user, sig, slot = 'oeAuto') => runTransa
  * is where this run records itself on the sales order; a row uses its own.
  * @returns { ran, review: [{ lineIdx, erp, finish, reasons[] }], state }
  */
-export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = null, log = () => {}, only = null, slot = 'oeAuto' }) => {
+export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = null, log = () => {}, only = null, slot = 'oeAuto', force = false }) => {
     // Read FRESH, and read everything ever raised — the run must never raise a line twice on its own.
     const linkSet = links || (await loadOeLinks([so.id], { all: true }))[so.id] || { wos: [], pos: [], demands: [] };
     const open = uncoveredTbfOf(so, linkSet, { any: true }).filter(x => (typeof only === 'function' ? only(x.line, x.lineIdx) : true));
     const sig = oeAutoSig(open);
     if (!open.length) return { ran: 0, review: [], state: 'DONE' };
-    if (!(await claimOeAuto(so.id, user, sig, slot))) return { ran: 0, review: [], state: 'SKIPPED' };
+    if (!(await claimOeAuto(so.id, user, sig, slot, { force }))) return { ran: 0, review: [], state: 'SKIPPED' };
     const review = [];
     let ran = 0;
     const finish = async (state, extra = {}) => {

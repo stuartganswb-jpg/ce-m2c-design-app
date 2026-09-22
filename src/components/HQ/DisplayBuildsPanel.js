@@ -318,7 +318,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             const inventory = oeInventoryOf(libraryRef.current, activeBrand);
             const key = rowKeyOf(label);
             // Only the orders that hold a startable line of this row; a whole-order one never does.
-            const targets = (floor.sos || []).filter(s => !s.whole && state.lines.some(l => l.soAppId === s.so.id && l.key === 'NONE'));
+            const targets = (floor.sos || []).filter(s => !s.whole && state.lines.some(l => l.soAppId === s.so.id && (l.key === 'NONE' || l.key === 'REVIEW')));
             for (const s of targets) {
                 const fresh = await getDoc(doc(db, 'hq_sales_orders', s.so.id));
                 const soNow = { id: fresh.id, ...fresh.data() };
@@ -327,6 +327,9 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                     so: soNow, brand: activeBrand, user: currentUser || '10.5', inventory, log,
                     only: (line) => rowKeyOf(rowOfLine(line)) === key,
                     slot: `displayRows.${key}`,
+                    // A person pressing the button asks again on purpose — the automatic run's
+                    // "already answered" guard does not apply to them.
+                    force: true,
                 });
                 if (res.state === 'SKIPPED') log(`   another session is already starting it, or it was answered for exactly these lines — nothing done.`, 'warn');
                 else log(`   ${res.ran} started · ${res.review.length} line(s) need a decision.`, res.review.length ? 'warn' : 'success');
@@ -545,7 +548,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                                 <button onClick={() => startRow(label, state)} disabled={!!starting || !!busy || dirty || !anyAccepted}
                                                     style={btn(true, { padding: '5px 12px', opacity: (!!starting || dirty || !anyAccepted) ? .5 : 1 })}
                                                     title={dirty ? 'Save the order first' : !anyAccepted ? 'Waits for NetSuite to accept the sales order' : `Start the ${state.open} line(s) of ${label} not yet raised`}>
-                                                    {starting === label ? '…' : '▶ Start row'}
+                                                    {starting === label ? '…' : state.key === ROW_STATE.NEEDS_DECISION ? '▶ Try again' : '▶ Start row'}
                                                 </button>
                                             )}
                                         </td>

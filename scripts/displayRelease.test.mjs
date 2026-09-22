@@ -118,6 +118,10 @@ eq('a written row wins over the memo', rowOfLine({ row: 'Row 1', memo: 'left win
     eq('one line raised, one not → PARTLY STARTED', st({ ...none, wos: [wo(0)] }).key, ROW_STATE.PARTLY_STARTED);
     eq('a line the run named for review → NEEDS A DECISION, and it outranks a backorder',
         st({ ...none, wos: [wo(0, { backOrdered: true })] }, { reviews: { 1: ['B is flagged BOTH'] } }).key, ROW_STATE.NEEDS_DECISION);
+    // ⚠ A LINE NAMED FOR REVIEW IS NOT STARTED (2026-09-22: "no change"). Nothing was raised for it,
+    // so it stays OPEN and the row can be run again — the rule may have changed since it was named.
+    eq('…and that line still counts as open, so the row offers a Start', st(none, { reviews: { 1: ['B is flagged BOTH'] } }).open, 2);
+    ok('…and the confirmation says it is being tried again', /named for a decision last time/.test(rowStartText('Row 1', st(none, { reviews: { 1: ['x'] } }))));
     eq('a backordered line → BACKORDERED', st({ ...none, wos: [wo(0, { backOrdered: true }), wo(1)] }).key, ROW_STATE.BACKORDERED);
     eq('all issued, none dispatched → ISSUED', st({ ...none, wos: [wo(0), wo(1)] }).key, ROW_STATE.ISSUED);
     eq('one on the floor → ON THE FLOOR', st({ ...none, wos: [wo(0, { status: 'Dispatched' }), wo(1)] }).key, ROW_STATE.ON_FLOOR);
