@@ -36,6 +36,30 @@ export const quoteDoorOf = (job) => {
     return '';   // too old, or empty, to say — each door keeps its own "nothing to reopen" words
 };
 const DOOR_NAME = { CPQ: 'Reopen CPQ', VISION: 'Reopen Vision', ORDER_ENTRY: 'Reopen Order Entry' };
+// THE CRM'S APPROVE IS CPQ'S DOOR (Stuart 2026-09-23, SO60586): it transforms the estimate and
+// builds the sales order from the JOB — a job id on it, no Order Entry class, no lines. RTG then
+// read "approved, has a job" and split the order WHOLE from a Quick Ship quote's printed breakdown
+// (prose: no part id, no cut length, no bin — an 18" pole went to finishing as a small part).
+// An Order Entry quote becomes an order through Order Entry: reopen it there, save it as a sales
+// order, and the record carries the class and the lines the WMS and the per-line route read.
+export const approveDoorReason = (job) => {
+    if (quoteDoorOf(job) !== 'ORDER_ENTRY') return '';
+    const no = (job && (job.quoteNo || job.netsuiteEstimateNo || job.jobId || job.id)) || 'This quote';
+    return `${no} was built in Order Entry (tab 7). Approving it here would build a CPQ-shaped order that RTG splits whole from the printed quote. Use "${DOOR_NAME.ORDER_ENTRY}", then save it there as a sales order. (The old estimate is closed in NetSuite by hand — tab 7 says so.)`;
+};
+/**
+ * An ORDER ENTRY sales order — by its own class (tab 7 writes orderClass QUICKSHIP), its source,
+ * or the quote it was approved from (a QSQUOTE-… job, or the job itself when the caller has it).
+ * RTG's whole-order split must never take one: its lines start one at a time through the Order
+ * Entry route, and the WMS packs its stocked lines off the order itself.
+ */
+export const isOrderEntryOrder = (so, job = null) => {
+    if (!so) return false;
+    const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
+    if (U(so.orderClass) === 'QUICKSHIP' || U(so.source) === 'QUICKSHIP') return true;
+    if (/^QSQUOTE-/i.test(String(so.hqJobId || '').trim())) return true;
+    return quoteDoorOf(job) === 'ORDER_ENTRY';
+};
 /** '' when `door` may open this quote, else the sentence that says why not and which door does. */
 export const wrongDoorReason = (job, door) => {
     const made = quoteDoorOf(job);

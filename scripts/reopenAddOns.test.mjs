@@ -1,5 +1,5 @@
 // A reopened quote brings its own checkout add-ons back (Stuart 2026-09-17).   node scripts/reopenAddOns.test.mjs
-import { savedAddOnSelOf, quoteDoorOf, wrongDoorReason } from '../src/components/Shared/reopenQuote.js';
+import { savedAddOnSelOf, quoteDoorOf, wrongDoorReason, approveDoorReason, isOrderEntryOrder } from '../src/components/Shared/reopenQuote.js';
 let pass = 0, fail = 0;
 const eq = (n, a, b) => { if (JSON.stringify(a) === JSON.stringify(b)) { pass++; return; } fail++; console.log(`✗ ${n} — got ${JSON.stringify(a)}`); };
 const job = { cpqData: { breakdown: [
@@ -23,5 +23,16 @@ eq('null job is safe', savedAddOnSelOf(null), {});
     eq('…and says it does NOT need rebuilding', /does NOT need rebuilding/.test(wrongDoorReason(cpq, 'ORDER_ENTRY')) && /QUO158/.test(wrongDoorReason(cpq, 'ORDER_ENTRY')), true);
     eq('Order Entry quote: only Order Entry opens — Vision included (the door that had no guard)', [!!wrongDoorReason(oe, 'CPQ'), !!wrongDoorReason(oe, 'VISION'), !!wrongDoorReason(oe, 'ORDER_ENTRY')], [true, true, false]);
     eq('a quote too old to say is left to each door\'s own words', [wrongDoorReason(old, 'CPQ'), wrongDoorReason(old, 'ORDER_ENTRY')], ['', '']);
+    // THE CRM'S APPROVE READS THE DOOR TOO (Stuart 2026-09-23, SO60586: an Order Entry quote approved
+    // from the CRM became a CPQ-shaped order that RTG split whole from the printed quote).
+    eq('CPQ quote: Approve is its door', approveDoorReason(cpq), '');
+    eq('Order Entry quote: Approve refuses and says where to go', /QUO160/.test(approveDoorReason(oe)) && /Reopen Order Entry/.test(approveDoorReason(oe)), true);
+    eq('a quote too old to say is not refused', approveDoorReason(old), '');
+    // IS THIS SALES ORDER AN ORDER ENTRY ORDER? — the whole-order split's guard, four shapes.
+    eq('a tab-7 order (orderClass QUICKSHIP, lines[], no job)', isOrderEntryOrder({ orderClass: 'QUICKSHIP', lines: [{ erp: 'X' }] }), true);
+    eq('a CRM-approved Order Entry quote (CPQ-shaped, QSQUOTE job, no lines) — SO60586', isOrderEntryOrder({ source: 'CRM', type: 'Custom', hqJobId: 'QSQUOTE-1789903760164' }), true);
+    eq('…and by the job itself when the caller has read it', isOrderEntryOrder({ source: 'CRM', hqJobId: 'J-1' }, oe), true);
+    eq('a CPQ order', isOrderEntryOrder({ source: 'CPQ', hqJobId: 'QUO158' }, cpq), false);
+    eq('a CPQ order that carries lines (a display released by rows) is still CPQ', isOrderEntryOrder({ source: 'CPQ', hqJobId: 'QUO158', displayRelease: true, lines: [{ erp: 'X' }] }), false);
 }
 console.log(`reopenAddOns: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

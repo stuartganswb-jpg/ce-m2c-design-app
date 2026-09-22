@@ -13,7 +13,7 @@ import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassificatio
 import { customerKeys } from '../Shared/clientPricing';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
-import { reopenQuoteInCpq, reopenQuoteInVision, reopenQuoteInOrderEntry, wrongDoorReason } from '../Shared/reopenQuote';
+import { reopenQuoteInCpq, reopenQuoteInVision, reopenQuoteInOrderEntry, wrongDoorReason, approveDoorReason } from '../Shared/reopenQuote';
 import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction, canReopenPostedOrder, netSuiteOrderNoOf } from '../Shared/orderStatus';
@@ -974,6 +974,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   // is named, and the way out is the one that always existed: reopen in CPQ, re-save, approve.
   // Going on anyway is the operator's choice and is stamped on the job.
   const approveToSalesOrder = async (job) => {
+      // The quote says where it was made; this door reads that first (Shared/reopenQuote).
+      const wrongDoor = approveDoorReason(job);
+      if (wrongDoor) { alert(`⛔ Wrong door.\n\n${wrongDoor}`); return; }
       if (job.netsuiteSalesOrderId) { await updateJobStatus(job.id, 'APPROVED'); return; }   // SO already exists in NetSuite
       if (!job.netsuiteEstimateId) {
           alert(`No NetSuite estimate is on this quote yet (the save-time push may still be queuing — watch RTG's Transmit Log).\n\nPress Approve again once the estimate # appears to create the Sales Order. Nothing was changed.`);
@@ -2101,7 +2104,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
                                                           <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>🔍 View Item</button>
                                                           {job.status === 'CONFIGURED' && (
-                                                              <button onClick={() => approveToSalesOrder(job)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Approve</button>
+                                                              <button onClick={() => approveToSalesOrder(job)} disabled={!!approveDoorReason(job)} title={approveDoorReason(job) || 'Create the NetSuite Sales Order from this quote (transforms the estimate)'} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', ...(approveDoorReason(job) ? { opacity: 0.35, cursor: 'not-allowed' } : {}) }}>Approve</button>
                                                           )}
                                                           <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${quoteDisplayNo(job)} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Email</button>
                                                           <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
@@ -2315,7 +2318,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                               </td>
                                               <td style={{ padding: '16px 20px', textAlign: 'right' }}>
                                                   {job.status === 'CONFIGURED' && (
-                                                      <button onClick={() => approveToSalesOrder(job)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Approve</button>
+                                                      <button onClick={() => approveToSalesOrder(job)} disabled={!!approveDoorReason(job)} title={approveDoorReason(job) || 'Create the NetSuite Sales Order from this quote (transforms the estimate)'} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px', ...(approveDoorReason(job) ? { opacity: 0.35, cursor: 'not-allowed' } : {}) }}>Approve</button>
                                                   )}
                                                   <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ padding: '8px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>🔍 View Item</button>
                                                   <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Docs</button>

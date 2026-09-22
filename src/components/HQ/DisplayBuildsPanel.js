@@ -36,7 +36,7 @@ import { cancelPlatingDemand } from '../Shared/platingDemand';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf } from '../Shared/displayRelease';
+import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -191,6 +191,11 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         try { links = (await loadOeLinks([so.id], { all: true }))[so.id] || null; } catch (e) { /* the row panel says it could not read */ }
         try { shipments = (await getDocs(query(collection(db, 'plating_shipments'), where('soAppId', '==', so.id)))).docs.map(d => ({ id: d.id, ...d.data() })); } catch (e) { /* likewise */ }
         const whole = wholeOrderDocsOf(so, fin, shop);
+        // The split's packaging document(s), PKG-<key>: shown, and closed with the split when it is retired.
+        const pkg = [];
+        for (const id of packagingIdsOf(so)) {
+            try { const d = await getDoc(doc(db, 'packaging_orders', id)); if (d.exists()) pkg.push({ id, ...d.data() }); } catch (e) { /* shown as absent */ }
+        }
         // A split CPQ order has no lines[] and must not be given any: its rows are read off the
         // breakdown at load time, for visibility only, and nothing on the order changes.
         let rowLines = null;
@@ -198,7 +203,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             try { const job = await getDoc(doc(db, 'jobs', so.hqJobId)); rowLines = job.exists() ? rowLinesFromBreakdown(((job.data().cpqData || {}).breakdown) || []) : []; }
             catch (e) { rowLines = []; }
         }
-        return { so, fin, shop, plating, links, shipments, whole, rowLines };
+        return { so, fin, shop, plating, pkg, links, shipments, whole, rowLines };
     };
     const loadFloor = async (build) => {
         const ids = anchoredIdsOf(build);
@@ -284,7 +289,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     const retireSplit = async (entry) => {
         const so = entry?.so;
         if (!so || !draft || !entry.whole) return;
-        const blockers = retireBlockersOf({ fin: entry.whole.fin, shop: entry.whole.shop, plating: entry.plating || [] });
+        const blockers = retireBlockersOf({ fin: entry.whole.fin, shop: entry.whole.shop, plating: entry.plating || [], pkg: entry.pkg || [] });
         if (blockers.length) return alert(`Cannot retire the whole-order split of ${so.soId || so.id} — work has been logged on it:\n\n${blockers.map(b => `  • ${b}`).join('\n')}\n\nClose or finish it on RTG, where that work is visible.`);
         // The lines that will replace it: read now, so a breakdown with nothing in it stops this before anything closes.
         let lines = null;
@@ -294,7 +299,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             lines = rowLinesFromBreakdown(job.exists() ? ((job.data().cpqData || {}).breakdown || []) : []);
             if (!lines.length) return alert(`The CPQ job ${so.hqJobId} has no physical lines in its breakdown — nothing to release by rows.`);
         }
-        if (!window.confirm(retireText(so, { fin: entry.whole.fin, shop: entry.whole.shop, plating: entry.plating || [] }))) return;
+        if (!window.confirm(retireText(so, { fin: entry.whole.fin, shop: entry.whole.shop, plating: entry.plating || [], pkg: entry.pkg || [] }))) return;
         setBusy('Retiring the whole-order split…');
         const by = String(currentUser || '10.5');
         try {
@@ -306,8 +311,16 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 const r = await cancelPlatingDemand(ctx, { id: d.id, record: d, by, from: '10.5', reason: 'the whole-order split was retired — the row raises its own', shipmentLines: (entry.plating || []).filter(p => p.__coll === 'plating_shipments') });
                 if (r.ok) cancelled++;
             }
+            // The packaging document the split wrote (the closer does not know packaging_orders):
+            // the same stamp shape, state kept, so it leaves the packing queue and can be read back.
+            let pkgClosed = 0;
+            for (const p of (entry.pkg || [])) {
+                if (!p || p.closed || String(p.closedFrom || '') === '10.5') continue;
+                await updateDoc(doc(db, 'packaging_orders', p.id), { status: 'closed', closed: true, closedAt: Date.now(), closedBy: by, closedFrom: '10.5', closeReason: 'released by rows from 10.5 (the whole-order split retired)', stateBeforeClose: { status: p.status || 'pending' } });
+                pkgClosed++;
+            }
             await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, lines }));
-            alert(`Retired: ${res.fin} finishing doc(s), ${res.shop} shop doc(s) closed${res.rodCuts ? `, ${res.rodCuts} rod cut(s) cancelled` : ''}${(res.nsWritesCancelled || []).length ? `, ${res.nsWritesCancelled.length} queued NetSuite write(s) cancelled` : ''}${cancelled ? `, ${cancelled} plating demand(s) cancelled` : ''}${res.nsNeedsManualClose ? `.\n\n⚠ NetSuite work order ${res.ns} must be closed by hand — a task was raised.` : '.'}\n\n${so.soId || so.id} is now released by rows from here.`);
+            alert(`Retired: ${res.fin} finishing doc(s), ${res.shop} shop doc(s)${pkgClosed ? `, ${pkgClosed} packaging doc(s)` : ''} closed${res.rodCuts ? `, ${res.rodCuts} rod cut(s) cancelled` : ''}${(res.nsWritesCancelled || []).length ? `, ${res.nsWritesCancelled.length} queued NetSuite write(s) cancelled` : ''}${cancelled ? `, ${cancelled} plating demand(s) cancelled` : ''}${res.nsNeedsManualClose ? `.\n\n⚠ NetSuite work order ${res.ns} must be closed by hand — a task was raised.` : '.'}\n\n${so.soId || so.id} is now released by rows from here.`);
             await loadFloor(draft);
         } catch (e) { alert('Retire failed partway: ' + (e?.message || e) + '\n\nRead the floor again before doing anything else — some documents may already be closed.'); }
         setBusy('');
@@ -547,12 +560,13 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                     : <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>⚓ rows start from here{!s.so.nsInternalId ? ' · ⚠ NetSuite has not accepted it yet' : ''}{splitRetiredOf(s.so, s.fin, s.shop) ? ` · split retired (${splitRetiredOf(s.so, s.fin, s.shop).map(d => d.id).join(', ')}) · released by rows` : ''}</span>}
                                 {!s.links && <span style={{ ...mono, color: '#b02d20', marginLeft: '10px' }}>⚠ could not read its work orders</span>}
                             </div>
-                            {(s.fin.length + s.shop.length + s.plating.length === 0)
+                            {(s.fin.length + s.shop.length + s.plating.length + (s.pkg || []).length === 0)
                                 ? <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px', fontStyle: 'italic' }}>No floor documents yet.</div>
                                 : <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: '4px', fontFamily: 'var(--mono)', fontSize: '11px' }}>
                                     {s.shop.map(d => <span key={d.id}>🔧 {d.id} · {d.status || 'Pending'}{d.nsWoTran ? ` · NS ${d.nsWoTran}` : ''}</span>)}
                                     {s.fin.map(d => <span key={d.id}>{d.pickOnly ? '📦' : '🎨'} {d.id} · {d.pickOnly ? (d.pickStatus || 'Pending') : (d.currentPhase || 'Setup')}{d.packStatus ? ` · ${d.packStatus}` : ''}{d.nsWoTran ? ` · NS ${d.nsWoTran}` : ''}</span>)}
                                     {s.plating.map(d => <span key={d.id}>⚡ {d.woNum || d.id} · {d.status || 'open'}{d.__coll === 'plating_shipments' ? ' (shipment)' : ''}</span>)}
+                                    {(s.pkg || []).map(d => <span key={d.id}>📦 {d.id} · {d.status || 'pending'}</span>)}
                                 </div>}
                         </div>
                     ))}

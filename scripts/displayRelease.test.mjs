@@ -9,7 +9,7 @@
 
 import {
     rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, lineStateOf, rowStateOf,
-    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf,
+    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf,
 } from '../src/components/Shared/displayRelease.js';
 
 let pass = 0, fail = 0;
@@ -191,6 +191,12 @@ eq('a written row wins over the memo', rowOfLine({ row: 'Row 1', memo: 'left win
     eq('parts already shipped to the plater block', retireBlockersOf({ ...untouched, plating: [{ __coll: 'plating_shipments', woNum: 'PLW-1', status: 'shipped' }] }), ['PLW-1 is shipped at the plater']);
     eq('an open demand (nothing pulled) does not block — it is cancelled instead', retireBlockersOf({ ...untouched, plating: [{ __coll: 'plating_demand', woNum: 'PLW-2', status: 'open' }] }), []);
     eq('in the pick QUEUE is not picked', retireBlockersOf({ ...untouched, fin: { ...untouched.fin, pickStatus: 'Pending', sentToPickPack: true } }), []);
+    // THE PACKAGING LEG (Stuart 2026-09-23): the split writes PKG-<so> too; pending closes with the split, packed blocks.
+    eq('a pending packaging doc does not block — it closes with the split', retireBlockersOf({ ...untouched, pkg: [{ id: 'PKG-SO60585', status: 'pending' }] }), []);
+    eq('a packed packaging doc blocks', retireBlockersOf({ ...untouched, pkg: [{ id: 'PKG-SO60585', status: 'packed' }] }), ['PKG-SO60585 is packed at packaging']);
+    eq('one already closed by a retire is neither blocker nor named again', retireBlockersOf({ ...untouched, pkg: [{ id: 'PKG-SO60585', status: 'closed', closed: true, closedFrom: '10.5' }] }), []);
+    ok('the words name the packaging document', /PKG-SO60585 — the whole-order packaging document/.test(retireText(so, { ...untouched, pkg: [{ id: 'PKG-SO60585', status: 'pending' }] })));
+    eq('the packaging ids follow the split\'s own convention', packagingIdsOf({ id: 'SO-APP-X', soId: 'SO60585' }), ['PKG-SO60585', 'PKG-SO-APP-X']);
     ok('the confirmation names both documents and the demand it will cancel',
         (() => { const t = retireText(so, { ...untouched, plating: [{ __coll: 'plating_demand', woNum: 'PLW-2' }] }); return /WO-SO60585/.test(t) && /SHOP-SO60585/.test(t) && /CANCELS 1 open plating demand/.test(t) && /stays open/.test(t); })());
 }

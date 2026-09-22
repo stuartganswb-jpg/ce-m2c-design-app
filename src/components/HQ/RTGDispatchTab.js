@@ -9,6 +9,7 @@ import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderCo
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { runOeAuto, oeInventoryOf } from '../Shared/oeGenerate';
 import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
+import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
@@ -449,7 +450,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // A DISPLAY ORDER IS STARTED ROW BY ROW FROM 10.5 (Stuart 2026-09-22, Shared/displayRelease):
         // the whole-order split would put every row on the floor at once, as one document — the
         // exact thing 10.5 exists to prevent. Its work orders still land here and are governed here.
-        const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId) && !o.displayRelease);
+        // AN ORDER ENTRY ORDER IS NEVER SPLIT WHOLE (Stuart 2026-09-23, SO60586): a Quick Ship quote
+        // approved from the CRM arrives here CPQ-shaped, with a QSQUOTE job — its lines start one at
+        // a time through the Order Entry route below. Shared/reopenQuote.isOrderEntryOrder is the test.
+        const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId) && !o.displayRelease && !isOrderEntryOrder(o));
         const isSalesFlow = (o) => o.orderType === 'sales' || o.orderClass === 'ORDER_ENTRY' || (o.finPayload && o.finPayload.orderType === 'sales');
         // FINISH COMPLETE by default (Stuart 2026-09-03): a sales-typed work order waits for every
         // sibling line of its sales order unless that order is flagged "Finish as available".
@@ -1328,6 +1332,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
 
     const autoSplitSalesOrder = async (so, opts = {}) => {
         if (!so.hqJobId) return alert("This SO has no linked CPQ job (custbody50). Cannot auto-split.");
+        // THE GUARD AT THE CAUSE (Stuart 2026-09-23): auto-release, ↻ Re-dispatch and the supervisor
+        // override all come through here. An Order Entry order's lines start one at a time through
+        // the Order Entry route; the whole-order split would put every line on the floor as one
+        // document, built from a quote's printed breakdown (no part id, no cut length, no bin).
+        const oeRefusal = (why) => { addLog(`⛔ SO ${so.soId || so.id} is an Order Entry order (${why}) — never split whole. Its lines start through the Order Entry route.`, 'warn'); if (!opts.skipConfirm) alert(`⛔ ${so.soId || so.id} is an ORDER ENTRY order (${why}).\n\nIt is never split whole: its lines start one at a time through the Order Entry route, and the WMS packs its stocked lines off the order itself. Nothing was written.`); };
+        if (isOrderEntryOrder(so)) return oeRefusal(so.orderClass === 'QUICKSHIP' ? 'orderClass QUICKSHIP' : `approved from quote ${so.hqJobId}`);
         const isRedispatch = so.status === 'Dispatched';
         if (!opts.skipConfirm && !window.confirm(isRedispatch
             ? `RE-DISPATCH SO ${so.soId || so.id}?\n\nThe split re-runs with the current routing rules and OVERWRITES the existing floor work orders (same ids) — any progress already logged against them is reset.`
@@ -1337,6 +1347,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             const jobSnap = await getDoc(doc(db, "jobs", so.hqJobId));
             if (!jobSnap.exists()) return alert(`Linked job ${so.hqJobId} not found.`);
             const job = jobSnap.data();
+            if (isOrderEntryOrder(so, job)) return oeRefusal(`its quote ${so.hqJobId} was built in Order Entry`);
 
             const lines = getJobLines(job);
             if (lines.length === 0) return alert("Linked job has no CPQ lines to split.");
@@ -2774,7 +2785,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
             </div>
             <button style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => handleViewOrder(o, kind)}>View</button>
             {o.hqJobId && <button style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => setCfgQuote(o.hqJobId)}>🔍</button>}
-            {kind === 'sales' && (
+            {kind === 'sales' && !isOrderEntryOrder(o) && (
                 <button title="Re-run the split with the current routing rules — the floor docs use fixed ids (WO-… / SHOP-…), so this overwrites rather than duplicating."
                     style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => autoSplitSalesOrder(o)}>↻ Re-dispatch</button>
             )}

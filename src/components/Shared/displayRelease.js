@@ -106,6 +106,8 @@ export const wholeOrderDocsOf = (so, fin = [], shop = []) => {
     const shopDoc = (shop || []).find(d => d && !splitRetiredDoc(d) && keys.some(k => String(d.id) === `SHOP-${k}`)) || null;
     return (finDoc || shopDoc) ? { fin: finDoc, shop: shopDoc } : null;
 };
+/** The packaging document ids the split gives an order: PKG-<orderKey>, one per identity key. */
+export const packagingIdsOf = (so) => wholeKeysOf(so).map(k => `PKG-${k}`);
 /** The whole-order documents the retire closed on this order — the strip says so instead of offering the retire again. */
 export const splitRetiredOf = (so, fin = [], shop = []) => {
     const keys = wholeKeysOf(so);
@@ -121,8 +123,11 @@ export const splitRetiredOf = (so, fin = [], shop = []) => {
  * logged against it is closed by a person on RTG who can see that work, not from here.
  * @returns string[] — empty means it may go
  */
-export const retireBlockersOf = ({ fin = null, shop = null, plating = [] } = {}) => {
+export const retireBlockersOf = ({ fin = null, shop = null, plating = [], pkg = [] } = {}) => {
     const out = [];
+    // The split also writes PKG-<so> for the packing station (pending until packed); one that has
+    // moved past pending was packed against the whole order and is closed by a person who can see it.
+    (pkg || []).forEach(p => { if (p && !['', 'PENDING'].includes(U(p.status)) && !splitRetiredDoc(p)) out.push(`${p.id} is ${p.status} at packaging`); });
     const FIN_OK = ['', 'SETUP', 'PENDING', 'QUEUED', 'NOT STARTED'];
     const PICK_OK = ['', 'PENDING', 'WAITING', 'QUEUED'];
     if (fin) {
@@ -145,13 +150,15 @@ export const retireBlockersOf = ({ fin = null, shop = null, plating = [] } = {})
 };
 
 /** The words of the retire confirmation — what closes, what is cancelled, what follows. */
-export const retireText = (so, { fin = null, shop = null, plating = [] } = {}) => {
+export const retireText = (so, { fin = null, shop = null, plating = [], pkg = [] } = {}) => {
     const demands = (plating || []).filter(p => p && p.__coll === 'plating_demand');
+    const pkgOpen = (pkg || []).filter(p => p && !splitRetiredDoc(p));
     return [
         `Retire the whole-order split of ${so.soId || so.id} and release it by ROWS instead?`,
         '\nThis CLOSES, through the same close RTG uses (state kept, reopenable):',
         fin ? `  • ${fin.id} — the whole-order finishing document` : '',
         shop ? `  • ${shop.id} — the whole-order shop document` : '',
+        ...pkgOpen.map(p => `  • ${p.id} — the whole-order packaging document`),
         demands.length ? `\nand CANCELS ${demands.length} open plating demand(s) the split raised (${demands.map(d => d.woNum || d.id).join(', ')}), through the ledger.` : '',
         `\nThe sales order ${so.soId || so.id} itself stays open and is not touched. Its lines are then written for the row route, and each row is started from here when you choose.`,
         '\nNothing has been worked on these documents (checked). This is the point of no return for the whole-order path on this order.',
