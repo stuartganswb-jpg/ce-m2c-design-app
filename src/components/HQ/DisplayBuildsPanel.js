@@ -36,7 +36,7 @@ import { cancelPlatingDemand } from '../Shared/platingDemand';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf } from '../Shared/displayRelease';
+import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -267,7 +267,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         if (!window.confirm(text)) return;
         setBusy('Anchoring…');
         try {
-            if (!entry.whole) await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, lines }));
+            if (!entry.whole) await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, lines, so }));
             const soAppIds = [...already, so.id];
             const b = { ...draft, soAppIds, soAppId: soAppIds[0], soNumber: draft.soNumber || so.soId || so.id, updatedAt: Date.now(), updatedBy: String(currentUser || '') };
             await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b, { merge: true });
@@ -319,10 +319,24 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 await updateDoc(doc(db, 'packaging_orders', p.id), { status: 'closed', closed: true, closedAt: Date.now(), closedBy: by, closedFrom: '10.5', closeReason: 'released by rows from 10.5 (the whole-order split retired)', stateBeforeClose: { status: p.status || 'pending' } });
                 pkgClosed++;
             }
-            await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, lines }));
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, lines, so }));
             alert(`Retired: ${res.fin} finishing doc(s), ${res.shop} shop doc(s)${pkgClosed ? `, ${pkgClosed} packaging doc(s)` : ''} closed${res.rodCuts ? `, ${res.rodCuts} rod cut(s) cancelled` : ''}${(res.nsWritesCancelled || []).length ? `, ${res.nsWritesCancelled.length} queued NetSuite write(s) cancelled` : ''}${cancelled ? `, ${cancelled} plating demand(s) cancelled` : ''}${res.nsNeedsManualClose ? `.\n\n⚠ NetSuite work order ${res.ns} must be closed by hand — a task was raised.` : '.'}\n\n${so.soId || so.id} is now released by rows from here.`);
             await loadFloor(draft);
         } catch (e) { alert('Retire failed partway: ' + (e?.message || e) + '\n\nRead the floor again before doing anything else — some documents may already be closed.'); }
+        setBusy('');
+    };
+
+    // An order released by rows before the class rule (Shared/displayRelease.needsPackCard): the
+    // same stamp the anchor and the retire write, applied by itself — nothing else on the order moves.
+    const givePackCard = async (entry) => {
+        const so = entry?.so;
+        if (!so || !draft || !needsPackCard(so)) return;
+        if (!window.confirm(`Give ${so.soId || so.id} its pack card?\n\nThe order is stamped as an Order Entry order (its lines are the truth): the WMS SO Pack card appears with its stocked lines to pick and its made-to-order lines on hold until their row work orders come back. Nothing else on the order changes.`)) return;
+        setBusy('Stamping…');
+        try {
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, so }));
+            await loadFloor(draft);
+        } catch (e) { alert('Could not stamp it: ' + (e?.message || e)); }
         setBusy('');
     };
 
@@ -558,6 +572,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                             title="Close the whole-order finishing and shop documents (reopenable, through RTG's own close), keep the sales order, and release its rows from here. Refuses if any work has been logged on them.">⟲ Retire the split → release by rows</button>
                                     </>
                                     : <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>⚓ rows start from here{!s.so.nsInternalId ? ' · ⚠ NetSuite has not accepted it yet' : ''}{splitRetiredOf(s.so, s.fin, s.shop) ? ` · split retired (${splitRetiredOf(s.so, s.fin, s.shop).map(d => d.id).join(', ')}) · released by rows` : ''}</span>}
+                                {needsPackCard(s.so) && <button onClick={() => givePackCard(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
+                                    title="This order was released by rows before the rule that makes such an order an Order Entry order. Without the stamp the WMS has no SO Pack card for it: its stocked lines are picked by nobody and its finished rows have nothing to hold them together.">📦 Give it its pack card</button>}
                                 {!s.links && <span style={{ ...mono, color: '#b02d20', marginLeft: '10px' }}>⚠ could not read its work orders</span>}
                             </div>
                             {(s.fin.length + s.shop.length + s.plating.length + (s.pkg || []).length === 0)

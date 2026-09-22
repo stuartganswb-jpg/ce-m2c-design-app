@@ -2537,6 +2537,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const snap = await getDocs(query(collection(db, 'hq_sales_orders'), where('orderClass', '==', 'QUICKSHIP'), where('brand', '==', activeBrand)));
             const sos = snap.docs.map(d => ({ id: d.id, ...d.data() }))
                 .filter(o => !o.deleted && !['Shipped', 'Closed', 'CANCELLED', 'Deleted'].includes(String(o.status || '')))
+                // A DISPLAY ORDER'S ROWS ARE STARTED FROM 10.5, one at a time (Shared/displayRelease) —
+                // the same rule RTG's automatic start follows. Listed here, the green Generate would sweep
+                // every row of it onto the floor in one press; its demand reaches the Snapshot on its own.
+                .filter(o => !o.displayRelease)
                 .filter(o => (o.lines || []).some(oeIsTbf));
             // Live work linked to each order — work orders, purchase orders AND plating demands, by the
             // one loader RTG's automatic start reads too (Shared/oeGenerate.loadOeLinks). A closed or

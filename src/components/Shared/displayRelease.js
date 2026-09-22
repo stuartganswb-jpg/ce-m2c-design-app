@@ -270,15 +270,26 @@ export const rowStateOf = ({ so, entries = [], links, shipments = [], reviews = 
 };
 
 /** The patch that puts a sales order on the row route. Writes `lines` only when handed some. */
-export const displayAnchorPatch = ({ buildId, lines = null }) => ({
+export const displayAnchorPatch = ({ buildId, lines = null, so = null }) => ({
     // RTG's whole-order split and the Order Entry auto-start both stand down for this order — its
     // rows are started from 10.5, one at a time, by a person.
     displayRelease: true,
     displayBuildId: buildId || '',
     // Every row's work orders release on their own; without this each waits for all its siblings.
     finishAsAvailable: true,
+    // AN ORDER RELEASED BY ROWS IS AN ORDER ENTRY ORDER (Stuart 2026-09-23, the wall's SO60585 /
+    // SO60586): its lines are the truth and it packs off the order itself — the SO Pack card picks
+    // the stocked lines and holds the made-to-order ones until their row work orders come back.
+    // Five readers and three queries key on this class; a CPQ-born order without it fell through
+    // every one of them, so its stocked lines had no pick path at all. Stamped ONCE here, at the one
+    // writer; `source` still says where it was sold. The pick status starts Pending only when the
+    // order has none — an order already picked is never set back.
+    orderClass: 'QUICKSHIP',
+    ...((so && so.pickStatus) ? {} : { pickStatus: 'Pending' }),
     ...(Array.isArray(lines) ? { lines } : {}),
 });
+/** An anchored, released-by-rows order that was stamped before the class rule — 10.5 offers the stamp. */
+export const needsPackCard = (so) => !!so && so.displayRelease === true && U(so.orderClass) !== 'QUICKSHIP';
 
 /** True when the sales order needs its lines written before rows can be read off it. */
 export const soNeedsLines = (so) => !!so && !(Array.isArray(so.lines) && so.lines.length);

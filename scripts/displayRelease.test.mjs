@@ -9,7 +9,7 @@
 
 import {
     rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, lineStateOf, rowStateOf,
-    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf,
+    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard,
 } from '../src/components/Shared/displayRelease.js';
 
 let pass = 0, fail = 0;
@@ -197,13 +197,20 @@ eq('a written row wins over the memo', rowOfLine({ row: 'Row 1', memo: 'left win
     eq('one already closed by a retire is neither blocker nor named again', retireBlockersOf({ ...untouched, pkg: [{ id: 'PKG-SO60585', status: 'closed', closed: true, closedFrom: '10.5' }] }), []);
     ok('the words name the packaging document', /PKG-SO60585 — the whole-order packaging document/.test(retireText(so, { ...untouched, pkg: [{ id: 'PKG-SO60585', status: 'pending' }] })));
     eq('the packaging ids follow the split\'s own convention', packagingIdsOf({ id: 'SO-APP-X', soId: 'SO60585' }), ['PKG-SO60585', 'PKG-SO-APP-X']);
+    // AN ORDER RELEASED BY ROWS IS AN ORDER ENTRY ORDER (Stuart 2026-09-23): the stamp rides the one patch.
+    const cpqPatch = displayAnchorPatch({ buildId: 'B1', lines: [{ erp: 'X', qty: 1 }], so: { source: 'CPQ', status: 'Dispatched' } });
+    eq('a CPQ order anchored for rows gets the Order Entry class and a pending pick', [cpqPatch.orderClass, cpqPatch.pickStatus, cpqPatch.displayRelease], ['QUICKSHIP', 'Pending', true]);
+    const oePatch = displayAnchorPatch({ buildId: 'B1', so: { orderClass: 'QUICKSHIP', pickStatus: 'Picked' } });
+    eq('an order already picked is never set back to pending', [oePatch.orderClass, 'pickStatus' in oePatch], ['QUICKSHIP', false]);
+    eq('a released order without the class needs its pack card; a stamped or unreleased one does not',
+        [needsPackCard({ displayRelease: true, source: 'CRM' }), needsPackCard({ displayRelease: true, orderClass: 'QUICKSHIP' }), needsPackCard({ source: 'CPQ' })], [true, false, false]);
     ok('the confirmation names both documents and the demand it will cancel',
         (() => { const t = retireText(so, { ...untouched, plating: [{ __coll: 'plating_demand', woNum: 'PLW-2' }] }); return /WO-SO60585/.test(t) && /SHOP-SO60585/.test(t) && /CANCELS 1 open plating demand/.test(t) && /stays open/.test(t); })());
 }
 
 // ── THE ANCHOR ──────────────────────────────────────────────────────────────────────────────
-eq('the anchor patch stands the auto-engines down and lets rows release alone',
-    displayAnchorPatch({ buildId: 'BUILD-1' }), { displayRelease: true, displayBuildId: 'BUILD-1', finishAsAvailable: true });
+eq('the anchor patch stands the auto-engines down, lets rows release alone, and makes the order an Order Entry order',
+    displayAnchorPatch({ buildId: 'BUILD-1' }), { displayRelease: true, displayBuildId: 'BUILD-1', finishAsAvailable: true, orderClass: 'QUICKSHIP', pickStatus: 'Pending' });
 eq('…and writes lines only when handed some', Object.keys(displayAnchorPatch({ buildId: 'B', lines: [] })).includes('lines'), true);
 eq('a CPQ order with no lines needs them written', soNeedsLines({ hqJobId: 'J' }), true);
 eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }] }), false);
