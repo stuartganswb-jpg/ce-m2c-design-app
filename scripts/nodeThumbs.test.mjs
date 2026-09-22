@@ -113,9 +113,15 @@ eq('a record with no code at all', baseCodeOf({}), '');
         /inside it: .*Lower Arm.*Body1/.test(text));
     ok('a node with no geometry is not offered as a candidate', !/EmptyGroup/.test(text));
 
-    // A slot that really is one welded solid should say so, not imply the names are wrong.
-    const solid = slotReportText('H1-2TRV-WB', planNodeThumbs({ parts, nodeNames: [] }), []);
-    ok('a single solid says so plainly', /this slot is a single solid/.test(solid));
+    // ⚠ THE TWO WAYS OF FINDING NOTHING, which must never read the same. A pin whose node is not in
+    // the model is a TAGGING problem; a node with nothing under it is a GEOMETRY one. Reporting the
+    // first as the second sends someone off to redraw parts that are sitting in the file.
+    const solid = slotReportText('H1-2TRV-WB', planNodeThumbs({ parts, nodeNames: [] }), [], 14, true);
+    ok('an empty node says the solid really is welded', /really is one welded solid/.test(solid));
+    const absent = slotReportText('H1-2TRV-WB', planNodeThumbs({ parts, nodeNames: [] }), [], 14, false);
+    ok('a node that is not in the model says THAT instead', /NOT in this model/.test(absent));
+    ok('…and points at the pin, not the geometry', /pin and the GLB disagree/.test(absent));
+    ok('…and never calls it a solid', !/welded solid/.test(absent));
 
     // When it works, the matched pairs are shown with the node each resolved to.
     const good = planNodeThumbs({ parts, nodeNames: ['H1-2TRVLA', 'H1-2TRVBP'] });

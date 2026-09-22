@@ -113,9 +113,17 @@ export const planNodeThumbs = ({ parts = [], nodeNames = [], hasPhoto = () => fa
  * @param children  [{ name, depth, isMesh, meshes }] from hardwareThumbs.sceneSubtree
  * @param limit     how many child names to print before saying "and N more"
  */
-export const slotReportText = (kitCode, rows = [], children = [], limit = 14) => {
+export const slotReportText = (kitCode, rows = [], children = [], limit = 14, parentFound = true) => {
     const ready = rows.filter(r => r.status === NODE_READY);
     const missed = rows.filter(r => r.status === NODE_NONE);
+    // ⚠ THE PIN'S NODE WAS NOT IN THE MODEL AT ALL. Reported as "a single solid" this reads as
+    // "the designer welded it", which is the opposite conclusion and would send someone off to
+    // redraw parts that are sitting in the file. It means the pin and the GLB disagree — a
+    // re-export renamed or removed that node — and the fix is in the tagging, not the geometry.
+    if (!parentFound) {
+        return `  ${kitCode} — the node this kit is pinned to is NOT in this model\n`
+            + '    (the pin and the GLB disagree — nothing can be read from inside it until they match)';
+    }
     const out = [`  ${kitCode} — ${children.length} node(s) inside the tagged slot`];
     if (ready.length) out.push(`    ✓ ${ready.map(r => `${r.code} → "${r.node}"`).join(', ')}`);
     if (missed.length) {
@@ -124,7 +132,7 @@ export const slotReportText = (kitCode, rows = [], children = [], limit = 14) =>
         const cands = children.filter(c => c.meshes > 0).map(c => `${'·'.repeat(Math.max(1, c.depth))} ${c.name}`);
         const shown = cands.slice(0, limit);
         if (shown.length) out.push(`    inside it: ${shown.join(' | ')}${cands.length > limit ? ` … and ${cands.length - limit} more` : ''}`);
-        else out.push('    inside it: nothing with geometry — this slot is a single solid');
+        else out.push('    inside it: nothing with geometry — this slot really is one welded solid');
     }
     return out.join('\n');
 };

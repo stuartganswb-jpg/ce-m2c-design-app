@@ -354,7 +354,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             const total = plans.reduce((s, p) => s + p.slots.reduce((n, sl) => n + sl.ready.length, 0), 0);
             const text = plans.map(p => [
                 `${p.asm.itemName || p.asm.id}:`,
-                ...p.slots.map(sl => slotReportText(sl.kit.legacyErpId || sl.kit.itemId || sl.kit.id, sl.rows, sl.children)),
+                ...p.slots.map(sl => slotReportText(sl.kit.legacyErpId || sl.kit.itemId || sl.kit.id, sl.rows, sl.children, 14, sl.children.parentFound !== false)),
             ].join('\n')).join('\n\n');
             // The full contents go to the console as well — the dialog is trimmed to stay readable,
             // and when the naming is the problem you want every name, not the first fourteen.

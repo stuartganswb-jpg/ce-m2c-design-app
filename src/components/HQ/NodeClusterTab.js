@@ -1009,12 +1009,14 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
 
                 {/* CENTER & RIGHT PANEL */}
                 {activeAssembly && (activeAssembly.manufacturingSpecs?.cadUrl || isSheet2dAssembly(activeAssembly)) ? (
-                    <div style={{ flex: 1, display: 'flex', gap: '24px', minHeight: '600px' }}>
+                    /* Viewer + choices. Wraps rather than crushing: on a narrow window the choices
+                       panel drops beneath the viewer at full width instead of off the edge. */
+                    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: '24px', minHeight: '600px' }}>
 
                         {isSheet2dAssembly(activeAssembly) ? (
                         /* 2D TEAR-SHEET EDITOR — the drawing replaces the 3D viewer; drawn sections are
                            normal clusters, so the Saved BOM Bindings panel on the right works unchanged. */
-                        <div style={{ flex: 1.8, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'sticky', top: '16px', alignSelf: 'flex-start', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto', borderRadius: '2px' }}>
+                        <div style={{ flex: '1.8 1 520px', minWidth: '420px', background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'sticky', top: '16px', alignSelf: 'flex-start', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto', borderRadius: '2px' }}>
                             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', position: 'sticky', top: 0, background: '#fff', zIndex: 5 }}>
                                 <div>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em' }}>2D tear sheet — drag to draw a section (hold SHIFT for a circle)</div>
@@ -1065,8 +1067,13 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                             </div>
                         </div>
                         ) : (
-                        /* 3D VIEWER — pinned so it stays visible/draggable no matter how long the BOM list */
-                        <div style={{ flex: 1.8, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'sticky', top: '16px', alignSelf: 'flex-start', height: 'calc(100vh - 32px)', borderRadius: '2px', overflow: 'hidden' }}>
+                        /* 3D VIEWER — pinned so it stays visible/draggable no matter how long the BOM list.
+                           ⚠ minWidth 0 (Stuart 2026-09-22: "the choices to the right are not visible, the
+                           center area scales too wide"). A flex item defaults to min-width:auto, which
+                           means it will NOT shrink below its own content — so the canvas kept its natural
+                           width, ate the row, and pushed the choices panel off the right-hand edge. The
+                           flex ratios were never the problem; nothing could act on them. */
+                        <div style={{ flex: '1.8 1 520px', minWidth: '420px', background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'sticky', top: '16px', alignSelf: 'flex-start', height: 'calc(100vh - 32px)', borderRadius: '2px', overflow: 'hidden' }}>
                             <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '16px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
                                 {showAutoPanel ? (
                                     <>
@@ -1152,7 +1159,11 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                         </div>
                         )}
 
-                        <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: '24px', alignSelf: 'flex-start', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' }}>
+                        {/* THE CHOICES. A floor is what guarantees it survives a narrow window — with only
+                            a flex ratio it was the panel that lost, every time. Below the floor the row
+                            wraps (see the parent) and this drops under the viewer at full width rather
+                            than being squeezed into an unreadable strip. */}
+                        <div style={{ flex: '1.2 1 380px', minWidth: '340px', display: 'flex', flexDirection: 'column', gap: '24px', alignSelf: 'flex-start', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' }}>
 
                             {/* Scene-tree + node-selection panels are 3D-only; 2D sections are drawn, not picked. */}
                             {!isSheet2dAssembly(activeAssembly) && (<>

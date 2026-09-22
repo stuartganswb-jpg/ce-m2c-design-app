@@ -159,11 +159,18 @@ export async function sceneSubtree(url, parentNames = []) {
             collect(c, depth + 1);
         });
     };
+    // ⚠ "FOUND NOTHING" AND "FOUND NOTHING INSIDE" ARE DIFFERENT ANSWERS (2026-09-22). The first cut
+    // returned a bare list, so a parent that was never located looked exactly like a parent with no
+    // children — and the report then called a naming mismatch a welded solid, which is the opposite
+    // conclusion and would have sent us to redraw parts that are sitting in the model. The caller is
+    // told which node it actually matched, so it can tell the two apart.
+    let matched = 0;
     scene.traverse(o => {
         const n = String(o.name || '');
         if (!n) return;
-        if (exact.has(n.toLowerCase()) || keys.has(nodeKey(n))) collect(o, 1);
+        if (exact.has(n.toLowerCase()) || keys.has(nodeKey(n))) { matched++; collect(o, 1); }
     });
+    out.parentFound = matched > 0;
     return out;
 }
 
