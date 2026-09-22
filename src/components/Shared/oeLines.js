@@ -88,7 +88,11 @@ export const oeAutoSig = (open = []) => open.map(x => `${x.lineIdx}:${U(x.line.e
 export const autoRunnable = (job, { unitsKnown = true } = {}) => {
     const reasons = [];
     if (!job) return { ok: false, reasons: ['no plan'] };
-    if (job.buy) reasons.push('a bought line — the purchase is reviewed');
+    // A BOUGHT LINE THAT IS SHORT is a purchase to decide; one the shelf covers is not (Stuart
+    // 2026-09-22). The plan puts the bought item itself in components[] with its `short`, and a
+    // covered line gets NO action — no PO is drafted, the work order releases and picks from stock —
+    // so there is nothing for a person to decide. Only a shortfall is a decision.
+    if (job.buy && (job.components || []).some(c => Number(c.short) > 0)) reasons.push('a bought line that is short — the purchase is reviewed before anything is ordered');
     if (!unitsKnown) reasons.push('NetSuite could not tell us the stock units on this read');
     (job.holds || []).forEach(h => reasons.push(h));
     if (job.poleChoice) reasons.push(`${job.poleChoice.pullErp}: ${job.poleChoice.short} short of the ${job.poleChoice.pullFt} ft length — cut a longer stick or wait (a person chooses)`);

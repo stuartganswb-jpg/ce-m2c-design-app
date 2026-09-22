@@ -408,8 +408,13 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = 
                 await issueOePlatedLine({ so, line, lineIdx, brand, user, inventory, auto: true, log });
                 ran++;
             } else if (door === 'ASK') named([`${erp} is flagged BOTH (make and buy) — a person chooses`]);
-            else if (door === 'BUY') named([`${erp} is a bought item — the purchase is reviewed before anything is ordered`]);
-            else planItems.push({ so, l: line });
+            // A BOUGHT LINE IS PLANNED, NOT PRE-REFUSED (Stuart 2026-09-22, SO60565: "why is it asking
+            // for the review and decision? the stock is clearly enough for the order"). The 09-20
+            // rule sent every bought item to review before the plan had looked at the shelf, so a
+            // line with 110 ft on hand against 50 needed — nothing to order, no PO drafted — still
+            // waited on a person to decide a purchase that did not exist. The plan reads the stock;
+            // autoRunnable then asks the honest question: is there a purchase to decide?
+            else planItems.push({ so, l: line, buy: door === 'BUY' });
         }
         if (planItems.length) {
             const jobs = await buildOeJobs({ items: planItems, inventory, log });

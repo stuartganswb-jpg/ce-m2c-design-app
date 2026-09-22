@@ -45,7 +45,12 @@ eq('a convert whose raw is ALSO short → a person', autoRunnable({ components: 
 eq('a short with a shop or PO action → a person', autoRunnable({ components: [comp({ have: 2, short: 8, actions: [{ kind: 'SHOP', qty: 8 }] })] }).ok, false);
 eq('a short "covered by inbound" is still a person\'s call', autoRunnable({ components: [comp({ have: 2, short: 8, actions: [{ kind: 'PO', qty: 8, skip: true }] })] }).ok, false);
 eq('a unit mismatch → a person', autoRunnable({ components: [comp({ unitMismatch: true, held: true, holdReason: 'PR vs EA' })] }).reasons, ['PR vs EA']);
-eq('a bought line → a person', autoRunnable({ buy: true, components: [comp()] }).ok, false);
+// A BOUGHT LINE (Stuart 2026-09-22, SO60565): the shelf decides. 110 ft on hand against 50
+// needed is nothing to order and nothing to decide; 30 on hand against 50 is a purchase.
+eq('a bought line the shelf COVERS → runs (there is no purchase to decide)', autoRunnable({ buy: true, components: [comp({ need: 50, have: 110, short: 0 })] }).ok, true);
+eq('a bought line that is SHORT → a person', autoRunnable({ buy: true, components: [comp({ need: 50, have: 30, short: 20, actions: [{ kind: 'PO', qty: 20, vendorName: 'V' }] })] }).ok, false);
+ok('…and it says why, naming the shortfall as the reason', /bought line that is short/.test(autoRunnable({ buy: true, components: [comp({ need: 50, have: 30, short: 20, actions: [{ kind: 'PO', qty: 20 }] })] }).reasons.join(' ')));
+eq('a bought line with a unit mismatch still waits, covered or not', autoRunnable({ buy: true, components: [comp({ short: 0, unitMismatch: true, held: true, holdReason: 'FT vs EA' })] }).ok, false);
 eq('a short pole (cut a longer stick or wait) → a person', autoRunnable({ components: [comp()], poleChoice: { pullErp: 'H1-1R-6', pullFt: 6, short: 2 } }).ok, false);
 eq('units unreadable on this NetSuite read → a person', autoRunnable({ components: [comp()] }, { unitsKnown: false }).ok, false);
 ok('the review-gate block rule moved here unchanged', oeJobBlocked({ components: [{ held: true, short: 1 }] }) && !oeJobBlocked({ components: [{ held: true, short: 0 }] }));
