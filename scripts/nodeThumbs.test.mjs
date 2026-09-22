@@ -170,8 +170,20 @@ eq('a record with no code at all', baseCodeOf({}), '');
     eq('the base record is photographed once; its finish variants are never rivals and are left to the inheritance pass',
         frows.filter(r => r.code === 'H1-2TRVBA').map(r => [r.part.id, r.status]), [['ba', 'READY']]);
     eq('a family with no base record has each variant photographed itself, so none is left blank',
-        frows.filter(r => r.code === 'H1-2TRVFH').map(r => r.part.id).sort(), ['fh-ep2', 'fh-p']);
-    eq('…and the raw merged node goes to the renderer for both', frows.filter(r => r.code === 'H1-2TRVFH').every(r => r.node === 'S0ZG584-NEW-SLOT__1_H12TRVFH'), true);
+        frows.filter(r => /^H1-2TRVFH\//.test(r.code)).map(r => r.part.id).sort(), ['fh-ep2', 'fh-p']);
+    eq('…and the raw merged node goes to the renderer for both', frows.filter(r => /^H1-2TRVFH\//.test(r.code)).every(r => r.node === 'S0ZG584-NEW-SLOT__1_H12TRVFH'), true);
+    // THE NODE CARRIES THE FINISH (2026-09-23, H1-BACKPLATES: H1BPWP4P is H1-BPWP4/P, and it did not match).
+    const plates = [
+        { id: 'bp4', legacyErpId: 'H1-BPWP4' }, { id: 'bp4-p', legacyErpId: 'H1-BPWP4/P' }, { id: 'bp4-ep1', legacyErpId: 'H1-BPWP4/EP1' },   // base present
+        { id: 'cp6-p', legacyErpId: 'H1-CPWP6/P' }, { id: 'cp6-ep2', legacyErpId: 'H1-CPWP6/EP2' },                                       // variants only
+        { id: 'sbpr', legacyErpId: 'H1-75SBP-R' },
+    ];
+    const pnodes = ['slot_1790099113522__0_H1BPWP4P', 'slot_1790099113522__1_H1CPWP6P', 'slot_1790099113522__2_H175SBPR'];
+    const prows = planModelThumbs({ parts: plates, nodeNames: pnodes });
+    eq('a node named with the finish still finds its family, and the BASE record takes the picture', prows.filter(r => /BPWP4/.test(r.code)).map(r => [r.part.id, r.node]), [['bp4', 'slot_1790099113522__0_H1BPWP4P']]);
+    eq('…with no base record, every variant of the family is photographed from that node, under its own code',
+        prows.filter(r => /CPWP6/.test(r.code)).map(r => [r.code, r.part.id, r.node]).sort(), [['H1-CPWP6/EP2', 'cp6-ep2', 'slot_1790099113522__1_H1CPWP6P'], ['H1-CPWP6/P', 'cp6-p', 'slot_1790099113522__1_H1CPWP6P']]);
+    eq('a dash that is not a finish (H1-75SBP-R) matches as before', prows.find(r => r.code === 'H1-75SBP-R').node, 'slot_1790099113522__2_H175SBPR');
     const text = modelReportText('H1-2TRV BRACKET PARTS', rows, nodes);
     ok('the report counts what it will and will not do', /H1-2TRV BRACKET PARTS: 4 to photograph, 1 already photographed, 2 refused/.test(text));
     ok('…and names the refusals', /✗ H1-75BE: /.test(text));

@@ -177,9 +177,17 @@ export const planModelThumbs = ({ parts = [], nodeNames = [], hasPhoto = () => f
         byBase.set(code, [...(byBase.get(code) || []), p]);
         groups.set(k, byBase);
     });
+    const fullKeyOf = (p) => nodeKey(String((p && (p.legacyErpId || p.itemId)) || ''));
     const out = [];
     for (const [k, byBase] of groups) {
-        const hits = (index.get(k) || []).slice().sort();
+        // THE NODE MAY CARRY THE FINISH (2026-09-23, H1-BACKPLATES: H1BPWP4P is H1-BPWP4/P). The
+        // family is looked for under its base code AND under each record's full code, finish
+        // flattened in. Geometry does not vary by finish, so either hit is the family's node.
+        const baseHits = (index.get(k) || []).slice().sort();
+        const fullHits = [];
+        for (const records of byBase.values()) records.forEach(r => { const fk = fullKeyOf(r); if (fk && fk !== k) (index.get(fk) || []).forEach(n => { if (!fullHits.includes(n)) fullHits.push(n); }); });
+        fullHits.sort();
+        const hits = baseHits.length ? baseHits : fullHits;
         if (!hits.length) continue;                                  // not in this model
         if (byBase.size > 1) {
             const names = [...byBase.keys()].sort();
@@ -189,10 +197,10 @@ export const planModelThumbs = ({ parts = [], nodeNames = [], hasPhoto = () => f
         const [code, records] = [...byBase.entries()][0];
         const isBase = (p) => { const c = splitCode((p && (p.legacyErpId || p.itemId)) || ''); return !!c && !c.finish; };
         const base = records.find(isBase);
-        // The base record when there is one; a family with no base record (variants only) has each
-        // variant photographed itself — the same node, one render, cached — so none is left blank.
+        // The base record when there is one (its variants inherit in the pass after); a family with
+        // no base record has every variant photographed itself — the same node, one render, cached.
         (base ? [base] : records).forEach(part => {
-            const row = { part, code, node: hits[0], instances: hits.length };
+            const row = { part, code: base ? code : String(part.legacyErpId || part.itemId || code), node: hits[0], instances: hits.length };
             if (hasPhoto(part)) out.push({ ...row, status: NODE_HAS_PHOTO, why: 'already has a real photograph — left alone' });
             else out.push({ ...row, status: NODE_READY, why: '' });
         });
