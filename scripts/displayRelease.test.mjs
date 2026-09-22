@@ -9,7 +9,7 @@
 
 import {
     rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, lineStateOf, rowStateOf,
-    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE,
+    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText,
 } from '../src/components/Shared/displayRelease.js';
 
 let pass = 0, fail = 0;
@@ -131,6 +131,37 @@ eq('a written row wins over the memo', rowOfLine({ row: 'Row 1', memo: 'left win
     const text = rowStartText('Row 1', st(none));
     ok('the start confirmation names every line it will start', /2 line\(s\) will be started/.test(text) && /1 × A in P06/.test(text));
     ok('and what it leaves alone', /left as they are/.test(text) && /C — stocked/.test(text));
+}
+
+// ── A DISPLAY ACROSS SEVERAL SALES ORDERS, ONE OF THEM ALREADY SPLIT WHOLE ──────────────────
+// The tabletop: SO60551 (CPQ, RTG split it as one document, nearly built) + SO60565 (tab 7). Its
+// rows are the union; the split order's lines read off its documents and are never offered a Start.
+{
+    const cpq = { id: 'SO-APP-1', soId: 'SO60551', lines: [{ erp: 'H1-1R', qty: 50, toBeFinished: true, finishCode: 'EP4', row: 'Top Row 1' }] };
+    const oe = { id: 'SO-APP-2', soId: 'SO60565', lines: [{ erp: 'H1-75SR', qty: 50, toBeFinished: true, finishCode: 'P24', memo: 'Base Front 1' }], oeGen: {} };
+    const fin = [{ id: 'WO-SO60551', currentPhase: 'Setup' }];
+    const shop = [{ id: 'SHOP-SO60551', status: 'Pending' }];
+    const whole = wholeOrderDocsOf(cpq, fin, shop);
+    ok('the split order\'s documents are recognised by RTG\'s own ids', !!whole && whole.fin.id === 'WO-SO60551' && whole.shop.id === 'SHOP-SO60551');
+    eq('an order with no such documents is not whole-order', wholeOrderDocsOf(oe, fin, shop), null);
+    eq('a row\'s OWN work orders (WO-OE-…) are never mistaken for the whole-order document',
+        wholeOrderDocsOf(oe, [{ id: 'WO-OE-H1-75SR-1-0' }], []), null);
+    ok('the words name both documents and their state', /WO-SO60551 · Setup/.test(wholeOrderText(whole)) && /SHOP-SO60551 · Pending/.test(wholeOrderText(whole)));
+
+    const none = { wos: [], pos: [], demands: [] };
+    const entries = [
+        { so: cpq, line: cpq.lines[0], lineIdx: 0, links: none, shipments: [], whole },
+        { so: oe, line: oe.lines[0], lineIdx: 0, links: none, shipments: [] },
+    ];
+    const st = rowStateOf({ entries });
+    eq('the split order\'s line is ON THE WHOLE-ORDER DOCUMENTS, not "not started"', st.lines[0].key, LINE_STATE.WHOLE);
+    eq('…and the tab-7 line, with nothing raised, IS not started', st.lines[1].key, LINE_STATE.NONE);
+    eq('only the tab-7 line counts as startable', st.open, 1);
+    eq('each line knows which sales order it came from', st.lines.map(l => l.soId), ['SO60551', 'SO60565']);
+    eq('a whole-order line whose finishing doc is Complete reads done',
+        rowStateOf({ entries: [{ ...entries[0], whole: { fin: { id: 'WO-SO60551', currentPhase: 'Complete' }, shop: null } }] }).lines[0].key, LINE_STATE.DONE);
+    eq('a row made only of whole-order lines has nothing to start', rowStateOf({ entries: [entries[0]] }).open, 0);
+    ok('…and does not read "not started"', rowStateOf({ entries: [entries[0]] }).key !== ROW_STATE.NOT_STARTED);
 }
 
 // ── THE ANCHOR ──────────────────────────────────────────────────────────────────────────────

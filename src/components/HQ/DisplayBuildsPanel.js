@@ -35,7 +35,7 @@ import { linkedDocsOf, identityKeysOf } from '../Shared/orderLifecycle';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE } from '../Shared/displayRelease';
+import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -151,118 +151,164 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     // Our SO # → the CPQ sales order → every floor document RTG raised from it (Shared/orderLifecycle
     // .linkedDocsOf, the same lookup RTG's closer uses) + the plater's demands and shipment lines.
     // Read-only; nothing here writes.
-    const [floor, setFloor] = useState(null);       // { loading, so, fin[], shop[], plating[], links, shipments[], error, forSo }
-    const loadFloor = async (soNumber, soAppId = '') => {
+    // ── THE ORDERS ON THE FLOOR — SEVERAL PER BUILD (Stuart 2026-09-22) ─────────────────────────
+    // "the table top display is SO60551 + SO60565 … the wall display is SO60583 + SO60585." A build
+    // anchors to every sales-order DOCUMENT that carries part of it (`soAppIds`), and reads each one
+    // with its own links, shipments, floor documents and — when RTG already split it whole — the
+    // whole-order documents its rows read their state from. `lookup` is a typed SO number that has
+    // resolved but is not anchored yet: the thing the ⚓ button anchors.
+    const [floor, setFloor] = useState(null);       // { loading, sos: [{ so, fin, shop, plating, links, shipments, whole, rowLines }], lookup, fin, shop, plating, error }
+    const anchoredIdsOf = (b) => [...new Set([...(Array.isArray(b?.soAppIds) ? b.soAppIds : []), ...(b?.soAppId ? [b.soAppId] : [])].filter(Boolean))];
+    const findSoByNumber = async (soNumber) => {
         const v = String(soNumber || '').trim();
-        const anchored = String(soAppId || '').trim();
-        if (!v && !anchored) { setFloor(null); return; }
-        setFloor({ loading: true, forSo: v || anchored, fin: [], shop: [], plating: [], links: null, shipments: [] });
+        if (!v) return null;
+        const salesOrders = collection(db, 'hq_sales_orders');
+        const direct = await getDoc(doc(db, 'hq_sales_orders', v));
+        if (direct.exists() && !(direct.data() || {}).deleted) return { id: direct.id, ...direct.data() };
+        for (const t of [v, /^\d+$/.test(v) ? `SO${v}` : null, `SO-APP-${v}`].filter(Boolean)) {
+            for (const field of ['soId', 'id']) {
+                const qs = await getDocs(query(salesOrders, where(field, '==', t)));
+                const hit = qs.docs.find(d => !(d.data() || {}).deleted);
+                if (hit) return { id: hit.id, ...hit.data() };
+            }
+        }
+        return null;
+    };
+    const readSo = async (so) => {
+        const docs = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, so, 'sales');
+        const fin = [...docs.fin.entries()].map(([id, d]) => ({ id, ...d }));
+        const shop = [...docs.shop.entries()].map(([id, d]) => ({ id, ...d }));
+        const keys = [...new Set([...identityKeysOf(so), ...docs.fin.keys(), ...docs.shop.keys()])].slice(0, 10);
+        const plating = [];
+        for (const [coll, field] of [['plating_demand', 'orderKey'], ['plating_demand', 'shopOrderId'], ['plating_shipments', 'orderKey'], ['plating_shipments', 'shopOrderId']]) {
+            try {
+                const qs = await getDocs(query(collection(db, coll), where(field, 'in', keys)));
+                qs.docs.forEach(d => { if (!plating.some(p => p.id === d.id)) plating.push({ id: d.id, __coll: coll, ...d.data() }); });
+            } catch (e) { /* a missing index or field: the rest still shows */ }
+        }
+        let links = null, shipments = [];
+        try { links = (await loadOeLinks([so.id], { all: true }))[so.id] || null; } catch (e) { /* the row panel says it could not read */ }
+        try { shipments = (await getDocs(query(collection(db, 'plating_shipments'), where('soAppId', '==', so.id)))).docs.map(d => ({ id: d.id, ...d.data() })); } catch (e) { /* likewise */ }
+        const whole = wholeOrderDocsOf(so, fin, shop);
+        // A split CPQ order has no lines[] and must not be given any: its rows are read off the
+        // breakdown at load time, for visibility only, and nothing on the order changes.
+        let rowLines = null;
+        if (whole && soNeedsLines(so) && so.hqJobId) {
+            try { const job = await getDoc(doc(db, 'jobs', so.hqJobId)); rowLines = job.exists() ? rowLinesFromBreakdown(((job.data().cpqData || {}).breakdown) || []) : []; }
+            catch (e) { rowLines = []; }
+        }
+        return { so, fin, shop, plating, links, shipments, whole, rowLines };
+    };
+    const loadFloor = async (build) => {
+        const ids = anchoredIdsOf(build);
+        const typed = String(build?.soNumber || '').trim();
+        if (!ids.length && !typed) { setFloor(null); return; }
+        setFloor({ loading: true, sos: [], lookup: null, fin: [], shop: [], plating: [] });
         try {
-            const salesOrders = collection(db, 'hq_sales_orders');
-            let so = null;
-            // ANCHORED: the build names the sales-order DOCUMENT, so there is nothing to search for.
-            if (anchored) {
-                const snap = await getDoc(doc(db, 'hq_sales_orders', anchored));
-                if (snap.exists() && !(snap.data() || {}).deleted) so = { id: snap.id, ...snap.data() };
+            const sos = [];
+            for (const id of ids) {
+                const snap = await getDoc(doc(db, 'hq_sales_orders', id));
+                if (snap.exists() && !(snap.data() || {}).deleted) sos.push(await readSo({ id: snap.id, ...snap.data() }));
             }
-            if (!so && v) {
-                const direct = await getDoc(doc(db, 'hq_sales_orders', v));
-                if (direct.exists()) so = { id: direct.id, ...direct.data() };
-            }
-            const tries = v ? [v, /^\d+$/.test(v) ? `SO${v}` : null, `SO-APP-${v}`].filter(Boolean) : [];
-            for (const t of tries) {
-                if (so) break;
-                for (const field of ['soId', 'id']) {
-                    const qs = await getDocs(query(salesOrders, where(field, '==', t)));
-                    const hit = qs.docs.find(d => !(d.data() || {}).deleted);
-                    if (hit) { so = { id: hit.id, ...hit.data() }; break; }
-                }
-            }
-            if (!so) { setFloor({ loading: false, forSo: v || anchored, fin: [], shop: [], plating: [], links: null, shipments: [], error: anchored ? `The anchored sales order (${anchored}) no longer exists.` : `No sales order found for "${v}" — type the SO number as RTG shows it.` }); return; }
-            // THE ROW ROUTE'S OWN LINKS: everything ever raised for this order (the strict reading, so
-            // a finished row is not re-offered), and the plater's shipments, which carry the demand's
-            // PLW number — how a plated line is followed staged → shipped → received → built.
-            let links = null, shipments = [];
-            try { links = (await loadOeLinks([so.id], { all: true }))[so.id] || null; } catch (e) { /* the row panel says it could not read */ }
-            try { shipments = (await getDocs(query(collection(db, 'plating_shipments'), where('soAppId', '==', so.id)))).docs.map(d => ({ id: d.id, ...d.data() })); } catch (e) { /* likewise */ }
-            const docs = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, so, 'sales');
-            const keys = [...new Set([...identityKeysOf(so), ...docs.fin.keys(), ...docs.shop.keys()])].slice(0, 10);
-            const plating = [];
-            for (const [coll, field] of [['plating_demand', 'orderKey'], ['plating_demand', 'shopOrderId'], ['plating_shipments', 'orderKey'], ['plating_shipments', 'shopOrderId']]) {
-                try {
-                    const qs = await getDocs(query(collection(db, coll), where(field, 'in', keys)));
-                    qs.docs.forEach(d => { if (!plating.some(p => p.id === d.id)) plating.push({ id: d.id, __coll: coll, ...d.data() }); });
-                } catch (e) { /* a missing index or field: the rest still shows */ }
+            // The typed number, when it is not one of the anchored orders, is offered for anchoring.
+            let lookup = null;
+            if (typed) {
+                const so = await findSoByNumber(typed);
+                if (!so) lookup = { error: `No sales order found for "${typed}" — type the SO number as RTG shows it.` };
+                else if (!ids.includes(so.id)) lookup = await readSo(so);
             }
             setFloor({
-                loading: false, forSo: v || anchored, so,
-                fin: [...docs.fin.entries()].map(([id, d]) => ({ id, ...d })),
-                shop: [...docs.shop.entries()].map(([id, d]) => ({ id, ...d })),
-                plating, links, shipments,
+                loading: false, sos, lookup,
+                fin: sos.flatMap(s => s.fin), shop: sos.flatMap(s => s.shop), plating: sos.flatMap(s => s.plating),
+                shipments: sos.flatMap(s => s.shipments),
             });
-        } catch (e) { setFloor({ loading: false, forSo: v || anchored, fin: [], shop: [], plating: [], links: null, shipments: [], error: e?.message || String(e) }); }
+        } catch (e) { setFloor({ loading: false, sos: [], lookup: null, fin: [], shop: [], plating: [], error: e?.message || String(e) }); }
     };
-    useEffect(() => { if (draft && !dirty) loadFloor(draft.soNumber, draft.soAppId); else if (!draft) setFloor(null); }, [draft?.id, draft?.soNumber, draft?.soAppId, dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { if (draft && !dirty) loadFloor(draft); else if (!draft) setFloor(null); }, [draft?.id, draft?.soNumber, JSON.stringify(draft?.soAppIds || []), draft?.soAppId, dirty]); // eslint-disable-line react-hooks/exhaustive-deps
     const floorLinks = useMemo(() => (floor && !floor.loading && draft ? floorLinksByLine(draft.lines?.parts || [], floor) : {}), [floor, draft]);
+    const [addSo, setAddSo] = useState('');
 
     // ── THE ANCHOR: this build ⇄ that sales-order document ─────────────────────────────────────
-    // Written once. A CPQ order gets its `lines[]` here — one per physical part per row, from the
-    // job's breakdown, in Order Entry's shape — because that is the only way it can join the row
-    // route; an Order Entry order already has them. Both get `displayRelease` (RTG's whole-order
-    // split and the automatic start stand down) and `finishAsAvailable` (rows release alone).
-    const anchor = async () => {
-        const so = floor?.so;
+    // Written once per order. A CPQ order gets its `lines[]` here — one per physical part per row,
+    // from the job's breakdown, in Order Entry's shape — because that is the only way it can join
+    // the row route; an Order Entry order already has them. Both get `displayRelease` (RTG's
+    // whole-order split and the automatic start stand down) and `finishAsAvailable` (rows release
+    // alone). An order RTG ALREADY SPLIT is anchored for visibility only: nothing is written on it,
+    // its rows read the whole-order documents, and it is never offered a Start.
+    const anchor = async (entry) => {
+        const so = entry?.so;
         if (!so || !draft) return;
+        const already = anchoredIdsOf(draft);
+        if (already.includes(so.id)) return;
         let lines = null;
-        if (soNeedsLines(so)) {
-            if (!so.hqJobId) return alert('This sales order has no lines and no CPQ job to read them from — nothing to anchor to.');
-            const job = await getDoc(doc(db, 'jobs', so.hqJobId));
-            const breakdown = job.exists() ? ((job.data().cpqData || {}).breakdown || []) : [];
-            lines = rowLinesFromBreakdown(breakdown);
-            if (!lines.length) return alert(`The CPQ job ${so.hqJobId} has no physical lines in its breakdown — nothing to anchor to.`);
+        let text;
+        if (entry.whole) {
+            text = `Anchor "${draft.name}" to sales order ${so.soId || so.id} — FOR VISIBILITY ONLY?\n\nRTG has already split this order as a whole: ${wholeOrderText(entry.whole)}. Its rows will show what those documents are doing, managed on RTG. Nothing is written on the order and no row of it can be started from here — starting one would raise the same parts twice.`;
+        } else {
+            if (soNeedsLines(so)) {
+                if (!so.hqJobId) return alert('This sales order has no lines and no CPQ job to read them from — nothing to anchor to.');
+                const job = await getDoc(doc(db, 'jobs', so.hqJobId));
+                lines = rowLinesFromBreakdown(job.exists() ? ((job.data().cpqData || {}).breakdown || []) : []);
+                if (!lines.length) return alert(`The CPQ job ${so.hqJobId} has no physical lines in its breakdown — nothing to anchor to.`);
+            }
+            const src = lines || so.lines || [];
+            const rowsSeen = new Set(src.map(l => rowOfLine(l)).filter(Boolean));
+            const unnamed = src.filter(l => !rowOfLine(l)).length;
+            text = `Anchor "${draft.name}" to sales order ${so.soId || so.id}?\n\n`
+                + (lines ? `${lines.length} line(s) will be written on the sales order from its CPQ breakdown, across ${rowsSeen.size} row(s)${unnamed ? ` — ${unnamed} name no row and will show as unassigned` : ''}.\n\n` : `Its ${src.length} existing line(s) are used as they are${unnamed ? ` — ${unnamed} name no row and will show as unassigned` : ''}.\n\n`)
+                + 'From then on this order\'s rows are started HERE, one at a time. RTG will not split it as a whole and will not auto-start it; every work order still lands on RTG under this order.';
         }
-        const rowsSeen = new Set((lines || so.lines || []).map(l => rowOfLine(l)).filter(Boolean));
-        const unnamed = (lines || so.lines || []).filter(l => !rowOfLine(l)).length;
-        if (!window.confirm(`Anchor "${draft.name}" to sales order ${so.soId || so.id}?\n\n`
-            + (lines ? `${lines.length} line(s) will be written on the sales order from its CPQ breakdown, across ${rowsSeen.size} row(s)${unnamed ? ` — ${unnamed} name no row and will show as unassigned` : ''}.\n\n` : `Its ${(so.lines || []).length} existing line(s) are used as they are${unnamed ? ` — ${unnamed} name no row and will show as unassigned` : ''}.\n\n`)
-            + 'From then on this order\'s rows are started HERE, one at a time. RTG will not split it as a whole and will not auto-start it; every work order still lands on RTG under this order.')) return;
+        if (!window.confirm(text)) return;
         setBusy('Anchoring…');
         try {
-            await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, lines }));
-            const b = { ...draft, soAppId: so.id, soNumber: draft.soNumber || so.soId || so.id, updatedAt: Date.now(), updatedBy: String(currentUser || '') };
+            if (!entry.whole) await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, lines }));
+            const soAppIds = [...already, so.id];
+            const b = { ...draft, soAppIds, soAppId: soAppIds[0], soNumber: draft.soNumber || so.soId || so.id, updatedAt: Date.now(), updatedBy: String(currentUser || '') };
             await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b, { merge: true });
-            setDraft(b); setDirty(false);
-            await loadFloor(b.soNumber, b.soAppId);
+            setDraft(b); setDirty(false); setAddSo('');
+            await loadFloor(b);
         } catch (e) { alert('Anchor failed: ' + (e?.message || e)); }
+        setBusy('');
+    };
+    // Another sales order for this build: type its number, it resolves, ⚓ anchors it.
+    const lookupSo = async () => {
+        const v = String(addSo || '').trim();
+        if (!v || !draft) return;
+        setBusy('Looking up…');
+        try {
+            const so = await findSoByNumber(v);
+            if (!so) { alert(`No sales order found for "${v}" — type the SO number as RTG shows it.`); setBusy(''); return; }
+            if (anchoredIdsOf(draft).includes(so.id)) { alert(`${so.soId || so.id} is already anchored to this build.`); setBusy(''); return; }
+            const entry = await readSo(so);
+            setFloor(f => ({ ...(f || { sos: [], fin: [], shop: [], plating: [] }), lookup: entry }));
+        } catch (e) { alert('Lookup failed: ' + (e?.message || e)); }
         setBusy('');
     };
 
     // ── A LINE THAT NAMES NO ROW is told which one (the operator's call, recorded on the line) ──
-    const assignRow = async (lineIdx, label) => {
-        const so = floor?.so;
-        if (!so) return;
+    const assignRow = async (soAppId, lineIdx, label) => {
         setBusy('Assigning…');
         try {
-            const fresh = await getDoc(doc(db, 'hq_sales_orders', so.id));
+            const fresh = await getDoc(doc(db, 'hq_sales_orders', soAppId));
             const cur = (fresh.data() || {}).lines || [];
             if (!cur[lineIdx]) throw new Error('that line is no longer on the sales order');
             const next = cur.map((l, i) => (i === lineIdx ? { ...l, row: label } : l));
-            await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: next });
-            await loadFloor(draft.soNumber, draft.soAppId);
+            await updateDoc(doc(db, 'hq_sales_orders', soAppId), { lines: next });
+            await loadFloor(draft);
         } catch (e) { alert('Could not assign the row: ' + (e?.message || e)); }
         setBusy('');
     };
 
-    // ── ▶ START A ROW — Order Entry's generator, scoped to this row's lines ─────────────────────
+    // ── ▶ START A ROW — Order Entry's generator, scoped to this row's lines, per sales order ────
     const [runLog, setRunLog] = useState([]);
     const [starting, setStarting] = useState('');
     const libraryRef = React.useRef(null);
     const startRow = async (label, state) => {
-        const so = floor?.so;
-        if (!so || !draft) return;
+        if (!draft || !floor) return;
         if (!window.confirm(rowStartText(label, state))) return;
         setStarting(label); setRunLog([]);
         const log = (msg, level = 'info') => setRunLog(l => [...l, { msg, level }]);
+        let ranTotal = 0, reviewTotal = 0;
         try {
             if (!libraryRef.current) {
                 log('Reading the Master Library…');
@@ -270,51 +316,61 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 libraryRef.current = snap.docs.map(d => ({ id: d.id, ...d.data() }));
             }
             const inventory = oeInventoryOf(libraryRef.current, activeBrand);
-            const fresh = await getDoc(doc(db, 'hq_sales_orders', so.id));
-            const soNow = { id: fresh.id, ...fresh.data() };
             const key = rowKeyOf(label);
-            const res = await runOeAuto({
-                so: soNow, brand: activeBrand, user: currentUser || '10.5', inventory, log,
-                only: (line) => rowKeyOf(rowOfLine(line)) === key,
-                slot: `displayRows.${key}`,
-            });
-            if (res.state === 'SKIPPED') log(`${label}: another session is already starting it, or it was answered for exactly these lines — nothing done.`, 'warn');
-            else log(`${label}: ${res.ran} started · ${res.review.length} line(s) need a decision.`, res.review.length ? 'warn' : 'success');
-            if (res.ran > 0) {
+            // Only the orders that hold a startable line of this row; a whole-order one never does.
+            const targets = (floor.sos || []).filter(s => !s.whole && state.lines.some(l => l.soAppId === s.so.id && l.key === 'NONE'));
+            for (const s of targets) {
+                const fresh = await getDoc(doc(db, 'hq_sales_orders', s.so.id));
+                const soNow = { id: fresh.id, ...fresh.data() };
+                log(`${label} · ${soNow.soId || soNow.id}:`);
+                const res = await runOeAuto({
+                    so: soNow, brand: activeBrand, user: currentUser || '10.5', inventory, log,
+                    only: (line) => rowKeyOf(rowOfLine(line)) === key,
+                    slot: `displayRows.${key}`,
+                });
+                if (res.state === 'SKIPPED') log(`   another session is already starting it, or it was answered for exactly these lines — nothing done.`, 'warn');
+                else log(`   ${res.ran} started · ${res.review.length} line(s) need a decision.`, res.review.length ? 'warn' : 'success');
+                ranTotal += res.ran; reviewTotal += res.review.length;
+            }
+            if (!targets.length) log(`${label}: nothing startable — its lines are stocked, already raised, or on a whole-order document.`, 'warn');
+            if (ranTotal > 0) {
                 const rowsStarted = [...new Set([...(draft.rowsStarted || []), label])];
                 const b = { ...draft, rowsStarted, status: draft.status === 'PLANNED' ? 'IN_PRODUCTION' : draft.status, updatedAt: Date.now(), updatedBy: String(currentUser || '') };
                 await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b, { merge: true });
                 await writeDemand([...builds.filter(x => x.id !== b.id), b]);
                 setDraft(b); setDirty(false);
             }
-            await loadFloor(draft.soNumber, draft.soAppId);
+            log(`${label}: ${ranTotal} started across ${targets.length} sales order(s)${reviewTotal ? ` · ${reviewTotal} need a decision` : ''}.`, reviewTotal ? 'warn' : 'success');
+            await loadFloor(draft);
         } catch (e) { log(`${label}: failed — ${e?.message || e}`, 'error'); }
         setStarting('');
     };
 
     // The display's own row order, so the panel reads top to bottom as the board does.
+    const linesOf = (s) => (s.rowLines || s.so.lines || []);
     const rowOrder = useMemo(() => {
         const disp = displays.find(d => d.id === draft?.displayId);
         const fromDisplay = disp ? (disp.faces || []).filter(f => f.kind === 'ROWS').flatMap(f => (f.rows || []).map(r => r.label || '')).filter(Boolean) : [];
-        const fromLines = [...new Set(((floor?.so?.lines) || []).map(l => rowOfLine(l)).filter(Boolean))];
+        const fromLines = [...new Set((floor?.sos || []).flatMap(s => linesOf(s).map(l => rowOfLine(l))).filter(Boolean))];
         return [...new Set([...fromDisplay, ...fromLines])];
-    }, [displays, draft?.displayId, floor?.so]);
-    const anchored = !!(draft?.soAppId && floor?.so && floor.so.id === draft.soAppId);
+    }, [displays, draft?.displayId, floor?.sos]); // eslint-disable-line react-hooks/exhaustive-deps
+    const anchored = !!(floor && !floor.loading && (floor.sos || []).length);
     const rowsView = useMemo(() => {
-        if (!anchored || floor.loading) return null;
-        const so = floor.so;
-        const { rows, unassigned } = soRowsOf(so, rowOrder);
-        const reviewsOf = (label) => {
-            const rec = (so.displayRows || {})[rowKeyOf(label)];
-            const out = {};
-            ((rec && rec.review) || []).forEach(r => { out[r.lineIdx] = r.reasons || []; });
-            return out;
-        };
-        return {
-            rows: rowOrder.map(label => ({ label, state: rowStateOf({ so, entries: rows[label] || [], links: floor.links || { wos: [], pos: [], demands: [] }, shipments: floor.shipments || [], reviews: reviewsOf(label) }) })),
-            unassigned,
-        };
-    }, [anchored, floor, rowOrder]);
+        if (!anchored) return null;
+        const byRow = {}; rowOrder.forEach(l => { byRow[l] = []; });
+        const unassigned = [];
+        (floor.sos || []).forEach(s => {
+            const soLike = { ...s.so, lines: linesOf(s) };
+            const { rows, unassigned: un } = soRowsOf(soLike, rowOrder);
+            const reviews = {};
+            Object.entries(s.so.displayRows || {}).forEach(([, rec]) => ((rec && rec.review) || []).forEach(r => { reviews[r.lineIdx] = r.reasons || []; }));
+            const ctx = { so: soLike, links: s.links || { wos: [], pos: [], demands: [] }, shipments: s.shipments || [], whole: s.whole, reviews };
+            rowOrder.forEach(l => (rows[l] || []).forEach(e => byRow[l].push({ ...e, ...ctx })));
+            un.forEach(e => unassigned.push({ ...e, soAppId: s.so.id, soId: s.so.soId || s.so.id, whole: !!s.whole }));
+        });
+        return { rows: rowOrder.map(label => ({ label, state: rowStateOf({ entries: byRow[label] }) })), unassigned };
+    }, [anchored, floor, rowOrder]); // eslint-disable-line react-hooks/exhaustive-deps
+    const anyAccepted = (floor?.sos || []).some(s => !s.whole && s.so.nsInternalId);
     // The plater's own word for a part line, from its shipments — by the code's base, since the
     // shipment names the core going out and the plated code coming back.
     const baseOf = (c) => String(c || '').toUpperCase().split('/')[0].trim();
@@ -417,29 +473,53 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 <span style={mono}>Demand published to the Sales Snapshot: open boards × per board, lines not done, rows not started</span>
             </div>
 
-            {/* the order on the floor — read-only, from Our SO # */}
-            {draft.soNumber && (
+            {/* the orders on the floor — several per build; anchored ones read, the typed one offered */}
+            {(draft.soNumber || anchoredIdsOf(draft).length > 0) && (
                 <div style={{ border: '1px solid var(--line)', background: 'var(--paper-2)', padding: '10px 14px', marginBottom: '16px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
                         <span style={mono}>On the floor</span>
                         {floor?.loading && <span style={{ ...mono, color: 'var(--brass)' }}>reading…</span>}
-                        {floor?.so && <span style={{ fontSize: '0.85rem' }}>Sales order <b>{floor.so.soId || floor.so.id}</b>{floor.so.soId && floor.so.soId !== floor.so.id ? <span style={{ color: 'var(--ink-soft)' }}> ({floor.so.id})</span> : null} · {floor.so.status || '—'}{floor.so.customer ? ` · ${floor.so.customer}` : ''}</span>}
                         {floor?.error && <span style={{ fontSize: '0.82rem', color: '#b02d20' }}>{floor.error}</span>}
+                        {anchored && <span style={{ ...mono, color: 'var(--brass)' }}>⚓ {floor.sos.length} sales order(s) anchored · rows start from here</span>}
                         <span style={{ flex: 1 }} />
-                        {floor?.so && !floor.loading && !anchored && (
-                            <button onClick={anchor} disabled={dirty || !!busy} style={btn(true, { padding: '4px 10px', borderColor: 'var(--brass)', background: 'var(--brass)' })}
-                                title={dirty ? 'Save the order first' : 'Tie this build to that sales-order document. From then on its rows are started from here, one at a time.'}>⚓ Anchor to this sales order</button>
-                        )}
-                        {anchored && <span style={{ ...mono, color: 'var(--brass)' }}>⚓ anchored · rows start from here</span>}
-                        <button onClick={() => loadFloor(draft.soNumber, draft.soAppId)} disabled={dirty || floor?.loading} style={btn(false, { padding: '4px 10px' })} title={dirty ? 'Save the order first' : 'Read the floor again'}>⟳ Refresh</button>
+                        <input value={addSo} onChange={e => setAddSo(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') lookupSo(); }} placeholder="+ another SO #" disabled={dirty || !!busy}
+                            style={{ ...inp, width: '130px', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '11px' }} title="A display can span several sales orders — type another one's number and anchor it" />
+                        <button onClick={lookupSo} disabled={dirty || !!busy || !String(addSo || '').trim()} style={btn(false, { padding: '4px 10px' })}>Find</button>
+                        <button onClick={() => loadFloor(draft)} disabled={dirty || floor?.loading} style={btn(false, { padding: '4px 10px' })} title={dirty ? 'Save the order first' : 'Read the floor again'}>⟳ Refresh</button>
                     </div>
-                    {floor?.so && !floor.loading && (floor.fin.length + floor.shop.length + floor.plating.length === 0
-                        ? <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px', fontStyle: 'italic' }}>No floor documents yet — RTG raises them when it splits the order.</div>
-                        : <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '11px' }}>
-                            {floor.shop.map(d => <span key={d.id}>🔧 {d.id} · {d.status || 'Pending'}{d.nsWoTran ? ` · NS ${d.nsWoTran}` : ''}</span>)}
-                            {floor.fin.map(d => <span key={d.id}>{d.pickOnly ? '📦' : '🎨'} {d.id} · {d.pickOnly ? (d.pickStatus || 'Pending') : (d.currentPhase || 'Setup')}{d.packStatus ? ` · ${d.packStatus}` : ''}{d.nsWoTran ? ` · NS ${d.nsWoTran}` : ''}</span>)}
-                            {floor.plating.map(d => <span key={d.id}>⚡ {d.woNum || d.id} · {d.status || 'open'}{d.__coll === 'plating_shipments' ? ' (shipment)' : ''}</span>)}
-                        </div>)}
+                    {/* each anchored order, with what RTG raised from it */}
+                    {(floor?.sos || []).map(s => (
+                        <div key={s.so.id} style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px solid var(--line)' }}>
+                            <div style={{ fontSize: '0.85rem' }}>
+                                Sales order <b>{s.so.soId || s.so.id}</b>{s.so.soId && s.so.soId !== s.so.id ? <span style={{ color: 'var(--ink-soft)' }}> ({s.so.id})</span> : null} · {s.so.status || '—'}{s.so.customer ? ` · ${s.so.customer}` : ''}
+                                {s.whole
+                                    ? <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>whole-order · split by RTG · managed there</span>
+                                    : <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>⚓ rows start from here{!s.so.nsInternalId ? ' · ⚠ NetSuite has not accepted it yet' : ''}</span>}
+                                {!s.links && <span style={{ ...mono, color: '#b02d20', marginLeft: '10px' }}>⚠ could not read its work orders</span>}
+                            </div>
+                            {(s.fin.length + s.shop.length + s.plating.length === 0)
+                                ? <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px', fontStyle: 'italic' }}>No floor documents yet.</div>
+                                : <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: '4px', fontFamily: 'var(--mono)', fontSize: '11px' }}>
+                                    {s.shop.map(d => <span key={d.id}>🔧 {d.id} · {d.status || 'Pending'}{d.nsWoTran ? ` · NS ${d.nsWoTran}` : ''}</span>)}
+                                    {s.fin.map(d => <span key={d.id}>{d.pickOnly ? '📦' : '🎨'} {d.id} · {d.pickOnly ? (d.pickStatus || 'Pending') : (d.currentPhase || 'Setup')}{d.packStatus ? ` · ${d.packStatus}` : ''}{d.nsWoTran ? ` · NS ${d.nsWoTran}` : ''}</span>)}
+                                    {s.plating.map(d => <span key={d.id}>⚡ {d.woNum || d.id} · {d.status || 'open'}{d.__coll === 'plating_shipments' ? ' (shipment)' : ''}</span>)}
+                                </div>}
+                        </div>
+                    ))}
+                    {/* a resolved sales order that is not anchored yet */}
+                    {floor?.lookup && !floor.loading && (
+                        <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px solid var(--line)', display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
+                            {floor.lookup.error
+                                ? <span style={{ fontSize: '0.82rem', color: '#b02d20' }}>{floor.lookup.error}</span>
+                                : <>
+                                    <span style={{ fontSize: '0.85rem' }}>Sales order <b>{floor.lookup.so.soId || floor.lookup.so.id}</b> · {floor.lookup.so.status || '—'}{floor.lookup.so.customer ? ` · ${floor.lookup.so.customer}` : ''}{floor.lookup.whole ? <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>already split whole by RTG ({wholeOrderText(floor.lookup.whole)})</span> : null}</span>
+                                    <span style={{ flex: 1 }} />
+                                    <button onClick={() => anchor(floor.lookup)} disabled={dirty || !!busy} style={btn(true, { padding: '4px 10px', borderColor: 'var(--brass)', background: 'var(--brass)' })}
+                                        title={dirty ? 'Save the order first' : floor.lookup.whole ? 'Anchor for VISIBILITY: its rows read the whole-order documents; nothing on it can be started from here.' : 'Tie this build to that sales-order document. From then on its rows are started from here, one at a time.'}>
+                                        ⚓ {floor.lookup.whole ? 'Anchor (visibility only)' : 'Anchor to this sales order'}</button>
+                                </>}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -449,8 +529,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
                         <span style={{ ...mono, color: 'var(--ink)' }}>Rows — released from here</span>
                         <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>Each row starts through the same route as any order: plated to the plater, painted to finishing, custom to the shop. Work orders land on RTG under this sales order; RTG still governs them.</span>
-                        {!floor.so.nsInternalId && <span style={{ fontSize: '0.78rem', color: '#b02d20' }}>⚠ NetSuite has not accepted this sales order yet — rows can be read but not started until it has.</span>}
-                        {!floor.links && <span style={{ fontSize: '0.78rem', color: '#b02d20' }}>⚠ Could not read this order's work orders — status may be incomplete.</span>}
+                        {!anyAccepted && <span style={{ fontSize: '0.78rem', color: '#b02d20' }}>⚠ No anchored sales order that rows can start from has been accepted by NetSuite yet — rows can be read, not started.</span>}
                     </div>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead><tr>{['Row', 'Status', 'Lines', '', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
@@ -463,16 +542,16 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                         <td style={{ ...td, fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{state.lines.length} line(s) · {state.started} started · {state.open} to start{state.stocked ? ` · ${state.stocked} stocked` : ''}</td>
                                         <td style={{ ...td, whiteSpace: 'nowrap' }}>
                                             {state.open > 0 && (
-                                                <button onClick={() => startRow(label, state)} disabled={!!starting || !!busy || dirty || !floor.so.nsInternalId}
-                                                    style={btn(true, { padding: '5px 12px', opacity: (!!starting || dirty || !floor.so.nsInternalId) ? .5 : 1 })}
-                                                    title={dirty ? 'Save the order first' : !floor.so.nsInternalId ? 'Waits for NetSuite to accept the sales order' : `Start the ${state.open} line(s) of ${label} not yet raised`}>
+                                                <button onClick={() => startRow(label, state)} disabled={!!starting || !!busy || dirty || !anyAccepted}
+                                                    style={btn(true, { padding: '5px 12px', opacity: (!!starting || dirty || !anyAccepted) ? .5 : 1 })}
+                                                    title={dirty ? 'Save the order first' : !anyAccepted ? 'Waits for NetSuite to accept the sales order' : `Start the ${state.open} line(s) of ${label} not yet raised`}>
                                                     {starting === label ? '…' : '▶ Start row'}
                                                 </button>
                                             )}
                                         </td>
                                         <td style={{ ...td, textAlign: 'right' }}>
                                             {state.key === ROW_STATE.NEEDS_DECISION && (
-                                                <button onClick={() => { try { sessionStorage.setItem('hq_oe_review_so', floor.so.id); } catch (e) { /* the board still lists it */ } window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }}
+                                                <button onClick={() => { try { sessionStorage.setItem('hq_oe_review_so', (state.lines.find(l => l.key === 'REVIEW') || {}).soAppId || (floor.sos[0] && floor.sos[0].so.id) || ''); } catch (e) { /* the board still lists it */ } window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }}
                                                     style={btn(false, { padding: '5px 10px', color: '#b02d20', borderColor: '#b02d20' })} title="The lines this row could not start cleanly — decide them on Order Entry Needs">Review →</button>
                                             )}
                                         </td>
@@ -480,7 +559,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                     {state.lines.length > 0 && (
                                         <tr><td style={{ ...td, borderBottom: '1px solid var(--line)' }} /><td colSpan={4} style={{ ...td, paddingTop: 0 }}>
                                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', fontFamily: 'var(--mono)', fontSize: '10px' }}>
-                                                {state.lines.map(l => <span key={l.lineIdx} title={l.text} style={{ color: TONE[l.tone] || 'var(--ink-soft)' }}>{l.qty} × {l.erp}{l.finish ? `/${l.finish}` : ''} — {l.text}</span>)}
+                                                {state.lines.map(l => <span key={`${l.soAppId}|${l.lineIdx}`} title={`${l.soId} · ${l.text}`} style={{ color: TONE[l.tone] || 'var(--ink-soft)' }}>{(floor.sos || []).length > 1 ? `${l.soId} · ` : ''}{l.qty} × {l.erp}{l.finish ? `/${l.finish}` : ''} — {l.text}</span>)}
                                             </div>
                                         </td></tr>
                                     )}
@@ -491,13 +570,13 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                     {rowsView.unassigned.length > 0 && (
                         <div style={{ marginTop: '10px', padding: '8px 10px', background: '#fdf3f2', border: '1px solid #e8b8b3' }}>
                             <div style={{ ...mono, color: '#b02d20', marginBottom: '4px' }}>{rowsView.unassigned.length} line(s) on the sales order name no row — nothing starts them until they belong to one</div>
-                            {rowsView.unassigned.map(({ line, lineIdx }) => (
-                                <div key={lineIdx} style={{ display: 'flex', gap: '10px', alignItems: 'center', fontFamily: 'var(--mono)', fontSize: '11px', padding: '2px 0' }}>
-                                    <span>{line.qty} × {line.erp}{line.finishCode ? `/${line.finishCode}` : ''}{line.memo ? ` · "${line.memo}"` : ''}</span>
-                                    <select value="" onChange={e => e.target.value && assignRow(lineIdx, e.target.value)} disabled={!!busy} style={{ ...inp, padding: '2px 6px', fontSize: '11px' }}>
+                            {rowsView.unassigned.map(({ line, lineIdx, soAppId, soId, whole }) => (
+                                <div key={`${soAppId}|${lineIdx}`} style={{ display: 'flex', gap: '10px', alignItems: 'center', fontFamily: 'var(--mono)', fontSize: '11px', padding: '2px 0' }}>
+                                    <span>{line.qty} × {line.erp}{line.finishCode ? `/${line.finishCode}` : ''}{line.memo ? ` · "${line.memo}"` : ''} <span style={{ color: 'var(--ink-soft)' }}>· {soId}</span></span>
+                                    {whole ? <span style={{ ...mono }}>whole-order · read only</span> : <select value="" onChange={e => e.target.value && assignRow(soAppId, lineIdx, e.target.value)} disabled={!!busy} style={{ ...inp, padding: '2px 6px', fontSize: '11px' }}>
                                         <option value="">— assign to a row —</option>
                                         {rowOrder.map(r => <option key={r} value={r}>{r}</option>)}
-                                    </select>
+                                    </select>}
                                 </div>
                             ))}
                         </div>

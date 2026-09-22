@@ -83,11 +83,37 @@ export const soRowsOf = (so, rowLabels = []) => {
     return { rows, unassigned };
 };
 
+/**
+ * A SALES ORDER RTG ALREADY SPLIT WHOLE (Stuart 2026-09-22: the tabletop's SO60551 — "nearly
+ * completed in the physical world … no need to start anything over"). Its finishing and shop
+ * documents carry every row already: `WO-<orderKey>` and `SHOP-<orderKey>`, the ids
+ * autoSplitSalesOrder gives them. Such an order is anchored for VISIBILITY — its rows read their
+ * state off those documents — and never offered a Start, because a row started on top of a
+ * whole-order document is the same parts twice. A row's own work orders are `WO-OE-…`, so the two
+ * cannot be confused.
+ */
+export const wholeOrderDocsOf = (so, fin = [], shop = []) => {
+    const keys = [...new Set([so && so.soId, so && so.id].map(k => String(k || '').trim()).filter(Boolean))];
+    const finDoc = (fin || []).find(d => d && keys.some(k => String(d.id) === `WO-${k}`)) || null;
+    const shopDoc = (shop || []).find(d => d && keys.some(k => String(d.id) === `SHOP-${k}`)) || null;
+    return (finDoc || shopDoc) ? { fin: finDoc, shop: shopDoc } : null;
+};
+
+/** The words for a whole-order sales order's rows: what its documents say, from RTG's side. */
+export const wholeOrderText = (whole) => {
+    if (!whole) return '';
+    const parts = [];
+    if (whole.fin) parts.push(`${whole.fin.id} · ${whole.fin.pickOnly ? (whole.fin.pickStatus || 'Pending') : (whole.fin.currentPhase || 'Setup')}${whole.fin.packStatus ? ` · ${whole.fin.packStatus}` : ''}`);
+    if (whole.shop) parts.push(`${whole.shop.id} · ${whole.shop.status || 'Pending'}`);
+    return parts.join(' · ');
+};
+
 /** Per-line state words, in the order the floor reaches them. */
 export const LINE_STATE = {
     STOCKED: 'STOCKED', NONE: 'NONE', REVIEW: 'REVIEW', DEAD: 'DEAD', BACKORDER: 'BACKORDER',
     PARKED: 'PARKED', FLOOR: 'FLOOR', PLATING: 'PLATING', PLATING_STAGED: 'PLATING_STAGED',
     PLATING_SHIPPED: 'PLATING_SHIPPED', PLATING_RECEIVED: 'PLATING_RECEIVED', PLATING_BUILT: 'PLATING_BUILT', DONE: 'DONE',
+    WHOLE: 'WHOLE',   // on a whole-order document RTG raised — managed there, never started here
 };
 
 /**
@@ -97,7 +123,11 @@ export const LINE_STATE = {
  * `ref`, so a plated line can be followed from "issued" through staged → shipped → received → built
  * without any new field anywhere.
  */
-export const lineStateOf = ({ so, line, lineIdx, links, shipments = [], review = null }) => {
+export const lineStateOf = ({ so, line, lineIdx, links, shipments = [], review = null, whole = null }) => {
+    if (whole) {
+        const done = whole.fin && /closed|complete|packed|shelved/i.test(String(whole.fin.currentPhase || whole.fin.status || ''));
+        return { key: done ? LINE_STATE.DONE : LINE_STATE.WHOLE, text: `on the whole-order documents (${wholeOrderText(whole)}) — managed on RTG`, tone: done ? 'green' : 'brass' };
+    }
     if (!oeIsTbf(line)) return { key: LINE_STATE.STOCKED, text: 'stocked — picked by the warehouse, not started here', tone: 'grey' };
     const coverage = oeCoverageOf({ so, line, lineIdx, ...(links || {}), any: true });
     const base = oeLineStateOf({ coverage, review });
@@ -139,10 +169,16 @@ const ROW_TEXT = {
  * reasons[]), so a line waiting on a person says why.
  */
 export const rowStateOf = ({ so, entries = [], links, shipments = [], reviews = {} }) => {
-    const lines = (entries || []).map(({ line, lineIdx }) => {
-        const rv = reviews && reviews[lineIdx] ? { reasons: reviews[lineIdx] } : null;
-        const st = lineStateOf({ so, line, lineIdx, links, shipments, review: rv });
-        return { lineIdx, erp: U(line.erp), finish: oeLineFinish(line), qty: N(line.qty), ...st };
+    // A DISPLAY SPANS SEVERAL SALES ORDERS (Stuart 2026-09-22: the tabletop is SO60551 + SO60565,
+    // the wall is SO60583 + SO60585). An entry may carry its own order and that order's links,
+    // shipments, review and whole-order documents; the row is the union of them all.
+    const lines = (entries || []).map((e) => {
+        const { line, lineIdx } = e;
+        const ctxSo = e.so || so;
+        const rvs = e.reviews || reviews;
+        const rv = rvs && rvs[lineIdx] ? { reasons: rvs[lineIdx] } : null;
+        const st = lineStateOf({ so: ctxSo, line, lineIdx, links: e.links || links, shipments: e.shipments || shipments, review: rv, whole: e.whole || null });
+        return { lineIdx, soId: ctxSo && (ctxSo.soId || ctxSo.id), soAppId: ctxSo && ctxSo.id, erp: U(line.erp), finish: oeLineFinish(line), qty: N(line.qty), ...st };
     });
     const tbf = lines.filter(l => l.key !== LINE_STATE.STOCKED);
     const has = (k) => tbf.some(l => l.key === k);
@@ -156,7 +192,7 @@ export const rowStateOf = ({ so, entries = [], links, shipments = [], reviews = 
     else if (has(LINE_STATE.NONE)) key = ROW_STATE.PARTLY_STARTED;
     else if (all([LINE_STATE.DONE, LINE_STATE.PLATING_BUILT, LINE_STATE.PLATING_RECEIVED])) key = ROW_STATE.DONE;
     else if (has(LINE_STATE.PLATING_STAGED) || has(LINE_STATE.PLATING_SHIPPED) || has(LINE_STATE.PLATING)) key = ROW_STATE.AT_PLATER;
-    else if (has(LINE_STATE.FLOOR)) key = ROW_STATE.ON_FLOOR;
+    else if (has(LINE_STATE.FLOOR) || has(LINE_STATE.WHOLE)) key = ROW_STATE.ON_FLOOR;
     else key = ROW_STATE.ISSUED;
     const open = lines.filter(l => l.key === LINE_STATE.NONE).length;
     return { key, text: ROW_TEXT[key], lines, open, started: tbf.length - open, stocked: lines.length - tbf.length };
