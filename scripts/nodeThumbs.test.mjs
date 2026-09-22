@@ -8,7 +8,7 @@
 // node, and two different records whose codes reduce to the same key.
 
 import {
-    cleanFusionName, nodeKey, baseCodeOf, buildNodeIndex, planNodeThumbs, nodeThumbSummary, nodeThumbPlanText,
+    cleanFusionName, nodeKey, baseCodeOf, buildNodeIndex, planNodeThumbs, nodeThumbSummary, nodeThumbPlanText, planModelThumbs, modelReportText,
     slotReportText, NODE_READY, NODE_NONE, NODE_AMBIGUOUS, NODE_NO_CODE, NODE_HAS_PHOTO,
 } from '../src/components/Shared/nodeThumbs.js';
 
@@ -134,6 +134,39 @@ eq('a record with no code at all', baseCodeOf({}), '');
     const many = Array.from({ length: 30 }, (_, i) => ({ name: `Part${i}`, depth: 1, isMesh: true, meshes: 1 }));
     ok('a crowded slot is trimmed and says how many more',
         /and 16 more/.test(slotReportText('X', planNodeThumbs({ parts, nodeNames: [] }), many)));
+}
+
+
+// ── A WHOLE PARTS MODEL, BY NAME (2026-09-23) — the designer's export, planned against the library ──
+{
+    const lib = [
+        { id: 'bp', legacyErpId: 'H1-2TRVBP' },
+        { id: 'la', legacyErpId: 'H1-2TRVLA' },
+        { id: 'nut', legacyErpId: 'H1-2TRVNUT' },
+        { id: 'arm', legacyErpId: 'H1-2TRVBADBL', finalImageUrl: 'https://x/arm.png', imageSource: 'DRAWING' },
+        { id: 'gal', legacyErpId: 'H1-2TRVCLP', finalImageUrl: 'https://x/clp.jpg', imageSource: 'GALLERY' },
+        { id: 'c1', legacyErpId: 'H1-75BE' }, { id: 'c2', legacyErpId: 'H1-75-BE' },
+        { id: 'elsewhere', legacyErpId: 'H1-138WEC' },
+    ];
+    const nodes = ['Scene', 'H1-2TRVBP v3:1', 'H1-2TRVLA_v2', 'H1-2TRVNUT:1', 'H1-2TRVNUT:2', 'H1-2TRVBADBL', 'H1-2TRVCLP', 'H1-75BE v1', 'Body1', 'Component7'];
+    const photo = (p) => p.imageSource === 'GALLERY';
+    const rows = planModelThumbs({ parts: lib, nodeNames: nodes, hasPhoto: photo });
+    const st = Object.fromEntries(rows.map(r => [r.code, r.status]));
+    eq('every part named in the model is planned; a part the model does not hold is not an error, it is absent',
+        Object.keys(st).sort(), ['H1-2TRVBADBL', 'H1-2TRVBP', 'H1-2TRVCLP', 'H1-2TRVLA', 'H1-2TRVNUT', 'H1-75-BE', 'H1-75BE']);
+    eq('version noise and instance suffixes still match', [st['H1-2TRVBP'], st['H1-2TRVLA'], st['H1-2TRVNUT']], ['READY', 'READY', 'READY']);
+    eq('a second instance is counted, the first (sorted) is photographed', rows.find(r => r.code === 'H1-2TRVNUT').instances, 2);
+    eq('a drawing cut may be replaced by a real render', st['H1-2TRVBADBL'], 'READY');
+    eq('a gallery photograph is never replaced', st['H1-2TRVCLP'], 'HAS_PHOTO');
+    eq('two records reducing to one node name are refused, both of them', [st['H1-75BE'], st['H1-75-BE']], ['AMBIGUOUS_CODE', 'AMBIGUOUS_CODE']);
+    ok('the refusal names both records', /H1-75BE and H1-75-BE/.test(rows.find(r => r.code === 'H1-75BE').why));
+    eq('Body1 and Component7 match nothing and are not planned', rows.some(r => /body|component/i.test(r.code)), false);
+    const text = modelReportText('H1-2TRV BRACKET PARTS', rows, nodes);
+    ok('the report counts what it will and will not do', /H1-2TRV BRACKET PARTS: 4 to photograph, 1 already photographed, 2 refused/.test(text));
+    ok('…and names the refusals', /✗ H1-75BE: /.test(text));
+    const empty = modelReportText('H1-BACKPLATES', planModelThumbs({ parts: lib, nodeNames: ['Scene', 'Body1', 'Mirror of Bracket v2'] }), ['Scene', 'Body1', 'Mirror of Bracket v2']);
+    ok('a model whose nodes carry no item code prints the names it holds, cleaned', /no node in this model is named with an item code — it holds: Body1, Mirror of Bracket, Scene/.test(empty));
+    eq('a model with no named nodes says so', /no named nodes at all/.test(modelReportText('X', [], [])), true);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

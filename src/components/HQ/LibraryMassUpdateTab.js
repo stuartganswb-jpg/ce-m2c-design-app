@@ -13,8 +13,8 @@ import { packSizeOf, rushFeeAmountOf, rushFeeLabelOf } from '../Shared/quickShip
 import { SOURCING, sourcingPatch } from '../Shared/sourcing';
 import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
-import { renderThumbnails, sceneSubtree } from '../Shared/hardwareThumbs';
-import { planNodeThumbs, slotReportText, NODE_READY } from '../Shared/nodeThumbs';
+import { sceneNodeNames, renderThumbnails, sceneSubtree } from '../Shared/hardwareThumbs';
+import { planNodeThumbs, planModelThumbs, slotReportText, modelReportText, NODE_READY } from '../Shared/nodeThumbs';
 // ⚠ splitNodes, NOT a hand-rolled .split(',') — Brimar node names contain commas
 // ("MMC92311A189_or_MMC91375A189_8-32,_316_L_v4004"), which a raw split shreds into fragments that
 // match nothing. That module exists for exactly this, and the sweep below still does it by hand.
@@ -400,6 +400,99 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         }
     };
 
+    // ── EVERY PART IN A PARTS MODEL, BY ITS OWN NAME (Stuart 2026-09-23) ───────────────
+    // docs/FUSION_EXPORT_FOR_PART_PICTURES.md asked the designer for one thing: every part that
+    // needs a picture as a TOP-LEVEL component named with its item code. H1-2TRV BRACKET PARTS,
+    // H1-CUFF BRACKETS, H1-138TRV PARTS and H1-BACKPLATES are that. Neither render tool could use
+    // them: 🖼 photographs an item's PINNED nodes (these are not tagged in 1.6, and stay untagged),
+    // 🔩 looks only inside a KIT's pinned slot. This reads the node names straight off each model
+    // and matches them to the whole library by code. The plan prints, per model, what will be
+    // photographed — and for a model whose nodes match nothing, the names it holds, so a naming
+    // miss is seen on sight and goes back to the designer with the spec, not guessed at.
+    // ⚠ WRITES ONLY finalImageUrl + imageSource, through the provenance gate: a render may replace a
+    // drawing cut (the seven arms from the PDF), never a photograph. Then the same inheritance
+    // passes 🖼 runs, so the picture reaches every kit piece and finish variant. 1.6 untouched.
+    const modelPartThumbs = async () => {
+        const asms = inventory.filter(a => a.manufacturingSpecs?.cadUrl && (a.routingType === 'MAIN' || a.recordType === 'PRODUCT'));
+        if (!asms.length) return alert('No mainline assemblies with a working GLB on this brand.');
+        setBulkTool({ running: 'modelpix', msg: `Reading ${asms.length} model(s)…` });
+        try {
+            let gIndex = { byPartId: new Map(), byCode: new Map() };
+            try {
+                const gSnap = await getDocs(collection(db, 'global_assets'));
+                gIndex = buildGalleryIndex(gSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+            } catch (err) { /* gallery unreadable → the stamp on the record still decides */ }
+            const byId = new Map(inventory.map(p => [p.id, p]));
+            const byCode = new Map();
+            inventory.forEach(p => { [p.legacyErpId, p.itemId].forEach(k => { if (k) byCode.set(String(k).toUpperCase(), p); }); });
+            const byBase = new Map();
+            inventory.forEach(p => { const k = splitCode(p.legacyErpId || p.itemId); if (k && !k.finish) byBase.set(k.pattern, p); });
+            const newUrls = new Map();
+            const done = new Set();
+            const hasPhoto = (p) => done.has(p.id) || !photoMayOverwrite(p, byBase) || !!galleryImageForPart(p, gIndex);
+            const photoOf = (p) => p?.finalImageUrl || newUrls.get(p?.id) || galleryImageForPart(p, gIndex) || null;
+
+            const plans = [];
+            const claimed = new Set();             // a part found in two models is photographed from the first
+            for (const asm of asms) {
+                let names = [];
+                try { names = await sceneNodeNames(asm.manufacturingSpecs.cadUrl); }
+                catch (err) { plans.push({ asm, rows: [], names: [], ready: [], error: err.message || String(err) }); continue; }
+                const rows = planModelThumbs({ parts: inventory.filter(p => p.id !== asm.id), nodeNames: names, hasPhoto });
+                const ready = rows.filter(r => r.status === NODE_READY && !claimed.has(r.part.id));
+                ready.forEach(r => claimed.add(r.part.id));
+                plans.push({ asm, rows, names, ready });
+            }
+            const total = plans.reduce((n, p) => n + p.ready.length, 0);
+            const text = plans.map(p => p.error ? `${p.asm.itemName || p.asm.id}: could not read the model — ${p.error}` : modelReportText(p.asm.itemName || p.asm.id, p.rows, p.names)).join('\n\n');
+            console.log('Item pictures from parts models — every node name, per model:', plans.map(p => ({ model: p.asm.itemName || p.asm.id, nodes: p.names, plan: p.rows.map(r => `${r.code} ${r.status}${r.why ? ' — ' + r.why : ''}`) })));
+            if (!total) {
+                setBulkTool({ running: '', msg: 'No part in any model is named with an item code that still needs a picture — nothing written. Every node name is in the console.' });
+                alert(`Item pictures from parts models — ${activeBrand.toUpperCase()}\n\n${text}\n\nNothing to photograph. Every model's node names are in the browser console (F12).`);
+                return;
+            }
+            if (!window.confirm(`Item pictures from parts models — ${activeBrand.toUpperCase()}\n\n${text}\n\n${total} picture(s) in total, then kit pieces, oak/walnut items and finish variants are filled from them. A render replaces a drawing cut, never a photograph. Every node name is in the browser console.\n\nWrite them?`)) {
+                setBulkTool({ running: '', msg: 'Cancelled — nothing written. Every node name is in the console.' });
+                return;
+            }
+
+            let made = 0, failed = 0;
+            for (const { asm, ready } of plans) {
+                if (!ready.length) continue;
+                setBulkTool({ running: 'modelpix', msg: `${asm.itemName || asm.id}: photographing ${ready.length} part(s)…` });
+                const shots = new Map();
+                await renderThumbnails(
+                    asm.manufacturingSpecs.cadUrl,
+                    ready.map(r => ({ key: r.part.id, nodes: [r.node] })),
+                    (key, dataUrl) => { if (dataUrl) shots.set(key, dataUrl); },
+                    // A nut, a clip or a plug is a part here — photographing a fastener is the point.
+                    { w: 384, h: 288, allowFasteners: true },
+                );
+                for (const r of ready) {
+                    const dataUrl = shots.get(r.part.id);
+                    if (!dataUrl) { failed++; continue; }
+                    setBulkTool({ running: 'modelpix', msg: `Saving ${r.code}… (${made + 1} of ${total})` });
+                    try {
+                        const blob = await (await fetch(dataUrl)).blob();
+                        const sref = ref(storage, `dynamic_assets/auto_thumbs/${r.part.id}_${Date.now()}.png`);
+                        await uploadBytes(sref, blob);
+                        const url = await getDownloadURL(sref);
+                        await updateDoc(doc(db, 'Approved_Designs', r.part.id), imageUpdate(url, IMG_GLB_RENDER));
+                        newUrls.set(r.part.id, url);
+                        done.add(r.part.id);
+                        made++;
+                    } catch (err) { console.warn(r.code, err); failed++; }
+                }
+            }
+            const inh = await fillInheritedPictures({ photoOf, newUrls, byId, byCode, running: 'modelpix' });
+            setBulkTool({ running: '', msg: `${made} part picture(s) from geometry${failed ? `, ${failed} produced nothing` : ''}; ${inh.kitPieces} kit piece(s), ${inh.species} oak/walnut item(s), ${inh.variants} finish variant(s) filled from them. 1.6 untouched.` });
+            alert(`📷 Item pictures from parts models:\n• ${made} rendered from geometry${failed ? `\n• ${failed} produced nothing (nothing visible under that name)` : ''}\n• ${inh.kitPieces} kit piece(s) filled from their kit\n• ${inh.species} oak / walnut item(s) filled from their product\n• ${inh.variants} finish variant(s) filled from their base\n\nEvery screen that shows an item picture reads these records.`);
+        } catch (err) {
+            console.error(err);
+            setBulkTool({ running: '', msg: `Parts-model pictures failed: ${err.message || err}` });
+        }
+    };
+
     // ── THE BASIC APP KITS, FROM THE SHEET (Stuart 2026-09-21, 0903/H1-SimpleKits.xlsx) ──────
     // A holder part that carries the price, the customer's alias and the customer's pricing, with
     // its pieces beneath it. Fifty of them, each in a mill and a /P version.
@@ -521,6 +614,97 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         }
     };
 
+    // ── THE INHERITANCE PASSES, SHARED (2026-09-23) ──────────────────────────────────────
+    // Lifted verbatim out of generateItemThumbs so a picture written by ANY tool reaches every
+    // record that inherits it (kit pieces, oak/walnut items, finish variants) in the same run.
+    // `photoOf` reads the record, then what this run just wrote, then the gallery; `newUrls` is
+    // what this run wrote (inventory state lags the writes).
+    const fillInheritedPictures = async ({ photoOf, newUrls, byId, byCode, running }) => {
+        let kitPieces = 0, species = 0, variants = 0;
+        // ── A PIECE OF A KIT TAKES THE KIT'S PICTURE (Stuart 2026-09-20) ──────────────────
+        // "assemblies with multiple parts, if the parts themselves are in the library they should
+        //  get thumbnails as well … we should be able to show these as they are together in the
+        //  fbx file that way." A cuff bracket is drawn, pinned and sold as ONE kit (H1-2RCTCB =
+        //  cuff + open bracket): the kit is what owns geometry, so the render above photographs
+        //  the KIT, and its pieces — which own no nodes anywhere — never got a picture. They take
+        //  the kit's: the pieces together, exactly as modelled. A stand-in (KIT_INHERIT), so a
+        //  photograph overrules it; filled BEFORE the variants, so a piece's /EP4 gets it too.
+        setBulkTool({ running, msg: 'Filling kit pieces from their kit…' });
+        const kBatch = [];
+        for (const kit of inventory) {
+            const comps = kit.manufacturingSpecs?.kitComponents;
+            if (!Array.isArray(comps) || !comps.length) continue;
+            const src = photoOf(kit);
+            if (!src) continue;
+            comps.forEach(c => {
+                const piece = byId.get(c.partId) || byCode.get(String(c.partId || '').toUpperCase());
+                if (!piece || piece.id === kit.id || photoOf(piece) || newUrls.has(piece.id)) return;
+                newUrls.set(piece.id, src);
+                kBatch.push({ id: piece.id, url: src });
+            });
+        }
+        for (let i = 0; i < kBatch.length; i += 400) {
+            const batch = writeBatch(db);
+            kBatch.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), imageUpdate(v.url, IMG_KIT_INHERIT)));
+            await batch.commit();
+        }
+        kitPieces = kBatch.length;
+
+        // ── OAK AND WALNUT ITEMS TAKE THEIR PRODUCT'S PICTURE (Stuart 2026-09-20) ─────────
+        // H1-138WEC-O / -W (and the stem-different codes a base names in its speciesMap) are the
+        // BOM items behind ONE modelled product — only the product is pinned, so only it was
+        // rendered. Base inheritance like the finish variants below, and BEFORE them, so a
+        // species item's own finish variants are filled from it in the same run.
+        setBulkTool({ running, msg: 'Filling oak / walnut items from their product…' });
+        const spIdx = buildSpeciesBaseIndex(inventory);
+        const sBatch = [];
+        for (const p of inventory) {
+            const baseCode = spIdx.get(String(p.legacyErpId || '').toUpperCase());
+            if (!baseCode || photoOf(p)) continue;
+            const base = byCode.get(baseCode);
+            const src = base && base.id !== p.id ? photoOf(base) : null;
+            if (!src) continue;
+            newUrls.set(p.id, src);
+            sBatch.push({ id: p.id, url: src });
+        }
+        for (let i = 0; i < sBatch.length; i += 400) {
+            const batch = writeBatch(db);
+            sBatch.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), imageUpdate(v.url, IMG_BASE_INHERIT)));
+            await batch.commit();
+        }
+        species = sBatch.length;
+
+        // ── FINISH VARIANTS INHERIT THE BASE'S PICTURE (Stuart 2026-08-27) ────────────────
+        // "broaden the search so that it applies the thumbnails to even the finished items …
+        // /P, /P01, /EP1 etc — i would prefer to at least have the thumbnail of the part,
+        // better than nothing till the photos arrive." A variant code is BASE/SUFFIX; a
+        // variant with no photo of its own takes the base's — the base's gallery photo first,
+        // else the thumbnail just rendered (or previously stamped). Its own photo, whenever it
+        // arrives in the gallery, overrules on every screen that reads the gallery.
+        setBulkTool({ running, msg: 'Filling finish variants from their base parts…' });
+        const vBatchDocs = [];
+        for (const p of inventory) {
+            const code = String(p.legacyErpId || p.itemId || '');
+            const cut = code.indexOf('/');
+            if (cut <= 0) continue;                     // not a variant code
+            if (photoOf(p)) continue;                   // its own photo (gallery or stamped) wins
+            const base = byCode.get(code.slice(0, cut).toUpperCase());
+            const src = base && base.id !== p.id ? photoOf(base) : null;
+            if (!src) continue;
+            vBatchDocs.push({ id: p.id, url: src });
+        }
+        for (let i = 0; i < vBatchDocs.length; i += 400) {
+            const batch = writeBatch(db);
+            vBatchDocs.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), imageUpdate(v.url, IMG_BASE_INHERIT)));
+            await batch.commit();
+            variants = Math.min(i + 400, vBatchDocs.length);
+            setBulkTool({ running, msg: `Variants filled: ${variants} / ${vBatchDocs.length}…` });
+        }
+        variants = vBatchDocs.length;
+
+        return { kitPieces, species, variants };
+    };
+
     const generateItemThumbs = async () => {
         const asms = inventory.filter(a => a.manufacturingSpecs?.cadUrl && (a.routingType === 'MAIN' || a.recordType === 'PRODUCT'));
         if (!asms.length) return alert('No mainline assemblies with a working GLB on this brand.');
@@ -583,87 +767,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 await Promise.all(uploads);
             }
 
-            // ── A PIECE OF A KIT TAKES THE KIT'S PICTURE (Stuart 2026-09-20) ──────────────────
-            // "assemblies with multiple parts, if the parts themselves are in the library they should
-            //  get thumbnails as well … we should be able to show these as they are together in the
-            //  fbx file that way." A cuff bracket is drawn, pinned and sold as ONE kit (H1-2RCTCB =
-            //  cuff + open bracket): the kit is what owns geometry, so the render above photographs
-            //  the KIT, and its pieces — which own no nodes anywhere — never got a picture. They take
-            //  the kit's: the pieces together, exactly as modelled. A stand-in (KIT_INHERIT), so a
-            //  photograph overrules it; filled BEFORE the variants, so a piece's /EP4 gets it too.
-            setBulkTool({ running: 'thumbs', msg: 'Filling kit pieces from their kit…' });
-            const kBatch = [];
-            for (const kit of inventory) {
-                const comps = kit.manufacturingSpecs?.kitComponents;
-                if (!Array.isArray(comps) || !comps.length) continue;
-                const src = photoOf(kit);
-                if (!src) continue;
-                comps.forEach(c => {
-                    const piece = byId.get(c.partId) || byCode.get(String(c.partId || '').toUpperCase());
-                    if (!piece || piece.id === kit.id || photoOf(piece) || newUrls.has(piece.id)) return;
-                    newUrls.set(piece.id, src);
-                    kBatch.push({ id: piece.id, url: src });
-                });
-            }
-            for (let i = 0; i < kBatch.length; i += 400) {
-                const batch = writeBatch(db);
-                kBatch.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), imageUpdate(v.url, IMG_KIT_INHERIT)));
-                await batch.commit();
-            }
-            kitPieces = kBatch.length;
-
-            // ── OAK AND WALNUT ITEMS TAKE THEIR PRODUCT'S PICTURE (Stuart 2026-09-20) ─────────
-            // H1-138WEC-O / -W (and the stem-different codes a base names in its speciesMap) are the
-            // BOM items behind ONE modelled product — only the product is pinned, so only it was
-            // rendered. Base inheritance like the finish variants below, and BEFORE them, so a
-            // species item's own finish variants are filled from it in the same run.
-            setBulkTool({ running: 'thumbs', msg: 'Filling oak / walnut items from their product…' });
-            const spIdx = buildSpeciesBaseIndex(inventory);
-            const sBatch = [];
-            for (const p of inventory) {
-                const baseCode = spIdx.get(String(p.legacyErpId || '').toUpperCase());
-                if (!baseCode || photoOf(p)) continue;
-                const base = byCode.get(baseCode);
-                const src = base && base.id !== p.id ? photoOf(base) : null;
-                if (!src) continue;
-                newUrls.set(p.id, src);
-                sBatch.push({ id: p.id, url: src });
-            }
-            for (let i = 0; i < sBatch.length; i += 400) {
-                const batch = writeBatch(db);
-                sBatch.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), imageUpdate(v.url, IMG_BASE_INHERIT)));
-                await batch.commit();
-            }
-            species = sBatch.length;
-
-            // ── FINISH VARIANTS INHERIT THE BASE'S PICTURE (Stuart 2026-08-27) ────────────────
-            // "broaden the search so that it applies the thumbnails to even the finished items …
-            // /P, /P01, /EP1 etc — i would prefer to at least have the thumbnail of the part,
-            // better than nothing till the photos arrive." A variant code is BASE/SUFFIX; a
-            // variant with no photo of its own takes the base's — the base's gallery photo first,
-            // else the thumbnail just rendered (or previously stamped). Its own photo, whenever it
-            // arrives in the gallery, overrules on every screen that reads the gallery.
-            setBulkTool({ running: 'thumbs', msg: 'Filling finish variants from their base parts…' });
-            const vBatchDocs = [];
-            for (const p of inventory) {
-                const code = String(p.legacyErpId || p.itemId || '');
-                const cut = code.indexOf('/');
-                if (cut <= 0) continue;                     // not a variant code
-                if (photoOf(p)) continue;                   // its own photo (gallery or stamped) wins
-                const base = byCode.get(code.slice(0, cut).toUpperCase());
-                const src = base && base.id !== p.id ? photoOf(base) : null;
-                if (!src) continue;
-                vBatchDocs.push({ id: p.id, url: src });
-            }
-            for (let i = 0; i < vBatchDocs.length; i += 400) {
-                const batch = writeBatch(db);
-                vBatchDocs.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), imageUpdate(v.url, IMG_BASE_INHERIT)));
-                await batch.commit();
-                variants = Math.min(i + 400, vBatchDocs.length);
-                setBulkTool({ running: 'thumbs', msg: `Variants filled: ${variants} / ${vBatchDocs.length}…` });
-            }
-            variants = vBatchDocs.length;
-
+            const inh = await fillInheritedPictures({ photoOf, newUrls, byId, byCode, running: 'thumbs' });
+            kitPieces = inh.kitPieces; species = inh.species; variants = inh.variants;
             alert(`🖼 Item thumbnails from assembly GLBs:\n• ${made} rendered from geometry\n• ${kitPieces} kit piece(s) filled from their kit's picture\n• ${species} oak / walnut item(s) filled from their product\n• ${variants} finish variant(s) (/P, /EPn, /W…) filled from their base part\n• ${had} already had a photo (untouched — gallery always wins)\n• ${noNodes} pin(s) carry no node to photograph\n• ${failed} render/upload failure(s)`);
         } catch (e) { alert('Thumbnail run failed: ' + (e?.message || e)); }
         finally { setBulkTool({ running: '', msg: '' }); }
@@ -1591,6 +1696,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     title={'Photographs each KIT COMPONENT on its own, straight out of the assembly model — it finds the node by the component\'s own item code, so no pin is needed. Shows the full plan first, per model, including every component it cannot find a node for. The 1.6 tagging is only READ: no pin and no cluster is written.'}
                     style={{ padding: '12px 20px', background: bulkTool.running === 'kitpix' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'kitpix' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                     🔩 Kit component thumbnails
+                </button>
+                <button onClick={modelPartThumbs} disabled={!!bulkTool.running}
+                    title={'For the designer\'s PARTS models (every part a top-level component named with its item code — see docs/FUSION_EXPORT_FOR_PART_PICTURES.md): reads the node names off every mainline model, matches them to the library by code, photographs each part alone and fills its kit pieces and finish variants. Shows the full plan first; a model whose nodes carry no item codes prints the names it holds. No pin, no kit, 1.6 untouched.'}
+                    style={{ padding: '12px 20px', background: bulkTool.running === 'modelpix' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'modelpix' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 700 }}>
+                    📷 Item pictures from a parts model
                 </button>
             </div>
 

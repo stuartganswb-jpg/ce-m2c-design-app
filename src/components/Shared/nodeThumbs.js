@@ -137,6 +137,52 @@ export const slotReportText = (kitCode, rows = [], children = [], limit = 14, pa
     return out.join('\n');
 };
 
+/**
+ * EVERY PART IN A PARTS MODEL, BY ITS OWN NAME (Stuart 2026-09-23). The designer's export spec
+ * (docs/FUSION_EXPORT_FOR_PART_PICTURES.md) asks for each part as a top-level component named with
+ * its item code — H1-2TRV BRACKET PARTS, H1-CUFF BRACKETS, H1-138TRV PARTS, H1-BACKPLATES are that.
+ * No pin and no kit: the library is planned against the model's node names directly. A part with no
+ * node in THIS model is simply not in it (not an error — every model holds a few parts); two
+ * records reducing to one node name are AMBIGUOUS and refused, exactly as planNodeThumbs refuses
+ * them; a part that already has a photograph is left alone.
+ */
+export const planModelThumbs = ({ parts = [], nodeNames = [], hasPhoto = () => false }) => {
+    const index = buildNodeIndex(nodeNames);
+    const byKey = new Map();
+    (parts || []).forEach(p => { const k = nodeKey(baseCodeOf(p)); if (k) byKey.set(k, [...(byKey.get(k) || []), p]); });
+    const out = [];
+    (parts || []).forEach(part => {
+        const code = baseCodeOf(part);
+        if (!code) return;
+        const k = nodeKey(code);
+        const hits = (index.get(k) || []).slice().sort();
+        if (!hits.length) return;                                    // not in this model
+        const row = { part, code, node: hits[0], instances: hits.length };
+        if ((byKey.get(k) || []).length > 1) out.push({ ...row, node: '', status: NODE_AMBIGUOUS, why: `${(byKey.get(k) || []).map(p => p.legacyErpId || p.itemId).join(' and ')} reduce to the same node name` });
+        else if (hasPhoto(part)) out.push({ ...row, status: NODE_HAS_PHOTO, why: 'already has a real photograph — left alone' });
+        else out.push({ ...row, status: NODE_READY, why: '' });
+    });
+    return out.sort((a, b) => a.code.localeCompare(b.code));
+};
+
+/** The plan for one model, for the confirm: what is photographed, what is refused — and, for a
+ *  model whose nodes match no item at all, the names it actually holds. */
+export const modelReportText = (asmName, rows = [], nodeNames = [], limit = 14) => {
+    const ready = rows.filter(r => r.status === NODE_READY);
+    const had = rows.filter(r => r.status === NODE_HAS_PHOTO);
+    const amb = rows.filter(r => r.status === NODE_AMBIGUOUS);
+    const lines = [`${asmName}: ${ready.length} to photograph${had.length ? `, ${had.length} already photographed` : ''}${amb.length ? `, ${amb.length} refused` : ''}`];
+    if (ready.length) lines.push(`   ${ready.slice(0, limit).map(r => r.code).join(', ')}${ready.length > limit ? ` … and ${ready.length - limit} more` : ''}`);
+    amb.forEach(r => lines.push(`   ✗ ${r.code}: ${r.why}`));
+    if (!rows.length) {
+        const names = [...new Set((nodeNames || []).map(cleanFusionName).filter(Boolean))].sort();
+        lines.push(names.length
+            ? `   no node in this model is named with an item code — it holds: ${names.slice(0, limit).join(', ')}${names.length > limit ? ` … and ${names.length - limit} more` : ''}`
+            : '   the model has no named nodes at all');
+    }
+    return lines.join('\n');
+};
+
 export const nodeThumbSummary = (rows = []) => (rows || []).reduce((m, r) => {
     if (r && r.status) m[r.status] = (m[r.status] || 0) + 1;
     return m;
