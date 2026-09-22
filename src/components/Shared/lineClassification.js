@@ -154,7 +154,8 @@ const reResolve = (l, findPart, custKeys) => {
 // (price × qty, BOM-only parts included — exactly what the discounted rows have always totalled).
 const NET_LABEL = 'Net Line Total';
 const HEADER_SIDEMARK_RE = /\[([^\]]+)\]/;          // "▶ H2581F [Row 2]  ·  Blonde Oak (S03)"
-const headerSidemarkOf = (l) => cleanSidemark((l && l.sidemark) || (String((l && l.name) || '').match(HEADER_SIDEMARK_RE) || [])[1] || '');
+// Exported for Shared/displayRelease (2026-09-22): a display order's ROW is this same sidemark.
+export const headerSidemarkOf = (l) => cleanSidemark((l && l.sidemark) || (String((l && l.name) || '').match(HEADER_SIDEMARK_RE) || [])[1] || '');
 const smName = (l, sm) => {
     const [, indent, label] = String((l && l.name) || '').match(/^(\s*)([\s\S]*)$/);
     return `${indent}SM: ${sm} — ${label}`;

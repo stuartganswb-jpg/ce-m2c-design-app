@@ -1,0 +1,144 @@
+// Harness for displayRelease — 10.5 as mission control for a display order.
+//
+//   node scripts/displayRelease.test.mjs
+//
+// Three things can go wrong here and none of them is visible on the screen: a breakdown line lands
+// in the wrong row, a physical part is dropped (or a non-part is kept) on the way into the line
+// shape, or a row reads "done" while a line on it is still waiting. Each is a wrong thing on the
+// floor, so each gets a case.
+
+import {
+    rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, lineStateOf, rowStateOf,
+    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE,
+} from '../src/components/Shared/displayRelease.js';
+
+let pass = 0, fail = 0;
+const eq = (name, got, want) => {
+    const g = JSON.stringify(got), w = JSON.stringify(want);
+    if (g === w) { pass++; return; }
+    fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`);
+};
+const ok = (name, cond, extra = '') => { if (cond) { pass++; return; } fail++; console.log(`✗ ${name} ${extra}`); };
+
+// ── ROW KEYS ────────────────────────────────────────────────────────────────────────────────
+eq('a row label becomes a safe field key', rowKeyOf('Row 2'), 'ROW_2');
+eq('case and spacing do not matter', rowKeyOf('  row 2 '), 'ROW_2');
+eq('a tab-7 line names its row in the memo', rowOfLine({ memo: 'Row 3' }), 'Row 3');
+eq('a written row wins over the memo', rowOfLine({ row: 'Row 1', memo: 'left window' }), 'Row 1');
+
+// ── THE CPQ BREAKDOWN → LINES, ONE PER PART PER ROW ─────────────────────────────────────────
+{
+    const breakdown = [
+        { name: '▶ H1-75 [Row 1]  ·  P06', isHeader: true, sidemark: 'Row 1', qty: 35, total: 1 },
+        { name: '  - Pole', legacyErpId: 'H1-75SR', qty: 35, price: 30, total: 1050, finishCode: 'P06', perFoot: true, feet: 2, cutLength: 18 },
+        { name: '  - Finial', legacyErpId: 'H1-75SPF', qty: 70, price: 5, total: 350, finishCode: 'P06' },
+        { name: '  - Standoff', legacyErpId: 'H1-1STDOFF', qty: 70, price: 0, total: 0, hidden: true, finishCode: 'P06' },
+        { name: '  Trade Discount - (20%)', qty: 1, price: -1, total: -1, isDiscount: true },
+        { name: '  Net Line Total', qty: 1, price: 1, total: 1, isNetLine: true },
+        { name: 'Rod Diameter: 3/4"', qty: 0, isSizeRow: true },
+        { name: '  - Parked', legacyErpId: 'HIDDEN-node7', qty: 1, price: 0, total: 0 },
+        // An older header with the row only in the brackets.
+        { name: '▶ H1-1 [Row 2]  ·  EP2', isHeader: true, qty: 35, total: 1 },
+        { name: '  - Pole', legacyErpId: 'H1-1R', qty: 35, price: 1, total: 1, finishCode: 'EP2', perFoot: true, feet: 2 },
+        { name: '  - Acrylic', legacyErpId: 'H1-1ACR', qty: 35, price: 1, total: 1 },
+        { name: '  - Bend fee', qty: 35, price: 5, total: 175, isFee: true },
+        { name: 'Add-ons & Fees', qty: 1, price: 0, total: 0, isHeader: true },
+        { name: '  - Rush', qty: 1, price: 50, total: 50, isFee: true, isAddOn: true },
+    ];
+    const lines = rowLinesFromBreakdown(breakdown);
+    eq('exactly the physical parts survive — including the hidden standoff, which is built and picked',
+        lines.map(l => l.erp), ['H1-75SR', 'H1-75SPF', 'H1-1STDOFF', 'H1-1R', 'H1-1ACR']);
+    eq('each is tagged with its row', lines.map(l => l.row), ['Row 1', 'Row 1', 'Row 1', 'Row 2', 'Row 2']);
+    eq('the row also rides the memo, which is where a tab-7 line keeps it', lines[0].memo, 'Row 1');
+    eq('a finished part is to-be-finished with its code', [lines[0].toBeFinished, lines[0].finishCode], [true, 'P06']);
+    eq('a plated part is marked outsourced', [lines[3].finishCode, lines[3].finishOutsourced], ['EP2', true]);
+    eq('a part with no finish is a stocked pick', [lines[4].toBeFinished, lines[4].finishCode], [false, undefined]);
+    eq('a per-foot line carries pieces, feet per piece and billed feet, as tab 7 writes them',
+        [lines[0].qty, lines[0].perFoot, lines[0].feetPer, lines[0].billedFeet], [35, true, 2, 70]);
+    eq('the cut rides along', lines[0].cutLength, 18);
+    eq('a part with no cut carries none', 'cutLength' in lines[1], false);
+    eq('the name loses its list dash', lines[0].name, 'Pole');
+    ok('no discount, net, size echo, fee, add-on or parked geometry became a line',
+        !lines.some(l => /Discount|Net Line|Diameter|Bend|Rush|HIDDEN/.test(l.erp + l.name)));
+    eq('an empty breakdown makes no lines', rowLinesFromBreakdown([]), []);
+}
+
+// ── GROUPING THE SALES ORDER BY THE DISPLAY'S ROWS ──────────────────────────────────────────
+{
+    const so = { lines: [
+        { erp: 'A', row: 'Row 1' }, { erp: 'B', memo: 'row 2' }, { erp: 'C', memo: 'Left window' }, { erp: 'D' }, { erp: 'E', row: 'Row 9' },
+    ] };
+    const { rows, unassigned } = soRowsOf(so, ['Row 1', 'Row 2', 'Row 3']);
+    eq('a written row and a typed memo both find their row', [rows['Row 1'].map(x => x.line.erp), rows['Row 2'].map(x => x.line.erp)], [['A'], ['B']]);
+    eq('a row with no lines is still listed, empty', rows['Row 3'], []);
+    eq('a memo naming no row, a blank line, and a row the display lacks are UNASSIGNED — never guessed into a row',
+        unassigned.map(x => x.line.erp), ['C', 'D', 'E']);
+    eq('the line index is kept — that is the anchor the work order will carry', unassigned.map(x => x.lineIdx), [2, 3, 4]);
+}
+
+// ── WHAT A LINE IS DOING ────────────────────────────────────────────────────────────────────
+{
+    const so = { id: 'SO1', lines: [
+        { erp: 'H1-75SR', qty: 35, toBeFinished: true, finishCode: 'P06', row: 'Row 1' },
+        { erp: 'H1-1R', qty: 35, toBeFinished: true, finishCode: 'EP2', row: 'Row 2' },
+        { erp: 'H1-1ACR', qty: 35, toBeFinished: false, row: 'Row 2' },
+    ], oeGen: {} };
+    const none = { wos: [], pos: [], demands: [] };
+    eq('a stocked line is never started from here', lineStateOf({ so, line: so.lines[2], lineIdx: 2, links: none }).key, LINE_STATE.STOCKED);
+    eq('a to-be-finished line with nothing raised is NOT started', lineStateOf({ so, line: so.lines[0], lineIdx: 0, links: none }).key, LINE_STATE.NONE);
+    eq('a parked work order waiting on material reads BACKORDERED, with the reason',
+        (() => { const s = lineStateOf({ so, line: so.lines[0], lineIdx: 0, links: { ...none, wos: [{ id: 'WO-1', soLineIdx: 0, status: 'Approved', backOrdered: true, backOrderReason: '10 × H1-75SR short' }] } }); return [s.key, /short/.test(s.text)]; })(),
+        [LINE_STATE.BACKORDER, true]);
+    eq('a dispatched work order is ON THE FLOOR', lineStateOf({ so, line: so.lines[0], lineIdx: 0, links: { ...none, wos: [{ id: 'WO-1', soLineIdx: 0, status: 'Dispatched' }] } }).key, 'FLOOR');
+    eq('a closed work order is DONE', lineStateOf({ so, line: so.lines[0], lineIdx: 0, links: { ...none, wos: [{ id: 'WO-1', soLineIdx: 0, status: 'Closed' }] } }).key, 'DONE');
+    // The plated line, followed through the plater by the shipment's demandWoNum ↔ the stamp's ref.
+    const soP = { ...so, oeGen: { 1: { kind: 'PLATING', ids: ['PLD-1'], ref: 'PLW-CE-000123' } } };
+    const step = (status) => lineStateOf({ so: soP, line: soP.lines[1], lineIdx: 1, links: none, shipments: [{ demandWoNum: 'PLW-CE-000123', status }] }).key;
+    eq('issued and pulled → staged', step('staged'), LINE_STATE.PLATING_STAGED);
+    eq('shipped to the plater', step('shipped'), LINE_STATE.PLATING_SHIPPED);
+    eq('received back', step('received'), LINE_STATE.PLATING_RECEIVED);
+    eq('built back', step('built'), LINE_STATE.PLATING_BUILT);
+    eq('issued but not yet pulled reads as issued', lineStateOf({ so: soP, line: soP.lines[1], lineIdx: 1, links: none }).key, LINE_STATE.PLATING);
+    eq('a shipment for a DIFFERENT demand is not this line', lineStateOf({ so: soP, line: soP.lines[1], lineIdx: 1, links: none, shipments: [{ demandWoNum: 'PLW-CE-000999', status: 'built' }] }).key, LINE_STATE.PLATING);
+}
+
+// ── WHAT A ROW SAYS — the worst thing on it ─────────────────────────────────────────────────
+{
+    const so = { id: 'SO1', lines: [
+        { erp: 'A', qty: 1, toBeFinished: true, finishCode: 'P06', row: 'Row 1' },
+        { erp: 'B', qty: 1, toBeFinished: true, finishCode: 'EP2', row: 'Row 1' },
+        { erp: 'C', qty: 1, toBeFinished: false, row: 'Row 1' },
+    ], oeGen: {} };
+    const entries = so.lines.map((line, lineIdx) => ({ line, lineIdx }));
+    const none = { wos: [], pos: [], demands: [] };
+    const wo = (idx, extra) => ({ id: `WO-${idx}`, soLineIdx: idx, status: 'Approved', ...extra });
+    const st = (links, extra = {}) => rowStateOf({ so, entries, links, ...extra });
+
+    eq('nothing raised → NOT STARTED, and the count of what would start', [st(none).key, st(none).open, st(none).stocked], [ROW_STATE.NOT_STARTED, 2, 1]);
+    eq('one line raised, one not → PARTLY STARTED', st({ ...none, wos: [wo(0)] }).key, ROW_STATE.PARTLY_STARTED);
+    eq('a line the run named for review → NEEDS A DECISION, and it outranks a backorder',
+        st({ ...none, wos: [wo(0, { backOrdered: true })] }, { reviews: { 1: ['B is flagged BOTH'] } }).key, ROW_STATE.NEEDS_DECISION);
+    eq('a backordered line → BACKORDERED', st({ ...none, wos: [wo(0, { backOrdered: true }), wo(1)] }).key, ROW_STATE.BACKORDERED);
+    eq('all issued, none dispatched → ISSUED', st({ ...none, wos: [wo(0), wo(1)] }).key, ROW_STATE.ISSUED);
+    eq('one on the floor → ON THE FLOOR', st({ ...none, wos: [wo(0, { status: 'Dispatched' }), wo(1)] }).key, ROW_STATE.ON_FLOOR);
+    eq('a plated line issued → AT THE PLATER', st({ ...none, wos: [wo(0, { status: 'Dispatched' })], demands: [{ id: 'PLD-1', baseErpId: 'B', finishCode: 'EP2', woNum: 'PLW-1' }] }).key, ROW_STATE.AT_PLATER);
+    eq('everything closed or built → DONE', st({ ...none, wos: [wo(0, { status: 'Closed' }), wo(1, { status: 'Closed' })] }).key, ROW_STATE.DONE);
+    // ⚠ A row is NOT done while one of its lines still waits — the mistake that ships a board short.
+    eq('one line still open keeps the row from reading done', st({ ...none, wos: [wo(0, { status: 'Closed' })] }).key, ROW_STATE.PARTLY_STARTED);
+    eq('a row with no lines says so', rowStateOf({ so, entries: [], links: none }).key, ROW_STATE.EMPTY);
+    eq('a row of only stocked parts has nothing to make', rowStateOf({ so, entries: [entries[2]], links: none }).key, ROW_STATE.DONE);
+
+    const text = rowStartText('Row 1', st(none));
+    ok('the start confirmation names every line it will start', /2 line\(s\) will be started/.test(text) && /1 × A in P06/.test(text));
+    ok('and what it leaves alone', /left as they are/.test(text) && /C — stocked/.test(text));
+}
+
+// ── THE ANCHOR ──────────────────────────────────────────────────────────────────────────────
+eq('the anchor patch stands the auto-engines down and lets rows release alone',
+    displayAnchorPatch({ buildId: 'BUILD-1' }), { displayRelease: true, displayBuildId: 'BUILD-1', finishAsAvailable: true });
+eq('…and writes lines only when handed some', Object.keys(displayAnchorPatch({ buildId: 'B', lines: [] })).includes('lines'), true);
+eq('a CPQ order with no lines needs them written', soNeedsLines({ hqJobId: 'J' }), true);
+eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }] }), false);
+
+console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
+process.exit(fail ? 1 : 0);

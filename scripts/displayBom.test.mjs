@@ -228,6 +228,17 @@ const cartBaseFront3 = {
         eq('sample bins by style', [SAMPLE_BIN_BY_STYLE.TABLETOP, SAMPLE_BIN_BY_STYLE.WALL], ['FDISTABLE', 'FDISWALL']);
     }
     eq('nothing when every order is complete', Object.keys(displayDemandFrom([b3]).byItem).length, 0);
+    // ── A STARTED ROW LEAVES THE DEMAND (2026-09-22) — its parts are work orders on RTG now ──
+    {
+        const bracket = { key: 'H-BKT|P06', code: 'H-BKT', finishCode: 'P06', qtyPerBoard: 4, feetPerBoard: 0,
+            byRow: [{ row: 'Row 1', qtyPerBoard: 2, feetPerBoard: 0 }, { row: 'Row 2', qtyPerBoard: 2, feetPerBoard: 0 }] };
+        const base = { id: 'b9', name: 'x', status: 'PLANNED', qty: 10, built: 0, lines: { parts: [bracket], chips: [] } };
+        eq('with no row started the whole per-board counts', displayDemandFrom([base]).byItem['H-BKT|P06'].qty, 40);
+        eq('with Row 1 started only Row 2\'s share remains', displayDemandFrom([{ ...base, rowsStarted: ['Row 1'] }]).byItem['H-BKT|P06'].qty, 20);
+        eq('the row label matches case-insensitively', displayDemandFrom([{ ...base, rowsStarted: ['row 1'] }]).byItem['H-BKT|P06'].qty, 20);
+        ok('with both rows started the item leaves the demand entirely', !displayDemandFrom([{ ...base, rowsStarted: ['Row 1', 'Row 2'] }]).byItem['H-BKT|P06']);
+        eq('a line with no per-row split is untouched by started rows', displayDemandFrom([{ ...base, rowsStarted: ['Row 1'], lines: { parts: [{ ...bracket, byRow: [] }], chips: [] } }]).byItem['H-BKT|P06'].qty, 40);
+    }
 
     // ── the order on the floor: RTG's documents matched back to the build lines ──────────────
     {

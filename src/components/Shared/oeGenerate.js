@@ -354,35 +354,44 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
 // them running the plan is two sets of work orders — so the run is CLAIMED on the sales order inside a
 // transaction first. A claim older than ten minutes is a browser that died mid-run and may be retaken.
 const CLAIM_MS = 10 * 60 * 1000;
-export const claimOeAuto = async (soId, user, sig) => runTransaction(db, async (tx) => {
+// The run's record on the sales order. `oeAuto` for the whole-order automatic start; a display
+// order's rows each record under their own slot (`displayRows.ROW_2`) so two rows never share a
+// claim or overwrite each other's review — Shared/displayRelease.
+const slotOf = (data, slot) => String(slot || 'oeAuto').split('.').reduce((o, k) => (o && typeof o === 'object' ? o[k] : undefined), data) || {};
+export const claimOeAuto = async (soId, user, sig, slot = 'oeAuto') => runTransaction(db, async (tx) => {
     const ref = doc(db, 'hq_sales_orders', soId);
     const snap = await tx.get(ref);
     if (!snap.exists()) return false;
-    const cur = (snap.data().oeAuto) || {};
+    const cur = slotOf(snap.data(), slot);
     const now = Date.now();
     if (cur.state === 'RUNNING' && now - (cur.at || 0) < CLAIM_MS) return false;
     if (['NEEDS_REVIEW', 'DONE'].includes(cur.state) && cur.sig === sig) return false;   // already answered for exactly these lines
     if (cur.state === 'FAILED' && cur.sig === sig && now - (cur.at || 0) < CLAIM_MS) return false;
-    tx.update(ref, { oeAuto: { state: 'RUNNING', at: now, by: user || '', sig } });
+    tx.update(ref, { [slot]: { state: 'RUNNING', at: now, by: user || '', sig } });
     return true;
 });
 
 /**
  * Start production for one accepted Order Entry sales order. Clean lines run; the rest are named.
+ *
+ * `only(line, lineIdx)` scopes the run to SOME of the order's lines — a display order's ROW
+ * (Stuart 2026-09-22, 10.5 as mission control). Everything else is identical: the same coverage
+ * reading so a line is never raised twice, the same claim, the same doors, the same writer. `slot`
+ * is where this run records itself on the sales order; a row uses its own.
  * @returns { ran, review: [{ lineIdx, erp, finish, reasons[] }], state }
  */
-export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = null, log = () => {} }) => {
+export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = null, log = () => {}, only = null, slot = 'oeAuto' }) => {
     // Read FRESH, and read everything ever raised — the run must never raise a line twice on its own.
     const linkSet = links || (await loadOeLinks([so.id], { all: true }))[so.id] || { wos: [], pos: [], demands: [] };
-    const open = uncoveredTbfOf(so, linkSet, { any: true });
+    const open = uncoveredTbfOf(so, linkSet, { any: true }).filter(x => (typeof only === 'function' ? only(x.line, x.lineIdx) : true));
     const sig = oeAutoSig(open);
     if (!open.length) return { ran: 0, review: [], state: 'DONE' };
-    if (!(await claimOeAuto(so.id, user, sig))) return { ran: 0, review: [], state: 'SKIPPED' };
+    if (!(await claimOeAuto(so.id, user, sig, slot))) return { ran: 0, review: [], state: 'SKIPPED' };
     const review = [];
     let ran = 0;
     const finish = async (state, extra = {}) => {
-        try { await updateDoc(doc(db, 'hq_sales_orders', so.id), { oeAuto: { state, at: Date.now(), by: user || '', sig, ran, review, ...extra } }); }
-        catch (e) { console.warn('oeAuto state write failed', so.id, e); }
+        try { await updateDoc(doc(db, 'hq_sales_orders', so.id), { [slot]: { state, at: Date.now(), by: user || '', sig, ran, review, ...extra } }); }
+        catch (e) { console.warn('run state write failed', so.id, slot, e); }
     };
     try {
         const planItems = [];

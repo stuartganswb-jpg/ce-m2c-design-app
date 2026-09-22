@@ -473,10 +473,18 @@ export function displayDemandFrom(builds = []) {
         if (!b || b.status === 'COMPLETE' || b.status === 'CANCELLED') return;
         const open = openBoards(b);
         if (!open) return;
+        // A STARTED ROW HAS LEFT THE DEMAND (Stuart 2026-09-22, Shared/displayRelease). Its parts are
+        // now committed by work orders on RTG — counting them here as well would show the same
+        // pieces twice on the Sales Snapshot. Per row, from the per-row split each line carries.
+        const started = new Set((b.rowsStarted || []).map(r => String(r || '').trim().toUpperCase()));
+        const perBoardOf = (l, field) => {
+            if (!started.size || !Array.isArray(l.byRow) || !l.byRow.length) return N(l[field]);
+            return l.byRow.filter(r => !started.has(String(r.row || '').trim().toUpperCase())).reduce((s, r) => s + N(r[field]), 0);
+        };
         (b.lines?.parts || []).forEach(l => {
             if (l.done) return;
             const key = `${l.billedId || l.code}|${l.finishCode || ''}`;
-            add(key, { code: l.code, billedId: l.billedId || '', partId: l.partId || '', finishCode: l.finishCode || '', name: l.name || '', perFoot: !!l.perFoot }, N(l.qtyPerBoard) * open, N(l.feetPerBoard) * open, b);
+            add(key, { code: l.code, billedId: l.billedId || '', partId: l.partId || '', finishCode: l.finishCode || '', name: l.name || '', perFoot: !!l.perFoot }, perBoardOf(l, 'qtyPerBoard') * open, perBoardOf(l, 'feetPerBoard') * open, b);
         });
         (b.lines?.chips || []).forEach(c => {
             if (c.done) return;

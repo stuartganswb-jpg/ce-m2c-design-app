@@ -446,7 +446,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // RECORD, and must NEVER be split here — its stocked lines are already being picked and
         // packed by the WMS off the SO doc itself. Widening this to QUICKSHIP would create fin/shop
         // docs for work the warehouse is already doing: duplicate work orders for one order.
-        const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId));
+        // A DISPLAY ORDER IS STARTED ROW BY ROW FROM 10.5 (Stuart 2026-09-22, Shared/displayRelease):
+        // the whole-order split would put every row on the floor at once, as one document — the
+        // exact thing 10.5 exists to prevent. Its work orders still land here and are governed here.
+        const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId) && !o.displayRelease);
         const isSalesFlow = (o) => o.orderType === 'sales' || o.orderClass === 'ORDER_ENTRY' || (o.finPayload && o.finPayload.orderType === 'sales');
         // FINISH COMPLETE by default (Stuart 2026-09-03): a sales-typed work order waits for every
         // sibling line of its sales order unless that order is flagged "Finish as available".
@@ -523,7 +526,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         };
         let pick = null;
         for (const o of liveSO) {
-            if (o.orderClass !== 'QUICKSHIP' || !o.nsInternalId || o.deleted || o.stopped || o.rtgArchived) continue;
+            // A display order's rows are started from 10.5, one at a time (Shared/displayRelease) —
+            // the automatic start would raise every to-be-finished line of the order in one go.
+            if (o.orderClass !== 'QUICKSHIP' || !o.nsInternalId || o.deleted || o.stopped || o.rtgArchived || o.displayRelease) continue;
             if ((o.createdAt || 0) < OE_AUTO_FROM || isClosedState(o) || isDoneState(o)) continue;
             const open = oeOpenOf(o);
             if (!open.length) continue;
