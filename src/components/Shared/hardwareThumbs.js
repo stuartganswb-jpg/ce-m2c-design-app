@@ -32,8 +32,10 @@ const SCENES = new Map();         // url → Promise<THREE.Group>
 const W = 128, H = 96;
 
 // Size rides the key ONLY when custom, so the configurator's existing cache entries stay valid.
-const keyOf = (url, nodes, w = W, h = H) =>
-    `${url}::${[...nodes].map(n => String(n).toLowerCase()).sort().join('|')}${(w !== W || h !== H) ? `::${w}x${h}` : ''}`;
+// Same for the fastener opt-out: the same nodes photographed with and without their hardware are
+// two different pictures, and without this the second caller would be handed the first one's.
+const keyOf = (url, nodes, w = W, h = H, allowFasteners = false) =>
+    `${url}::${[...nodes].map(n => String(n).toLowerCase()).sort().join('|')}${(w !== W || h !== H) ? `::${w}x${h}` : ''}${allowFasteners ? '::fast' : ''}`;
 
 function loadScene(url) {
     if (SCENES.has(url)) return SCENES.get(url);
@@ -100,22 +102,33 @@ let _queue = Promise.resolve();
  */
 export function renderThumbnails(url, groups, onEach, opts = {}) {
     const w = opts.w || W, h = opts.h || H;
+    const allowFasteners = !!opts.allowFasteners;
     // Anything already photographed is handed back immediately; only the rest costs anything.
     groups.forEach(g => {
-        const k = keyOf(url, g.nodes || [], w, h);
+        const k = keyOf(url, g.nodes || [], w, h, allowFasteners);
         if (CACHE.has(k) && typeof onEach === 'function') onEach(g.key, CACHE.get(k));
     });
-    const pending = groups.filter(g => g.nodes?.length && !CACHE.has(keyOf(url, g.nodes, w, h)));
+    const pending = groups.filter(g => g.nodes?.length && !CACHE.has(keyOf(url, g.nodes, w, h, allowFasteners)));
     if (!url || !pending.length) return _queue;
     _queue = _queue
-        .then(() => runBatch(url, pending, onEach, w, h))
+        .then(() => runBatch(url, pending, onEach, w, h, allowFasteners))
         .catch(e => console.warn('Thumbnail batch failed:', e));
     return _queue;
 }
 
-async function runBatch(url, groups, onEach, w = W, h = H) {
+/** Every node name in an assembly's .glb, off the SAME cached scene the renderer uses — so asking
+ *  what is in a model costs nothing extra once it has been photographed (and vice versa). */
+export async function sceneNodeNames(url) {
+    if (!url) return [];
+    const scene = await loadScene(url);
+    const names = new Set();
+    scene.traverse(o => { if (o.name) names.add(o.name); });
+    return [...names];
+}
+
+async function runBatch(url, groups, onEach, w = W, h = H, allowFasteners = false) {
     // A batch queued behind another may find its work already done — re-check before paying.
-    const todo = groups.filter(g => !CACHE.has(keyOf(url, g.nodes, w, h)));
+    const todo = groups.filter(g => !CACHE.has(keyOf(url, g.nodes, w, h, allowFasteners)));
     if (!todo.length) return;
     try {
         const scene = await loadScene(url);
@@ -139,7 +152,11 @@ async function runBatch(url, groups, onEach, w = W, h = H) {
             const wanted = new Set(g.nodes.map(n => String(n).toLowerCase()));
             let shown = 0;
             meshes.forEach(m => {
-                const on = !FASTENER_RX.test(m.name || '') && belongs(m, wanted);
+                // ⚠ THE FASTENER FILTER MUST BE OPT-OUTABLE (2026-09-21). Hiding screws and washers
+                // is right when photographing a whole bracket — nobody wants a thumbnail of its
+                // hardware. It is exactly wrong when the subject IS a fastener: the sweep would show
+                // nothing, cache the nothing, and that part could never get a picture again.
+                const on = (allowFasteners || !FASTENER_RX.test(m.name || '')) && belongs(m, wanted);
                 m.visible = on;
                 if (on) shown++;
             });
@@ -171,7 +188,7 @@ async function runBatch(url, groups, onEach, w = W, h = H) {
                 }
             }
             if (!contextDied) {
-                CACHE.set(keyOf(url, g.nodes, w, h), data);
+                CACHE.set(keyOf(url, g.nodes, w, h, allowFasteners), data);
                 if (typeof onEach === 'function') onEach(g.key, data);
             }
             // Give the browser the thread back between frames. Twenty options in a slot must never

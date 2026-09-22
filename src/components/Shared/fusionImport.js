@@ -17,16 +17,15 @@ import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils';
+import { cleanFusionName } from './nodeThumbs.js';
 
 // Fusion component names carry versioning noise — and FBXLoader sanitizes separators, so
 // "H1-75BE v3:2" can arrive as "H1-75BE_v32". Strip from the version marker to the end.
-export const cleanFusionName = (s) => String(s || '')
-    .replace(/[\s_]v\d+.*$/i, '')
-    .replace(/:\d+$/, '')
-    .replace(/\.\d{3}$/, '')
-    .replace(/_+$/, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+//
+// The rule now lives in Shared/nodeThumbs, which is pure, so the thumbnail matcher can use it and a
+// node harness can test it — this module cannot be imported without pulling in three.js. Re-exported
+// here so every existing caller and import path is unchanged.
+export { cleanFusionName };
 
 // The FBX's declared unit factor (2.54 = file authored in inches, exported as cm). Read straight
 // from the binary so the unit guess doesn't depend on which conversions FBXLoader applied.

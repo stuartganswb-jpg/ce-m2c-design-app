@@ -13,7 +13,8 @@ import { packSizeOf, rushFeeAmountOf, rushFeeLabelOf } from '../Shared/quickShip
 import { SOURCING, sourcingPatch } from '../Shared/sourcing';
 import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
-import { renderThumbnails } from '../Shared/hardwareThumbs';
+import { renderThumbnails, sceneNodeNames } from '../Shared/hardwareThumbs';
+import { planNodeThumbs, nodeThumbPlanText, NODE_READY } from '../Shared/nodeThumbs';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -263,6 +264,97 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     //    working GLB, so its thumbnail is that geometry photographed once (the SAME renderer/queue
     //    the configurator uses — Shared/hardwareThumbs), uploaded, and stamped as finalImageUrl.
     //    Parts that already have an image are never touched.
+    // ── A PICTURE OF THE PIECE, NOT THE BRACKET (Stuart 2026-09-21) ──────────────────────────
+    // "really need to try and split the nodes on 1.6, only for thumbnail purposes, do not split on
+    // 1.6 itself as the tagging is finally perfect and working."
+    //
+    // The seeded kits are holders; their COMPONENTS have no picture, because the sweep below
+    // photographs what a PIN names and the pins name the bracket. 1.6's ⤢ split would fix that by
+    // writing new pins a level down — and rewriting pins is the one thing forbidden here.
+    //
+    // It is not needed. The renderer matches a mesh's OWN name before walking up its ancestry, so a
+    // child name renders just that child; and the child is found without any pin, because Fusion
+    // component names ARE the item codes. This reads the node names straight out of each GLB,
+    // matches them to the component codes, and photographs each one alone.
+    //
+    // ⚠ WRITES ONLY the component's own finalImageUrl + imageSource. Nothing touches assembly_pins
+    // or nodeClusters, so the tagging cannot drift and this can be re-run at will.
+    const kitComponentThumbs = async () => {
+        const asms = inventory.filter(a => a.manufacturingSpecs?.cadUrl && (a.routingType === 'MAIN' || a.recordType === 'PRODUCT'));
+        if (!asms.length) return alert('No mainline assemblies with a working GLB on this brand.');
+        // Every part named as a component of any kit on this brand.
+        const byId = new Map(inventory.map(p => [p.id, p]));
+        const wanted = new Map();
+        inventory.forEach(k => {
+            if (k.partClass !== 'Kit') return;
+            (k.manufacturingSpecs?.kitComponents || []).forEach(c => {
+                const p = byId.get(c.partId);
+                if (p && !wanted.has(p.id)) wanted.set(p.id, p);
+            });
+        });
+        if (!wanted.size) return alert('No kit components on this brand — seed the kits first.');
+
+        setBulkTool({ running: 'kitpix', msg: `Reading ${asms.length} model(s)…` });
+        try {
+            let gIndex = { byPartId: new Map(), byCode: new Map() };
+            try {
+                const gSnap = await getDocs(collection(db, 'global_assets'));
+                gIndex = buildGalleryIndex(gSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+            } catch (err) { /* gallery unreadable → the stamp on the record still decides */ }
+            const byBase = new Map();
+            inventory.forEach(p => { const k = splitCode(p.legacyErpId || p.itemId); if (k && !k.finish) byBase.set(k.pattern, p); });
+            const done = new Set();
+            const hasPhoto = (p) => done.has(p.id) || !photoMayOverwrite(p, byBase) || !!galleryImageForPart(p, gIndex);
+
+            // Plan against every model first, so the operator sees the whole picture before any of it.
+            const plans = [];
+            for (const asm of asms) {
+                const names = await sceneNodeNames(asm.manufacturingSpecs.cadUrl);
+                const rows = planNodeThumbs({ parts: [...wanted.values()], nodeNames: names, hasPhoto });
+                plans.push({ asm, rows, ready: rows.filter(r => r.status === NODE_READY) });
+            }
+            const total = plans.reduce((s, p) => s + p.ready.length, 0);
+            const text = plans.map(p => nodeThumbPlanText(p.rows, p.asm.itemName || p.asm.id)).join('\n\n');
+            if (!window.confirm(`Kit component pictures from the model — ${activeBrand.toUpperCase()}\n\n${text}\n\n${total} picture(s) in total. The 1.6 tagging is NOT touched. Go ahead?`)) {
+                setBulkTool({ running: '', msg: 'Cancelled — nothing was written.' });
+                return;
+            }
+
+            let made = 0, failed = 0;
+            for (const { asm, ready } of plans) {
+                // A part photographed from an earlier model is not photographed again.
+                const todo = ready.filter(r => !done.has(r.part.id));
+                if (!todo.length) continue;
+                const shots = new Map();
+                await renderThumbnails(
+                    asm.manufacturingSpecs.cadUrl,
+                    todo.map(r => ({ key: r.part.id, nodes: [r.node] })),
+                    (key, dataUrl) => { if (dataUrl) shots.set(key, dataUrl); },
+                    // Photographing a fastener is the POINT here — a nut is a kit component.
+                    { w: 384, h: 288, allowFasteners: true },
+                );
+                for (const r of todo) {
+                    const dataUrl = shots.get(r.part.id);
+                    if (!dataUrl) { failed++; continue; }     // nothing visible under that name
+                    setBulkTool({ running: 'kitpix', msg: `Saving ${r.code}… (${made + 1} of ${total})` });
+                    try {
+                        const blob = await (await fetch(dataUrl)).blob();
+                        const sref = ref(storage, `dynamic_assets/auto_thumbs/${r.part.id}_${Date.now()}.png`);
+                        await uploadBytes(sref, blob);
+                        const url = await getDownloadURL(sref);
+                        await updateDoc(doc(db, 'Approved_Designs', r.part.id), imageUpdate(url, IMG_GLB_RENDER));
+                        done.add(r.part.id);
+                        made++;
+                    } catch (err) { console.warn(r.code, err); failed++; }
+                }
+            }
+            setBulkTool({ running: '', msg: `${made} component picture(s) written${failed ? `, ${failed} produced nothing` : ''}. The 1.6 tagging was not touched.` });
+        } catch (err) {
+            console.error(err);
+            setBulkTool({ running: '', msg: `Component thumbnails failed: ${err.message || err}` });
+        }
+    };
+
     // ── THE BASIC APP KITS, FROM THE SHEET (Stuart 2026-09-21, 0903/H1-SimpleKits.xlsx) ──────
     // A holder part that carries the price, the customer's alias and the customer's pricing, with
     // its pieces beneath it. Fifty of them, each in a mill and a /P version.
@@ -1449,6 +1541,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     title={'Reads H1-SimpleKits.xlsx (column "Item" = the kit, the "Kit Comp" columns = its parts) and makes each one an app kit. Shows the full plan first, including every row it will skip and why. Writes ONLY partClass, routingType and the component list — customer pricing and aliases on those records are never touched.'}
                     style={{ padding: '12px 20px', background: bulkTool.running === 'kits' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'kits' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                     🧰 Seed app kits from sheet
+                </button>
+                <button onClick={kitComponentThumbs} disabled={!!bulkTool.running}
+                    title={'Photographs each KIT COMPONENT on its own, straight out of the assembly model — it finds the node by the component\'s own item code, so no pin is needed. Shows the full plan first, per model, including every component it cannot find a node for. The 1.6 tagging is only READ: no pin and no cluster is written.'}
+                    style={{ padding: '12px 20px', background: bulkTool.running === 'kitpix' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'kitpix' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                    🔩 Kit component thumbnails
                 </button>
             </div>
 
