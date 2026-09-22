@@ -179,11 +179,16 @@ export const entryNamesOrder = (entry, docIds) => {
     const m = dk.match(/^(?:wo|wocmpl):(?:[a-z_]+:)?(.+)$/);
     return !!(m && docIds.has(m[1]));
 };
-export async function cancelQueuedNsWrites(ctx, { order, links, by, reason }) {
+export async function cancelQueuedNsWrites(ctx, { order, links, by, reason, floorOnly = false }) {
     const { db, doc, updateDoc, getDocs, query, collection, where } = ctx;
     const out = { cancelled: [], inFlight: [] };
     if (!getDocs || !query || !collection || !where) return out;      // a caller without the reads cannot look
-    const docIds = orderDocIdsOf(order, links);
+    // `floorOnly` (the retire, 2026-09-22): only the FLOOR documents are being closed — the sales
+    // order stays open, so a write queued for the order itself (its own push, a retry of one) is not
+    // this closer's to cancel.
+    const docIds = floorOnly
+        ? new Set([...(links && links.fin ? [...links.fin.keys()] : []), ...(links && links.shop ? [...links.shop.keys()] : [])].map(String))
+        : orderDocIdsOf(order, links);
     let snap;
     try { snap = await getDocs(query(collection(db, 'ns_outbox'), where('status', 'in', ['PENDING', 'FAILED', 'PROCESSING', 'POSTING']))); }
     catch (e) { console.warn('outbox scan on close failed (order is closed regardless):', e); return out; }
@@ -212,7 +217,15 @@ export async function cancelQueuedNsWrites(ctx, { order, links, by, reason }) {
  * Returns a summary the caller can put in front of the operator — including whether a NetSuite
  * close was queued, which is a REQUEST and not a confirmation (a non-WIP work order refuses it).
  */
-export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason, notify }) {
+/**
+ * `keepRecord` (2026-09-22, Shared/displayRelease — "keep the sales orders but otherwise start
+ * over"): retire an order's FLOOR documents and leave the record itself open. Used when a sales
+ * order that was split as one document is being re-released row by row: the whole-order finishing
+ * and shop documents close exactly as any close (state kept for reopen, pick fields cleared, open
+ * rod cuts cancelled, their queued NetSuite work-order writes cancelled), but the sales order is
+ * not closed, is not stamped, and its own queued writes are not touched.
+ */
+export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason, notify, keepRecord = false }) {
     const { db, doc, updateDoc } = ctx;
     const links = await linkedDocsOf(ctx, order, kind);
     const stamp = {
@@ -242,7 +255,7 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
         await updateDoc(doc(db, 'shop_custom_orders', id), { status: 'Completed', closed: true, ...stamp, stateBeforeClose: snap(d, ['status', 'closed']) });
         done.shop++;
     }
-    if (links.hq) {
+    if (links.hq && !keepRecord) {
         await updateDoc(doc(db, links.hq.coll, links.hq.id), { status: 'Closed', ...stamp, stateBeforeClose: snap(links.hq.data, ['status']) });
         done.hq++;
     }
@@ -275,7 +288,7 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
 
     // Queued NetSuite writes for this order are cancelled; ones already in flight are flagged.
     try {
-        const nsq = await cancelQueuedNsWrites(ctx, { order, links, by, reason });
+        const nsq = await cancelQueuedNsWrites(ctx, { order, links, by, reason, floorOnly: keepRecord });
         done.nsWritesCancelled = nsq.cancelled; done.nsWritesInFlight = nsq.inFlight;
     } catch (e) { console.warn('queued-write cancel on close failed (order is closed regardless):', e); }
 
@@ -286,7 +299,7 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
     // to raise a "close the balance" task for orders NetSuite had already built (146 of them on the
     // board). The fin docs' word counts for the record's work order.
     const builtIds = new Set([...links.fin.values()].filter(d => d && d.nsWoCompletionPosted && d.nsWoId).map(d => String(d.nsWoId)));
-    const hqWoOpen = links.hq && links.hq.data.nsWoId && !links.hq.data.nsWoClosed
+    const hqWoOpen = !keepRecord && links.hq && links.hq.data.nsWoId && !links.hq.data.nsWoClosed
         && !links.hq.data.nsWoCompletionPosted && !builtIds.has(String(links.hq.data.nsWoId));
     const ns = nsSrc
         ? { coll: 'fin_workorders', docId: nsSrc[0], nsWoId: nsSrc[1].nsWoId, tran: nsSrc[1].nsWoTran }
@@ -311,7 +324,7 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
             nsWoCloseRequired: true, nsWoCloseRequestedAt: Date.now(), nsWoCloseRequestedBy: by || '',
             nsWoClosePending: false,
         }).catch(() => {});
-        if (links.hq) await updateDoc(doc(db, links.hq.coll, links.hq.id), {
+        if (links.hq && !keepRecord) await updateDoc(doc(db, links.hq.coll, links.hq.id), {
             nsWoCloseRequired: true, nsWoCloseRequestedAt: Date.now(), nsWoCloseRequestedBy: by || '',
             nsWoClosePending: false,
         }).catch(() => {});

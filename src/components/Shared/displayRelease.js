@@ -99,6 +99,51 @@ export const wholeOrderDocsOf = (so, fin = [], shop = []) => {
     return (finDoc || shopDoc) ? { fin: finDoc, shop: shopDoc } : null;
 };
 
+/**
+ * MAY THE WHOLE-ORDER SPLIT BE RETIRED? (Stuart 2026-09-22: "keep the sales orders but otherwise
+ * start over, it is not workable in current format.") Only while nothing has moved on it: the
+ * finishing doc not past Setup, nothing picked or packed, the shop doc not started, nothing pulled
+ * to the plater. Anything that HAS moved is named, and the retire refuses — a document with work
+ * logged against it is closed by a person on RTG who can see that work, not from here.
+ * @returns string[] — empty means it may go
+ */
+export const retireBlockersOf = ({ fin = null, shop = null, plating = [] } = {}) => {
+    const out = [];
+    const FIN_OK = ['', 'SETUP', 'PENDING', 'QUEUED', 'NOT STARTED'];
+    const PICK_OK = ['', 'PENDING', 'WAITING', 'QUEUED'];
+    if (fin) {
+        const phase = U(fin.currentPhase || fin.status || '');
+        if (!FIN_OK.includes(phase)) out.push(`${fin.id} is at ${fin.currentPhase || fin.status} on the finishing floor`);
+        if (!PICK_OK.includes(U(fin.pickStatus || ''))) out.push(`${fin.id} has been picked (${fin.pickStatus})`);
+        if (fin.packStatus) out.push(`${fin.id} has been packed (${fin.packStatus})`);
+        if (fin.closed || U(fin.status) === 'CLOSED') out.push(`${fin.id} is already closed`);
+    }
+    if (shop) {
+        const st = U(shop.status || '');
+        if (!['', 'PENDING', 'RELEASED', 'QUEUED', 'APPROVED', 'NOT STARTED'].includes(st)) out.push(`${shop.id} is ${shop.status} on the shop floor`);
+        if (shop.closed) out.push(`${shop.id} is already closed`);
+    }
+    (plating || []).forEach(p => {
+        if (!p) return;
+        if (p.__coll === 'plating_shipments' && !['', 'STAGED'].includes(U(p.status))) out.push(`${p.woNum || p.id} is ${p.status} at the plater`);
+    });
+    return out;
+};
+
+/** The words of the retire confirmation — what closes, what is cancelled, what follows. */
+export const retireText = (so, { fin = null, shop = null, plating = [] } = {}) => {
+    const demands = (plating || []).filter(p => p && p.__coll === 'plating_demand');
+    return [
+        `Retire the whole-order split of ${so.soId || so.id} and release it by ROWS instead?`,
+        '\nThis CLOSES, through the same close RTG uses (state kept, reopenable):',
+        fin ? `  • ${fin.id} — the whole-order finishing document` : '',
+        shop ? `  • ${shop.id} — the whole-order shop document` : '',
+        demands.length ? `\nand CANCELS ${demands.length} open plating demand(s) the split raised (${demands.map(d => d.woNum || d.id).join(', ')}), through the ledger.` : '',
+        `\nThe sales order ${so.soId || so.id} itself stays open and is not touched. Its lines are then written for the row route, and each row is started from here when you choose.`,
+        '\nNothing has been worked on these documents (checked). This is the point of no return for the whole-order path on this order.',
+    ].filter(Boolean).join('\n');
+};
+
 /** The words for a whole-order sales order's rows: what its documents say, from RTG's side. */
 export const wholeOrderText = (whole) => {
     if (!whole) return '';

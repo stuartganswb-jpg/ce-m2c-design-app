@@ -31,11 +31,12 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc, query, where, getDoc, getDocs } from 'firebase/firestore';
 import { DISPLAY_STYLES, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, cpqEntryRows, cpqEntryCsv, SAMPLE_BIN_BY_STYLE, floorLinksByLine } from '../Shared/displayBom';
-import { linkedDocsOf, identityKeysOf } from '../Shared/orderLifecycle';
+import { linkedDocsOf, identityKeysOf, closeOrderEverywhere } from '../Shared/orderLifecycle';
+import { cancelPlatingDemand } from '../Shared/platingDemand';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText } from '../Shared/displayRelease';
+import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -270,6 +271,48 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         } catch (e) { alert('Anchor failed: ' + (e?.message || e)); }
         setBusy('');
     };
+    // ── ⟲ RETIRE THE WHOLE-ORDER SPLIT → RELEASE BY ROWS (Stuart 2026-09-22) ───────────────────
+    // "keep the sales orders but otherwise start over, it is not workable in current format." The
+    // whole-order finishing and shop documents close through the closer's own path — state kept
+    // for reopen, pick fields cleared, open rod cuts cancelled, their queued NetSuite work-order
+    // writes cancelled — with `keepRecord`, so the sales order itself is not closed and its own
+    // queued writes are not touched. Open plating demands the split raised are cancelled through
+    // the ledger. Then the order is anchored for real, and its rows start from here.
+    //
+    // Refused outright if anything on those documents has moved (retireBlockersOf): a document with
+    // work logged against it is closed by a person on RTG who can see that work, not from here.
+    const retireSplit = async (entry) => {
+        const so = entry?.so;
+        if (!so || !draft || !entry.whole) return;
+        const blockers = retireBlockersOf({ fin: entry.whole.fin, shop: entry.whole.shop, plating: entry.plating || [] });
+        if (blockers.length) return alert(`Cannot retire the whole-order split of ${so.soId || so.id} — work has been logged on it:\n\n${blockers.map(b => `  • ${b}`).join('\n')}\n\nClose or finish it on RTG, where that work is visible.`);
+        // The lines that will replace it: read now, so a breakdown with nothing in it stops this before anything closes.
+        let lines = null;
+        if (soNeedsLines(so)) {
+            if (!so.hqJobId) return alert('This sales order has no lines and no CPQ job to read them from — nothing to release by rows.');
+            const job = await getDoc(doc(db, 'jobs', so.hqJobId));
+            lines = rowLinesFromBreakdown(job.exists() ? ((job.data().cpqData || {}).breakdown || []) : []);
+            if (!lines.length) return alert(`The CPQ job ${so.hqJobId} has no physical lines in its breakdown — nothing to release by rows.`);
+        }
+        if (!window.confirm(retireText(so, { fin: entry.whole.fin, shop: entry.whole.shop, plating: entry.plating || [] }))) return;
+        setBusy('Retiring the whole-order split…');
+        const by = String(currentUser || '10.5');
+        try {
+            const ctx = { db, doc, updateDoc, getDoc, getDocs, query, collection, where, deleteDoc, setDoc };
+            const res = await closeOrderEverywhere(ctx, { order: so, kind: 'sales', by, from: '10.5', reason: 'released by rows from 10.5 (the whole-order split retired)', keepRecord: true });
+            const demands = (entry.plating || []).filter(p => p && p.__coll === 'plating_demand');
+            let cancelled = 0;
+            for (const d of demands) {
+                const r = await cancelPlatingDemand(ctx, { id: d.id, record: d, by, from: '10.5', reason: 'the whole-order split was retired — the row raises its own', shipmentLines: (entry.plating || []).filter(p => p.__coll === 'plating_shipments') });
+                if (r.ok) cancelled++;
+            }
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, lines }));
+            alert(`Retired: ${res.fin} finishing doc(s), ${res.shop} shop doc(s) closed${res.rodCuts ? `, ${res.rodCuts} rod cut(s) cancelled` : ''}${(res.nsWritesCancelled || []).length ? `, ${res.nsWritesCancelled.length} queued NetSuite write(s) cancelled` : ''}${cancelled ? `, ${cancelled} plating demand(s) cancelled` : ''}${res.nsNeedsManualClose ? `.\n\n⚠ NetSuite work order ${res.ns} must be closed by hand — a task was raised.` : '.'}\n\n${so.soId || so.id} is now released by rows from here.`);
+            await loadFloor(draft);
+        } catch (e) { alert('Retire failed partway: ' + (e?.message || e) + '\n\nRead the floor again before doing anything else — some documents may already be closed.'); }
+        setBusy('');
+    };
+
     // Another sales order for this build: type its number, it resolves, ⚓ anchors it.
     const lookupSo = async () => {
         const v = String(addSo || '').trim();
@@ -496,7 +539,11 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                             <div style={{ fontSize: '0.85rem' }}>
                                 Sales order <b>{s.so.soId || s.so.id}</b>{s.so.soId && s.so.soId !== s.so.id ? <span style={{ color: 'var(--ink-soft)' }}> ({s.so.id})</span> : null} · {s.so.status || '—'}{s.so.customer ? ` · ${s.so.customer}` : ''}
                                 {s.whole
-                                    ? <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>whole-order · split by RTG · managed there</span>
+                                    ? <>
+                                        <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>whole-order · split by RTG · managed there</span>
+                                        <button onClick={() => retireSplit(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
+                                            title="Close the whole-order finishing and shop documents (reopenable, through RTG's own close), keep the sales order, and release its rows from here. Refuses if any work has been logged on them.">⟲ Retire the split → release by rows</button>
+                                    </>
                                     : <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>⚓ rows start from here{!s.so.nsInternalId ? ' · ⚠ NetSuite has not accepted it yet' : ''}</span>}
                                 {!s.links && <span style={{ ...mono, color: '#b02d20', marginLeft: '10px' }}>⚠ could not read its work orders</span>}
                             </div>

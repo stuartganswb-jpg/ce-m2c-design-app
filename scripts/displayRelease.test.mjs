@@ -9,7 +9,7 @@
 
 import {
     rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, lineStateOf, rowStateOf,
-    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText,
+    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText,
 } from '../src/components/Shared/displayRelease.js';
 
 let pass = 0, fail = 0;
@@ -166,6 +166,23 @@ eq('a written row wins over the memo', rowOfLine({ row: 'Row 1', memo: 'left win
         rowStateOf({ entries: [{ ...entries[0], whole: { fin: { id: 'WO-SO60551', currentPhase: 'Complete' }, shop: null } }] }).lines[0].key, LINE_STATE.DONE);
     eq('a row made only of whole-order lines has nothing to start', rowStateOf({ entries: [entries[0]] }).open, 0);
     ok('…and does not read "not started"', rowStateOf({ entries: [entries[0]] }).key !== ROW_STATE.NOT_STARTED);
+}
+
+// ── RETIRING THE WHOLE-ORDER SPLIT — only while nothing has moved ───────────────────────────
+{
+    const so = { id: 'SO-APP-9', soId: 'SO60585' };
+    const untouched = { fin: { id: 'WO-SO60585', currentPhase: 'Setup', pickStatus: 'Pending' }, shop: { id: 'SHOP-SO60585', status: 'Pending' }, plating: [] };
+    eq('untouched documents may be retired', retireBlockersOf(untouched), []);
+    eq('a finishing doc past Setup blocks, and says where it is',
+        retireBlockersOf({ ...untouched, fin: { ...untouched.fin, currentPhase: 'Painting' } }), ['WO-SO60585 is at Painting on the finishing floor']);
+    eq('a picked doc blocks', retireBlockersOf({ ...untouched, fin: { ...untouched.fin, pickStatus: 'Picked' } }), ['WO-SO60585 has been picked (Picked)']);
+    eq('a packed doc blocks', retireBlockersOf({ ...untouched, fin: { ...untouched.fin, packStatus: 'Packed' } }), ['WO-SO60585 has been packed (Packed)']);
+    eq('a shop doc that is being fabricated blocks', retireBlockersOf({ ...untouched, shop: { id: 'SHOP-SO60585', status: 'In Process' } }), ['SHOP-SO60585 is In Process on the shop floor']);
+    eq('parts already shipped to the plater block', retireBlockersOf({ ...untouched, plating: [{ __coll: 'plating_shipments', woNum: 'PLW-1', status: 'shipped' }] }), ['PLW-1 is shipped at the plater']);
+    eq('an open demand (nothing pulled) does not block — it is cancelled instead', retireBlockersOf({ ...untouched, plating: [{ __coll: 'plating_demand', woNum: 'PLW-2', status: 'open' }] }), []);
+    eq('in the pick QUEUE is not picked', retireBlockersOf({ ...untouched, fin: { ...untouched.fin, pickStatus: 'Pending', sentToPickPack: true } }), []);
+    ok('the confirmation names both documents and the demand it will cancel',
+        (() => { const t = retireText(so, { ...untouched, plating: [{ __coll: 'plating_demand', woNum: 'PLW-2' }] }); return /WO-SO60585/.test(t) && /SHOP-SO60585/.test(t) && /CANCELS 1 open plating demand/.test(t) && /stays open/.test(t); })());
 }
 
 // ── THE ANCHOR ──────────────────────────────────────────────────────────────────────────────
