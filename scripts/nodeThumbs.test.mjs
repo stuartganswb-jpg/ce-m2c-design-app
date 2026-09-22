@@ -8,7 +8,7 @@
 // node, and two different records whose codes reduce to the same key.
 
 import {
-    cleanFusionName, nodeKey, baseCodeOf, buildNodeIndex, planNodeThumbs, nodeThumbSummary, nodeThumbPlanText, planModelThumbs, modelReportText,
+    cleanFusionName, nodeKey, baseCodeOf, buildNodeIndex, planNodeThumbs, nodeThumbSummary, nodeThumbPlanText, planModelThumbs, modelReportText, slotTailOf,
     slotReportText, NODE_READY, NODE_NONE, NODE_AMBIGUOUS, NODE_NO_CODE, NODE_HAS_PHOTO,
 } from '../src/components/Shared/nodeThumbs.js';
 
@@ -167,6 +167,17 @@ eq('a record with no code at all', baseCodeOf({}), '');
     const empty = modelReportText('H1-BACKPLATES', planModelThumbs({ parts: lib, nodeNames: ['Scene', 'Body1', 'Mirror of Bracket v2'] }), ['Scene', 'Body1', 'Mirror of Bracket v2']);
     ok('a model whose nodes carry no item code prints the names it holds, cleaned', /no node in this model is named with an item code — it holds: Body1, Mirror of Bracket, Scene/.test(empty));
     eq('a model with no named nodes says so', /no named nodes at all/.test(modelReportText('X', [], [])), true);
+
+    // THE MERGED MODEL'S SLOT PREFIX (2026-09-23, H1-2TRV BRACKET PARTS: "Nothing to photograph" while
+    // every part sat there as S0ZG584-NEW-SLOT__9_H12TRVLA).
+    eq('the tail behind the slot prefix, as 1.6 / CPQ / Admin read it', [slotTailOf('S0ZG584-NEW-SLOT__9_H12TRVLA'), slotTailOf('S0ZG584-NEW-SLOT__0_FusionImport'), slotTailOf('H12TRVLA')], ['H12TRVLA', 'FusionImport', 'H12TRVLA']);
+    const merged = ['S0ZG584-NEW-SLOT', 'S0ZG584-NEW-SLOT__0_FusionImport', 'S0ZG584-NEW-SLOT__1_H12TRVFH', 'S0ZG584-NEW-SLOT__2_H12TRVBADBL', 'S0ZG584-NEW-SLOT__3_H12TRVBP', 'S0ZG584-NEW-SLOT__6_H12TRV', 'S0ZG584-NEW-SLOT__8_H12TRV2', 'S0ZG584-NEW-SLOT__9_H12TRVLA', 'S0ZG584-NEW-SLOT__10_H12TRVBADBL2'];
+    const mrows = planModelThumbs({ parts: [...lib, { id: 'trv', legacyErpId: 'H1-2TRV' }], nodeNames: merged, hasPhoto: photo });
+    const mst = Object.fromEntries(mrows.map(r => [r.code, r]));
+    eq('every part behind a slot prefix is found, hyphen or not', Object.keys(mst).sort(), ['H1-2TRV', 'H1-2TRVBADBL', 'H1-2TRVBP', 'H1-2TRVLA']);
+    eq('…and the RAW node name is what goes to the renderer', mst['H1-2TRVLA'].node, 'S0ZG584-NEW-SLOT__9_H12TRVLA');
+    eq('H1-2TRV is found by its first instance; the designer-numbered H12TRV2 is a different name and adds nothing', [mst['H1-2TRV'].node, mst['H1-2TRV'].instances], ['S0ZG584-NEW-SLOT__6_H12TRV', 1]);
+    eq('the slot node itself and the import root never match a part', mrows.some(r => /SLOT$|FusionImport/.test(r.node)), false);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

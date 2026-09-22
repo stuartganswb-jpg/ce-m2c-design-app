@@ -51,15 +51,30 @@ export const NODE_AMBIGUOUS = 'AMBIGUOUS_CODE';
 export const NODE_NO_CODE = 'NO_CODE';
 export const NODE_HAS_PHOTO = 'HAS_PHOTO';
 
-/** raw GLB node names → key → the raw names carrying it (a component instanced twice has two). */
+/**
+ * THE NAME BEHIND THE SLOT PREFIX (2026-09-23). A model merged by the Assembly Builder names every
+ * node `<slot>__<n>_<component>` — `S0ZG584-NEW-SLOT__9_H12TRVLA` — with the component's own name
+ * reduced to letters and digits (AssemblyBuilderTab, the merge). Every reader of such a name
+ * (1.6's chip label, CPQ, Admin) takes the tail the same way: after the last `__`, the ordinal and
+ * its underscore dropped. So does this; a name with no prefix is its own tail.
+ */
+export const slotTailOf = (n) => { const seg = String(n || '').split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); };
+
+/** raw GLB node names → key → the raw names carrying it (a component instanced twice has two).
+ *  A merged model's node is indexed under its slot-stripped tail as well, so `H1-2TRVLA` finds
+ *  `S0ZG584-NEW-SLOT__9_H12TRVLA`; the RAW name is what is kept, because the renderer matches by it. */
 export const buildNodeIndex = (nodeNames = []) => {
     const m = new Map();
-    (nodeNames || []).forEach(n => {
-        const k = nodeKey(n);
+    const put = (k, n) => {
         if (!k) return;
         const cur = m.get(k);
         if (!cur) m.set(k, [String(n)]);
         else if (!cur.includes(String(n))) cur.push(String(n));
+    };
+    (nodeNames || []).forEach(n => {
+        put(nodeKey(n), n);
+        const tail = slotTailOf(n);
+        if (tail && tail !== String(n)) put(nodeKey(tail), n);
     });
     return m;
 };
