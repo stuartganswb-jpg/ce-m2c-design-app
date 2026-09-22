@@ -51,6 +51,29 @@ function loadScene(url) {
     return p;
 }
 
+/**
+ * LET A MODEL GO (2026-09-23). The scene cache above holds every GLB ever loaded, for the life of
+ * the page — right for the configurator, which returns to the same few models, wrong for a sweep
+ * that reads a model once: the parts-model picture tool loaded every mainline model on the brand
+ * and the browser ran out of memory. A caller that is done with a model calls this; its geometry
+ * and materials are disposed, and the next load starts clean. Thumbnails already rendered from it
+ * stay cached — they are small, and re-rendering them would need the scene again.
+ */
+export async function releaseScene(url) {
+    if (!url || !SCENES.has(url)) return false;
+    const p = SCENES.get(url);
+    SCENES.delete(url);
+    try {
+        const scene = await p;
+        scene.traverse(o => {
+            if (o.geometry && o.geometry.dispose) o.geometry.dispose();
+            const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+            mats.forEach(m => { if (m && m.dispose) { Object.values(m).forEach(v => { if (v && v.isTexture && v.dispose) v.dispose(); }); m.dispose(); } });
+        });
+    } catch (e) { /* a load that failed has nothing to dispose */ }
+    return true;
+}
+
 // Does this mesh belong to the option? Same ancestry rule the renderer matches by, so a thumbnail
 // shows exactly what selecting the option would show — not an approximation of it.
 const belongs = (mesh, wanted) => {

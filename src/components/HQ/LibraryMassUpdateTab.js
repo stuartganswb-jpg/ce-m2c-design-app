@@ -13,7 +13,7 @@ import { packSizeOf, rushFeeAmountOf, rushFeeLabelOf } from '../Shared/quickShip
 import { SOURCING, sourcingPatch } from '../Shared/sourcing';
 import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
-import { sceneNodeNames, renderThumbnails, sceneSubtree } from '../Shared/hardwareThumbs';
+import { sceneNodeNames, renderThumbnails, sceneSubtree, releaseScene } from '../Shared/hardwareThumbs';
 import { planNodeThumbs, planModelThumbs, slotReportText, modelReportText, NODE_READY } from '../Shared/nodeThumbs';
 // ⚠ splitNodes, NOT a hand-rolled .split(',') — Brimar node names contain commas
 // ("MMC92311A189_or_MMC91375A189_8-32,_316_L_v4004"), which a raw split shreds into fragments that
@@ -236,6 +236,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
     // ── BULK TOOLS (Stuart 2026-08-27) ──────────────────────────────────────────────────────
     const [bulkTool, setBulkTool] = useState({ running: '', msg: '' });
+    const [modelPick, setModelPick] = useState('');     // the one parts model 📷 photographs per run (doc id)
 
     // 1. STRIP " - Mill Finish" from every item name — "put in place before the system was fully
     //    built and really does not make sense to customers, save the descriptions before the -".
@@ -412,10 +413,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     // ⚠ WRITES ONLY finalImageUrl + imageSource, through the provenance gate: a render may replace a
     // drawing cut (the seven arms from the PDF), never a photograph. Then the same inheritance
     // passes 🖼 runs, so the picture reaches every kit piece and finish variant. 1.6 untouched.
+    // ⚠ ONE MODEL PER RUN (2026-09-23): the first cut read EVERY mainline model on the brand before
+    // the plan, and the renderer keeps each loaded scene for the life of the page — the browser ran
+    // out of memory. The person picks the model; it is loaded alone and released when the run ends.
     const modelPartThumbs = async () => {
-        const asms = inventory.filter(a => a.manufacturingSpecs?.cadUrl && (a.routingType === 'MAIN' || a.recordType === 'PRODUCT'));
-        if (!asms.length) return alert('No mainline assemblies with a working GLB on this brand.');
-        setBulkTool({ running: 'modelpix', msg: `Reading ${asms.length} model(s)…` });
+        const pick = inventory.find(a => a.id === modelPick && a.manufacturingSpecs?.cadUrl);
+        if (!pick) return alert('Choose the parts model first — the picker beside this button lists every mainline model with a working GLB on this brand. One model per run.');
+        const asms = [pick];
+        setBulkTool({ running: 'modelpix', msg: `Reading ${pick.itemName || pick.id}…` });
         try {
             let gIndex = { byPartId: new Map(), byCode: new Map() };
             try {
@@ -447,11 +452,13 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             const text = plans.map(p => p.error ? `${p.asm.itemName || p.asm.id}: could not read the model — ${p.error}` : modelReportText(p.asm.itemName || p.asm.id, p.rows, p.names)).join('\n\n');
             console.log('Item pictures from parts models — every node name, per model:', plans.map(p => ({ model: p.asm.itemName || p.asm.id, nodes: p.names, plan: p.rows.map(r => `${r.code} ${r.status}${r.why ? ' — ' + r.why : ''}`) })));
             if (!total) {
-                setBulkTool({ running: '', msg: 'No part in any model is named with an item code that still needs a picture — nothing written. Every node name is in the console.' });
+                await releaseScene(pick.manufacturingSpecs.cadUrl);
+                setBulkTool({ running: '', msg: 'No part in this model is named with an item code that still needs a picture — nothing written. Every node name is in the console.' });
                 alert(`Item pictures from parts models — ${activeBrand.toUpperCase()}\n\n${text}\n\nNothing to photograph. Every model's node names are in the browser console (F12).`);
                 return;
             }
             if (!window.confirm(`Item pictures from parts models — ${activeBrand.toUpperCase()}\n\n${text}\n\n${total} picture(s) in total, then kit pieces, oak/walnut items and finish variants are filled from them. A render replaces a drawing cut, never a photograph. Every node name is in the browser console.\n\nWrite them?`)) {
+                await releaseScene(pick.manufacturingSpecs.cadUrl);
                 setBulkTool({ running: '', msg: 'Cancelled — nothing written. Every node name is in the console.' });
                 return;
             }
@@ -484,11 +491,13 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     } catch (err) { console.warn(r.code, err); failed++; }
                 }
             }
+            await releaseScene(pick.manufacturingSpecs.cadUrl);
             const inh = await fillInheritedPictures({ photoOf, newUrls, byId, byCode, running: 'modelpix' });
             setBulkTool({ running: '', msg: `${made} part picture(s) from geometry${failed ? `, ${failed} produced nothing` : ''}; ${inh.kitPieces} kit piece(s), ${inh.species} oak/walnut item(s), ${inh.variants} finish variant(s) filled from them. 1.6 untouched.` });
             alert(`📷 Item pictures from parts models:\n• ${made} rendered from geometry${failed ? `\n• ${failed} produced nothing (nothing visible under that name)` : ''}\n• ${inh.kitPieces} kit piece(s) filled from their kit\n• ${inh.species} oak / walnut item(s) filled from their product\n• ${inh.variants} finish variant(s) filled from their base\n\nEvery screen that shows an item picture reads these records.`);
         } catch (err) {
             console.error(err);
+            await releaseScene(pick.manufacturingSpecs.cadUrl).catch(() => {});
             setBulkTool({ running: '', msg: `Parts-model pictures failed: ${err.message || err}` });
         }
     };
@@ -1697,9 +1706,17 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     style={{ padding: '12px 20px', background: bulkTool.running === 'kitpix' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'kitpix' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                     🔩 Kit component thumbnails
                 </button>
-                <button onClick={modelPartThumbs} disabled={!!bulkTool.running}
+                <select value={modelPick} onChange={e => setModelPick(e.target.value)} disabled={!!bulkTool.running}
+                    title="The one parts model 📷 photographs this run. One model per run — each is loaded alone and released afterwards."
+                    style={{ padding: '10px 12px', border: `1px solid ${theme.line}`, background: '#fff', color: theme.ink, fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', maxWidth: '260px' }}>
+                    <option value="">— parts model for 📷 —</option>
+                    {inventory.filter(a => a.manufacturingSpecs?.cadUrl && (a.routingType === 'MAIN' || a.recordType === 'PRODUCT'))
+                        .slice().sort((a, b) => String(a.itemName || a.id).localeCompare(String(b.itemName || b.id)))
+                        .map(a => <option key={a.id} value={a.id}>{a.itemName || a.itemId || a.id}</option>)}
+                </select>
+                <button onClick={modelPartThumbs} disabled={!!bulkTool.running || !modelPick}
                     title={'For the designer\'s PARTS models (every part a top-level component named with its item code — see docs/FUSION_EXPORT_FOR_PART_PICTURES.md): reads the node names off every mainline model, matches them to the library by code, photographs each part alone and fills its kit pieces and finish variants. Shows the full plan first; a model whose nodes carry no item codes prints the names it holds. No pin, no kit, 1.6 untouched.'}
-                    style={{ padding: '12px 20px', background: bulkTool.running === 'modelpix' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'modelpix' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 700 }}>
+                    style={{ padding: '12px 20px', background: bulkTool.running === 'modelpix' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'modelpix' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: (bulkTool.running || !modelPick) ? 'not-allowed' : 'pointer', opacity: modelPick ? 1 : 0.5, fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 700 }}>
                     📷 Item pictures from a parts model
                 </button>
             </div>
