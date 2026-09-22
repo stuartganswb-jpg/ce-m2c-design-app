@@ -9,7 +9,7 @@
 
 import {
     rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, lineStateOf, rowStateOf,
-    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText,
+    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf,
 } from '../src/components/Shared/displayRelease.js';
 
 let pass = 0, fail = 0;
@@ -151,6 +151,16 @@ eq('a written row wins over the memo', rowOfLine({ row: 'Row 1', memo: 'left win
     eq('a row\'s OWN work orders (WO-OE-…) are never mistaken for the whole-order document',
         wholeOrderDocsOf(oe, [{ id: 'WO-OE-H1-75SR-1-0' }], []), null);
     ok('the words name both documents and their state', /WO-SO60551 · Setup/.test(wholeOrderText(whole)) && /SHOP-SO60551 · Pending/.test(wholeOrderText(whole)));
+    // THE RETIRE LEAVES THE DOCUMENTS IN PLACE, CLOSED FROM 10.5 (the wall, 2026-09-23: SO60585 and
+    // SO60586 read whole-order again after their retire — every row DONE, nothing startable).
+    const retiredFin = [{ id: 'WO-SO60585', status: 'Closed', currentPhase: 'Closed', closedFrom: '10.5' }];
+    const retiredShop = [{ id: 'SHOP-SO60585', status: 'Completed', closed: true, closedFrom: '10.5' }];
+    const wall = { id: 'SO-APP-3', soId: 'SO60585' };
+    eq('documents the retire closed are no longer the split — the order releases by rows', wholeOrderDocsOf(wall, retiredFin, retiredShop), null);
+    eq('…and the strip can name them', splitRetiredOf(wall, retiredFin, retiredShop).map(d => d.id), ['WO-SO60585', 'SHOP-SO60585']);
+    ok('a whole-order document RTG closed as FINISHED still counts — a built display is never offered a Start',
+        !!wholeOrderDocsOf(wall, [{ id: 'WO-SO60585', status: 'Closed', closedFrom: 'RTG', closeReason: 'FLOOR_DONE' }], [{ id: 'SHOP-SO60585', status: 'Completed' }]));
+    eq('…and nothing reads as retired on it', splitRetiredOf(wall, [{ id: 'WO-SO60585', status: 'Closed', closedFrom: 'RTG' }], []), null);
 
     const none = { wos: [], pos: [], demands: [] };
     const entries = [

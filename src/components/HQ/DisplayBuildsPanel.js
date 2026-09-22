@@ -36,7 +36,7 @@ import { cancelPlatingDemand } from '../Shared/platingDemand';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText } from '../Shared/displayRelease';
+import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -544,7 +544,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                         <button onClick={() => retireSplit(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
                                             title="Close the whole-order finishing and shop documents (reopenable, through RTG's own close), keep the sales order, and release its rows from here. Refuses if any work has been logged on them.">⟲ Retire the split → release by rows</button>
                                     </>
-                                    : <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>⚓ rows start from here{!s.so.nsInternalId ? ' · ⚠ NetSuite has not accepted it yet' : ''}</span>}
+                                    : <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>⚓ rows start from here{!s.so.nsInternalId ? ' · ⚠ NetSuite has not accepted it yet' : ''}{splitRetiredOf(s.so, s.fin, s.shop) ? ` · split retired (${splitRetiredOf(s.so, s.fin, s.shop).map(d => d.id).join(', ')}) · released by rows` : ''}</span>}
                                 {!s.links && <span style={{ ...mono, color: '#b02d20', marginLeft: '10px' }}>⚠ could not read its work orders</span>}
                             </div>
                             {(s.fin.length + s.shop.length + s.plating.length === 0)

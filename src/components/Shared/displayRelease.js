@@ -92,11 +92,25 @@ export const soRowsOf = (so, rowLabels = []) => {
  * whole-order document is the same parts twice. A row's own work orders are `WO-OE-…`, so the two
  * cannot be confused.
  */
+const wholeKeysOf = (so) => [...new Set([so && so.soId, so && so.id].map(k => String(k || '').trim()).filter(Boolean))];
+/**
+ * A whole-order document the RETIRE closed (below) still exists — the closer keeps it, reopenable —
+ * but it is no longer the split. The closer stamps `closedFrom: '10.5'` on it and nothing else
+ * closes from 10.5; a document RTG closed as FINISHED keeps counting, so a built whole-order
+ * display still reads DONE off it and is never offered a Start.
+ */
+export const splitRetiredDoc = (d) => !!d && (d.closed === true || U(d.status) === 'CLOSED') && String(d.closedFrom || '').trim() === '10.5';
 export const wholeOrderDocsOf = (so, fin = [], shop = []) => {
-    const keys = [...new Set([so && so.soId, so && so.id].map(k => String(k || '').trim()).filter(Boolean))];
-    const finDoc = (fin || []).find(d => d && keys.some(k => String(d.id) === `WO-${k}`)) || null;
-    const shopDoc = (shop || []).find(d => d && keys.some(k => String(d.id) === `SHOP-${k}`)) || null;
+    const keys = wholeKeysOf(so);
+    const finDoc = (fin || []).find(d => d && !splitRetiredDoc(d) && keys.some(k => String(d.id) === `WO-${k}`)) || null;
+    const shopDoc = (shop || []).find(d => d && !splitRetiredDoc(d) && keys.some(k => String(d.id) === `SHOP-${k}`)) || null;
     return (finDoc || shopDoc) ? { fin: finDoc, shop: shopDoc } : null;
+};
+/** The whole-order documents the retire closed on this order — the strip says so instead of offering the retire again. */
+export const splitRetiredOf = (so, fin = [], shop = []) => {
+    const keys = wholeKeysOf(so);
+    const docs = [...(fin || []).filter(d => d && keys.some(k => String(d.id) === `WO-${k}`)), ...(shop || []).filter(d => d && keys.some(k => String(d.id) === `SHOP-${k}`))].filter(splitRetiredDoc);
+    return docs.length ? docs : null;
 };
 
 /**
