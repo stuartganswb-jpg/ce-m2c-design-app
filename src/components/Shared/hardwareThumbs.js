@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
+import { nodeKey } from './nodeThumbs';
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // THUMBNAILS FROM THE ASSEMBLY'S OWN .GLB (Stuart 2026-08-17: "yes thumbnails render from the same
@@ -124,6 +125,46 @@ export async function sceneNodeNames(url) {
     const names = new Set();
     scene.traverse(o => { if (o.name) names.add(o.name); });
     return [...names];
+}
+
+/**
+ * WHAT IS INSIDE A TAGGED SLOT (Stuart 2026-09-21: "why not look specifically at the nodes on the
+ * matching 1.6 slots, there the main brackets are already tagged, 100% we know what they are we
+ * just need to look inside these nodes and find what they are made of").
+ *
+ * Searching the whole model by name asks "is there a node called H1-2TRVLA anywhere?", which is
+ * both weaker and riskier than it needs to be: it can match something in an unrelated corner, and
+ * it fails entirely when the pieces are not named after their codes. The PIN already says which
+ * node is the bracket, and that tagging is trusted — so descend from there instead.
+ *
+ * The parent is matched permissively (exact name, or the same reduced key) because a pin's stored
+ * spelling has been through both the exporter and the tagger. Everything under it is returned with
+ * its depth, so a caller can look one level down first and go deeper only if it must.
+ */
+export async function sceneSubtree(url, parentNames = []) {
+    if (!url || !(parentNames || []).length) return [];
+    const scene = await loadScene(url);
+    const exact = new Set(parentNames.map(n => String(n).toLowerCase()));
+    const keys = new Set(parentNames.map(nodeKey).filter(Boolean));
+    const out = [];
+    const seen = new Set();
+    const collect = (node, depth) => {
+        (node.children || []).forEach(c => {
+            if (c.name && !seen.has(c.uuid)) {
+                seen.add(c.uuid);
+                let meshes = 0;
+                c.traverse(m => { if (m.isMesh) meshes++; });
+                out.push({ name: c.name, depth, isMesh: !!c.isMesh, meshes });
+            }
+            collect(c, depth + 1);
+        });
+    };
+    scene.traverse(o => {
+        const n = String(o.name || '');
+        if (!n) return;
+        if (exact.has(n.toLowerCase()) || keys.has(nodeKey(n))) collect(o, 1);
+    });
+    return out;
 }
 
 async function runBatch(url, groups, onEach, w = W, h = H, allowFasteners = false) {

@@ -9,7 +9,7 @@
 
 import {
     cleanFusionName, nodeKey, baseCodeOf, buildNodeIndex, planNodeThumbs, nodeThumbSummary, nodeThumbPlanText,
-    NODE_READY, NODE_NONE, NODE_AMBIGUOUS, NODE_NO_CODE, NODE_HAS_PHOTO,
+    slotReportText, NODE_READY, NODE_NONE, NODE_AMBIGUOUS, NODE_NO_CODE, NODE_HAS_PHOTO,
 } from '../src/components/Shared/nodeThumbs.js';
 
 let pass = 0, fail = 0;
@@ -92,6 +92,42 @@ eq('a record with no code at all', baseCodeOf({}), '');
     ok('and what is not in this model', /1 not in this model: H1-2TRVFH/.test(text));
     ok('an empty model says so rather than looking successful',
         /nothing to photograph here/.test(nodeThumbPlanText(planNodeThumbs({ parts, nodeNames: [] }), 'EMPTY')));
+}
+
+// ── WHAT A TAGGED SLOT CONTAINS — the report that matters when nothing matches ───────────────
+// The kit's own picture renders fine, so the model and the pin are good; if the COMPONENTS match
+// nothing, the only useful output is the names that ARE in there. A slot that quietly reports
+// "0 matched" teaches nobody anything.
+{
+    const parts = [{ id: 'p1', legacyErpId: 'H1-2TRVLA/P' }, { id: 'p2', legacyErpId: 'H1-2TRVBP/P' }];
+    const children = [
+        { name: 'Lower Arm', depth: 1, isMesh: false, meshes: 3 },
+        { name: 'Body1', depth: 2, isMesh: true, meshes: 1 },
+        { name: 'EmptyGroup', depth: 1, isMesh: false, meshes: 0 },
+    ];
+    const rows = planNodeThumbs({ parts, nodeNames: children.map(c => c.name) });
+    const text = slotReportText('H1-2TRV-6WB', rows, children);
+    ok('the slot is named with how many nodes are inside it', /H1-2TRV-6WB — 3 node\(s\) inside/.test(text));
+    ok('the components that matched nothing are named', /no node matched: H1-2TRVLA, H1-2TRVBP/.test(text));
+    ok('and the names actually in there are printed, so the naming is visible',
+        /inside it: .*Lower Arm.*Body1/.test(text));
+    ok('a node with no geometry is not offered as a candidate', !/EmptyGroup/.test(text));
+
+    // A slot that really is one welded solid should say so, not imply the names are wrong.
+    const solid = slotReportText('H1-2TRV-WB', planNodeThumbs({ parts, nodeNames: [] }), []);
+    ok('a single solid says so plainly', /this slot is a single solid/.test(solid));
+
+    // When it works, the matched pairs are shown with the node each resolved to.
+    const good = planNodeThumbs({ parts, nodeNames: ['H1-2TRVLA', 'H1-2TRVBP'] });
+    const gt = slotReportText('H1-2TRV-6WB', good, [
+        { name: 'H1-2TRVLA', depth: 1, isMesh: true, meshes: 1 },
+        { name: 'H1-2TRVBP', depth: 1, isMesh: true, meshes: 1 }]);
+    ok('a working slot shows each match and its node', /H1-2TRVLA → "H1-2TRVLA"/.test(gt));
+    ok('…and reports no misses', !/no node matched/.test(gt));
+    // Long slots are trimmed for the dialog, and say that they were.
+    const many = Array.from({ length: 30 }, (_, i) => ({ name: `Part${i}`, depth: 1, isMesh: true, meshes: 1 }));
+    ok('a crowded slot is trimmed and says how many more',
+        /and 16 more/.test(slotReportText('X', planNodeThumbs({ parts, nodeNames: [] }), many)));
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

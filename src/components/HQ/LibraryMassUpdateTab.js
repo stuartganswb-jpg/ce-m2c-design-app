@@ -13,8 +13,12 @@ import { packSizeOf, rushFeeAmountOf, rushFeeLabelOf } from '../Shared/quickShip
 import { SOURCING, sourcingPatch } from '../Shared/sourcing';
 import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
-import { renderThumbnails, sceneNodeNames } from '../Shared/hardwareThumbs';
-import { planNodeThumbs, nodeThumbPlanText, NODE_READY } from '../Shared/nodeThumbs';
+import { renderThumbnails, sceneSubtree } from '../Shared/hardwareThumbs';
+import { planNodeThumbs, slotReportText, NODE_READY } from '../Shared/nodeThumbs';
+// ⚠ splitNodes, NOT a hand-rolled .split(',') — Brimar node names contain commas
+// ("MMC92311A189_or_MMC91375A189_8-32,_316_L_v4004"), which a raw split shreds into fragments that
+// match nothing. That module exists for exactly this, and the sweep below still does it by hand.
+import { splitNodes } from '../Shared/nodeList';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -306,24 +310,65 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             const done = new Set();
             const hasPhoto = (p) => done.has(p.id) || !photoMayOverwrite(p, byBase) || !!galleryImageForPart(p, gIndex);
 
-            // Plan against every model first, so the operator sees the whole picture before any of it.
+            // ── LOOK INSIDE THE TAGGED SLOT, NOT ACROSS THE WHOLE MODEL (Stuart 2026-09-21) ──
+            // "why not look specifically at the nodes on the matching 1.6 slots, there the main
+            // brackets are already tagged, 100% we know what they are we just need to look inside
+            // these nodes and find what they are made of."
+            //
+            // Right, and better than what this did first. Searching the model by name asks "is
+            // there a node called H1-2TRVLA anywhere", which can match an unrelated corner and
+            // fails outright when the pieces are not named after their codes. The PIN already says
+            // which node is the bracket and that tagging is trusted — so descend from it. Each kit
+            // is planned against ITS OWN slot's contents, and a slot that matches nothing prints
+            // what it actually holds, which is the thing we cannot otherwise see.
             const plans = [];
             for (const asm of asms) {
-                const names = await sceneNodeNames(asm.manufacturingSpecs.cadUrl);
-                const rows = planNodeThumbs({ parts: [...wanted.values()], nodeNames: names, hasPhoto });
-                plans.push({ asm, rows, ready: rows.filter(r => r.status === NODE_READY) });
+                const cadUrl = asm.manufacturingSpecs.cadUrl;
+                const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', asm.id)));
+                const pinNodesFor = new Map();       // part doc id → [node names]
+                pinSnap.docs.forEach(d => {
+                    const pin = d.data();
+                    const part = byId.get(pin.partId) || null;
+                    if (!part) return;
+                    const nodes = splitNodes(pin.choiceNode || pin.targetNode || '');
+                    if (nodes.length) pinNodesFor.set(part.id, [...(pinNodesFor.get(part.id) || []), ...nodes]);
+                });
+                const slots = [];
+                for (const kit of inventory.filter(k => k.partClass === 'Kit' && (k.manufacturingSpecs?.kitComponents || []).length)) {
+                    const parentNodes = pinNodesFor.get(kit.id);
+                    if (!parentNodes) continue;                       // this kit is not in this model
+                    const comps = (kit.manufacturingSpecs.kitComponents || [])
+                        .map(c => byId.get(c.partId)).filter(Boolean);
+                    if (!comps.length) continue;
+                    const children = await sceneSubtree(cadUrl, parentNodes);
+                    const rows = planNodeThumbs({ parts: comps, nodeNames: children.map(c => c.name), hasPhoto });
+                    slots.push({ kit, rows, children, ready: rows.filter(r => r.status === NODE_READY) });
+                }
+                if (slots.length) plans.push({ asm, slots });
             }
-            const total = plans.reduce((s, p) => s + p.ready.length, 0);
-            const text = plans.map(p => nodeThumbPlanText(p.rows, p.asm.itemName || p.asm.id)).join('\n\n');
-            if (!window.confirm(`Kit component pictures from the model — ${activeBrand.toUpperCase()}\n\n${text}\n\n${total} picture(s) in total. The 1.6 tagging is NOT touched. Go ahead?`)) {
-                setBulkTool({ running: '', msg: 'Cancelled — nothing was written.' });
+            if (!plans.length) {
+                setBulkTool({ running: '', msg: 'No kit is pinned in any model on this brand — nothing to look inside.' });
+                alert('None of the kits on this brand are pinned to a node in a mainline assembly, so there is no tagged slot to look inside.\n\nCheck the brand, or that these brackets are pinned in 1.6.');
+                return;
+            }
+            const total = plans.reduce((s, p) => s + p.slots.reduce((n, sl) => n + sl.ready.length, 0), 0);
+            const text = plans.map(p => [
+                `${p.asm.itemName || p.asm.id}:`,
+                ...p.slots.map(sl => slotReportText(sl.kit.legacyErpId || sl.kit.itemId || sl.kit.id, sl.rows, sl.children)),
+            ].join('\n')).join('\n\n');
+            // The full contents go to the console as well — the dialog is trimmed to stay readable,
+            // and when the naming is the problem you want every name, not the first fourteen.
+            console.log('Kit component thumbnails — what each tagged slot contains:',
+                plans.map(p => ({ assembly: p.asm.itemName, slots: p.slots.map(sl => ({ kit: sl.kit.legacyErpId, children: sl.children })) })));
+            if (!window.confirm(`Kit component pictures from inside the tagged slots — ${activeBrand.toUpperCase()}\n\n${text}\n\n${total} picture(s) in total. The full contents of every slot are in the browser console.\nThe 1.6 tagging is NOT touched. Go ahead?`)) {
+                setBulkTool({ running: '', msg: `Cancelled — nothing written. The contents of each slot are in the console.` });
                 return;
             }
 
             let made = 0, failed = 0;
-            for (const { asm, ready } of plans) {
-                // A part photographed from an earlier model is not photographed again.
-                const todo = ready.filter(r => !done.has(r.part.id));
+            for (const { asm, slots } of plans) {
+                // A part photographed from an earlier slot or model is not photographed again.
+                const todo = slots.flatMap(sl => sl.ready).filter(r => !done.has(r.part.id));
                 if (!todo.length) continue;
                 const shots = new Map();
                 await renderThumbnails(
@@ -348,7 +393,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     } catch (err) { console.warn(r.code, err); failed++; }
                 }
             }
-            setBulkTool({ running: '', msg: `${made} component picture(s) written${failed ? `, ${failed} produced nothing` : ''}. The 1.6 tagging was not touched.` });
+            setBulkTool({ running: '', msg: `${made} component picture(s) written${failed ? `, ${failed} produced nothing` : ''}. Slot contents are in the console. The 1.6 tagging was not touched.` });
         } catch (err) {
             console.error(err);
             setBulkTool({ running: '', msg: `Component thumbnails failed: ${err.message || err}` });

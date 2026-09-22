@@ -100,6 +100,35 @@ export const planNodeThumbs = ({ parts = [], nodeNames = [], hasPhoto = () => fa
     });
 };
 
+/**
+ * WHAT ONE TAGGED SLOT CONTAINS — the report that matters when nothing matches.
+ *
+ * Stuart 2026-09-21: the kit's own picture rendered fine, so the model and the pin are good; the
+ * COMPONENTS matched nothing. Whether that is because the pieces are not in there, or are in there
+ * under names that are not item codes, cannot be guessed — it has to be looked at. So a slot that
+ * matches nothing prints what it actually holds, and the naming answers the question on sight.
+ *
+ * @param kitCode   the bracket's code, for the heading
+ * @param rows      planNodeThumbs's answer for this slot's components
+ * @param children  [{ name, depth, isMesh, meshes }] from hardwareThumbs.sceneSubtree
+ * @param limit     how many child names to print before saying "and N more"
+ */
+export const slotReportText = (kitCode, rows = [], children = [], limit = 14) => {
+    const ready = rows.filter(r => r.status === NODE_READY);
+    const missed = rows.filter(r => r.status === NODE_NONE);
+    const out = [`  ${kitCode} — ${children.length} node(s) inside the tagged slot`];
+    if (ready.length) out.push(`    ✓ ${ready.map(r => `${r.code} → "${r.node}"`).join(', ')}`);
+    if (missed.length) {
+        out.push(`    ✗ no node matched: ${missed.map(r => r.code).join(', ')}`);
+        // The names themselves — geometry-bearing first, since those are the candidates.
+        const cands = children.filter(c => c.meshes > 0).map(c => `${'·'.repeat(Math.max(1, c.depth))} ${c.name}`);
+        const shown = cands.slice(0, limit);
+        if (shown.length) out.push(`    inside it: ${shown.join(' | ')}${cands.length > limit ? ` … and ${cands.length - limit} more` : ''}`);
+        else out.push('    inside it: nothing with geometry — this slot is a single solid');
+    }
+    return out.join('\n');
+};
+
 export const nodeThumbSummary = (rows = []) => (rows || []).reduce((m, r) => {
     if (r && r.status) m[r.status] = (m[r.status] || 0) + 1;
     return m;
