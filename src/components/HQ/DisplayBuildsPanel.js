@@ -29,14 +29,14 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc, query, where, getDoc, getDocs } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc, query, where, getDoc, getDocs, deleteField } from 'firebase/firestore';
 import { DISPLAY_STYLES, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, cpqEntryRows, cpqEntryCsv, SAMPLE_BIN_BY_STYLE, floorLinksByLine } from '../Shared/displayBom';
 import { linkedDocsOf, identityKeysOf, closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { cancelPlatingDemand } from '../Shared/platingDemand';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard } from '../Shared/displayRelease';
+import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -330,13 +330,29 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     // same stamp the anchor and the retire write, applied by itself — nothing else on the order moves.
     const givePackCard = async (entry) => {
         const so = entry?.so;
-        if (!so || !draft || !needsPackCard(so)) return;
-        if (!window.confirm(`Give ${so.soId || so.id} its pack card?\n\nThe order is stamped as an Order Entry order (its lines are the truth): the WMS SO Pack card appears with its stocked lines to pick and its made-to-order lines on hold until their row work orders come back. Nothing else on the order changes.`)) return;
+        const need = so && !entry.whole ? needsPackCard(so) : '';
+        if (!so || !draft || !need) return;
+        if (!window.confirm(need === 'count'
+            ? `Correct the piece count on ${so.soId || so.id}'s pack card?\n\nThe card reads ${so.totalParts || 0} pcs; its lines add up to ${(so.lines || []).reduce((a, l) => a + (Number(l.qty) || 0), 0)}. Nothing else on the order changes.`
+            : `Give ${so.soId || so.id} its pack card?\n\nThe order is stamped as an Order Entry order (its lines are the truth): the WMS SO Pack card appears with its stocked lines to pick and its made-to-order lines on hold until their row work orders come back. Nothing else on the order changes.`)) return;
         setBusy('Stamping…');
         try {
             await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, so }));
             await loadFloor(draft);
         } catch (e) { alert('Could not stamp it: ' + (e?.message || e)); }
+        setBusy('');
+    };
+    // The reverse, for a whole-order order that carries the class by mistake: it packs on its
+    // whole-order documents, so the class and the pick status come back off. Never an Order Entry sale.
+    const removePackCard = async (entry) => {
+        const so = entry?.so;
+        if (!so || !draft || !packCardToRemove(so, entry.whole)) return;
+        if (!window.confirm(`Remove the pack card from ${so.soId || so.id}?\n\nThis order is split whole by RTG and packs on ${wholeOrderText(entry.whole)} — the SO Pack card is a second pack home with no lines on it. The Order Entry class and the pick status come off; nothing else on the order changes.`)) return;
+        setBusy('Removing…');
+        try {
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), { orderClass: deleteField(), pickStatus: deleteField() });
+            await loadFloor(draft);
+        } catch (e) { alert('Could not remove it: ' + (e?.message || e)); }
         setBusy('');
     };
 
@@ -572,8 +588,12 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                             title="Close the whole-order finishing and shop documents (reopenable, through RTG's own close), keep the sales order, and release its rows from here. Refuses if any work has been logged on them.">⟲ Retire the split → release by rows</button>
                                     </>
                                     : <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>⚓ rows start from here{!s.so.nsInternalId ? ' · ⚠ NetSuite has not accepted it yet' : ''}{splitRetiredOf(s.so, s.fin, s.shop) ? ` · split retired (${splitRetiredOf(s.so, s.fin, s.shop).map(d => d.id).join(', ')}) · released by rows` : ''}</span>}
-                                {needsPackCard(s.so) && <button onClick={() => givePackCard(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
+                                {!s.whole && needsPackCard(s.so) === 'class' && <button onClick={() => givePackCard(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
                                     title="This order was released by rows before the rule that makes such an order an Order Entry order. Without the stamp the WMS has no SO Pack card for it: its stocked lines are picked by nobody and its finished rows have nothing to hold them together.">📦 Give it its pack card</button>}
+                                {!s.whole && needsPackCard(s.so) === 'count' && <button onClick={() => givePackCard(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
+                                    title="The pack card's piece count is not the sum of this order's lines — it still carries the count from before the lines were written.">📦 Fix its piece count</button>}
+                                {packCardToRemove(s.so, s.whole) && <button onClick={() => removePackCard(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
+                                    title="This order is split whole by RTG and packs on its whole-order documents at Packaging Prep. Its SO Pack card is a second pack home with no lines on it.">↩ Remove its pack card</button>}
                                 {!s.links && <span style={{ ...mono, color: '#b02d20', marginLeft: '10px' }}>⚠ could not read its work orders</span>}
                             </div>
                             {(s.fin.length + s.shop.length + s.plating.length + (s.pkg || []).length === 0)

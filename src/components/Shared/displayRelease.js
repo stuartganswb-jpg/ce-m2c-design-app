@@ -287,9 +287,28 @@ export const displayAnchorPatch = ({ buildId, lines = null, so = null }) => ({
     orderClass: 'QUICKSHIP',
     ...((so && so.pickStatus) ? {} : { pickStatus: 'Pending' }),
     ...(Array.isArray(lines) ? { lines } : {}),
+    // The card's piece count is the sum of the lines, as tab 7 writes it — a CPQ record carries the
+    // 1 its approve wrote.
+    ...(piecesOf(Array.isArray(lines) ? lines : (so && so.lines)) != null ? { totalParts: piecesOf(Array.isArray(lines) ? lines : so.lines) } : {}),
 });
-/** An anchored, released-by-rows order that was stamped before the class rule — 10.5 offers the stamp. */
-export const needsPackCard = (so) => !!so && so.displayRelease === true && U(so.orderClass) !== 'QUICKSHIP';
+const piecesOf = (lines) => (Array.isArray(lines) && lines.length) ? lines.reduce((a, l) => a + (N(l && l.qty) || 0), 0) : null;
+/**
+ * What the pack-card stamp still owes an anchored, released-by-rows order: 'class' when it was
+ * stamped before the class rule, 'count' when its piece count disagrees with its lines; '' when
+ * nothing. A whole-order order is the CALLER's to refuse — it packs on its whole-order documents.
+ */
+export const needsPackCard = (so) => {
+    if (!so || so.displayRelease !== true) return '';
+    if (U(so.orderClass) !== 'QUICKSHIP') return 'class';
+    const n = piecesOf(so.lines);
+    return (n != null && N(so.totalParts) !== n) ? 'count' : '';
+};
+/**
+ * A whole-order order that carries the class by mistake (the tabletop's SO60551, 2026-09-23: anchored
+ * before the visibility-only mode, then offered the stamp): it packs on WO-<so>, so the card is a
+ * second pack home with no lines. Only an order NOT sold through Order Entry ever loses the class.
+ */
+export const packCardToRemove = (so, whole) => !!so && !!whole && U(so.orderClass) === 'QUICKSHIP' && U(so.source) !== 'QUICKSHIP';
 
 /** True when the sales order needs its lines written before rows can be read off it. */
 export const soNeedsLines = (so) => !!so && !(Array.isArray(so.lines) && so.lines.length);

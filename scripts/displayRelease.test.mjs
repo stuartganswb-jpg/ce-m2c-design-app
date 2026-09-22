@@ -9,7 +9,7 @@
 
 import {
     rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, lineStateOf, rowStateOf,
-    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard,
+    displayAnchorPatch, soNeedsLines, rowStartText, LINE_STATE, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove,
 } from '../src/components/Shared/displayRelease.js';
 
 let pass = 0, fail = 0;
@@ -203,7 +203,18 @@ eq('a written row wins over the memo', rowOfLine({ row: 'Row 1', memo: 'left win
     const oePatch = displayAnchorPatch({ buildId: 'B1', so: { orderClass: 'QUICKSHIP', pickStatus: 'Picked' } });
     eq('an order already picked is never set back to pending', [oePatch.orderClass, 'pickStatus' in oePatch], ['QUICKSHIP', false]);
     eq('a released order without the class needs its pack card; a stamped or unreleased one does not',
-        [needsPackCard({ displayRelease: true, source: 'CRM' }), needsPackCard({ displayRelease: true, orderClass: 'QUICKSHIP' }), needsPackCard({ source: 'CPQ' })], [true, false, false]);
+        [needsPackCard({ displayRelease: true, source: 'CRM' }), needsPackCard({ displayRelease: true, orderClass: 'QUICKSHIP' }), needsPackCard({ source: 'CPQ' })], ['class', '', '']);
+    // THE PIECE COUNT (2026-09-23, "1 pcs" on the wall's cards): the sum of the lines, as tab 7 writes it.
+    eq('the stamp writes the piece count from the lines', displayAnchorPatch({ buildId: 'B', lines: [{ erp: 'A', qty: 70 }, { erp: 'B', qty: 35 }] }).totalParts, 105);
+    eq('…from the order\'s own lines when none are handed in', displayAnchorPatch({ buildId: 'B', so: { lines: [{ erp: 'A', qty: 3 }] } }).totalParts, 3);
+    eq('…and leaves the count alone when there are no lines to sum', 'totalParts' in displayAnchorPatch({ buildId: 'B' }), false);
+    eq('a stamped order whose count disagrees with its lines needs the count', needsPackCard({ displayRelease: true, orderClass: 'QUICKSHIP', totalParts: 1, lines: [{ qty: 70 }, { qty: 35 }] }), 'count');
+    eq('…and nothing when it agrees', needsPackCard({ displayRelease: true, orderClass: 'QUICKSHIP', totalParts: 105, lines: [{ qty: 70 }, { qty: 35 }] }), '');
+    // THE TABLETOP'S SO60551: whole-order, stamped by mistake — the class comes off; an Order Entry sale never loses it.
+    const wholeDocs = { fin: { id: 'WO-SO60551' }, shop: null };
+    eq('a whole-order CPQ order carrying the class is offered the removal', packCardToRemove({ source: 'CPQ', orderClass: 'QUICKSHIP' }, wholeDocs), true);
+    eq('…not when it is not whole-order, nor when it was sold through Order Entry, nor without the class',
+        [packCardToRemove({ source: 'CPQ', orderClass: 'QUICKSHIP' }, null), packCardToRemove({ source: 'QUICKSHIP', orderClass: 'QUICKSHIP' }, wholeDocs), packCardToRemove({ source: 'CPQ' }, wholeDocs)], [false, false, false]);
     ok('the confirmation names both documents and the demand it will cancel',
         (() => { const t = retireText(so, { ...untouched, plating: [{ __coll: 'plating_demand', woNum: 'PLW-2' }] }); return /WO-SO60585/.test(t) && /SHOP-SO60585/.test(t) && /CANCELS 1 open plating demand/.test(t) && /stays open/.test(t); })());
 }
