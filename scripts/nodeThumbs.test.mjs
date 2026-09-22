@@ -159,8 +159,19 @@ eq('a record with no code at all', baseCodeOf({}), '');
     eq('a drawing cut may be replaced by a real render', st['H1-2TRVBADBL'], 'READY');
     eq('a gallery photograph is never replaced', st['H1-2TRVCLP'], 'HAS_PHOTO');
     eq('two records reducing to one node name are refused, both of them', [st['H1-75BE'], st['H1-75-BE']], ['AMBIGUOUS_CODE', 'AMBIGUOUS_CODE']);
-    ok('the refusal names both records', /H1-75BE and H1-75-BE/.test(rows.find(r => r.code === 'H1-75BE').why));
+    ok('the refusal names both records', (() => { const w = rows.find(r => r.code === 'H1-75BE').why; return /H1-75BE/.test(w) && /H1-75-BE/.test(w) && / and /.test(w); })());
     eq('Body1 and Component7 match nothing and are not planned', rows.some(r => /body|component/i.test(r.code)), false);
+    // A FINISH FAMILY IS ONE PART (2026-09-23: 110 refusals, every base against its own /B /C /EP1 … /P25).
+    const fam = [
+        { id: 'ba', legacyErpId: 'H1-2TRVBA' }, { id: 'ba-b', legacyErpId: 'H1-2TRVBA/B' }, { id: 'ba-ep1', legacyErpId: 'H1-2TRVBA/EP1' }, { id: 'ba-p25', legacyErpId: 'H1-2TRVBA/P25' },
+        { id: 'fh-p', legacyErpId: 'H1-2TRVFH/P' }, { id: 'fh-ep2', legacyErpId: 'H1-2TRVFH/EP2' },        // variants only, no base record
+    ];
+    const frows = planModelThumbs({ parts: fam, nodeNames: ['S0ZG584-NEW-SLOT__4_H12TRVBA', 'S0ZG584-NEW-SLOT__1_H12TRVFH'] });
+    eq('the base record is photographed once; its finish variants are never rivals and are left to the inheritance pass',
+        frows.filter(r => r.code === 'H1-2TRVBA').map(r => [r.part.id, r.status]), [['ba', 'READY']]);
+    eq('a family with no base record has each variant photographed itself, so none is left blank',
+        frows.filter(r => r.code === 'H1-2TRVFH').map(r => r.part.id).sort(), ['fh-ep2', 'fh-p']);
+    eq('…and the raw merged node goes to the renderer for both', frows.filter(r => r.code === 'H1-2TRVFH').every(r => r.node === 'S0ZG584-NEW-SLOT__1_H12TRVFH'), true);
     const text = modelReportText('H1-2TRV BRACKET PARTS', rows, nodes);
     ok('the report counts what it will and will not do', /H1-2TRV BRACKET PARTS: 4 to photograph, 1 already photographed, 2 refused/.test(text));
     ok('…and names the refusals', /✗ H1-75BE: /.test(text));

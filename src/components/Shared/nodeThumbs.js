@@ -163,20 +163,40 @@ export const slotReportText = (kitCode, rows = [], children = [], limit = 14, pa
  */
 export const planModelThumbs = ({ parts = [], nodeNames = [], hasPhoto = () => false }) => {
     const index = buildNodeIndex(nodeNames);
-    const byKey = new Map();
-    (parts || []).forEach(p => { const k = nodeKey(baseCodeOf(p)); if (k) byKey.set(k, [...(byKey.get(k) || []), p]); });
-    const out = [];
-    (parts || []).forEach(part => {
-        const code = baseCodeOf(part);
+    // key → base code → the records carrying it. A FINISH VARIANT is the same part in the same
+    // geometry (H1-2TRVBA/EP1 is the node H1-2TRVBA): the BASE record is photographed and the
+    // variants take its picture in the inheritance pass — they are never rivals for the node
+    // (2026-09-23: 110 refusals on H1-2TRV BRACKET PARTS, every one a base against its own finishes).
+    // Two DIFFERENT base codes reducing to one name are rivals, and both are refused.
+    const groups = new Map();
+    (parts || []).forEach(p => {
+        const code = baseCodeOf(p);
         if (!code) return;
         const k = nodeKey(code);
-        const hits = (index.get(k) || []).slice().sort();
-        if (!hits.length) return;                                    // not in this model
-        const row = { part, code, node: hits[0], instances: hits.length };
-        if ((byKey.get(k) || []).length > 1) out.push({ ...row, node: '', status: NODE_AMBIGUOUS, why: `${(byKey.get(k) || []).map(p => p.legacyErpId || p.itemId).join(' and ')} reduce to the same node name` });
-        else if (hasPhoto(part)) out.push({ ...row, status: NODE_HAS_PHOTO, why: 'already has a real photograph — left alone' });
-        else out.push({ ...row, status: NODE_READY, why: '' });
+        const byBase = groups.get(k) || new Map();
+        byBase.set(code, [...(byBase.get(code) || []), p]);
+        groups.set(k, byBase);
     });
+    const out = [];
+    for (const [k, byBase] of groups) {
+        const hits = (index.get(k) || []).slice().sort();
+        if (!hits.length) continue;                                  // not in this model
+        if (byBase.size > 1) {
+            const names = [...byBase.keys()].sort();
+            names.forEach(code => out.push({ part: byBase.get(code)[0], code, node: '', instances: hits.length, status: NODE_AMBIGUOUS, why: `${names.join(' and ')} reduce to the same node name` }));
+            continue;
+        }
+        const [code, records] = [...byBase.entries()][0];
+        const isBase = (p) => { const c = splitCode((p && (p.legacyErpId || p.itemId)) || ''); return !!c && !c.finish; };
+        const base = records.find(isBase);
+        // The base record when there is one; a family with no base record (variants only) has each
+        // variant photographed itself — the same node, one render, cached — so none is left blank.
+        (base ? [base] : records).forEach(part => {
+            const row = { part, code, node: hits[0], instances: hits.length };
+            if (hasPhoto(part)) out.push({ ...row, status: NODE_HAS_PHOTO, why: 'already has a real photograph — left alone' });
+            else out.push({ ...row, status: NODE_READY, why: '' });
+        });
+    }
     return out.sort((a, b) => a.code.localeCompare(b.code));
 };
 
