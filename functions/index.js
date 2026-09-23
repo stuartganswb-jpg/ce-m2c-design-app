@@ -2561,7 +2561,10 @@ exports.upsProbe = onCall({
 // Sandbox merchant 1347136 ("Classical Elements Test Merchant"). Nothing is charged; the key never
 // leaves the server; card data never touches our systems (that is the whole point of the design).
 const NMI_SANDBOX_KEY_CE = defineSecret("NMI_SANDBOX_KEY_CE");
-const NMI_HOST = 'https://secure.nmi.com';
+// A SANDBOX key is refused by the production host ("Sandbox accounts must use a sandbox domain",
+// seen 2026-09-23) — the environment decides the host, exactly as UPS_HOSTS does for shipping.
+const NMI_HOSTS = { SANDBOX: 'https://sandbox.nmi.com', PRODUCTION: 'https://secure.nmi.com' };
+const NMI_HOST = NMI_HOSTS.SANDBOX;
 
 // The Payment API answers in querystring form (response=1&responsetext=...), not JSON.
 const nmiParse = (text) => Object.fromEntries(new URLSearchParams(String(text || '')));
@@ -2589,17 +2592,20 @@ exports.nmiProbe = onCall({
     const key = NMI_SANDBOX_KEY_CE.value().trim();
     const out = { environment: 'NMI SANDBOX (merchant 1347136)', steps: [] };
 
-    // 1) Credentials — the query API returns this merchant's (empty) transaction list.
+    // 1) Credentials — the query API returns this merchant's (empty) transaction list. ANY error
+    //    document counts as a failure: matching only "authentication failed" once let the
+    //    wrong-host refusal read as a pass (2026-09-23).
     try {
         const r = await nmiPost('/api/query.php', { security_key: key, report_type: 'transaction' });
         const body = String(r.text || '');
-        const failed = /Authentication Failed|Invalid Security Key/i.test(body);
+        const errText = (body.match(/<error_response>([\s\S]*?)<\/error_response>/i) || [])[1]
+            || (/Authentication Failed|Invalid Security Key|must use a sandbox domain/i.test(body) ? body.slice(0, 200) : '');
         out.steps.push({
             step: 'credentials',
-            ok: r.ok && !failed,
-            detail: failed ? 'NMI rejected the security key.' : `HTTP ${r.status}, ${body.length} bytes back`,
+            ok: r.ok && !errText,
+            detail: errText ? `NMI refused: ${errText.trim().slice(0, 200)}` : `HTTP ${r.status}, ${body.length} bytes back`,
         });
-        if (!r.ok || failed) return out;
+        if (!r.ok || errText) return out;
     } catch (e) {
         out.steps.push({ step: 'credentials', ok: false, detail: String(e.message || e) });
         return out;
