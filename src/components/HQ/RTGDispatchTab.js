@@ -12,6 +12,7 @@ import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineS
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
+import { finishGroupsOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
@@ -1445,6 +1446,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             });
 
             const { svgUri, finishRecipe } = await fetchEnrichedJobData(so.hqJobId, 'sales');
+            // ── ONE PAIR PER FINISH (Stuart 2026-09-23, Shared/rowPairShape.finishGroupsOf): a wood pole
+            // stained beside metal parts painted is two batches — two pairs. A single-finish order is
+            // exactly what it was, same ids. A line naming no finish takes the order's recipe.
+            const orderRecipe = so.recipe || (finishRecipe !== "PENDING-RECIPE" ? finishRecipe : '');
+            const finishGroups = finishGroupsOf({ smallLines, customLines, finishOf: (l) => String(l.finishCode || '').toUpperCase() || orderRecipe });
+            if (finishGroups.length > 1) addLog(`🎨 SO ${orderKey}: ${finishGroups.length} finishes (${finishGroups.map(g => g.finish || 'none').join(', ')}) — one finishing + shop pair per finish.`, 'info');
+            let firstPair = null, anyFin = false, anyShop = false;
+            const allBackorder = [];
 
             // Vision-computed fabrication geometry (bend vs splice vs miter, shape, O2O) lives
             // on the job's engineeringNotes. Carry it to the floors so the shop knows HOW to
@@ -1488,17 +1497,19 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // a Vision draft existed and still produced none (cutSheetMissing && visionUsed) — a plain
             // straight cut stays quiet (Stuart). The board says so at the split.
             const visionUsed = !!(Object.keys(eng).length || (Array.isArray(eng.hangerLocations) && eng.hangerLocations.length) || bracketNotes.length);
+            for (const grp of finishGroups) {
+            const { smallLines, customLines } = grp;   // this pair's lines — shadows the whole order's
             const cutSheetMissing = customLines.some(l => l.cutLength) && !eng.shape && !eng.poleO2O && eng.pole1 == null && eng.pole2 == null && eng.pole3 == null;
             if (cutSheetMissing) addLog(`⚠ SO ${orderKey}: custom pole with NO cut sheet — the job has no Vision engineering specs${visionUsed ? '' : ' (no Vision draft on this job)'}; the shop card will say so.`, 'warn');
             const drawingUrl = svgUri
                 || (eng.svgString ? "data:image/svg+xml;charset=utf-8," + encodeURIComponent(eng.svgString) : null)
                 || job.finalImageUrl || null;
 
-            const finId = `WO-${orderKey}`;
-            const shopId = `SHOP-${orderKey}`;
+            const finId = `WO-${orderKey}${grp.suffix}`;
+            const shopId = `SHOP-${orderKey}${grp.suffix}`;
             const hasCustom = customLines.length > 0;
             const hasSmall = smallLines.length > 0;
-            const recipeCode = so.recipe || (finishRecipe !== "PENDING-RECIPE" ? finishRecipe : '');
+            const recipeCode = grp.finish || orderRecipe;
 
             // --- STOCK FIRST (B5 part 2, Stuart 2026-09-03) ---
             // A PLATED small-parts line is a stocked finished good, decided by live stock after the
@@ -1526,10 +1537,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // the same read the plan just made — on hand vs need per part, back orders named.
             const materialStamp = hasSmall ? materialStampOf(materialRowsFromSplit({ lines: allPartsList, plan, stock: stockRead, recipe: recipeCode }), Date.now()) : {};
             if (plan.summary) addLog(`🧭 SO ${orderKey} stock-first: ${plan.summary}.`, plan.backorder.length ? 'warn' : 'info');
-            if (plan.backorder.length) {
-                // The record of what could not be covered — for the board and A's Backorder window.
-                await updateDoc(doc(db, "hq_sales_orders", so.id), { backorderLines: plan.backorder, backorderAt: Date.now() }).catch(() => {});
-            }
+            // The record of what could not be covered — for the board and A's Backorder window —
+            // written once for the whole order, after every pair has been planned.
+            plan.backorder.forEach(b => allBackorder.push(b));
             // THE HOLD, DECIDED ONCE FOR EVERY DOCUMENT THIS SPLIT WRITES (Stuart 2026-09-15, on the
             // 09-14 Fabricut orders SO60427–SO60432: "you can see these orders are showing as hold
             // waiting on back orders yet they still hit the floor"). The rule lives in Shared/
@@ -1696,6 +1706,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 }));
                 addLog(`Created Shop custom order ${shopId}${fabMethod ? ` [${fabMethod}]` : ''} (${customLines.length} custom lines).`, "success");
             }
+            if (!firstPair) firstPair = { finId, shopId, finishingNeeded, pickOnly, hasCustom };
+            anyFin = anyFin || finishingNeeded || pickOnly;
+            anyShop = anyShop || hasCustom;
+            }   // ← one pair per finish
+            if (allBackorder.length) await updateDoc(doc(db, "hq_sales_orders", so.id), { backorderLines: allBackorder, backorderAt: Date.now() }).catch(() => {});
 
             // Packaging: create the packaging order alongside finishing + shop (shared orderKey)
             // so it lands in the Packaging inbox the moment the SO is split. Carries every line
@@ -1750,7 +1765,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 // Fab geometry drives the pole box width: french-return bends need the wider 8" box.
                 fab: { shape: fabNotes.shape || null, qtyBends: fabNotes.qtyBends || 0, qtyMiterReturns: fabNotes.qtyMiterReturns || 0 },
                 // cpqData NOT stored here — large, and the grouping step re-fetches it via quoteId.
-                finSiblingId: (finishingNeeded || pickOnly) ? finId : null, shopSiblingId: hasCustom ? shopId : null,
+                finSiblingId: firstPair && (firstPair.finishingNeeded || firstPair.pickOnly) ? firstPair.finId : null, shopSiblingId: firstPair && firstPair.hasCustom ? firstPair.shopId : null,
                 createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || null
             };
             // Strip any undefined (Firestore rejects it anywhere in the doc) via a JSON round-trip.
@@ -1765,14 +1780,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             });
             await updateDoc(doc(db, "hq_sales_orders", so.id), {
                 status: "Dispatched",
-                pushedToFinishing: finishingNeeded || pickOnly,
-                pushedToShop: hasCustom,
+                pushedToFinishing: anyFin,
+                pushedToShop: anyShop,
                 autoSplit: true,
                 dispatchedAt: Date.now(),
                 dispatchedBy: currentUser || ''
             });
 
-            alert(`✅ SO ${orderKey} split: ${hasSmall ? 'Finishing ✓' : '—'}  ${hasCustom ? 'Shop ✓' : '—'}`);
+            alert(`✅ SO ${orderKey} split: ${anyFin ? 'Finishing ✓' : '—'}  ${anyShop ? 'Shop ✓' : '—'}${finishGroups.length > 1 ? `  ·  ${finishGroups.length} finishes, one pair each` : ''}`);
             loadRTGOrders();
         } catch (error) {
             console.error("Auto-Split Error:", error);

@@ -1,6 +1,6 @@
 // node scripts/rowPair.test.mjs — a row hits the floor as a production order does (Stuart 2026-09-23):
 // grouped by row and finish, one pair per group, the pole the shop's, the small parts finishing's.
-import { floorGroupsOf, splitGroupJobs, pairShapeOf, pairIdsOf } from '../src/components/Shared/rowPairShape.js';
+import { floorGroupsOf, splitGroupJobs, pairShapeOf, pairIdsOf, finishGroupsOf } from '../src/components/Shared/rowPairShape.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 const ok = (n, c) => { if (c) pass++; else { fail++; console.log(`✗ ${n}`); } };
@@ -52,5 +52,16 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
     // a small-parts-only group has no shop half
     const smallOnly = pairShapeOf({ group: groups[2], so: display, brand: 'ce', now: 1, inventory, woId: 'W2', shopWoId: 'W2-C' });
     eq('a small-parts-only group has no shop sibling and no custom flag', [smallOnly.shopSibling, smallOnly.finPayload.hasCustomSibling, smallOnly.finPayload.shopSiblingId], [null, false, null]);
+}
+
+// ── THE CPQ SPLIT: ONE PAIR PER FINISH ──────────────────────────────────────────────────────
+{
+    const small = [{ name: 'Bracket', finishCode: 'P26' }, { name: 'Ring', finishCode: '' }, { name: 'Finial', finishCode: 'S03' }];
+    const custom = [{ name: 'Oak rod', finishCode: 'S03', cutLength: 96 }];
+    const g = finishGroupsOf({ smallLines: small, customLines: custom, finishOf: (l) => String(l.finishCode || '').toUpperCase() || 'P26' });
+    eq('a wood pole stained beside metal painted is two pairs, sorted by finish, each suffixed', g.map(x => [x.finish, x.suffix, x.smallLines.length, x.customLines.length]), [['P26', '-P26', 2, 0], ['S03', '-S03', 1, 1]]);
+    eq('a line naming no finish takes the order recipe', g[0].smallLines.map(l => l.name), ['Bracket', 'Ring']);
+    const one = finishGroupsOf({ smallLines: small.slice(0, 2), customLines: [], finishOf: () => 'P26' });
+    eq('a single-finish order keeps its ids exactly — no suffix', [one.length, one[0].suffix], [1, '']);
 }
 console.log(`rowPair: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

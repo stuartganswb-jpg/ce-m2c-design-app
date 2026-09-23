@@ -49,6 +49,29 @@ export const floorGroupsOf = (jobs = [], so = null) => {
     return [...groups.values()];
 };
 
+/**
+ * THE SAME RULE FOR THE CPQ SPLIT (Stuart 2026-09-23: "the same should happen when this happens on a
+ * normal order, there will be plenty of orders from cpq or order entry specifying a wood pole with
+ * metal small parts"). The whole-order split wrote one pair per order whatever the finishes; now
+ * one pair per FINISH. A single-finish order keeps its ids exactly (WO-<key> / SHOP-<key>); a
+ * multi-finish order suffixes every pair with its finish (WO-<key>-P24, WO-<key>-S03), sorted, so
+ * a re-dispatch overwrites the same documents.
+ * @param finishOf  (line) → the line's finish code, the order's recipe when the line names none
+ * @returns [{ finish, suffix, smallLines, customLines }]
+ */
+export const finishGroupsOf = ({ smallLines = [], customLines = [], finishOf = () => '' } = {}) => {
+    const groups = new Map();
+    const put = (l, kind) => {
+        const f = U(finishOf(l) || '');
+        if (!groups.has(f)) groups.set(f, { finish: f, smallLines: [], customLines: [] });
+        groups.get(f)[kind].push(l);
+    };
+    (smallLines || []).forEach(l => put(l, 'smallLines'));
+    (customLines || []).forEach(l => put(l, 'customLines'));
+    const out = [...groups.values()].sort((a, b) => a.finish.localeCompare(b.finish));
+    return out.map(g => ({ ...g, suffix: out.length > 1 ? `-${slug(g.finish) || 'NOFINISH'}` : '' }));
+};
+
 /** Which jobs of a group are the SHOP's (a custom pole) and which the finishing side's. */
 export const splitGroupJobs = (group) => ({
     custom: (group.jobs || []).filter(j => !!j.custom),

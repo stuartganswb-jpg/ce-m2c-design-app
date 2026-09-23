@@ -101,18 +101,21 @@ const wholeKeysOf = (so) => [...new Set([so && so.soId, so && so.id].map(k => St
  * display still reads DONE off it and is never offered a Start.
  */
 export const splitRetiredDoc = (d) => !!d && (d.closed === true || U(d.status) === 'CLOSED') && String(d.closedFrom || '').trim() === '10.5';
+// A whole-order id is WO-<key>, or — since the split writes one pair per finish (2026-09-23) —
+// WO-<key>-<FINISH>. A row pair's id is WO-OE-…, never a sales-order key, so the two cannot meet.
+const isWholeId = (id, prefix, keys) => keys.some(k => String(id) === `${prefix}-${k}` || String(id).startsWith(`${prefix}-${k}-`));
 export const wholeOrderDocsOf = (so, fin = [], shop = []) => {
     const keys = wholeKeysOf(so);
-    const finDoc = (fin || []).find(d => d && !splitRetiredDoc(d) && keys.some(k => String(d.id) === `WO-${k}`)) || null;
-    const shopDoc = (shop || []).find(d => d && !splitRetiredDoc(d) && keys.some(k => String(d.id) === `SHOP-${k}`)) || null;
-    return (finDoc || shopDoc) ? { fin: finDoc, shop: shopDoc } : null;
+    const fins = (fin || []).filter(d => d && !splitRetiredDoc(d) && isWholeId(d.id, 'WO', keys));
+    const shops = (shop || []).filter(d => d && !splitRetiredDoc(d) && isWholeId(d.id, 'SHOP', keys));
+    return (fins.length || shops.length) ? { fin: fins[0] || null, shop: shops[0] || null, fins, shops } : null;
 };
 /** The packaging document ids the split gives an order: PKG-<orderKey>, one per identity key. */
 export const packagingIdsOf = (so) => wholeKeysOf(so).map(k => `PKG-${k}`);
 /** The whole-order documents the retire closed on this order — the strip says so instead of offering the retire again. */
 export const splitRetiredOf = (so, fin = [], shop = []) => {
     const keys = wholeKeysOf(so);
-    const docs = [...(fin || []).filter(d => d && keys.some(k => String(d.id) === `WO-${k}`)), ...(shop || []).filter(d => d && keys.some(k => String(d.id) === `SHOP-${k}`))].filter(splitRetiredDoc);
+    const docs = [...(fin || []).filter(d => d && isWholeId(d.id, 'WO', keys)), ...(shop || []).filter(d => d && isWholeId(d.id, 'SHOP', keys))].filter(splitRetiredDoc);
     return docs.length ? docs : null;
 };
 
@@ -124,25 +127,28 @@ export const splitRetiredOf = (so, fin = [], shop = []) => {
  * logged against it is closed by a person on RTG who can see that work, not from here.
  * @returns string[] — empty means it may go
  */
-export const retireBlockersOf = ({ fin = null, shop = null, plating = [], pkg = [] } = {}) => {
+export const retireBlockersOf = ({ fin = null, shop = null, fins = null, shops = null, plating = [], pkg = [] } = {}) => {
     const out = [];
+    // Every pair of the order (one per finish) is checked — the first-pair shorthand still works.
+    const finList = Array.isArray(fins) && fins.length ? fins : (fin ? [fin] : []);
+    const shopList = Array.isArray(shops) && shops.length ? shops : (shop ? [shop] : []);
     // The split also writes PKG-<so> for the packing station (pending until packed); one that has
     // moved past pending was packed against the whole order and is closed by a person who can see it.
     (pkg || []).forEach(p => { if (p && !['', 'PENDING'].includes(U(p.status)) && !splitRetiredDoc(p)) out.push(`${p.id} is ${p.status} at packaging`); });
     const FIN_OK = ['', 'SETUP', 'PENDING', 'QUEUED', 'NOT STARTED'];
     const PICK_OK = ['', 'PENDING', 'WAITING', 'QUEUED'];
-    if (fin) {
-        const phase = U(fin.currentPhase || fin.status || '');
-        if (!FIN_OK.includes(phase)) out.push(`${fin.id} is at ${fin.currentPhase || fin.status} on the finishing floor`);
-        if (!PICK_OK.includes(U(fin.pickStatus || ''))) out.push(`${fin.id} has been picked (${fin.pickStatus})`);
-        if (fin.packStatus) out.push(`${fin.id} has been packed (${fin.packStatus})`);
-        if (fin.closed || U(fin.status) === 'CLOSED') out.push(`${fin.id} is already closed`);
-    }
-    if (shop) {
-        const st = U(shop.status || '');
-        if (!['', 'PENDING', 'RELEASED', 'QUEUED', 'APPROVED', 'NOT STARTED'].includes(st)) out.push(`${shop.id} is ${shop.status} on the shop floor`);
-        if (shop.closed) out.push(`${shop.id} is already closed`);
-    }
+    finList.forEach(f => {
+        const phase = U(f.currentPhase || f.status || '');
+        if (!FIN_OK.includes(phase)) out.push(`${f.id} is at ${f.currentPhase || f.status} on the finishing floor`);
+        if (!PICK_OK.includes(U(f.pickStatus || ''))) out.push(`${f.id} has been picked (${f.pickStatus})`);
+        if (f.packStatus) out.push(`${f.id} has been packed (${f.packStatus})`);
+        if (f.closed || U(f.status) === 'CLOSED') out.push(`${f.id} is already closed`);
+    });
+    shopList.forEach(sh => {
+        const st = U(sh.status || '');
+        if (!['', 'PENDING', 'RELEASED', 'QUEUED', 'APPROVED', 'NOT STARTED'].includes(st)) out.push(`${sh.id} is ${sh.status} on the shop floor`);
+        if (sh.closed) out.push(`${sh.id} is already closed`);
+    });
     (plating || []).forEach(p => {
         if (!p) return;
         if (p.__coll === 'plating_shipments' && !['', 'STAGED'].includes(U(p.status))) out.push(`${p.woNum || p.id} is ${p.status} at the plater`);
@@ -151,14 +157,16 @@ export const retireBlockersOf = ({ fin = null, shop = null, plating = [], pkg = 
 };
 
 /** The words of the retire confirmation — what closes, what is cancelled, what follows. */
-export const retireText = (so, { fin = null, shop = null, plating = [], pkg = [] } = {}) => {
+export const retireText = (so, { fin = null, shop = null, fins = null, shops = null, plating = [], pkg = [] } = {}) => {
     const demands = (plating || []).filter(p => p && p.__coll === 'plating_demand');
     const pkgOpen = (pkg || []).filter(p => p && !splitRetiredDoc(p));
+    const finList = Array.isArray(fins) && fins.length ? fins : (fin ? [fin] : []);
+    const shopList = Array.isArray(shops) && shops.length ? shops : (shop ? [shop] : []);
     return [
         `Retire the whole-order split of ${so.soId || so.id} and release it by ROWS instead?`,
         '\nThis CLOSES, through the same close RTG uses (state kept, reopenable):',
-        fin ? `  • ${fin.id} — the whole-order finishing document` : '',
-        shop ? `  • ${shop.id} — the whole-order shop document` : '',
+        ...finList.map(f => `  • ${f.id} — the whole-order finishing document`),
+        ...shopList.map(sh => `  • ${sh.id} — the whole-order shop document`),
         ...pkgOpen.map(p => `  • ${p.id} — the whole-order packaging document`),
         demands.length ? `\nand CANCELS ${demands.length} open plating demand(s) the split raised (${demands.map(d => d.woNum || d.id).join(', ')}), through the ledger.` : '',
         `\nThe sales order ${so.soId || so.id} itself stays open and is not touched. Its lines are then written for the row route, and each row is started from here when you choose.`,
@@ -170,8 +178,10 @@ export const retireText = (so, { fin = null, shop = null, plating = [], pkg = []
 export const wholeOrderText = (whole) => {
     if (!whole) return '';
     const parts = [];
-    if (whole.fin) parts.push(`${whole.fin.id} · ${whole.fin.pickOnly ? (whole.fin.pickStatus || 'Pending') : (whole.fin.currentPhase || 'Setup')}${whole.fin.packStatus ? ` · ${whole.fin.packStatus}` : ''}`);
-    if (whole.shop) parts.push(`${whole.shop.id} · ${whole.shop.status || 'Pending'}`);
+    const fins = Array.isArray(whole.fins) && whole.fins.length ? whole.fins : (whole.fin ? [whole.fin] : []);
+    const shops = Array.isArray(whole.shops) && whole.shops.length ? whole.shops : (whole.shop ? [whole.shop] : []);
+    fins.forEach(f => parts.push(`${f.id} · ${f.pickOnly ? (f.pickStatus || 'Pending') : (f.currentPhase || 'Setup')}${f.packStatus ? ` · ${f.packStatus}` : ''}`));
+    shops.forEach(sh => parts.push(`${sh.id} · ${sh.status || 'Pending'}`));
     return parts.join(' · ');
 };
 

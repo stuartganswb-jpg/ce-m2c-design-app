@@ -151,6 +151,14 @@ eq('a written row wins over the memo', rowOfLine({ row: 'Row 1', memo: 'left win
     eq('a row\'s OWN work orders (WO-OE-…) are never mistaken for the whole-order document',
         wholeOrderDocsOf(oe, [{ id: 'WO-OE-H1-75SR-1-0' }], []), null);
     ok('the words name both documents and their state', /WO-SO60551 · Setup/.test(wholeOrderText(whole)) && /SHOP-SO60551 · Pending/.test(wholeOrderText(whole)));
+    // ONE PAIR PER FINISH (2026-09-23): a multi-finish order's whole-order documents are WO-<key>-<FINISH>.
+    const twoFin = [{ id: 'WO-SO60551-P26', currentPhase: 'Setup' }, { id: 'WO-SO60551-S03', currentPhase: 'Painting' }];
+    const twoShop = [{ id: 'SHOP-SO60551-S03', status: 'Pending' }];
+    const w2 = wholeOrderDocsOf(cpq, twoFin, twoShop);
+    eq('every pair of the order is seen', [w2.fins.map(d => d.id), w2.shops.map(d => d.id), w2.fin.id], [['WO-SO60551-P26', 'WO-SO60551-S03'], ['SHOP-SO60551-S03'], 'WO-SO60551-P26']);
+    eq('a row pair (WO-OE-…) is never mistaken for a whole-order pair', wholeOrderDocsOf(cpq, [{ id: 'WO-OE-SO60551-ROW-2-P24-1' }], []), null);
+    eq('the retire checks every pair', retireBlockersOf({ fins: twoFin, shops: twoShop }), ['WO-SO60551-S03 is at Painting on the finishing floor']);
+    ok('…and names every pair', /WO-SO60551-P26/.test(wholeOrderText(w2)) && /WO-SO60551-S03/.test(wholeOrderText(w2)) && /SHOP-SO60551-S03/.test(wholeOrderText(w2)));
     // THE RETIRE LEAVES THE DOCUMENTS IN PLACE, CLOSED FROM 10.5 (the wall, 2026-09-23: SO60585 and
     // SO60586 read whole-order again after their retire — every row DONE, nothing startable).
     const retiredFin = [{ id: 'WO-SO60585', status: 'Closed', currentPhase: 'Closed', closedFrom: '10.5' }];

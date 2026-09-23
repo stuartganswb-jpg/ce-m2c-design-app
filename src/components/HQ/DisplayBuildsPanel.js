@@ -289,7 +289,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     const retireSplit = async (entry) => {
         const so = entry?.so;
         if (!so || !draft || !entry.whole) return;
-        const blockers = retireBlockersOf({ fin: entry.whole.fin, shop: entry.whole.shop, plating: entry.plating || [], pkg: entry.pkg || [] });
+        const blockers = retireBlockersOf({ fin: entry.whole.fin, shop: entry.whole.shop, fins: entry.whole.fins, shops: entry.whole.shops, plating: entry.plating || [], pkg: entry.pkg || [] });
         if (blockers.length) return alert(`Cannot retire the whole-order split of ${so.soId || so.id} — work has been logged on it:\n\n${blockers.map(b => `  • ${b}`).join('\n')}\n\nClose or finish it on RTG, where that work is visible.`);
         // The lines that will replace it: read now, so a breakdown with nothing in it stops this before anything closes.
         let lines = null;
@@ -299,7 +299,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             lines = rowLinesFromBreakdown(job.exists() ? ((job.data().cpqData || {}).breakdown || []) : []);
             if (!lines.length) return alert(`The CPQ job ${so.hqJobId} has no physical lines in its breakdown — nothing to release by rows.`);
         }
-        if (!window.confirm(retireText(so, { fin: entry.whole.fin, shop: entry.whole.shop, plating: entry.plating || [], pkg: entry.pkg || [] }))) return;
+        if (!window.confirm(retireText(so, { fin: entry.whole.fin, shop: entry.whole.shop, fins: entry.whole.fins, shops: entry.whole.shops, plating: entry.plating || [], pkg: entry.pkg || [] }))) return;
         setBusy('Retiring the whole-order split…');
         const by = String(currentUser || '10.5');
         try {
