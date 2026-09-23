@@ -20,6 +20,7 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction, canReopenPostedOrder, netSuiteOrderNoOf } from '../Shared/orderStatus';
 import { packingListOf } from '../Shared/packingList';
 import { invoiceDocOf } from '../Shared/invoiceMath';
+import PayLinkPanel from '../Shared/PayLinkPanel';
 import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
 import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { soHeaderOf, jobHeaderPatchOf, EMPTY_SHIP_ADDRESS } from '../Shared/salesOrderHeader';
@@ -708,6 +709,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   const [cfgQuote, setCfgQuote] = useState(null); // read-only configured-item 3D viewer (opens a CONFIGURED job straight from the pipeline)
   const [qsOrders, setQsOrders] = useState([]);   // Quick Ship (stocked) orders — invoiced from the CRM
   const [qsInvoice, setQsInvoice] = useState(null); // Quick Ship invoice modal
+  const [payRowId, setPayRowId] = useState(null);   // which Order Entry SO row has its payment panel open
 
   // Quick Ship orders live-feed: the customer card shows them with kit-grouped invoices
   // (customer pays the KIT price; NetSuite carries the per-item accounting lines).
@@ -2129,6 +2131,23 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                           <button onClick={() => handleDeleteJob(job)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
                                                       </div>
                                                       ); })()}
+
+                                                      {/* TAKE PAYMENT (Stuart 2026-09-23) — a deposit on a quote or sales order:
+                                                          50% by default, another % or a flat figure if staff say so. The link is
+                                                          printed on the document only when they add it; the customer pays on the
+                                                          portal pay page, in the gateway's own card fields. */}
+                                                      {Number(job.cpqData?.totalPrice || 0) > 0 && (
+                                                          <div style={{ marginTop: '14px' }}>
+                                                              <PayLinkPanel
+                                                                  docType={isOrderCard ? 'SALES_ORDER' : 'QUOTE'}
+                                                                  collection="jobs" docId={job.jobId || job.id}
+                                                                  reference={quoteDisplayNo(job)}
+                                                                  customerName={activeCrmRecord?.name || job.customerName || ''}
+                                                                  totalAmount={Number(job.cpqData?.totalPrice || 0) + Number(job.shippingAmount || 0)}
+                                                                  brand={activeBrand} compact
+                                                              />
+                                                          </div>
+                                                      )}
                                                   </div>
                                           );
                                           const qJobs = act.filter(j => !isOrder(j));
@@ -2195,7 +2214,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                       const fulfilled = o.packStatus === 'Packed' || o.status === 'Shipped' || !!o.nsInvoiceNo;
                                                       const state = o.status === 'NS_QUEUED' ? 'AWAITING NETSUITE' : (o.status || 'Pending');
                                                       return (
-                                                      <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', border: '1px solid var(--line)', background: 'var(--paper)', padding: '10px 14px', marginBottom: '8px' }}>
+                                                      <div key={o.id}>
+                                                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', border: '1px solid var(--line)', background: 'var(--paper)', padding: '10px 14px', marginBottom: payRowId === o.id ? 0 : '8px' }}>
                                                           <div style={{ flex: 1, minWidth: 0 }}>
                                                               <span style={{ fontFamily: 'var(--mono)', fontSize: '0.85rem', fontWeight: 600, color: 'var(--ink)' }}>SO {o.soId}</span>
                                                               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '10px' }}>{o.createdAt ? new Date(o.createdAt).toLocaleDateString() : ''}{o.jobName ? ` · ${o.jobName}` : ''} · ${Number(o.invoiceTotal || 0).toFixed(2)}</span>
@@ -2207,12 +2227,28 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                           {packedStateOf(o).packed && (
                                                               <button onClick={() => { setActiveDocJob({ ...o, jobId: o.soId || o.id, customer: { id: o.customerId, name: o.customer } }); setActiveDocType('PACKING_SLIP'); }} title="Packing list — what was ordered beside what was packed, with ship date and tracking" style={{ padding: '8px 12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>📦 Packing list</button>
                                                           )}
+                                                          {/* Deposit / payment on an Order Entry sales order — the same panel the
+                                                              quote card uses (Stuart 2026-09-23). An invoiced order is paid in full. */}
+                                                          <button onClick={() => setPayRowId(payRowId === o.id ? null : o.id)} title="Take a deposit or payment against this order — creates a link and a QR code the customer can pay from" style={{ padding: '8px 12px', background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>💳 Payment</button>
                                                           {!fulfilled && String(o.status || '') !== 'Closed' && (
                                                               <>
                                                                   <button onClick={() => editOeSo(o)} title="Reopen this order's lines in Order Entry (tab 7) for editing — pushing the edited cart supersedes this SO. Blocked once work orders exist." style={{ padding: '8px 12px', background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>✎ Edit</button>
                                                                   <button onClick={() => closeOeSo(o)} title="Close this sales order. If work orders exist, a manager confirm cascades the close to every work order, floor document and WMS demand." style={{ padding: '8px 12px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>✕ Close</button>
                                                               </>
                                                           )}
+                                                      </div>
+                                                      {payRowId === o.id && (
+                                                          <div style={{ marginBottom: '8px' }}>
+                                                              <PayLinkPanel
+                                                                  docType={fulfilled ? 'INVOICE' : 'SALES_ORDER'}
+                                                                  collection="hq_sales_orders" docId={o.id}
+                                                                  reference={`SO ${o.soId || o.id}`}
+                                                                  customerName={o.customer || ''}
+                                                                  totalAmount={Number(o.invoiceTotal || 0)}
+                                                                  brand={activeBrand} compact
+                                                              />
+                                                          </div>
+                                                      )}
                                                       </div>
                                                       );
                                                   })}

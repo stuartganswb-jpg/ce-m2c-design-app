@@ -2733,9 +2733,16 @@ exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
     if (!['QUOTE', 'SALES_ORDER', 'INVOICE'].includes(type)) throw new HttpsError('invalid-argument', 'docType must be QUOTE, SALES_ORDER or INVOICE.');
     const total = money(totalAmount);
     if (!(total > 0)) throw new HttpsError('invalid-argument', 'A total greater than zero is required.');
-    // An invoice is paid in full; a quote / sales order defaults to a deposit (50% unless told otherwise).
-    const pct = type === 'INVOICE' ? 100 : (Number(depositPct) > 0 && Number(depositPct) <= 100 ? Number(depositPct) : 50);
-    const due = type === 'INVOICE' ? total : money(total * pct / 100);
+    // An invoice is paid in full. A quote / sales order asks for a deposit: 50% unless staff say
+    // otherwise, either as a percentage or as a flat figure ("$2,500 down" — Stuart 2026-09-23).
+    const flat = money((request.data || {}).flatAmount);
+    let pct = type === 'INVOICE' ? 100 : (Number(depositPct) > 0 && Number(depositPct) <= 100 ? Number(depositPct) : 50);
+    let due = type === 'INVOICE' ? total : money(total * pct / 100);
+    if (type !== 'INVOICE' && flat > 0) {
+        if (flat > total) throw new HttpsError('invalid-argument', 'The deposit cannot be more than the total.');
+        due = flat;
+        pct = Math.round(flat / total * 100);
+    }
     const token = crypto.randomBytes(32).toString('base64url');
     const now = Date.now();
     await admin.firestore().collection('pay_links').doc(token).set({
@@ -2746,6 +2753,43 @@ exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
         expiresAt: now + PAY_LINK_DAYS * 86400000,
     });
     return { token, url: `https://portal.classicalelements.com/#/pay/${token}`, amountDue: due, totalAmount: total, expiresAt: now + PAY_LINK_DAYS * 86400000 };
+});
+
+// Every link a document has ever had, newest first — what the staff panel on the CRM card, the
+// invoice and Order Entry all read. Amounts and status only; no card data exists to leak.
+exports.payLinksFor = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const { collection, docId, reference } = request.data || {};
+    const col = admin.firestore().collection('pay_links');
+    const q = (String(collection || '') && String(docId || ''))
+        ? col.where('collection', '==', String(collection)).where('docId', '==', String(docId))
+        : col.where('reference', '==', cleanStr(reference, 60));
+    const snap = await q.limit(25).get();
+    const links = snap.docs.map((d) => {
+        const l = d.data() || {};
+        return {
+            token: l.token, url: `https://portal.classicalelements.com/#/pay/${l.token}`,
+            docType: l.docType, reference: l.reference || '', status: l.status || '',
+            totalAmount: l.totalAmount || 0, amountDue: l.amountDue || 0, depositPct: l.depositPct || 0,
+            createdAt: l.createdAt || 0, createdBy: l.createdBy || '', expiresAt: l.expiresAt || 0,
+            paidAt: l.paidAt || 0, paidAmount: l.paidAmount || 0, transactionId: l.transactionId || '',
+            lastError: l.lastError || '',
+        };
+    }).sort((a, b) => b.createdAt - a.createdAt);
+    return { links, paidTotal: links.filter((l) => l.status === 'PAID').reduce((s, l) => s + Number(l.paidAmount || 0), 0) };
+});
+
+// Cancel a link that should no longer be payable (wrong amount, resent, order changed). A PAID link
+// is never voided — the money happened, and the record says so.
+exports.payLinkVoid = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const token = String((request.data || {}).token || '');
+    const ref = admin.firestore().collection('pay_links').doc(token);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError('not-found', 'No such payment link.');
+    if ((snap.data() || {}).status === 'PAID') throw new HttpsError('failed-precondition', 'That link has been paid — it cannot be cancelled.');
+    await ref.update({ status: 'VOID', voidedAt: Date.now(), voidedBy: (request.auth && request.auth.token && request.auth.token.name) || '' });
+    return { ok: true };
 });
 
 const payLinkOf = async (token) => {

@@ -27,7 +27,7 @@ const SAMPLE_SHIP = ['Master Suite Reno', '88 Lakeshore Dr', 'Aspen, CO 81611'];
 
 const money = (n) => `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, footer, terms, docNumber = 'SO10293', data }) => {
+const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, footer, terms, docNumber = 'SO10293', data, pay }) => {
   // SAMPLE DATA ONLY WHEN THERE IS NO DATA AT ALL (Stuart 2026-08-07). The fallbacks used to fire
   // per-field — a REAL document with zero lines (an unpriced portal request has none by design)
   // silently rendered the SAMPLE_LINES demo under a real quote number and barcode, one Print PDF
@@ -217,6 +217,28 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '12px', fontFamily: 'var(--mono)' }}><span style={{ color: 'var(--ink-soft)' }}>TAX</span><span>{money(tax)}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', marginTop: '6px', background: 'var(--paper-2)', border: '1px solid var(--line)', fontFamily: 'var(--serif)', fontSize: '15px', fontWeight: 500 }}>
               <span>{type === 'INVOICE' ? 'Balance Due' : 'Total'}</span><span>{money(total)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PAY THIS DOCUMENT — printed ONLY when staff added a link (Stuart 2026-09-23: "when decided
+          to add it"). `pay` = { url, qrSvg, amountDue, label } from Shared/PayLinkPanel; without it
+          the document prints exactly as it always has. */}
+      {pay && pay.url && (
+        <div style={{ marginTop: '24px', border: '1px solid var(--line)', padding: '14px 16px', display: 'flex', gap: '16px', alignItems: 'center' }}>
+          {pay.qrSvg ? <div style={{ width: '104px', height: '104px', flex: '0 0 104px' }} dangerouslySetInnerHTML={{ __html: pay.qrSvg }} /> : null}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--brass)', marginBottom: '4px' }}>
+              Pay {pay.label || 'this document'}
+            </div>
+            <div style={{ fontSize: '13px', marginBottom: '4px' }}>
+              {pay.amountDue ? <>Amount due now <strong>{money(pay.amountDue)}</strong>. </> : null}
+              Scan the code, or visit:
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '10.5px', wordBreak: 'break-all' }}>{pay.url}</div>
+            <div style={{ fontSize: '9.5px', color: 'var(--ink-soft)', marginTop: '4px' }}>
+              Paid securely by card through our payment provider — we never see or store your card number.
             </div>
           </div>
         </div>
