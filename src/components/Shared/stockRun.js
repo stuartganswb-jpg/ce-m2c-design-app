@@ -54,6 +54,23 @@ export const floorFieldsOf = (part, qty) => {
     };
 };
 
+// ── A PAINT RUN SAYS WHETHER IT IS POLES (Stuart 2026-09-23) ────────────────────────────────────
+// "some JFP items, which i happen to know are poles got routed as small parts … at the time order is
+// created it pops up and asks if it is to be routed as small parts or poles." A JFP run is written
+// from the JFP TEMPLATE's record (the item was never taught to the library), so floorFieldsOf has no
+// category to read and every paint run landed on the floor as small parts. The person raising the
+// run answers instead, at every door (Master Library JFP + Repaint, the Snapshot's Repaint), and
+// Shared/repaintRun refuses a run without the answer. POLES = the same pole shape floorFieldsOf
+// writes for a pole item (a count, no sled size); SMALL = what a paint run always carried.
+export const RUN_HANDLING = { SMALL: 'SMALL', POLES: 'POLES' };
+export const paintRunFloorFields = (handling, qty) => {
+    const h = String(handling || '').trim().toUpperCase();
+    const n = Math.max(1, Math.floor(Number(qty) || 1));
+    if (h === RUN_HANDLING.POLES) return { runHandling: h, productType: 'POLE', poles: { qty: n, type: 'POLE' }, totalPoles: n, paintSize: null, paintSizes: null };
+    if (h === RUN_HANDLING.SMALL) return { runHandling: h };
+    return null;
+};
+
 // A stock run, as a finishing work order. Kept free of Firestore imports so the document shape can
 // be asserted in a test — the canonical TASK shape is NOT duplicated here: the caller passes
 // makeFullTasks() from workOrderContract, which stays the one place that defines it.

@@ -12,7 +12,7 @@
 import { db } from '../../firebase';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { withItemCode, makeFullTasks } from './workOrderContract';
-import { buildStockFinPayload } from './stockRun';
+import { buildStockFinPayload, paintRunFloorFields } from './stockRun';
 import { buildFinDoc } from './floorRelease';
 
 /**
@@ -82,8 +82,14 @@ export const releaseRunToFloor = async ({
  */
 export const raisePaintRun = async ({
     woId, part, targetCode, nsItem, pullCode, nsPull, finishId, finishLabel, fin,
-    qty, desc, brand, by = '', runType = 'Just For Paint', extra = {},
+    qty, desc, brand, by = '', runType = 'Just For Paint', extra = {}, handling,
 }) => {
+    // SMALL PARTS OR POLES — asked at the door (Shared/RunHandlingPrompt), refused here without it:
+    // the template record cannot say, and a pole run on the small-parts track is how B4/B5 landed on
+    // the Spin Machine (Stuart 2026-09-23).
+    const floorFields = paintRunFloorFields(handling, qty);
+    if (!floorFields) throw new Error('A paint run must say whether it is small parts or poles — nothing was created.');
+    const handlingStamp = { ...floorFields, runHandlingBy: by || '', runHandlingAt: Date.now() };
     const jfpFields = {
         paintOnly: true, jfpItemCode: targetCode, jfpItemId: String(nsItem.id),
         jfpItemName: nsItem.displayname || '', jfpFinishId: finishId, jfpFinishLabel: finishLabel,
@@ -96,8 +102,8 @@ export const raisePaintRun = async ({
         woId,
         part: { ...part, legacyErpId: targetCode, itemName: nsItem.displayname || targetCode },
         qty, finishLabel, recipe: (fin && fin.code) || finishLabel, note: desc, brand, by,
-        hqExtra: { ...jfpFields, type: runType },
-        finExtra: { ...jfpFields, type: nsItem.displayname || targetCode },
+        hqExtra: { ...jfpFields, ...handlingStamp, type: runType },
+        finExtra: { ...jfpFields, ...handlingStamp, type: nsItem.displayname || targetCode },
     });
 };
 

@@ -3,6 +3,7 @@ import { buildGalleryIndex, galleryImageForPart, photoMayOverwrite, isAutoImage,
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { splitFinish, siblingsQuery, oneItemQuery, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
 import { releaseRunToFloor as sharedReleaseRunToFloor, raisePaintRun as sharedRaisePaintRun } from '../Shared/repaintRun';
+import { askRunHandling, runHandlingLabel } from '../Shared/RunHandlingPrompt';
 import { parkWorkOrder, INTENT } from '../Shared/workOrderCreate';
 import { issuePlatedDemand } from '../Shared/platingDemand';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
@@ -1362,7 +1363,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           setRepaint(r => r && ({ ...r, busy: false }));
           return alert(`NetSuite has no item called "${target}".\n\nThe painted pieces are adjusted into this code at packing, so it has to exist before the paint is run.`);
       }
-      if (!window.confirm(`Send a REPAINT run to the finishing floor?\n\n${desc}\n\nPull ${qty} × ${chosen.code}${chosen.name ? ` (${chosen.name})` : ''} — ${chosen.available} available.\n\nAt the WMS pick, ${qty} × ${chosen.code} is adjusted OUT. At put-away, ${qty} × ${target} is adjusted IN to the bin that gets scanned.\n\nNo assembly, no NetSuite work order.`)) {
+      // SMALL PARTS OR POLES (Stuart 2026-09-23) — the same question as JFP and the Snapshot's repaint.
+      const handling = await askRunHandling({ code: target, qty, hint: libraryTypeOf(target) });
+      if (!handling) { setRepaint(r => r && ({ ...r, busy: false })); return; }
+      if (!window.confirm(`Send a REPAINT run to the finishing floor?\n\n${desc}\n\nPull ${qty} × ${chosen.code}${chosen.name ? ` (${chosen.name})` : ''} — ${chosen.available} available.\nRouted as: ${runHandlingLabel(handling)}\n\nAt the WMS pick, ${qty} × ${chosen.code} is adjusted OUT. At put-away, ${qty} × ${target} is adjusted IN to the bin that gets scanned.\n\nNo assembly, no NetSuite work order.`)) {
           setRepaint(r => r && ({ ...r, busy: false }));
           return;
       }
@@ -1373,7 +1377,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               woId: newWoId, part: activePart, targetCode: target, nsItem,
               pullCode: chosen.code, nsPull: { id: chosen.nsId, displayname: chosen.name },
               finishId: st.finishId, finishLabel, fin, qty, desc,
-              runType: 'Repaint',
+              runType: 'Repaint', handling,
               // Declared on the order so a repaint is never mistaken for a JFP on the floor or in
               // RTG — same machinery, different reason, and the reason is worth keeping.
               extra: { repaint: true, repaintFrom: chosen.code, repaintAvailAtIssue: chosen.available },
@@ -1389,6 +1393,13 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
   const raisePaintRun = (args) =>
       sharedRaisePaintRun({ ...args, brand: activeBrand, by: (currentUser && (currentUser.name || currentUser.email)) || '' });
+  // What the library lists an item as — the routing prompt's HINT, never the answer (a JFP item is
+  // usually one the library was never taught).
+  const libraryTypeOf = (code) => {
+      const c = String(code || '').toUpperCase();
+      const p = (inventory || []).find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === c);
+      return String((p && ((p.manufacturingSpecs && p.manufacturingSpecs.productType) || p.productType)) || '');
+  };
 
   // JFP RUN → FINISHING (Stuart 2026-08-03). No library assembly, no NetSuite work order — the item
   // rides as typed text and only meets NetSuite again at packing, as an adjustment.
@@ -1432,8 +1443,12 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           return alert(`NetSuite has no item called "${pullCode}" (the Pull Pieces From item).\n\nCheck the spelling — the pick adjusts this item OUT of NetSuite, so it has to be right. Leave the field blank if the pieces aren't coming from stock.`);
       }
 
+      // SMALL PARTS OR POLES (Stuart 2026-09-23) — the JFP template cannot say; the person does.
+      const handling = await askRunHandling({ code, qty, hint: libraryTypeOf(code) });
+      if (!handling) { setJfp(j => ({ ...j, busy: false })); return; }
+
       const desc = paintOnlyDescription({ itemCode: code, finishLabel, qty, note: jfp.note });
-      if (!window.confirm(`Send a JUST FOR PAINT run to the finishing floor?\n\n${desc}\nNetSuite item: ${nsItem.itemid}${nsItem.displayname ? ` — ${nsItem.displayname}` : ''}${nsPull && pullCode !== code ? `\nPull pieces from: ${nsPull.itemid}${nsPull.displayname ? ` — ${nsPull.displayname}` : ''} (−${qty} adjusts out at pick)` : ''}\n\nNo assembly, no NetSuite work order. At packing the painted pieces are adjusted into the bin that gets scanned.`)) {
+      if (!window.confirm(`Send a JUST FOR PAINT run to the finishing floor?\n\n${desc}\nNetSuite item: ${nsItem.itemid}${nsItem.displayname ? ` — ${nsItem.displayname}` : ''}${nsPull && pullCode !== code ? `\nPull pieces from: ${nsPull.itemid}${nsPull.displayname ? ` — ${nsPull.displayname}` : ''} (−${qty} adjusts out at pick)` : ''}\nRouted as: ${runHandlingLabel(handling)}\n\nNo assembly, no NetSuite work order. At packing the painted pieces are adjusted into the bin that gets scanned.`)) {
           setJfp(j => ({ ...j, busy: false }));
           return;
       }
@@ -1443,7 +1458,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           await raisePaintRun({
               woId: newWoId, part: activePart, targetCode: code, nsItem,
               pullCode, nsPull, finishId: jfp.finishId, finishLabel, fin, qty, desc,
-              runType: 'Just For Paint',
+              runType: 'Just For Paint', handling,
           });
           alert(`✅ ${newWoId} is on the finishing floor.\n\n${desc}\n\nIt is in the Setup Queue now, and recorded in RTG. Packing does a bin count and adjusts ${code} into that bin.`);
           setJfp({ itemCode: '', finishId: '', note: '', pullFrom: '', busy: false });

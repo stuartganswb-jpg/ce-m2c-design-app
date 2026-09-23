@@ -21,6 +21,7 @@ import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolve
 import { coverCodesOf, rowsFor, uncoveredCount, STATE_STYLE } from '../Shared/backorderBoard';
 import { splitFinish, siblingsQuery, oneItemQuery, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
 import { raisePaintRun, repaintWoId } from '../Shared/repaintRun';
+import { askRunHandling, runHandlingLabel } from '../Shared/RunHandlingPrompt';
 import { runBatchPrecheck } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
@@ -2377,7 +2378,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             nsItem = (data.items || [])[0] || null;
         } catch (e) { setSnapRepaint(r => r && ({ ...r, busy: false })); return alert(`Couldn't reach NetSuite to check ${st.target} — nothing was created.\n\n${e.message || e}`); }
         if (!nsItem) { setSnapRepaint(r => r && ({ ...r, busy: false })); return alert(`NetSuite has no item called "${st.target}" — the painted pieces are adjusted into it at packing, so it has to exist first.`); }
-        if (!window.confirm(`Send a REPAINT run to the finishing floor?\n\n${desc}\n\nPull ${qty} × ${chosen.code} — ${chosen.available} available.\n\nAt the WMS pick ${qty} × ${chosen.code} is adjusted OUT; at put-away ${qty} × ${st.target} is adjusted IN. It lands in the Setup Queue and on the RTG board.`)) {
+        // SMALL PARTS OR POLES (Stuart 2026-09-23) — the same prompt the Master Library's JFP and
+        // repaint ask; the library's category, when it knows the item, is shown as a hint only.
+        const known = partByKey['erp:' + st.target];
+        const handling = await askRunHandling({ code: st.target, qty, hint: String((known && ((known.manufacturingSpecs && known.manufacturingSpecs.productType) || known.productType)) || '') });
+        if (!handling) return setSnapRepaint(r => r && ({ ...r, busy: false }));
+        if (!window.confirm(`Send a REPAINT run to the finishing floor?\n\n${desc}\n\nPull ${qty} × ${chosen.code} — ${chosen.available} available.\nRouted as: ${runHandlingLabel(handling)}\n\nAt the WMS pick ${qty} × ${chosen.code} is adjusted OUT; at put-away ${qty} × ${st.target} is adjusted IN. It lands in the Setup Queue and on the RTG board.`)) {
             return setSnapRepaint(r => r && ({ ...r, busy: false }));
         }
         try {
@@ -2386,7 +2392,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 woId: repaintWoId(st.target), part, targetCode: st.target, nsItem,
                 pullCode: chosen.code, nsPull: { id: chosen.nsId, displayname: chosen.name },
                 finishId: st.finishId, finishLabel, fin, qty, desc,
-                brand: activeBrand, by: currentUser || '', runType: 'Repaint',
+                brand: activeBrand, by: currentUser || '', runType: 'Repaint', handling,
                 extra: { repaint: true, repaintFrom: chosen.code, repaintAvailAtIssue: chosen.available, raisedFrom: 'SALES_SNAPSHOT' },
             });
             addLog(`♻ ${res.woId}: ${desc} — on the finishing floor and recorded in RTG.`, 'success');
