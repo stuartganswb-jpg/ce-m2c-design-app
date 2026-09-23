@@ -182,6 +182,16 @@ export const buildParkedWorkOrder = ({
     const n = Math.max(1, Math.floor(Number(qty) || 1));
     const ff = floorFieldsOf(part, n);
     const finishing = routeTo === ROUTE_FINISHING;
+    // ON A CUSTOM PAIR THE POLE IS THE SHOP'S (Stuart 2026-09-23, Shared/pickLines.isOwnCustomPole):
+    // the raw pole's pull line leaves the finishing payload — the CPQ split never put a custom line
+    // there either — and rides the shop sibling as its pull line. The small parts stay on the
+    // finishing side and are picked when the shop starts (§A1). The finishing document keeps its
+    // pole count for the paint stream.
+    const customPair = !!(sales && sales.custom && sales.shopWoId);
+    const poleCodes = customPair ? [String(sales.rawErp || erp).toUpperCase(), erp] : [];
+    const isPoleLine = (l) => { const c = String((l && (l.legacyErpId || l.partId)) || '').toUpperCase(); return !!c && (poleCodes.includes(c) || poleCodes.includes(c.split('/')[0])); };
+    const finPartsList = customPair ? partsList.filter(l => !isPoleLine(l)) : partsList;
+    const shopPullLines = customPair ? partsList.filter(isPoleLine) : [];
     // A sales order's NetSuite item is the FLOW2 assembly when there is one, never the raw part's.
     const nsId = sales ? (sales.stockInternalId ? String(sales.stockInternalId) : null)
         : (part && part.netSuiteInternalId != null && part.netSuiteInternalId !== '' ? String(part.netSuiteInternalId) : null);
@@ -191,7 +201,7 @@ export const buildParkedWorkOrder = ({
         type: erp, stockInternalId: nsId, code: erp, sales,
         productType: ff.productType, paintSize: ff.paintSize, paintSizes: ff.paintSizes,
         poles: ff.poles, totalPoles: ff.totalPoles, finishStream: ff.finishStream,
-        partsList, bomExploded, urgent, needBy, convertSuggestion, releasedDirect: false,
+        partsList: finPartsList, bomExploded, urgent, needBy, convertSuggestion, releasedDirect: false,
         extra: { ...(sales ? { itemName: (part && part.itemName) || '', ...(Number(sales.cutLength) > 0 ? { cutLength: Number(sales.cutLength) } : {}) } : { orderKey: woId }), ...(materialStamp || {}) },
     });
     const salesHeader = sales ? {
@@ -246,6 +256,8 @@ export const buildParkedWorkOrder = ({
         brand, status: 'Approved', customer: String(sales.customer || ''),
         source, intent, routeTo: ROUTE_SHOP, orderType: 'sales', autoFlow: true,
         finSiblingId: woId, hasSmallSibling: true,
+        // The pole the shop cuts from stock — its pull line, off the finishing side (above).
+        ...(shopPullLines.length ? { pullLines: shopPullLines } : {}),
         type: erp, erpId: erp, partErpId: erp, variantErpId: erp, rootItem: String(sales.rawErp || erp).toUpperCase(),
         itemName: (part && part.itemName) || '',
         ...salesHeader,

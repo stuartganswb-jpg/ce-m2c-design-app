@@ -8,7 +8,7 @@
 
 import {
     lineIsFeeish, isQuickShip, pickableLinesOf, packLinesOf, lineCode, lineQty,
-    poleDetailsOf, stockedPoleDetail, formatPoleLength,
+    poleDetailsOf, stockedPoleDetail, formatPoleLength, isOwnCustomPole, ownPoleCodesOf,
 } from '../src/components/Shared/pickLines.js';
 import { poleLengthOf } from '../src/components/Shared/poleCut.js';
 
@@ -161,5 +161,16 @@ eq('a document with only a pole count keeps the legacy POLES row', packLinesOf(l
 eq('the stocked pole row carries its code too', stockedPoleDetail('HCUMP810', 6, poleLengthOf).code, 'HCUMP810');
 eq('a single-cutLength shop doc names its code', poleDetailsOf({ job: customDoc, shopDoc: { itemCode: 'HBR1-1INPOLE', qty: 3, cutLength: 108 } }).rows.map(r => [r.code, r.qty]), [['HBR1-1INPOLE', 3]]);
 
+
+// ── ON A CUSTOM PAIR THE POLE IS THE SHOP'S (2026-09-23, SO60565 Base Front 1) ──────────────
+{
+    const paired = { id: 'WO-OE-H1-75SR-1', rootItem: 'H1-75SR', stockErpId: 'H1-75SR/P24', hasCustomSibling: true, shopSiblingId: 'SHOP-WO-OE-H1-75SR-1-C',
+        partsList: [{ legacyErpId: 'H1-75SR', partName: 'Pole raw', quantity: 50 }, { legacyErpId: 'H1-75SBP-S', partName: 'Backplate', quantity: 100 }] };
+    eq('the pair names its pole by the document\'s own raw item', ownPoleCodesOf(paired), ['H1-75SR', 'H1-75SR/P24']);
+    eq('the pole is never a pick line on the finishing side; the small parts still are', pickableLinesOf(paired).map(l => l.legacyErpId), ['H1-75SBP-S']);
+    eq('…the finished variant of it neither', isOwnCustomPole(paired, { legacyErpId: 'H1-75SR/P24' }), true);
+    eq('a document with NO custom sibling picks its pole as before (a stocked pole pulled from the shelf)', pickableLinesOf({ ...paired, hasCustomSibling: false, shopSiblingId: null }).map(l => l.legacyErpId), ['H1-75SR', 'H1-75SBP-S']);
+    eq('a document written before the writer fix (pole still on its list) is cured by the reader alone', pickableLinesOf({ ...paired }).length, 1);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

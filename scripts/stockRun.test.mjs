@@ -223,7 +223,10 @@ test('Order Entry custom pair: sales header, finished code, raw rootItem, linked
     assert.equal(finPayload.hasCustomSibling, true);
     assert.equal(finPayload.totalPoles, 4);
     assert.equal(finPayload.finishStream, 'POLES');
-    assert.equal(finPayload.partsList[0].legacyErpId, 'HCUMP810');
+    // ON A CUSTOM PAIR THE POLE IS THE SHOP'S (2026-09-23): the raw pole's pull line is NOT on the
+    // finishing side — it rides the shop sibling. (This line used to assert the defect.)
+    assert.deepEqual(finPayload.partsList, []);
+    assert.deepEqual(shopSibling.pullLines.map(l => l.legacyErpId), ['HCUMP810']);
     // the custom half
     assert.equal(shopSibling.id, 'WO-OE-HCUMP810-1-C');
     assert.equal(shopSibling.routeTo, 'SHOP');
@@ -265,4 +268,18 @@ test('Library run payload is unchanged by the new parameters', () => {
     const now = buildStockFinPayload({ woId: 'WO-X', part: bracket, qty: 3, finishLabel: 'BS', brand: 'ce', createdBy: 'stuart',
         reqDate: '2026-09-09', note: 'n', tasks: TASKS, extra: { finishLabel: 'BS - Brass' }, now: NOW });
     assert.deepEqual(now, before);
+});
+
+test('a custom pair with small parts: the pole leaves the finishing payload, the small parts stay; a straight pole line is untouched (2026-09-23)', () => {
+    const part = { legacyErpId: 'H1-75SR', itemName: '3/4" Square Pole', manufacturingSpecs: { productType: 'POLE' } };
+    const partsList = [{ legacyErpId: 'H1-75SR', partName: 'Pole raw', quantity: 50 }, { legacyErpId: 'H1-75SBP-S', partName: 'Backplate', quantity: 100 }];
+    const built = buildParkedWorkOrder({ intent: 'ORDER_ENTRY', woId: 'WO-OE-1', part, qty: 50, brand: 'ce', source: 'ORDER_ENTRY', routeTo: ROUTE_FINISHING, finish: 'P24', partsList, tasks: TASKS, now: NOW,
+        code: 'H1-75SR/P24', sales: { soAppId: 'SO-APP-1', soId: 'SO60565', customer: 'Fabricut', rawErp: 'H1-75SR', custom: true, shopWoId: 'WO-OE-1-C', cutLength: 7.5 } });
+    assert.deepEqual(built.finPayload.partsList.map(l => l.legacyErpId), ['H1-75SBP-S']);
+    assert.deepEqual(built.shopSibling.pullLines.map(l => l.legacyErpId), ['H1-75SR']);
+    assert.equal(built.finPayload.poles.qty, 50);
+    const straight = buildParkedWorkOrder({ intent: 'ORDER_ENTRY', woId: 'WO-OE-2', part, qty: 50, brand: 'ce', source: 'ORDER_ENTRY', routeTo: ROUTE_FINISHING, finish: 'P24', partsList, tasks: TASKS, now: NOW,
+        code: 'H1-75SR/P24', sales: { soAppId: 'SO-APP-1', soId: 'SO60565', customer: 'Fabricut', rawErp: 'H1-75SR', custom: false } });
+    assert.deepEqual(straight.finPayload.partsList.map(l => l.legacyErpId), ['H1-75SR', 'H1-75SBP-S']);
+    assert.equal(straight.shopSibling, null);
 });

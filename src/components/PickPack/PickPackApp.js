@@ -991,7 +991,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         && j.packStatus !== 'Packed'
         // Something to pick, eventually: either real BOM lines or a stock pull the Setup Queue
         // will synthesize. An order with neither is never going to reach her.
-        && ((Array.isArray(j.partsList) && j.partsList.length > 0) || j.stockErpId || j.orderType === 'stock')
+        && (pickableLines(j).length > 0 || j.orderType === 'stock' || j.paintOnly === true)
         // Sorted by the date the customer needs it. `needBy` is the one key (Brief E); the fin doc
         // still carries `reqDate`, written by RTG's split from that header, so both are read until
         // B's split is on the new name.

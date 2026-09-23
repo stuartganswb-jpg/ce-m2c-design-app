@@ -79,8 +79,30 @@ export const isQuickShip = (job) => !!job && String(job.orderClass || '').trim()
 export function pickableLinesOf(job) {
     if (!job) return [];
     if (isQuickShip(job)) return (job.lines || []).filter(l => !lineIsFeeish(l));
-    return (job.partsList || []).filter(l => !lineIsFeeish(l));
+    return (job.partsList || []).filter(l => !lineIsFeeish(l) && !isOwnCustomPole(job, l));
 }
+
+// ── ON A CUSTOM PAIR THE POLE IS THE SHOP'S (Stuart 2026-09-23, SO60565 Base Front 1) ────────
+// "poles route to the shop floor, but need to stay there until fabricated and completed and then
+//  they are supposed to be scanned to a staging bin for the matching small parts to be picked and
+//  reunited." The Order Entry writer had put the raw pole on the FINISHING document's parts list
+// (the CPQ split never does — a custom line is the shop's cut list), so the WMS offered
+// H1-75SR ×50 for picking and the Setup Queue counted it as a pickable line. The writer no longer
+// writes it (Shared/stockRun.buildParkedWorkOrder); this reader rule is the belt for every
+// document written before that, and for any writer that forgets. The pole is named by the pair
+// itself: the document's raw item (rootItem / stockErpId) on a document that HAS a custom sibling.
+export const ownPoleCodesOf = (job) => {
+    if (!job || !(job.hasCustomSibling || job.shopSiblingId)) return [];
+    return [...new Set([job.rootItem, job.stockErpId, job.partErpId, job.erpId].map(v => up(v)).filter(Boolean))];
+};
+export const isOwnCustomPole = (job, line) => {
+    const codes = ownPoleCodesOf(job);
+    if (!codes.length) return false;
+    const c = up((line && (line.legacyErpId || line.partId || line.erp)) || '');
+    if (!c) return false;
+    // The raw pole itself, or the finished variant of it (H1-75SR/P24 pulls H1-75SR).
+    return codes.includes(c) || codes.includes(c.split('/')[0]);
+};
 
 /**
  * The lines to PACK, normalised to one shape: { key, erp, aliasErp, name, qty, isPole }.

@@ -12,6 +12,7 @@ import { finishCodeFromErp, machineLoadPlan } from '../Shared/finishingTime';
 import { printMachineLoadLabels } from '../Shared/labelPrint';
 import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
 import PullLinesLive from '../Shared/PullLinesLive';
+import { pickableLinesOf } from '../Shared/pickLines';
 import MaterialGridCard from '../Shared/MaterialGridCard';
 import { woRefOf } from '../Shared/woRef';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
@@ -124,20 +125,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       })).sort((a, b) => (a.firstSeq !== b.firstSeq) ? a.firstSeq - b.firstSeq : a.firstDate - b.firstDate);
   })();
 
-  // Same precision rule as the WMS pick app: a line with a real item # is pickable; the
-  // fee/return/splice NAME test only applies to lines with no real id.
-  const FEEISH_RE = /\b(FRENCH|MITERED|MITER|BENT)\s+RETURN\b|\bSPLICE\b|\bFEE\b/i;
-  const pickableCount = (wo) => (wo.partsList || []).filter(l => {
-      if (l && (l.isFee || l.lineIsFee)) return false;
-      const pid = String((l && (l.legacyErpId || l.partId)) || '');
-      // OPT- = a configurator option (flush cut, bend, miter), never a pickable part — dropped
-      // OUTRIGHT rather than left to the name test below, which only catches fee-ish wording and
-      // would happily pass "Flush Cut" through (Eric 2026-08-20). See usablePin in
-      // finishedGoodsRun for the full reasoning.
-      if (/(^|-)OPT-/i.test(pid)) return false;
-      const hasRealId = pid && pid !== 'PENDING' && pid !== 'N/A' && pid !== 'UNASSIGNED' && !/(^|-)(FEE|HIDDEN)-/i.test(pid);
-      return hasRealId || !FEEISH_RE.test(String((l && l.name) || ''));
-  }).length;
+  // THE ONE READER (Shared/pickLines.pickableLinesOf, 2026-09-23) — this was a local copy of the WMS
+  // rule, and it counted a custom pair's own pole as a pickable line. The shared reader excludes it.
+  const pickableCount = (wo) => pickableLinesOf(wo).length;
   // Release the small-parts pick to the WMS pick app (its queue = sentToPickPack +
   // pickStatus 'Pending'). Idempotent: an already-released or already-picked order is untouched.
   const releasePickPatch = (wo) => {
@@ -151,7 +141,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       // raw base core (finish suffix stripped off the stock item), qty = the build count.
       // Synthesize that single pick line so WMS pulls the cores for finishing; the bin
       // resolves from the Master Library on the WMS side.
-      const stockErp = String(wo.stockErpId || (wo.orderType === 'stock' ? wo.type : '') || '');
+      // A STOCK BUILD ONLY (2026-09-23): a sales document carries stockErpId too, and on a custom
+      // pair this branch would have invented a raw pull of the pole the shop is cutting.
+      const stockErp = (wo.orderType === 'stock' || wo.paintOnly === true) ? String(wo.stockErpId || wo.type || '') : '';
       if (stockErp) {
           const cut = stockErp.lastIndexOf('/');
           // JFP paint-only (Eric 2026-08-11/12): the PULL SOURCE was decided at creation —
