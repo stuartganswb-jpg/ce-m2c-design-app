@@ -21,6 +21,7 @@ import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import { customFabLabel, setupWaitsOnShop, stageWaitsOnMatch, nothingToPick } from '../Shared/orderStatus';
+import { asksSprayStation, SPRAY_STATIONS, WINDOW_LABEL } from '../Shared/floorActivity';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
 // Finishing converts only ever run for the shop brands.
@@ -195,7 +196,11 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       alert(`${hg.label} — ${woRefOf(wo)} cannot ${verb}.\n\n${hg.reason}\n\n${hg.liftedBy}`);
       return true;
   };
-  const startSetup = async (wo) => {
+  // SPIN OR BOOTH (Stuart 2026-09-23): "when she hits start set up she chooses just between spin
+  // machine and booth" — the small parts' sprayed coats run where she sends them, and the Active Floor
+  // shows the job in that window. Poles always go to the booth and hand coats to the hand bench, so a
+  // job with nothing to spray on its small parts is not asked (`asksSprayStation`).
+  const startSetup = async (wo, station) => {
     if (heldRefusal(wo, 'start setup')) return;
     const shopWait = setupWaitsOnShop(wo);
     if (shopWait) return alert(`⏳ ${woRefOf(wo)} — ${shopWait}.\n\nThe pole is fabricated on the shop floor and comes back through the staging bin; there is nothing to set up here until it does.`);
@@ -205,8 +210,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
         // Start Setup RELEASES THE PARTS PICK (Stuart 2026-07-18): warehouse pulls the small
         // parts on the WMS pick app while setup runs — not just a button-status change.
         const { patch, note } = releasePickPatch(wo);
-        await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Running", ...patch });
-        if (writeLog) writeLog(`Started Setup for ${woRefOf(wo)}${note}`, 'production');
+        const stationPatch = station ? { sprayStation: station, sprayStationAt: Date.now(), sprayStationBy: currentUser || '' } : {};
+        await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Running", ...patch, ...stationPatch });
+        if (writeLog) writeLog(`Started Setup for ${woRefOf(wo)}${station ? ` → ${WINDOW_LABEL[station]}` : ''}${note}`, 'production');
         await tellRtg(wo, 'Setup');
         if (patch.sentToPickPack) alert(`📦 Parts pick released to the WMS pick app${note.replace(' — ', ': ')}.`);
         else if (note) alert(`Setup started${note}.`);
@@ -951,7 +957,12 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                     ) : wo.stepStatus === "Pending" ? (
                         setupWaitsOnShop(wo)
                             ? <button disabled title="The pole is being fabricated on the shop floor and comes back through the staging bin. Setup starts when it is here." style={{ ...btnStyle, flex: 2, background: 'var(--paper-2)', border: '1px dashed var(--brass)', color: 'var(--brass)', cursor: 'not-allowed', opacity: 0.9 }}>⏳ {setupWaitsOnShop(wo)}</button>
-                            : <button onClick={() => startSetup(wo)} style={{ ...btnStyle, flex: 2, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup</button>
+                            : asksSprayStation(wo, recipes)
+                                ? <span style={{ display: 'flex', gap: '8px', flex: 2 }}>
+                                    <button onClick={() => startSetup(wo, SPRAY_STATIONS.SPIN)} title="Start setup — the small parts are sprayed on the spin machine" style={{ ...btnStyle, flex: 1, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup → Spin</button>
+                                    <button onClick={() => startSetup(wo, SPRAY_STATIONS.BOOTH)} title="Start setup — the small parts are sprayed in the large booth" style={{ ...btnStyle, flex: 1, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup → Booth</button>
+                                  </span>
+                                : <button onClick={() => startSetup(wo)} style={{ ...btnStyle, flex: 2, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup</button>
                     ) : stageWaitsOnMatch(wo) ? (
                         <button disabled title="A sales order reaches this floor through the WMS staging handshake — small parts picked, shop parts back, both labels scanned at the staging bin. Then this card offers ✓ Push to Active Floor." style={{ ...btnStyle, flex: 2, background: 'var(--paper-2)', border: '1px dashed var(--brass)', color: 'var(--brass)', cursor: 'not-allowed', opacity: 0.9 }}>⏳ {stageWaitsOnMatch(wo)}</button>
                     ) : (

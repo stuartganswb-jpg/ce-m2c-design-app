@@ -1,13 +1,13 @@
 import React, { useState, useRef } from 'react';
 import { isFloorSupervisor } from '../Shared/finishingRoles';
-import { runningStepsOf, activityOf, activityTone } from '../Shared/floorActivity';
+import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
+    FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf } from '../Shared/floorActivity';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
 import { propagateFloorState } from '../Shared/orderLifecycle';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import { pickGateOf } from '../Shared/orderStatus';
-import { isPoleCategory } from '../Shared/poleCut';
 import PullLinesLive from '../Shared/PullLinesLive';
 import { woRefOf } from '../Shared/woRef';
 
@@ -148,11 +148,14 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   };
 
   // --- SLED ASSIGNMENT ENGINE ---
-  const spinningWOs = [...activeWOs].filter(w => w.tasks?.spinSetup && w.tasks.spinBake?.status !== 'Complete')
+  // A BOOTH JOB NEVER TAKES A SLED (Stuart 2026-09-23): small parts sent to the booth at Start Setup
+  // are sprayed there, so the spin machine's RED / BLUE must not be held for them.
+  const onSpinMachine = (w) => sprayStationOf(w) !== SPRAY_STATIONS.BOOTH;
+  const spinningWOs = [...activeWOs].filter(w => onSpinMachine(w) && w.tasks?.spinSetup && w.tasks.spinBake?.status !== 'Complete')
     .sort((a, b) => ((a.scheduleSeq ?? 1e9) - (b.scheduleSeq ?? 1e9)) || a.id.localeCompare(b.id));
 
-  const redWO = activeWOs.find(w => w.machineAssigned === 'RED') || (spinningWOs.find(w => !w.machineAssigned) || null);
-  const blueWO = activeWOs.find(w => w.machineAssigned === 'BLUE') || (spinningWOs.find(w => !w.machineAssigned && w.id !== redWO?.id) || null);
+  const redWO = activeWOs.find(w => w.machineAssigned === 'RED' && onSpinMachine(w)) || (spinningWOs.find(w => !w.machineAssigned) || null);
+  const blueWO = activeWOs.find(w => w.machineAssigned === 'BLUE' && onSpinMachine(w)) || (spinningWOs.find(w => !w.machineAssigned && w.id !== redWO?.id) || null);
 
   if (redWO && !redWO.machineAssigned) updateDoc(doc(db,"fin_workorders", redWO.id), { machineAssigned: 'RED' });
   if (blueWO && !blueWO.machineAssigned) updateDoc(doc(db,"fin_workorders", blueWO.id), { machineAssigned: 'BLUE' });
@@ -182,52 +185,15 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               { finWo: wo, phase, by: (user && user.name) || '' });
       } catch (e) { console.warn('RTG propagate failed (floor state stands):', e); }
   };
-  // The pole COUNT is what splits the two streams, and orders raised before the category test was
-  // shared never carried one — so a rod order showed no pole row at all. The category is the
-  // fallback: a pole/rod order with no count is all poles, which is what it always was.
-  const woHasPoles = (wo) => Number(wo.totalPoles || (wo.poles && wo.poles.qty)) > 0 || wo.type === 'Poles'
-      || isPoleCategory(wo && wo.productType);
-  // A POLE-ONLY ORDER HAS NO SMALL PARTS (Grace 2026-08-18: "with orders that are only Poles, an
-  // option to spray small parts shows up … in this instance there are no small parts and it's only
-  // an order of 20 poles"). The small-parts stream was unconditional, so the floor was offered
-  // Setup/Spray/Bake for a sled that was never going to be loaded — and, worse, the order could
-  // never COMPLETE, because completion waits for a parts stream that has nothing to run.
-  //
-  // Deliberately conservative: it only says "no small parts" when poles are present AND nothing
-  // counts small parts (no S/M/L sled sizes) AND the total is fully accounted for by the poles.
-  // Anything ambiguous keeps both streams, because hiding real work is the worse mistake.
-  const woHasSmallParts = (wo) => {
-      if (!wo || !woHasPoles(wo)) return true;                       // no poles → it is all small parts
-      const sizes = wo.paintSizes || null;
-      if (sizes && Object.values(sizes).some(v => Number(v) > 0)) return true;
-      // On a pole/rod order that never got a count stamped, the pieces ARE the poles — otherwise
-      // this falls straight back to "it is all small parts", which is the bug Grace reported.
-      const poleQty = Number(wo.totalPoles || (wo.poles && wo.poles.qty) || 0)
-          || (isPoleCategory(wo.productType) ? Number(wo.totalParts || 0) : 0);
-      const total = Number(wo.totalParts || 0);
-      if (!poleQty) return true;
-      return total > poleQty;
-  };
+  // woHasPoles / woHasSmallParts / partsStreamOf / poleStreamOf / isHandStep live in
+  // Shared/floorActivity (moved 2026-09-23 so the Setup Queue reads the same answers).
   const poleIdxOf = (wo) => (wo.poleStepIndex !== undefined && wo.poleStepIndex !== null) ? wo.poleStepIndex : (wo.currentStepIndex || 0);
   // STREAM RECIPE VARIANTS (Stuart & Grace 2026-08-11): the order says `CP`; the small parts run
   // `CP-S` and the poles run `CP-P` when those recipes exist — Grace's CP case, where poles take
   // 4 coats of DTM-7/Champagne/hand/30-sheen and the small parts 2 coats of DTM-11/tinted. Base
   // code when no variant exists, so everything pre-existing behaves exactly as before.
-  // FINISH-STREAM EXCEPTION (the elbow): a WO stamped finishStream 'POLES' (from the item
-  // master's flag) runs its PARTS stream on the -P recipe — physically still a small part on a
-  // sled, finished to match the poles. 'SMALL' forces the reverse on a pole item.
-  // AUTO (BY PRODUCT TYPE) NOW MEANS SOMETHING (Grace 2026-08-25). The Library's Finish Stream
-  // dropdown has always offered a blank option labelled "Auto (by product type)" — and blank simply
-  // fell through to SMALL here, whatever the item was. So her CP rods, correctly tagged ROD and
-  // needing no flag at all, ran CP-S. An untagged pole/rod now resolves to POLES, which is what
-  // the label says and what the floor expects; an explicit flag still wins over the category.
-  const streamFlagOf = (wo) => {
-      const flag = String(wo?.finishStream || '').toUpperCase();
-      if (flag === 'POLES' || flag === 'SMALL') return flag;
-      return isPoleCategory(wo?.productType) ? 'POLES' : '';
-  };
-  const partsStreamOf = (wo) => streamFlagOf(wo) === 'POLES' ? 'POLES' : 'SMALL';
-  const poleStreamOf = (wo) => streamFlagOf(wo) === 'SMALL' ? 'SMALL' : 'POLES';
+  // FINISH-STREAM EXCEPTION (the elbow) + AUTO BY PRODUCT TYPE: see streamFlagOf in
+  // Shared/floorActivity — a finishStream 'POLES' part runs the -P recipe, an untagged rod resolves POLES.
   const recipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, partsStreamOf(wo));
   const poleRecipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, poleStreamOf(wo));
   const partsRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, partsStreamOf(wo));
@@ -242,11 +208,6 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // the -P variant (Grace's CP: 4 pole coats against 2 for the small parts).
   const partsStepOf = (wo) => { const r = partsRecipeOf(wo); const i = (wo && wo.currentStepIndex) || 0; return (r && r.steps && i < r.steps.length) ? r.steps[i] : null; };
   const poleStepOf = (wo) => { const r = poleRecipeOf(wo); const i = poleIdxOf(wo); return (r && r.steps && i < r.steps.length) ? r.steps[i] : null; };
-  // Recipes author this through a dropdown ("Sprayed" / "Hand Applied" / "None"), but older and
-  // imported recipes spell it their own way — match on the word, so a hand step is never silently
-  // treated as a spray step, which is what leaves an operator with no control to press.
-  const isHandStep = (step) => !!step && /hand/i.test(String(step.app || ''));
-
   // ⛔ ZERO COATS IS NOT "FINISHED" (Stuart 2026-08-03, WO11374: "when the operator scanned it to
   // start, it immediately shows completed??").
   //
@@ -701,6 +662,24 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           await manualTask(wo, act.key, act.action, actor);
       }
   };
+  // ⇄ BOOTH / SPIN ON THE FLOOR (2026-09-23): the choice is made at Start Setup, but a job can reach the
+  // floor through the WMS staging match without Start Setup being pressed (it reads Spin), and a pick
+  // can be wrong. It moves only before the coat's first step has started — a half-sprayed coat stays
+  // where it is. Moving to the booth frees the job's sled in the same write.
+  const SPIN_KEYS = ['spinSetup', 'spinSpray', 'spinBake'];
+  const switchSprayStation = async (wo, to) => {
+      if (heldRefusal(wo)) return;
+      const t = wo.tasks || {};
+      const begun = SPIN_KEYS.find(k => ['Running', 'Complete'].includes(t[k]?.status));
+      if (begun) return alert(`${woRef(wo)} — this coat has already started (${TASK_LABEL[begun] || begun}). It stays where it is until the coat is done.`);
+      if (!window.confirm(`Move ${woRef(wo)}'s small parts to the ${WINDOW_LABEL[to]}?`)) return;
+      const updates = { sprayStation: to, sprayStationAt: Date.now(), sprayStationBy: user?.name || '' };
+      if (to === SPRAY_STATIONS.BOOTH) updates.machineAssigned = null;
+      try {
+          await updateDoc(doc(db, 'fin_workorders', wo.id), updates);
+          await logManual({ msg: `SPRAY STATION → ${WINDOW_LABEL[to]} · ${woRef(wo)}`, action: 'STATION', station: to, woId: wo.id, woRefNo: woRef(wo), task: 'parts', recipe: wo.recipe || '' });
+      } catch (e) { alert('Move failed: ' + (e.message || e)); }
+  };
   // PER-STEP MANUAL CONTROLS (Stuart 2026-07-28: "i need a manual step to start and stop every
   // step in the recipe, they are currently getting hung up as pending in between").
   // Manual mode used to offer ONE button — whatever the engine decided came next — so a job whose
@@ -817,6 +796,52 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       }
       return out;
   });
+
+  // ===== THE THREE WINDOWS (Stuart 2026-09-23) =====
+  // "On the Floor really needs 3 job windows — Large Booth, Spin Machine and Hand Finish, the jobs and
+  // steps should be shown in the appropriate window." The old panel listed RUNNING steps only, so a
+  // coat nobody had started — P24's hand coat on WO-OE-H1-75SPF — was on no screen at all.
+  //
+  // Every job on the floor lands in the window its CURRENT coat is worked in (running / ready / held),
+  // and in each other window a LATER coat of it reaches (coming). The next action is the same
+  // nextPartsAction / nextPoleAction the Manual Floor Control buttons use, so the windows and the
+  // buttons cannot disagree. A task running outside its coat is still listed where the task belongs:
+  // nothing that is running ever drops off the floor.
+  const floorWindows = { BOOTH: [], SPIN: [], HAND: [] };
+  activeWOs.forEach(wo => {
+      const tasks = wo.tasks || {};
+      const listed = new Set();
+      const hold = holdGateOf(wo);
+      const streams = [];
+      if (woHasSmallParts(wo)) streams.push({ stream: 'parts', r: partsRecipeOf(wo), idx: wo.currentStepIndex || 0 });
+      if (woHasPoles(wo)) streams.push({ stream: 'poles', r: poleRecipeOf(wo), idx: poleIdxOf(wo) });
+      streams.forEach(({ stream, r, idx }) => {
+          const steps = (r && Array.isArray(r.steps)) ? r.steps : [];
+          if (idx >= steps.length) return;       // stream finished — or no recipe, which the floor refuses to advance
+          const step = steps[idx];
+          const win = windowOfCoat(stream, step, wo);
+          const keys = coatTaskKeys(stream, step);
+          keys.forEach(k => listed.add(k));
+          const running = keys.filter(k => tasks[k]?.status === 'Running');
+          const act = stream === 'poles' ? nextPoleAction(wo) : nextPartsAction(wo);
+          floorWindows[win].push({ wo, stream, step, coat: idx + 1, of: steps.length, keys, running, act, hold,
+              state: running.length ? 'running' : (hold ? 'held' : 'ready') });
+          comingCoatsOf(steps, idx, stream, wo).forEach(c => floorWindows[c.window].push({
+              wo, stream, step: c.step, coat: c.coat, of: c.of, keys: [], running: [], state: 'coming', nowAt: win, nowCoat: idx + 1 }));
+      });
+      Object.keys(tasks).forEach(k => {
+          if (listed.has(k) || tasks[k]?.status !== 'Running') return;
+          floorWindows[windowOfTask(k, wo)].push({ wo, stream: k.startsWith('pole') ? 'poles' : 'parts', step: null,
+              keys: [k], running: [k], state: 'running', offCoat: true });
+      });
+  });
+  const WINDOW_STATE_ORDER = { running: 0, ready: 1, held: 2, coming: 3 };
+  const startedOf = (row) => Math.min(...row.running.map(k => (row.wo.tasks[k] && row.wo.tasks[k].startTime) || now));
+  FLOOR_WINDOWS.forEach(w => floorWindows[w].sort((a, b) =>
+      (WINDOW_STATE_ORDER[a.state] - WINDOW_STATE_ORDER[b.state])
+      || (a.state === 'running' ? startedOf(a) - startedOf(b) : 0)            // longest-running first
+      || ((a.wo.scheduleSeq ?? 1e9) - (b.wo.scheduleSeq ?? 1e9))               // then the planner's order
+      || String(a.wo.id).localeCompare(String(b.wo.id))));
 
   const getRemainingMins = (timestampMs, totalMinsAllowed) => Math.max(0, Math.floor(((totalMinsAllowed * 60000) - (now - timestampMs)) / 60000));
 
@@ -988,51 +1013,113 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
             )}
         </div>
 
-        {/* ON THE FLOOR (Stuart 2026-08-03: "once the jobs are started there should be a visual in
-            the center of the screen of what is actively happening (and by whom)"). The Machine View
-            that used to fill this space is hidden while the machines are offline, so a started job
-            left the middle of the screen blank. Renders only when something is running — an empty
-            floor should look empty, not like a broken panel. */}
+        {/* 🔥 ON THE FLOOR — THREE WINDOWS (Stuart 2026-09-23: "On the Floor really needs 3 job windows —
+            Large Booth, Spin Machine and Hand Finish, the jobs and steps should be shown in the
+            appropriate window"). Replaces the single panel of running steps (2026-08-03), which never
+            showed a coat nobody had started. Always drawn — an empty window says so. */}
         {(() => {
-            const steps = runningStepsOf(workOrders);
-            if (!steps.length) return null;
+            const ovenNow = runningStepsOf(activeWOs).filter(s => OVEN_TASK_KEYS.includes(s.key));
+            const ovenLine = ovenNow.length
+                ? ovenNow.map(s => `${s.key === 'poleBake' ? 'pole' : 'parts'} bake · ${woRef(s.wo)}${s.startTime ? ` · ${Math.floor((now - s.startTime) / 60000)}m` : ''}`).join('  ·  ')
+                : 'free';
+            const KEY_LABEL = { spinSetup: 'Setup', spinSpray: 'Spray', spinBake: 'Bake', poleSpray: 'Spray', poleBake: 'Bake', hand: 'Hand Finish', poleHand: 'Hand Finish' };
+            const STATE_LABEL = { running: 'Running', ready: 'Ready', held: 'Held', coming: 'Coming' };
+            const mono = { fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.04em' };
+            const piecesOf = (wo, stream) => {
+                const total = Number(wo.totalParts) || 0;
+                const poleQty = Number(wo.totalPoles || (wo.poles && wo.poles.qty)) || 0;
+                if (stream === 'poles') return poleQty || total;
+                return woHasPoles(wo) && poleQty ? Math.max(0, total - poleQty) : total;
+            };
+            const renderRow = (row, win, i) => {
+                const { wo, stream, step, state } = row;
+                const tasks = wo.tasks || {};
+                const acts = row.running.map(k => ({ k, a: activityOf({ wo, key: k, task: tasks[k], operator: tasks[k].assignedTo || '', startTime: tasks[k].startTime || null }, { cfg, now }) }));
+                const tone = state === 'running' ? activityTone(acts[0] ? acts[0].a.state : 'running')
+                    : state === 'held' ? '#d9534f' : state === 'ready' ? 'var(--ink)' : 'var(--line)';
+                const gate = state === 'ready' && row.act && !row.act.advance && row.act.key !== 'spinSetup' ? pickGateOf(wo) : null;
+                const canMove = stream === 'parts' && win !== 'HAND' && !row.offCoat && (state === 'ready' || state === 'held')
+                    && !SPIN_KEYS.some(k => ['Running', 'Complete'].includes(tasks[k]?.status));
+                const other = win === 'BOOTH' ? SPRAY_STATIONS.SPIN : SPRAY_STATIONS.BOOTH;
+                return (
+                    <div key={`${wo.id}-${stream}-${state}-${i}`} style={{ border: '1px solid var(--line)', borderLeft: `6px solid ${tone}`, background: state === 'coming' ? '#fff' : 'var(--paper)', padding: '12px 14px', opacity: state === 'coming' ? 0.8 : 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
+                            <span onClick={() => { setManualWoId(wo.id); setViewWo(null); }} title="Open this job in Manual Floor Control"
+                                style={{ ...mono, fontSize: '12px', fontWeight: 700, color: 'var(--ink)', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--line)', wordBreak: 'break-all' }}>{woRef(wo)}</span>
+                            <span style={{ ...mono, fontSize: '9px', textTransform: 'uppercase', color: state === 'coming' ? 'var(--ink-soft)' : tone, border: `1px solid ${state === 'coming' ? 'var(--line)' : tone}`, padding: '1px 6px' }}>{STATE_LABEL[state]}</span>
+                        </div>
+                        <div style={{ ...mono, color: 'var(--ink-soft)', marginTop: '4px' }}>
+                            {stream === 'poles' ? 'Poles' : 'Small parts'} · {piecesOf(wo, stream)} pcs{wo.recipe ? ` · ${wo.recipe}` : ''}{wo.customerName ? ` · ${wo.customerName}` : ''}
+                        </div>
+                        {step && (
+                            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)', marginTop: '6px' }}>
+                                Coat {row.coat}/{row.of}{step.color ? ` — ${step.color}` : ''} <span style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>({step.app || '—'})</span>
+                            </div>
+                        )}
+                        {state === 'coming' && <div style={{ ...mono, color: 'var(--ink-soft)', marginTop: '4px' }}>now on coat {row.nowCoat} at the {WINDOW_LABEL[row.nowAt]}</div>}
+                        {row.offCoat && <div style={{ ...mono, color: '#d9534f', marginTop: '4px' }}>{KEY_LABEL[row.keys[0]] || row.keys[0]} running outside the current coat — stop it when it is done</div>}
+                        {state === 'held' && row.hold && <div style={{ ...mono, color: '#d9534f', marginTop: '6px', lineHeight: 1.5 }}>{row.hold.label} — {row.hold.reason}</div>}
+                        {gate && gate.blocked && <div style={{ ...mono, color: '#d9534f', marginTop: '6px', lineHeight: 1.5 }}>⛔ {gate.reason}</div>}
+                        {acts.map(({ k, a }) => (
+                            <div key={k} style={{ marginTop: '8px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                                    <span style={{ ...mono, color: 'var(--ink)' }}>{a.isOven ? '🔥 ' : ''}{KEY_LABEL[k] || a.label} · {a.operator || '— unassigned —'}</span>
+                                    <span style={{ ...mono, fontWeight: 700, color: activityTone(a.state) }}>{a.elapsedMins === null ? '—' : `${a.elapsedMins}m`}</span>
+                                </div>
+                                {a.pct !== null && (
+                                    <div style={{ height: '5px', background: 'var(--line)', overflow: 'hidden', marginTop: '4px' }}>
+                                        <div style={{ width: `${a.pct}%`, height: '100%', background: activityTone(a.state), transition: 'width .4s' }} />
+                                    </div>
+                                )}
+                                <div style={{ ...mono, fontSize: '9px', textTransform: 'uppercase', color: activityTone(a.state), marginTop: '3px' }}>
+                                    {a.state === 'overdue' && `over by ${a.overdueMins}m · est ${a.estMins}m`}
+                                    {a.state === 'baking' && `baking · dwell ${a.estMins}m reached`}
+                                    {a.state === 'running' && `${a.remainingMins}m left of ${a.estMins}m`}
+                                    {a.state === 'untimed' && 'no time set for this step'}
+                                </div>
+                            </div>
+                        ))}
+                        {(state === 'running' || state === 'ready') && (
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginTop: '10px' }}>
+                                {row.keys.map(k => manualStepBtn(wo, k, KEY_LABEL[k] || k))}
+                                {row.act && row.act.advance && !row.offCoat && (
+                                    <button onClick={() => runManualAction(wo, row.act, stream)} style={{ ...mono, textTransform: 'uppercase', padding: '9px 12px', background: stream === 'poles' ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>{row.act.label}</button>
+                                )}
+                            </div>
+                        )}
+                        {canMove && (
+                            <button onClick={() => switchSprayStation(wo, other)} title="Sprayed somewhere else? Moves before the coat's first step starts."
+                                style={{ ...mono, fontSize: '9px', textTransform: 'uppercase', marginTop: '10px', padding: '6px 10px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer' }}>⇄ Move to {WINDOW_LABEL[other]}</button>
+                        )}
+                    </div>
+                );
+            };
+            const runningCount = FLOOR_WINDOWS.reduce((n, w) => n + floorWindows[w].filter(r => r.state === 'running').length, 0);
             return (
                 <div style={{ marginBottom: '30px', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', padding: '18px 24px', borderBottom: '1px solid var(--line)' }}>
                         <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>🔥 On the Floor</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>
-                            {steps.length} step{steps.length === 1 ? '' : 's'} running · longest first
+                            {activeWOs.length} job{activeWOs.length === 1 ? '' : 's'} · {runningCount} running · oven {ovenNow.length ? 'busy' : 'free'}
                         </span>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px', padding: '20px 24px' }}>
-                        {steps.map((st, i) => {
-                            const a = activityOf(st, { cfg, now });
-                            const tone = activityTone(a.state);
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', padding: '20px 24px' }}>
+                        {FLOOR_WINDOWS.map(win => {
+                            const rows = floorWindows[win];
+                            const n = (s) => rows.filter(r => r.state === s).length;
                             return (
-                                <div key={`${st.wo.id}-${st.key}-${i}`} onClick={() => { setManualWoId(st.wo.id); setViewWo(null); }} title="Open this job in Manual Floor Control"
-                                    style={{ border: `1px solid ${tone}`, borderLeft: `6px solid ${tone}`, background: a.state === 'overdue' ? '#fdf3f3' : 'var(--paper)', padding: '14px 16px', cursor: 'pointer' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px' }}>
-                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--ink)', letterSpacing: '.04em' }}>{a.isOven ? '🔥' : '🎨'} {a.label}</span>
-                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: tone, fontWeight: 700 }}>
-                                            {a.elapsedMins === null ? '—' : `${a.elapsedMins}m`}
-                                        </span>
-                                    </div>
-                                    {/* WHO — the half of the question the old one-line list answered last. */}
-                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1.05rem', color: 'var(--ink)', fontWeight: 500, margin: '6px 0 2px' }}>{st.operator || '— unassigned —'}</div>
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{woRef(st.wo)}{st.wo.recipe ? ` · ${st.wo.recipe}` : ''}{st.wo.customerName ? ` · ${st.wo.customerName}` : ''}</div>
-                                    {a.pct !== null && (
-                                        <div style={{ marginTop: '10px' }}>
-                                            <div style={{ height: '6px', background: 'var(--line)', overflow: 'hidden' }}>
-                                                <div style={{ width: `${a.pct}%`, height: '100%', background: tone, transition: 'width .4s' }} />
-                                            </div>
-                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: tone, marginTop: '4px' }}>
-                                                {a.state === 'overdue' && `over by ${a.overdueMins}m · est ${a.estMins}m`}
-                                                {a.state === 'baking' && `baking · dwell ${a.estMins}m reached`}
-                                                {a.state === 'running' && `${a.remainingMins}m left of ${a.estMins}m`}
-                                            </div>
+                                <div key={win} style={{ border: '1px solid var(--line)', background: '#fff', minWidth: 0 }}>
+                                    <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>{WINDOW_LABEL[win]}</div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', marginTop: '4px' }}>
+                                            {n('running')} running · {n('ready')} ready{n('held') ? ` · ${n('held')} held` : ''} · {n('coming')} coming
                                         </div>
-                                    )}
-                                    {a.state === 'untimed' && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginTop: '10px' }}>no time set for this step</div>}
+                                        {win !== 'HAND' && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: ovenNow.length ? '#3f7fc4' : 'var(--ink-soft)', marginTop: '4px' }}>🔥 Oven: {ovenLine}</div>}
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px' }}>
+                                        {rows.length ? rows.map((r, i) => renderRow(r, win, i))
+                                            : <div style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', padding: '6px 2px' }}>Nothing here.</div>}
+                                    </div>
                                 </div>
                             );
                         })}
