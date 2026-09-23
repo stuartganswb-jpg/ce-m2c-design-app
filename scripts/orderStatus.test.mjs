@@ -7,7 +7,7 @@
 
 import {
     GATES, gatesOf, openGatesOf, isReleasable, gateSummary,
-    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor, wholeOrderWait, canReopenPostedOrder, netSuiteOrderNoOf, setupWaitsOnShop } from '../src/components/Shared/orderStatus.js';
+    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor, wholeOrderWait, canReopenPostedOrder, netSuiteOrderNoOf, setupWaitsOnShop, stageWaitsOnMatch, nothingToPick, isSalesDoc, stagingMatched } from '../src/components/Shared/orderStatus.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => {
@@ -136,6 +136,20 @@ ok('a quote has none', netSuiteOrderNoOf({ status: 'CONFIGURED' }, null) === '')
     eq('the pole is back → setup may start', setupWaitsOnShop({ ...poleOnly, customFabStatus: 'Complete' }), '');
     eq('a paired document WITH small parts starts its setup in parallel with the fab', setupWaitsOnShop({ ...poleOnly, partsList: [...poleOnly.partsList, { legacyErpId: 'H1-75SBP-S', quantity: 100 }] }), '');
     eq('an unpaired document never waits on a shop', setupWaitsOnShop({ hasCustomSibling: false, partsList: [] }), '');
+}
+
+// ── STAGE TO FLOOR WAITS ON THE MATCH — the same whatever door the order came through (2026-09-23) ──
+{
+    const poleOnly = { orderType: 'sales', salesOrderId: 'SO-APP-1', hasCustomSibling: true, customFabStatus: 'In Process', rootItem: 'H1-75SR', stockErpId: 'H1-75SR/P24', partsList: [{ legacyErpId: 'H1-75SR', quantity: 50 }] };
+    eq('the pole still out → waiting on shop', stageWaitsOnMatch(poleOnly), 'Waiting on shop — In Process');
+    eq('the pole back, nothing to pick → waiting on the staging scan of the shop label', stageWaitsOnMatch({ ...poleOnly, customFabStatus: 'Complete' }), 'Waiting on staging — scan the shop label at the WMS staging bin');
+    const mixed = { ...poleOnly, customFabStatus: 'Complete', partsList: [...poleOnly.partsList, { legacyErpId: 'H1-75SBP-S', quantity: 100 }] };
+    eq('small parts not picked → waiting on the pick', stageWaitsOnMatch(mixed), 'Waiting on the WMS pick — small parts not picked yet');
+    eq('picked, not scanned → waiting on the staging scan', stageWaitsOnMatch({ ...mixed, pickStatus: 'Picked_Awaiting_Staging' }), 'Waiting on staging — picked; scan the labels at the WMS staging bin');
+    eq('matched → may be staged', stageWaitsOnMatch({ ...mixed, stagingStatus: 'MATCHED' }), '');
+    eq('a CPQ-split sales document obeys the same gate (no door is consulted)', stageWaitsOnMatch({ orderType: 'sales', salesOrderId: 'SO60585', partsList: [{ legacyErpId: 'H1-1R', qty: 35 }] }), 'Waiting on the WMS pick — small parts not picked yet');
+    eq('a stock build skips the match, as the scheduler always has', stageWaitsOnMatch({ orderType: 'stock', stockErpId: 'H1-1R/P', partsList: [] }), '');
+    eq('nothing to pick / matched / sales — the three facts the floor reads', [nothingToPick(poleOnly), stagingMatched({ ...mixed, stagingStatus: 'MATCHED' }), isSalesDoc({ salesOrderId: 'x' }), isSalesDoc({ orderType: 'stock' })], [true, true, true, false]);
 }
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

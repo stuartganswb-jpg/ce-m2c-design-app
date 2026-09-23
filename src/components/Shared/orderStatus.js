@@ -87,6 +87,28 @@ export const setupWaitsOnShop = (wo) => {
     if (pickableLinesOf(wo).length > 0) return '';
     return `Waiting on shop — ${customFabLabel(wo)}`;
 };
+// ── THE FLOOR IS THE SAME WHATEVER DOOR THE ORDER CAME THROUGH (Stuart 2026-09-23) ──────────
+// "the way the floor operates between the shop, finishing and wms needs to be the same no matter
+//  how the orders arrive there … they do not know if the order came from cpq, order entry or 10.5,
+//  they are all orders." These tests read the DOCUMENT's own facts — sales-typed or stock, a custom
+// sibling or not, matched or not, anything to pick or not — never the door.
+export const isSalesDoc = (wo) => !!wo && ((wo.orderType || '') === 'sales' || !!wo.salesOrderId);
+/** Nothing for the warehouse to pull for this document (a paired pole with no small parts of its own). */
+export const nothingToPick = (wo) => !!wo && pickableLinesOf(wo).length === 0;
+/** The WMS has scan-matched the document at the staging bin — the scheduler's own readiness test. */
+export const stagingMatched = (wo) => !!wo && wo.stagingStatus === 'MATCHED';
+// STAGE TO FLOOR WAITS ON THE MATCH (Stuart 2026-09-23: Base Front 1 was staged with no pick and
+// no match). A sales document reaches the finishing floor only through the WMS staging handshake;
+// the card used to offer Stage to Floor regardless. Stock builds and stock poles skip the match,
+// exactly as the scheduler (finishingTime.isReadyWO) has always treated them.
+// Returns the sentence for the card, or '' when it may be staged.
+export const stageWaitsOnMatch = (wo) => {
+    if (!isSalesDoc(wo) || stagingMatched(wo)) return '';
+    if (wo.hasCustomSibling && !customPartsReady(wo)) return `Waiting on shop — ${customFabLabel(wo)}`;
+    if (nothingToPick(wo)) return 'Waiting on staging — scan the shop label at the WMS staging bin';
+    if (wo.pickStatus === 'Picked_Awaiting_Staging') return 'Waiting on staging — picked; scan the labels at the WMS staging bin';
+    return 'Waiting on the WMS pick — small parts not picked yet';
+};
 // The words, once — the Setup Queue chip, the shop card and RTG all say the same thing.
 export const customFabLabel = (wo) => {
     const cf = (wo && wo.customFabStatus) || 'Pending';

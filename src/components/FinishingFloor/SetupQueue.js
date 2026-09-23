@@ -20,7 +20,7 @@ import { closeOrderEverywhere, propagateFloorState, linkedDocsOf } from '../Shar
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
-import { customFabLabel, setupWaitsOnShop } from '../Shared/orderStatus';
+import { customFabLabel, setupWaitsOnShop, stageWaitsOnMatch, nothingToPick } from '../Shared/orderStatus';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
 // Finishing converts only ever run for the shop brands.
@@ -218,6 +218,8 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
 
   const stageToFloor = async (wo) => {
     if (heldRefusal(wo, 'be staged')) return;
+    const matchWait = stageWaitsOnMatch(wo);
+    if (matchWait) return alert(`⏳ ${woRefOf(wo)} — ${matchWait}.\n\nA sales order reaches this floor through the WMS staging handshake: the small parts picked, the shop parts back, both labels scanned at the staging bin. Then this card offers ✓ Push to Active Floor.`);
     const pieces = Number(wo.totalParts) || 0;
     try {
         const cut = await rodCutStillOpen(wo);
@@ -875,7 +877,10 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                 {((wo.partsList || []).length > 0 || wo.sentToPickPack) && (() => {
                     const ps = wo.pickStatus || 'Pending';
                     const picked = ps === 'Picked_Awaiting_Staging';
-                    const label = !wo.sentToPickPack ? 'Awaiting release (▶ Start Setup sends the pick)'
+                    // NOTHING TO PICK (2026-09-23): a paired pole with no small parts of its own has no pick —
+                    // it said "in pick queue" for a queue that would never move. It is matched at staging alone.
+                    const label = nothingToPick(wo) ? (wo.stagingStatus === 'MATCHED' ? 'Nothing to pick — matched at staging' : 'Nothing to pick here — the pole is matched at the WMS staging bin')
+                        : !wo.sentToPickPack ? 'Awaiting release (▶ Start Setup sends the pick)'
                         : picked ? (wo.pickHadSkips ? `Picked ⚠ ${(wo.pickSkips || []).length} skip(s)` : 'Picked — at staging')
                         : 'In pick queue (WMS)';
                     const color = picked ? (wo.pickHadSkips ? '#d9534f' : 'var(--ink)') : (wo.sentToPickPack ? 'var(--brass)' : 'var(--ink-soft)');
@@ -943,6 +948,8 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                         setupWaitsOnShop(wo)
                             ? <button disabled title="The pole is being fabricated on the shop floor and comes back through the staging bin. Setup starts when it is here." style={{ ...btnStyle, flex: 2, background: 'var(--paper-2)', border: '1px dashed var(--brass)', color: 'var(--brass)', cursor: 'not-allowed', opacity: 0.9 }}>⏳ {setupWaitsOnShop(wo)}</button>
                             : <button onClick={() => startSetup(wo)} style={{ ...btnStyle, flex: 2, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup</button>
+                    ) : stageWaitsOnMatch(wo) ? (
+                        <button disabled title="A sales order reaches this floor through the WMS staging handshake — small parts picked, shop parts back, both labels scanned at the staging bin. Then this card offers ✓ Push to Active Floor." style={{ ...btnStyle, flex: 2, background: 'var(--paper-2)', border: '1px dashed var(--brass)', color: 'var(--brass)', cursor: 'not-allowed', opacity: 0.9 }}>⏳ {stageWaitsOnMatch(wo)}</button>
                     ) : (
                         <button onClick={() => stageToFloor(wo)} style={{ ...btnStyle, flex: 2, background: 'var(--ink)', color: '#fff' }}>Stage to Floor</button>
                     )}

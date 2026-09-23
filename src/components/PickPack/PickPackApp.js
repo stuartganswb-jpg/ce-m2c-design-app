@@ -4,7 +4,7 @@ import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import MaterialGridCard from '../Shared/MaterialGridCard';
 import { coverArrival } from '../Shared/backorderCover';
 import { uomOf, uomLabel } from '../Shared/uom';
-import { orderStatusOf, customPartsReady, liftPatchFor } from '../Shared/orderStatus';
+import { orderStatusOf, customPartsReady, liftPatchFor, nothingToPick, stagingMatched } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
@@ -4062,6 +4062,27 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const smallKey = normalizeKey(stagingSmallScan);
         const custKey = normalizeKey(stagingCustomScan);
 
+        // NOTHING TO PICK (Stuart 2026-09-23, SO60565 Base Front 1): a paired pole with no small parts
+        // of its own has no pick and no small-parts label — the shop's label alone identifies it. The
+        // match is the same match and the stamp the same stamp, so everything downstream reads it as
+        // any other staged order. A document WITH small parts still needs both labels below.
+        if (!smallKey && custKey) {
+            const cands = jobs.filter(j => j.hasCustomSibling && nothingToPick(j) && !stagingMatched(j) && j.currentPhase !== 'Closed'
+                && [j.orderKey, j.salesOrderId, j.soNum].map(normalizeKey).filter(Boolean).includes(custKey));
+            if (cands.length === 1) {
+                const j = cands[0];
+                if (!customPartsReady(j)) return alert(`❌ ${packRef(j)}: the shop parts are not ready (${j.customFabStatus || 'Pending'}).${j.customFabStatus === 'Sent to Plating' ? '\n\nThey are AT THE PLATER.' : ''}`);
+                await updateDoc(doc(db, "fin_workorders", j.id), {
+                    pickStatus: 'Staged_Ready_For_Finishing', stagingStatus: 'MATCHED', stagedAt: serverTimestamp(),
+                    pickNothingToPick: true, pickedBy: operator?.name || '', pickedAt: Date.now(),
+                });
+                writeLog(`Order Staged & Matched (nothing to pick — shop parts only): ${packRef(j)}`, 'wms');
+                alert(`✅ MATCH CONFIRMED: ${packRef(j)} has nothing to pick — the shop parts are staged and it is ready for the Finishing floor.`);
+                setStagingSmallScan(''); setStagingCustomScan(''); setOperator(null);
+                return;
+            }
+            if (cands.length > 1) return alert(`❌ ${cands.length} unmatched shop-only orders carry the key "${custKey}" (${cands.map(packRef).join(', ')}) — the shop label names the sales order, not the row. Scan the SMALL-PARTS label of the one you mean, or stage them from RTG by work order.`);
+        }
         if (!smallKey) return alert("Scan the SMALL-PARTS staging label first.");
 
         const job = resolveByExactKey(jobs, smallKey);
