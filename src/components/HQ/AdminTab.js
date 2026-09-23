@@ -10,6 +10,7 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, 
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import FormPreview from '../Shared/FormPreview';
+import IntegrationsPanel from '../Shared/IntegrationsPanel';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printForm } from '../Shared/printForm';
 import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE, SIZE_FAMILIES, sizeKeyOf } from '../Shared/sizeMatrix';
@@ -2206,6 +2207,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           <AdminNavButton active={activeSection === "FORMS"} onClick={() => setActiveSection("FORMS")} label="Form Templates" icon="📝" />
           <AdminNavButton active={activeSection === "USERS"} onClick={() => setActiveSection("USERS")} label="User Matrix" icon="🔐" />
           <AdminNavButton active={activeSection === "PLATING_FEES"} onClick={() => setActiveSection("PLATING_FEES")} label="Plating Fees" icon="🧪" />
+          <AdminNavButton active={activeSection === "INTEGRATIONS"} onClick={() => setActiveSection("INTEGRATIONS")} label="Integrations" icon="🔌" />
           
           
           {isSuperAdmin && (
@@ -3438,6 +3440,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   </div>
               </div>
           )}
+
+          {/* --- INTEGRATIONS (payments · shipping) — admin connection probes. Read-only: they
+                 prove a vendor pipe works before any screen depends on it. No card data, no
+                 orders, no NetSuite. (Stuart 2026-09-23: put it on 11.) --- */}
+          {activeSection === "INTEGRATIONS" && <IntegrationsPanel />}
 
           {/* --- FORMS & BRANDING VIEW --- */}
           {activeSection === "PLATING_FEES" && (() => {

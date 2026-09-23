@@ -2552,6 +2552,94 @@ exports.upsProbe = onCall({
 });
 
 // ============================================================================
+// 💳 NMI — connection probe (SANDBOX ONLY)
+// ============================================================================
+// Proves the payments pipe before any checkout exists, WITHOUT sending card data anywhere:
+//   1) a query call authenticated with the private key — proves key + account + connection;
+//   2) optionally (Stuart ticks a box) one $1 test invoice, to learn whether NMI hands back a
+//      payment-page URL we can put on our own quote/SO PDFs, or only emails it itself.
+// Sandbox merchant 1347136 ("Classical Elements Test Merchant"). Nothing is charged; the key never
+// leaves the server; card data never touches our systems (that is the whole point of the design).
+const NMI_SANDBOX_KEY_CE = defineSecret("NMI_SANDBOX_KEY_CE");
+const NMI_HOST = 'https://secure.nmi.com';
+
+// The Payment API answers in querystring form (response=1&responsetext=...), not JSON.
+const nmiParse = (text) => Object.fromEntries(new URLSearchParams(String(text || '')));
+const nmiPost = async (path, fields) => {
+    const r = await fetch(`${NMI_HOST}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(fields).toString(),
+    });
+    const text = await r.text();
+    return { ok: r.ok, status: r.status, text };
+};
+// A payment link may come back as a field or inside the XML query response — find a URL either way.
+const nmiFindPayUrl = (text) => {
+    const m = String(text || '').match(/https?:\/\/[^\s"'<>&]+/g) || [];
+    return m.find((u) => /invoice|checkout|pay/i.test(u)) || '';
+};
+
+exports.nmiProbe = onCall({
+    enforceAppCheck: true,
+    secrets: [NMI_SANDBOX_KEY_CE],
+}, async (request) => {
+    assertStaffAdmin(request);
+    const { testInvoice, email, amount } = request.data || {};
+    const key = NMI_SANDBOX_KEY_CE.value().trim();
+    const out = { environment: 'NMI SANDBOX (merchant 1347136)', steps: [] };
+
+    // 1) Credentials — the query API returns this merchant's (empty) transaction list.
+    try {
+        const r = await nmiPost('/api/query.php', { security_key: key, report_type: 'transaction' });
+        const body = String(r.text || '');
+        const failed = /Authentication Failed|Invalid Security Key/i.test(body);
+        out.steps.push({
+            step: 'credentials',
+            ok: r.ok && !failed,
+            detail: failed ? 'NMI rejected the security key.' : `HTTP ${r.status}, ${body.length} bytes back`,
+        });
+        if (!r.ok || failed) return out;
+    } catch (e) {
+        out.steps.push({ step: 'credentials', ok: false, detail: String(e.message || e) });
+        return out;
+    }
+
+    // 2) One test invoice — ONLY when asked. This is how we learn whether a per-invoice pay URL
+    //    comes back to us (the link we want on the quote/SO PDF) or whether NMI only emails it.
+    if (testInvoice === true) {
+        const to = cleanStr(email, 120);
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
+            out.steps.push({ step: 'invoice', ok: false, detail: 'Enter a valid email address to send the test invoice to.' });
+            return out;
+        }
+        const amt = Number(amount) > 0 ? Number(amount).toFixed(2) : '1.00';
+        try {
+            const r = await nmiPost('/api/transact.php', {
+                security_key: key, invoicing: 'add_invoice', amount: amt, email: to,
+                order_description: 'CE integration probe (sandbox test invoice)',
+                payment_terms: 'upon_receipt',
+            });
+            const res = nmiParse(r.text);
+            const okay = res.response === '1';
+            out.steps.push({
+                step: 'invoice',
+                ok: okay,
+                detail: okay
+                    ? `Invoice ${res.invoice_id || '(no id returned)'} created for $${amt} to ${to}.`
+                    : `NMI refused: ${res.responsetext || r.text || 'no detail'}`,
+                invoiceId: res.invoice_id || '',
+                payUrl: nmiFindPayUrl(r.text),
+                payUrlReturned: !!nmiFindPayUrl(r.text),
+            });
+        } catch (e) {
+            out.steps.push({ step: 'invoice', ok: false, detail: String(e.message || e) });
+        }
+    }
+    return out;
+});
+
+// ============================================================================
 // 🚚 UPS — rate · ship · void (the WMS Fulfilment tab)
 // ============================================================================
 // Staff callables (App Check + a staff role; portal customers refused). The ENVIRONMENT is decided
