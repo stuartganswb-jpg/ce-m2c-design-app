@@ -20,6 +20,68 @@ const btn = (primary, busy) => ({
 });
 const input = { padding: '8px 10px', border: '1px solid var(--line)', background: '#fff', fontFamily: 'var(--sans)', fontSize: '13px', outline: 'none' };
 
+// What actually arrived from the gateway, and whether we could prove it came from NMI. This is how
+// the signature format is confirmed BEFORE anything downstream trusts a webhook.
+function WebhookEvents() {
+    const [busy, setBusy] = useState(false);
+    const [rows, setRows] = useState(null);
+    const [err, setErr] = useState('');
+
+    const load = async () => {
+        setBusy(true); setErr(''); setRows(null);
+        try {
+            const res = await httpsCallable(functions, 'nmiRecentEvents')();
+            setRows(res.data.events || []);
+        } catch (e) {
+            setErr(e.message || String(e));
+        } finally { setBusy(false); }
+    };
+
+    const when = (t) => t ? new Date(Number(t)).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+
+    return (
+        <div style={card}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                <span style={{ ...label, color: 'var(--brass)' }}>NMI · Webhook events received</span>
+                <button style={btn(false, busy)} disabled={busy} onClick={load}>{busy ? 'Reading…' : 'Show last 10'}</button>
+            </div>
+            <p style={{ fontSize: '13px', color: 'var(--ink-soft)', margin: '0 0 6px' }}>
+                What the gateway has sent us. Nothing acts on these yet — they are recorded so we can prove the
+                connection and the signature before any payment depends on them.
+            </p>
+            {err && <div style={{ fontSize: '13px', color: '#9b2c2c' }}>✗ {err}</div>}
+            {rows && rows.length === 0 && (
+                <div style={{ fontSize: '13px', color: '#9b6a2c' }}>
+                    ⚠ Nothing received yet. Creating an invoice is not a transaction — pay one, or run a sale in NMI's
+                    virtual terminal, then check again.
+                </div>
+            )}
+            {rows && rows.length > 0 && (
+                <table style={{ borderCollapse: 'collapse', width: '100%', fontFamily: 'var(--mono)', fontSize: '12px', marginTop: '8px' }}>
+                    <thead><tr style={{ textAlign: 'left', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)' }}>
+                        <th style={{ padding: '6px' }}>Received</th><th style={{ padding: '6px' }}>Event</th>
+                        <th style={{ padding: '6px' }}>Amount</th><th style={{ padding: '6px' }}>Transaction</th>
+                        <th style={{ padding: '6px' }}>Signature</th>
+                    </tr></thead>
+                    <tbody>
+                        {rows.map((e) => (
+                            <tr key={e.id} style={{ borderBottom: '1px solid var(--line)' }}>
+                                <td style={{ padding: '6px' }}>{when(e.receivedAt)}</td>
+                                <td style={{ padding: '6px' }}>{e.eventType || '—'}</td>
+                                <td style={{ padding: '6px' }}>{e.amount ? `$${e.amount}` : '—'}</td>
+                                <td style={{ padding: '6px' }}>{e.transactionId || '—'}</td>
+                                <td style={{ padding: '6px', color: e.verified ? '#3a7d44' : '#9b2c2c' }}>
+                                    {e.verified ? `✓ verified (${e.matchedForm})` : '✗ not verified'}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
+        </div>
+    );
+}
+
 export default function IntegrationsPanel() {
     const [busy, setBusy] = useState(false);
     const [result, setResult] = useState(null);
@@ -96,6 +158,8 @@ export default function IntegrationsPanel() {
                     </div>
                 )}
             </div>
+
+            <WebhookEvents />
 
             <div style={{ ...card, background: 'var(--paper-2, #f2efe8)' }}>
                 <span style={label}>UPS · Shipping</span>

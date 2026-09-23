@@ -2696,6 +2696,29 @@ exports.nmiWebhook = onRequest({ secrets: [NMI_WEBHOOK_SIGNING_KEY] }, async (re
     return res.status(200).send('ok');
 });
 
+// The last webhook events, for the HQ 11 → Integrations read-out: is the gateway reaching us, and
+// does the signature verify? Admin-only; the raw body is truncated and never shown in full.
+exports.nmiRecentEvents = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const snap = await admin.firestore().collection('nmi_events').orderBy('receivedAt', 'desc').limit(10).get();
+    return {
+        events: snap.docs.map((d) => {
+            const e = d.data() || {};
+            return {
+                id: d.id,
+                receivedAt: e.receivedAt || 0,
+                verified: e.verified === true,
+                matchedForm: e.matchedForm || '',
+                eventType: e.eventType || '',
+                transactionId: e.transactionId || '',
+                amount: e.amount || '',
+                responseText: e.responseText || '',
+                orderId: e.orderId || '',
+            };
+        }),
+    };
+});
+
 // ============================================================================
 // 🚚 UPS — rate · ship · void (the WMS Fulfilment tab)
 // ============================================================================
