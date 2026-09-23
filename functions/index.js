@@ -2645,6 +2645,57 @@ exports.nmiProbe = onCall({
     return out;
 });
 
+// ── NMI WEBHOOK RECEIVER ─────────────────────────────────────────────────────────────────────
+// NMI posts every transaction event here (Merchant Portal → Settings → Webhooks). Phase 1 RECORDS
+// events only — nothing acts on them yet — so a wrong signature can never move money or stamp an
+// order. Each event lands in `nmi_events` with whether its signature verified.
+//
+// Signature: header `Webhook-Signature: t=<nonce>, s=<sig>`, sig = HMAC-SHA256 of the nonce and the
+// RAW body with the signing key NMI shows when the webhook is created. The exact string NMI signs
+// is not stated identically everywhere, so both documented forms are tried and the one that matched
+// is recorded — the first real event tells us which it is, and then this tightens to that one.
+const NMI_WEBHOOK_SIGNING_KEY = defineSecret("NMI_WEBHOOK_SIGNING_KEY");
+
+exports.nmiWebhook = onRequest({ secrets: [NMI_WEBHOOK_SIGNING_KEY] }, async (req, res) => {
+    if (req.method !== 'POST') return res.status(405).send('POST only');
+    const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
+    const header = String(req.get('Webhook-Signature') || '');
+    const nonce = (header.match(/t=([^,\s]+)/) || [])[1] || '';
+    const given = (header.match(/s=([^,\s]+)/) || [])[1] || '';
+    const signingKey = NMI_WEBHOOK_SIGNING_KEY.value().trim();
+
+    let verified = false, matchedForm = '';
+    if (nonce && given && signingKey) {
+        for (const [form, message] of [['nonce.body', `${nonce}.${raw}`], ['nonce+body', `${nonce}${raw}`]]) {
+            const mine = crypto.createHmac('sha256', signingKey).update(message).digest('hex');
+            if (mine.length === given.length && crypto.timingSafeEqual(Buffer.from(mine), Buffer.from(given))) {
+                verified = true; matchedForm = form; break;
+            }
+        }
+    }
+
+    let body = {};
+    try { body = raw ? JSON.parse(raw) : {}; } catch (e) { body = { unparsed: raw.slice(0, 2000) }; }
+    const t = (body && body.event_body) || {};
+    try {
+        await admin.firestore().collection('nmi_events').add({
+            receivedAt: Date.now(),
+            verified, matchedForm,
+            eventType: String((body && body.event_type) || ''),
+            transactionId: String(t.transaction_id || ''),
+            amount: t.action && t.action.amount ? String(t.action.amount) : '',
+            responseText: String((t.action && t.action.response_text) || ''),
+            orderId: String(t.order_id || ''),
+            raw: raw.slice(0, 20000),
+        });
+    } catch (e) {
+        console.error('nmi_events write failed', e);
+    }
+    // 200 either way: NMI retries on non-2xx, and an unverified event is already recorded for us
+    // to look at. Nothing downstream reads these yet.
+    return res.status(200).send('ok');
+});
+
 // ============================================================================
 // 🚚 UPS — rate · ship · void (the WMS Fulfilment tab)
 // ============================================================================
