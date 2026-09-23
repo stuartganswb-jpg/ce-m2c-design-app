@@ -10,6 +10,13 @@ import { functions } from './firebase';
 // may be paid up, an invoice is paid in full); this page can only offer what payIntent allows.
 
 const fmt = (v) => `$${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// A customer must never read a system word. Our own refusals (expired link, declined card) are
+// written for them and pass through; anything else becomes one plain sentence.
+const sayable = (e, fallback) => {
+  const m = String((e && e.message) || '').trim();
+  if (!m || /^(internal|unknown|unavailable|deadline-exceeded|not-found|failed-precondition)$/i.test(m) || m.length > 200) return fallback;
+  return m;
+};
 const DOC_WORDS = { QUOTE: 'Quote', SALES_ORDER: 'Sales Order', INVOICE: 'Invoice' };
 
 const fieldBox = {
@@ -34,7 +41,7 @@ export default function Pay() {
     if (!token) { setErr('This payment link is not valid.'); return; }
     httpsCallable(functions, 'payIntent')({ token })
       .then((res) => { setIntent(res.data); setAmount(Number(res.data.amountDue).toFixed(2)); })
-      .catch((e) => setErr(e.message || 'This payment link could not be opened.'));
+      .catch((e) => setErr(sayable(e, 'This payment link could not be opened. It may have expired or already been paid.')));
   }, [token]);
 
   // 2) NMI's hosted card fields. The script is loaded with the brand's public tokenization key;
@@ -71,7 +78,7 @@ export default function Pay() {
   const charge = (paymentToken) => {
     httpsCallable(functions, 'payCharge')({ token, paymentToken, amount, payerName: name, email })
       .then((res) => setDone(res.data))
-      .catch((e) => setErr(e.message || 'The payment could not be completed.'))
+      .catch((e) => setErr(sayable(e, 'The payment could not be completed. Your card has not been charged — please try again or contact us.')))
       .finally(() => setBusy(false));
   };
 
