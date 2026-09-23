@@ -984,6 +984,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // have NOT been released yet. Collapsed by default — it is for looking at, not for working —
     // and she can pull one forward herself if she would rather pick ahead.
     const [pendingOpen, setPendingOpen] = useState(false);
+    // CLOSED ORDERS DROP TO THE BOTTOM, COLLAPSED (Stuart 2026-09-23: "the screen is getting full, it should
+    // just be true open jobs at the top"). Shipped history was already below; closed sat among the open.
+    const [closedOpen, setClosedOpen] = useState(false);
     const pendingQueue = useMemo(() => finAll.filter(j =>
         !j.sentToPickPack
         && (j.brand || 'ce') === activeBrand
@@ -5208,8 +5211,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         .map(so => ({ so, docs: finAll.filter(f => f.salesOrderId && (f.salesOrderId === so.id || String(f.salesOrderId) === String(so.soId || ''))) }))
                         .filter(x => x.docs.length)
                         .sort((a, b) => String(a.so.needBy || a.so.needByDate || '￿').localeCompare(String(b.so.needBy || b.so.needByDate || '￿')));
-                    const open = quickShipOrders.filter(o => (o.status || 'Pending') !== 'Shipped');
+                    // A closed order is not open work: the closer stamps `closed`, or the status says so.
+                    const isClosedSo = (o) => o.closed === true || ['Closed', 'CANCELLED', 'Cancelled', 'Deleted'].includes(String(o.status || ''));
+                    const open = quickShipOrders.filter(o => (o.status || 'Pending') !== 'Shipped' && !isClosedSo(o));
                     const shipped = quickShipOrders.filter(o => o.status === 'Shipped');
+                    const closed = quickShipOrders.filter(o => isClosedSo(o) && o.status !== 'Shipped')
+                        .sort((a, b) => (b.closedAt || b.updatedAt || 0) - (a.closedAt || a.updatedAt || 0));
                     // Load the four numbers for the OPEN orders only, once each (soStatsRef), and
                     // never for shipped history — it is a NetSuite round trip per batch and a
                     // Firestore read per order, and history cannot change.
@@ -5359,6 +5366,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', margin: '30px 0 14px' }}>Shipped ({shipped.length})</div>
                                     {shipped.map(o => <Card key={o.id} o={o} />)}
                                 </>
+                            )}
+                            {closed.length > 0 && (
+                                <div style={{ marginTop: '30px', borderTop: `1px solid ${theme.line}`, paddingTop: '14px' }}>
+                                    <div onClick={() => setClosedOpen(v => !v)} style={{ cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: closedOpen ? '14px' : 0, userSelect: 'none' }}
+                                        title="Closed and cancelled orders — kept for the record, collapsed so the open work stays on top">
+                                        {closedOpen ? '▾' : '▸'} Closed ({closed.length}) — {closedOpen ? 'hide' : 'show'}
+                                    </div>
+                                    {closedOpen && closed.map(o => <Card key={o.id} o={o} />)}
+                                </div>
                             )}
                         </div>
                     );
