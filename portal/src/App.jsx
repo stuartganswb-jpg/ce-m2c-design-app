@@ -11,6 +11,9 @@ const Tools = lazy(() => import('./Tools.jsx'));
 // Public policy page — rendered WITHOUT login at #/policies (the card brands' underwriters must
 // be able to read it), and linked from the footer + sign-in screen.
 const Policies = lazy(() => import('./Policies.jsx'));
+// The pay page is opened from a link on a quote / sales order / invoice — no login, the token is
+// the credential (single use, 30 days, revocable). Card fields are the gateway's own.
+const Pay = lazy(() => import('./Pay.jsx'));
 
 const fmtMoney = (v) => (v === null || v === undefined) ? '' :
   Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -335,6 +338,15 @@ export default function App() {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
+
+  // A payment link is public by design — the customer paying an invoice may have no portal login.
+  if (route.startsWith('#/pay/')) {
+    return (
+      <Suspense fallback={<div className="loading">One moment…</div>}>
+        <Pay />
+      </Suspense>
+    );
+  }
 
   // Policies are public — no login, no data: render before the auth gate resolves.
   if (route.startsWith('#/policies')) {

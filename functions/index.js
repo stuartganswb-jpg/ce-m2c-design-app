@@ -2696,6 +2696,158 @@ exports.nmiWebhook = onRequest({ secrets: [NMI_WEBHOOK_SIGNING_KEY] }, async (re
     return res.status(200).send('ok');
 });
 
+// ── THE PAY LINK ─────────────────────────────────────────────────────────────────────────────
+// A quote / sales order / invoice carries a link the customer can pay from without logging in:
+//   portal.classicalelements.com/#/pay/<token>
+// The token is 32 random bytes, single use, 30 days, revocable. What may be paid is decided HERE,
+// never by the browser: a sales order defaults to a 50% deposit and the customer may choose to pay
+// MORE (never less, never more than the balance); an invoice is paid in full (Stuart 2026-09-23).
+// Card data never touches us — the page uses NMI's hosted fields and sends us only their one-time
+// token. Sandbox until an admin switches system/nmi_config.environment.
+const PAY_LINK_DAYS = 30;
+const nmiConfig = async () => {
+    try {
+        const snap = await admin.firestore().doc('system/nmi_config').get();
+        const c = (snap.exists && snap.data()) || {};
+        return {
+            environment: c.environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX',
+            tokenizationKeys: c.tokenizationKeys || {},
+        };
+    } catch (e) { return { environment: 'SANDBOX', tokenizationKeys: {} }; }
+};
+// One gateway key per brand — a brand with no key REFUSES rather than charging the wrong entity
+// (the UPS NO_UPS_ACCOUNT_FOR_BRAND rule; money must land in the right NetSuite subsidiary).
+const nmiKeyFor = (brand, environment) => {
+    const b = String(brand || '').toLowerCase();
+    if (environment === 'SANDBOX' && b === 'ce') return NMI_SANDBOX_KEY_CE.value().trim();
+    throw new HttpsError('failed-precondition', `NO_NMI_ACCOUNT_FOR_BRAND: no ${environment} gateway key is on file for "${brand}".`);
+};
+const money = (v) => Math.round(Number(v) * 100) / 100;
+
+// Staff mint a link for a document. The amount rules are stored ON the link, so the payer cannot
+// alter them later.
+exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const { docType, collection, docId, brand, reference, customerName, totalAmount, depositPct } = request.data || {};
+    const type = String(docType || '').toUpperCase();
+    if (!['QUOTE', 'SALES_ORDER', 'INVOICE'].includes(type)) throw new HttpsError('invalid-argument', 'docType must be QUOTE, SALES_ORDER or INVOICE.');
+    const total = money(totalAmount);
+    if (!(total > 0)) throw new HttpsError('invalid-argument', 'A total greater than zero is required.');
+    // An invoice is paid in full; a quote / sales order defaults to a deposit (50% unless told otherwise).
+    const pct = type === 'INVOICE' ? 100 : (Number(depositPct) > 0 && Number(depositPct) <= 100 ? Number(depositPct) : 50);
+    const due = type === 'INVOICE' ? total : money(total * pct / 100);
+    const token = crypto.randomBytes(32).toString('base64url');
+    const now = Date.now();
+    await admin.firestore().collection('pay_links').doc(token).set({
+        token, docType: type, collection: String(collection || ''), docId: String(docId || ''),
+        brand: String(brand || 'ce').toLowerCase(), reference: cleanStr(reference, 60), customerName: cleanStr(customerName, 120),
+        totalAmount: total, depositPct: pct, amountDue: due, minAmount: due, maxAmount: total,
+        status: 'OPEN', createdAt: now, createdBy: (request.auth && request.auth.token && request.auth.token.name) || '',
+        expiresAt: now + PAY_LINK_DAYS * 86400000,
+    });
+    return { token, url: `https://portal.classicalelements.com/#/pay/${token}`, amountDue: due, totalAmount: total, expiresAt: now + PAY_LINK_DAYS * 86400000 };
+});
+
+const payLinkOf = async (token) => {
+    const t = String(token || '');
+    if (!/^[A-Za-z0-9_-]{20,90}$/.test(t)) throw new HttpsError('not-found', 'This payment link is not valid.');
+    const snap = await admin.firestore().collection('pay_links').doc(t).get();
+    if (!snap.exists) throw new HttpsError('not-found', 'This payment link is not valid.');
+    const link = snap.data();
+    if (link.status === 'PAID') throw new HttpsError('failed-precondition', 'This link has already been paid. Contact us if you need another.');
+    if (link.status === 'VOID') throw new HttpsError('failed-precondition', 'This link has been cancelled. Contact us for a new one.');
+    if (Number(link.expiresAt) < Date.now()) throw new HttpsError('failed-precondition', 'This payment link has expired. Contact us for a new one.');
+    return link;
+};
+
+// What the pay page shows. Public by design (the token IS the credential) — it returns only what a
+// payer must see: who it is for, which document, and what is owed.
+exports.payIntent = onCall({ cors: true }, async (request) => {
+    const link = await payLinkOf((request.data || {}).token);
+    const cfg = await nmiConfig();
+    const tokenizationKey = cfg.tokenizationKeys[link.brand] || '';
+    if (!tokenizationKey) throw new HttpsError('failed-precondition', 'Card payments are not configured for this brand yet.');
+    return {
+        environment: cfg.environment,
+        tokenizationKey,
+        collectJsUrl: cfg.environment === 'PRODUCTION' ? 'https://secure.nmi.com/token/Collect.js' : 'https://sandbox.nmi.com/token/Collect.js',
+        docType: link.docType, reference: link.reference, customerName: link.customerName,
+        totalAmount: link.totalAmount, amountDue: link.amountDue, minAmount: link.minAmount, maxAmount: link.maxAmount,
+        depositPct: link.depositPct, expiresAt: link.expiresAt,
+    };
+});
+
+// The charge. The amount is re-checked against the link's own bounds; the browser's number is never
+// trusted on its own. The link is claimed in a transaction so a double-click cannot pay twice.
+exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async (request) => {
+    const { token, paymentToken, amount, payerName, email } = request.data || {};
+    const link = await payLinkOf(token);
+    const cfg = await nmiConfig();
+    const pt = String(paymentToken || '').trim();
+    if (!pt) throw new HttpsError('invalid-argument', 'Card details were not completed.');
+    const amt = money(amount);
+    if (!(amt >= money(link.minAmount) && amt <= money(link.maxAmount))) {
+        throw new HttpsError('invalid-argument', `The amount must be between $${money(link.minAmount).toFixed(2)} and $${money(link.maxAmount).toFixed(2)}.`);
+    }
+    const key = nmiKeyFor(link.brand, cfg.environment);
+    const db = admin.firestore();
+    const ref = db.collection('pay_links').doc(link.token);
+
+    // Claim the link first: a second attempt while one is in flight is refused rather than charged.
+    await db.runTransaction(async (tx) => {
+        const cur = await tx.get(ref);
+        const s = (cur.data() || {}).status;
+        if (s !== 'OPEN') throw new HttpsError('failed-precondition', 'This link is already being paid or has been paid.');
+        tx.update(ref, { status: 'CHARGING', chargingAt: Date.now() });
+    });
+
+    let res = {};
+    try {
+        const host = cfg.environment === 'PRODUCTION' ? NMI_HOSTS.PRODUCTION : NMI_HOSTS.SANDBOX;
+        const r = await fetch(`${host}/api/transact.php`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                security_key: key, type: 'sale', amount: amt.toFixed(2), payment_token: pt,
+                orderid: cleanStr(link.reference, 50), order_description: `${link.docType} ${link.reference}`.trim(),
+                first_name: cleanStr(payerName, 60), email: cleanStr(email, 120),
+            }).toString(),
+        });
+        res = nmiParse(await r.text());
+    } catch (e) {
+        await ref.update({ status: 'OPEN', lastError: String(e.message || e) });
+        throw new HttpsError('unavailable', 'The card could not be processed just now. Please try again.');
+    }
+
+    if (res.response !== '1') {
+        await ref.update({ status: 'OPEN', lastError: res.responsetext || 'declined', lastDeclineAt: Date.now() });
+        throw new HttpsError('failed-precondition', res.responsetext || 'The card was declined.');
+    }
+
+    // Paid. Record it on the link, in a payments ledger, and on the document itself.
+    const paidAt = Date.now();
+    const payment = {
+        paidAt, amount: amt, transactionId: res.transactionid || '', authCode: res.authcode || '',
+        brand: link.brand, docType: link.docType, collection: link.collection, docId: link.docId,
+        reference: link.reference, payerName: cleanStr(payerName, 60), email: cleanStr(email, 120),
+        environment: cfg.environment, method: 'CARD', gateway: 'NMI',
+        // What a deposit vs a payment means in NetSuite is Stuart's rule: deposits on quotes and
+        // sales orders, payments on invoices. The posting itself waits on Eric's field ids.
+        netsuiteKind: link.docType === 'INVOICE' ? 'customerpayment' : 'customerdeposit',
+        netsuitePosted: false,
+    };
+    await ref.update({ status: 'PAID', paidAt, paidAmount: amt, transactionId: res.transactionid || '' });
+    await db.collection('payments').add(payment);
+    if (link.collection && link.docId) {
+        await db.doc(`${link.collection}/${link.docId}`).set({
+            paymentsTotal: admin.firestore.FieldValue.increment(amt),
+            lastPaymentAt: paidAt, lastPaymentAmount: amt, lastPaymentTxn: res.transactionid || '',
+            paymentEnvironment: cfg.environment,
+        }, { merge: true }).catch((e) => console.error('pay stamp failed', e));
+    }
+    return { ok: true, amount: amt, transactionId: res.transactionid || '', reference: link.reference, environment: cfg.environment };
+});
+
 // The last webhook events, for the HQ 11 → Integrations read-out: is the gateway reaching us, and
 // does the signature verify? Admin-only; the raw body is truncated and never shown in full.
 exports.nmiRecentEvents = onCall({ enforceAppCheck: true }, async (request) => {

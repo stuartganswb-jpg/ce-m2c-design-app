@@ -7,9 +7,10 @@
 // NMI (payments, SANDBOX): a key/connection check that sends NO card data, plus an OPTIONAL $1
 // test invoice whose real purpose is to learn whether NMI hands back a payment-page URL we can put
 // on our own quote/SO PDFs (Stuart's first payments use case) or only emails it itself.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../../firebase';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { db, functions } from '../../firebase';
 
 const card = { background: '#fff', border: '1px solid var(--line)', padding: '18px', marginBottom: '18px' };
 const label = { fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
@@ -19,6 +20,93 @@ const btn = (primary, busy) => ({
     letterSpacing: '.1em', textTransform: 'uppercase', cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1,
 });
 const input = { padding: '8px 10px', border: '1px solid var(--line)', background: '#fff', fontFamily: 'var(--sans)', fontSize: '13px', outline: 'none' };
+
+// The pay page's settings, and a way to mint a link by hand while the document buttons are built.
+// TEST vs LIVE is decided here and read on the SERVER — a floor click can never charge a real card.
+function PaySettings() {
+    const [cfg, setCfg] = useState(null);
+    const [saving, setSaving] = useState(false);
+    const [key, setKey] = useState('');
+    const [form, setForm] = useState({ docType: 'SALES_ORDER', reference: '', customerName: '', totalAmount: '', depositPct: '50', collection: '', docId: '' });
+    const [link, setLink] = useState(null);
+    const [err, setErr] = useState('');
+
+    useEffect(() => onSnapshot(doc(db, 'system', 'nmi_config'),
+        (s) => {
+            const c = { environment: 'SANDBOX', tokenizationKeys: {}, ...(s.exists() ? s.data() : {}) };
+            setCfg(c); setKey(c.tokenizationKeys.ce || '');
+        }, () => setCfg({ environment: 'SANDBOX', tokenizationKeys: {} })), []);
+
+    if (!cfg) return null;
+    const isLive = cfg.environment === 'PRODUCTION';
+
+    const save = async (patch) => {
+        if (patch.environment === 'PRODUCTION' && !window.confirm('Switch payments to LIVE?\n\nPay links will charge real cards from then on.')) return;
+        setSaving(true);
+        try { await setDoc(doc(db, 'system', 'nmi_config'), patch, { merge: true }); }
+        catch (e) { alert(`Could not save: ${e.message || e}`); }
+        finally { setSaving(false); }
+    };
+
+    const makeLink = async () => {
+        setErr(''); setLink(null);
+        try {
+            const res = await httpsCallable(functions, 'payLinkCreate')({
+                docType: form.docType, reference: form.reference, customerName: form.customerName,
+                totalAmount: Number(form.totalAmount), depositPct: Number(form.depositPct),
+                collection: form.collection, docId: form.docId, brand: 'ce',
+            });
+            setLink(res.data);
+        } catch (e) { setErr(e.message || String(e)); }
+    };
+
+    const chip = (active) => ({ padding: '7px 12px', border: `1px solid ${active ? 'var(--ink)' : 'var(--line)'}`, background: active ? 'var(--ink)' : '#fff', color: active ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: saving ? 'wait' : 'pointer' });
+
+    return (
+        <div style={card}>
+            <span style={{ ...label, color: 'var(--brass)' }}>NMI · Pay links</span>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', margin: '10px 0 12px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '12px', color: 'var(--ink-soft)' }}>Mode</span>
+                <button style={chip(!isLive)} disabled={saving} onClick={() => save({ environment: 'SANDBOX' })}>Test</button>
+                <button style={{ ...chip(isLive), ...(isLive ? { background: '#3a7d44', borderColor: '#3a7d44' } : {}) }} disabled={saving} onClick={() => save({ environment: 'PRODUCTION' })}>Live</button>
+                <span style={{ fontSize: '12px', color: 'var(--ink-soft)' }}>
+                    {isLive ? 'LIVE — pay links charge real cards.' : 'TEST — nothing is charged.'}
+                </span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '14px' }}>
+                <span style={{ fontSize: '12px', color: 'var(--ink-soft)' }}>CE public tokenization key</span>
+                <input style={{ ...input, minWidth: '280px' }} value={key} onChange={(e) => setKey(e.target.value)} placeholder="e.g. hYW9bd-c6E952-Z4tCVb-kQk6c2" />
+                <button style={btn(false, saving)} disabled={saving} onClick={() => save({ tokenizationKeys: { ...(cfg.tokenizationKeys || {}), ce: key.trim() } })}>Save key</button>
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--line)', paddingTop: '12px' }}>
+                <span style={label}>Make a pay link (until the buttons land on the documents)</span>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '8px 0' }}>
+                    <select style={input} value={form.docType} onChange={(e) => setForm({ ...form, docType: e.target.value })}>
+                        <option value="SALES_ORDER">Sales order (deposit)</option>
+                        <option value="QUOTE">Quote (deposit)</option>
+                        <option value="INVOICE">Invoice (paid in full)</option>
+                    </select>
+                    <input style={{ ...input, width: '150px' }} placeholder="Reference e.g. SO60428" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} />
+                    <input style={{ ...input, width: '180px' }} placeholder="Customer name" value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} />
+                    <input style={{ ...input, width: '110px' }} placeholder="Total $" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value.replace(/[^0-9.]/g, '') })} />
+                    {form.docType !== 'INVOICE' && (
+                        <input style={{ ...input, width: '90px' }} placeholder="Deposit %" value={form.depositPct} onChange={(e) => setForm({ ...form, depositPct: e.target.value.replace(/[^0-9]/g, '') })} />
+                    )}
+                    <button style={btn(true, false)} onClick={makeLink}>Create link</button>
+                </div>
+                {err && <div style={{ fontSize: '13px', color: '#9b2c2c' }}>✗ {err}</div>}
+                {link && (
+                    <div style={{ fontSize: '13px', marginTop: '6px' }}>
+                        <div style={{ color: '#3a7d44' }}>✓ {Number(link.amountDue).toFixed(2)} due of {Number(link.totalAmount).toFixed(2)} · expires {new Date(link.expiresAt).toLocaleDateString()}</div>
+                        <input style={{ ...input, width: '100%', marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '12px' }} readOnly value={link.url} onFocus={(e) => e.target.select()} />
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
 
 // What actually arrived from the gateway, and whether we could prove it came from NMI. This is how
 // the signature format is confirmed BEFORE anything downstream trusts a webhook.
@@ -159,6 +247,7 @@ export default function IntegrationsPanel() {
                 )}
             </div>
 
+            <PaySettings />
             <WebhookEvents />
 
             <div style={{ ...card, background: 'var(--paper-2, #f2efe8)' }}>
