@@ -1,3 +1,4 @@
+import { isQuickShip } from './pickLines.js';
 // "Reopen in CPQ": load a finalized quote's configuration back into the CPQ configurator so
 // details can change without rebuilding from scratch. Used by the CRM (ExternalCoopTab) and the
 // ERP hub (ERPPushPullTab). Dispatches REOPEN_QUOTE_IN_CPQ, handled in HQ.js (which owns the
@@ -31,7 +32,7 @@ export const savedAddOnSelOf = (job) => {
 // the same sentence, so the mistake cannot be clicked, and the function still refuses if it is called.
 export const quoteDoorOf = (job) => {
     if (!job) return '';
-    if (job.source === 'QUICKSHIP' || job.orderClass === 'QUICKSHIP' || (Array.isArray(job.quickShipCart) && job.quickShipCart.length)) return 'ORDER_ENTRY';
+    if (job.source === 'QUICKSHIP' || isQuickShip(job) || (Array.isArray(job.quickShipCart) && job.quickShipCart.length)) return 'ORDER_ENTRY';
     if (job.cpqData && ((Array.isArray(job.cpqData.cartItems) && job.cpqData.cartItems.length) || (Array.isArray(job.cpqData.breakdown) && job.cpqData.breakdown.length))) return 'CPQ';
     return '';   // too old, or empty, to say — each door keeps its own "nothing to reopen" words
 };
@@ -56,7 +57,7 @@ export const approveDoorReason = (job) => {
 export const isOrderEntryOrder = (so, job = null) => {
     if (!so) return false;
     const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
-    if (U(so.orderClass) === 'QUICKSHIP' || U(so.source) === 'QUICKSHIP') return true;
+    if (isQuickShip(so) || U(so.source) === 'QUICKSHIP') return true;
     if (/^QSQUOTE-/i.test(String(so.hqJobId || '').trim())) return true;
     return quoteDoorOf(job) === 'ORDER_ENTRY';
 };

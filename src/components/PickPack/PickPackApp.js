@@ -9,7 +9,7 @@ import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
-import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail } from '../Shared/pickLines';
+import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
@@ -391,7 +391,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         });
 
         // Quick Ship stock orders for this brand (own pick/pack tab).
-        const unsubQS = onSnapshot(query(collection(db, "hq_sales_orders"), where("orderClass", "==", "QUICKSHIP")), (snap) => {
+        const unsubQS = onSnapshot(query(collection(db, "hq_sales_orders"), where("orderClass", "==", ORDER_ENTRY_CLASS)), (snap) => {
             // NS_QUEUED = saved locally, NetSuite not yet accepted (staged sync) — not floor work yet.
             const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand && o.status !== 'NS_QUEUED');
             rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -783,7 +783,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // Two order sources share this station: custom finishing WOs (fin_workorders) and Quick Ship
     // stocked sales orders from HQ tab 7 (hq_sales_orders, orderClass QUICKSHIP — queue once
     // Picked off the shelf). Writes land on whichever doc the order came from.
-    const isQsOrder = (j) => j && j.orderClass === 'QUICKSHIP';
+    // THE ONE TEST (Shared/pickLines.isQuickShip, 2026-09-23) — this used to be a local copy.
+    const isQsOrder = isQuickShip;
     const packDocOf = (j) => doc(db, isQsOrder(j) ? 'hq_sales_orders' : 'fin_workorders', j.id);
     const packJob = finAll.find(j => j.id === packOrderId) || quickShipOrders.find(o => o.id === packOrderId) || null;
 
@@ -5173,7 +5174,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     // lifting Stuart means.
                     const cpqOrders = Object.values(soIndex)
                         .filter((so, i, arr) => arr.findIndex(x => x.id === so.id) === i)   // soIndex is keyed twice
-                        .filter(so => so && (so.brand || 'ce') === activeBrand && so.orderClass !== 'QUICKSHIP'
+                        .filter(so => so && (so.brand || 'ce') === activeBrand && !isQuickShip(so)
                             && !so.deleted && !['Shipped', 'Closed', 'Deleted'].includes(String(so.status || '')))
                         .map(so => ({ so, docs: finAll.filter(f => f.salesOrderId && (f.salesOrderId === so.id || String(f.salesOrderId) === String(so.soId || ''))) }))
                         .filter(x => x.docs.length)

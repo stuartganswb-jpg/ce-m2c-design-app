@@ -14,6 +14,7 @@ import { customerKeys } from '../Shared/clientPricing';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { reopenQuoteInCpq, reopenQuoteInVision, reopenQuoteInOrderEntry, wrongDoorReason, approveDoorReason } from '../Shared/reopenQuote';
+import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction, canReopenPostedOrder, netSuiteOrderNoOf } from '../Shared/orderStatus';
@@ -711,7 +712,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   // Quick Ship orders live-feed: the customer card shows them with kit-grouped invoices
   // (customer pays the KIT price; NetSuite carries the per-item accounting lines).
   useEffect(() => {
-    const unsub = onSnapshot(query(collection(db, 'hq_sales_orders'), where('orderClass', '==', 'QUICKSHIP')), snap => {
+    const unsub = onSnapshot(query(collection(db, 'hq_sales_orders'), where('orderClass', '==', ORDER_ENTRY_CLASS)), snap => {
       // NS_QUEUED = saved locally, NetSuite not yet accepted; deleted = tombstone. Neither is a real order on a customer card.
       setQsOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand && o.status !== 'NS_QUEUED' && !o.deleted));
     }, () => { /* none yet */ });
@@ -1408,7 +1409,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       // contents document: hidden parts are in the box; a pole is one piece); PACKED = the order's
       // pack documents (fin_workorders for a CPQ order, the SO doc itself for an Order Entry one).
       // The invoice = the money reader's lines × the shipped quantities (Shared/invoiceMath).
-      const isQsDoc = activeDocJob.orderClass === 'QUICKSHIP';
+      const isQsDoc = isQuickShip(activeDocJob);   // the one test (Shared/pickLines)
       const docOpts = {
           findPart: (id) => docPartIndex.get(String(id || '').trim().toUpperCase()) || null,
           custKeys: customerKeys(activeDocJob.customer?.id || '', jobCrm || { name: activeDocJob.customer?.name || activeDocJob.clientName || '' }),

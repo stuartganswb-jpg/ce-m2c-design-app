@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { isPoleCategory } from '../Shared/poleCut';
 import { nsTransactionHeader, withLineLocations } from '../Shared/nsHeader';
 import { resolveShipMethod } from '../Shared/nsTransmit';
@@ -1531,7 +1532,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             }
             await setDoc(doc(db, "hq_sales_orders", hqId), {
                 id: hqId, soId: hqId, nsInternalId: null, nsQueuedAt: stamp,
-                orderClass: 'QUICKSHIP', type: 'Stock',
+                orderClass: ORDER_ENTRY_CLASS, type: 'Stock',
                 brand: activeBrand,
                 ...soHeader,
                 ...(backorderLines.length ? { backorderLines, backorderAt: stamp } : {}),

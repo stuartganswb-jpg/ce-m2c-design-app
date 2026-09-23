@@ -20,6 +20,7 @@
 // Every identity an order might be keyed under. The floor and the board have historically keyed the
 // same order four different ways, which is why linkage has to be by SET rather than by one field.
 import { strandedGatesOf } from './orderStatus.js';
+import { isQuickShip } from './pickLines.js';
 import { isOpenPo } from './poLock.js';
 
 export const identityKeysOf = (o) => {
@@ -740,7 +741,7 @@ export function reopenPlanFor({ coll, d, sibling = null, force = null, anyClose 
         // A stocked (Order Entry / Quick Ship) order's status IS its pick status — the WMS writes
         // both together and the closer touched only `status`.
         const qs = ['Pending', 'Picked', 'Shipped'];
-        const stocked = d.orderClass === 'QUICKSHIP' || (d.autoSplit !== true && qs.includes(String(d.pickStatus || '')));
+        const stocked = isQuickShip(d) || (d.autoSplit !== true && qs.includes(String(d.pickStatus || '')));
         const status = stocked
             ? (qs.includes(String(d.pickStatus || '')) ? String(d.pickStatus) : 'Pending')
             : ((has(d.dispatchedAt) || d.autoSplit === true) ? 'Dispatched' : 'Approved');

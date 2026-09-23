@@ -60,8 +60,17 @@ export const lineIsFeeish = (l) => {
     return !hasRealId && FEEISH_NAME_RE.test(String((l && l.name) || (l && l.partName) || ''));
 };
 
-/** Which door did this order come through? */
-export const isQuickShip = (job) => !!job && job.orderClass === 'QUICKSHIP';
+// ── THE ONE TEST: IS THIS AN ORDER ENTRY ORDER? (Stuart 2026-09-23) ─────────────────────────
+// "we need to close all these gaps not just for this order, but so they do not happen again."
+// The question was asked in five places with five local copies (the WMS, the CRM, orderStatus
+// twice, the closer's reopen plan) and answered by three Firestore queries on the raw field name.
+// A CPQ order released by rows from 10.5 is Order Entry in behaviour but was not in class, and it
+// fell through every one of them at once. Now: ONE field name (ORDER_ENTRY_CLASS — the writers
+// stamp it, the queries filter on it) and ONE function (isQuickShip — every reader calls it). The
+// richer sales-order identity test, Shared/reopenQuote.isOrderEntryOrder, builds on this one.
+export const ORDER_ENTRY_CLASS = 'QUICKSHIP';
+/** Which door did this order come through — does it pack off the order itself (lines[] are the truth)? */
+export const isQuickShip = (job) => !!job && String(job.orderClass || '').trim().toUpperCase() === ORDER_ENTRY_CLASS;
 
 /**
  * The lines to PICK: real parts off a shelf, in either dialect, fees removed.

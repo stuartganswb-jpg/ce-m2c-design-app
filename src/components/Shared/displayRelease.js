@@ -21,6 +21,7 @@
 //
 // Pure. The panel loads and writes; RTG's guards read `displayRelease` on the sales order.
 
+import { isQuickShip, ORDER_ENTRY_CLASS } from './pickLines.js';
 import { isDisplayOnlyLine, isParkedGeometryLine, headerSidemarkOf } from './lineClassification.js';
 import { oeIsTbf, oeLineFinish, oeCoverageOf, oeLineStateOf } from './oeLines.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
@@ -284,7 +285,7 @@ export const displayAnchorPatch = ({ buildId, lines = null, so = null }) => ({
     // every one of them, so its stocked lines had no pick path at all. Stamped ONCE here, at the one
     // writer; `source` still says where it was sold. The pick status starts Pending only when the
     // order has none — an order already picked is never set back.
-    orderClass: 'QUICKSHIP',
+    orderClass: ORDER_ENTRY_CLASS,
     ...((so && so.pickStatus) ? {} : { pickStatus: 'Pending' }),
     ...(Array.isArray(lines) ? { lines } : {}),
     // The card's piece count is the sum of the lines, as tab 7 writes it — a CPQ record carries the
@@ -299,7 +300,7 @@ const piecesOf = (lines) => (Array.isArray(lines) && lines.length) ? lines.reduc
  */
 export const needsPackCard = (so) => {
     if (!so || so.displayRelease !== true) return '';
-    if (U(so.orderClass) !== 'QUICKSHIP') return 'class';
+    if (!isQuickShip(so)) return 'class';
     const n = piecesOf(so.lines);
     return (n != null && N(so.totalParts) !== n) ? 'count' : '';
 };
@@ -308,7 +309,7 @@ export const needsPackCard = (so) => {
  * before the visibility-only mode, then offered the stamp): it packs on WO-<so>, so the card is a
  * second pack home with no lines. Only an order NOT sold through Order Entry ever loses the class.
  */
-export const packCardToRemove = (so, whole) => !!so && !!whole && U(so.orderClass) === 'QUICKSHIP' && U(so.source) !== 'QUICKSHIP';
+export const packCardToRemove = (so, whole) => !!so && !!whole && isQuickShip(so) && U(so.source) !== 'QUICKSHIP';
 
 /** True when the sales order needs its lines written before rows can be read off it. */
 export const soNeedsLines = (so) => !!so && !(Array.isArray(so.lines) && so.lines.length);

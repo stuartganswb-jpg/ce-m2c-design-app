@@ -1,3 +1,4 @@
+import { isQuickShip } from './pickLines.js';
 // WHERE IS IT? — the one answer, derived (Stuart 2026-08-03: "of utmost importance is the clarity
 // on the status of an item, my team is confused and i want them to see clearly each stage exactly
 // where something is at… from the time an order hits the custom or finishing floor till the time
@@ -428,7 +429,7 @@ export const netSuiteOrderNoOf = (job, so) => {
 };
 export const inProduction = (so) => {
     if (!so) return false;
-    if (so.orderClass === 'QUICKSHIP') {
+    if (isQuickShip(so)) {
         const st = String(so.status || so.pickStatus || '');
         return st === 'Picked' || st === 'Shipped' || so.packStatus === 'Packed' || !!(so.pickInProgress && so.pickInProgress.by) || !!(so.packInProgress && so.packInProgress.by);
     }
@@ -438,7 +439,7 @@ export const inProduction = (so) => {
 const _ms = (v) => (v && typeof v.toMillis === 'function') ? v.toMillis() : (typeof v === 'number' ? v : (v ? (Date.parse(v) || 0) : 0));
 export const packedStateOf = (so, packDocs = []) => {
     if (!so) return { packed: false, packedAt: null, shipped: false, tracking: [] };
-    if (so.orderClass === 'QUICKSHIP') {
+    if (isQuickShip(so)) {
         return { packed: so.packStatus === 'Packed', packedAt: so.packedAt || null, shipped: String(so.status || '') === 'Shipped' || !!so.nsIfTran, tracking: so.trackingNumbers || [] };
     }
     const docs = (packDocs || []).filter(Boolean);

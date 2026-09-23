@@ -10,6 +10,7 @@ import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { runOeAuto, oeInventoryOf } from '../Shared/oeGenerate';
 import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
+import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
@@ -535,7 +536,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         for (const o of liveSO) {
             // A display order's rows are started from 10.5, one at a time (Shared/displayRelease) —
             // the automatic start would raise every to-be-finished line of the order in one go.
-            if (o.orderClass !== 'QUICKSHIP' || !o.nsInternalId || o.deleted || o.stopped || o.rtgArchived || o.displayRelease) continue;
+            if (!isQuickShip(o) || !o.nsInternalId || o.deleted || o.stopped || o.rtgArchived || o.displayRelease) continue;
             if ((o.createdAt || 0) < OE_AUTO_FROM || isClosedState(o) || isDoneState(o)) continue;
             const open = oeOpenOf(o);
             if (!open.length) continue;
@@ -1111,7 +1112,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // (liveSO — unfiltered by status, brand-scoped, tombstones dropped), from CREATION, and shows
     // them as RECORDS: a status chip and their work orders, never a split button (see the guard on
     // the auto-dispatch effect above). Closed rows leave the board; packed ones stay a week.
-    const qsRows = liveSO.filter(o => o.orderClass === 'QUICKSHIP' && !o.rtgArchived && !isClosedState(o));
+    const qsRows = liveSO.filter(o => isQuickShip(o) && !o.rtgArchived && !isClosedState(o));
     const qsRecent = (o) => (Date.now() - (o.packedAt || o.updatedAt || o.createdAt || 0)) < WEEK_MS;
     const qsBoard = {
         open: qsRows.filter(o => !isDoneState(o)).sort(urgentFirst),
@@ -1401,7 +1402,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // the Order Entry route; the whole-order split would put every line on the floor as one
         // document, built from a quote's printed breakdown (no part id, no cut length, no bin).
         const oeRefusal = (why) => { addLog(`⛔ SO ${so.soId || so.id} is an Order Entry order (${why}) — never split whole. Its lines start through the Order Entry route.`, 'warn'); if (!opts.skipConfirm) alert(`⛔ ${so.soId || so.id} is an ORDER ENTRY order (${why}).\n\nIt is never split whole: its lines start one at a time through the Order Entry route, and the WMS packs its stocked lines off the order itself. Nothing was written.`); };
-        if (isOrderEntryOrder(so)) return oeRefusal(so.orderClass === 'QUICKSHIP' ? 'orderClass QUICKSHIP' : `approved from quote ${so.hqJobId}`);
+        if (isOrderEntryOrder(so)) return oeRefusal(isQuickShip(so) ? `orderClass ${ORDER_ENTRY_CLASS}` : `approved from quote ${so.hqJobId}`);
         const isRedispatch = so.status === 'Dispatched';
         if (!opts.skipConfirm && !window.confirm(isRedispatch
             ? `RE-DISPATCH SO ${so.soId || so.id}?\n\nThe split re-runs with the current routing rules and OVERWRITES the existing floor work orders (same ids) — any progress already logged against them is reset.`

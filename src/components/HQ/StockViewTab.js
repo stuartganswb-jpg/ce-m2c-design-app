@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import BufferedInput from '../Shared/BufferedInput';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, addDoc, serverTimestamp } from "firebase/firestore";
@@ -2534,7 +2535,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const loadOeNeeds = async () => {
         setOeNeeds({ loading: true, orders: [] });
         try {
-            const snap = await getDocs(query(collection(db, 'hq_sales_orders'), where('orderClass', '==', 'QUICKSHIP'), where('brand', '==', activeBrand)));
+            const snap = await getDocs(query(collection(db, 'hq_sales_orders'), where('orderClass', '==', ORDER_ENTRY_CLASS), where('brand', '==', activeBrand)));
             const sos = snap.docs.map(d => ({ id: d.id, ...d.data() }))
                 .filter(o => !o.deleted && !['Shipped', 'Closed', 'CANCELLED', 'Deleted'].includes(String(o.status || '')))
                 // A DISPLAY ORDER'S ROWS ARE STARTED FROM 10.5, one at a time (Shared/displayRelease) —
