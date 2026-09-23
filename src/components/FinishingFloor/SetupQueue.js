@@ -877,13 +877,17 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                 {((wo.partsList || []).length > 0 || wo.sentToPickPack) && (() => {
                     const ps = wo.pickStatus || 'Pending';
                     const picked = ps === 'Picked_Awaiting_Staging';
+                    // STAGED IS PAST PICKED (2026-09-23): after the staging match the strip said "in pick
+                    // queue", because it knew only picked and not-picked. The match is the end of the pick.
+                    const staged = wo.stagingStatus === 'MATCHED' || ps === 'Staged_Ready_For_Finishing';
                     // NOTHING TO PICK (2026-09-23): a paired pole with no small parts of its own has no pick —
                     // it said "in pick queue" for a queue that would never move. It is matched at staging alone.
-                    const label = nothingToPick(wo) ? (wo.stagingStatus === 'MATCHED' ? 'Nothing to pick — matched at staging' : 'Nothing to pick here — the pole is matched at the WMS staging bin')
+                    const label = nothingToPick(wo) ? (staged ? 'Nothing to pick — matched at staging' : 'Nothing to pick here — the pole is matched at the WMS staging bin')
+                        : staged ? (wo.pickHadSkips ? `Staged & matched ⚠ ${(wo.pickSkips || []).length} skip(s) at the pick` : 'Staged & matched')
                         : !wo.sentToPickPack ? 'Awaiting release (▶ Start Setup sends the pick)'
                         : picked ? (wo.pickHadSkips ? `Picked ⚠ ${(wo.pickSkips || []).length} skip(s)` : 'Picked — at staging')
                         : 'In pick queue (WMS)';
-                    const color = picked ? (wo.pickHadSkips ? '#d9534f' : 'var(--ink)') : (wo.sentToPickPack ? 'var(--brass)' : 'var(--ink-soft)');
+                    const color = staged ? (wo.pickHadSkips ? '#d9534f' : '#3a7d44') : picked ? (wo.pickHadSkips ? '#d9534f' : 'var(--ink)') : (wo.sentToPickPack ? 'var(--brass)' : 'var(--ink-soft)');
                     return (
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: wo.hasCustomSibling ? '8px' : '14px', padding: '10px 12px', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Small Parts (Pick)</span>
