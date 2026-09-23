@@ -22,7 +22,7 @@ import { CATEGORY_NAME_RX } from '../Shared/itemCodeMatch';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
-import { resolveByExactKey, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf, mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
+import { resolveStagingScan, stagingKeyOf, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf, mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
 import { hardDeleteWithLedger, propagateFloorState, closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { fulfilPlatingDemand } from '../Shared/platingDemand';
 import { clearConvertGate } from '../Shared/finishedRunPrecheck';
@@ -4061,32 +4061,38 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         // require the second scan to match the SAME key exactly and the shop fab to be Complete.
         const smallKey = normalizeKey(stagingSmallScan);
         const custKey = normalizeKey(stagingCustomScan);
+        // THE STAGING KEY IS THE WORK ORDER (Stuart 2026-09-23, Shared/stagingKey): each scan resolves
+        // to ONE finishing document; on a paired order the small-parts scan and the shop scan must
+        // resolve to the SAME document. An older label carrying the sales-order key is accepted only
+        // when it names exactly one open document — two or more (a multi-row order) means reprint.
+        const explain = (r, what, key) => r.ambiguous.length
+            ? `❌ ${r.ambiguous.length} open orders carry the ${what} label "${key}" (${r.ambiguous.map(packRef).join(', ')}) — an older label that names the sales order, not the row.\n\nReprint the ${what} label from the order's card and scan the new one.`
+            : `❌ No open order matches the ${what} label "${key}".`;
 
-        // NOTHING TO PICK (Stuart 2026-09-23, SO60565 Base Front 1): a paired pole with no small parts
-        // of its own has no pick and no small-parts label — the shop's label alone identifies it. The
-        // match is the same match and the stamp the same stamp, so everything downstream reads it as
-        // any other staged order. A document WITH small parts still needs both labels below.
+        // NOTHING TO PICK (SO60565 Base Front 1): a paired pole with no small parts of its own has no
+        // pick and no small-parts label — the shop's label alone identifies it. The match is the same
+        // match and the stamp the same stamp, so everything downstream reads it as any staged order.
         if (!smallKey && custKey) {
-            const cands = jobs.filter(j => j.hasCustomSibling && nothingToPick(j) && !stagingMatched(j) && j.currentPhase !== 'Closed'
-                && [j.orderKey, j.salesOrderId, j.soNum].map(normalizeKey).filter(Boolean).includes(custKey));
-            if (cands.length === 1) {
-                const j = cands[0];
-                if (!customPartsReady(j)) return alert(`❌ ${packRef(j)}: the shop parts are not ready (${j.customFabStatus || 'Pending'}).${j.customFabStatus === 'Sent to Plating' ? '\n\nThey are AT THE PLATER.' : ''}`);
-                await updateDoc(doc(db, "fin_workorders", j.id), {
-                    pickStatus: 'Staged_Ready_For_Finishing', stagingStatus: 'MATCHED', stagedAt: serverTimestamp(),
-                    pickNothingToPick: true, pickedBy: operator?.name || '', pickedAt: Date.now(),
-                });
-                writeLog(`Order Staged & Matched (nothing to pick — shop parts only): ${packRef(j)}`, 'wms');
-                alert(`✅ MATCH CONFIRMED: ${packRef(j)} has nothing to pick — the shop parts are staged and it is ready for the Finishing floor.`);
-                setStagingSmallScan(''); setStagingCustomScan(''); setOperator(null);
-                return;
-            }
-            if (cands.length > 1) return alert(`❌ ${cands.length} unmatched shop-only orders carry the key "${custKey}" (${cands.map(packRef).join(', ')}) — the shop label names the sales order, not the row. Scan the SMALL-PARTS label of the one you mean, or stage them from RTG by work order.`);
+            const r = resolveStagingScan(jobs, custKey);
+            if (!r.job) return alert(explain(r, 'shop', custKey));
+            const j = r.job;
+            if (!(j.hasCustomSibling && nothingToPick(j))) return alert(`📋 ${packRef(j)} has small parts to pick — scan the SMALL-PARTS label first, then the shop label.`);
+            if (stagingMatched(j)) return alert(`${packRef(j)} is already staged and matched.`);
+            if (!customPartsReady(j)) return alert(`❌ ${packRef(j)}: the shop parts are not ready (${j.customFabStatus || 'Pending'}).${j.customFabStatus === 'Sent to Plating' ? '\n\nThey are AT THE PLATER.' : ''}`);
+            await updateDoc(doc(db, "fin_workorders", j.id), {
+                pickStatus: 'Staged_Ready_For_Finishing', stagingStatus: 'MATCHED', stagedAt: serverTimestamp(),
+                pickNothingToPick: true, pickedBy: operator?.name || '', pickedAt: Date.now(),
+            });
+            writeLog(`Order Staged & Matched (nothing to pick — shop parts only): ${packRef(j)}`, 'wms');
+            alert(`✅ MATCH CONFIRMED: ${packRef(j)} has nothing to pick — the shop parts are staged and it is ready for the Finishing floor.`);
+            setStagingSmallScan(''); setStagingCustomScan(''); setOperator(null);
+            return;
         }
         if (!smallKey) return alert("Scan the SMALL-PARTS staging label first.");
 
-        const job = resolveByExactKey(jobs, smallKey);
-        if (!job) return alert(`❌ No picked small-parts order matches "${smallKey}".`);
+        const rs = resolveStagingScan(jobs, smallKey);
+        if (!rs.job) return alert(explain(rs, 'small-parts', smallKey));
+        const job = rs.job;
         if (job.pickStatus !== 'Picked_Awaiting_Staging') {
             return alert(`❌ ${packRef(job)}: small parts are not picked yet (status: ${job.pickStatus || 'Pending'}).`);
         }
@@ -4094,15 +4100,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         // Orders with a custom (shop) half must pass the two-label verify; small-only orders skip it.
         if (job.hasCustomSibling) {
             if (!custKey) return alert(`📋 ${packRef(job)} has custom shop parts — scan the CUSTOM (shop) label too.`);
-            if (smallKey !== custKey) {
-                return alert(`🛑 DIFFERENT ORDERS — DO NOT MIX.\n\nSmall-parts label: ${smallKey}\nCustom label: ${custKey}\n\nSeparate these before staging.`);
+            const rc = resolveStagingScan(jobs, custKey);
+            if (!rc.job || rc.job.id !== job.id) {
+                return alert(`🛑 DIFFERENT ORDERS — DO NOT MIX.\n\nSmall-parts label: ${packRef(job)}\nShop label: ${rc.job ? packRef(rc.job) : (rc.ambiguous.length ? `${rc.ambiguous.length} open orders carry "${custKey}" — an older label; reprint the shop label from its card` : `no open order matches "${custKey}"`)}\n\nSeparate these before staging.`);
             }
             // ONE TEST for "are the custom parts ready" (Brief B2's customPartsReady), so this
             // screen, RTG and the Setup Queue cannot disagree. 'Sent to Plating' is NOT ready —
             // the pieces are at the plater, and the receiving station's build-back is what makes
             // them Complete.
             if (!customPartsReady(job)) {
-                return alert(`❌ ${packRef(job)}: custom parts are not ready (${job.customFabStatus || 'Pending'}).${job.customFabStatus === 'Sent to Plating' ? '\n\nThey are AT THE PLATER. They become packable when the pallet is received and built back on the Plating tab.' : '\n\nWait for the shop to finish + label them.'}`);
+                return alert(`❌ ${packRef(job)}: custom parts are not ready (${job.customFabStatus || 'Pending'}).${job.customFabStatus === 'Sent to Plating' ? '\n\nThey are AT THE PLATER. They become packable when the receiving station builds them back.' : ''}`);
             }
         }
 
@@ -4125,7 +4132,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const base = {
             kind: type === 'SMALL_PARTS' ? 'SETUP · SMALL PARTS' : String(type || 'SETUP').replace(/_/g, ' '),
             woRef: packRef(job),
-            orderKey: job.orderKey || job.salesOrderId || job.soNum || job.id,
+            // THE STAGING KEY IS THE WORK ORDER (2026-09-23, Shared/stagingKey) — one row, one key.
+            orderKey: stagingKeyOf(job),
             item: job.stockErpId || job.type || '',
             qty: job.totalParts || '',
             finish: job.recipe || '',
@@ -5590,7 +5598,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             }} title="Item labels with the WO # as batch reference" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
                                         ) : (<>
                                             {!isQsOrder(packJob) && (
-                                                <button onClick={() => printHandshakeLabels({ woRef: packRef(packJob), orderKey: packJob.orderKey || packJob.salesOrderId || packJob.soNum || packJob.id, item: packJob.stockErpId || packJob.type || '', qty: packJob.totalParts || '', qtyLabel: `${packJob.totalParts || 0} pcs`, finish: packJob.recipe || '', customer: packJob.customerName || packJob.clientName || packJob.customer || '', hasCustom: !!packJob.hasCustomSibling })} title="Reprint both staging-handshake labels (small parts + custom shop when the order has one) — same barcode key the handshake scans" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Handshake Labels</button>
+                                                <button onClick={() => printHandshakeLabels({ woRef: packRef(packJob), orderKey: stagingKeyOf(packJob), item: packJob.stockErpId || packJob.type || '', qty: packJob.totalParts || '', qtyLabel: `${packJob.totalParts || 0} pcs`, finish: packJob.recipe || '', customer: packJob.customerName || packJob.clientName || packJob.customer || '', hasCustom: !!packJob.hasCustomSibling })} title="Reprint both staging-handshake labels (small parts + custom shop when the order has one) — same barcode key the handshake scans" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Handshake Labels</button>
                                             )}
                                             <button onClick={() => { const ls = packLinesOf(packJob); if (ls.length) printItemLabels(ls.map(l => ({ itemId: l.erp, itemName: l.name }))); }} title="One 2×4 item label per line on this order" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
                                         </>)}

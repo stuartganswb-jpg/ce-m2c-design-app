@@ -68,25 +68,11 @@ export const releaseSiblingToPickPack = async (shopOrder) => {
 // scans it to re-pair. Normalize for tolerant matching.
 export const normalizeKey = (v) => String(v == null ? '' : v).trim().toUpperCase();
 
-// True if a scanned label identifies this fin work order (match on the shared key).
-export const stagingScanMatches = (finWO, scan) => {
-    const s = normalizeKey(scan);
-    if (!s) return false;
-    const candidates = [finWO.orderKey, finWO.salesOrderId, finWO.soNum].map(normalizeKey).filter(Boolean);
-    return candidates.some(k => k === s || k.includes(s) || s.includes(k));
-};
-
-// §A2: the staging handshake resolves a scanned label to a fin WO by EXACT shared-key
-// match (no substring — that's how we refuse to pair two different orders). Both the
-// small-parts label and the shop custom label encode orderKey, so an exact compare on
-// the normalized key is the verification. Returns the matching fin WO, or null.
-export const resolveByExactKey = (finWOs = [], scan) => {
-    const s = normalizeKey(scan);
-    if (!s) return null;
-    return finWOs.find(w =>
-        [w.orderKey, w.salesOrderId, w.soNum].map(normalizeKey).filter(Boolean).includes(s)
-    ) || null;
-};
+// §A2 / §8 — THE STAGING KEY IS THE WORK ORDER (2026-09-23): the labels barcode the finishing
+// document's id (the shop half carries it as finSiblingId), the handshake resolves each scan to a
+// document and requires both to be the same one. Pure, in Shared/stagingKey; re-exported here for
+// the callers that always imported it from the contract.
+export { stagingKeyOf, resolveStagingScan, stagingScanMatches, resolveByExactKey, legacyStagingKeysOf } from './stagingKey.js';
 
 // ── WHAT IS THIS ORDER FOR? (Stuart 2026-08-17) ─────────────────────────────────────────────────
 // "why are none of the work order windows displaying any product info, there is no pattern# nothing

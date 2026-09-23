@@ -18,7 +18,7 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import SopViewer from '../Shared/SopViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AppImprovementTab from '../Shared/AppImprovementTab';
-import { mirrorCustomStatusToSibling, releaseSiblingToPickPack, woItemCodeOf, CUSTOM_FAB_STATUS } from '../Shared/workOrderContract';
+import { mirrorCustomStatusToSibling, releaseSiblingToPickPack, woItemCodeOf, CUSTOM_FAB_STATUS, stagingKeyOf } from '../Shared/workOrderContract';
 import { isHeld, holdFirst, HOLD_STAGES } from '../Shared/orderHold';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import MaterialGridCard from '../Shared/MaterialGridCard';
@@ -1324,14 +1324,15 @@ const ShopFloor = () => {
                 ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
                 ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${shopItemCodeOf(order) || order.item || order.partNum}^FS
                 ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${uom ? uomLabel(qty, uom) : qty}  ${cutLength ? `Cut: ${cutLength}"` : ''}^FS
-                ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.orderKey || order.woNum}^FS
+                ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${stagingKeyOf(order)}^FS
                 ^XZ
             `;
             const zpl = cuts.length > 1
                 ? cuts.map((c, i) => one(c.qty, c.cutLength, `Cut ${i + 1}/${cuts.length}`, c.uom || order.uom)).join('')
                 : one(order.qty, order.cutLength, '', order.uom);
             emitLabel(zpl, () => printShopCompletionLabel({
-                woNum: order.woNum, soNum: soNumOf(order), orderKey: order.orderKey,
+                // THE STAGING KEY IS THE WORK ORDER (2026-09-23): the barcode names the finishing half — the pair's spine.
+                woNum: order.woNum, soNum: soNumOf(order), orderKey: stagingKeyOf(order),
                 item: shopItemCodeOf(order) || order.item || order.partNum, qty: order.qty, cutLength: order.cutLength,
                 cuts, uom: order.uom || null,
                 finishRecipe: order.finishRecipe, isOutsourced: order.isOutsourced,
