@@ -20,7 +20,7 @@ import { closeOrderEverywhere, propagateFloorState, linkedDocsOf } from '../Shar
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
-import { customFabLabel } from '../Shared/orderStatus';
+import { customFabLabel, setupWaitsOnShop } from '../Shared/orderStatus';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
 // Finishing converts only ever run for the shop brands.
@@ -197,6 +197,8 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
   };
   const startSetup = async (wo) => {
     if (heldRefusal(wo, 'start setup')) return;
+    const shopWait = setupWaitsOnShop(wo);
+    if (shopWait) return alert(`⏳ ${woRefOf(wo)} — ${shopWait}.\n\nThe pole is fabricated on the shop floor and comes back through the staging bin; there is nothing to set up here until it does.`);
     try {
         const cut = await rodCutStillOpen(wo);
         if (cut) return alert(`✂ ${woRefOf(wo)} cannot start — its rod cut is still OPEN on the WMS (${cut}).\n\nThe poles do not exist yet. Complete the cut at WMS → ROD CUTS → Cuts for Finishing; that clears the gate and prints this order's label.`);
@@ -938,7 +940,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                     {isMatched ? (
                         <button onClick={() => stageToFloor(wo)} style={{ ...btnStyle, flex: 2, background: '#3a7d44', color: '#fff', border: 'none' }}>✓ Push to Active Floor</button>
                     ) : wo.stepStatus === "Pending" ? (
-                        <button onClick={() => startSetup(wo)} style={{ ...btnStyle, flex: 2, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup</button>
+                        setupWaitsOnShop(wo)
+                            ? <button disabled title="The pole is being fabricated on the shop floor and comes back through the staging bin. Setup starts when it is here." style={{ ...btnStyle, flex: 2, background: 'var(--paper-2)', border: '1px dashed var(--brass)', color: 'var(--brass)', cursor: 'not-allowed', opacity: 0.9 }}>⏳ {setupWaitsOnShop(wo)}</button>
+                            : <button onClick={() => startSetup(wo)} style={{ ...btnStyle, flex: 2, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup</button>
                     ) : (
                         <button onClick={() => stageToFloor(wo)} style={{ ...btnStyle, flex: 2, background: 'var(--ink)', color: '#fff' }}>Stage to Floor</button>
                     )}

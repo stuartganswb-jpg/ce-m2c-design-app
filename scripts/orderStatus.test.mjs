@@ -7,7 +7,7 @@
 
 import {
     GATES, gatesOf, openGatesOf, isReleasable, gateSummary,
-    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor, wholeOrderWait, canReopenPostedOrder, netSuiteOrderNoOf } from '../src/components/Shared/orderStatus.js';
+    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor, wholeOrderWait, canReopenPostedOrder, netSuiteOrderNoOf, setupWaitsOnShop } from '../src/components/Shared/orderStatus.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => {
@@ -127,5 +127,15 @@ ok('an app id is not a NetSuite number', netSuiteOrderNoOf({}, { soId: 'SO-APP-Q
 ok('an internal id alone still counts as posted', netSuiteOrderNoOf({ netsuiteSalesOrderId: '77' }, null) === 'NetSuite #77');
 ok('a quote has none', netSuiteOrderNoOf({ status: 'CONFIGURED' }, null) === '');
 
+
+// ── SETUP WAITS ON THE SHOP (2026-09-23) ───────────────────────────────────────────────────
+{
+    const poleOnly = { hasCustomSibling: true, customFabStatus: 'In Process', rootItem: 'H1-75SR', stockErpId: 'H1-75SR/P24', partsList: [{ legacyErpId: 'H1-75SR', quantity: 50 }] };
+    eq('a paired pole with nothing else to set up waits, and says where the pole is', setupWaitsOnShop(poleOnly), 'Waiting on shop — In Process');
+    eq('…at the plater, the label says so', setupWaitsOnShop({ ...poleOnly, customFabStatus: 'Sent to Plating' }).startsWith('Waiting on shop — At the plater'), true);
+    eq('the pole is back → setup may start', setupWaitsOnShop({ ...poleOnly, customFabStatus: 'Complete' }), '');
+    eq('a paired document WITH small parts starts its setup in parallel with the fab', setupWaitsOnShop({ ...poleOnly, partsList: [...poleOnly.partsList, { legacyErpId: 'H1-75SBP-S', quantity: 100 }] }), '');
+    eq('an unpaired document never waits on a shop', setupWaitsOnShop({ hasCustomSibling: false, partsList: [] }), '');
+}
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

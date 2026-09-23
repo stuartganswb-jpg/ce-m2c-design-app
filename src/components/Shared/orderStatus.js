@@ -1,4 +1,4 @@
-import { isQuickShip } from './pickLines.js';
+import { isQuickShip, pickableLinesOf } from './pickLines.js';
 // WHERE IS IT? — the one answer, derived (Stuart 2026-08-03: "of utmost importance is the clarity
 // on the status of an item, my team is confused and i want them to see clearly each stage exactly
 // where something is at… from the time an order hits the custom or finishing floor till the time
@@ -76,6 +76,17 @@ const shortDate = (ms) => {
     return Number.isFinite(t) && t > 0 ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
 };
 export const customPartsReady = (wo) => !wo || !wo.hasCustomSibling || wo.customFabStatus === 'Complete';
+// SETUP WAITS ON THE SHOP (Stuart 2026-09-23: "should state waiting on shop"). A paired document
+// whose pole is still on the shop and which has NO small parts of its own to set up has nothing to
+// do here until the pole is back — the card said "Start Setup" as if the paint job could begin.
+// A paired document WITH small parts keeps its Start Setup: their setup and pick run in parallel
+// with the fab (2026-07-17), and the custom strip already says where the pole is.
+// Returns the sentence for the card, or '' when setup may start.
+export const setupWaitsOnShop = (wo) => {
+    if (!wo || !wo.hasCustomSibling || customPartsReady(wo)) return '';
+    if (pickableLinesOf(wo).length > 0) return '';
+    return `Waiting on shop — ${customFabLabel(wo)}`;
+};
 // The words, once — the Setup Queue chip, the shop card and RTG all say the same thing.
 export const customFabLabel = (wo) => {
     const cf = (wo && wo.customFabStatus) || 'Pending';
