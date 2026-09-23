@@ -23,15 +23,15 @@ import { realPartOf, isAliasDoc } from './aliasIdentity';
 import { isPoleCategory, cutPlanFromSource } from './poleCut';
 import { isOutsourcedFinishCode, handlingForErp } from './finishRouting';
 import { orderRouteFor, ORDER_ROUTE, sourcingOf, SOURCING } from './sourcing';
-import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal, stampReceiptPo } from './workOrderCreate';
+import { ParkRefusal, stampReceiptPo } from './workOrderCreate';
 import { isReleasable } from './orderStatus';
 import { releaseFinWoToFloor } from './finishedRunPrecheck';
 import { buildOeReviewPlan, actionsOfReviewedJob } from './oeReviewPlan';
-import { queueNsAssemblyWorkOrder } from './nsWorkOrder';
 import { createDraftPurchaseOrders } from './purchaseOrders';
 import { issuePlatedDemand } from './platingDemand';
 import { isAssemblyPart } from './finishedGoodsRun';
 import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig } from './oeLines';
+import { floorGroupsOf, parkRowPair } from './rowPair.js';
 
 export { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig };
 
@@ -179,143 +179,94 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
             expanded.push({ ...job, qty: job.qty - nowQty, buyQty: (job.qty - nowQty) * per, plan: mkPlan(job.qty - nowQty), __tag: '-PO', __skipPo: true });
         } else expanded.push(job);
     }
+    // ── GROUP BY ROW AND FINISH, ONE PAIR PER GROUP (Stuart 2026-09-23, Shared/rowPair) ─────────
+    // "each row is like a small typical order": the to-be-finished lines of an order are grouped by
+    // row and finish and each group is written as the pair the CPQ split writes — one finishing
+    // document with every small part, one shop sibling with the custom pole(s), linked. A pair opens
+    // NO NetSuite work order: the sales order is the NetSuite record, exactly as a CPQ pair.
+    let linesStarted = 0;
+    const bookPurchase = (job) => { if (!bookedJobs.has(job.key)) { bookedJobs.add(job.key); (job.__poLines || []).forEach(pl => {
+        const k = `${pl.vendorName}|${job.so.id}`;
+        (poBuckets[k] = poBuckets[k] || { vendorName: pl.vendorName, so: job.so, lines: [] }).lines.push(pl);
+    }); } };
+    const nsIdOf = (code) => { const hit = inventory.find(p => U(p.legacyErpId || p.itemId) === U(code)); return hit && hit.netSuiteInternalId ? String(hit.netSuiteInternalId) : null; };
+    const prepared = [];
     for (const job of expanded) {
         const { so, part, finish, qty } = job;
         const erp = U(part.legacyErpId || part.itemId);
-        // ⚠ A BOUGHT LINE IS PLANNED AS ITS RAW ITEM — AND FINISHED AS THE FINISHED ONE (Stuart 2026-09-20,
-        // SO60565: "H1-75SR has no finish suffix — it is shop work (STOCK_MILL), not a finishing run").
-        // The plan for a bought to-be-finished line is one pull of the raw item (that is what the vendor
-        // and the shelf hold), so its `finishedErp` IS the raw code — and the one writer rightly refuses
-        // a finishing work order for a code with no finish. The work order is for the FINISHED item,
-        // raw + finish; the raw stays the pull line. (Broken since the one-writer move of 09-02 — the
-        // 08-31 "the track should create a finishing WO for once it arrives" rule could not run.)
+        // A BOUGHT LINE IS PLANNED AS ITS RAW ITEM — AND FINISHED AS THE FINISHED ONE (Stuart 2026-09-20).
         const finishedErp = (job.buy && finish && U(job.finishedErp) === erp) ? `${erp}/${U(finish)}` : job.finishedErp;
         const specs = part.manufacturingSpecs || {};
-        const needBy = soNeedBy(so);
-        const prodNote = so.productionNotes || '';
-        const woId = `WO-OE-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now()}-${job.key}${job.__tag || ''}`;
         const { makeup, poLines } = actionsOfReviewedJob(job);
-        // ⚠ THE PURCHASE IS BOOKED ONLY ONCE ITS WORK ORDER EXISTS (Stuart 2026-09-20, SO60565). The PO
-        // lines used to be bucketed HERE, before the work order was written — so when the writer refused
-        // the work order (it did: a bought line under its raw code), the run still went on to draft the
-        // material's purchase order, for work that did not exist, and a second attempt drafted it again.
-        // A raw-only buy (no finish) raises no work order by design, so it books straight away.
-        // Booked ONCE per reviewed line: a start-now split is two work orders (-NOW, -PO) over one purchase,
-        // and whichever of them is written first carries it — so a refused first half cannot lose the buy.
-        const bookPurchase = () => { if (!bookedJobs.has(job.key)) { bookedJobs.add(job.key); poLines.forEach(pl => {
-            const k = `${pl.vendorName}|${so.id}`;
-            (poBuckets[k] = poBuckets[k] || { vendorName: pl.vendorName, so, lines: [] }).lines.push(pl);
-        }); } };
-        // A BOUGHT line's PO (or coverage) settles the MATERIAL only. When the line is TO BE FINISHED
-        // (Stuart 2026-08-31) the finishing WO is still created — it releases to the floor and waits
-        // at the WMS pick until the material lands. A raw-only buy (no finish) makes no work order.
+        const prepared1 = { ...job, erp, finishedErp, __makeup: makeup, __poLines: poLines };
         if (job.buy) {
             if (!poLines.length && !job.__skipPo) log(`✔ ${erp} ×${qty} (SO ${so.soId || so.id}) — material covered by stock/on-order as reviewed; nothing ordered.`, 'success');
-            if (!finish) { bookPurchase(); continue; }
+            // A raw-only buy (no finish) makes no work order — its purchase books straight away.
+            if (!finish) { bookPurchase(prepared1); continue; }
             log(job.__tag === '-NOW'
-                ? `🎨 ${erp} ×${qty}: START NOW from stock — finishing WO releases and picks from the shelf.`
-                : `🎨 ${erp} ×${qty}: TO BE FINISHED — creating the finishing WO now; it waits at the pick until the material arrives.`, 'info');
+                ? `🎨 ${erp} ×${qty}: START NOW from stock — finishing releases and picks from the shelf.`
+                : `🎨 ${erp} ×${qty}: TO BE FINISHED — the pair is created now; its pick waits until the material arrives.`, 'info');
         }
-        const flow2 = job.nsPlan && job.nsPlan.flow === 'FLOW2';
         const planLines = (job.plan?.lines || []).map(pl => (U(pl.legacyErpId) === finishedErp || (job.buy && U(pl.legacyErpId) === erp))
             ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
-        // ONE POLE TEST (sweep 2026-09-01) — Shared/poleCut is the single answer; the CUSTOM PAIR rule
-        // (Stuart 2026-09-01, b531f53): a mill code plus an applied finish is made to order and gets a
-        // shop sibling; a complete assembly (/BS, /N90) is one finishing WO.
+        // ONE POLE TEST (sweep 2026-09-01) — the CUSTOM PAIR rule: a mill code plus an applied finish
+        // is made to order and is the shop's; a complete assembly (/BS, /N90) is finishing's.
         const isPole = isPoleCategory(U(specs.productType));
         const custom = isPole && handlingForErp(finishedErp) === 'Custom';
-        const shopWoId = `${woId}-C`;
-        // ── THE POLE CHOICE THE OPERATOR MADE (Q5 — Stuart 2026-09-02) ────────────────
+        // ── THE POLE CHOICE THE OPERATOR MADE (Q5) — a finishing-side pole cut or waited for ──
         let poleCut = null, backOrder = '';
         if (job.poleChoice) {
             const pc = job.poleChoice;
             const opt = pc.chosen && pc.chosen !== 'BACKORDER' ? (pc.options || []).find(o => o.sourceErp === pc.chosen) : null;
             if (opt) {
-                // Only the SHORTFALL is cut — whatever is already on the shelf is picked.
                 poleCut = cutPlanFromSource({ targetErp: pc.pullErp, targetFt: pc.pullFt, sourceFt: opt.sourceFt, per: opt.per, scrapFt: opt.scrapFt, want: pc.short });
                 if (!poleCut) log(`⚠ ${pc.pullErp}: could not build the cut from ${opt.sourceErp} — the order is created, raise the cut from WMS → Rod Cuts.`, 'warn');
             } else {
                 backOrder = `${pc.short} × ${pc.pullErp} short (${pc.have} on hand of ${pc.need}) — waiting for the ${pc.pullFt} ft length`;
             }
         }
-        const rcptRefs = job.__tag === '-NOW' ? null
-            : (poLines || []).map(pl => ({ itemId: U(pl.code), qtyNeeded: Number(pl.editQty ?? pl.qty) || Number(pl.qty) || 0 }))
-                .filter(r => r.itemId && r.qtyNeeded > 0);
-        let gate = {}, finPayload = null;
-        try {
-            // ── THE ONE WRITER (Brief A, A1 step 4 — 2026-09-02). Intent ORDER_ENTRY: the document,
-            // the pre-built finishing payload, the pre-check gates and the custom sibling all come
-            // from Shared/workOrderCreate. Anchor policy NONE here (FLOW1/FLOW2 below).
-            const res = await parkWorkOrder({
-                intent: INTENT.ORDER_ENTRY, part, code: finishedErp, qty, brand, createdBy: user || '',
-                reqDate: needBy, needBy,
-                note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · ${erp} in ${finish}${job.aliasNote ? ` · 🔗 ${job.aliasNote}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
-                source: 'ORDER_ENTRY', precheck: { plan: job.plan, actions: makeup, components: job.components || [], poleChoice: job.poleChoice || null, unitsKnown: job.unitsKnown !== false }, partsList: planLines,
-                inventory, locationId,
-                makeup: { dispatchShop: true, customerName: so.customer || '' }, soRef: so.soId || so.id,
-                anchor: ANCHOR.NONE, woId, poleCut, backOrder,
-                // MATERIAL WE HAD TO BUY (Stuart 2026-09-04): every component this review is raising a
-                // PO for parks the order AWAITING RECEIPT. A '-NOW' split is the exception by definition.
-                receiptRefs: rcptRefs,
-                sales: {
-                    soAppId: so.id, soId: so.soId || so.id, customerId: so.customerId || null, customer: so.customer || '',
-                    rawErp: erp, aliasErp: job.aliasNote ? job.lineErp : null, soAccepted: !!so.nsInternalId,
-                    flow2, stockInternalId: flow2 ? job.nsPlan.assemblyInternalId : null,
-                    custom, shopWoId,
-                    // THE CUT (S5, Stuart 2026-09-17): the SO line's cut in inches, onto the work order,
-                    // its shop sibling and the floor payload.
-                    cutLength: Number(job.line && job.line.cutLength) > 0 ? Number(job.line.cutLength) : null,
-                    // WHICH LINE of the sales order this is for (2026-09-20) — the link is a fact now.
-                    soLineIdx: job.lineIdx >= 0 ? job.lineIdx : null,
-                },
-            });
-            gate = res.gate; finPayload = res.finPayload;
-            res.made.forEach((m, i) => log(`${i === 0 ? '' : '   '}${m}`, i === 0 ? 'success' : (/^[⚠✂⇄🏭🧩]/.test(m) ? 'warn' : 'info')));
-        } catch (e) {
-            if (e instanceof ParkRefusal) { log(`⛔ ${finishedErp} (SO ${so.soId || so.id}): ${e.message}`, 'error'); continue; }
-            throw e;
-        }
-        // The work order exists: NOW its purchase is booked, and its receipt gate is remembered so the PO
-        // number can be written onto it below.
-        bookPurchase();
-        if (rcptRefs && rcptRefs.length) rcptRefs.forEach(r => gatedWos.push({ woId, soAppId: so.id, itemId: r.itemId }));
-        woIds.push(woId);
-        const lk = `${so.id}|${job.lineIdx}`;
-        idsByLine[lk] = [...(idsByLine[lk] || []), woId, ...(custom ? [shopWoId] : [])];
-        await stampLineGenerated(so, job.lineIdx, { kind: 'WO', ids: idsByLine[lk], at: Date.now(), by: user || '', auto: !!auto });
-        const waitingText = `${gate.awaitingConvert ? 'its phosphate convert' : ''}${gate.awaitingConvert && gate.awaitingComponents ? ' + ' : ''}${gate.awaitingComponents ? 'its component work orders' : ''}${(gate.awaitingConvert || gate.awaitingComponents) && gate.awaitingNsWo ? ' + ' : ''}${gate.awaitingNsWo ? 'its NetSuite work-order number' : ''}` || 'its gates';
-        if (flow2) {
+        const rcptRefs = job.__tag === '-NOW' ? []
+            : (poLines || []).map(pl => ({ itemId: U(pl.code), qtyNeeded: Number(pl.editQty ?? pl.qty) || Number(pl.qty) || 0 })).filter(r => r.itemId && r.qtyNeeded > 0);
+        prepared.push({ ...prepared1, custom, __planLines: planLines, __poleCut: poleCut, __backOrder: backOrder, __rcptRefs: rcptRefs });
+    }
+    // Per sales order, then by row and finish — the review modal may hand in several orders at once.
+    const bySo = new Map();
+    prepared.forEach(j => { const k = j.so.id; if (!bySo.has(k)) bySo.set(k, []); bySo.get(k).push(j); });
+    for (const jobsOfSo of bySo.values()) {
+        const so = jobsOfSo[0].so;
+        for (const group of floorGroupsOf(jobsOfSo, so)) {
+            const receiptRefs = group.jobs.flatMap(j => j.__rcptRefs || []);
+            let res;
             try {
-                await queueNsAssemblyWorkOrder({
-                    brandId: brand, assemblyInternalId: job.nsPlan.assemblyInternalId,
-                    erp: finishedErp, qty, reqDate: needBy,
-                    memo: `SO ${so.soId || so.id} · ${so.customer || ''} · ${finish}`,
-                    writeBacks: [{ collection: 'hq_work_orders', docId: woId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
-                    sourceApp: 'OE_REVIEW', createdBy: user || '',
+                res = await parkRowPair({
+                    group, so, brand, user, inventory,
+                    poleCutsOf: (j) => ({ poleCut: j.__poleCut, backOrder: j.__backOrder }),
+                    receiptRefs, makeupActions: group.jobs.flatMap(j => j.__makeup || []), nsIdOf,
                 });
-                await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
-                log(`📤 NetSuite work order queued for ${finishedErp} ×${qty} — the floor release waits for its number.`, 'success');
-            } catch (e) { log(`⚠ ${finishedErp}: NetSuite WO queue failed (${e.message || e}) — WO parked awaiting it; retry from RTG.`, 'error'); }
-        } else if (job.nsPlan && job.nsPlan.flow === 'FLOW1' && job.nsPlan.baseAssemblyInternalId) {
-            // The TOP-LEVEL anchor (Stuart 2026-08-31): WO on the BASE assembly so the order shows ON
-            // ORDER in NetSuite from day one. It does NOT gate the floor.
-            try {
-                await queueNsAssemblyWorkOrder({
-                    brandId: brand, assemblyInternalId: job.nsPlan.baseAssemblyInternalId,
-                    erp: job.nsPlan.baseErp, qty, reqDate: needBy,
-                    memo: `SO ${so.soId || so.id} · ${so.customer || ''} · build ${job.nsPlan.baseErp} ×${qty} · finish ${finish} · closes on the final assembly build (after mill + phosphate convert)`,
-                    writeBacks: [{ collection: 'hq_work_orders', docId: woId, patch: { nsWoOnErp: job.nsPlan.baseErp, nsWoOnInternalId: job.nsPlan.baseAssemblyInternalId }, idField: 'nsWoId', tranField: 'nsWoTran' }],
-                    sourceApp: 'OE_REVIEW', createdBy: user || '',
-                });
-                await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
-                log(`📤 Top-level NetSuite WO queued on ${job.nsPlan.baseErp} ×${qty} (SO ${so.soId || so.id}) — shows ON ORDER; the final assembly build closes it.`, 'success');
-            } catch (e) { log(`⚠ ${job.nsPlan.baseErp}: top-level NS WO queue failed (${e.message || e}) — the RTG anchor review will re-offer it.`, 'error'); }
-        }
-        if (!flow2 && isReleasable(gate)) {
-            await releaseFinWoToFloor({ id: woId, finPayload }, user || 'oe-review');
-            log(`✅ ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — ${auto ? 'clean plan' : 'approved in review'} → RELEASED to the finishing floor (${woId}).`, 'success');
-        } else if (!flow2) {
-            log(`✅ WO ${woId}: ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — waiting on ${waitingText}; RTG releases it when they clear.`, 'success');
+            } catch (e) {
+                if (e instanceof ParkRefusal) { log(`⛔ ${group.rowLabel || 'order'} · ${group.finish} (SO ${so.soId || so.id}): ${e.message}`, 'error'); continue; }
+                throw e;
+            }
+            res.made.forEach((m, i) => log(`${i === 0 ? '' : '   '}${m}`, i === 0 ? 'success' : (/^[⚠✂⇄🏭🧩⏳📦]/.test(m) ? 'warn' : 'info')));
+            // The pair exists: NOW its purchases are booked, and the receipt gate remembers the work order
+            // so the PO number can be written onto it below.
+            group.jobs.forEach(bookPurchase);
+            receiptRefs.forEach(r => gatedWos.push({ woId: res.woId, soAppId: so.id, itemId: r.itemId }));
+            woIds.push(res.woId);
+            linesStarted += group.jobs.length;
+            for (const job of group.jobs) {
+                const lk = `${so.id}|${job.lineIdx}`;
+                idsByLine[lk] = [...(idsByLine[lk] || []), res.woId, ...(res.shopWoId ? [res.shopWoId] : [])];
+                await stampLineGenerated(so, job.lineIdx, { kind: 'WO', ids: idsByLine[lk], at: Date.now(), by: user || '', auto: !!auto, rowKey: group.rowKey || '', finish: group.finish });
+            }
+            const g = res.gate || {};
+            const waitingText = [g.awaitingConvert ? 'its phosphate convert' : '', g.awaitingComponents ? 'its component work orders' : '', g.awaitingRodCut ? 'its rod cut' : '', g.awaitingReceipt ? 'its purchased material' : ''].filter(Boolean).join(' + ');
+            if (isReleasable(g)) {
+                await releaseFinWoToFloor({ id: res.woId, finPayload: res.finPayload }, user || 'oe-review');
+                log(`✅ ${group.rowLabel ? `${group.rowLabel} · ` : ''}${group.finish} (SO ${so.soId || so.id}) — ${auto ? 'clean plan' : 'approved in review'} → RELEASED to the finishing floor (${res.woId})${res.shopWoId ? `; the shop job ${res.shopWoId} releases from RTG` : ''}.`, 'success');
+            } else {
+                log(`✅ ${res.woId} (SO ${so.soId || so.id}) — waiting on ${waitingText || 'its gates'}; RTG releases it when they clear.`, 'success');
+            }
         }
     }
     // PO drafts — one per vendor per SO, exactly as reviewed (qtys already MOQ-adjusted). ONE PO WRITER
@@ -346,7 +297,7 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
         }
         res.pos.forEach(po => log(`🧾 DRAFT ${po.poId} → ${po.vendor}: ${po.items.map(l => `${l.quantity} × ${l.itemId}`).join(', ')} (SO ${so.soId || so.id}) — review and approve to send it to NetSuite.`, 'info'));
     }
-    return { draftPos, woIds };
+    return { draftPos, woIds, linesStarted };
 };
 
 // ── THE AUTOMATIC RUN (RTG, Stuart 2026-09-20: "automatic when netsuite accepts") ───────────────────
@@ -436,7 +387,7 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = 
             });
             if (clean.length) {
                 const res = await executeOeJobs({ jobs: clean, brand, user, inventory, log, auto: true });
-                ran += res.woIds.length;
+                ran += res.linesStarted != null ? res.linesStarted : res.woIds.length;
             }
         }
         const state = review.length ? 'NEEDS_REVIEW' : 'DONE';

@@ -2051,6 +2051,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     note: hqOrder.memo || originalJob?.sidemark || "",
                     cpqSpecs,
                     imageUrl: svgUri || originalJob?.finalImageUrl || null,
+                    // A ROW PAIR'S SHOP HALF (Shared/rowPair, 2026-09-23) carries its cut list, its pole pull
+                    // lines and the pole counts the plater bills on — they ride the parked record onto the
+                    // shop document exactly as the CPQ split writes them.
+                    ...(Array.isArray(hqOrder.cutList) && hqOrder.cutList.length ? { cutList: hqOrder.cutList } : {}),
+                    ...(Array.isArray(hqOrder.pullLines) && hqOrder.pullLines.length ? { pullLines: hqOrder.pullLines } : {}),
+                    ...(hqOrder.poles != null && typeof hqOrder.poles === 'number' ? { poles: hqOrder.poles, feet: hqOrder.feet || 0, billableFeet: hqOrder.billableFeet || 0, riderLines: hqOrder.riderLines || 0 } : {}),
+                    ...(hqOrder.rowLabel ? { rowLabel: hqOrder.rowLabel, rowKey: hqOrder.rowKey || '', finishGroup: hqOrder.finishGroup || '' } : {}),
                 },
             }));
 
