@@ -21,6 +21,7 @@ import AppImprovementTab from '../Shared/AppImprovementTab';
 import { mirrorCustomStatusToSibling, releaseSiblingToPickPack, woItemCodeOf, CUSTOM_FAB_STATUS } from '../Shared/workOrderContract';
 import { isHeld, holdFirst, HOLD_STAGES } from '../Shared/orderHold';
 import OrderStatusChips from '../Shared/OrderStatusChips';
+import MaterialGridCard from '../Shared/MaterialGridCard';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
@@ -1689,6 +1690,9 @@ const ShopFloor = () => {
                             ))}
                         </div>
                     )}
+
+                    {/* THE MATERIAL GRID (Stuart 2026-09-23) — the same rows the finishing card and the WMS show. */}
+                    <MaterialGridCard doc={order} style={{ marginTop: 0, marginBottom: '20px' }} />
 
                     {Array.isArray(order.cutList) && order.cutList.length > 0 && (
                         <div style={{ marginBottom: '20px' }}>

@@ -12,6 +12,7 @@ import { finishCodeFromErp, machineLoadPlan } from '../Shared/finishingTime';
 import { printMachineLoadLabels } from '../Shared/labelPrint';
 import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
 import PullLinesLive from '../Shared/PullLinesLive';
+import MaterialGridCard from '../Shared/MaterialGridCard';
 import { woRefOf } from '../Shared/woRef';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { closeOrderEverywhere, propagateFloorState, linkedDocsOf } from '../Shared/orderLifecycle';
@@ -891,6 +892,10 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                         </div>
                     );
                 })()}
+
+                {/* THE MATERIAL GRID (Stuart 2026-09-23): what the release read — on hand vs need per part,
+                    short and what covers it. Stamped by the writer; RTG refreshes it each morning. */}
+                <MaterialGridCard doc={wo} />
 
                 {wo.convertSuggestion && (
                     <div title="Attached by the planner on the Sales Snapshot — run it with the ⇄ Convert Finished → Raw tool at the top of this screen" style={{ marginTop: '8px', padding: '10px 12px', background: '#fdf8ef', border: '1px solid var(--brass)', borderRadius: '2px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', lineHeight: 1.5 }}>

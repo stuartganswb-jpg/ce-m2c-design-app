@@ -250,7 +250,7 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
                 intent: INTENT.ORDER_ENTRY, part, code: finishedErp, qty, brand, createdBy: user || '',
                 reqDate: needBy, needBy,
                 note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · ${erp} in ${finish}${job.aliasNote ? ` · 🔗 ${job.aliasNote}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
-                source: 'ORDER_ENTRY', precheck: { plan: job.plan, actions: makeup }, partsList: planLines,
+                source: 'ORDER_ENTRY', precheck: { plan: job.plan, actions: makeup, components: job.components || [], poleChoice: job.poleChoice || null, unitsKnown: job.unitsKnown !== false }, partsList: planLines,
                 inventory, locationId,
                 makeup: { dispatchShop: true, customerName: so.customer || '' }, soRef: so.soId || so.id,
                 anchor: ANCHOR.NONE, woId, poleCut, backOrder,

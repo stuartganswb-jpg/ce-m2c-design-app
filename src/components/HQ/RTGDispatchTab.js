@@ -10,6 +10,7 @@ import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { runOeAuto, oeInventoryOf } from '../Shared/oeGenerate';
 import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
+import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
@@ -316,6 +317,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     const [liveWO, setLiveWO] = useState([]);
     const [liveShop, setLiveShop] = useState([]);
     const [liveFin, setLiveFin] = useState([]);
+    const [stockRefresh, setStockRefresh] = useState(null);   // hq_config/floor_stock_refresh[brand] — the morning run's record
+    const stockRefreshBusyRef = useRef(false);
     // Demand documents ride beside the orders and orphan just as easily (2026-08-29: eleven
     // stray convert waves) — the audit needs them live too.
     const [liveConvD, setLiveConvD] = useState([]);
@@ -1330,6 +1333,67 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     const dispatchedChip = (o) => [o.pushedToFinishing ? 'FINISHING ✓' : null, o.pushedToShop ? 'SHOP ✓' : null].filter(Boolean).join('  ·  ') || 'SENT';
     const whenStr = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
 
+    // ── THE MORNING STOCK REFRESH (Stuart 2026-09-23) ────────────────────────────────────
+    // "the work order information updates naturally in the app by the step stamps but the stock
+    //  situation in a week will look stale, once a morning the rtg pulls in the new netsuite data
+    //  and pushes to the floor". Every open document carrying a material grid (Shared/materialGrid)
+    // whose parts have NOT been pulled yet gets its stock columns re-read — on hand, on order,
+    // short — from one NetSuite read of every code they name; need and covered-by stay the
+    // release's. Once a day from 6 am, by the first RTG session open after that (the record in
+    // hq_config/floor_stock_refresh says when it ran; a run started in the last ten minutes by
+    // another session is not repeated); the 🌅 button runs it any other time.
+    const refreshFloorStock = async ({ manual = false } = {}) => {
+        if (stockRefreshBusyRef.current) return;
+        const targets = [
+            ...liveFin.filter(d => materialRefreshable(d, 'fin_workorders')).map(d => ({ coll: 'fin_workorders', d })),
+            ...liveShop.filter(d => materialRefreshable(d, 'shop_custom_orders')).map(d => ({ coll: 'shop_custom_orders', d })),
+            ...liveWO.filter(d => materialRefreshable(d, 'hq_work_orders')).map(d => ({ coll: 'hq_work_orders', d })),
+        ];
+        const codes = materialCodesOf(targets.map(t => t.d));
+        const by = currentUser || 'RTG';
+        const cfgRef = doc(db, 'hq_config', 'floor_stock_refresh');
+        stockRefreshBusyRef.current = true;
+        try {
+            await setDoc(cfgRef, { [activeBrand]: { running: { at: Date.now(), by } } }, { merge: true });
+            let changed = 0;
+            if (targets.length && codes.length) {
+                const locationId = (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17';
+                const map = {}; let unitsKnown = true;
+                for (let i = 0; i < codes.length; i += 100) {
+                    const r = await fetchAvailabilityUnits(codes.slice(i, i + 100), locationId);
+                    Object.assign(map, r.map || {});
+                    if (r.unitsKnown === false) unitsKnown = false;
+                }
+                for (const t of targets) {
+                    const { rows, changed: ch } = refreshMaterialRows(t.d.materialRows, { map, unitsKnown });
+                    if (ch) changed++;
+                    // The as-of moves on every open document, changed or not — the card must say TODAY.
+                    await updateDoc(doc(db, t.coll, t.d.id), { materialRows: rows, materialRefreshedAt: Date.now(), materialRefreshedBy: by });
+                }
+            }
+            await setDoc(cfgRef, { [activeBrand]: { lastRunAt: Date.now(), lastRunBy: by, lastRunDay: refreshDayKey(), docs: targets.length, codes: codes.length, changed, manual, running: null, lastError: null } }, { merge: true });
+            addLog(`🌅 Floor stock refreshed${manual ? '' : ' (morning run)'}: ${targets.length} open document(s), ${codes.length} code(s) read, ${changed} with a changed picture.`, targets.length ? 'success' : 'info');
+        } catch (e) {
+            addLog(`⚠ Floor stock refresh failed: ${e.message || e}`, 'error');
+            await setDoc(cfgRef, { [activeBrand]: { running: null, lastError: String(e.message || e), lastErrorAt: Date.now() } }, { merge: true }).catch(() => {});
+        } finally { stockRefreshBusyRef.current = false; }
+    };
+    useEffect(() => {
+        const unsub = onSnapshot(doc(db, 'hq_config', 'floor_stock_refresh'),
+            s => setStockRefresh((s.exists() && s.data()[activeBrand]) || {}),
+            () => setStockRefresh({}));
+        return () => unsub();
+    }, [activeBrand]);
+    // The morning run: checked once the live feeds have landed, then every ten minutes.
+    useEffect(() => {
+        if (!stockRefresh) return undefined;                  // the record has not been read yet
+        const tick = () => { if (refreshDue(stockRefresh)) refreshFloorStock({ manual: false }); };
+        const t0 = setTimeout(tick, 20000);
+        const id = setInterval(tick, 10 * 60 * 1000);
+        return () => { clearTimeout(t0); clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [stockRefresh, activeBrand, liveFin.length, liveShop.length, liveWO.length]);
+
     const autoSplitSalesOrder = async (so, opts = {}) => {
         if (!so.hqJobId) return alert("This SO has no linked CPQ job (custbody50). Cannot auto-split.");
         // THE GUARD AT THE CAUSE (Stuart 2026-09-23): auto-release, ↻ Re-dispatch and the supervisor
@@ -1457,6 +1521,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 addLog(`⚠ SO ${orderKey}: not yet accepted by NetSuite — plated lines cannot be stock-checked, they go to the pick with a warning.`, 'warn');
             }
             const plan = planSmallLines(allPartsList, recipeCode, stockRead, { since: so.createdAt || Date.now() });
+            // THE MATERIAL GRID on the whole-order finishing document (Shared/materialGrid, 2026-09-23):
+            // the same read the plan just made — on hand vs need per part, back orders named.
+            const materialStamp = hasSmall ? materialStampOf(materialRowsFromSplit({ lines: allPartsList, plan, stock: stockRead, recipe: recipeCode }), Date.now()) : {};
             if (plan.summary) addLog(`🧭 SO ${orderKey} stock-first: ${plan.summary}.`, plan.backorder.length ? 'warn' : 'info');
             if (plan.backorder.length) {
                 // The record of what could not be covered — for the board and A's Backorder window.
@@ -1556,6 +1623,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     hqOrder: so, finPayload, by: currentUser || '',
                     extra: {
                         needBy: so.needBy || '', cutSheetMissing, visionUsed,
+                        ...materialStamp,
                         ...(finHold || {}),
                     },
                 }));
@@ -3064,6 +3132,9 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     <button onClick={toggleAutoRelease} title={autoRelease?.enabled ? `Auto-release is ON (since ${autoRelease.sinceAt ? new Date(autoRelease.sinceAt).toLocaleString() : '—'}${autoRelease.by ? `, by ${autoRelease.by}` : ''}). New orders dispatch themselves one at a time; gated or ambiguous ones wait for a human. Click to turn OFF.` : 'Turn on auto-release: newly created orders push themselves to the floors, one at a time, fully logged. The parked backlog stays manual.'} style={{ ...btnStyle, background: autoRelease?.enabled ? 'var(--brass)' : '#fff', color: autoRelease?.enabled ? '#fff' : 'var(--brass)', border: '1px solid var(--brass)' }}>
                         {autoRelease?.enabled ? '⚡ Auto-Release ON' : '⚡ Auto-Release OFF'}
                     </button>
+                    <button onClick={() => refreshFloorStock({ manual: true })}
+                        title={`Re-read NetSuite stock for every open floor document's material grid (on hand · on order · short) — runs by itself each morning from 6 am.${stockRefresh && stockRefresh.lastRunAt ? ` Last run ${new Date(stockRefresh.lastRunAt).toLocaleString()} by ${stockRefresh.lastRunBy || '?'} · ${stockRefresh.docs || 0} document(s), ${stockRefresh.changed || 0} changed.` : ' Not run yet.'}${stockRefresh && stockRefresh.lastError ? ` ⚠ Last error: ${stockRefresh.lastError}` : ''}`}
+                        style={{ ...btnStyle }}>🌅 Refresh floor stock</button>
                     <button onClick={pullNSSalesOrders} disabled={isSyncing} style={{ ...btnStyle, background: isSyncing ? 'var(--paper)' : 'var(--ink)', color: isSyncing ? 'var(--ink-soft)' : '#fff', border: 'none' }}>
                         {isSyncing ? 'Syncing...' : 'Pull ERP Sales Orders'}
                     </button>

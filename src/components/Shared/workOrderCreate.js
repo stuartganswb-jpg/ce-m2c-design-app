@@ -28,6 +28,7 @@ import { executeMakeupActions, releaseFinWoToFloor } from './finishedRunPrecheck
 import { isReleasable } from './orderStatus';
 import { poleCutPlan } from './poleCut.js';
 import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from './nsWorkOrder';
+import { materialRowsOf, materialStampOf } from './materialGrid.js';
 
 // REISSUE (RTG's balance close, writer 10 — B's file calls it): the route is decided by the code,
 // exactly as STOCK_FINISH / STOCK_MILL would decide it, plus the lineage stamp (`replaces`).
@@ -129,6 +130,7 @@ export const parkWorkOrder = async ({
     //    too (awaitingComponents): under auto-release there is no operator to "wait for the
     //    components" — the gate is what waits, and RTG clears it when the shop completes.
     let gate = {};
+    let execRes = null;
     if (precheck && Array.isArray(precheck.actions) && precheck.actions.length) {
         const exec = await executeMakeupActions({
             actions: precheck.actions, brandId: brand, finWoId: id, finWoErpId: erp,
@@ -140,6 +142,7 @@ export const parkWorkOrder = async ({
             ...(exec.shopWoIds.length ? { awaitingComponents: true, componentShopWoIds: exec.shopWoIds } : {}),
         };
         exec.made.forEach(m => made.push(m));
+        execRes = exec;
     }
 
     // 4. A STOCKED POLE IS CUT BEFORE IT IS FINISHED (Stuart 2026-08-19): a 4/6 ft order raises a
@@ -183,12 +186,24 @@ export const parkWorkOrder = async ({
     const shortStamp = poleShortNote ? { materialShort: true, materialShortNote: String(poleShortNote), materialShortAt: Date.now() } : {};
     if (poleShortNote) made.push(`⚠ SHORT, UN-GATED — ${poleShortNote}. Nothing is on order and no cut was chosen, so nothing would ever release this on its own: raise the PO or cut a longer stick, then release from RTG.`);
 
+    // THE MATERIAL GRID (Stuart 2026-09-23, Shared/materialGrid): the plan's per-code numbers — need,
+    // on hand, short, on order — and what was raised for each short, stamped once here onto every
+    // document this writer produces. The floor reads it; nothing else recomputes it.
+    const materialStamp = materialStampOf(materialRowsOf({
+        components: (precheck && Array.isArray(precheck.components)) ? precheck.components : [],
+        planLines: partsList,
+        gate: { ...gate, ...backOrderStamp, ...shortStamp },
+        poleChoice: (precheck && precheck.poleChoice) || null,
+        backOrder: backOrder ? String(backOrder) : '',
+        shopWoIds: execRes ? execRes.shopWoIds : [],
+        unitsKnown: !(precheck && precheck.unitsKnown === false),
+    }), Date.now());
     const built = buildParkedWorkOrder({
         intent, woId: id, part, qty: n, brand, createdBy, reqDate, needBy, urgent, note,
         source, routeTo: route.routeTo, finish: route.finish,
         partsList, bomExploded: !!(plan && plan.exploded), gate: { ...gate, ...backOrderStamp, ...shortStamp }, replaces, forPlating, convertSuggestion,
         tasks: wantFinishing ? makeFullTasks() : null, now: Date.now(),
-        code: erp, sales,
+        code: erp, sales, materialStamp,
     });
     const hq = withItemCode({ ...built.hq, ...(built.finPayload ? { finPayload: withItemCode(built.finPayload) } : {}) });
     await setDoc(doc(db, 'hq_work_orders', id), hq, { merge: true });

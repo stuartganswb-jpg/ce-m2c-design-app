@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
+import MaterialGridCard from '../Shared/MaterialGridCard';
 import { coverArrival } from '../Shared/backorderCover';
 import { uomOf, uomLabel } from '../Shared/uom';
 import { orderStatusOf, customPartsReady, liftPatchFor } from '../Shared/orderStatus';
@@ -4961,6 +4962,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         ); })()}
                                         {expandedJob === job.id && (
                                             <div style={{ borderTop: `1px solid ${theme.line}`, background: theme.paper, padding: '8px 20px 16px' }}>
+                                                {/* THE MATERIAL GRID (Stuart 2026-09-23): the release's read of on hand vs need, refreshed by
+                                                    RTG each morning until the parts are pulled. The live per-bin pull below is the drill-down. */}
+                                                <MaterialGridCard doc={job} style={{ marginTop: '6px', marginBottom: '10px' }} />
                                                 <div style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft, display: 'flex', gap: '12px', alignItems: 'center', padding: '10px 0 6px', borderBottom: `1px solid ${theme.line}` }}>
                                                     <span style={{ flex: 1 }}>Part</span><span style={{ width: '130px' }}>Bin (live)</span><span style={{ width: '40px', textAlign: 'right' }}>Qty</span>
                                                     <button onClick={() => fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId))} title="Re-pull live per-bin stock from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 8px', fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>⟳ Live</button>

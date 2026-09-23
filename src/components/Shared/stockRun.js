@@ -172,6 +172,10 @@ export const buildParkedWorkOrder = ({
     // { soAppId, soId, customerId, customer, rawErp, aliasErp, soAccepted, flow2, stockInternalId,
     //   custom, shopWoId } — the header, the SO link, the FLOW2 wait and the custom pair.
     code = '', sales = null,
+    // THE MATERIAL GRID (Shared/materialGrid, 2026-09-23): { materialRows, materialAsOf,
+    // materialRefreshedAt } — the same rows on the record, the finishing document and the shop
+    // sibling, so the three floor apps draw one picture.
+    materialStamp = {},
 }) => {
     const t = Number(now) || 0;
     const erp = String(code || (part && (part.legacyErpId || part.itemId)) || '').toUpperCase();
@@ -188,7 +192,7 @@ export const buildParkedWorkOrder = ({
         productType: ff.productType, paintSize: ff.paintSize, paintSizes: ff.paintSizes,
         poles: ff.poles, totalPoles: ff.totalPoles, finishStream: ff.finishStream,
         partsList, bomExploded, urgent, needBy, convertSuggestion, releasedDirect: false,
-        extra: sales ? { itemName: (part && part.itemName) || '', ...(Number(sales.cutLength) > 0 ? { cutLength: Number(sales.cutLength) } : {}) } : { orderKey: woId },
+        extra: { ...(sales ? { itemName: (part && part.itemName) || '', ...(Number(sales.cutLength) > 0 ? { cutLength: Number(sales.cutLength) } : {}) } : { orderKey: woId }), ...(materialStamp || {}) },
     });
     const salesHeader = sales ? {
         orderClass: 'ORDER_ENTRY', soAppId: sales.soAppId || null, soId: sales.soId || null,
@@ -227,6 +231,7 @@ export const buildParkedWorkOrder = ({
         note, memo: note,
         ...(partsList.length ? { partsList, bomExploded: !!bomExploded } : {}),
         ...gate,
+        ...(materialStamp || {}),
         ...(finPayload ? { finPayload } : {}),
         ...(replaces && replaces.woId ? { replacesWo: replaces.woId, replacesReason: replaces.reason || '' } : {}),
         ...(forPlating ? { forPlating } : {}),
@@ -250,6 +255,7 @@ export const buildParkedWorkOrder = ({
         ...urgentBlock,
         note, memo: note,
         ...gate,
+        ...(materialStamp || {}),
         createdAt: t, createdBy,
     } : null;
     return { hq, finPayload, shopSibling, erp, floor: ff };
