@@ -61,9 +61,14 @@ async function thumbOf(dataUrl, maxPx = 420) {
 // `kind` (2026-09-11, the Display Designer): 'GUIDE' files the picture for the guide books, as it
 // always has; 'DISPLAY' files a board row's render the same way under its own product type and
 // flag, so the gallery can tell the two apart and neither picker lists the other's captures.
-export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '', collection = '', user = '', kind = 'GUIDE' }) {
+// `kind: 'FABRIC'` (2026-09-24, the Uniquity pillow board): a fabric PHOTOGRAPHED at a trade show
+// files here too — pattern id + colour + the pillow facts (price group, width, railroad) in `fabric`
+// — "just as if it was already in the asset gallery" (Stuart). Flag `fabricCapture`, product type
+// FABRIC CAPTURE, so the gallery can tell it from a render and the board can list it as a fabric.
+export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '', collection = '', user = '', kind = 'GUIDE', finishId = '', fabric = null, notes = '' }) {
     const isDisplay = String(kind).toUpperCase() === 'DISPLAY';
-    const tag = isDisplay ? 'DISPLAY' : 'GUIDE';
+    const isFabric = String(kind).toUpperCase() === 'FABRIC';
+    const tag = isDisplay ? 'DISPLAY' : (isFabric ? 'FABRIC' : 'GUIDE');
     const safe = String(code || name || 'CAPTURE').toUpperCase().replace(/[^A-Z0-9-]/g, '') || 'CAPTURE';
     const brandFolder = brandId ? String(brandId) : 'global';
     const ts = Date.now();
@@ -80,13 +85,13 @@ export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '',
         id,
         name: String(name || safe).toUpperCase(),
         collection: collection || '',
-        productType: isDisplay ? 'DISPLAY CAPTURE' : 'GUIDE CAPTURE',
+        productType: isDisplay ? 'DISPLAY CAPTURE' : (isFabric ? 'FABRIC CAPTURE' : 'GUIDE CAPTURE'),
         patternId: String(code || '').toUpperCase(),
-        finishId: '',
-        customerId: '', clientSku: '', notes: isDisplay ? 'Captured from CPQ for a sales display board' : 'Captured from CPQ for guide books',
+        finishId: String(finishId || '').toUpperCase(),
+        customerId: '', clientSku: '', notes: notes || (isDisplay ? 'Captured from CPQ for a sales display board' : (isFabric ? 'Fabric photographed on the pillow board' : 'Captured from CPQ for guide books')),
         associatedParts: [], associatedFinishes: [],
         originalUrl, thumbnailUrl, url: thumbnailUrl,
-        ...(isDisplay ? { displayCapture: true } : { guideCapture: true }),
+        ...(isDisplay ? { displayCapture: true } : (isFabric ? { fabricCapture: true, fabric: fabric || {} } : { guideCapture: true })),
         brandId: brandId || 'ALL',
         uploadedBy: user || 'Unknown',
         createdAt: serverTimestamp(),

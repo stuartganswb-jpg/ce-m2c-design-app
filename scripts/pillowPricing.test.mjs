@@ -127,6 +127,13 @@ const rEmpty = pricePillow({ design: design(), findPart, config: DEFAULT_PILLOW_
 ok('the empty default table prices nothing', !rEmpty.ok && rEmpty.holder === null);
 ok('the default table is empty by design', Object.keys(DEFAULT_PILLOW_PRICING.prices).length === 0 && DEFAULT_PILLOW_PRICING.seamLabor.perSeam === null);
 
+// ── a photographed fabric (trade show) ────────────────────────────────────────────────────────
+const captured = { id: 'CAPTURE:asset1', captured: true, assetId: 'asset1', legacyErpId: 'ROMO-2211/INDIGO', itemName: 'Romo 2211 Indigo (photo)', manufacturingSpecs: { productType: 'FABRIC CAPTURE', priceGroup: 'B', width: 54, customData: { patternId: 'ROMO-2211', color: 'INDIGO', railroad: false } } };
+const rCap = pricePillow({ design: design({ panels: [panel('A', 'CAPTURE:asset1')] }), findPart: (id) => (id === 'CAPTURE:asset1' ? captured : findPart(id)), config });
+ok('a photographed fabric prices at its group (B = 185)', rCap.ok && rCap.unitPrice === 185 && rCap.group === 'B');
+ok('its rows are marked captured / to be sourced and consume nothing, with the photo, pattern and colour', rCap.rows.filter(r => r.captured).length === 2 && rCap.rows.filter(r => r.captured).every(r => r.consumes === false && r.assetId === 'asset1' && r.patternId === 'ROMO-2211' && r.color === 'INDIGO' && /TO BE SOURCED/.test(r.name)));
+ok('the warning names the panel and says to be sourced', rCap.warnings.some(w => /panel A: ROMO-2211\/INDIGO is a photographed fabric — to be sourced/.test(w)));
+
 // ── from the board's pillowData ───────────────────────────────────────────────────────────────
 const pd = { size: '22x22 Square', fabrics: ['FAB-A'], seams: [{ id: 1, x1: 100, y1: 100, x2: 170, y2: 100, treatment: 'STANDARD', trimId: '' }], flange: 'NONE', flangeSize: 0, fill: 'DOWN', stitch: 'STANDARD', outerTrim: { trimId: '', top: false, bottom: false, left: false, right: false } };
 const d1 = designFromPillowData(pd, { pxPerIn: 7 });

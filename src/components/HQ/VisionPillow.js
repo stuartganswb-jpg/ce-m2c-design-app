@@ -11,6 +11,7 @@ import { pricePillow, designFromPillowData, DEFAULT_PILLOW_PRICING, PILLOW_PRICI
 import { panelsOf } from '../Shared/pillowPanels';
 import { isFabricItem, isTrimItem } from '../Shared/pillowFabricSheet';
 import { isRailroad, fabricWidthOf } from '../Shared/pillowCuts';
+import { saveGuideCapture } from '../Shared/guideCapture';   // the ONE Asset Gallery writer — a photographed fabric files as kind FABRIC
 
 const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, globalLists, activeSession }) => {
   const [viewMode, setViewMode] = useState('ENGINEERING');
@@ -18,11 +19,19 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
   
   // The fabrics the sheet imported (6.5 → Pillow Pricing → Fabrics): FABRIC / TEXTILE / RAW MATERIAL, any case;
   // trims: TRIMMING / TRIM / COMPONENT. An option names the code, the description, the price group and the bolt width.
-  const fabrics = useMemo(() => libraryParts.filter(isFabricItem).sort((a, b) => String(a.legacyErpId || a.itemName || '').localeCompare(String(b.legacyErpId || b.itemName || ''))), [libraryParts]);
+  // ── A FABRIC PHOTOGRAPHED AT A TRADE SHOW (S7 step 3b, Stuart 2026-09-14) ────────────────────
+  // "take a photo of the fabric, add it to the panel along with pattern id and color and add it in
+  //  just as if it was already in the asset gallery". The photo files in global_assets (kind FABRIC)
+  // through the shared writer; the board lists it beside the library fabrics as a CAPTURED fabric
+  // carrying the price group and width typed at capture — it prices, and its rows read TO BE SOURCED.
+  const [capturedFabrics, setCapturedFabrics] = useState([]);
+  const [capForm, setCapForm] = useState({ open: false, dataUrl: '', fileName: '', patternId: '', color: '', priceGroup: '', widthIn: '54', railroad: false, busy: false, err: '' });
+  const libraryFabrics = useMemo(() => libraryParts.filter(isFabricItem).sort((a, b) => String(a.legacyErpId || a.itemName || '').localeCompare(String(b.legacyErpId || b.itemName || ''))), [libraryParts]);
+  const fabrics = useMemo(() => [...capturedFabrics, ...libraryFabrics], [capturedFabrics, libraryFabrics]);
   const trims = useMemo(() => libraryParts.filter(p => isTrimItem(p) || String(p.manufacturingSpecs?.productType || '').toUpperCase() === 'COMPONENT'), [libraryParts]);
-  const partById = useMemo(() => { const m = new Map(); libraryParts.forEach(p => { m.set(p.id, p); if (p.legacyErpId) m.set(String(p.legacyErpId).toUpperCase(), p); }); return m; }, [libraryParts]);
+  const partById = useMemo(() => { const m = new Map(); libraryParts.forEach(p => { m.set(p.id, p); if (p.legacyErpId) m.set(String(p.legacyErpId).toUpperCase(), p); }); capturedFabrics.forEach(p => m.set(p.id, p)); return m; }, [libraryParts, capturedFabrics]);
   const findPart = (id) => partById.get(id) || partById.get(String(id || '').toUpperCase()) || null;
-  const fabricLabel = (f) => `${f.legacyErpId || f.itemName}${f.itemName && f.legacyErpId ? ` — ${f.itemName}` : ''}${priceGroupOf(f) ? ` · group ${priceGroupOf(f)}` : ' · NO PRICE GROUP'}${fabricWidthOf(f) ? ` · ${fabricWidthOf(f)}"` : ''}${isRailroad(f) ? ' · railroad' : ''}`;
+  const fabricLabel = (f) => `${f.captured ? '📷 ' : ''}${f.legacyErpId || f.itemName}${f.itemName && f.legacyErpId ? ` — ${f.itemName}` : ''}${priceGroupOf(f) ? ` · group ${priceGroupOf(f)}` : ' · NO PRICE GROUP'}${fabricWidthOf(f) ? ` · ${fabricWidthOf(f)}"` : ''}${isRailroad(f) ? ' · railroad' : ''}`;
   // the price table, live
   const [pricing, setPricing] = useState(null);
   useEffect(() => onSnapshot(doc(db, 'system', PILLOW_PRICING_DOC), s => setPricing(s.exists() ? { ...DEFAULT_PILLOW_PRICING, ...s.data() } : { ...DEFAULT_PILLOW_PRICING })), []);
@@ -31,6 +40,44 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
       const fromTable = Object.entries(d).filter(([, v]) => String(v.kind || '').toUpperCase() === 'EDGE').map(([code, v]) => ({ code, label: v.label || code }));
       return fromTable.length ? fromTable : (globalLists.flangeStyles || []).filter(x => String(x).toUpperCase() !== 'NONE').map(x => ({ code: String(x).toUpperCase(), label: x }));
   }, [pricing, globalLists.flangeStyles]);
+  const groupCodes = useMemo(() => Object.entries((pricing && pricing.fabricGroups) || {}).sort((a, b) => (a[1].rank || 0) - (b[1].rank || 0)).map(([code, g]) => ({ code, label: g.label || '' })), [pricing]);
+  const onCapturePhoto = (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => setCapForm(prev => ({ ...prev, open: true, dataUrl: String(reader.result || ''), fileName: f.name, err: '' }));
+      reader.readAsDataURL(f);
+  };
+  const saveCapturedFabric = async () => {
+      const patternId = String(capForm.patternId || '').trim().toUpperCase();
+      const color = String(capForm.color || '').trim();
+      const widthIn = Number(capForm.widthIn) || 0;
+      if (!capForm.dataUrl) return setCapForm(p => ({ ...p, err: 'Take or choose the photo first.' }));
+      if (!patternId) return setCapForm(p => ({ ...p, err: 'Pattern id is required — it is how the office sources the fabric.' }));
+      if (!capForm.priceGroup) return setCapForm(p => ({ ...p, err: 'Pick the price group — the pillow cannot price without it.' }));
+      if (!(widthIn > 0)) return setCapForm(p => ({ ...p, err: 'Width in inches is required for the yardage.' }));
+      setCapForm(p => ({ ...p, busy: true, err: '' }));
+      try {
+          const code = `${patternId}${color ? '/' + color.toUpperCase() : ''}`;
+          const asset = await saveGuideCapture({
+              dataUrl: capForm.dataUrl, name: `${patternId}${color ? ' ' + color : ''} (photo)`, code: patternId, brandId: activeBrand, user: currentUser,
+              kind: 'FABRIC', finishId: color, fabric: { priceGroup: capForm.priceGroup, widthIn, railroad: !!capForm.railroad, capturedBy: currentUser || '', session: activeSession?.quoteId || '' },
+              notes: `Photographed on the pillow board${activeSession?.jobName ? ` · ${activeSession.jobName}` : ''} · to be sourced`,
+          });
+          const item = {
+              id: `CAPTURE:${asset.id}`, captured: true, assetId: asset.id, thumbnailUrl: asset.thumbnailUrl, originalUrl: asset.originalUrl,
+              legacyErpId: code, itemName: `${patternId}${color ? ' ' + color : ''} (photo)`,
+              manufacturingSpecs: { productType: 'FABRIC CAPTURE', priceGroup: capForm.priceGroup, width: widthIn, uom: 'RY', customData: { patternId, color, railroad: !!capForm.railroad } },
+          };
+          setCapturedFabrics(prev => [item, ...prev]);
+          // the new fabric goes straight onto the first panel that has none, else it is just listed
+          setPillowData(prev => { const i = prev.fabrics.indexOf(''); if (i < 0) return prev; const fabs = [...prev.fabrics]; fabs[i] = item.id; return { ...prev, fabrics: fabs }; });
+          setCapForm({ open: false, dataUrl: '', fileName: '', patternId: '', color: '', priceGroup: '', widthIn: '54', railroad: false, busy: false, err: '' });
+      } catch (err) {
+          setCapForm(p => ({ ...p, busy: false, err: `Could not file the photo: ${err.message || err}` }));
+      }
+  };
 
   // --- CANVAS & TOOL STATE ---
   const [visScale, setVisScale] = useState(1.0); 
@@ -272,7 +319,8 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
           specs: { 
               ...pillowData, 
               tags: fabricTags,
-              seamCount: seamCountString
+              seamCount: seamCountString,
+              capturedFabrics: capturedFabrics.map(f => ({ id: f.id, assetId: f.assetId, code: f.legacyErpId, name: f.itemName, thumbnailUrl: f.thumbnailUrl || '', priceGroup: f.manufacturingSpecs.priceGroup, widthIn: f.manufacturingSpecs.width, railroad: !!f.manufacturingSpecs.customData.railroad, patternId: f.manufacturingSpecs.customData.patternId, color: f.manufacturingSpecs.customData.color }))
           }, 
           author: currentUser, createdAt: serverTimestamp()
       };
@@ -432,9 +480,35 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                     <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                             <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>2. Fabric Panels ({pillowData.fabrics.length})</h4>
+                            <label style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', marginLeft: 'auto', marginRight: '8px' }} title="Photograph a fabric that is not in the library — it files in the Asset Gallery and prices at the group you pick">
+                                📷 Photo a fabric<input type="file" accept="image/*" capture="environment" onChange={onCapturePhoto} style={{ display: 'none' }} />
+                            </label>
                             <button onClick={addFabricPanel} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Add Panel</button>
                         </div>
                         
+                        {capForm.open && (
+                            <div style={{ border: '1px solid var(--brass)', padding: '16px', background: '#fff', marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                                    {capForm.dataUrl && <img src={capForm.dataUrl} alt="fabric" style={{ width: '96px', height: '96px', objectFit: 'cover', border: '1px solid var(--line)' }} />}
+                                    <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                                        <input value={capForm.patternId} onChange={e => setCapForm({ ...capForm, patternId: e.target.value })} placeholder="pattern id (required)" style={fieldStyle} />
+                                        <input value={capForm.color} onChange={e => setCapForm({ ...capForm, color: e.target.value })} placeholder="colour" style={fieldStyle} />
+                                        <select value={capForm.priceGroup} onChange={e => setCapForm({ ...capForm, priceGroup: e.target.value })} style={fieldStyle}>
+                                            <option value="">-- price group (required) --</option>
+                                            {groupCodes.map(g => <option key={g.code} value={g.code}>Group {g.code}{g.label ? ` · like ${g.label}` : ''}</option>)}
+                                        </select>
+                                        <input value={capForm.widthIn} onChange={e => setCapForm({ ...capForm, widthIn: e.target.value })} placeholder="width (in)" style={fieldStyle} />
+                                        <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px', gridColumn: '1 / span 2' }}><input type="checkbox" checked={capForm.railroad} onChange={e => setCapForm({ ...capForm, railroad: e.target.checked })} /> Railroad (the design runs along the roll)</label>
+                                    </div>
+                                </div>
+                                {capForm.err && <div style={{ color: '#d9534f', fontSize: '0.85rem' }}>{capForm.err}</div>}
+                                <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>Files the photo in the Asset Gallery (pattern + colour) and lists it here as a fabric. It prices at the group you pick; the order will read TO BE SOURCED for it.</div>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button onClick={saveCapturedFabric} disabled={capForm.busy} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '10px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: capForm.busy ? 'wait' : 'pointer' }}>{capForm.busy ? 'Filing…' : 'Add this fabric'}</button>
+                                    <button onClick={() => setCapForm({ open: false, dataUrl: '', fileName: '', patternId: '', color: '', priceGroup: '', widthIn: '54', railroad: false, busy: false, err: '' })} disabled={capForm.busy} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '10px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Cancel</button>
+                                </div>
+                            </div>
+                        )}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                             {pillowData.fabrics.map((fabId, index) => {
                                 const labelChar = String.fromCharCode(65 + index); // A, B, C

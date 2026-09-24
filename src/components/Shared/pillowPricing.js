@@ -260,8 +260,12 @@ export function pricePillow({ design, findPart, config = DEFAULT_PILLOW_PRICING,
         groupOf[p.label] = group;
         const c = panelConsumptionOf({ item, panel: p, config: cfg });
         c.warnings.forEach(w => warnings.push(w));
-        rows.push(rowOf(item, p.fabricId, `${item.legacyErpId || item.itemName || p.fabricId} — panel ${p.label}${group ? ` (group ${group})` : ''}`,
-            c.qty === null ? null : yd3(c.qty * orderQty), { uom: c.unit, panel: p.label, perPillow: c.qty }));
+        // A fabric PHOTOGRAPHED at a trade show (item.captured, a gallery asset, no library record) prices
+        // like any fabric — it carries a group and a width — but nothing in stock can be consumed for it:
+        // the row says 'to be sourced' and the order carries the photo, pattern and colour to the office.
+        if (item.captured) warnings.push(`panel ${p.label}: ${item.legacyErpId || item.itemName} is a photographed fabric — to be sourced (no stock, no NetSuite line)`);
+        rows.push(rowOf(item, p.fabricId, `${item.legacyErpId || item.itemName || p.fabricId} — panel ${p.label}${group ? ` (group ${group})` : ''}${item.captured ? ' · TO BE SOURCED' : ''}`,
+            c.qty === null ? null : yd3(c.qty * orderQty), { uom: c.unit, panel: p.label, perPillow: c.qty, ...(item.captured ? { captured: true, consumes: false, assetId: item.assetId || '', patternId: (item.manufacturingSpecs && item.manufacturingSpecs.customData && item.manufacturingSpecs.customData.patternId) || '', color: (item.manufacturingSpecs && item.manufacturingSpecs.customData && item.manufacturingSpecs.customData.color) || '' } : {}) }));
     });
 
     // ── the size at the highest group ───────────────────────────────────────────────────────────
