@@ -2935,8 +2935,8 @@ const enqueueNsWriteServer = async ({ kind, label, targetUrl, method, payload, s
 
 // One SuiteQL read with the server's own NetSuite credentials — used to turn an invoice NUMBER
 // (all we store) into the internal id the apply sublist needs.
-const nsQuery = async (sql) => {
-    const url = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
+const nsQuery = async (sql, { limit = 1000, offset = 0 } = {}) => {
+    const url = `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql?limit=${Number(limit)}&offset=${Number(offset)}`;
     const creds = {
         account: NS_ACCOUNT.value(), consumerKey: NS_CONSUMER_KEY.value(), consumerSecret: NS_CONSUMER_SECRET.value(),
         tokenId: NS_TOKEN_ID.value(), tokenSecret: NS_TOKEN_SECRET.value(),
@@ -2947,7 +2947,10 @@ const nsQuery = async (sql) => {
         body: JSON.stringify({ q: sql }),
     });
     const body = await r.json().catch(() => ({}));
-    return r.ok ? (body.items || []) : [];
+    if (!r.ok) return [];
+    const items = body.items || [];
+    items.hasMore = body.hasMore === true;   // the caller must be able to say "there are more"
+    return items;
 };
 
 // Everything a payment needs to become a NetSuite record, gathered from the documents we hold.
@@ -3034,28 +3037,44 @@ const postPaymentSoon = (paymentId) => postPaymentToNetSuite(paymentId)
 // must show; each brand sees only its own subsidiary's invoices.
 const NS_BRAND_SUBSIDIARY = { m2c: '3', ce: '2', uniquity: '6', leyla: '5' };
 
-const nsOpenInvoiceRows = async ({ brand, entityId, limit = 300 }) => {
+// Filters exist because an unfiltered pull is thousands of rows and SuiteQL pages at 1,000
+// (Stuart 2026-09-24). A date is only ever a date, a name is escaped, and the caller is TOLD when
+// more rows exist rather than being handed a quiet half-list.
+const sqlDate = (v) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || '').trim());
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+};
+const nsOpenInvoiceRows = async ({ brand, entityId, customerLike = '', dueFrom = '', dueTo = '', limit = 200, offset = 0 }) => {
     const subsidiary = NS_BRAND_SUBSIDIARY[String(brand || 'ce').toLowerCase()];
     if (!subsidiary) throw new HttpsError('failed-precondition', `No NetSuite subsidiary on file for "${brand}".`);
+    const name = cleanStr(customerLike, 60).replace(/'/g, "''").toUpperCase();
+    const from = sqlDate(dueFrom);
+    const to = sqlDate(dueTo);
     const where = [
         "t.type = 'CustInvc'",
         `t.subsidiary = ${Number(subsidiary)}`,
         "NVL(t.foreignamountunpaid, 0) > 0.005",
         "NVL(t.voided, 'F') = 'F'",
         ...(entityId ? [`t.entity = ${Number(entityId)}`] : []),
+        ...(name ? [`(UPPER(c.companyname) LIKE '%${name}%' OR UPPER(c.entityid) LIKE '%${name}%')`] : []),
+        ...(from ? [`t.duedate >= TO_DATE('${from}', 'YYYY-MM-DD')`] : []),
+        ...(to ? [`t.duedate <= TO_DATE('${to}', 'YYYY-MM-DD')`] : []),
     ].join(' AND ');
     // foreignamountunpaid is what is STILL owed — deposits already applied and credit memos are
     // netted off by NetSuite, which is the figure the team collects (Stuart's point 5).
     const rows = await nsQuery(
-        `SELECT t.id, t.tranid, t.trandate, t.duedate, t.entity, BUILTIN.DF(t.entity) AS customername, `
+        `SELECT t.id, t.tranid, t.trandate, t.duedate, t.entity, c.companyname AS customername, `
         + `ABS(NVL(t.foreigntotal, 0)) AS total, ABS(NVL(t.foreignamountunpaid, 0)) AS due `
-        + `FROM transaction t WHERE ${where} ORDER BY t.duedate`,
+        + `FROM transaction t JOIN customer c ON c.id = t.entity WHERE ${where} ORDER BY t.duedate, t.id`,
+        { limit: Math.min(Number(limit) || 200, 1000), offset: Number(offset) || 0 },
     );
-    return rows.slice(0, limit).map((r) => ({
+    const invoices = rows.map((r) => ({
         id: String(r.id), tranid: r.tranid || '', date: r.trandate || '', dueDate: r.duedate || '',
         customerNsId: String(r.entity || ''), customerName: r.customername || '',
         total: Number(r.total || 0), due: money(r.due),
     }));
+    invoices.hasMore = rows.hasMore === true;
+    return invoices;
 };
 
 // Staff: one customer's open invoices, or every open invoice for the brand (the chasing list).
@@ -3064,10 +3083,13 @@ exports.nsOpenInvoices = onCall({
     secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
 }, async (request) => {
     assertStaffAdmin(request);
-    const { brand, customerId } = request.data || {};
+    const { brand, customerId, customerLike, dueFrom, dueTo, limit, offset } = request.data || {};
     const entityId = customerId ? nsPay.nsCustomerIdOf(customerId) : '';
-    const invoices = await nsOpenInvoiceRows({ brand, entityId });
-    return { invoices, totalDue: money(invoices.reduce((s, i) => s + i.due, 0)) };
+    const invoices = await nsOpenInvoiceRows({ brand, entityId, customerLike, dueFrom, dueTo, limit, offset });
+    return {
+        invoices, totalDue: money(invoices.reduce((s, i) => s + i.due, 0)),
+        hasMore: invoices.hasMore === true, offset: Number(offset) || 0,
+    };
 });
 
 // A portal customer sees THEIR OWN open invoices — the entity id is taken from their claim, never

@@ -23,15 +23,33 @@ export default function NsInvoicesPanel({ brand = 'ce', customerId = '', custome
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
     const [link, setLink] = useState(null);
+    // An unfiltered read is thousands of rows and NetSuite pages at 1,000 — so the chasing list
+    // asks for a slice, and says plainly when there is more behind it (Stuart 2026-09-24).
+    const [who, setWho] = useState('');
+    const [dueFrom, setDueFrom] = useState('');
+    const [dueTo, setDueTo] = useState('');
+    const [more, setMore] = useState(false);
+    const [page, setPage] = useState(0);
+    const PAGE = 200;
 
-    const load = useCallback(async () => {
-        setBusy(true); setErr(''); setLink(null); setPicked({});
+    const load = useCallback(async (opts = {}) => {
+        const offset = Number(opts.offset || 0);
+        setBusy(true); setErr(''); setLink(null);
+        if (!offset) setPicked({});
         try {
-            const res = await httpsCallable(functions, 'nsOpenInvoices')({ brand, customerId: mode === 'CUSTOMER' ? customerId : '' });
-            setRows(res.data.invoices || []);
-        } catch (e) { setErr(e.message || String(e)); setRows([]); }
+            const res = await httpsCallable(functions, 'nsOpenInvoices')({
+                brand, customerId: mode === 'CUSTOMER' ? customerId : '',
+                customerLike: mode === 'ALL' ? (opts.who !== undefined ? opts.who : who) : '',
+                dueFrom: opts.dueFrom !== undefined ? opts.dueFrom : dueFrom,
+                dueTo: opts.dueTo !== undefined ? opts.dueTo : dueTo,
+                limit: PAGE, offset,
+            });
+            setRows((prev) => (offset ? [...(prev || []), ...(res.data.invoices || [])] : (res.data.invoices || [])));
+            setMore(res.data.hasMore === true);
+            setPage(offset / PAGE);
+        } catch (e) { setErr(e.message || String(e)); if (!offset) setRows([]); }
         finally { setBusy(false); }
-    }, [brand, customerId, mode]);
+    }, [brand, customerId, mode, who, dueFrom, dueTo]);
 
     useEffect(() => { if (mode === 'CUSTOMER') load(); }, [mode, load]);
 
@@ -72,6 +90,23 @@ export default function NsInvoicesPanel({ brand = 'ce', customerId = '', custome
                 )}
             </div>
 
+            {mode === 'ALL' && (
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '10px' }}>
+                    <input placeholder="Customer name or id" value={who} onChange={(e) => setWho(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') load({ offset: 0 }); }}
+                        style={{ padding: '6px 8px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '12.5px', minWidth: '190px' }} />
+                    <span style={{ fontSize: '12px', color: theme.inkSoft }}>due</span>
+                    <input type="date" value={dueFrom} onChange={(e) => setDueFrom(e.target.value)} style={{ padding: '6px 8px', border: `1px solid ${theme.line}`, fontSize: '12.5px' }} />
+                    <span style={{ fontSize: '12px', color: theme.inkSoft }}>to</span>
+                    <input type="date" value={dueTo} onChange={(e) => setDueTo(e.target.value)} style={{ padding: '6px 8px', border: `1px solid ${theme.line}`, fontSize: '12.5px' }} />
+                    <button style={btn(true)} disabled={busy} onClick={() => load({ offset: 0 })}>{busy ? 'Reading…' : 'Find'}</button>
+                    {(who || dueFrom || dueTo) && (
+                        <button style={btn(false)} disabled={busy} onClick={() => { setWho(''); setDueFrom(''); setDueTo(''); load({ offset: 0, who: '', dueFrom: '', dueTo: '' }); }}>Clear</button>
+                    )}
+                    <button style={btn(false)} disabled={busy} onClick={() => { const d = new Date(); const iso = d.toISOString().slice(0, 10); setDueFrom(''); setDueTo(iso); load({ offset: 0, dueTo: iso }); }}>Overdue only</button>
+                </div>
+            )}
+
             {err && <div style={{ fontSize: '12.5px', color: '#9b2c2c', marginBottom: '6px' }}>✗ {err}</div>}
             {rows && rows.length === 0 && !busy && <div style={{ fontSize: '12.5px', color: theme.inkSoft }}>Nothing open in NetSuite.</div>}
 
@@ -103,6 +138,13 @@ export default function NsInvoicesPanel({ brand = 'ce', customerId = '', custome
                             ))}
                         </tbody>
                     </table>
+                </div>
+            )}
+
+            {rows && rows.length > 0 && more && (
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px', fontSize: '12.5px', color: '#9b6a2c' }}>
+                    ⚠ There are more open invoices than shown — narrow by customer or due date, or
+                    <button style={btn(false)} disabled={busy} onClick={() => load({ offset: (page + 1) * PAGE })}>Load more</button>
                 </div>
             )}
 
