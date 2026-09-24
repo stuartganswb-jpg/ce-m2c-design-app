@@ -3097,6 +3097,11 @@ exports.nsOpenInvoices = onCall({
     if (diagnose === true) {
         const sub = NS_BRAND_SUBSIDIARY[String(brand || 'ce').toLowerCase()];
         const steps = [
+            // Does this ROLE see transactions at all? SuiteQL returns zero rows — not an error —
+            // for record types the integration role lacks permission on (2026-09-24).
+            ['any transaction at all', 'SELECT COUNT(*) AS n FROM transaction'],
+            ['sales orders (the app reads these today)', "SELECT COUNT(*) AS n FROM transaction WHERE type = 'SalesOrd'"],
+            ['customers', 'SELECT COUNT(*) AS n FROM customer'],
             ['invoices of any kind', "SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc'"],
             [`in subsidiary ${sub}`, `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)}`],
             ['not voided', `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)} AND NVL(t.voided, 'F') = 'F'`],
