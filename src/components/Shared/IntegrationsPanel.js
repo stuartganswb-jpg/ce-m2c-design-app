@@ -108,6 +108,85 @@ function PaySettings() {
     );
 }
 
+// Money taken, and where each payment stands with NetSuite. A deposit posts as a CUSTOMER DEPOSIT
+// against its sales order; an invoice payment posts as a CUSTOMER PAYMENT applied to that invoice
+// (Eric's spec). Posting is automatic — this is the queue, the reasons, and a retry.
+function PaymentsQueue() {
+    const [rows, setRows] = useState(null);
+    const [busy, setBusy] = useState('');
+    const [err, setErr] = useState('');
+
+    const load = async () => {
+        setErr('');
+        try { const res = await httpsCallable(functions, 'paymentsQueue')(); setRows(res.data.payments || []); }
+        catch (e) { setErr(e.message || String(e)); }
+    };
+    useEffect(() => { load(); }, []);
+
+    const postNow = async (id) => {
+        setBusy(id); setErr('');
+        try {
+            const res = await httpsCallable(functions, 'paymentPostNow')({ paymentId: id });
+            if (!res.data.ok) setErr(res.data.reason || 'Not ready yet.');
+            await load();
+        } catch (e) { setErr(e.message || String(e)); }
+        finally { setBusy(''); }
+    };
+
+    const when = (t) => t ? new Date(Number(t)).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+    const state = (p) => {
+        if (p.netsuitePosted) return { text: `✓ NetSuite ${p.nsPaymentTran || ''}`.trim(), color: '#3a7d44' };
+        if (p.netsuiteQueued) return { text: '→ queued (11.1)', color: 'var(--brass)' };
+        if (p.environment !== 'PRODUCTION') return { text: 'test — not posted', color: 'var(--ink-soft)' };
+        return { text: p.netsuiteWaiting || 'not posted', color: '#9b6a2c' };
+    };
+
+    return (
+        <div style={card}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                <span style={{ ...label, color: 'var(--brass)' }}>Payments taken</span>
+                <button style={btn(false, false)} onClick={load}>Refresh</button>
+            </div>
+            <p style={{ fontSize: '13px', color: 'var(--ink-soft)', margin: '0 0 8px' }}>
+                Deposits post against the sales order; invoice payments apply to the invoice. A deposit whose sales
+                order has not reached NetSuite yet waits here and goes as soon as it does.
+            </p>
+            {err && <div style={{ fontSize: '13px', color: '#9b2c2c', marginBottom: '6px' }}>✗ {err}</div>}
+            {rows && rows.length === 0 && <div style={{ fontSize: '13px', color: 'var(--ink-soft)' }}>No payments yet.</div>}
+            {rows && rows.length > 0 && (
+                <table style={{ borderCollapse: 'collapse', width: '100%', fontFamily: 'var(--mono)', fontSize: '12px' }}>
+                    <thead><tr style={{ textAlign: 'left', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)' }}>
+                        <th style={{ padding: '6px' }}>Paid</th><th style={{ padding: '6px' }}>Document</th>
+                        <th style={{ padding: '6px', textAlign: 'right' }}>Amount</th><th style={{ padding: '6px' }}>Kind</th>
+                        <th style={{ padding: '6px' }}>NetSuite</th><th />
+                    </tr></thead>
+                    <tbody>
+                        {rows.map((p) => {
+                            const st = state(p);
+                            return (
+                                <tr key={p.id} style={{ borderBottom: '1px solid var(--line)' }}>
+                                    <td style={{ padding: '6px' }}>{when(p.paidAt)}</td>
+                                    <td style={{ padding: '6px' }}>{p.reference || '—'}{p.source === 'PORTAL' ? ' (portal)' : ''}</td>
+                                    <td style={{ padding: '6px', textAlign: 'right' }}>${Number(p.amount || 0).toFixed(2)}</td>
+                                    <td style={{ padding: '6px' }}>{p.netsuiteKind === 'customerpayment' ? 'payment' : 'deposit'}</td>
+                                    <td style={{ padding: '6px', color: st.color }}>{st.text}</td>
+                                    <td style={{ padding: '6px' }}>
+                                        {!p.netsuitePosted && !p.netsuiteQueued && p.environment === 'PRODUCTION' && (
+                                            <button style={btn(false, busy === p.id)} disabled={busy === p.id} onClick={() => postNow(p.id)}>
+                                                {busy === p.id ? '…' : 'Post now'}
+                                            </button>
+                                        )}
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            )}
+        </div>
+    );
+}
+
 // What actually arrived from the gateway, and whether we could prove it came from NMI. This is how
 // the signature format is confirmed BEFORE anything downstream trusts a webhook.
 function WebhookEvents() {
@@ -248,6 +327,7 @@ export default function IntegrationsPanel() {
             </div>
 
             <PaySettings />
+            <PaymentsQueue />
             <WebhookEvents />
 
             <div style={{ ...card, background: 'var(--paper-2, #f2efe8)' }}>

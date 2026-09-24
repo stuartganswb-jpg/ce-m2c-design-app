@@ -2823,7 +2823,7 @@ exports.payIntent = onCall({ cors: true }, async (request) => {
 
 // The charge. The amount is re-checked against the link's own bounds; the browser's number is never
 // trusted on its own. The link is claimed in a transaction so a double-click cannot pay twice.
-exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async (request) => {
+exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET] }, async (request) => {
     const { token, paymentToken, amount, payerName, email } = request.data || {};
     const link = await payLinkOf(token);
     const cfg = await nmiConfig();
@@ -2881,7 +2881,8 @@ exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async 
         netsuitePosted: false,
     };
     await ref.update({ status: 'PAID', paidAt, paidAmount: amt, transactionId: res.transactionid || '' });
-    await db.collection('payments').add(payment);
+    const payRec = await db.collection('payments').add(payment);
+    postPaymentSoon(payRec.id);   // deposit / payment into NetSuite, automatically (Stuart 2026-09-24)
     if (link.collection && link.docId) {
         await db.doc(`${link.collection}/${link.docId}`).set({
             paymentsTotal: admin.firestore.FieldValue.increment(amt),
@@ -2891,6 +2892,127 @@ exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async 
     }
     return { ok: true, amount: amt, transactionId: res.transactionid || '', reference: link.reference, environment: cfg.environment };
 });
+
+// ── A PAYMENT REACHES NETSUITE ───────────────────────────────────────────────────────────────
+// Eric's spec (2026-09-23), Stuart's answers (2026-09-24: NMI transaction id as the check #,
+// automatic posting, memo "Card payment · <ref> · NMI <txn>"):
+//   quote / sales order → CUSTOMER DEPOSIT, which MUST name its sales order;
+//   invoice             → CUSTOMER PAYMENT, applying to that invoice on the apply sublist.
+// Writes go through the SAME ns_outbox every other NetSuite write uses — serial, retried, visible
+// in HQ 11.1, and refused twice by a dedupe key. A SANDBOX payment never posts.
+const nsPay = require('./nsPayment');
+
+// The brand's location, the same map the rest of the app pushes against.
+const NS_BRAND_LOCATION = { m2c: '19', ce: '17', uniquity: '20', leyla: '18' };
+
+// Enqueue exactly as Shared/nsOutbox does from the browser (keep the two in step): the worker
+// drains ns_outbox and knows nothing about who wrote the entry.
+const enqueueNsWriteServer = async ({ kind, label, targetUrl, method, payload, sourceApp, createdBy, writeBack, dedupeKey }) => {
+    const db = admin.firestore();
+    if (dedupeKey) {
+        const inflight = await db.collection('ns_outbox').where('dedupeKey', '==', dedupeKey).get();
+        const live = inflight.docs.map((d) => d.data()).filter((e) => ['PENDING', 'POSTING', 'PROCESSING', 'WAITING'].includes(e.status));
+        if (live.length) throw new HttpsError('failed-precondition', `already queued (${live[0].label || dedupeKey} is ${live[0].status})`);
+    }
+    const ref = db.collection('ns_outbox').doc();
+    const p = payload ? JSON.parse(JSON.stringify(payload)) : {};
+    const stamp = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' });
+    if (typeof p.memo === 'string') p.memo = `${p.memo} [app push ${stamp} #${ref.id.slice(0, 6)}]`.slice(0, 299);
+    await ref.set({
+        id: ref.id, kind: kind || 'write', label: label || '', sourceApp: sourceApp || 'PAYMENTS', createdBy: createdBy || '',
+        targetUrl, method: method || 'POST', payload: p, writeBack: writeBack || null, dedupeKey: dedupeKey || null,
+        status: 'PENDING', attempts: 0, lastError: null, nsId: null, nsTran: null,
+        createdAt: Date.now(), nextAttemptAt: Date.now(), leasedAt: null, postedAt: null,
+    });
+    return ref.id;
+};
+
+// One SuiteQL read with the server's own NetSuite credentials — used to turn an invoice NUMBER
+// (all we store) into the internal id the apply sublist needs.
+const nsQuery = async (sql) => {
+    const url = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
+    const creds = {
+        account: NS_ACCOUNT.value(), consumerKey: NS_CONSUMER_KEY.value(), consumerSecret: NS_CONSUMER_SECRET.value(),
+        tokenId: NS_TOKEN_ID.value(), tokenSecret: NS_TOKEN_SECRET.value(),
+    };
+    const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Authorization': generateNetSuiteHeader('POST', url, creds), 'Content-Type': 'application/json', 'Prefer': 'transient' },
+        body: JSON.stringify({ q: sql }),
+    });
+    const body = await r.json().catch(() => ({}));
+    return r.ok ? (body.items || []) : [];
+};
+
+// Everything a payment needs to become a NetSuite record, gathered from the documents we hold.
+const resolvePaymentTargets = async (pay) => {
+    const db = admin.firestore();
+    const brand = String(pay.brand || 'ce').toLowerCase();
+    const locationId = NS_BRAND_LOCATION[brand] || '';
+    let customerId = String(pay.customerId || '');
+    let salesOrderNsId = '';
+    let invoiceNsId = '';
+    let reference = pay.reference || '';
+
+    const docSnap = pay.collection && pay.docId ? await db.collection(pay.collection).doc(pay.docId).get() : null;
+    const d = docSnap && docSnap.exists ? { id: docSnap.id, ...docSnap.data() } : null;
+    if (d) {
+        customerId = customerId || String((d.customer && d.customer.id) || d.customerId || '');
+        reference = reference || (pay.collection === 'jobs' ? String(d.quoteNo || d.jobId || d.id) : `SO ${d.soId || d.id}`);
+        if (pay.collection === 'hq_sales_orders') {
+            salesOrderNsId = String(d.nsInternalId || '');
+            if (d.nsInvoiceNo) {
+                const rows = await nsQuery(`SELECT id FROM transaction WHERE type = 'CustInvc' AND tranid = '${String(d.nsInvoiceNo).replace(/'/g, "''")}'`);
+                invoiceNsId = rows.length ? String(rows[0].id) : '';
+            }
+        } else {
+            // A quote's deposit belongs to the SALES ORDER raised from it — which may not exist yet.
+            const so = await db.collection('hq_sales_orders').where('hqJobId', '==', String(d.jobId || d.id)).limit(1).get();
+            if (!so.empty) salesOrderNsId = String((so.docs[0].data() || {}).nsInternalId || '');
+        }
+    }
+    return { brand, locationId, customerId, salesOrderNsId, invoiceNsId, reference };
+};
+
+// Post one recorded payment. Safe to call twice: a posted or queued payment is left alone, and a
+// payment that is not ready records WHY and waits (a deposit whose sales order has not landed).
+const postPaymentToNetSuite = async (paymentId) => {
+    const db = admin.firestore();
+    const ref = db.collection('payments').doc(paymentId);
+    const snap = await ref.get();
+    if (!snap.exists) return { ok: false, reason: 'no such payment' };
+    const pay = { id: snap.id, ...snap.data() };
+    if (pay.netsuitePosted === true || pay.netsuiteQueued === true) return { ok: true, already: true };
+
+    const t = await resolvePaymentTargets(pay);
+    const kind = pay.netsuiteKind === 'customerpayment' ? 'customerpayment' : 'customerdeposit';
+    const state = nsPay.postabilityOf({
+        kind, customerId: t.customerId, salesOrderNsId: t.salesOrderNsId, invoiceNsId: t.invoiceNsId,
+        locationId: t.locationId, amount: pay.amount, environment: pay.environment,
+    });
+    if (!state.ready) {
+        await ref.set({ netsuiteWaiting: state.reason, netsuiteCheckedAt: Date.now() }, { merge: true });
+        return { ok: false, waiting: state.waiting, reason: state.reason };
+    }
+
+    const payload = kind === 'customerpayment'
+        ? nsPay.customerPaymentPayload({ customerId: t.customerId, invoiceNsId: t.invoiceNsId, locationId: t.locationId, amount: pay.amount, reference: t.reference, transactionId: pay.transactionId })
+        : nsPay.customerDepositPayload({ customerId: t.customerId, salesOrderNsId: t.salesOrderNsId, locationId: t.locationId, amount: pay.amount, reference: t.reference, transactionId: pay.transactionId });
+
+    const outboxId = await enqueueNsWriteServer({
+        kind, label: `${kind === 'customerpayment' ? 'Customer payment' : 'Customer deposit'} — ${t.reference} $${Number(pay.amount).toFixed(2)} (NMI ${pay.transactionId || ''})`,
+        targetUrl: nsPay.nsPaymentUrl(kind), method: 'POST', payload,
+        sourceApp: 'PAYMENTS', createdBy: pay.source === 'PORTAL' ? 'portal' : 'staff',
+        dedupeKey: `nspay:${paymentId}`,
+        writeBack: { collection: 'payments', docId: paymentId, patch: { netsuitePosted: true, netsuiteWaiting: '' }, idField: 'nsPaymentId', tranField: 'nsPaymentTran' },
+    });
+    await ref.set({ netsuiteQueued: true, netsuiteQueuedAt: Date.now(), netsuiteOutboxId: outboxId, netsuiteWaiting: '' }, { merge: true });
+    return { ok: true, outboxId };
+};
+
+// Fire-and-forget after a successful charge: a payment must never fail because NetSuite is busy.
+const postPaymentSoon = (paymentId) => postPaymentToNetSuite(paymentId)
+    .catch((e) => console.error('payment → NetSuite failed', paymentId, e && e.message));
 
 // ── THE PORTAL'S OWN CHECKOUT ────────────────────────────────────────────────────────────────
 // A signed-in trade customer pays their own quote / sales order / invoice, and may keep a card for
@@ -3015,7 +3137,7 @@ exports.portalDeleteCard = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] },
 });
 
 // Pay one of your own documents, with a saved card or a new one.
-exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async (request) => {
+exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET] }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const { collection, docId, amount, vaultId, paymentToken, saveCard } = request.data || {};
     const db = admin.firestore();
@@ -3058,7 +3180,7 @@ exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, asy
     });
 
     const paidAt = Date.now();
-    await db.collection('payments').add({
+    const portalPayRec = await db.collection('payments').add({
         paidAt, amount: amt, transactionId: res.transactionid || '', authCode: res.authcode || '',
         brand, docType: collection === 'jobs' ? 'QUOTE_OR_SO' : 'SALES_ORDER', collection, docId: d.id, reference,
         payerName: '', email: (request.auth.token && request.auth.token.email) || '', customerId,
@@ -3071,8 +3193,38 @@ exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, asy
         lastPaymentAt: paidAt, lastPaymentAmount: amt, lastPaymentTxn: res.transactionid || '',
         paymentEnvironment: cfg.environment,
     }, { merge: true });
+    postPaymentSoon(portalPayRec.id);
 
     return { ok: true, amount: amt, transactionId: res.transactionid || '', balance: money(balance - amt), environment: cfg.environment };
+});
+
+// What has been taken and where each payment stands with NetSuite — the HQ 11 queue. A deposit
+// whose sales order has not reached NetSuite yet reads as WAITING, not as a failure.
+exports.paymentsQueue = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const snap = await admin.firestore().collection('payments').orderBy('paidAt', 'desc').limit(25).get();
+    return {
+        payments: snap.docs.map((d) => {
+            const p = d.data() || {};
+            return {
+                id: d.id, paidAt: p.paidAt || 0, amount: p.amount || 0, reference: p.reference || '',
+                environment: p.environment || '', source: p.source || 'LINK', transactionId: p.transactionId || '',
+                netsuiteKind: p.netsuiteKind || '', netsuitePosted: p.netsuitePosted === true,
+                netsuiteQueued: p.netsuiteQueued === true, netsuiteWaiting: p.netsuiteWaiting || '',
+                nsPaymentTran: p.nsPaymentTran || '',
+            };
+        }),
+    };
+});
+
+// Try a waiting payment again — after the sales order lands in NetSuite, or the invoice is billed.
+exports.paymentPostNow = onCall({
+    enforceAppCheck: true,
+    secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
+}, async (request) => {
+    assertStaffAdmin(request);
+    const res = await postPaymentToNetSuite(String((request.data || {}).paymentId || ''));
+    return res;
 });
 
 // The last webhook events, for the HQ 11 → Integrations read-out: is the gateway reaching us, and
