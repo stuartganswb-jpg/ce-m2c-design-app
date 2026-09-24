@@ -1,4 +1,5 @@
-// ── 11. System Admin → 🧵 Pillow Pricing (Uniquity · S7, 2026-09-24) ─────────────────────────
+// ── 6.5 Tools → 🧵 Pillow Pricing (Uniquity · S7, 2026-09-24; moved off 11. System Admin the same day —
+// Stuart: manager level and above, "an easy tool to use and i can have more associates help") ────
 //
 // The ONE home of `system/pillow_pricing`, the table `Shared/pillowPricing` prices a custom pillow
 // from. Two halves:

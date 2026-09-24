@@ -158,7 +158,7 @@ const FabricCutStock = ({ activeBrand = 'uniquity', currentUser = 'HQ' }) => {
                     </div>
                 </div>
                 {nsAt ? <div style={{ ...mono, marginTop: '6px' }}>NetSuite read {new Date(nsAt).toLocaleTimeString()}</div> : null}
-                {!library ? <div style={{ marginTop: '12px', color: 'var(--ink-soft)' }}>Reading the library…</div> : rows.length === 0 ? <div style={{ marginTop: '12px', color: 'var(--ink-soft)' }}>No fabrics yet — import them on 11. System Admin → Pillow Pricing → Fabrics.</div> : (
+                {!library ? <div style={{ marginTop: '12px', color: 'var(--ink-soft)' }}>Reading the library…</div> : rows.length === 0 ? <div style={{ marginTop: '12px', color: 'var(--ink-soft)' }}>No fabrics yet — import them on 6.5 Tools → Pillow Pricing → Fabrics.</div> : (
                     <div style={{ overflowX: 'auto', marginTop: '12px' }}>
                         <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.85rem' }}>
                             <thead><tr>{['Fabric', 'Name', 'Throw', 'Width', 'Cuts', 'Cut yards', 'Roll yards', 'Longest cut', ''].map(t => <th key={t} style={{ ...mono, textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--line)' }}>{t}</th>)}</tr></thead>

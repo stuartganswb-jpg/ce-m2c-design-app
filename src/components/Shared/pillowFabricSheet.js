@@ -79,7 +79,7 @@ export const HOW_TO_NOTES = [
     'Cuts of a fabric are NOT items and are not on this sheet: they live in the Fabric Cut Stock ledger (6.5 Tools on the Uniquity brand), declared by the sewing floor when a pillow is finished.',
     'The pillow price = the size at the HIGHEST price group among its panels (Pillow Size Price Chart) + labour per seam + details. A FABRIC row with no Price Group cannot be used on a pillow.',
     'The minimum cut per size on the Pillow Pricing screen is ONE SIDE; a standard pillow takes two. Yardage off the bolt = widths across × (cut length + 2 × seam allowance) ÷ 36, rounded up to ⅛ yd — so Width must be the true bolt width.',
-    'Upload: 11. System Admin → Pillow Pricing → Fabrics → drop this file → preview (creates / updates / refusals listed by row) → Apply. Nothing is written until Apply. Base price and the NetSuite id are never touched unless typed.',
+    'Upload: 6.5 Tools → Pillow Pricing → Fabrics → drop this file → preview (creates / updates / refusals listed by row) → Apply. Nothing is written until Apply. Base price and the NetSuite id are never touched unless typed.',
     'Re-uploading the same file changes nothing; changed fields are listed per row in the preview.',
 ];
 

@@ -11,7 +11,6 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import FormPreview from '../Shared/FormPreview';
 import IntegrationsPanel from '../Shared/IntegrationsPanel';
-import PillowPricingAdmin from './PillowPricingAdmin';   // 🧵 Uniquity pillow price table (S7) — ONE guarded mount
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printForm } from '../Shared/printForm';
 import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE, SIZE_FAMILIES, sizeKeyOf } from '../Shared/sizeMatrix';
@@ -2209,7 +2208,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           <AdminNavButton active={activeSection === "USERS"} onClick={() => setActiveSection("USERS")} label="User Matrix" icon="🔐" />
           <AdminNavButton active={activeSection === "PLATING_FEES"} onClick={() => setActiveSection("PLATING_FEES")} label="Plating Fees" icon="🧪" />
           <AdminNavButton active={activeSection === "INTEGRATIONS"} onClick={() => setActiveSection("INTEGRATIONS")} label="Integrations" icon="🔌" />
-          {activeBrand === 'uniquity' && <AdminNavButton active={activeSection === "PILLOW_PRICING"} onClick={() => setActiveSection("PILLOW_PRICING")} label="Pillow Pricing" icon="🧵" />}
           
           
           {isSuperAdmin && (
@@ -3447,7 +3445,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                  prove a vendor pipe works before any screen depends on it. No card data, no
                  orders, no NetSuite. (Stuart 2026-09-23: put it on 11.) --- */}
           {activeSection === "INTEGRATIONS" && <IntegrationsPanel />}
-          {activeSection === "PILLOW_PRICING" && activeBrand === 'uniquity' && <PillowPricingAdmin currentUser={currentUser} activeBrand={activeBrand} />}
 
           {/* --- FORMS & BRANDING VIEW --- */}
           {activeSection === "PLATING_FEES" && (() => {

@@ -83,7 +83,7 @@ export async function downloadFabricTemplate({ items = [], config = null } = {})
     mc.getRow(1).font = { bold: true };
     sizeCutTableOf(cfg).forEach(row => mc.addRow([row.key, row.minCut ? row.minCut.lengthIn : '', row.minCut ? row.minCut.widthIn : '', row.minCut ? (row.minCut.derived ? `pillow + ${allowanceOf(cfg)}" allowance each way` : 'set on the Pillow Pricing screen') : '']));
     mc.addRow([]);
-    mc.addRow(['Length runs along the roll (the pillow\'s height); a railroad fabric takes the cut turned. Edit on 11. System Admin → Pillow Pricing.']).font = { italic: true, color: { argb: 'FF777777' } };
+    mc.addRow(['Length runs along the roll (the pillow\'s height); a railroad fabric takes the cut turned. Edit on 6.5 Tools → Pillow Pricing.']).font = { italic: true, color: { argb: 'FF777777' } };
 
     const pg = wb.addWorksheet('Price Groups (reference)');
     const gs = Object.entries(cfg.fabricGroups || {}).sort((a, b) => (a[1].rank || 0) - (b[1].rank || 0));

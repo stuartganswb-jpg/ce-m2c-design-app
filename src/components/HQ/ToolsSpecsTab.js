@@ -7,6 +7,8 @@ import {
 } from '../Shared/bracketSpan';
 import RodPieceInventory from '../Shared/RodPieceInventory';
 import FabricCutStock from '../Shared/FabricCutStock';   // 🧵 Uniquity: replaces Rod Piece Stock (S7 2026-09-24)
+import PillowPricingAdmin from './PillowPricingAdmin';   // 🧵 Uniquity: the pillow price table + the fabric sheet (moved here from 11 — Stuart 2026-09-24: manager level and above)
+import { canLineDiscount } from '../Shared/lineDiscount';   // the app's ONE manager-or-higher rule (admin · superadmin · manager · executive)
 
 // TOOLS, SPECS & FAQs (HQ 6.5) — the staff-side twin of the portal's Tools page. Same engineering
 // (Shared/bracketSpan.js, a verbatim-copy pair with portal/src/shared/), but staff also see the
@@ -264,7 +266,11 @@ const TOOLS = [
     // TOOL 2 FOR UNIQUITY · FABRIC CUT STOCK (Stuart 2026-09-24: "it is different division so it
     // replaces the rod cuts"): the fabric cut ledger + the throw → yardage convert, in place of the
     // rod tool when the brand is Uniquity. `brands` / `notBrands` gate which tool the nav offers.
-    { id: 'fabriccuts', label: 'Fabric Cut Stock', blurb: 'Cuts on the shelf by fabric + the throw → yardage convert', brands: ['uniquity'], render: (p) => <FabricCutStock activeBrand={p.activeBrand} currentUser="HQ" /> },
+    // PILLOW PRICING (Stuart 2026-09-24: "put it all on 6.5 … manager level and above, rather than on
+    // 11 admin, as this is an easy tool to use and i can have more associates help"): the price chart,
+    // the minimum cut per size, labour + details, the fabric sheet. Brand Uniquity; role manager+.
+    { id: 'pillowpricing', label: 'Pillow Pricing', blurb: 'Size × fabric-group prices, minimum cuts, labour + details, the fabric sheet', brands: ['uniquity'], managerUp: true, render: (p) => <PillowPricingAdmin activeBrand={p.activeBrand} currentUser={p.currentUser || 'HQ'} /> },
+    { id: 'fabriccuts', label: 'Fabric Cut Stock', blurb: 'Cuts on the shelf by fabric + the throw → yardage convert', brands: ['uniquity'], render: (p) => <FabricCutStock activeBrand={p.activeBrand} currentUser={p.currentUser || 'HQ'} /> },
 ];
 
 const toolFitsBrand = (t, brand) => {
@@ -273,10 +279,13 @@ const toolFitsBrand = (t, brand) => {
     if (t.notBrands && t.notBrands.includes(b)) return false;
     return true;
 };
+// A tool marked managerUp is offered to manager level and above only — the same role list the
+// cart discounts use, plus the super-admin flag. The tab itself is granted per role on 11's matrix.
+const toolFitsRole = (t, role, isSuperAdmin) => !t.managerUp || canLineDiscount(role, isSuperAdmin);
 
-const ToolsSpecsTab = ({ activeBrand }) => {
+const ToolsSpecsTab = ({ activeBrand, currentUser = 'HQ', userRole = '', isSuperAdmin = false }) => {
     const [activeTool, setActiveTool] = useState(TOOLS[0].id);
-    const tools = TOOLS.filter(t => toolFitsBrand(t, activeBrand));
+    const tools = TOOLS.filter(t => toolFitsBrand(t, activeBrand) && toolFitsRole(t, userRole, isSuperAdmin));
     const tool = tools.find(t => t.id === activeTool) || tools[0] || TOOLS[0];
 
     return (
@@ -304,7 +313,7 @@ const ToolsSpecsTab = ({ activeBrand }) => {
                 </div>
             )}
 
-            {tool.render({ showAssumptions: true, activeBrand })}
+            {tool.render({ showAssumptions: true, activeBrand, currentUser })}
         </div>
     );
 };
