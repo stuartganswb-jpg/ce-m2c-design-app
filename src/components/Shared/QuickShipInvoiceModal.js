@@ -3,6 +3,7 @@ import { db } from '../../firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 import { nsProxyFetch } from './nsProxy';
 import { printForm } from './printForm';
+import { usePayBlock } from './payBlock';
 
 // ============================================================================
 // QUICK SHIP INVOICE (Stuart 2026-07-17) — the customer-facing document.
@@ -16,6 +17,11 @@ import { printForm } from './printForm';
 const BRAND_NAMES = { ce: 'Classical Elements', m2c: 'M2C Studio', uniquity: 'Uniquity', leyla: 'Leyla Gans LLC' };
 
 const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
+    // A pay link, if staff made one for this order — printed on the document, scannable in person.
+    const pay = usePayBlock({
+        collection: 'hq_sales_orders', docId: String(order.id || ''),
+        label: 'this order', enabled: !!order.id,
+    });
     const [invNo, setInvNo] = useState(order.nsInvoiceNo || '');
     const [busy, setBusy] = useState(false);
     // INVOICES ISSUE AT FULFILLMENT (Stuart 2026-08-27): until the order is packed/shipped or a
@@ -182,6 +188,21 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                     <span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px' }}>${total.toFixed(2)}</span>
                 </div>
             </div>
+            {/* PAY THIS DOCUMENT — only while an OPEN pay link exists for this order (Stuart
+                2026-09-23: printed "when decided to add it"). Made on the CRM row's 💳 Payment panel. */}
+            {pay && pay.url && (
+                <div style={{ marginTop: '18px', border: '1px solid #ddd', padding: '12px 14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
+                    {pay.qrSvg ? <div style={{ width: '96px', height: '96px', flex: '0 0 96px' }} dangerouslySetInnerHTML={{ __html: pay.qrSvg }} /> : null}
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase', color: '#b08d57', marginBottom: '4px' }}>Pay this {fulfilled ? 'invoice' : 'order'}</div>
+                        <div style={{ fontSize: '12px', marginBottom: '3px' }}>
+                            {pay.amountDue ? <>Amount due now <strong>${Number(pay.amountDue).toFixed(2)}</strong>. </> : null}Scan the code, or visit:
+                        </div>
+                        <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '10px', wordBreak: 'break-all' }}>{pay.url}</div>
+                        <div style={{ fontSize: '9px', color: '#8a857c', marginTop: '3px' }}>Paid securely by card through our payment provider — we never see or store your card number.</div>
+                    </div>
+                </div>
+            )}
             <div style={{ marginTop: '18px', fontFamily: 'var(--mono, monospace)', fontSize: '9px', color: '#8a857c' }}>{fulfilled ? `Thank you — please reference invoice #${invNo || order.soId} with payment.` : `Thank you — this confirms sales order ${order.soId}. Your invoice follows at shipment.`}</div>
         </div>
     );

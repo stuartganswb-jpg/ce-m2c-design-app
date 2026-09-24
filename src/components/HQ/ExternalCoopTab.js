@@ -21,6 +21,7 @@ import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canR
 import { packingListOf } from '../Shared/packingList';
 import { invoiceDocOf } from '../Shared/invoiceMath';
 import PayLinkPanel from '../Shared/PayLinkPanel';
+import { usePayBlock } from '../Shared/payBlock';
 import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
 import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { soHeaderOf, jobHeaderPatchOf, EMPTY_SHIP_ADDRESS } from '../Shared/salesOrderHeader';
@@ -710,6 +711,14 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   const [qsOrders, setQsOrders] = useState([]);   // Quick Ship (stocked) orders — invoiced from the CRM
   const [qsInvoice, setQsInvoice] = useState(null); // Quick Ship invoice modal
   const [payRowId, setPayRowId] = useState(null);   // which Order Entry SO row has its payment panel open
+  // The pay block a printed quote / sales order / invoice carries — present only while an OPEN link
+  // exists for that document (Shared/payBlock). Documents without one print exactly as before.
+  const docPay = usePayBlock({
+      collection: (activeDocJob && (activeDocJob.orderClass === 'QUICKSHIP' || activeDocJob.soId)) ? 'hq_sales_orders' : 'jobs',
+      docId: activeDocJob ? String(activeDocJob.jobId || activeDocJob.id || '') : '',
+      label: activeDocType === 'INVOICE' ? 'this invoice' : (activeDocType === 'QUOTE' ? 'this quote' : 'this order'),
+      enabled: !!activeDocJob && ['QUOTE', 'INVOICE', 'FULL_PACKET'].includes(String(activeDocType || '')),
+  });
 
   // Quick Ship orders live-feed: the customer card shows them with kit-grouped invoices
   // (customer pays the KIT price; NetSuite carries the per-item accounting lines).
@@ -1509,6 +1518,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                   terms={template.terms}
                                   docNumber={quoteDisplayNo(activeDocJob)}
                                   data={quoteFormData}
+                                  pay={docPay}
                               />
                           </div>
                       )}
@@ -1592,7 +1602,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                       {/* INVOICE — the sales order's prices at the shipped quantities (Shared/invoiceMath) */}
                       {activeDocType === 'INVOICE' && invoiceFormData && (
                           <div className="pdf-page" style={{ background: '#fff', width: '100%', minHeight: '11in', padding: '0.45in 0.35in', boxSizing: 'border-box', boxShadow: '0 12px 48px rgba(0,0,0,0.05)' }}>
-                              <FormPreview type="INVOICE" brand={activeBrand} logoUrl={logoUrl} header={invoiceDoc.note || (formTemplates['INVOICE'] || template).header} footer={(formTemplates['INVOICE'] || template).footer} terms={(formTemplates['INVOICE'] || template).terms} docNumber={soDocNumber} data={invoiceFormData} />
+                              <FormPreview type="INVOICE" brand={activeBrand} logoUrl={logoUrl} header={invoiceDoc.note || (formTemplates['INVOICE'] || template).header} footer={(formTemplates['INVOICE'] || template).footer} terms={(formTemplates['INVOICE'] || template).terms} docNumber={soDocNumber} data={invoiceFormData} pay={docPay} />
                           </div>
                       )}
 
