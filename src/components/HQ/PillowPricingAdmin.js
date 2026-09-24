@@ -15,13 +15,15 @@
 // two-press button.
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, updateDoc, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { workbookFileToSheets } from '../Shared/customerControlFile';
 import { DEFAULT_PILLOW_PRICING, PILLOW_PRICING_DOC } from '../Shared/pillowPricing';
 import {
     parsePillowPriceChart, mergePricingFromChart, masterListSizesOf, chartDiffOf, masterListDiffOf,
     detailRowsOf, detailsFromRows, numbersPatchOf, DETAIL_KINDS, DETAIL_PER,
 } from '../Shared/pillowPriceSheet';
+import { parseFabricSheet, planFabricRows, fabricUpdatePatchOf, fabricCreateDocOf, newFabricItemId, fabricPlanSummary } from '../Shared/pillowFabricSheet';
+import { downloadFabricTemplate, readFabricWorkbook, FABRIC_TEMPLATE_NAME } from '../Shared/pillowFabricXlsx';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
 const card = { background: '#fff', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' };
@@ -47,6 +49,12 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
     const [rollup, setRollup] = useState('');
     const [rows, setRows] = useState([]);
     const [dirty, setDirty] = useState(false);
+
+    // the fabrics half: sheet → plan against the Uniquity library → Apply
+    const [fabFile, setFabFile] = useState('');
+    const [fabParsed, setFabParsed] = useState(null);
+    const [fabPlans, setFabPlans] = useState(null);
+    const [fabArmed, setFabArmed] = useState(false);
 
     useEffect(() => {
         const u1 = onSnapshot(doc(db, 'system', PILLOW_PRICING_DOC), (s) => setLive(s.exists() ? { ...DEFAULT_PILLOW_PRICING, ...s.data() } : { ...DEFAULT_PILLOW_PRICING }));
@@ -120,6 +128,54 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
     const setRow = (i, k, v) => { setDirty(true); setRows(prev => prev.map((r, j) => (j === i ? { ...r, [k]: v } : r))); };
     const addRow = () => { setDirty(true); setRows(prev => [...prev, { code: '', label: '', kind: 'ADDON', per: 'EACH', price: '', builtIn: false }]); };
     const dropRow = (i) => { setDirty(true); setRows(prev => prev.filter((_, j) => j !== i)); };
+
+    const liveGroupCodes = useMemo(() => Object.keys(cfg.fabricGroups || {}), [cfg]);
+    const onFabricFile = async (e) => {
+        const f = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (!f) return;
+        setFabArmed(false); setFabPlans(null);
+        try {
+            const sheets = await readFabricWorkbook(f);
+            const p = parseFabricSheet(sheets, { groups: liveGroupCodes });
+            setFabParsed(p); setFabFile(f.name);
+            if (!p.ok) { say(`${f.name}: ${p.errors.length} problem(s) — nothing will be written until the sheet reads clean.`, 'err'); return; }
+            // one read of the brand's library at preview time (2,800 records — not a listener)
+            const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('brandId', '==', 'uniquity')));
+            const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const plans = planFabricRows(p.rows, items);
+            setFabPlans(plans);
+            const n = fabricPlanSummary(plans);
+            say(`${f.name}: ${p.rows.length} row(s) read — ${n.CREATE} to create, ${n.UPDATE} to update, ${n.SKIP} unchanged (against ${items.length} Uniquity items).`, 'ok');
+        } catch (err) { setFabParsed(null); say(`Could not read ${f.name}: ${err.message || err}`, 'err'); }
+    };
+    const applyFabrics = async () => {
+        if (!fabParsed || !fabParsed.ok || !fabPlans) return;
+        if (!fabArmed) { setFabArmed(true); return; }
+        setBusy(true);
+        try {
+            const at = Date.now();
+            const todo = fabPlans.filter(pl => pl.action !== 'SKIP');
+            let done = 0;
+            for (let i = 0; i < todo.length; i += 400) {
+                const batch = writeBatch(db);
+                todo.slice(i, i + 400).forEach((pl, j) => {
+                    if (pl.action === 'UPDATE') batch.update(doc(db, 'Approved_Designs', pl.item.id), fabricUpdatePatchOf(pl, { by: currentUser || '', at }));
+                    else { const id = newFabricItemId('uniquity', i + j, at); batch.set(doc(db, 'Approved_Designs', id), fabricCreateDocOf(pl.row, { id, brandId: 'uniquity', by: currentUser || '', at })); }
+                });
+                await batch.commit();
+                done += Math.min(400, todo.length - i);
+            }
+            const n = fabricPlanSummary(fabPlans);
+            say(`Applied ${fabFile}: ${n.CREATE} created, ${n.UPDATE} updated, ${n.SKIP} unchanged (${done} write(s)).`, 'ok');
+            setFabParsed(null); setFabPlans(null); setFabFile(''); setFabArmed(false);
+        } catch (err) { say(`Apply failed: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
+    const downloadTemplate = async () => {
+        try { await downloadFabricTemplate({ config: cfg }); say(`${FABRIC_TEMPLATE_NAME} downloaded — the office fills it and sends it back.`, 'ok'); }
+        catch (err) { say(`Download failed: ${err.message || err}`, 'err'); }
+    };
 
     if (activeBrand !== 'uniquity') {
         return <div style={{ ...card, color: 'var(--ink-soft)' }}>Pillow pricing is a Uniquity table — switch the brand to Uniquity to edit it.</div>;
@@ -226,6 +282,54 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
                     <button onClick={saveBlanks} disabled={busy || !dirty} style={btn(true, busy || !dirty)}>Save labour + details</button>
                     {dirty && <span style={{ ...mono, color: '#a86b00' }}>unsaved edits</span>}
                 </div>
+            </div>
+
+            <div style={card}>
+                <h3 style={h}>Fabrics — the yardage items and trims the board picks from</h3>
+                <p style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
+                    Download the sheet, the office fills one row per fabric (the yardage item every throw already has) or trim — code, name, FABRIC / TRIM, price group, bolt width, railroad, pattern, colour, cost — and drops it back here.
+                    A known code UPDATES the item; a new code CREATES it in the Uniquity library. Base price and the NetSuite id are never touched unless typed. Cuts are not items: they live in Fabric Cut Stock.
+                </p>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button onClick={downloadTemplate} disabled={busy} style={btn(false, busy)}>⬇ Download the fabric sheet</button>
+                    <input type="file" accept=".xlsx" onChange={onFabricFile} disabled={busy} style={{ fontSize: '0.85rem' }} />
+                    {liveGroupCodes.length === 0 && <span style={{ ...mono, color: '#a86b00' }}>apply the price chart first — the groups a fabric may use come from it</span>}
+                </div>
+                {fabParsed && !fabParsed.ok && (
+                    <div style={{ marginTop: '12px', border: '1px solid #d9534f', background: '#fdf3f3', padding: '12px' }}>
+                        <div style={{ ...mono, color: '#d9534f', marginBottom: '6px' }}>{fabFile}: not applied — {fabParsed.errors.length} problem(s)</div>
+                        {fabParsed.errors.map((e, i) => <div key={i} style={{ fontSize: '0.85rem', color: '#8a1f1f' }}>{e.message}</div>)}
+                    </div>
+                )}
+                {fabParsed && fabParsed.ok && fabPlans && (
+                    <div style={{ marginTop: '16px' }}>
+                        <div style={{ ...mono, marginBottom: '8px' }}>Preview · {fabFile} · {(() => { const n = fabricPlanSummary(fabPlans); return `${n.CREATE} create · ${n.UPDATE} update · ${n.SKIP} unchanged`; })()}</div>
+                        {fabParsed.warnings.map((w, i) => <div key={i} style={{ fontSize: '0.85rem', color: '#a86b00' }}>⚠ {w}</div>)}
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ borderCollapse: 'collapse', width: '100%', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                                <thead><tr>{['Row', 'Code', 'Name', 'Type', 'Group', 'Width', 'Action', 'What changes'].map(t => <th key={t} style={{ ...mono, textAlign: 'left', padding: '6px 6px', borderBottom: '1px solid var(--line)' }}>{t}</th>)}</tr></thead>
+                                <tbody>
+                                    {fabPlans.map((pl, i) => (
+                                        <tr key={i} style={{ opacity: pl.action === 'SKIP' ? 0.55 : 1 }}>
+                                            <td style={{ padding: '4px 6px' }}>{pl.row.rowNo}</td>
+                                            <td style={{ padding: '4px 6px', fontWeight: 600 }}>{pl.row.code}</td>
+                                            <td style={{ padding: '4px 6px' }}>{pl.row.name}</td>
+                                            <td style={{ padding: '4px 6px' }}>{pl.row.type}{pl.row.railroad ? ' · railroad' : ''}</td>
+                                            <td style={{ padding: '4px 6px' }}>{pl.row.priceGroup || '—'}</td>
+                                            <td style={{ padding: '4px 6px' }}>{pl.row.width == null ? '—' : `${pl.row.width}"`}</td>
+                                            <td style={{ padding: '4px 6px', color: pl.action === 'CREATE' ? '#2e7d32' : (pl.action === 'UPDATE' ? '#a86b00' : 'var(--ink-soft)') }}>{pl.action}{pl.was ? ` (was ${pl.was})` : ''}</td>
+                                            <td style={{ padding: '4px 6px', color: 'var(--ink-soft)' }}>{pl.action === 'CREATE' ? 'new item' : (pl.changes.length ? pl.changes.map(c => `${c.path.replace('manufacturingSpecs.', '').replace('customData.', '')}: ${c.from === undefined || c.from === '' ? '—' : String(c.from)} → ${String(c.to)}`).join(' · ') : '—')}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+                            <button onClick={applyFabrics} disabled={busy || fabPlans.every(pl => pl.action === 'SKIP')} style={btn(true, busy || fabPlans.every(pl => pl.action === 'SKIP'))}>{fabArmed ? 'Press again to write the items' : 'Apply fabrics'}</button>
+                            <button onClick={() => { setFabParsed(null); setFabPlans(null); setFabFile(''); setFabArmed(false); }} disabled={busy} style={btn(false, busy)}>Discard</button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {log.length > 0 && (
