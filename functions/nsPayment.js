@@ -52,10 +52,16 @@ function customerDepositPayload({ customerId, salesOrderNsId, locationId, amount
     };
 }
 
-// The apply sublist is a checklist of the customer's open invoices: name the one this pays, tick
-// it, and state the amount (so a part payment applies as a part payment, not the whole invoice).
-function customerPaymentPayload({ customerId, invoiceNsId, locationId, amount, reference, transactionId }) {
-    const amt = Number(Number(amount).toFixed(2));
+// The apply sublist is a checklist of the customer's open invoices: tick the ones this pays and
+// state each amount. One invoice or many — paying several existing NetSuite invoices in one card
+// charge is the same record with more lines (Stuart 2026-09-24).
+function customerPaymentPayload({ customerId, invoiceNsId, invoices, locationId, amount, reference, transactionId }) {
+    const list = Array.isArray(invoices) && invoices.length
+        ? invoices.map((i) => ({ doc: str(i.id), apply: true, amount: Number(Number(i.amount).toFixed(2)) }))
+        : [{ doc: str(invoiceNsId), apply: true, amount: Number(Number(amount).toFixed(2)) }];
+    const amt = Number(Number(
+        Array.isArray(invoices) && invoices.length ? list.reduce((s, i) => s + i.amount, 0) : amount,
+    ).toFixed(2));
     return {
         customer: { id: nsCustomerIdOf(customerId) },
         location: { id: str(locationId) },
@@ -63,7 +69,7 @@ function customerPaymentPayload({ customerId, invoiceNsId, locationId, amount, r
         paymentmethod: { id: NS_PAYMENT_METHOD_ID },
         checknum: str(transactionId).slice(0, 45),
         memo: paymentMemo({ reference, transactionId }),
-        apply: { items: [{ doc: str(invoiceNsId), apply: true, amount: amt }] },
+        apply: { items: list },
     };
 }
 

@@ -22,6 +22,7 @@ import { packingListOf } from '../Shared/packingList';
 import { invoiceDocOf } from '../Shared/invoiceMath';
 import PayLinkPanel from '../Shared/PayLinkPanel';
 import { usePayBlock } from '../Shared/payBlock';
+import NsInvoicesPanel from '../Shared/NsInvoicesPanel';
 import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
 import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { soHeaderOf, jobHeaderPatchOf, EMPTY_SHIP_ADDRESS } from '../Shared/salesOrderHeader';
@@ -1670,6 +1671,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
               <button onClick={() => { setActiveSubTab('CUSTOMERS'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'CUSTOMERS' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'CUSTOMERS' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'CUSTOMERS' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Customer CRM</button>
               <button onClick={() => { setActiveSubTab('VENDORS'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'VENDORS' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'VENDORS' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'VENDORS' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Vendor / Co-op CRM</button>
               <button onClick={() => { setActiveSubTab('PIPELINE'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'PIPELINE' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'PIPELINE' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'PIPELINE' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Global Pipeline</button>
+              {/* THE CHASING LIST (Stuart 2026-09-24) — every open NetSuite invoice for this brand,
+                  oldest due first, each payable by card link. */}
+              <button onClick={() => { setActiveSubTab('OPEN_INVOICES'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'OPEN_INVOICES' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'OPEN_INVOICES' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'OPEN_INVOICES' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Open Invoices (NetSuite)</button>
           </div>
 
           <div style={{ flex: 1, minWidth: 0, background: '#fff', border: '1px solid var(--line)', minHeight: '600px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
@@ -1889,6 +1893,12 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
 
                                       {/* Portal logins + flow entitlements — customers only (vendors share this detail panel) */}
                                       {activeSubTab === 'CUSTOMERS' && <PortalAccessPanel customer={activeCrmRecord} activeBrand={activeBrand} />}
+
+                                      {/* THE INVOICES THIS APP NEVER RAISED (Stuart 2026-09-24) — NetSuite's own open
+                                          invoices for this customer, payable by card once the old processor is off. */}
+                                      {activeSubTab === 'CUSTOMERS' && activeCrmRecord && (
+                                          <NsInvoicesPanel brand={activeBrand} customerId={activeCrmRecord.id} customerName={activeCrmRecord.name || ''} mode="CUSTOMER" />
+                                      )}
 
                                       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', flex: 1, display: 'flex', flexDirection: 'column' }}>
                                           <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Relationship Notes</h4>
@@ -2303,6 +2313,17 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                               </div>
                           )}
                       </div>
+                  </div>
+              )}
+
+              {activeSubTab === 'OPEN_INVOICES' && (
+                  <div style={{ padding: '24px' }}>
+                      <h3 style={{ margin: '0 0 6px', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Open invoices in NetSuite</h3>
+                      <p style={{ margin: '0 0 16px', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
+                          Every unpaid invoice for {String(activeBrand).toUpperCase()}, oldest due date first — including the ones this app never
+                          raised. Tick the invoices a customer is paying, then show them the QR code or send the link.
+                      </p>
+                      <NsInvoicesPanel brand={activeBrand} mode="ALL" />
                   </div>
               )}
 

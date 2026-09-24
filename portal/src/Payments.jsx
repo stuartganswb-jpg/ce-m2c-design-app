@@ -20,6 +20,8 @@ const fieldBox = { border: '1px solid var(--line)', background: 'var(--card)', h
 
 export default function Payments() {
   const [data, setData] = useState(null);
+  const [invoices, setInvoices] = useState(null);     // open invoices in NetSuite (not raised here)
+  const [pickedInv, setPickedInv] = useState({});
   const [err, setErr] = useState('');
   const [note, setNote] = useState('');
   const [paying, setPaying] = useState(null);      // the payable being paid
@@ -35,6 +37,10 @@ export default function Payments() {
     httpsCallable(functions, 'portalPayables')()
       .then((res) => setData(res.data))
       .catch((e) => setErr(sayable(e, 'Your account could not be loaded just now.')));
+    // Invoices that live in our accounting system rather than here — shown with their due dates.
+    httpsCallable(functions, 'portalOpenInvoices')()
+      .then((res) => { setInvoices(res.data.invoices || []); setPickedInv({}); })
+      .catch(() => setInvoices([]));
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -64,7 +70,12 @@ export default function Payments() {
           const job = pending.current;
           pending.current = null;
           if (!job) { setBusy(false); return; }
-          if (job.kind === 'SAVE') {
+          if (job.kind === 'PAY_INVOICES') {
+            httpsCallable(functions, 'portalPayInvoices')({ ...job.payload, paymentToken: r.token })
+              .then((res) => { setNote(`Thank you — ${fmt(res.data.amount)} paid. Confirmation ${res.data.transactionId}.`); load(); })
+              .catch((e) => setErr(sayable(e, 'The payment could not be completed. Your card has not been charged.')))
+              .finally(() => setBusy(false));
+          } else if (job.kind === 'SAVE') {
             httpsCallable(functions, 'portalSaveCard')({ paymentToken: r.token })
               .then(() => { setNote('Card saved.'); load(); })
               .catch((e) => setErr(sayable(e, 'That card could not be saved.')))
@@ -104,6 +115,24 @@ export default function Payments() {
         .finally(() => setBusy(false));
     } else {
       pending.current = { kind: 'PAY', payload: { ...payload, saveCard } };
+      window.CollectJS.startPaymentRequest();
+    }
+  };
+
+  const chosenInvoices = (invoices || []).filter((i) => pickedInv[i.id]);
+  const chosenInvoiceTotal = chosenInvoices.reduce((s2, i) => s2 + Number(i.due || 0), 0);
+
+  const payInvoices = () => {
+    if (!chosenInvoices.length) return;
+    setErr(''); setNote(''); setBusy(true);
+    const payload = { invoiceIds: chosenInvoices.map((i) => i.id) };
+    if (useCard) {
+      httpsCallable(functions, 'portalPayInvoices')({ ...payload, vaultId: useCard })
+        .then((res) => { setNote(`Thank you — ${fmt(res.data.amount)} paid. Confirmation ${res.data.transactionId}.`); load(); })
+        .catch((e) => setErr(sayable(e, 'The payment could not be completed. Your card has not been charged.')))
+        .finally(() => setBusy(false));
+    } else {
+      pending.current = { kind: 'PAY_INVOICES', payload: { ...payload, saveCard } };
       window.CollectJS.startPaymentRequest();
     }
   };
@@ -190,6 +219,57 @@ export default function Payments() {
           )}
         </div>
       ))}
+
+      <h2 className="sec">Invoices<span className="count">{(invoices || []).length}</span></h2>
+      {invoices && invoices.length === 0 && <div className="empty">No open invoices.</div>}
+      {invoices && invoices.length > 0 && (
+        <div className="card" style={{ padding: '4px 0 14px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: 'var(--ink-soft)' }}>
+                <th style={{ padding: '8px 10px' }} />
+                <th style={{ padding: '8px 10px' }}>Invoice</th>
+                <th style={{ padding: '8px 10px' }}>Date</th>
+                <th style={{ padding: '8px 10px' }}>Due</th>
+                <th style={{ padding: '8px 10px', textAlign: 'right' }}>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invoices.map((i) => {
+                const late = i.dueDate && new Date(i.dueDate) < new Date();
+                return (
+                  <tr key={i.id} style={{ borderTop: '1px solid var(--line)' }}>
+                    <td style={{ padding: '8px 10px' }}>
+                      <input type="checkbox" checked={!!pickedInv[i.id]} onChange={(e) => setPickedInv({ ...pickedInv, [i.id]: e.target.checked })} />
+                    </td>
+                    <td style={{ padding: '8px 10px' }}>{i.tranid}</td>
+                    <td style={{ padding: '8px 10px' }}>{i.date ? new Date(i.date).toLocaleDateString() : '—'}</td>
+                    <td style={{ padding: '8px 10px', color: late ? '#9b2c2c' : 'inherit' }}>
+                      {i.dueDate ? new Date(i.dueDate).toLocaleDateString() : '—'}{late ? ' · overdue' : ''}
+                    </td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>{fmt(i.due)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {chosenInvoices.length > 0 && (
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px 0' }}>
+              <span>{chosenInvoices.length} selected · <strong>{fmt(chosenInvoiceTotal)}</strong></span>
+              {cards.length > 0 && (
+                <select value={useCard} onChange={(e) => setUseCard(e.target.value)} style={{ padding: '8px 10px', border: '1px solid var(--line)', background: 'var(--card)' }}>
+                  {cards.map((c) => <option key={c.vaultId} value={c.vaultId}>{c.brand} ending {c.last4}</option>)}
+                  <option value="">Use the card entered below</option>
+                </select>
+              )}
+              <button className="btn" style={{ width: 'auto', padding: '10px 18px' }} disabled={busy || (!useCard && !fieldsReady)} onClick={payInvoices}>
+                {busy ? 'Processing…' : `Pay ${fmt(chosenInvoiceTotal)}`}
+              </button>
+              <span style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Invoices are paid in full.</span>
+            </div>
+          )}
+        </div>
+      )}
 
       <h2 className="sec">Saved cards<span className="count">{cards.length}</span></h2>
       {cards.length === 0 && <div className="empty">No saved cards. You can save one when you pay.</div>}

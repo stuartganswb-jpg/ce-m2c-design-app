@@ -2745,9 +2745,13 @@ exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
     }
     const token = crypto.randomBytes(32).toString('base64url');
     const now = Date.now();
+    // Existing NetSuite invoices: the link pays exactly those, in full, and cannot be part-paid.
+    const invoices = Array.isArray((request.data || {}).invoices) ? (request.data || {}).invoices : [];
     await admin.firestore().collection('pay_links').doc(token).set({
+        ...(invoices.length ? { invoices: invoices.map((i) => ({ id: String(i.id), tranid: String(i.tranid || ''), amount: money(i.amount) })) } : {}),
         token, docType: type, collection: String(collection || ''), docId: String(docId || ''),
         brand: String(brand || 'ce').toLowerCase(), reference: cleanStr(reference, 60), customerName: cleanStr(customerName, 120),
+        customerId: String((request.data || {}).customerId || ''),
         totalAmount: total, depositPct: pct, amountDue: due, minAmount: due, maxAmount: total,
         status: 'OPEN', createdAt: now, createdBy: (request.auth && request.auth.token && request.auth.token.name) || '',
         expiresAt: now + PAY_LINK_DAYS * 86400000,
@@ -2818,6 +2822,7 @@ exports.payIntent = onCall({ cors: true }, async (request) => {
         docType: link.docType, reference: link.reference, customerName: link.customerName,
         totalAmount: link.totalAmount, amountDue: link.amountDue, minAmount: link.minAmount, maxAmount: link.maxAmount,
         depositPct: link.depositPct, expiresAt: link.expiresAt,
+        invoices: Array.isArray(link.invoices) ? link.invoices : [],
     };
 });
 
@@ -2872,12 +2877,13 @@ exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NS_ACCOUN
     const paidAt = Date.now();
     const payment = {
         paidAt, amount: amt, transactionId: res.transactionid || '', authCode: res.authcode || '',
+        ...(Array.isArray(link.invoices) && link.invoices.length ? { invoices: link.invoices, customerId: link.customerId || '' } : {}),
         brand: link.brand, docType: link.docType, collection: link.collection, docId: link.docId,
         reference: link.reference, payerName: cleanStr(payerName, 60), email: cleanStr(email, 120),
         environment: cfg.environment, method: 'CARD', gateway: 'NMI',
         // What a deposit vs a payment means in NetSuite is Stuart's rule: deposits on quotes and
         // sales orders, payments on invoices. The posting itself waits on Eric's field ids.
-        netsuiteKind: link.docType === 'INVOICE' ? 'customerpayment' : 'customerdeposit',
+        netsuiteKind: (link.docType === 'INVOICE' || (Array.isArray(link.invoices) && link.invoices.length)) ? 'customerpayment' : 'customerdeposit',
         netsuitePosted: false,
     };
     await ref.update({ status: 'PAID', paidAt, paidAmount: amt, transactionId: res.transactionid || '' });
@@ -2954,6 +2960,9 @@ const resolvePaymentTargets = async (pay) => {
     let invoiceNsId = '';
     let reference = pay.reference || '';
 
+    if (Array.isArray(pay.invoices) && pay.invoices.length) {
+        return { brand, locationId, customerId, salesOrderNsId: '', invoiceNsId: String(pay.invoices[0].id || ''), reference };
+    }
     const docSnap = pay.collection && pay.docId ? await db.collection(pay.collection).doc(pay.docId).get() : null;
     const d = docSnap && docSnap.exists ? { id: docSnap.id, ...docSnap.data() } : null;
     if (d) {
@@ -2986,6 +2995,9 @@ const postPaymentToNetSuite = async (paymentId) => {
 
     const t = await resolvePaymentTargets(pay);
     const kind = pay.netsuiteKind === 'customerpayment' ? 'customerpayment' : 'customerdeposit';
+    // A payment against EXISTING NetSuite invoices already names them — no document to resolve.
+    const chosenInvoices = Array.isArray(pay.invoices) ? pay.invoices : [];
+    if (chosenInvoices.length) t.invoiceNsId = String(chosenInvoices[0].id || '');
     const state = nsPay.postabilityOf({
         kind, customerId: t.customerId, salesOrderNsId: t.salesOrderNsId, invoiceNsId: t.invoiceNsId,
         locationId: t.locationId, amount: pay.amount, environment: pay.environment,
@@ -2996,7 +3008,7 @@ const postPaymentToNetSuite = async (paymentId) => {
     }
 
     const payload = kind === 'customerpayment'
-        ? nsPay.customerPaymentPayload({ customerId: t.customerId, invoiceNsId: t.invoiceNsId, locationId: t.locationId, amount: pay.amount, reference: t.reference, transactionId: pay.transactionId })
+        ? nsPay.customerPaymentPayload({ customerId: t.customerId, invoiceNsId: t.invoiceNsId, invoices: chosenInvoices, locationId: t.locationId, amount: pay.amount, reference: t.reference, transactionId: pay.transactionId })
         : nsPay.customerDepositPayload({ customerId: t.customerId, salesOrderNsId: t.salesOrderNsId, locationId: t.locationId, amount: pay.amount, reference: t.reference, transactionId: pay.transactionId });
 
     const outboxId = await enqueueNsWriteServer({
@@ -3013,6 +3025,123 @@ const postPaymentToNetSuite = async (paymentId) => {
 // Fire-and-forget after a successful charge: a payment must never fail because NetSuite is busy.
 const postPaymentSoon = (paymentId) => postPaymentToNetSuite(paymentId)
     .catch((e) => console.error('payment → NetSuite failed', paymentId, e && e.message));
+
+// ── THE INVOICES THAT WERE NEVER IN THE APP ──────────────────────────────────────────────────
+// NetSuite is full of invoices this app did not raise, and will be for a long time. When the old
+// processor is switched off, this is how they get paid: read the open ones, let staff or the
+// customer tick which to pay, charge once, and post ONE customer payment applying to each.
+// Stuart 2026-09-24: no part payments on an invoice — tick it and it is paid in full; due dates
+// must show; each brand sees only its own subsidiary's invoices.
+const NS_BRAND_SUBSIDIARY = { m2c: '3', ce: '2', uniquity: '6', leyla: '5' };
+
+const nsOpenInvoiceRows = async ({ brand, entityId, limit = 300 }) => {
+    const subsidiary = NS_BRAND_SUBSIDIARY[String(brand || 'ce').toLowerCase()];
+    if (!subsidiary) throw new HttpsError('failed-precondition', `No NetSuite subsidiary on file for "${brand}".`);
+    const where = [
+        "t.type = 'CustInvc'",
+        `t.subsidiary = ${Number(subsidiary)}`,
+        "NVL(t.foreignamountunpaid, 0) > 0.005",
+        "NVL(t.voided, 'F') = 'F'",
+        ...(entityId ? [`t.entity = ${Number(entityId)}`] : []),
+    ].join(' AND ');
+    // foreignamountunpaid is what is STILL owed — deposits already applied and credit memos are
+    // netted off by NetSuite, which is the figure the team collects (Stuart's point 5).
+    const rows = await nsQuery(
+        `SELECT t.id, t.tranid, t.trandate, t.duedate, t.entity, BUILTIN.DF(t.entity) AS customername, `
+        + `ABS(NVL(t.foreigntotal, 0)) AS total, ABS(NVL(t.foreignamountunpaid, 0)) AS due `
+        + `FROM transaction t WHERE ${where} ORDER BY t.duedate`,
+    );
+    return rows.slice(0, limit).map((r) => ({
+        id: String(r.id), tranid: r.tranid || '', date: r.trandate || '', dueDate: r.duedate || '',
+        customerNsId: String(r.entity || ''), customerName: r.customername || '',
+        total: Number(r.total || 0), due: money(r.due),
+    }));
+};
+
+// Staff: one customer's open invoices, or every open invoice for the brand (the chasing list).
+exports.nsOpenInvoices = onCall({
+    enforceAppCheck: true,
+    secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
+}, async (request) => {
+    assertStaffAdmin(request);
+    const { brand, customerId } = request.data || {};
+    const entityId = customerId ? nsPay.nsCustomerIdOf(customerId) : '';
+    const invoices = await nsOpenInvoiceRows({ brand, entityId });
+    return { invoices, totalDue: money(invoices.reduce((s, i) => s + i.due, 0)) };
+});
+
+// A portal customer sees THEIR OWN open invoices — the entity id is taken from their claim, never
+// from the browser, so no login can read another customer's ledger.
+exports.portalOpenInvoices = onCall({
+    cors: true,
+    secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
+}, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const entityId = nsPay.nsCustomerIdOf(customerId);
+    if (!entityId) return { invoices: [], totalDue: 0 };
+    const crm = await admin.firestore().collection('crm_records').doc(customerId).get();
+    const brand = String(((crm.exists && crm.data()) || {}).brandId || 'ce').toLowerCase();
+    const invoices = await nsOpenInvoiceRows({ brand, entityId });
+    return { invoices, totalDue: money(invoices.reduce((s, i) => s + i.due, 0)) };
+});
+
+// Charge a set of existing invoices and post ONE customer payment against them. Balances are
+// re-read from NetSuite at this moment: an invoice paid by cheque yesterday can no longer be paid
+// here, and the amount charged is what NetSuite says is owed — never a figure from the browser.
+const payNsInvoices = async ({ brand, customerId, invoiceIds, paymentToken, vaultId, environment, payerName, email, source }) => {
+    const ids = [...new Set((invoiceIds || []).map((x) => String(x)))].filter((x) => /^\d+$/.test(x));
+    if (!ids.length) throw new HttpsError('invalid-argument', 'Choose at least one invoice.');
+    const entityId = nsPay.nsCustomerIdOf(customerId);
+    const open = await nsOpenInvoiceRows({ brand, entityId });
+    const chosen = open.filter((i) => ids.includes(i.id));
+    if (chosen.length !== ids.length) {
+        throw new HttpsError('failed-precondition', 'One of those invoices is no longer open — refresh the list and try again.');
+    }
+    const amount = money(chosen.reduce((s, i) => s + i.due, 0));
+    if (!(amount > 0)) throw new HttpsError('failed-precondition', 'Nothing is owed on those invoices.');
+
+    const res = await nmiSale({
+        environment, brand, amount, paymentToken, vaultId,
+        orderRef: chosen.map((i) => i.tranid).join(', ').slice(0, 50), payerName, email,
+    });
+
+    const paidAt = Date.now();
+    const reference = chosen.length === 1 ? chosen[0].tranid : `${chosen.length} invoices`;
+    const payRec = await admin.firestore().collection('payments').add({
+        paidAt, amount, transactionId: res.transactionid || '', authCode: res.authcode || '',
+        brand, docType: 'NS_INVOICES', collection: '', docId: '', reference,
+        invoices: chosen.map((i) => ({ id: i.id, tranid: i.tranid, amount: i.due })),
+        customerId, payerName: cleanStr(payerName, 60), email: cleanStr(email, 120),
+        environment, method: 'CARD', gateway: 'NMI', source: source || 'STAFF',
+        netsuiteKind: 'customerpayment', netsuitePosted: false,
+    });
+    postPaymentSoon(payRec.id);
+    return { ok: true, amount, transactionId: res.transactionid || '', invoices: chosen.map((i) => i.tranid), environment };
+};
+
+exports.portalPayInvoices = onCall({
+    cors: true,
+    secrets: [NMI_SANDBOX_KEY_CE, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
+}, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const { invoiceIds, vaultId, paymentToken, saveCard } = request.data || {};
+    const cfg = await nmiConfig();
+    const crm = await admin.firestore().collection('crm_records').doc(customerId).get();
+    const brand = String(((crm.exists && crm.data()) || {}).brandId || 'ce').toLowerCase();
+
+    let useVault = String(vaultId || '');
+    if (useVault) {
+        const ok = (((crm.exists && crm.data()) || {}).vaultCards || []).some((c) => String(c.vaultId) === useVault);
+        if (!ok) throw new HttpsError('permission-denied', 'That card is not on your account.');
+    } else if (saveCard === true) {
+        useVault = (await vaultAddCard({ customerId, paymentToken, cfg })).vaultId;
+    }
+    return payNsInvoices({
+        brand, customerId, invoiceIds, environment: cfg.environment,
+        vaultId: useVault, paymentToken: useVault ? '' : paymentToken,
+        email: (request.auth.token && request.auth.token.email) || '', source: 'PORTAL',
+    });
+});
 
 // ── THE PORTAL'S OWN CHECKOUT ────────────────────────────────────────────────────────────────
 // A signed-in trade customer pays their own quote / sales order / invoice, and may keep a card for

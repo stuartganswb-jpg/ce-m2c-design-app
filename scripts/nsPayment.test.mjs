@@ -45,5 +45,12 @@ ok('a part payment applies only its own amount', cp.apply.items[0].amount === cp
 eq('deposit url', nsPaymentUrl('customerdeposit').endsWith('/customerDeposit'), true);
 eq('payment url', nsPaymentUrl('customerpayment').endsWith('/customerPayment'), true);
 
+// several existing NetSuite invoices, paid by one card charge
+const many = customerPaymentPayload({ customerId: 'CUST-4720', locationId: '17', transactionId: '777', reference: '3 invoices',
+  invoices: [{ id: '921725', amount: 100.25 }, { id: '921800', amount: 50 }] });
+eq('applies to every invoice selected', many.apply.items, [{ doc: '921725', apply: true, amount: 100.25 }, { doc: '921800', apply: true, amount: 50 }]);
+eq('payment is the sum of them', many.payment, 150.25);
+eq('one invoice still works the old way', customerPaymentPayload({ customerId: '1', invoiceNsId: '9', locationId: '17', amount: 10 }).apply.items, [{ doc: '9', apply: true, amount: 10 }]);
+
 console.log(`nsPayment: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
