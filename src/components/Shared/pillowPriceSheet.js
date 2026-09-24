@@ -109,7 +109,7 @@ export function mergePricingFromChart(existing, parsed) {
     const sizes = {};
     parsed.sizeKeys.forEach(k => {
         const prev = (cur.sizes || {})[k] || {};
-        sizes[k] = { label: k, ...(prev.fillItem ? { fillItem: prev.fillItem } : {}), ...(prev.zipperItem ? { zipperItem: prev.zipperItem } : {}) };
+        sizes[k] = { label: k, ...(prev.fillItem ? { fillItem: prev.fillItem } : {}), ...(prev.zipperItem ? { zipperItem: prev.zipperItem } : {}), ...(prev.minCut ? { minCut: prev.minCut } : {}) };
     });
     return { ...cur, prices: parsed.prices, fabricGroups, sizes, sizeOrder: parsed.sizeKeys.slice() };
 }

@@ -73,6 +73,7 @@ const existing = {
 const merged = mergePricingFromChart(existing, p);
 ok('prices are REPLACED by the chart (the old 999 and group Z are gone)', merged.prices['22x22'].A === 650 && merged.prices['22x22'].Z === undefined && !merged.fabricGroups.Z);
 ok('labour, details, rollup, allowance survive the chart', merged.seamLabor.perSeam === 15 && merged.details.FLANGE.price === 20 && merged.rollupItem.itemId === 'u9' && merged.seamAllowanceIn === 0.75);
+ok('a kept size keeps its stored min cut', mergePricingFromChart({ ...existing, sizes: { '22x22': { minCut: { lengthIn: 24, widthIn: 24 } } } }, p).sizes['22x22'].minCut.lengthIn === 24);
 ok('a kept size keeps its fill / zipper items; a size off the chart drops', merged.sizes['22x22'].fillItem === 'FILL-22' && merged.sizes['22x22'].zipperItem === 'ZIP-22' && !merged.sizes['12x20']);
 ok('a kept group keeps its upcharge, its label follows the chart', merged.fabricGroups.A.upcharge === 12 && merged.fabricGroups.A.label === 'Savery');
 ok('the size order rides the document', merged.sizeOrder.join(',') === p.sizeKeys.join(','));

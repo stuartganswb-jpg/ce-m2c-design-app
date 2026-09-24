@@ -22,6 +22,7 @@ export const EXAMPLE_PREFIX = 'EXAMPLE-';
 /** The column contract — header text is what the reader matches (case-insensitive, trimmed). */
 export const FABRIC_COLS = [
     { key: 'code', header: 'Item Code', width: 20, rule: 'REQUIRED. Our item number — the NetSuite item name (the fabric-yardage item; every throw already has one). Unique. Matches an existing Uniquity item to UPDATE it; a new code CREATES the item. A code starting EXAMPLE- is refused.' },
+    { key: 'convertedFrom', header: 'Throw Item Code', width: 20, rule: 'The THROW item this fabric yardage is converted from (blank for a fabric bought by the yard, and for a trim).', aliases: ['Converted From (throw code)'] },
     { key: 'name', header: 'Name', width: 34, rule: 'REQUIRED. The description the board and the quote print (pattern + colour).' },
     { key: 'type', header: 'Type', width: 9, rule: 'REQUIRED. FABRIC = by the running yard (the yardage item) · TRIM = a trim or fringe by the yard.' },
     { key: 'priceGroup', header: 'Price Group', width: 11, rule: 'REQUIRED for FABRIC: A–E from the Pillow Size Price Chart (must exist in the live table). Blank for TRIM.' },
@@ -30,7 +31,6 @@ export const FABRIC_COLS = [
     { key: 'patternId', header: 'Pattern #', width: 14, rule: 'Optional. The pattern id on the swatch / quote (Asset Gallery pattern field).' },
     { key: 'color', header: 'Color', width: 14, rule: 'Optional. Colour name or number.' },
     { key: 'cost', header: 'Cost per Yard ($)', width: 14, rule: 'Optional.' },
-    { key: 'convertedFrom', header: 'Converted From (throw code)', width: 24, rule: 'Optional. The THROW item this yardage item is converted from.' },
     { key: 'vendor', header: 'Vendor', width: 16, rule: 'Optional.' },
     { key: 'homeBin', header: 'Home Bin', width: 10, rule: 'Optional. Warehouse bin.' },
     { key: 'stocked', header: 'Stocked (TRUE/FALSE)', width: 18, rule: 'Optional, default TRUE. FALSE = special order only.' },
@@ -39,13 +39,42 @@ export const FABRIC_COLS = [
 ];
 
 export const EXAMPLE_ROWS = [
-    ['EXAMPLE-SAVERY-NAT', 'Savery Natural linen 54"', 'FABRIC', 'A', 54, 'FALSE', 'SAVERY', 'Natural', 28, '', 'Uniq Fabric', 'F-01', 'TRUE', '', 'group A typical fabric'],
-    ['EXAMPLE-NAKA10-FAB', 'Naka 10 fabric yardage (from the Naka 10 throw)', 'FABRIC', 'C', 40, 'TRUE', 'NAKA', '10', 45, 'NAKA10-THROW', 'Uniq Throws', 'F-04', 'TRUE', '', 'converted from the throw; railroad'],
-    ['EXAMPLE-BRUSH-FRINGE-IVY', 'Brush fringe ivory 2"', 'TRIM', '', '', '', 'BF-2', 'Ivory', 6.5, '', 'Romo Trim', 'T-02', 'TRUE', '', 'per yard'],
+    ['EXAMPLE-SAVERY-NAT', '', 'Savery Natural linen 54"', 'FABRIC', 'A', 54, 'FALSE', 'SAVERY', 'Natural', 28, 'Uniq Fabric', 'F-01', 'TRUE', '', 'group A typical fabric, bought by the yard'],
+    ['EXAMPLE-NAKA10-FAB', 'NAKA10-THROW', 'Naka 10 fabric yardage (from the Naka 10 throw)', 'FABRIC', 'C', 40, 'TRUE', 'NAKA', '10', 45, 'Uniq Throws', 'F-04', 'TRUE', '', 'converted from the throw; railroad'],
+    ['EXAMPLE-BRUSH-FRINGE-IVY', '', 'Brush fringe ivory 2"', 'TRIM', '', '', '', 'BF-2', 'Ivory', 6.5, 'Romo Trim', 'T-02', 'TRUE', '', 'per yard'],
 ];
 
+/** The cut columns the download adds after the contract columns — computed, one side, ignored on import. */
+export const cutColumnHeaderOf = (sizeKey) => `Cut ${sizeKey} (in, one side)`;
+export const CUT_COLUMN_RX = /^CUT\s+\d+(\.\d+)?X\d+(\.\d+)?\s*\(/i;
+
+/**
+ * The live library → the sheet's rows (one per fabric / trim the board can pick), the office's
+ * working copy: code, throw code, name, type, group, width, railroad, pattern, colour, cost, vendor,
+ * bin, stocked, NetSuite id, notes — in FABRIC_COLS order. Cut columns are the caller's (they need
+ * the price table). Items that are neither fabric nor trim are not listed.
+ */
+export const isFabricItem = (it) => ['FABRIC', 'TEXTILE', 'RAW MATERIAL'].includes(String((it && it.manufacturingSpecs && it.manufacturingSpecs.productType) || (it && it.productType) || '').toUpperCase());
+export const isTrimItem = (it) => ['TRIMMING', 'TRIM'].includes(String((it && it.manufacturingSpecs && it.manufacturingSpecs.productType) || (it && it.productType) || '').toUpperCase());
+export const fabricSheetRowsOf = (items = []) => (items || [])
+    .filter(it => isFabricItem(it) || isTrimItem(it))
+    .sort((a, b) => String(a.legacyErpId || a.itemId || '').localeCompare(String(b.legacyErpId || b.itemId || '')))
+    .map(it => {
+        const specs = it.manufacturingSpecs || {};
+        const cd = specs.customData || {};
+        const fabric = isFabricItem(it);
+        return [
+            it.legacyErpId || it.itemId || '', cd.convertedFrom || '', it.itemName || '', fabric ? 'FABRIC' : 'TRIM',
+            fabric ? (specs.priceGroup || '') : '', fabric && specs.width ? specs.width : '', cd.railroad ? 'TRUE' : 'FALSE',
+            cd.patternId || '', cd.color || '', specs.cost === undefined || specs.cost === null || specs.cost === '' ? '' : specs.cost,
+            specs.vendorName || '', specs.homeBin || '', specs.isStocked === false ? 'FALSE' : 'TRUE', it.netSuiteInternalId || '', cd.importNotes || '',
+        ];
+    });
+
 export const HOW_TO_NOTES = [
-    'The three grey EXAMPLE- rows on the Fabrics sheet are examples — delete them (the importer refuses any code starting EXAMPLE-).',
+    'The sheet is PRE-FILLED with every fabric and trim in the Uniquity library. Edit a row to update the item; add a row (a new Item Code) to create one; the three grey EXAMPLE- rows are examples — delete them (the importer refuses any code starting EXAMPLE-).',
+    'The Cut columns (one per standard pillow size) are COMPUTED from the fabric\'s width, its railroad flag and the minimum cut per size on the Pillow Pricing screen: the length to cut off the roll for ONE side, or — when the fabric is too narrow for that size. They are for the team to work from and are ignored on upload.',
+    'Throw Item Code = the throw this fabric yardage is converted from; blank for goods bought by the yard.',
     'Unit of measure is derived from Type: FABRIC and TRIM are kept and used in running yards. Do not add a UOM column.',
     'Cuts of a fabric are NOT items and are not on this sheet: they live in the Fabric Cut Stock ledger (6.5 Tools on the Uniquity brand), declared by the sewing floor when a pillow is finished.',
     'The pillow price = the size at the HIGHEST price group among its panels (Pillow Size Price Chart) + labour per seam + details. A FABRIC row with no Price Group cannot be used on a pillow.',
@@ -73,7 +102,7 @@ export const findFabricSheet = (sheets = []) => {
 };
 const colIndexOf = (header) => {
     const idx = {};
-    FABRIC_COLS.forEach(c => { const i = (header || []).findIndex(h => up(h) === up(c.header)); if (i >= 0) idx[c.key] = i; });
+    FABRIC_COLS.forEach(c => { const names = [c.header, ...(c.aliases || [])].map(up); const i = (header || []).findIndex(h => names.includes(up(h))); if (i >= 0) idx[c.key] = i; });
     return idx;
 };
 

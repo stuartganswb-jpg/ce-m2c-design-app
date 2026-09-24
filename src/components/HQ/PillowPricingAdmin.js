@@ -24,6 +24,7 @@ import {
 } from '../Shared/pillowPriceSheet';
 import { parseFabricSheet, planFabricRows, fabricUpdatePatchOf, fabricCreateDocOf, newFabricItemId, fabricPlanSummary } from '../Shared/pillowFabricSheet';
 import { downloadFabricTemplate, readFabricWorkbook, FABRIC_TEMPLATE_NAME } from '../Shared/pillowFabricXlsx';
+import { sizeCutTableOf, minCutPatchOf, sizesWithMinCuts, allowanceOf } from '../Shared/pillowCuts';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
 const card = { background: '#fff', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' };
@@ -55,6 +56,9 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
     const [fabParsed, setFabParsed] = useState(null);
     const [fabPlans, setFabPlans] = useState(null);
     const [fabArmed, setFabArmed] = useState(false);
+    // the minimum cut per size (ONE side) — follows the served document until the operator types
+    const [cutRows, setCutRows] = useState([]);
+    const [cutDirty, setCutDirty] = useState(false);
 
     useEffect(() => {
         const u1 = onSnapshot(doc(db, 'system', PILLOW_PRICING_DOC), (s) => setLive(s.exists() ? { ...DEFAULT_PILLOW_PRICING, ...s.data() } : { ...DEFAULT_PILLOW_PRICING }));
@@ -70,6 +74,10 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
         setRollup((live.rollupItem && live.rollupItem.legacyErpId) || '');
         setRows(detailRowsOf(live));
     }, [live, dirty]);
+    useEffect(() => {
+        if (!live || cutDirty) return;
+        setCutRows(sizeCutTableOf(live).map(r => ({ key: r.key, w: r.w, h: r.h, lengthIn: r.minCut && !r.minCut.derived ? String(r.minCut.lengthIn) : '', widthIn: r.minCut && !r.minCut.derived ? String(r.minCut.widthIn) : '', dflt: r.minCut })));
+    }, [live, cutDirty]);
 
     const cfg = live || DEFAULT_PILLOW_PRICING;
     const liveSizes = useMemo(() => (Array.isArray(cfg.sizeOrder) && cfg.sizeOrder.length ? cfg.sizeOrder : Object.keys(cfg.prices || {})), [cfg]);
@@ -141,8 +149,7 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
             setFabParsed(p); setFabFile(f.name);
             if (!p.ok) { say(`${f.name}: ${p.errors.length} problem(s) — nothing will be written until the sheet reads clean.`, 'err'); return; }
             // one read of the brand's library at preview time (2,800 records — not a listener)
-            const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('brandId', '==', 'uniquity')));
-            const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const items = await readLibrary();
             const plans = planFabricRows(p.rows, items);
             setFabPlans(plans);
             const n = fabricPlanSummary(plans);
@@ -172,10 +179,31 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
         } catch (err) { say(`Apply failed: ${err.message || err}`, 'err'); }
         setBusy(false);
     };
-    const downloadTemplate = async () => {
-        try { await downloadFabricTemplate({ config: cfg }); say(`${FABRIC_TEMPLATE_NAME} downloaded — the office fills it and sends it back.`, 'ok'); }
-        catch (err) { say(`Download failed: ${err.message || err}`, 'err'); }
+    const readLibrary = async () => {
+        const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('brandId', '==', 'uniquity')));
+        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     };
+    const downloadTemplate = async () => {
+        setBusy(true);
+        try {
+            const items = await readLibrary();
+            const r = await downloadFabricTemplate({ items, config: cfg });
+            say(`${FABRIC_TEMPLATE_NAME} downloaded — ${r.rows} fabric / trim row(s) from the library, ${r.sizes} cut column(s). The office edits it and sends it back.`, 'ok');
+        } catch (err) { say(`Download failed: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
+    const saveMinCuts = async () => {
+        const p = minCutPatchOf(cutRows);
+        if (!p.ok) { p.errors.forEach(m => say(m, 'err')); return; }
+        setBusy(true);
+        try {
+            await updateDoc(doc(db, 'system', PILLOW_PRICING_DOC), { sizes: sizesWithMinCuts(live, p.minCuts), minCutsSavedAt: Date.now(), minCutsSavedBy: currentUser || '' });
+            setCutDirty(false);
+            say(`Minimum cuts saved: ${Object.values(p.minCuts).filter(Boolean).length} size(s) set by hand, the rest at pillow + ${allowanceOf(live)}" allowance each way.`, 'ok');
+        } catch (err) { say(`Save failed: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
+    const setCut = (i, k, v) => { setCutDirty(true); setCutRows(prev => prev.map((r, j) => (j === i ? { ...r, [k]: v } : r))); };
 
     if (activeBrand !== 'uniquity') {
         return <div style={{ ...card, color: 'var(--ink-soft)' }}>Pillow pricing is a Uniquity table — switch the brand to Uniquity to edit it.</div>;
@@ -285,9 +313,36 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
             </div>
 
             <div style={card}>
+                <h3 style={h}>Minimum cut per size — ONE side</h3>
+                <p style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
+                    The rectangle one side of each standard pillow takes off the roll: length runs along the roll (the pillow's height), width across the bolt. A standard pillow takes two.
+                    Blank = the default, pillow + {allowanceOf(cfg)}" allowance each way. A railroad fabric takes the cut turned. Every fabric cut in stock is labelled with the largest size that fits inside it.
+                </p>
+                {cutRows.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontSize: '0.9rem' }}>Apply the price chart first — the sizes come from it.</div> : (
+                    <table style={{ borderCollapse: 'collapse', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                        <thead><tr>{['Size (wide × tall)', 'Default (in)', 'Cut length (in)', 'Cut width (in)'].map(t => <th key={t} style={{ ...mono, textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--line)' }}>{t}</th>)}</tr></thead>
+                        <tbody>
+                            {cutRows.map((r, i) => (
+                                <tr key={r.key}>
+                                    <td style={{ padding: '4px 8px', fontWeight: 600 }}>{r.key}</td>
+                                    <td style={{ padding: '4px 8px', color: 'var(--ink-soft)' }}>{r.dflt ? `${r.h + 2 * allowanceOf(cfg)} × ${r.w + 2 * allowanceOf(cfg)}` : '—'}</td>
+                                    <td style={{ padding: '4px 8px' }}><input value={r.lengthIn} onChange={e => setCut(i, 'lengthIn', e.target.value)} placeholder="default" style={{ ...field, width: '90px', textAlign: 'right' }} /></td>
+                                    <td style={{ padding: '4px 8px' }}><input value={r.widthIn} onChange={e => setCut(i, 'widthIn', e.target.value)} placeholder="default" style={{ ...field, width: '90px', textAlign: 'right' }} /></td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+                <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button onClick={saveMinCuts} disabled={busy || !cutDirty} style={btn(true, busy || !cutDirty)}>Save minimum cuts</button>
+                    {cutDirty && <span style={{ ...mono, color: '#a86b00' }}>unsaved edits</span>}
+                </div>
+            </div>
+
+            <div style={card}>
                 <h3 style={h}>Fabrics — the yardage items and trims the board picks from</h3>
                 <p style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
-                    Download the sheet, the office fills one row per fabric (the yardage item every throw already has) or trim — code, name, FABRIC / TRIM, price group, bolt width, railroad, pattern, colour, cost — and drops it back here.
+                    Download the sheet — pre-filled with every fabric and trim in the library, its throw code, and one computed column per size with the one-side cut length that fabric needs — the office edits it (or adds rows) and drops it back here.
                     A known code UPDATES the item; a new code CREATES it in the Uniquity library. Base price and the NetSuite id are never touched unless typed. Cuts are not items: they live in Fabric Cut Stock.
                 </p>
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>

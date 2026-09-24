@@ -5,6 +5,7 @@
 import {
     FABRIC_COLS, EXAMPLE_ROWS, findFabricSheet, parseFabricSheet, planFabricRows, fabricFieldsOf,
     fabricUpdatePatchOf, fabricCreateDocOf, fabricPlanSummary, newFabricItemId, PRODUCT_TYPE_OF,
+    cutColumnHeaderOf, CUT_COLUMN_RX, fabricSheetRowsOf,
 } from '../src/components/Shared/pillowFabricSheet.js';
 
 let pass = 0, fail = 0;
@@ -14,10 +15,11 @@ const header = FABRIC_COLS.map(c => c.header);
 const grid = (rows) => [header, ...rows];
 const sheetsOf = (rows, name = 'Fabrics') => [{ name: 'How to fill', grid: [['Column', 'Rule']] }, { name, grid: grid(rows) }];
 const GROUPS = ['A', 'B', 'C', 'D', 'E'];
+// FABRIC_COLS order: code · throw · name · type · group · width · railroad · pattern · color · cost · vendor · bin · stocked · nsId · notes
 const R = {
-    savery: ['SAVERY-NAT', 'Savery Natural linen 54"', 'FABRIC', 'A', 54, 'FALSE', 'SAVERY', 'Natural', 28, '', 'Uniq Fabric', 'F-01', 'TRUE', '', 'group A'],
-    naka: ['NAKA10-FAB', 'Naka 10 fabric yardage', 'fabric', 'c', '40', 'true', 'NAKA', '10', '$45.00', 'NAKA10-THROW', 'Uniq Throws', 'f-04', '', '', ''],
-    fringe: ['BRUSH-FRINGE-IVY', 'Brush fringe ivory 2"', 'TRIM', '', '', '', 'BF-2', 'Ivory', 6.5, '', 'Romo Trim', 'T-02', 'TRUE', '', 'per yard'],
+    savery: ['SAVERY-NAT', '', 'Savery Natural linen 54"', 'FABRIC', 'A', 54, 'FALSE', 'SAVERY', 'Natural', 28, 'Uniq Fabric', 'F-01', 'TRUE', '', 'group A'],
+    naka: ['NAKA10-FAB', 'NAKA10-THROW', 'Naka 10 fabric yardage', 'fabric', 'c', '40', 'true', 'NAKA', '10', '$45.00', 'Uniq Throws', 'f-04', '', '', ''],
+    fringe: ['BRUSH-FRINGE-IVY', '', 'Brush fringe ivory 2"', 'TRIM', '', '', '', 'BF-2', 'Ivory', 6.5, 'Romo Trim', 'T-02', 'TRUE', '', 'per yard'],
 };
 
 // ── reading ──────────────────────────────────────────────────────────────────────────────────
@@ -35,18 +37,33 @@ ok('the example rows carry every column', EXAMPLE_ROWS.every(r => r.length === F
 
 // ── refusals ─────────────────────────────────────────────────────────────────────────────────
 const codes = (rows) => parseFabricSheet(sheetsOf(rows), { groups: GROUPS }).errors.map(e => e.code);
-ok('no code refuses', codes([['', 'x', 'FABRIC', 'A', 54]]).includes('CODE_MISSING'));
+ok('no code refuses', codes([['', '', 'x', 'FABRIC', 'A', 54]]).includes('CODE_MISSING'));
 ok('a code twice refuses', codes([R.savery, R.savery]).includes('CODE_DUPLICATE'));
-ok('a type outside FABRIC / TRIM refuses (PANEL is not an item)', codes([['X', 'x', 'PANEL', 'A', 54]]).includes('TYPE_UNREADABLE'));
-ok('a FABRIC with no group refuses', codes([['X', 'x', 'FABRIC', '', 54]]).includes('GROUP_MISSING'));
-ok('a group outside the live table refuses and names the table', (() => { const e = parseFabricSheet(sheetsOf([['X', 'x', 'FABRIC', 'Q', 54]]), { groups: GROUPS }).errors[0]; return e.code === 'GROUP_UNKNOWN' && /A, B, C, D, E/.test(e.message) && /row 2 \(X\)/.test(e.message); })());
-ok('no live groups yet → any group passes the reader (the table gate is the screen\'s)', parseFabricSheet(sheetsOf([['X', 'x', 'FABRIC', 'Q', 54]]), { groups: [] }).ok);
-ok('a FABRIC with no width refuses', codes([['X', 'x', 'FABRIC', 'A', '']]).includes('WIDTH_MISSING'));
-ok('a cost that is not a number refuses', codes([['X', 'x', 'FABRIC', 'A', 54, '', '', '', 'call']]).includes('COST_NOT_A_NUMBER'));
-ok('Railroad "maybe" refuses', codes([['X', 'x', 'FABRIC', 'A', 54, 'maybe']]).includes('RAILROAD_UNREADABLE'));
+ok('a type outside FABRIC / TRIM refuses (PANEL is not an item)', codes([['X', '', 'x', 'PANEL', 'A', 54]]).includes('TYPE_UNREADABLE'));
+ok('a FABRIC with no group refuses', codes([['X', '', 'x', 'FABRIC', '', 54]]).includes('GROUP_MISSING'));
+ok('a group outside the live table refuses and names the table', (() => { const e = parseFabricSheet(sheetsOf([['X', '', 'x', 'FABRIC', 'Q', 54]]), { groups: GROUPS }).errors[0]; return e.code === 'GROUP_UNKNOWN' && /A, B, C, D, E/.test(e.message) && /row 2 \(X\)/.test(e.message); })());
+ok('no live groups yet → any group passes the reader (the table gate is the screen\'s)', parseFabricSheet(sheetsOf([['X', '', 'x', 'FABRIC', 'Q', 54]]), { groups: [] }).ok);
+ok('a FABRIC with no width refuses', codes([['X', '', 'x', 'FABRIC', 'A', '']]).includes('WIDTH_MISSING'));
+ok('a cost that is not a number refuses', codes([['X', '', 'x', 'FABRIC', 'A', 54, '', '', '', 'call']]).includes('COST_NOT_A_NUMBER'));
+ok('Railroad "maybe" refuses', codes([['X', '', 'x', 'FABRIC', 'A', 54, 'maybe']]).includes('RAILROAD_UNREADABLE'));
 ok('an empty sheet refuses', codes([]).includes('NO_ROWS'));
-ok('a header missing Price Group refuses by name', (() => { const g = [header.filter(h => h !== 'Price Group'), ['X', 'x', 'FABRIC']]; const e = parseFabricSheet([{ name: 'Fabrics', grid: g }]).errors[0]; return e.code === 'HEADER_MISSING' && /Price Group/.test(e.message); })());
-ok('a trim with a group is a warning, not a refusal', (() => { const r = parseFabricSheet(sheetsOf([['T', 'trim', 'TRIM', 'A']]), { groups: GROUPS }); return r.ok && r.warnings.length === 1; })());
+ok('a header missing Price Group refuses by name', (() => { const g = [header.filter(h => h !== 'Price Group'), ['X', '', 'x', 'FABRIC']]; const e = parseFabricSheet([{ name: 'Fabrics', grid: g }]).errors[0]; return e.code === 'HEADER_MISSING' && /Price Group/.test(e.message); })());
+ok('a trim with a group is a warning, not a refusal', (() => { const r = parseFabricSheet(sheetsOf([['T', '', 'trim', 'TRIM', 'A']]), { groups: GROUPS }); return r.ok && r.warnings.length === 1; })());
+
+// ── the sheet the team works from ────────────────────────────────────────────────────────────
+ok('the old "Converted From (throw code)" header is still read', (() => { const hdr = header.map(x => (x === 'Throw Item Code' ? 'Converted From (throw code)' : x)); const r = parseFabricSheet([{ name: 'Fabrics', grid: [hdr, R.naka] }], { groups: GROUPS }); return r.ok && r.rows[0].convertedFrom === 'NAKA10-THROW'; })());
+ok('cut columns on the sheet are ignored on upload', (() => { const hdr = [...header, cutColumnHeaderOf('20x12'), cutColumnHeaderOf('52x28')]; const r = parseFabricSheet([{ name: 'Fabrics', grid: [hdr, [...R.savery, 13, 29]] }], { groups: GROUPS }); return r.ok && r.rows.length === 1; })());
+ok('a cut column header is recognisable', CUT_COLUMN_RX.test(cutColumnHeaderOf('20x12')) && !CUT_COLUMN_RX.test('Cost per Yard ($)'));
+const lib = [
+    { legacyErpId: 'NAKA10-FAB', itemName: 'Naka 10 yardage', manufacturingSpecs: { productType: 'FABRIC', priceGroup: 'C', width: 40, uom: 'RY', cost: 45, vendorName: 'Uniq Throws', homeBin: 'F-04', isStocked: true, customData: { railroad: true, convertedFrom: 'NAKA10-THROW', patternId: 'NAKA', color: '10' } }, netSuiteInternalId: '5' },
+    { legacyErpId: 'BELL/10P19X19', itemName: 'Bell pillow', manufacturingSpecs: { productType: 'Pillow' } },
+    { legacyErpId: 'BRUSH-FRINGE-IVY', itemName: 'Brush fringe', manufacturingSpecs: { productType: 'Trimming', isStocked: false } },
+];
+const pre = fabricSheetRowsOf(lib);
+ok('pre-fill lists fabrics and trims only, sorted by code', pre.length === 2 && pre[0][0] === 'BRUSH-FRINGE-IVY' && pre[1][0] === 'NAKA10-FAB');
+ok('a pre-filled fabric row carries the throw code, group, width, railroad, pattern, colour, cost, vendor, bin, stocked, NetSuite id in column order', JSON.stringify(pre[1]) === JSON.stringify(['NAKA10-FAB', 'NAKA10-THROW', 'Naka 10 yardage', 'FABRIC', 'C', 40, 'TRUE', 'NAKA', '10', 45, 'Uniq Throws', 'F-04', 'TRUE', '5', '']), JSON.stringify(pre[1]));
+ok('a pre-filled trim row: TRIM, no group / width, stocked FALSE as stored', pre[0][3] === 'TRIM' && pre[0][4] === '' && pre[0][5] === '' && pre[0][12] === 'FALSE');
+ok('a pre-filled row reads back as a SKIP (round trip)', (() => { const r = parseFabricSheet([{ name: 'Fabrics', grid: [header, pre[1]] }], { groups: GROUPS }); return r.ok && planFabricRows(r.rows, lib)[0].action === 'SKIP'; })());
 
 // ── the plan against the library ─────────────────────────────────────────────────────────────
 const items = [
