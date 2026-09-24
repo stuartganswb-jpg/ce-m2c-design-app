@@ -10,6 +10,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../../firebase';
 import { PayQr } from './PayLinkPanel';
+import { fetchOpenInvoices, diagnoseOpenInvoices } from './nsInvoiceQuery';
 
 const theme = { ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', mono: "'IBM Plex Mono', monospace", sans: "'Inter', -apple-system, sans-serif" };
 const usd = (v) => `$${Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -38,15 +39,15 @@ export default function NsInvoicesPanel({ brand = 'ce', customerId = '', custome
         setBusy(true); setErr(''); setLink(null);
         if (!offset) setPicked({});
         try {
-            const res = await httpsCallable(functions, 'nsOpenInvoices')({
+            const res = await fetchOpenInvoices({
                 brand, customerId: mode === 'CUSTOMER' ? customerId : '',
                 customerLike: mode === 'ALL' ? (opts.who !== undefined ? opts.who : who) : '',
                 dueFrom: opts.dueFrom !== undefined ? opts.dueFrom : dueFrom,
                 dueTo: opts.dueTo !== undefined ? opts.dueTo : dueTo,
                 limit: PAGE, offset,
             });
-            setRows((prev) => (offset ? [...(prev || []), ...(res.data.invoices || [])] : (res.data.invoices || [])));
-            setMore(res.data.hasMore === true);
+            setRows((prev) => (offset ? [...(prev || []), ...(res.invoices || [])] : (res.invoices || [])));
+            setMore(res.hasMore === true);
             setPage(offset / PAGE);
         } catch (e) { setErr(e.message || String(e)); if (!offset) setRows([]); }
         finally { setBusy(false); }
@@ -109,7 +110,7 @@ export default function NsInvoicesPanel({ brand = 'ce', customerId = '', custome
                         <button style={btn(false)} disabled={busy} title="Count invoices at each step of the query, to see which condition is excluding them"
                             onClick={async () => {
                                 setBusy(true); setDiag(null);
-                                try { const res = await httpsCallable(functions, 'nsOpenInvoices')({ brand, diagnose: true }); setDiag(res.data.diagnosis || []); }
+                                try { setDiag(await diagnoseOpenInvoices(brand)); }
                                 catch (e) { setErr(e.message || String(e)); }
                                 finally { setBusy(false); }
                             }}>Why is this empty?</button>

@@ -3090,47 +3090,10 @@ const nsOpenInvoiceRows = async ({ brand, entityId, customerLike = '', dueFrom =
     return invoices;
 };
 
-// Staff: one customer's open invoices, or every open invoice for the brand (the chasing list).
-exports.nsOpenInvoices = onCall({
-    enforceAppCheck: true,
-    secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
-}, async (request) => {
-    assertStaffAdmin(request);
-    const { brand, customerId, customerLike, dueFrom, dueTo, limit, offset, diagnose } = request.data || {};
-    const entityId = customerId ? nsPay.nsCustomerIdOf(customerId) : '';
-
-    // WHY IS IT EMPTY? Count at each step so the failing predicate names itself, instead of us
-    // guessing which column NetSuite fills on this account (2026-09-24).
-    if (diagnose === true) {
-        const sub = NS_BRAND_SUBSIDIARY[String(brand || 'ce').toLowerCase()];
-        const steps = [
-            // Does this ROLE see transactions at all? SuiteQL returns zero rows — not an error —
-            // for record types the integration role lacks permission on (2026-09-24).
-            ['any transaction at all', 'SELECT COUNT(*) AS n FROM transaction'],
-            ['sales orders (the app reads these today)', "SELECT COUNT(*) AS n FROM transaction WHERE type = 'SalesOrd'"],
-            ['customers', 'SELECT COUNT(*) AS n FROM customer'],
-            ['invoices of any kind', "SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc'"],
-            [`in subsidiary ${sub}`, `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)}`],
-            ['not voided', `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)} AND NVL(t.voided, 'F') = 'F'`],
-            ['with foreignamountunpaid > 0', `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)} AND NVL(t.foreignamountunpaid, 0) > 0.005`],
-            ['status open (CustInvc:A)', `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)} AND t.status = 'CustInvc:A'`],
-            ['joined to customer', `SELECT COUNT(*) AS n FROM transaction t JOIN customer c ON c.id = t.entity WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)}`],
-            ['subsidiary on the LINE instead', `SELECT COUNT(DISTINCT t.id) AS n FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'CustInvc' AND tl.subsidiary = ${Number(sub)}`],
-            ["Eric's shape: open + line subsidiary", `SELECT COUNT(DISTINCT t.id) AS n FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'CustInvc' AND t.status = 'CustInvc:A' AND tl.subsidiary = ${Number(sub)}`],
-        ];
-        const out = [];
-        for (const [what, sql] of steps) {
-            try { const rows = await nsQuery(sql, { limit: 1 }); out.push({ step: what, count: Number((rows[0] || {}).n || 0) }); }
-            catch (e) { out.push({ step: what, error: String(e.message || e).slice(0, 200) }); }
-        }
-        return { diagnosis: out, invoices: [], totalDue: 0, hasMore: false };
-    }
-    const invoices = await nsOpenInvoiceRows({ brand, entityId, customerLike, dueFrom, dueTo, limit, offset });
-    return {
-        invoices, totalDue: money(invoices.reduce((s, i) => s + i.due, 0)),
-        hasMore: invoices.hasMore === true, offset: Number(offset) || 0,
-    };
-});
+// (The STAFF list is not here: HQ reads NetSuite through the netsuiteProxy like every other staff
+// screen — Shared/nsInvoiceQuery. A second server-side path with its own secret bindings failed to
+// deploy and bought nothing, 2026-09-24. Only the PORTAL needs a function, because a customer has
+// no proxy access.)
 
 // A portal customer sees THEIR OWN open invoices — the entity id is taken from their claim, never
 // from the browser, so no login can read another customer's ledger.
