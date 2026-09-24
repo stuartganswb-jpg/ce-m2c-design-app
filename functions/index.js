@@ -2947,7 +2947,13 @@ const nsQuery = async (sql, { limit = 1000, offset = 0 } = {}) => {
         body: JSON.stringify({ q: sql }),
     });
     const body = await r.json().catch(() => ({}));
-    if (!r.ok) return [];
+    if (!r.ok) {
+        // NEVER return an empty list for a failed query: "nothing open" and "the query broke" must
+        // not look the same on screen (2026-09-24 — they did, and it cost a debugging round).
+        const detail = (body && body['o:errorDetails'] && body['o:errorDetails'][0] && body['o:errorDetails'][0].detail)
+            || (body && body.title) || `HTTP ${r.status}`;
+        throw new HttpsError('failed-precondition', `NetSuite refused the query: ${String(detail).slice(0, 300)}`);
+    }
     const items = body.items || [];
     items.hasMore = body.hasMore === true;   // the caller must be able to say "there are more"
     return items;
