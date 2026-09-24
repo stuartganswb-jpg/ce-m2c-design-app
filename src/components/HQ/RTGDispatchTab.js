@@ -3933,34 +3933,38 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                     )}
                                 </div>
 
-                                {/* THE ONE SUPERVISOR OVERRIDE (Stuart 2026-09-02, answer 1: "keep one, behind the
-                                    scary confirm, in the detail view"). Nobody is ever REQUIRED to press it — every
-                                    record releases itself when its gates clear. It exists for the order the engine
-                                    will not take: parked before the switch, stopped, no route, or a gate a person has
-                                    decided to walk past. It goes through the same door the engine would (split /
-                                    shop / sales release / Route A), so a forced release is still anchored. */}
-                                <div style={{ display: 'flex', gap: '16px', marginTop: '10px', alignItems: 'center' }}>
-                                    <span style={{ flex: 2, fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
-                                        {(() => { const st = releaseStateOf(activeViewOrder, activeViewOrder.orderType === 'sales' && !activeViewOrder.finPayload && !activeViewOrder.routeTo ? 'sales' : 'stock'); return `Auto-release: ${st.text}`; })()}
-                                    </span>
-                                    <button
-                                        onClick={async () => {
-                                            const o = activeViewOrder;
-                                            const isSo = o.orderType === 'sales' && !o.finPayload && !o.routeTo && !!o.hqJobId;
-                                            if (!window.confirm(`⚠ SUPERVISOR OVERRIDE — release ${o.soId || o.woDisplayId || o.id} NOW?\n\nThe engine has not released it: ${releaseStateOf(o, isSo ? 'sales' : 'stock').text}.\n\nThis walks past whatever it is waiting on. The release goes through the normal door (${isSo ? 'split to both floors' : o.routeTo === 'SHOP' ? 'shop' : 'finishing + its NetSuite work order'}) and is logged under your name.`)) return;
-                                            setActiveViewOrder(null);
-                                            addLog(`⚠ SUPERVISOR OVERRIDE by ${currentUser || '?'}: releasing ${o.soId || o.id} — engine said "${releaseStateOf(o, isSo ? 'sales' : 'stock').text}".`, 'warn');
-                                            if (isSo) return autoSplitSalesOrder(o);
-                                            if (o.routeTo === 'SHOP') return pushToShop(o, o.orderType || 'stock');
-                                            return pushToFinishing(o, o.orderType || 'stock');
-                                        }}
-                                        style={{ flex: 1, padding: '16px', background: '#d9534f', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', fontWeight: 700 }}
-                                    >
-                                        ⚠ Supervisor override — release now
-                                    </button>
-                                </div>
                             </div>
                         )}
+                        {/* ON EVERY FACE OF THE WINDOW (Eric 2026-09-24, App Imp: "the app says I can release an order by
+                            clicking View — there is no button under View"). The override sat inside the CPQ branch of the
+                            details above, so a stock build or an Order Entry pair — the records the engine most often leaves
+                            parked — never showed it. It reads the order only, never the details, so it lives outside them. */}
+                            {/* THE ONE SUPERVISOR OVERRIDE (Stuart 2026-09-02, answer 1: "keep one, behind the
+                                scary confirm, in the detail view"). Nobody is ever REQUIRED to press it — every
+                                record releases itself when its gates clear. It exists for the order the engine
+                                will not take: parked before the switch, stopped, no route, or a gate a person has
+                                decided to walk past. It goes through the same door the engine would (split /
+                                shop / sales release / Route A), so a forced release is still anchored. */}
+                            <div style={{ display: 'flex', gap: '16px', marginTop: '10px', alignItems: 'center' }}>
+                                <span style={{ flex: 2, fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+                                    {(() => { const st = releaseStateOf(activeViewOrder, activeViewOrder.orderType === 'sales' && !activeViewOrder.finPayload && !activeViewOrder.routeTo ? 'sales' : 'stock'); return `Auto-release: ${st.text}`; })()}
+                                </span>
+                                <button
+                                    onClick={async () => {
+                                        const o = activeViewOrder;
+                                        const isSo = o.orderType === 'sales' && !o.finPayload && !o.routeTo && !!o.hqJobId;
+                                        if (!window.confirm(`⚠ SUPERVISOR OVERRIDE — release ${o.soId || o.woDisplayId || o.id} NOW?\n\nThe engine has not released it: ${releaseStateOf(o, isSo ? 'sales' : 'stock').text}.\n\nThis walks past whatever it is waiting on. The release goes through the normal door (${isSo ? 'split to both floors' : o.routeTo === 'SHOP' ? 'shop' : 'finishing + its NetSuite work order'}) and is logged under your name.`)) return;
+                                        setActiveViewOrder(null);
+                                        addLog(`⚠ SUPERVISOR OVERRIDE by ${currentUser || '?'}: releasing ${o.soId || o.id} — engine said "${releaseStateOf(o, isSo ? 'sales' : 'stock').text}".`, 'warn');
+                                        if (isSo) return autoSplitSalesOrder(o);
+                                        if (o.routeTo === 'SHOP') return pushToShop(o, o.orderType || 'stock');
+                                        return pushToFinishing(o, o.orderType || 'stock');
+                                    }}
+                                    style={{ flex: 1, padding: '16px', background: '#d9534f', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', fontWeight: 700 }}
+                                >
+                                    ⚠ Supervisor override — release now
+                                </button>
+                            </div>
                     </div>
                 </div>
             )}

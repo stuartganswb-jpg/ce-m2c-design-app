@@ -2677,6 +2677,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             alert(`✅ NetSuite updated: ${posted.join(' + ')}.${skipped.length ? `\n\n⚠️ Skipped ${skipped.length} counted item(s) with no NetSuite Internal ID.` : ''}`);
             writeLog(`Count push: ${posted.join(' + ')}.${countMemo.trim() ? ` Memo: ${countMemo.trim()}` : ''}`, 'wms');
             setPhysicalCounts({});
+            setExtraCountRows([]);   // the added bin rows were for THIS count — they do not outlive the push (Eric 2026-09-24)
             setBinEdits({});
             setCountMemo("");
             setShowSynapsis(false);
@@ -4264,7 +4265,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         // Operator-added rows: count stock in a bin NetSuite doesn't show. binOnHand 0 → +adjustment.
         const item = baseFilteredItems.find(p => p.id === x.itemId);
         return item ? { ...item, rowKey: x.id, countBin: '', binOnHand: 0, isExistingBin: false, isExtra: true } : null;
-    }).filter(Boolean));
+    }).filter(Boolean).filter(r => {
+        // THE ADDED ROWS OBEY THE SEARCH TOO (Eric 2026-09-24, App Imp: "H1-75R rod stock is showing up
+        // in the Bin Count results when it should not, and multiple instances of, regardless of the item
+        // searched"). They were appended AFTER the search filter, so once someone added bin rows for an
+        // item they sat on every search, one per addition. Same item test as the rows above; a typed
+        // bin cannot match a row whose bin is still empty.
+        const term = searchQuery.trim().toLowerCase();
+        if (!term) return true;
+        return (r.itemName || '').toLowerCase().includes(term) || String(r.erpId || '').toLowerCase().includes(term) || String(r.itemId || '').toLowerCase().includes(term) || String(binEdits[r.rowKey] || '').toLowerCase().includes(term);
+    }));
 
     // DELETE a convert to-do (admin/superadmin ✕ on the Needs Phosphating list, 2026-08-29): the
     // one affordance this tab never had — stray demands from deleted or re-run ordering attempts
