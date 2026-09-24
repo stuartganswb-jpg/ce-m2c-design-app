@@ -711,14 +711,6 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   const [qsOrders, setQsOrders] = useState([]);   // Quick Ship (stocked) orders — invoiced from the CRM
   const [qsInvoice, setQsInvoice] = useState(null); // Quick Ship invoice modal
   const [payRowId, setPayRowId] = useState(null);   // which Order Entry SO row has its payment panel open
-  // The pay block a printed quote / sales order / invoice carries — present only while an OPEN link
-  // exists for that document (Shared/payBlock). Documents without one print exactly as before.
-  const docPay = usePayBlock({
-      collection: (activeDocJob && (activeDocJob.orderClass === 'QUICKSHIP' || activeDocJob.soId)) ? 'hq_sales_orders' : 'jobs',
-      docId: activeDocJob ? String(activeDocJob.jobId || activeDocJob.id || '') : '',
-      label: activeDocType === 'INVOICE' ? 'this invoice' : (activeDocType === 'QUOTE' ? 'this quote' : 'this order'),
-      enabled: !!activeDocJob && ['QUOTE', 'INVOICE', 'FULL_PACKET'].includes(String(activeDocType || '')),
-  });
 
   // Quick Ship orders live-feed: the customer card shows them with kit-grouped invoices
   // (customer pays the KIT price; NetSuite carries the per-item accounting lines).
@@ -738,6 +730,16 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   
   const [activeDocJob, setActiveDocJob] = useState(null);
   const [activeDocType, setActiveDocType] = useState('FULL_PACKET');
+  // The pay block a printed quote / sales order / invoice carries — present only while an OPEN link
+  // exists for that document (Shared/payBlock). Documents without one print exactly as before.
+  // MUST stay below activeDocJob/activeDocType: reading them above their declaration threw on every
+  // render and whited out the whole CRM tab (2026-09-23).
+  const docPay = usePayBlock({
+      collection: (activeDocJob && (activeDocJob.orderClass === 'QUICKSHIP' || activeDocJob.soId)) ? 'hq_sales_orders' : 'jobs',
+      docId: activeDocJob ? String(activeDocJob.jobId || activeDocJob.id || '') : '',
+      label: activeDocType === 'INVOICE' ? 'this invoice' : (activeDocType === 'QUOTE' ? 'this quote' : 'this order'),
+      enabled: !!activeDocJob && ['QUOTE', 'INVOICE', 'FULL_PACKET'].includes(String(activeDocType || '')),
+  });
   // Flow + finish lists behind an OPEN portal-request doc, fetched on demand — an unpriced
   // PORTAL_REQUEST has no cpqData.breakdown, so its document lines come from
   // portalRequest.selections resolved through the flow (Shared/portalRequestLines, the same logic
