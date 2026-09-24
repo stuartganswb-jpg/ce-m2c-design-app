@@ -1152,7 +1152,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         await updateDoc(doc(db, 'hq_purchase_orders', rcvPo.id), { receivingCart: cart, receivingCartId: cartId });
         setRcvPo(p => ({ ...p, receivingCart: cart, receivingCartId: cartId }));
     };
-    const cartSig = (cart) => JSON.stringify((Array.isArray(cart) ? cart : []).map(c => [Number(c.index), String(c.itemId || ''), Number(c.qty) || 0]).sort());
+    const cartSig = (cart) => JSON.stringify((Array.isArray(cart) ? cart : []).map(c => [Number(c.index), String(c.itemId || ''), Number(c.qty) || 0, String(c.bin || '').trim().toUpperCase()]).sort());
     const rcvAddToCart = async (idx) => {
         const line = (rcvPo.items || [])[idx];
         if (!line) return;
@@ -1180,6 +1180,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         try { await rcvSaveCart(rcvCart.filter(c => c.index !== idx)); }
         catch (e) { alert('Could not take it off the cart: ' + (e.message || e)); }
     };
+    // A LINE'S OWN BIN (Eric, App Imp 2026-09-22: "you cannot put away items on the Cart individually —
+    // all would go to the same BIN"). Optional per line; a line without one lands in the home bin
+    // scanned at put-away, so the one-scan habit still works. The receipt and the per-line bin moves
+    // underneath already took a bin per line (Shared/poReceiptLines) — only this screen assumed one.
+    const rcvSetLineBin = async (idx, bin) => {
+        try { await rcvSaveCart(rcvCart.map(c => (c.index === idx ? { ...c, bin: String(bin || '').toUpperCase() } : c))); }
+        catch (e) { alert('Could not set the bin: ' + (e.message || e)); }
+    };
 
     // PUT AWAY = the whole close for this cart, in order, each step guarded:
     //   1 the bin is real          same validator the pack put-away uses: refuse only on complete
@@ -1192,11 +1200,17 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const rcvPutAwayRun = async () => {
         if (!rcvPo || !rcvCart.length) return;
         const bin = String(rcvBin || '').trim().toUpperCase();
-        if (!bin) return alert('Scan the home bin — the pieces have to land somewhere.');
-        const chk = await platingBinCheck(bin);
-        if (!chk.ok) return alert(chk.msg || `"${bin}" is not a bin here.`);
+        // Each line lands in its own bin when it has one, else in the home bin (Eric 2026-09-22).
+        const binOf = (c) => String(c.bin || '').trim().toUpperCase() || bin;
+        if (rcvCart.some(c => !binOf(c))) return alert('Scan the home bin — the pieces have to land somewhere. (A line with its own bin on the cart does not need it.)');
+        const distinctBins = [...new Set(rcvCart.map(binOf))];
+        for (const b of distinctBins) {
+            const chk = await platingBinCheck(b);
+            if (!chk.ok) return alert(chk.msg || `"${b}" is not a bin here.`);
+        }
+        const binText = distinctBins.length === 1 ? distinctBins[0] : `${distinctBins.length} bins`;
         const pcs = rcvCart.reduce((a, c) => a + (Number(c.qty) || 0), 0);
-        if (!window.confirm(`Put away ${rcvCart.length} line(s) / ${pcs} pcs from ${poRef(rcvPo)} into ${bin}?\n\n${rcvCart.map(c => `   ${c.qty} × ${c.itemId}`).join('\n')}\n\nThe receipt posts to NetSuite from the queue, and any order waiting on these pieces is offered them next.`)) return;
+        if (!window.confirm(`Put away ${rcvCart.length} line(s) / ${pcs} pcs from ${poRef(rcvPo)} into ${binText}?\n\n${rcvCart.map(c => `   ${c.qty} × ${c.itemId} → ${binOf(c)}`).join('\n')}\n\nThe receipt posts to NetSuite from the queue, and any order waiting on these pieces is offered them next.`)) return;
         setRcvBusy(true);
         try {
             // 1½ — IS THIS STILL THE CART? Re-read the record: another tablet may have put it away, or
@@ -1216,7 +1230,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // 2 — the app's own record first, so what physically arrived is known even if NetSuite argues.
             const res = await recordPoReceipt({
                 poId: rcvPo.id, by: operator?.name || '',
-                receipts: rcvCart.map(c => ({ index: c.index, qty: c.qty, bin })),
+                receipts: rcvCart.map(c => ({ index: c.index, qty: c.qty, bin: binOf(c) })),
             });
             await rcvSaveCart([]);
             // The cart id dies with the cart: the next cart on this PO must mint its own, or its NetSuite
@@ -1240,14 +1254,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     const receiptObId = await enqueueNsWrite({
                         dedupeKey: `porcv-${String(rcvPo.id)}-${cartId}`,   // deterministic per cart (S2's finding 2026-09-16)
                         kind: 'itemreceipt',
-                        label: `Receipt — ${poRef(rcvPo)} (${pcs} pcs → ${bin})`,
+                        label: `Receipt — ${poRef(rcvPo)} (${pcs} pcs → ${binText})`,
                         sourceApp: 'WMS', createdBy: operator?.name || '',
                         targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder/${rcvPo.nsPoId}/!transform/itemreceipt`,
                         method: 'POST',
-                        payload: { memo: nsMemo(`PO ${poRef(rcvPo)} received ${pcs} pcs @ ${bin}`), item: { items: built.items } },
+                        payload: { memo: nsMemo(`PO ${poRef(rcvPo)} received ${pcs} pcs @ ${binText}`), item: { items: built.items } },
                     });
                     nsNote = '\n\n📤 The NetSuite receipt is queued (11.1 → Sync Queue).' + pb.note;
-                    writeLog(`Receiving ${poRef(rcvPo)}: item receipt queued — ${pcs} pcs into ${bin}.`, 'wms');
+                    writeLog(`Receiving ${poRef(rcvPo)}: item receipt queued — ${pcs} pcs into ${binText}.`, 'wms');
                     nsNote += await rcvQueueBinMoves(rcvPo, built.transfers || [], receiptObId, cartId);
                 } catch (nsErr) {
                     nsNote = `\n\n⚠ NETSUITE DOES NOT HAVE THIS RECEIPT YET:\n${nsErr.message || nsErr}\n\nThe pieces ARE recorded here — do not receive them a second time. Open this PO on Receiving again and it will offer to post what NetSuite is missing.`;
@@ -1290,7 +1304,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 try { taken += await offerAllocation(a.itemId, a.qty, { from: `receiving ${poRef(rcvPo)}` }) || 0; }
                 catch (e) { console.warn('arrival alert failed (the receipt stands):', e); }
             }
-            alert(`✅ ${pcs} pcs received against ${poRef(rcvPo)} into ${bin}.`
+            alert(`✅ ${pcs} pcs received against ${poRef(rcvPo)} into ${binText}.`
                 + (freed.length ? `\n\n🏭 ${freed.length} order(s) were waiting on this material and have gone to the finishing floor:\n   ${freed.join('\n   ')}` : '')
                 + (taken ? `\n\n${taken} went to orders waiting to ship.` : '')
                 + boNote
@@ -7067,11 +7081,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             {rcvCart.map(c => (
                                                 <div key={c.index} style={rowBox}>
                                                     <span style={{ fontFamily: theme.mono, fontSize: '11px' }}>{c.qty} × {c.itemId}</span>
+                                                    {/* This line's own bin — optional; blank means the home bin scanned below (Eric 2026-09-22). */}
+                                                    <input value={c.bin || ''} onChange={(e) => rcvSetLineBin(c.index, e.target.value)} placeholder={t('own bin (optional)')} title={t('Put this line in its own bin. Leave blank to use the home bin scanned below.')} style={{ ...inp, width: '150px', marginLeft: 'auto', marginRight: '8px', textTransform: 'uppercase', fontSize: '11px', padding: '6px 8px' }} />
                                                     <button onClick={() => rcvRemoveFromCart(c.index)} style={{ ...btn('transparent', theme.inkSoft), border: `1px solid ${theme.line}` }}>{t('Take off')}</button>
                                                 </div>
                                             ))}
                                             <form onSubmit={(e) => { e.preventDefault(); rcvPutAway(); }} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '14px', flexWrap: 'wrap' }}>
-                                                <input value={rcvBin} onChange={(e) => setRcvBin(e.target.value)} placeholder={t('Scan the home bin')} style={{ ...inp, flex: '1 1 180px', textTransform: 'uppercase' }} />
+                                                <input value={rcvBin} onChange={(e) => setRcvBin(e.target.value)} placeholder={rcvCart.some(c => !String(c.bin || '').trim()) ? t('Scan the home bin') : t('Home bin (every line has its own)')} style={{ ...inp, flex: '1 1 180px', textTransform: 'uppercase' }} />
                                                 <button type="submit" disabled={rcvBusy} style={btn(theme.ink, '#fff')}>{rcvBusy ? t('Posting…') : t('Put away')}</button>
                                             </form>
                                             <div style={{ fontSize: '0.78rem', color: theme.inkSoft, marginTop: '8px' }}>
