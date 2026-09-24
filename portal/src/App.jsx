@@ -14,6 +14,8 @@ const Policies = lazy(() => import('./Policies.jsx'));
 // The pay page is opened from a link on a quote / sales order / invoice — no login, the token is
 // the credential (single use, 30 days, revocable). Card fields are the gateway's own.
 const Pay = lazy(() => import('./Pay.jsx'));
+// Signed-in customers: what is owed, pay it, and keep cards for next time (the gateway's vault).
+const Payments = lazy(() => import('./Payments.jsx'));
 
 const fmtMoney = (v) => (v === null || v === undefined) ? '' :
   Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -231,6 +233,7 @@ const Orders = () => {
 
 const TABS = [
   { id: 'orders', label: 'Orders & Quotes' },
+  { id: 'payments', label: 'Payments' },
   { id: 'showroom', label: 'Showroom' },
   { id: 'measure', label: 'Measure & Fit' },
   { id: 'quickship', label: 'Quick Ship' },
@@ -276,6 +279,11 @@ const Dashboard = ({ user }) => {
       {tab === 'gallery' && (
         <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading your gallery…</div>}>
           <Gallery />
+        </Suspense>
+      )}
+      {tab === 'payments' && (
+        <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading your account…</div>}>
+          <Payments />
         </Suspense>
       )}
       {tab === 'tools' && (

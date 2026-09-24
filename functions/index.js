@@ -2892,6 +2892,189 @@ exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async 
     return { ok: true, amount: amt, transactionId: res.transactionid || '', reference: link.reference, environment: cfg.environment };
 });
 
+// ── THE PORTAL'S OWN CHECKOUT ────────────────────────────────────────────────────────────────
+// A signed-in trade customer pays their own quote / sales order / invoice, and may keep a card for
+// next time. The card itself lives in NMI's Customer Vault — we hold a vault id, the brand and the
+// last four, which are not card data. Stuart 2026-09-23: customers save their own cards.
+//
+// Everything here re-derives what is owed from the DOCUMENT; the browser's numbers are checked
+// against it, never trusted. The charge and the recording are the same helpers the pay link uses.
+const nmiSale = async ({ environment, brand, amount, paymentToken, vaultId, orderRef, payerName, email }) => {
+    const key = nmiKeyFor(brand, environment);
+    const host = environment === 'PRODUCTION' ? NMI_HOSTS.PRODUCTION : NMI_HOSTS.SANDBOX;
+    const fields = {
+        security_key: key, type: 'sale', amount: Number(amount).toFixed(2),
+        orderid: cleanStr(orderRef, 50), order_description: cleanStr(orderRef, 60),
+        ...(vaultId ? { customer_vault_id: String(vaultId) } : { payment_token: String(paymentToken || '') }),
+        ...(payerName ? { first_name: cleanStr(payerName, 60) } : {}),
+        ...(email ? { email: cleanStr(email, 120) } : {}),
+    };
+    const r = await fetch(`${host}/api/transact.php`, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(fields).toString(),
+    });
+    const res = nmiParse(await r.text());
+    if (res.response !== '1') throw new HttpsError('failed-precondition', res.responsetext || 'The card was declined.');
+    return res;
+};
+
+// What this customer can pay, and what is owed on each — balance = what the document says minus
+// what has already been paid against it. A quote / sales order offers a 50% deposit as the starting
+// figure and allows anything up to the balance; an invoice is paid in full.
+exports.portalPayables = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const db = admin.firestore();
+    const cfg = await nmiConfig();
+    const out = [];
+    const push = (d, collection, docType, reference, total) => {
+        const paid = Number(d.paymentsTotal || 0);
+        const balance = money(Number(total || 0) - paid);
+        if (!(balance > 0)) return;
+        const min = docType === 'INVOICE' ? balance : money(Math.min(balance, Number(total) * 0.5));
+        out.push({
+            collection, docId: d.id, docType, reference, total: money(total), paid: money(paid),
+            balance, suggested: min, minAmount: min, maxAmount: balance,
+        });
+    };
+
+    const jobsSnap = await db.collection('jobs').where('customer.id', '==', customerId).get();
+    const jobs = jobsSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((j) => !j.deleted && !j.portalDeleted);
+    jobs.forEach((j) => {
+        // Only a priced, accepted piece of work is payable — never an unpriced request.
+        if (!['CONFIGURED', 'APPROVED', 'ORDERED'].includes(String(j.status || ''))) return;
+        const total = Number((j.cpqData && j.cpqData.totalPrice) || 0) + Number(j.shippingAmount || 0);
+        push(j, 'jobs', String(j.status) === 'ORDERED' ? 'SALES_ORDER' : 'QUOTE', j.quoteNo || j.jobId || j.id, total);
+    });
+
+    const qsSnap = await db.collection('hq_sales_orders').where('customerId', '==', customerId).get();
+    qsSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((o) => !o.deleted).forEach((o) => {
+        const invoiced = !!o.nsInvoiceNo || o.packStatus === 'Packed';
+        push(o, 'hq_sales_orders', invoiced ? 'INVOICE' : 'SALES_ORDER', `SO ${o.soId || o.id}`, Number(o.invoiceTotal || 0));
+    });
+
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const cards = (((crmSnap.exists && crmSnap.data()) || {}).vaultCards || [])
+        .map((c) => ({ vaultId: c.vaultId, brand: c.brand || 'Card', last4: c.last4 || '', exp: c.exp || '', addedAt: c.addedAt || 0 }));
+
+    return {
+        environment: cfg.environment,
+        tokenizationKey: cfg.tokenizationKeys.ce || '',
+        collectJsUrl: cfg.environment === 'PRODUCTION' ? 'https://secure.nmi.com/token/Collect.js' : 'https://sandbox.nmi.com/token/Collect.js',
+        payables: out.sort((a, b) => String(a.reference).localeCompare(String(b.reference))),
+        cards,
+    };
+});
+
+// Keep a card for next time. The PAN never reaches us: the browser tokenises with NMI, and NMI
+// stores the card in its vault. We keep the vault id and the last four — not card data.
+const vaultAddCard = async ({ customerId, paymentToken, cfg }) => {
+    if (!String(paymentToken || '').trim()) throw new HttpsError('invalid-argument', 'Card details were not completed.');
+    const host = cfg.environment === 'PRODUCTION' ? NMI_HOSTS.PRODUCTION : NMI_HOSTS.SANDBOX;
+    const r = await fetch(`${host}/api/transact.php`, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ security_key: nmiKeyFor('ce', cfg.environment), customer_vault: 'add_customer', payment_token: String(paymentToken) }).toString(),
+    });
+    const res = nmiParse(await r.text());
+    if (res.response !== '1' || !res.customer_vault_id) throw new HttpsError('failed-precondition', res.responsetext || 'The card could not be saved.');
+    const card = {
+        vaultId: String(res.customer_vault_id),
+        brand: res.cc_type || 'Card',
+        last4: String(res.cc_number || '').slice(-4),
+        exp: res.cc_exp || '',
+        addedAt: Date.now(),
+    };
+    await admin.firestore().collection('crm_records').doc(customerId)
+        .set({ vaultCards: admin.firestore.FieldValue.arrayUnion(card) }, { merge: true });
+    return card;
+};
+
+exports.portalSaveCard = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const cfg = await nmiConfig();
+    const card = await vaultAddCard({ customerId, paymentToken: (request.data || {}).paymentToken, cfg });
+    return { card };
+});
+
+exports.portalDeleteCard = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const vaultId = String((request.data || {}).vaultId || '');
+    const db = admin.firestore();
+    const ref = db.collection('crm_records').doc(customerId);
+    const snap = await ref.get();
+    const cards = (((snap.exists && snap.data()) || {}).vaultCards || []);
+    const card = cards.find((c) => String(c.vaultId) === vaultId);
+    if (!card) throw new HttpsError('not-found', 'That card is not on your account.');
+    const cfg = await nmiConfig();
+    const host = cfg.environment === 'PRODUCTION' ? NMI_HOSTS.PRODUCTION : NMI_HOSTS.SANDBOX;
+    await fetch(`${host}/api/transact.php`, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ security_key: nmiKeyFor('ce', cfg.environment), customer_vault: 'delete_customer', customer_vault_id: vaultId }).toString(),
+    }).catch(() => {});   // the card leaves OUR list either way; a vault orphan is harmless
+    await ref.set({ vaultCards: cards.filter((c) => String(c.vaultId) !== vaultId) }, { merge: true });
+    return { ok: true };
+});
+
+// Pay one of your own documents, with a saved card or a new one.
+exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const { collection, docId, amount, vaultId, paymentToken, saveCard } = request.data || {};
+    const db = admin.firestore();
+    if (!['jobs', 'hq_sales_orders'].includes(String(collection || ''))) throw new HttpsError('invalid-argument', 'Unknown document.');
+    const snap = await db.collection(String(collection)).doc(String(docId || '')).get();
+    if (!snap.exists) throw new HttpsError('not-found', 'That order could not be found.');
+    const d = { id: snap.id, ...snap.data() };
+
+    // It must be THEIR document — a portal login may never pay (or read) another customer's order.
+    const owner = String((d.customer && d.customer.id) || d.customerId || '');
+    if (owner !== customerId) throw new HttpsError('permission-denied', 'That order is not on your account.');
+
+    const total = collection === 'jobs'
+        ? Number((d.cpqData && d.cpqData.totalPrice) || 0) + Number(d.shippingAmount || 0)
+        : Number(d.invoiceTotal || 0);
+    const balance = money(total - Number(d.paymentsTotal || 0));
+    const amt = money(amount);
+    if (!(balance > 0)) throw new HttpsError('failed-precondition', 'That order has already been paid.');
+    if (!(amt > 0 && amt <= balance)) throw new HttpsError('invalid-argument', `The amount must be between $0.01 and $${balance.toFixed(2)}.`);
+
+    const cfg = await nmiConfig();
+    const brand = String(d.brand || 'ce').toLowerCase();
+    const reference = collection === 'jobs' ? String(d.quoteNo || d.jobId || d.id) : `SO ${d.soId || d.id}`;
+
+    let useVault = String(vaultId || '');
+    if (useVault) {
+        const crm = await db.collection('crm_records').doc(customerId).get();
+        const ok = (((crm.exists && crm.data()) || {}).vaultCards || []).some((c) => String(c.vaultId) === useVault);
+        if (!ok) throw new HttpsError('permission-denied', 'That card is not on your account.');
+    } else if (saveCard === true) {
+        // Save first, then charge the saved card, so one card entry does both.
+        const saved = await vaultAddCard({ customerId, paymentToken, cfg: await nmiConfig() });
+        useVault = saved.vaultId;
+    }
+
+    const res = await nmiSale({
+        environment: cfg.environment, brand, amount: amt,
+        vaultId: useVault || '', paymentToken: useVault ? '' : paymentToken,
+        orderRef: reference, email: (request.auth.token && request.auth.token.email) || '',
+    });
+
+    const paidAt = Date.now();
+    await db.collection('payments').add({
+        paidAt, amount: amt, transactionId: res.transactionid || '', authCode: res.authcode || '',
+        brand, docType: collection === 'jobs' ? 'QUOTE_OR_SO' : 'SALES_ORDER', collection, docId: d.id, reference,
+        payerName: '', email: (request.auth.token && request.auth.token.email) || '', customerId,
+        environment: cfg.environment, method: 'CARD', gateway: 'NMI', source: 'PORTAL',
+        netsuiteKind: collection === 'hq_sales_orders' && (d.nsInvoiceNo || d.packStatus === 'Packed') ? 'customerpayment' : 'customerdeposit',
+        netsuitePosted: false,
+    });
+    await db.collection(String(collection)).doc(d.id).set({
+        paymentsTotal: admin.firestore.FieldValue.increment(amt),
+        lastPaymentAt: paidAt, lastPaymentAmount: amt, lastPaymentTxn: res.transactionid || '',
+        paymentEnvironment: cfg.environment,
+    }, { merge: true });
+
+    return { ok: true, amount: amt, transactionId: res.transactionid || '', balance: money(balance - amt), environment: cfg.environment };
+});
+
 // The last webhook events, for the HQ 11 → Integrations read-out: is the gateway reaching us, and
 // does the signature verify? Admin-only; the raw body is truncated and never shown in full.
 exports.nmiRecentEvents = onCall({ enforceAppCheck: true }, async (request) => {
