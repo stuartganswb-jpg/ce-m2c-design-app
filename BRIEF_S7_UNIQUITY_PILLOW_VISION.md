@@ -330,6 +330,8 @@ either posts (ids on file) or refuses with `NO_NS_FORM_FOR_BRAND` — and the CE
 
 *(newest first)*
 
+- **2026-09-24 · b871cded (pushed 11:35 EDT) — Pillow Pricing on 6.5 LIVE;** swept per §5 on the sha: served main carries VERCEL_GIT_COMMIT_SHA b871cded; 39 chunk entries, 0 failures, 1 stub refetched; `Save minimum cuts` + `Fabric Cut Stock` in the 6.5 chunk `345.7ae1eb24.chunk.js`; the Admin section key `PILLOW_PRICING` in NO chunk (the 11 mount is gone); hardware guard literals stand (main + `104.037c016c.chunk.js`). Rules deployed by Stuart. Recorded in `STATE_OF_THE_APP_2026-09-23.md` §8. **Stuart's turn:** hard-refresh + re-PIN → Uniquity → 6.5 Tools: Pillow Pricing · Fabric Cut Stock; on 11 → User Matrix grant 6.5 to the roles that should reach it (the price tool itself shows only to manager+). **Next:** step 3 the board.
+
 - **2026-09-24 — Pillow Pricing moved to 6.5 Tools (built):** `HQ.js` +2 props on the 6.5 mount (`userRole`, `isSuperAdmin`); `ToolsSpecsTab` rows gain `managerUp` gated by `lineDiscount.canLineDiscount` (the app's ONE manager-or-higher list: admin · superadmin · manager · executive, + the super-admin flag), `currentUser` passed through, the `pillowpricing` tool (Uniquity, manager+) listed before Fabric Cut Stock; `AdminTab` −3 lines (the 11 mount gone). Prices and the fabric sheet under ONE gate. The tab itself is granted per role on 11's User Matrix. Build compiles; eslint 0; harnesses unchanged.
 
 - **2026-09-24 — Stuart: rules DEPLOYED; "go yes put it all on 6.5"** — the Pillow Pricing controls move off 11. System Admin to 6.5 Tools (manager level and above; "this is an easy tool to use and i can have more associates help"). One gate for prices and fabrics; 11 drops it entirely.
