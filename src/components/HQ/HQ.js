@@ -13,6 +13,7 @@ const BOMTab = lazy(() => import('./BOMTab'));
 const LibraryTab = lazy(() => import('./LibraryTab')); 
 const LibraryMassUpdateTab = lazy(() => import('./LibraryMassUpdateTab')); 
 const CustomerCollectionsTab = lazy(() => import('./CustomerCollectionsTab'));
+const FlowStockTab = lazy(() => import('./FlowStockTab'));   // 4.7 — per-flow items, Fabricut prices, stock (2026-09-24)
 const DisplayDesignerTab = lazy(() => import('./DisplayDesignerTab'));   // 5. Marketing — sales display boards (S5, 2026-09-11)
 const InstructionsTab = lazy(() => import('./InstructionsTab'));
 const ToolsSpecsTab = lazy(() => import('./ToolsSpecsTab'));
@@ -57,7 +58,7 @@ const TAB_LABELS = {
 };
 
 const TABS = [
-  '1. Inception & Validation', '1.5 Node Grouping', '1.6 Assembly Builder', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update', '4.6 Customer Collections',
+  '1. Inception & Validation', '1.5 Node Grouping', '1.6 Assembly Builder', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update', '4.6 Customer Collections', '4.7 Flow Stock',
   '5. Marketing', '6. Instructions', '6.5 Tools, Specs & FAQs', '7. Quick Ship', '8. CPQ Configurator',
   '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '11.1 NetSuite Sync', '11.2 ERP Mapping Audit', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', '15. Packaging', 'App Imp.', 'User Guide', 'ERP_WRITE_BACK'
@@ -451,6 +452,7 @@ function HQ() {
             
             {activeTab === '4.5 Mass Update' && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '4.6 Customer Collections' && <CustomerCollectionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '4.7 Flow Stock' && <FlowStockTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '5. Marketing' && <DisplayDesignerTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} setCart={setGlobalCart} />}
             {activeTab === '6. Instructions' && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '6.5 Tools, Specs & FAQs' && <ToolsSpecsTab currentUser={user.name} activeBrand={activeBrand.id} />}
