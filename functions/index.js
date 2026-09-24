@@ -3056,29 +3056,36 @@ const nsOpenInvoiceRows = async ({ brand, entityId, customerLike = '', dueFrom =
     const name = cleanStr(customerLike, 60).replace(/'/g, "''").toUpperCase();
     const from = sqlDate(dueFrom);
     const to = sqlDate(dueTo);
+    // Eric's field list (2026-09-24): status Invoice:Open, and subsidiary / location live on the
+    // MAIN LINE, not the transaction header — which is why filtering the header found nothing.
+    // Amount due is the remaining balance (deposits applied and credit memos already netted off),
+    // with total-minus-paid as the fallback if the account leaves that column empty.
     const where = [
         "t.type = 'CustInvc'",
-        `t.subsidiary = ${Number(subsidiary)}`,
-        "NVL(t.foreignamountunpaid, 0) > 0.005",
-        "NVL(t.voided, 'F') = 'F'",
+        "t.status = 'CustInvc:A'",
+        `tl.subsidiary = ${Number(subsidiary)}`,
         ...(entityId ? [`t.entity = ${Number(entityId)}`] : []),
         ...(name ? [`(UPPER(c.companyname) LIKE '%${name}%' OR UPPER(c.entityid) LIKE '%${name}%')`] : []),
         ...(from ? [`t.duedate >= TO_DATE('${from}', 'YYYY-MM-DD')`] : []),
         ...(to ? [`t.duedate <= TO_DATE('${to}', 'YYYY-MM-DD')`] : []),
     ].join(' AND ');
-    // foreignamountunpaid is what is STILL owed — deposits already applied and credit memos are
-    // netted off by NetSuite, which is the figure the team collects (Stuart's point 5).
     const rows = await nsQuery(
         `SELECT t.id, t.tranid, t.trandate, t.duedate, t.entity, c.companyname AS customername, `
-        + `ABS(NVL(t.foreigntotal, 0)) AS total, ABS(NVL(t.foreignamountunpaid, 0)) AS due `
-        + `FROM transaction t JOIN customer c ON c.id = t.entity WHERE ${where} ORDER BY t.duedate, t.id`,
+        + `t.otherrefnum AS ponumber, BUILTIN.DF(t.terms) AS terms, t.memo, tl.location AS locationid, `
+        + `ABS(NVL(t.foreigntotal, 0)) AS total, ABS(NVL(t.foreignamountpaid, 0)) AS paid, `
+        + `ABS(NVL(t.foreignamountunpaid, NVL(t.foreigntotal, 0) - NVL(t.foreignamountpaid, 0))) AS due `
+        + `FROM transaction t `
+        + `JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' `
+        + `JOIN customer c ON c.id = t.entity `
+        + `WHERE ${where} ORDER BY t.duedate, t.id`,
         { limit: Math.min(Number(limit) || 200, 1000), offset: Number(offset) || 0 },
     );
     const invoices = rows.map((r) => ({
         id: String(r.id), tranid: r.tranid || '', date: r.trandate || '', dueDate: r.duedate || '',
         customerNsId: String(r.entity || ''), customerName: r.customername || '',
-        total: Number(r.total || 0), due: money(r.due),
-    }));
+        poNumber: r.ponumber || '', terms: r.terms || '', memo: r.memo || '', locationId: String(r.locationid || ''),
+        total: Number(r.total || 0), paid: Number(r.paid || 0), due: money(r.due),
+    })).filter((i) => i.due > 0.005);
     invoices.hasMore = rows.hasMore === true;
     return invoices;
 };
@@ -3109,6 +3116,7 @@ exports.nsOpenInvoices = onCall({
             ['status open (CustInvc:A)', `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)} AND t.status = 'CustInvc:A'`],
             ['joined to customer', `SELECT COUNT(*) AS n FROM transaction t JOIN customer c ON c.id = t.entity WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)}`],
             ['subsidiary on the LINE instead', `SELECT COUNT(DISTINCT t.id) AS n FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'CustInvc' AND tl.subsidiary = ${Number(sub)}`],
+            ["Eric's shape: open + line subsidiary", `SELECT COUNT(DISTINCT t.id) AS n FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'CustInvc' AND t.status = 'CustInvc:A' AND tl.subsidiary = ${Number(sub)}`],
         ];
         const out = [];
         for (const [what, sql] of steps) {

@@ -136,8 +136,11 @@ export default function NsInvoicesPanel({ brand = 'ce', customerId = '', custome
                             <th style={{ padding: '6px' }} />
                             <th style={{ padding: '6px' }}>Invoice</th>
                             {mode === 'ALL' && <th style={{ padding: '6px' }}>Customer</th>}
+                            <th style={{ padding: '6px' }}>PO #</th>
+                            <th style={{ padding: '6px' }}>Terms</th>
                             <th style={{ padding: '6px' }}>Date</th>
                             <th style={{ padding: '6px' }}>Due</th>
+                            <th style={{ padding: '6px', textAlign: 'right' }}>Total</th>
                             <th style={{ padding: '6px', textAlign: 'right' }}>Owed</th>
                         </tr></thead>
                         <tbody>
@@ -148,9 +151,14 @@ export default function NsInvoicesPanel({ brand = 'ce', customerId = '', custome
                                     </td>
                                     <td style={{ padding: '6px', fontFamily: theme.mono }}>{r.tranid}</td>
                                     {mode === 'ALL' && <td style={{ padding: '6px' }}>{r.customerName}</td>}
+                                    <td style={{ padding: '6px' }}>{r.poNumber || '—'}</td>
+                                    <td style={{ padding: '6px' }}>{r.terms || '—'}</td>
                                     <td style={{ padding: '6px' }}>{day(r.date)}</td>
                                     <td style={{ padding: '6px', color: overdue(r.dueDate) ? '#9b2c2c' : theme.ink }}>
                                         {day(r.dueDate)}{overdue(r.dueDate) ? ' · overdue' : ''}
+                                    </td>
+                                    <td style={{ padding: '6px', textAlign: 'right', fontFamily: theme.mono, color: theme.inkSoft }}>
+                                        {usd(r.total)}{Number(r.paid) > 0 ? ` · paid ${usd(r.paid)}` : ''}
                                     </td>
                                     <td style={{ padding: '6px', textAlign: 'right', fontFamily: theme.mono }}>{usd(r.due)}</td>
                                 </tr>
