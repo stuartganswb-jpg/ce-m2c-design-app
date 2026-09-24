@@ -18,6 +18,8 @@ import { nsProxyFetch } from '../Shared/nsProxy';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { fetchAvailableById, fetchInboundById, backorderTallyOf } from '../Shared/stockPosition';
 import { flowTabsOf, flowFamilies, notCovered, enginePartsOf, partFinderOf, finishCodeOf } from '../Shared/flowItems';
+import { buildSpeciesBaseIndex } from '../Shared/partPicture';
+import FlowItemPopup from './FlowItemPopup';
 
 const theme = {
     paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46',
@@ -42,7 +44,7 @@ const runSql = async (q) => {
     return b.items || [];
 };
 
-const FlowStockTab = ({ activeBrand }) => {
+const FlowStockTab = ({ activeBrand, onNavigateToLibrary }) => {
     const [brandDocs, setBrandDocs] = useState(null);         // Approved_Designs for this brand (null = loading)
     const [flows, setFlows] = useState([]);
     const [finishes, setFinishes] = useState([]);             // [...master_finishes, ...hq_outsource_finishes]
@@ -56,6 +58,7 @@ const FlowStockTab = ({ activeBrand }) => {
     const [boByCode, setBoByCode] = useState(null);           // our backorder tally, read once
     const [search, setSearch] = useState('');
     const [onlyGaps, setOnlyGaps] = useState(false);
+    const [popup, setPopup] = useState(null);                 // { row, family } — the item popup (step 3)
     const asked = useRef({ pins: new Set(), stock: new Set() });
 
     // ── REFERENCE DATA — one read each, on open. This is a board to read, not a live monitor; ↻ reloads.
@@ -170,6 +173,10 @@ const FlowStockTab = ({ activeBrand }) => {
         return { avail: (stock.avail || {})[row.internalId] || 0, onOrd: inb ? inb.qty : 0, onOrdLines: inb ? inb.lines : [] };
     }, [stock]);
     const boOf = (row) => (boByCode ? boByCode[String(row.code || '').toUpperCase()] : null);
+    // The popup's picture picker wants the kits (a piece shows its kit) and the species index (oak /
+    // walnut show their product) — the same inputs the label printer hands partImageOf.
+    const kits = useMemo(() => (brandDocs || []).filter(d => d.partClass === 'Kit'), [brandDocs]);
+    const speciesBase = useMemo(() => buildSpeciesBaseIndex(brandDocs || []), [brandDocs]);
 
     // ── FILTERS — they apply to the FAMILY: a family shows whole when any of its rows match (the 3-Tier
     // view's rule: half a family defeats a view whose point is reading the tiers against each other).
@@ -232,7 +239,9 @@ const FlowStockTab = ({ activeBrand }) => {
         return (
             <tr key={row.key} style={{ background: lead ? '#fff' : undefined }}>
                 <td style={{ ...td, paddingLeft: variant ? '28px' : '10px', fontWeight: lead ? 700 : 500 }}>
-                    {row.code}
+                    {row.part
+                        ? <button onClick={() => setPopup({ row, family: fam })} title="Images, program print, Master Library" style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', fontWeight: 'inherit', color: theme.blueDark, textDecoration: 'underline', textUnderlineOffset: '2px', cursor: 'pointer' }}>{row.code}</button>
+                        : row.code}
                     {lead && fam.hidden && <span style={chip('#eee', theme.inkSoft)} title="Built and billed, never shown to the customer">BOM only</span>}
                     {row.kind === 'MILL' && <span style={chip(theme.paper2, theme.inkSoft)}>mill</span>}
                     {row.finishes.length > 0 && <div style={{ fontSize: '10px', color: theme.inkSoft, marginTop: '2px' }}>{row.kind === 'MILL' ? 'billed as the mill code for ' : ''}{row.finishes.join(' · ')}</div>}
@@ -333,6 +342,20 @@ const FlowStockTab = ({ activeBrand }) => {
                         </div>
                     )}
                 </>
+            )}
+
+            {popup && (
+                <FlowItemPopup
+                    row={popup.row}
+                    family={popup.family}
+                    findPart={findPart}
+                    kits={kits}
+                    speciesBase={speciesBase}
+                    stock={stockOf(popup.row)}
+                    bo={boOf(popup.row)}
+                    onOpenInLibrary={(docId) => { setPopup(null); if (typeof onNavigateToLibrary === 'function') onNavigateToLibrary(docId); }}
+                    onClose={() => setPopup(null)}
+                />
             )}
         </div>
     );
