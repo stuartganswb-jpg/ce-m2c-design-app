@@ -1,13 +1,36 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { doc, setDoc, serverTimestamp, onSnapshot } from "firebase/firestore";
+// ── THE BOARD PRICES FROM THE TABLE (S7, step 3a, 2026-09-24) ──────────────────────────────────
+// The rules are pure and proven offline: Shared/pillowPricing (the price: size at the highest fabric
+// group + labour per seam + details; consumption per panel), Shared/pillowPanels (the drawn seams →
+// the face as rectangles, each tagged with its fabric), Shared/pillowCuts (the minimum cut per size).
+// This file only draws, collects the operator's choices and shows the rule's answer — it decides
+// nothing about money. The table is system/pillow_pricing (6.5 Tools → Pillow Pricing).
+import { pricePillow, designFromPillowData, DEFAULT_PILLOW_PRICING, PILLOW_PRICING_DOC, priceGroupOf } from '../Shared/pillowPricing';
+import { panelsOf } from '../Shared/pillowPanels';
+import { isFabricItem, isTrimItem } from '../Shared/pillowFabricSheet';
+import { isRailroad, fabricWidthOf } from '../Shared/pillowCuts';
 
 const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, globalLists, activeSession }) => {
   const [viewMode, setViewMode] = useState('ENGINEERING');
   const [isPushingToCPQ, setIsPushingToCPQ] = useState(false);
   
-  const fabrics = libraryParts.filter(p => ['TEXTILE', 'FABRIC', 'RAW MATERIAL'].includes(p.manufacturingSpecs?.productType));
-  const trims = libraryParts.filter(p => ['TRIMMING', 'COMPONENT'].includes(p.manufacturingSpecs?.productType));
+  // The fabrics the sheet imported (6.5 → Pillow Pricing → Fabrics): FABRIC / TEXTILE / RAW MATERIAL, any case;
+  // trims: TRIMMING / TRIM / COMPONENT. An option names the code, the description, the price group and the bolt width.
+  const fabrics = useMemo(() => libraryParts.filter(isFabricItem).sort((a, b) => String(a.legacyErpId || a.itemName || '').localeCompare(String(b.legacyErpId || b.itemName || ''))), [libraryParts]);
+  const trims = useMemo(() => libraryParts.filter(p => isTrimItem(p) || String(p.manufacturingSpecs?.productType || '').toUpperCase() === 'COMPONENT'), [libraryParts]);
+  const partById = useMemo(() => { const m = new Map(); libraryParts.forEach(p => { m.set(p.id, p); if (p.legacyErpId) m.set(String(p.legacyErpId).toUpperCase(), p); }); return m; }, [libraryParts]);
+  const findPart = (id) => partById.get(id) || partById.get(String(id || '').toUpperCase()) || null;
+  const fabricLabel = (f) => `${f.legacyErpId || f.itemName}${f.itemName && f.legacyErpId ? ` — ${f.itemName}` : ''}${priceGroupOf(f) ? ` · group ${priceGroupOf(f)}` : ' · NO PRICE GROUP'}${fabricWidthOf(f) ? ` · ${fabricWidthOf(f)}"` : ''}${isRailroad(f) ? ' · railroad' : ''}`;
+  // the price table, live
+  const [pricing, setPricing] = useState(null);
+  useEffect(() => onSnapshot(doc(db, 'system', PILLOW_PRICING_DOC), s => setPricing(s.exists() ? { ...DEFAULT_PILLOW_PRICING, ...s.data() } : { ...DEFAULT_PILLOW_PRICING })), []);
+  const edgeOptions = useMemo(() => {
+      const d = (pricing && pricing.details) || {};
+      const fromTable = Object.entries(d).filter(([, v]) => String(v.kind || '').toUpperCase() === 'EDGE').map(([code, v]) => ({ code, label: v.label || code }));
+      return fromTable.length ? fromTable : (globalLists.flangeStyles || []).filter(x => String(x).toUpperCase() !== 'NONE').map(x => ({ code: String(x).toUpperCase(), label: x }));
+  }, [pricing, globalLists.flangeStyles]);
 
   // --- CANVAS & TOOL STATE ---
   const [visScale, setVisScale] = useState(1.0); 
@@ -43,6 +66,7 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
       flangeSize: 0, 
       fill: globalLists.fillTypes?.[0] || 'DOWN', 
       stitch: globalLists.stitchTypes?.[0] || 'STANDARD',
+      back: { fabricId: '' },
       outerTrim: { trimId: '', top: false, bottom: false, left: false, right: false }
   });
 
@@ -81,6 +105,17 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
 
       return (totalInches / 36).toFixed(2);
   };
+
+  // ── the face as panels + the price, live (pure rules; this file only shows the answer) ──────
+  const geometry = useMemo(() => {
+      const { w, h } = getPillowDimensions();
+      return panelsOf({ w, h, seams: pillowData.seams, tags: fabricTags, fabrics: pillowData.fabrics, pxPerIn: S * 2 });
+  }, [pillowData.size, pillowData.seams, pillowData.fabrics, fabricTags]); // eslint-disable-line react-hooks/exhaustive-deps
+  const priced = useMemo(() => {
+      if (!pricing) return null;
+      const design = { ...designFromPillowData(pillowData, { pxPerIn: S * 2 }), panels: geometry.panels };
+      return pricePillow({ design, findPart, config: pricing, qty: 1 });
+  }, [pricing, pillowData, geometry]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- SVG INTERACTION HANDLERS ---
   const getAdjustedSvgPoint = (clientX, clientY) => {
@@ -386,8 +421,8 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                             <div style={{ flex: 1 }}>
                                 <label style={labelStyle}>Edge / Flange</label>
                                 <select value={pillowData.flange} onChange={e => setPillowData({...pillowData, flange: e.target.value})} style={fieldStyle}>
-                                    <option value="">-- Select Edge --</option>
-                                    {(globalLists.flangeStyles || []).map(fl => <option key={fl} value={fl}>{fl}</option>)}
+                                    <option value="NONE">NONE — knife edge</option>
+                                    {edgeOptions.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
                                 </select>
                             </div>
                         </div>
@@ -409,7 +444,7 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                                             <label style={labelStyle}>Panel {labelChar} Fabric</label>
                                             <select value={fabId} onChange={e => updateFabric(index, e.target.value)} style={fieldStyle}>
                                                 <option value="">-- Assign Master Fabric --</option>
-                                                {fabrics.map(f => <option key={f.id} value={f.id}>{f.itemName}</option>)}
+                                                {fabrics.map(f => <option key={f.id} value={f.id}>{fabricLabel(f)}</option>)}
                                             </select>
                                         </div>
                                         {pillowData.fabrics.length > 1 && <button onClick={() => removeFabricPanel(index)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--sans)', fontSize: '1.2rem', padding: '0 8px' }}>×</button>}
@@ -419,6 +454,14 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                         </div>
                     </div>
 
+                    <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)' }}>
+                        <label style={labelStyle}>Back Fabric</label>
+                        <select value={pillowData.back?.fabricId || ''} onChange={e => setPillowData({ ...pillowData, back: { fabricId: e.target.value } })} style={fieldStyle}>
+                            <option value="">-- Same as Panel A --</option>
+                            {fabrics.map(f => <option key={f.id} value={f.id}>{fabricLabel(f)}</option>)}
+                        </select>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px' }}>A standard pillow takes two cuts — one per side. A custom pillow may take a different fabric on the back.</div>
+                    </div>
                     <div style={{ background: '#fff', padding: '20px', border: '1px solid var(--line)', opacity: pillowData.seams.length > 0 ? 1 : 0.6 }}>
                         <h4 style={sectionHeaderStyle}>3. Seam Treatments ({pillowData.seams.length})</h4>
                         <p style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: 0, marginBottom: '20px' }}>Use the ✂️ DRAW SEAM tool on the canvas to slice panels.</p>
@@ -521,6 +564,30 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                 <div style={{ background: 'var(--paper)', borderTop: '1px solid var(--line)' }}>
                     <div style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Sewing Floor B.O.M</div>
                     <div style={{ padding: '24px', fontSize: '0.9rem', display: 'flex', flexDirection: 'column', gap: '12px', color: 'var(--ink)' }}>
+                        {/* ── THE LIVE PRICE (S7 step 3a): the rule's answer, refusals by name, consumption per panel ── */}
+                        {!pricing ? <div style={{ color: 'var(--ink-soft)' }}>Reading the price table…</div> : priced && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '8px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: '1px solid var(--line)', paddingBottom: '8px' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Custom pillow · {priced.sizeKey || '?'}{priced.group ? ` · group ${priced.group}` : ''}</span>
+                                    <strong style={{ fontSize: '1.4rem', fontFamily: 'var(--serif)', color: priced.ok ? 'var(--ink)' : '#d9534f' }}>{priced.ok ? `$${priced.unitPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : 'not priced'}</strong>
+                                </div>
+                                {priced.ok && (
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                        <span>Size at group {priced.group}: ${priced.breakdown.sizePrice}</span>
+                                        {priced.breakdown.seams.count > 0 && <span>{priced.breakdown.seams.count} custom seam{priced.breakdown.seams.count === 1 ? '' : 's'} × ${priced.breakdown.seams.each}: ${priced.breakdown.seams.total}</span>}
+                                        {priced.breakdown.details.map((d, i) => <span key={i}>{d.label}{d.per === 'YARD' ? ` (${d.units} yd)` : ''}: ${d.price}</span>)}
+                                    </div>
+                                )}
+                                {priced.errors.map((e, i) => <div key={i} style={{ fontSize: '0.8rem', color: '#d9534f' }}>⛔ {e.message}</div>)}
+                                {[...geometry.warnings, ...priced.warnings].map((w, i) => <div key={i} style={{ fontSize: '0.8rem', color: '#a86b00' }}>⚠ {w}</div>)}
+                                <div style={{ fontSize: '0.8rem', borderTop: '1px dotted var(--line)', paddingTop: '6px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '4px' }}>Panels ({geometry.panels.length}) · cuts</div>
+                                    {geometry.panels.map((p, i) => { const it = findPart(p.fabricId); const row = priced.rows.find(r => r.panel === p.label); return <div key={i} style={{ display: 'flex', justifyContent: 'space-between' }}><span>{p.label} · {p.widthIn}" × {p.heightIn}" · {it ? (it.legacyErpId || it.itemName) : (p.fabricId ? p.fabricId : 'no fabric')}</span><span>{row && row.qty !== null ? `${row.qty} ${row.uom === 'YARD' ? 'yd' : 'ea'}` : '—'}</span></div>; })}
+                                    {priced.rows.filter(r => r.panel === 'BACK').map((r, i) => <div key={`b${i}`} style={{ display: 'flex', justifyContent: 'space-between' }}><span>BACK · {r.name.replace(/ — panel BACK.*$/, '')}</span><span>{r.qty !== null ? `${r.qty} ${r.uom === 'YARD' ? 'yd' : 'ea'}` : '—'}</span></div>)}
+                                    {priced.rows.filter(r => !r.panel).map((r, i) => <div key={`o${i}`} style={{ display: 'flex', justifyContent: 'space-between' }}><span>{r.name}</span><span>{r.qty} {r.uom === 'YARD' ? 'yd' : 'ea'}</span></div>)}
+                                </div>
+                            </div>
+                        )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted var(--line)', paddingBottom: '8px' }}><span>Face / Back Cut (inc. seam):</span><strong style={{ fontWeight: 500 }}>{getPillowDimensions().w + 1}" x {getPillowDimensions().h + 1}"</strong></div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted var(--line)', paddingBottom: '8px' }}><span>Insert / Fill Required:</span><strong style={{ fontWeight: 500 }}>{pillowData.size} ({pillowData.fill})</strong></div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted var(--line)', paddingBottom: '8px' }}><span>Total Trim Yardage Req:</span><strong style={{ fontWeight: 500 }}>{calculateTrimYards()} Yds</strong></div>

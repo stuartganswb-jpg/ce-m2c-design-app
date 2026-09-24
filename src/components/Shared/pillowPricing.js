@@ -62,6 +62,7 @@ export const DEFAULT_PILLOW_PRICING = {
 
 const num = (v) => (v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
 const cents = (v) => Math.round((Number(v) || 0) * 100) / 100;
+const yd3 = (v) => Math.round((Number(v) || 0) * 1000) / 1000;   // yards keep three decimals (⅛ = 0.125), money keeps cents
 const up = (v) => String(v || '').trim().toUpperCase();
 
 /** '22x22 Square' / '12 x 20 Lumbar' / '22X22' → '22x22'; '' when no WxH can be read. */
@@ -260,7 +261,7 @@ export function pricePillow({ design, findPart, config = DEFAULT_PILLOW_PRICING,
         const c = panelConsumptionOf({ item, panel: p, config: cfg });
         c.warnings.forEach(w => warnings.push(w));
         rows.push(rowOf(item, p.fabricId, `${item.legacyErpId || item.itemName || p.fabricId} — panel ${p.label}${group ? ` (group ${group})` : ''}`,
-            c.qty === null ? null : cents(c.qty * orderQty), { uom: c.unit, panel: p.label, perPillow: c.qty }));
+            c.qty === null ? null : yd3(c.qty * orderQty), { uom: c.unit, panel: p.label, perPillow: c.qty }));
     });
 
     // ── the size at the highest group ───────────────────────────────────────────────────────────
@@ -297,7 +298,7 @@ export function pricePillow({ design, findPart, config = DEFAULT_PILLOW_PRICING,
         addDetail('OUTER_TRIM', yards, 'Outer edge trim');
         const t = lookup(d.outerTrim.trimId);
         if (!t) errors.push({ code: 'TRIM_UNKNOWN', message: `Outer trim ${d.outerTrim.trimId} is not in the library` });
-        else rows.push(rowOf(t, d.outerTrim.trimId, `${t.legacyErpId || t.itemName} — outer edge trim`, cents(roundUpTo(yards, num(cfg.yardRounding) || 0.125) * orderQty), { uom: 'YARD', perPillow: roundUpTo(yards, num(cfg.yardRounding) || 0.125) }));
+        else rows.push(rowOf(t, d.outerTrim.trimId, `${t.legacyErpId || t.itemName} — outer edge trim`, yd3(roundUpTo(yards, num(cfg.yardRounding) || 0.125) * orderQty), { uom: 'YARD', perPillow: roundUpTo(yards, num(cfg.yardRounding) || 0.125) }));
     }
     const fringeSeams = seams.filter(s => /FRINGE/i.test(String(s.treatment || '')));
     if (fringeSeams.length) {
@@ -310,7 +311,7 @@ export function pricePillow({ design, findPart, config = DEFAULT_PILLOW_PRICING,
             const t = lookup(trimId);
             if (!t) { errors.push({ code: 'TRIM_UNKNOWN', message: `Seam trim ${trimId} is not in the library` }); return; }
             const y = roundUpTo(inches / 36, num(cfg.yardRounding) || 0.125);
-            rows.push(rowOf(t, trimId, `${t.legacyErpId || t.itemName} — fringe on seams`, cents(y * orderQty), { uom: 'YARD', perPillow: y }));
+            rows.push(rowOf(t, trimId, `${t.legacyErpId || t.itemName} — fringe on seams`, yd3(y * orderQty), { uom: 'YARD', perPillow: y }));
         });
         if (fringeSeams.some(s => !s.trimId)) errors.push({ code: 'TRIM_MISSING', message: 'A fringe seam has no trim chosen' });
     }
