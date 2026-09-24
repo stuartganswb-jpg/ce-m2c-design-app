@@ -6,6 +6,7 @@ import {
     ROD_COLLECTIONS, rodCollectionsFor, DEFAULT_DROP_FT, ASSUMPTIONS, STUD_NOTE,
 } from '../Shared/bracketSpan';
 import RodPieceInventory from '../Shared/RodPieceInventory';
+import FabricCutStock from '../Shared/FabricCutStock';   // 🧵 Uniquity: replaces Rod Piece Stock (S7 2026-09-24)
 
 // TOOLS, SPECS & FAQs (HQ 6.5) — the staff-side twin of the portal's Tools page. Same engineering
 // (Shared/bracketSpan.js, a verbatim-copy pair with portal/src/shared/), but staff also see the
@@ -259,12 +260,24 @@ const TOOLS = [
     // TOOL 2 · ROD PIECE STOCK (Stuart 2026-08-27): the piece-length declaration per rod item
     // ("we receive in 100 pcs which equals 1200 ft") + the offcut ledger, HQ vantage. The same
     // component mounts on the shop's Custom tab; the cut-station recommendation reads this config.
-    { id: 'rodpieces', label: 'Rod Piece Stock', blurb: 'Stocked piece lengths + the offcut ledger', render: (p) => <RodPieceInventory vantage="HQ" activeBrand={p.activeBrand} currentUser="HQ" /> },
+    { id: 'rodpieces', label: 'Rod Piece Stock', blurb: 'Stocked piece lengths + the offcut ledger', notBrands: ['uniquity'], render: (p) => <RodPieceInventory vantage="HQ" activeBrand={p.activeBrand} currentUser="HQ" /> },
+    // TOOL 2 FOR UNIQUITY · FABRIC CUT STOCK (Stuart 2026-09-24: "it is different division so it
+    // replaces the rod cuts"): the fabric cut ledger + the throw → yardage convert, in place of the
+    // rod tool when the brand is Uniquity. `brands` / `notBrands` gate which tool the nav offers.
+    { id: 'fabriccuts', label: 'Fabric Cut Stock', blurb: 'Cuts on the shelf by fabric + the throw → yardage convert', brands: ['uniquity'], render: (p) => <FabricCutStock activeBrand={p.activeBrand} currentUser="HQ" /> },
 ];
+
+const toolFitsBrand = (t, brand) => {
+    const b = String(brand || '').toLowerCase();
+    if (t.brands && !t.brands.includes(b)) return false;
+    if (t.notBrands && t.notBrands.includes(b)) return false;
+    return true;
+};
 
 const ToolsSpecsTab = ({ activeBrand }) => {
     const [activeTool, setActiveTool] = useState(TOOLS[0].id);
-    const tool = TOOLS.find(t => t.id === activeTool) || TOOLS[0];
+    const tools = TOOLS.filter(t => toolFitsBrand(t, activeBrand));
+    const tool = tools.find(t => t.id === activeTool) || tools[0] || TOOLS[0];
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', fontFamily: 'var(--sans)' }}>
@@ -278,7 +291,7 @@ const ToolsSpecsTab = ({ activeBrand }) => {
 
             {TOOLS.length > 1 && (
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    {TOOLS.map(t => (
+                    {tools.map(t => (
                         <button key={t.id} onClick={() => setActiveTool(t.id)} title={t.blurb}
                             style={{
                                 padding: '10px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px',

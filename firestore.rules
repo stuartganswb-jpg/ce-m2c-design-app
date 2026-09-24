@@ -141,6 +141,8 @@ service cloud.firestore {
     match /sample_chip_orders/{document=**}     { allow read, write: if isAuth(); }
     match /rod_pieces/{document=**}             { allow read, write: if isAuth(); }
     match /rod_cut_orders/{document=**}         { allow read, write: if isAuth(); }
+    match /fabric_pieces/{document=**}          { allow read, write: if isAuth(); }   // Uniquity fabric cut ledger (S7 2026-09-24)
+    match /fabric_converts/{document=**}        { allow read, write: if isAuth(); }   // throw → yardage builds (S7 2026-09-24)
     match /core_urgent_demand/{document=**}     { allow read, write: if isAuth(); }
 
     // Anything not explicitly listed above is denied by default.
