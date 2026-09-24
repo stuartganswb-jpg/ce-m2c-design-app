@@ -3089,8 +3089,29 @@ exports.nsOpenInvoices = onCall({
     secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
 }, async (request) => {
     assertStaffAdmin(request);
-    const { brand, customerId, customerLike, dueFrom, dueTo, limit, offset } = request.data || {};
+    const { brand, customerId, customerLike, dueFrom, dueTo, limit, offset, diagnose } = request.data || {};
     const entityId = customerId ? nsPay.nsCustomerIdOf(customerId) : '';
+
+    // WHY IS IT EMPTY? Count at each step so the failing predicate names itself, instead of us
+    // guessing which column NetSuite fills on this account (2026-09-24).
+    if (diagnose === true) {
+        const sub = NS_BRAND_SUBSIDIARY[String(brand || 'ce').toLowerCase()];
+        const steps = [
+            ['invoices of any kind', "SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc'"],
+            [`in subsidiary ${sub}`, `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)}`],
+            ['not voided', `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)} AND NVL(t.voided, 'F') = 'F'`],
+            ['with foreignamountunpaid > 0', `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)} AND NVL(t.foreignamountunpaid, 0) > 0.005`],
+            ['status open (CustInvc:A)', `SELECT COUNT(*) AS n FROM transaction t WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)} AND t.status = 'CustInvc:A'`],
+            ['joined to customer', `SELECT COUNT(*) AS n FROM transaction t JOIN customer c ON c.id = t.entity WHERE t.type = 'CustInvc' AND t.subsidiary = ${Number(sub)}`],
+            ['subsidiary on the LINE instead', `SELECT COUNT(DISTINCT t.id) AS n FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'CustInvc' AND tl.subsidiary = ${Number(sub)}`],
+        ];
+        const out = [];
+        for (const [what, sql] of steps) {
+            try { const rows = await nsQuery(sql, { limit: 1 }); out.push({ step: what, count: Number((rows[0] || {}).n || 0) }); }
+            catch (e) { out.push({ step: what, error: String(e.message || e).slice(0, 200) }); }
+        }
+        return { diagnosis: out, invoices: [], totalDue: 0, hasMore: false };
+    }
     const invoices = await nsOpenInvoiceRows({ brand, entityId, customerLike, dueFrom, dueTo, limit, offset });
     return {
         invoices, totalDue: money(invoices.reduce((s, i) => s + i.due, 0)),

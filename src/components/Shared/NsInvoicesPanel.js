@@ -29,6 +29,7 @@ export default function NsInvoicesPanel({ brand = 'ce', customerId = '', custome
     const [dueFrom, setDueFrom] = useState('');
     const [dueTo, setDueTo] = useState('');
     const [more, setMore] = useState(false);
+    const [diag, setDiag] = useState(null);
     const [page, setPage] = useState(0);
     const PAGE = 200;
 
@@ -104,11 +105,29 @@ export default function NsInvoicesPanel({ brand = 'ce', customerId = '', custome
                         <button style={btn(false)} disabled={busy} onClick={() => { setWho(''); setDueFrom(''); setDueTo(''); load({ offset: 0, who: '', dueFrom: '', dueTo: '' }); }}>Clear</button>
                     )}
                     <button style={btn(false)} disabled={busy} onClick={() => { const d = new Date(); const iso = d.toISOString().slice(0, 10); setDueFrom(''); setDueTo(iso); load({ offset: 0, dueTo: iso }); }}>Overdue only</button>
+                    {rows && rows.length === 0 && (
+                        <button style={btn(false)} disabled={busy} title="Count invoices at each step of the query, to see which condition is excluding them"
+                            onClick={async () => {
+                                setBusy(true); setDiag(null);
+                                try { const res = await httpsCallable(functions, 'nsOpenInvoices')({ brand, diagnose: true }); setDiag(res.data.diagnosis || []); }
+                                catch (e) { setErr(e.message || String(e)); }
+                                finally { setBusy(false); }
+                            }}>Why is this empty?</button>
+                    )}
                 </div>
             )}
 
             {err && <div style={{ fontSize: '12.5px', color: '#9b2c2c', marginBottom: '6px' }}>✗ {err}</div>}
             {rows && rows.length === 0 && !busy && <div style={{ fontSize: '12.5px', color: theme.inkSoft }}>Nothing open in NetSuite.</div>}
+            {diag && (
+                <div style={{ marginTop: '8px', border: `1px solid ${theme.line}`, padding: '10px 12px', fontFamily: theme.mono, fontSize: '11.5px' }}>
+                    {diag.map((d) => (
+                        <div key={d.step} style={{ color: d.error ? '#9b2c2c' : theme.ink }}>
+                            {d.step}: {d.error ? `error — ${d.error}` : d.count}
+                        </div>
+                    ))}
+                </div>
+            )}
 
             {rows && rows.length > 0 && (
                 <div style={{ maxHeight: mode === 'ALL' ? '420px' : '260px', overflowY: 'auto', border: `1px solid ${theme.line}` }}>
