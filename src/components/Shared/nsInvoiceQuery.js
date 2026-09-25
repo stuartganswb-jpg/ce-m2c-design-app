@@ -25,7 +25,14 @@ export function openInvoiceSql({ brand, entityId, customerLike = '', dueFrom = '
     const to = sqlDate(dueTo);
     const where = [
         "t.type = 'CustInvc'",
-        "t.status = 'CustInvc:A'",
+        // STATUS IS THE BARE CODE IN SuiteQL. 'A' = Open; 'B' = Paid In Full. The prefixed
+        // "Invoice:Open" / "CustInvc:A" form belongs to saved searches and SuiteScript, and in SQL
+        // it is a valid string that matches NOTHING — which is how this list read as "nothing open"
+        // while the account held 74,063 invoices (2026-09-24). BUILTIN.DF(t.status) is the name.
+        "t.status = 'A'",
+        // Belt and braces on top of the status: a balance must actually remain, so anything paid,
+        // closed or voided out to zero can never appear on a list staff are about to charge.
+        'NVL(t.foreignamountunpaid, NVL(t.foreigntotal, 0) - NVL(t.foreignamountpaid, 0)) <> 0',
         `tl.subsidiary = ${Number(subsidiary)}`,
         ...(entityId ? [`t.entity = ${Number(entityId)}`] : []),
         ...(name ? [`(UPPER(c.companyname) LIKE '%${name}%' OR UPPER(c.entityid) LIKE '%${name}%')`] : []),
@@ -75,8 +82,8 @@ export async function diagnoseOpenInvoices(brand) {
         ['sales orders (read by the app today)', "SELECT COUNT(*) AS n FROM transaction WHERE type = 'SalesOrd'"],
         ['customers', 'SELECT COUNT(*) AS n FROM customer'],
         ['invoices of any kind', "SELECT COUNT(*) AS n FROM transaction WHERE type = 'CustInvc'"],
-        ['invoices with status open', "SELECT COUNT(*) AS n FROM transaction WHERE type = 'CustInvc' AND status = 'CustInvc:A'"],
-        [`open invoices in subsidiary ${sub} (line)`, `SELECT COUNT(DISTINCT t.id) AS n FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'CustInvc' AND t.status = 'CustInvc:A' AND tl.subsidiary = ${sub}`],
+        ['invoices with status open', "SELECT COUNT(*) AS n FROM transaction WHERE type = 'CustInvc' AND status = 'A'"],
+        [`open invoices in subsidiary ${sub} (line)`, `SELECT COUNT(DISTINCT t.id) AS n FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'CustInvc' AND t.status = 'A' AND tl.subsidiary = ${sub}`],
     ];
     const out = [];
     for (const [step, q] of steps) {
@@ -87,5 +94,19 @@ export async function diagnoseOpenInvoices(brand) {
             out.push({ step, count: Number(((b.items || [])[0] || {}).n || 0) });
         } catch (e) { out.push({ step, error: String(e.message || e).slice(0, 200) }); }
     }
+    // Then STOP GUESSING at the status literal and ask NetSuite what it actually stores. A wrong
+    // guess is invisible — it is a valid string that matches nothing — so the screen names the real
+    // codes and their display names instead of leaving the next person to guess a third time.
+    try {
+        const r = await nsProxyFetch({
+            targetUrl: SUITEQL, method: 'POST',
+            payload: { q: "SELECT status, BUILTIN.DF(status) AS statusname, COUNT(*) AS n FROM transaction WHERE type = 'CustInvc' GROUP BY status ORDER BY status" },
+        });
+        const b = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(((b['o:errorDetails'] || [])[0] || {}).detail || b.title || `HTTP ${r.status}`);
+        for (const row of b.items || []) {
+            out.push({ step: `status "${row.status}" (${row.statusname || '?'})`, count: Number(row.n || 0) });
+        }
+    } catch (e) { out.push({ step: 'invoice statuses in this account', error: String(e.message || e).slice(0, 200) }); }
     return out;
 }

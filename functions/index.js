@@ -3056,13 +3056,20 @@ const nsOpenInvoiceRows = async ({ brand, entityId, customerLike = '', dueFrom =
     const name = cleanStr(customerLike, 60).replace(/'/g, "''").toUpperCase();
     const from = sqlDate(dueFrom);
     const to = sqlDate(dueTo);
-    // Eric's field list (2026-09-24): status Invoice:Open, and subsidiary / location live on the
-    // MAIN LINE, not the transaction header — which is why filtering the header found nothing.
-    // Amount due is the remaining balance (deposits applied and credit memos already netted off),
-    // with total-minus-paid as the fallback if the account leaves that column empty.
+    // Eric's field list (2026-09-24): subsidiary / location live on the MAIN LINE, not the
+    // transaction header — which is why filtering the header found nothing. Amount due is the
+    // remaining balance (deposits applied and credit memos already netted off), with
+    // total-minus-paid as the fallback if the account leaves that column empty.
     const where = [
         "t.type = 'CustInvc'",
-        "t.status = 'CustInvc:A'",
+        // STATUS IS THE BARE CODE IN SuiteQL. 'A' = Open; 'B' = Paid In Full. Eric's "Invoice:Open"
+        // is the saved-search form, and in SQL it is a valid string matching NOTHING — the silent
+        // reason both lists read as "nothing open" (2026-09-24). Keep this in step with
+        // Shared/nsInvoiceQuery.js, which is the same query for the staff side.
+        "t.status = 'A'",
+        // Belt and braces on top of the status: a balance must actually remain, so anything paid,
+        // closed or voided out to zero can never be offered to a customer to pay again.
+        'NVL(t.foreignamountunpaid, NVL(t.foreigntotal, 0) - NVL(t.foreignamountpaid, 0)) <> 0',
         `tl.subsidiary = ${Number(subsidiary)}`,
         ...(entityId ? [`t.entity = ${Number(entityId)}`] : []),
         ...(name ? [`(UPPER(c.companyname) LIKE '%${name}%' OR UPPER(c.entityid) LIKE '%${name}%')`] : []),
