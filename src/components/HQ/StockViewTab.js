@@ -19,7 +19,7 @@ import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
 import { issuePlatedDemand } from '../Shared/platingDemand';
 import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf, fetchOpenPoLines, addToOpenPurchaseOrder, isOpenPo, discardDraftPurchaseOrder } from '../Shared/purchaseOrders';
 import { coverCodesOf, rowsFor, uncoveredCount, STATE_STYLE } from '../Shared/backorderBoard';
-import { splitFinish, siblingsQuery, oneItemQuery, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
+import { splitFinish, siblingsQuery, oneItemQuery, activeItemOf, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
 import { raisePaintRun, repaintWoId } from '../Shared/repaintRun';
 import { askRunHandling, runHandlingLabel } from '../Shared/RunHandlingPrompt';
 import { runBatchPrecheck } from '../Shared/finishedRunPrecheck';
@@ -2275,7 +2275,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const resp = await nsProxyFetch({ targetUrl: NS_SUITEQL_URL, method: 'POST', payload: { q: oneItemQuery(code) } });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
-            const row = (data.items || [])[0] || null;
+            const row = activeItemOf(data.items);   // the ACTIVE item, never an inactive twin
             if (!row) return setSnapRepaint(r => r && ({ ...r, freeBusy: false, error: `NetSuite has no item called "${code}".` }));
             let avail = 0;
             try { const a = await fetchAvailability([code], (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17'); avail = Math.max(0, Number(a[code]) || 0); } catch (e) { /* reads 0 — refused below, the safe direction */ }
@@ -2302,7 +2302,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const resp = await nsProxyFetch({ targetUrl: NS_SUITEQL_URL, method: 'POST', payload: { q: oneItemQuery(st.target) } });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
-            nsItem = (data.items || [])[0] || null;
+            nsItem = activeItemOf(data.items);   // the ACTIVE item, never an inactive twin
         } catch (e) { setSnapRepaint(r => r && ({ ...r, busy: false })); return alert(`Couldn't reach NetSuite to check ${st.target} — nothing was created.\n\n${e.message || e}`); }
         if (!nsItem) { setSnapRepaint(r => r && ({ ...r, busy: false })); return alert(`NetSuite has no item called "${st.target}" — the painted pieces are adjusted into it at packing, so it has to exist first.`); }
         // SMALL PARTS OR POLES (Stuart 2026-09-23) — the same prompt the Master Library's JFP and

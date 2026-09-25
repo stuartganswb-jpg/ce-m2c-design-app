@@ -45,7 +45,15 @@ export const siblingsQuery = (millBase) => {
 /** One named item, for the free-entry box. */
 export const oneItemQuery = (code) =>
     `SELECT Item.id AS id, Item.itemid AS itemid, Item.displayname AS displayname, Item.isinactive AS inactive ` +
-    `FROM Item WHERE UPPER(Item.itemid) = '${esc(String(code || '').toUpperCase())}'`;
+    `FROM Item WHERE UPPER(Item.itemid) = '${esc(String(code || '').toUpperCase())}' ORDER BY Item.isinactive`;
+
+/**
+ * THE ACTIVE ITEM, NEVER AN INACTIVE TWIN (Eric 2026-09-24). NetSuite keeps inactive items under a
+ * name an active item also carries (HZLWP8135/B5 had one), and the first row back was the inactive
+ * one — its id went onto two JFP orders and the put-away adjustment was refused. Every by-name pick
+ * goes through here: the active row, or null when only inactive ones exist.
+ */
+export const activeItemOf = (rows) => (Array.isArray(rows) ? rows : []).find(x => x && String(x.inactive || '') !== 'T') || null;
 
 /**
  * Shape the rows for the picker: the target itself is never offered as its own source, inactive

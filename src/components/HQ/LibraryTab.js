@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { buildGalleryIndex, galleryImageForPart, photoMayOverwrite, isAutoImage, isInheritedFromBase, splitCode, imageUpdate, IMG_GALLERY } from '../Shared/partImage';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
-import { splitFinish, siblingsQuery, oneItemQuery, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
+import { splitFinish, siblingsQuery, oneItemQuery, activeItemOf, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
 import { releaseRunToFloor as sharedReleaseRunToFloor, raisePaintRun as sharedRaisePaintRun } from '../Shared/repaintRun';
 import { askRunHandling, runHandlingLabel } from '../Shared/RunHandlingPrompt';
 import { parkWorkOrder, INTENT } from '../Shared/workOrderCreate';
@@ -1315,7 +1315,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           const resp = await nsProxyFetch({ targetUrl: NS_SUITEQL, method: 'POST', payload: { q: oneItemQuery(code) } });
           const data = await resp.json().catch(() => ({}));
           if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
-          const row = (data.items || [])[0] || null;
+          const row = activeItemOf(data.items);   // the ACTIVE item, never an inactive twin
           if (!row) return setRepaint(r => r && ({ ...r, freeBusy: false, error: `NetSuite has no item called "${code}".` }));
           let avail = 0;
           try { const a = await fetchAvailability([code], (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17'); avail = Math.max(0, Number(a[code]) || 0); } catch (e) { /* reads as 0 — refused below, which is the safe direction */ }
@@ -1354,7 +1354,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           const resp = await nsProxyFetch({ targetUrl: NS_SUITEQL, method: 'POST', payload: { q: oneItemQuery(target) } });
           const data = await resp.json().catch(() => ({}));
           if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
-          nsItem = (data.items || [])[0] || null;
+          nsItem = activeItemOf(data.items);   // the ACTIVE item, never an inactive twin
       } catch (e) {
           setRepaint(r => r && ({ ...r, busy: false }));
           return alert(`Couldn't reach NetSuite to check ${target} — nothing was created. Try again.\n\n${e.message || e}`);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useDeferredValue } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import MaterialGridCard from '../Shared/MaterialGridCard';
@@ -333,6 +333,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
     // Counting Filter State
     const [searchQuery, setSearchQuery] = useState("");
+    // THE BOX KEEPS UP WITH THE TYPING (Eric 2026-09-24: "entry into this field is also quite laggy to
+    // type and delete"): every keystroke re-filtered the whole library and re-drew the rows. The input
+    // shows searchQuery at once; the filters read this deferred copy, one render behind when it must be.
+    const searchTerm = useDeferredValue(searchQuery);
     const [typeFilter, setTypeFilter] = useState("");
     const [collectionFilter, setCollectionFilter] = useState("");
     const [watchlistFilter, setWatchlistFilter] = useState("");
@@ -2183,7 +2187,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!lock.ok) return alert(lock.msg);
         const bin = lock.bin;
         const qty = Number(job.jfpAdjQty) || Number(job.completedParts) || Number(job.totalParts) || 0;
-        if (!job.jfpItemId) return alert(`${packRef(job)} has no NetSuite item id recorded, so nothing can be adjusted automatically. Adjust ${job.jfpItemCode || 'the item'} into ${bin} by hand in NetSuite.`);
+        // THE ID STAMPED AT ISSUE MAY BE AN INACTIVE TWIN'S (Eric 2026-09-24, HZLWP8135/B5 → id 19541 refused):
+        // re-resolve the ACTIVE item by code before re-posting, and keep the corrected id on the order.
+        let jfpItemId = job.jfpItemId;
+        if (job.jfpItemCode) {
+            const live = await resolveItemDetail(job.jfpItemCode).catch(() => null);
+            if (live && live.id && live.id !== String(job.jfpItemId || '')) jfpItemId = live.id;
+        }
+        if (!jfpItemId) return alert(`${packRef(job)} has no NetSuite item id recorded, so nothing can be adjusted automatically. Adjust ${job.jfpItemCode || 'the item'} into ${bin} by hand in NetSuite.`);
         const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
         try {
             await enqueueNsWrite({
@@ -2194,13 +2205,13 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
                 method: 'POST',
                 payload: paintOnlyAdjustment({
-                    itemId: job.jfpItemId, qty, bin,
+                    itemId: jfpItemId, qty, bin,
                     subsidiary: nsCfg.subsidiary, location: nsCfg.location,
                     ref: packRef(job), itemCode: job.jfpItemCode, by: operator?.name || '',
                 }),
                 writeBack: { collection: 'fin_workorders', docId: job.id, patch: { jfpAdjPosted: true }, idField: 'jfpAdjId', tranField: 'jfpAdjTran' },
             });
-            await updateDoc(packDocOf(job), { putawayBin: bin, jfpAdjBin: bin, jfpAdjQueued: true, jfpAdjRetriedAt: Date.now(), jfpAdjRetriedBy: operator?.name || '' });
+            await updateDoc(packDocOf(job), { putawayBin: bin, jfpAdjBin: bin, jfpItemId, jfpAdjQueued: true, jfpAdjRetriedAt: Date.now(), jfpAdjRetriedBy: operator?.name || '' });
             writeLog(`↩ JFP put-away re-posted for ${packRef(job)} → ${bin} (was "${job.jfpAdjBin || job.putawayBin || '—'}")`, 'wms');
             alert(`↩ Re-queued: +${qty} × ${job.jfpItemCode} into ${bin}.\n\nWatch it land in HQ 11.1 → NetSuite Sync Queue.`);
         } catch (e) { alert('Could not re-queue: ' + (e.message || e)); }
@@ -2467,9 +2478,17 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const src = String(issueCut.code || '').trim().toUpperCase();
         const tgt = String(issueCut.target || '').trim().toUpperCase();
         const qn = parseInt(issueCut.qty) || 0;
-        const srcRec = cutLook(src), tgtRec = cutLook(tgt);
-        if (src && !srcRec) return alert(`"${src}" is not in the Master Library.`);
-        if (tgt && !tgtRec) return alert(`"${tgt}" is not in the Master Library — create & sync it first (HQ 11.1).`);
+        // NOT IN THE LIBRARY, BUT IN NETSUITE (Eric 2026-09-25: HWMMP835/BL → HWMMP635/BL): a pole length the
+        // library never synced is resolved live for its NetSuite id, and takes its category from the library
+        // side of the cut — a stick cut from a pole is a pole. Neither side a known pole → still refused.
+        const liveLook = async (code) => { const d = await resolveItemDetail(code).catch(() => null); return d && d.id ? { code, internalId: String(d.id), productType: '', live: true } : null; };
+        let srcRec = cutLook(src) || (src ? await liveLook(src) : null);
+        let tgtRec = cutLook(tgt) || (tgt ? await liveLook(tgt) : null);
+        if (src && !srcRec) return alert(`"${src}" is not in the Master Library, and NetSuite has no active item by that name.`);
+        if (tgt && !tgtRec) return alert(`"${tgt}" is not in the Master Library, and NetSuite has no active item by that name — create it in NetSuite first.`);
+        const knownCat = (srcRec && !srcRec.live && srcRec.productType) || (tgtRec && !tgtRec.live && tgtRec.productType) || '';
+        if (srcRec && srcRec.live) srcRec = { ...srcRec, productType: knownCat };
+        if (tgtRec && tgtRec.live) tgtRec = { ...tgtRec, productType: knownCat };
         const plan = planManualCut({
             source: srcRec || { code: src }, qtySource: qn, scrapFt: Number(issueCut.scrapFt) || 0,
             targets: [{ code: tgt, per: issueCut.per, internalId: tgtRec && tgtRec.internalId, productType: tgtRec && tgtRec.productType }],
@@ -2606,7 +2625,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const r = await nsProxyFetch({
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
                 method: 'POST',
-                payload: { q: `SELECT ${cols} FROM item WHERE UPPER(itemid) = '${name.toUpperCase().replace(/'/g, "''")}'` }
+                // ACTIVE ITEMS ONLY (Eric 2026-09-24): an inactive twin of the same name must never be the id a build or cut posts against.
+                payload: { q: `SELECT ${cols} FROM item WHERE UPPER(itemid) = '${name.toUpperCase().replace(/'/g, "''")}' AND NVL(isinactive, 'F') = 'F'` }
             });
             const b = await r.json().catch(() => ({}));
             return (r.ok && b.items && b.items.length) ? b.items[0] : null;
@@ -2797,7 +2817,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
 
         const srcBin = binOf(base);
-        const destBin = binOf(target);
+        const destBin = convertDestScan.trim() ? convertDestScan.trim().toUpperCase() : binOf(target);   // the scan, else the home bin
         const memoText = `Phosphate convert by ${operator?.name || 'Unknown'}${convertMemo.trim() ? ` — ${convertMemo.trim()}` : ''}`;
 
         let dbg = '';
@@ -2824,6 +2844,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
             alert(`✅ Assembly build #${built.id || ''} posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${consumeBin}, received into ${receiveBin}).`);
             writeLog(`Assembly Build (phosphate): +${qty} ${erpOf(target)} / -${qty} ${base.erpId}.${convertMemo.trim() ? ` Memo: ${convertMemo.trim()}` : ''}`, 'wms');
+            // The first bin a home-less item is built into becomes its home bin — the next convert expects it.
+            if (binOf(target) === 'UNASSIGNED' && target.id) await updateDoc(doc(db, 'Approved_Designs', target.id), { 'manufacturingSpecs.binLocation': receiveBin }).catch(() => {});
             await coverBackordersOn(erpOf(target), qty, 'convert');   // close-out #18
             // Converted straight through (no cart hop) — the HQ to-do that opened this is satisfied.
             if (convertDemandId) {
@@ -4275,7 +4297,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
     const baseFilteredItems = hqParts.filter(part => {
         if (part.manufacturingSpecs?.isRetired === true || retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired (custitem28 / locked) items
-        const term = searchQuery.toLowerCase();
+        const term = searchTerm.toLowerCase();
         const specs = part.manufacturingSpecs || {};
         const erpId = (part.legacyErpId || part.itemId || "").toUpperCase();
 
@@ -4366,7 +4388,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     }).filter(r => {
         // Row-level search: an item term keeps all of that item's bin rows; a bin term keeps only the
         // rows for the matching bin (across every item in it). Item-level filter already let it through.
-        const term = searchQuery.trim().toLowerCase();
+        const term = searchTerm.trim().toLowerCase();
         if (!term) return true;
         const itemMatch = (r.itemName || '').toLowerCase().includes(term) || String(r.erpId || '').toLowerCase().includes(term) || String(r.itemId || '').toLowerCase().includes(term);
         const binMatch = String(r.countBin || '').toLowerCase().includes(term);
@@ -4381,7 +4403,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         // searched"). They were appended AFTER the search filter, so once someone added bin rows for an
         // item they sat on every search, one per addition. Same item test as the rows above; a typed
         // bin cannot match a row whose bin is still empty.
-        const term = searchQuery.trim().toLowerCase();
+        const term = searchTerm.trim().toLowerCase();
         if (!term) return true;
         return (r.itemName || '').toLowerCase().includes(term) || String(r.erpId || '').toLowerCase().includes(term) || String(r.itemId || '').toLowerCase().includes(term) || String(binEdits[r.rowKey] || '').toLowerCase().includes(term);
     }));
@@ -4422,7 +4444,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const convSrcBin = convSrcBins.find(b => String(b.bin).toUpperCase() === convertSrcScan.trim().toUpperCase());
     const convSrcQty = convSrcBin ? convSrcBin.qty : 0;
     const convSrcOk = !!convSrcBin;
-    const convDestOk = !!convTarget && binOf(convTarget) !== 'UNASSIGNED' && convertDestScan.trim().toUpperCase() === binOf(convTarget).toUpperCase();
+    // NO HOME BIN YET → THE SCANNED BIN IS THE ANSWER (Sandra 2026-09-25, H1-138BP-R/P "expect UNASSIGNED"):
+    // the gate demanded a match with a home bin the item did not have, so it could never be converted.
+    // A known home bin must still be matched; the bin lock checks the scan is real when the build posts,
+    // and the build writes it back as the item's home bin.
+    const convDestOk = !!convTarget && convertDestScan.trim() !== '' && (binOf(convTarget) === 'UNASSIGNED' || convertDestScan.trim().toUpperCase() === binOf(convTarget).toUpperCase());
     const convReady = !!convertBase && !!convertBase.netSuiteInternalId && !!convTarget && !!convTarget.netSuiteInternalId && convQtyNum > 0 && convQtyNum <= convSrcQty && convSrcOk && convDestOk;
     const convTargetMatches = convertTargetSearch.trim().length >= 2
         ? hqParts.filter(p => p.id !== convertBase?.id && (erpOf(p).includes(convertTargetSearch.trim().toUpperCase()) || (p.itemName || '').toLowerCase().includes(convertTargetSearch.trim().toLowerCase()))).slice(0, 8)
@@ -6257,7 +6283,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan dest bin</label>
                                             <input value={convertDestScan} onChange={e => setConvertDestScan(e.target.value)} placeholder={convTarget ? binOf(convTarget) : '—'} disabled={!convTarget} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${convDestOk ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
-                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: convDestOk ? '#7dbb81' : theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>{convDestOk ? '✓ matches' : (convTarget ? `expect ${binOf(convTarget)}` : '')}</div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: convDestOk ? '#7dbb81' : theme.inkSoft, marginTop: '4px', textAlign: 'center' }}>{convDestOk ? (binOf(convTarget) === 'UNASSIGNED' ? '✓ becomes its home bin' : '✓ matches') : (convTarget ? (binOf(convTarget) === 'UNASSIGNED' ? 'no home bin yet — scan where it goes' : `expect ${binOf(convTarget)}`) : '')}</div>
                                         </div>
                                     </div>
 
@@ -6897,7 +6923,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             )}
                                             <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, paddingBottom: '10px' }}>
                                                 {qn > 0 && per > 0 && issueCut.target
-                                                    ? `→ ${qn * per} × ${String(issueCut.target).toUpperCase()}${Number(issueCut.scrapFt) ? ` (+${qn * Number(issueCut.scrapFt)} ft scrap)` : ''}${tgtRec ? '' : ' · not in the library'}`
+                                                    ? `→ ${qn * per} × ${String(issueCut.target).toUpperCase()}${Number(issueCut.scrapFt) ? ` (+${qn * Number(issueCut.scrapFt)} ft scrap)` : ''}${tgtRec ? '' : ' · not in the library — its NetSuite id is read live at issue'}`
                                                     : (srcFt ? `reads as ${srcFt} ft — the buttons fill the rest in` : 'no length in the code — set it by hand')}
                                             </span>
                                             <button onClick={issueRodCut} style={{ padding: '11px 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>✂ Issue</button>
