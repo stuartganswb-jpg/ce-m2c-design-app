@@ -610,7 +610,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         try {
             const loc = BRAND_NETSUITE_MAP[activeBrand]?.location || '17';
             const idList = list.map(c => `'${c.replace(/'/g, "''")}'`).join(',');
-            const r = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: `SELECT Item.itemid AS legacy_id, Bin.binnumber AS bin_number, SUM(InventoryBalance.quantityonhand) AS onhand FROM Item LEFT JOIN InventoryBalance ON InventoryBalance.item = Item.id LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id WHERE UPPER(Item.itemid) IN (${idList}) AND InventoryBalance.location = ${loc} GROUP BY Item.itemid, Bin.binnumber` } });
+            const r = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: `SELECT Item.itemid AS legacy_id, Bin.id AS bin_id, Bin.binnumber AS bin_number, SUM(InventoryBalance.quantityonhand) AS onhand FROM Item LEFT JOIN InventoryBalance ON InventoryBalance.item = Item.id LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id WHERE UPPER(Item.itemid) IN (${idList}) AND InventoryBalance.location = ${loc} GROUP BY Item.itemid, Bin.id, Bin.binnumber` } });
             const j = await r.json();
             if (!r.ok) throw new Error(JSON.stringify(j).slice(0, 200));
             const map = {};
@@ -624,8 +624,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 map[id].known = true;
                 const qty = parseInt(row.onhand) || 0;
                 map[id].total += qty;
-                const bn = (row.bin_number || '').trim().toUpperCase();
-                if (bn && qty > 0) map[id].bins.push({ bin: bn, qty });
+                // A BIN IS ITS NETSUITE ID (2026-09-25): `bin` stays the upper-cased name every scan
+                // compares against; `name` is NetSuite's own spelling, `id` its internal id — two bins
+                // that read the same once upper-cased (PRODUCTION STOCK / Production Stock) stay two.
+                const name = String(row.bin_number || '').trim(); const bn = name.toUpperCase();
+                if (bn && qty > 0) map[id].bins.push({ bin: bn, name, id: row.bin_id != null ? String(row.bin_id) : '', qty });
             });
             Object.values(map).forEach(m => m.bins.sort((a, b) => b.qty - a.qty));
             setLiveBins(prev => ({ ...prev, ...map }));
@@ -1025,7 +1028,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return `\n\n⚠ The bin move(s) were NOT queued — no NetSuite subsidiary / location on file for this brand. Move the stock in NetSuite by hand: ${transfers.map(tr => `${tr.quantity} × ${tr.itemId} ${tr.fromBin} → ${tr.toBin}`).join(', ')}.`;
         for (const tr of transfers) {
-            await ensureBinExists(tr.toBin, nsConfig.location);
+            // The bins passed THE BIN LOCK at put-away — a bin is never created from a receipt.
             await enqueueNsWrite({
                 afterId: receiptOutboxId,
                 dedupeKey: `porcv-${String(po.id)}-${cartKey}-move-${tr.orderLine}-${tr.toBin}`,
@@ -1201,12 +1204,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!rcvPo || !rcvCart.length) return;
         const bin = String(rcvBin || '').trim().toUpperCase();
         // Each line lands in its own bin when it has one, else in the home bin (Eric 2026-09-22).
-        const binOf = (c) => String(c.bin || '').trim().toUpperCase() || bin;
+        const locked = {};   // typed → NetSuite's spelling, once THE BIN LOCK has passed it
+        const binOf = (c) => { const raw = String(c.bin || '').trim().toUpperCase() || bin; return locked[raw] || raw; };
         if (rcvCart.some(c => !binOf(c))) return alert('Scan the home bin — the pieces have to land somewhere. (A line with its own bin on the cart does not need it.)');
         const distinctBins = [...new Set(rcvCart.map(binOf))];
         for (const b of distinctBins) {
             const chk = await platingBinCheck(b);
             if (!chk.ok) return alert(chk.msg || `"${b}" is not a bin here.`);
+            locked[b] = chk.bin;
         }
         const binText = distinctBins.length === 1 ? distinctBins[0] : `${distinctBins.length} bins`;
         const pcs = rcvCart.reduce((a, c) => a + (Number(c.qty) || 0), 0);
@@ -2007,13 +2012,13 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // warning the person can pass — which still puts Eric's typo in front of him, without telling
     // someone correct that they are wrong. Refusing on partial data is worse than not checking:
     // the operator knows the bin is real, so the app just looks broken and gets worked around.
-    const [binIndex, setBinIndex] = useState({ loc: null, list: [], complete: false, loaded: false });
+    const [binIndex, setBinIndex] = useState({ loc: null, list: [], byKey: {}, complete: false, loaded: false });
     const loadBinIndex = async () => {
         const loc = (BRAND_NETSUITE_MAP[activeBrand] || {}).location;
-        if (!loc) return { list: [], complete: false };
-        if (binIndex.loaded && binIndex.loc === loc) return { list: binIndex.list, complete: binIndex.complete };
+        if (!loc) return { list: [], byKey: {}, complete: false };
+        if (binIndex.loaded && binIndex.loc === loc) return { list: binIndex.list, byKey: binIndex.byKey, complete: binIndex.complete };
         const PAGE = 1000, MAX_PAGES = 40;   // 40k bins is far past any real warehouse
-        let list = [], lastId = 0, complete = false;
+        let list = [], byKey = {}, lastId = 0, complete = false;   // byKey: normalized name → { id, name, twins? }
         try {
             for (let page = 0; page < MAX_PAGES; page++) {
                 const r = await nsProxyFetch({
@@ -2024,17 +2029,24 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 const body = await r.json().catch(() => ({}));
                 if (!r.ok) throw new Error(JSON.stringify(body).slice(0, 200));
                 const rows = body.items || [];
-                list = list.concat(rows.map(x => String(x.binnumber || '').toUpperCase()).filter(Boolean));
+                rows.forEach(x => {
+                    const name = String(x.binnumber || '').trim();
+                    if (!name) return;
+                    list.push(name.toUpperCase());
+                    // Two bins that tidy to the same key are TWINS — the lock names both and takes only an exact spelling.
+                    const k = normalizeBin(name), rec = { id: String(x.id), name };
+                    if (!byKey[k]) byKey[k] = rec; else byKey[k].twins = [...(byKey[k].twins || []), rec];
+                });
                 if (rows.length < PAGE) { complete = true; break; }
                 lastId = rows[rows.length - 1].id;
             }
-            setBinIndex({ loc, list, complete, loaded: true });
-            return { list, complete };
+            setBinIndex({ loc, list, byKey, complete, loaded: true });
+            return { list, byKey, complete };
         } catch (e) {
             // Unreachable NetSuite must not block a put-away — warn instead of inventing certainty.
             console.warn('Bin list unavailable:', e);
-            setBinIndex({ loc, list, complete: false, loaded: true });
-            return { list, complete: false };
+            setBinIndex({ loc, list, byKey, complete: false, loaded: true });
+            return { list, byKey, complete: false };
         }
     };
     // WHERE DOES THIS BIN ACTUALLY LIVE? Asked only when a bin fails the check, because "not at
@@ -2066,6 +2078,80 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             .map(x => x.b).slice(0, 6);
     };
 
+    // ── THE BIN LOCK (Stuart 2026-09-25) ───────────────────────────────────────────────────────
+    // "an operator put an item to plate instead of plating, hit planting … can we make a tighter
+    //  lock so that can't easily occur." The plating pull wrote whatever was typed straight into
+    // NetSuite: ensureBinExists CREATED the misspelt bin and the stock moved into it. The same day
+    // the count screen showed H1-75SR under every search, because NetSuite holds two bins that both
+    // read PRODUCTION STOCK once upper-cased and two rows shared one key.
+    //
+    // ONE gate for every typed or scanned DESTINATION bin, before anything posts:
+    //   • the bin must already exist at this location — resolved by NetSuite's internal id and
+    //     posted with NetSuite's own spelling, never the operator's;
+    //   • a name one or two letters from a real bin (PLANTING / PLATING) is refused with the real
+    //     one named — it is never created;
+    //   • two bins that differ only in case or spacing are BOTH named and the exact one is required;
+    //   • a brand-new bin is created only where { allowCreate } is passed (the Transfer form), only
+    //     when nothing resembles it, and only after the name is typed a second time;
+    //   • the validator rule stands: refuse on a COMPLETE list, warn on a partial one.
+    // Returns { ok, bin, id, create?, msg? } — `bin` is the spelling to post.
+    const closeBins = (want, list) => {
+        const w = normalizeBin(want).replace(/[^A-Z0-9]/g, '');
+        if (w.length < 4) return [];
+        const dist = (a, b) => {
+            const m = a.length, n = b.length;
+            if (Math.abs(m - n) > 2) return 3;
+            let prev = Array.from({ length: n + 1 }, (_, j) => j);
+            for (let i = 1; i <= m; i++) {
+                const cur = [i];
+                for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+                prev = cur;
+            }
+            return prev[n];
+        };
+        return Array.from(new Set(list)).filter(b => { const k = b.replace(/[^A-Z0-9]/g, ''); return k !== w && dist(w, k) <= 2; }).slice(0, 6);
+    };
+    const lockBin = async (entered, { allowCreate = false } = {}) => {
+        const typed = String(entered || '').trim();
+        const bin = normalizeBin(typed);
+        if (!bin) return { ok: false, msg: 'A bin is needed.' };
+        if (bin === 'UNASSIGNED') return { ok: false, msg: '"UNASSIGNED" is a placeholder, not a bin. Scan the bin label.' };
+        const { list: known, complete, byKey } = await loadBinIndex();
+        const hit = byKey[bin];
+        if (hit) {
+            const twins = [hit, ...(hit.twins || [])];
+            if (twins.length === 1) return { ok: true, bin: hit.name, id: hit.id };
+            // Two real bins read the same once tidied — only the exact spelling decides.
+            const exact = twins.find(t => t.name === typed);
+            if (exact) return { ok: true, bin: exact.name, id: exact.id };
+            return { ok: false, msg: `NetSuite has ${twins.length} bins at this location that all read as "${bin}":\n${twins.map(t => `   "${t.name}"`).join('\n')}\n\nScan the label, or type the exact spelling of the one you mean — nothing was posted. (Merging them in NetSuite ends this.)` };
+        }
+        const near = nearestBins(bin, known);
+        const close = closeBins(bin, known).filter(b => !near.includes(b));
+        const meant = [...near, ...close];
+        const elsewhere = await lookupBinAnywhere(bin);
+        const read = bin !== typed.toUpperCase() ? `\n\n(Read as "${bin}" after tidying the spacing.)` : '';
+        const where = elsewhere.length ? `\n\nNetSuite has a bin by that name at: ${elsewhere.join(', ')} — not at this brand's location.` : '';
+        const msg = `"${typed}" is not a bin at this location.${read}${where}\n\n${meant.length ? `Did you mean:\n${meant.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}`;
+        if (!complete || !known.length) {
+            // The list is short or unreachable: the app cannot see every bin here, so it warns and the person decides.
+            if (!window.confirm(`${msg}\n\n(The bin list here may be incomplete, so this is a warning, not a refusal.)\n\n${allowCreate ? 'Create and use' : 'Use'} "${bin}" anyway?`)) return { ok: false, msg: 'Nothing was posted.' };
+            return { ok: true, bin, id: '', unverified: true, create: allowCreate };
+        }
+        if (elsewhere.length) return { ok: false, msg: `${msg}\n\nNothing was posted.` };
+        if (!allowCreate) return { ok: false, msg: `${msg}\n\nNothing was posted — the bin has to exist in NetSuite first. A new bin is created from the TRANSFER tab, or in NetSuite.` };
+        if (meant.length) return { ok: false, msg: `${msg}\n\nA new bin this close to a real one is refused — a typo would put stock where nobody looks. Scan the label of the bin you mean.` };
+        const again = window.prompt(`"${bin}" does not exist at this location.\n\nTo CREATE it in NetSuite and move the stock into it, type the bin name again, exactly:`);
+        if (again === null) return { ok: false, msg: 'Nothing was posted.' };
+        if (normalizeBin(again) !== bin) return { ok: false, msg: `The two spellings differ ("${bin}" / "${normalizeBin(again)}") — nothing was created or posted.` };
+        return { ok: true, bin, id: '', create: true };
+    };
+    // A bin the lock let through as NEW is created here, and joins the index so the next scan finds it.
+    const createLockedBin = async (bin, locationId) => {
+        await ensureBinExists(bin, locationId);
+        setBinIndex(prev => (prev.loaded && !prev.byKey[normalizeBin(bin)]) ? { ...prev, list: [...prev.list, bin], byKey: { ...prev.byKey, [normalizeBin(bin)]: { id: '', name: bin } } } : prev);
+    };
+
     // ── REDO A PUT-AWAY THAT NETSUITE REFUSED (Eric 2026-08-24: "possible to move back to pack to
     // correct?") ──────────────────────────────────────────────────────────────────────────────
     // His adjustment failed on a mistyped bin, and the order was already Packed — so the pieces
@@ -2091,21 +2177,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (last && ['PENDING', 'POSTING'].includes(last.status)) return alert(`${packRef(job)}: the first put-away adjustment is still in the NetSuite Sync Queue (${last.status}).\n\nWait a minute for it to post, or check HQ 11.1. Re-posting now would double the stock.`);
             if (last && last.status === 'POSTED') return alert(`${packRef(job)}: the put-away adjustment already POSTED${last.nsTran ? ` (${last.nsTran})` : ''} — the order is being stamped.\n\nNothing to redo — re-posting would double the stock.`);
         }
-        const { list: known, complete: binsComplete } = await loadBinIndex();
         const entered = window.prompt(`↩ Re-post the put-away for ${packRef(job)}?\n\nThe last attempt used "${job.jfpAdjBin || job.putawayBin || '—'}" and NetSuite rejected it, so the pieces are physically away but NOT on the books.\n\nCorrect bin:`, job.putawayBin || '');
         if (entered === null) return;
-        const bin = normalizeBin(entered);
-        if (!bin) return alert('A bin is needed.');
-        if (known.length && !known.includes(bin)) {
-            const near = nearestBins(bin, known);
-            const elsewhere = await lookupBinAnywhere(bin);
-            const where = elsewhere.length ? `\n\nNetSuite has a bin by that name at: ${elsewhere.join(', ')} — not at this brand's location.` : '';
-            const msg = `"${entered.trim()}" is not a bin at this location.${where}\n\n${near.length ? `Did you mean:\n${near.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}`;
-            // Complete list → refuse. Incomplete → say so and let the person decide; they can see
-            // the bin and the app cannot see all of them.
-            if (binsComplete && !elsewhere.length) return alert(`${msg}\n\nNothing was posted.`);
-            if (!window.confirm(`${msg}\n\n(The bin list here may be incomplete, so this is a warning, not a refusal.)\n\nPost to "${bin}" anyway?`)) return;
-        }
+        const lock = await lockBin(entered);   // THE BIN LOCK — a real bin, NetSuite's spelling
+        if (!lock.ok) return alert(lock.msg);
+        const bin = lock.bin;
         const qty = Number(job.jfpAdjQty) || Number(job.completedParts) || Number(job.totalParts) || 0;
         if (!job.jfpItemId) return alert(`${packRef(job)} has no NetSuite item id recorded, so nothing can be adjusted automatically. Adjust ${job.jfpItemCode || 'the item'} into ${bin} by hand in NetSuite.`);
         const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
@@ -2148,7 +2224,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         }
         const isStockPutaway = job.orderType === 'stock';
         if (!(job.packPhotos || []).length && !isStockPutaway) return alert('A photo of the packaged parts is required — tap 📷 Add Photo first.');
-        const bin = normalizeBin(putawayBin);
+        let bin = normalizeBin(putawayBin);
         if (isStockPutaway) {
             if (!bin) return alert('Scan/enter the put-away bin — stocked goods go straight to the shelf.');
             // THAT IS THE ITEM LABEL, NOT A BIN (Stuart 2026-08-18). WO-JFP-HTFMRLG-04 was put away
@@ -2158,22 +2234,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // receives the pieces. A finish suffix is the tell — no bin here is named "CODE/FIN".
             // IS IT A REAL BIN? (Eric 2026-08-24) Checked before posting, because NetSuite's answer
             // to a bad bin is a failed adjustment nobody sees until the stock does not add up.
-            const { list: known, complete: binsComplete } = await loadBinIndex();
-            if (known.length && !known.includes(bin)) {
-                const near = nearestBins(bin, known);
-                const elsewhere = await lookupBinAnywhere(bin);
-                const read = bin !== putawayBin.trim().toUpperCase() ? `\n\n(Read as "${bin}" after tidying the spacing.)` : '';
-                const where = elsewhere.length ? `\n\nNetSuite has a bin by that name at: ${elsewhere.join(', ')} — not at this brand's location.` : '';
-                const msg = `"${putawayBin.trim()}" is not a bin at this location.${read}${where}\n\n${near.length ? `Did you mean:\n${near.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}`;
-                if (binsComplete && !elsewhere.length) return alert(`${msg}\n\nNothing was posted — NetSuite rejects an unknown bin and the adjustment would have been lost.`);
-                if (!window.confirm(`${msg}\n\n(The bin list here may be incomplete, so this is a warning, not a refusal.)\n\nPut away to "${bin}" anyway?`)) return;
-            }
+            const lock = await lockBin(putawayBin);   // THE BIN LOCK — a real bin, NetSuite's spelling
+            if (!lock.ok) return alert(lock.msg);
+            bin = lock.bin;
             const itemCodes = [job.jfpItemCode, job.stockErpId, job.type].map(v => String(v || '').trim().toUpperCase()).filter(Boolean);
             if (itemCodes.includes(bin) || (bin.includes('/') && !/^[A-Z]{2,}-/.test(bin))) {
                 return alert(`"${bin}" looks like the ITEM code, not a bin.\n\nScan the BIN label (e.g. RTS-CUS, BB 2-2) — the bin is posted to NetSuite, and one that doesn't exist makes the whole inventory adjustment fail, leaving the pieces un-received there while this screen says they were put away.`);
             }
             const lv = liveBins[String(job.stockErpId || job.type || '').toUpperCase()];
-            if (lv && lv.bins.length && !lv.bins.some(x => x.bin === bin) && !window.confirm(`Bin ${bin} isn't where NetSuite holds this item today (${lv.bins.slice(0, 3).map(x => x.bin).join(', ')}).\n\nPut away to ${bin} anyway? (Recorded as the physical location — no NetSuite move.)`)) return;
+            if (lv && lv.bins.length && !lv.bins.some(x => x.bin === bin.toUpperCase()) && !window.confirm(`Bin ${bin} isn't where NetSuite holds this item today (${lv.bins.slice(0, 3).map(x => x.bin).join(', ')}).\n\nPut away to ${bin} anyway? (Recorded as the physical location — no NetSuite move.)`)) return;
         }
         const confirmMsg = isStockPutaway
             ? `Put away ${packRef(job)} to bin ${bin}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} confirmed · stocked goods to the shelf (no customer packing).`
@@ -2484,6 +2553,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                         const qBins = `
                             SELECT
                                 Item.itemid AS legacy_id,
+                                Bin.id AS bin_id,
                                 Bin.binnumber AS bin_number,
                                 SUM(InventoryBalance.quantityonhand) AS onhand
                             FROM Item
@@ -2491,7 +2561,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                             LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
                             WHERE Item.itemid IN (${idList})
                             AND InventoryBalance.location = ${locationId}
-                            GROUP BY Item.itemid, Bin.binnumber
+                            GROUP BY Item.itemid, Bin.id, Bin.binnumber
                         `;
                         allBinResults = allBinResults.concat(await runQuery(qBins));
                     } catch (binErr) {
@@ -2511,7 +2581,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     const binName = (row.bin_number || '').trim();
                     if (!binName) return;
                     if (!stockMap[id]) stockMap[id] = { onHand: 0, bins: [] };
-                    stockMap[id].bins.push({ bin: binName.toUpperCase(), qty: parseInt(row.onhand) || 0 });
+                    // A BIN IS ITS NETSUITE ID (2026-09-25) — see fetchLiveBins: name + id ride with the upper-cased key.
+                    stockMap[id].bins.push({ bin: binName.toUpperCase(), name: binName, id: row.bin_id != null ? String(row.bin_id) : '', qty: parseInt(row.onhand) || 0 });
                 });
 
                 setNsStock(stockMap);
@@ -2561,6 +2632,18 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // --- NETSUITE INVENTORY ADJUSTMENT (PUSH) ---
     const pushInventoryAdjustment = async () => {
         const skipped = [];
+        // A TYPED BIN PASSES THE BIN LOCK FIRST — a real bin, NetSuite's spelling. An existing-bin row
+        // already carries NetSuite's spelling. Nothing is created from a count any more.
+        const lockedCountBins = {};
+        for (const row of countRows) {
+            if (physicalCounts[row.rowKey] === undefined || row.isExistingBin) continue;
+            if (physicalCounts[row.rowKey] - row.binOnHand === 0) continue;
+            const typed = String((binEdits[row.rowKey] ?? row.countBin) || '').trim();
+            if (!typed || typed.toUpperCase() === 'UNASSIGNED') continue;
+            const lock = await lockBin(typed);
+            if (!lock.ok) return alert(`${row.itemName || row.erpId}: ${lock.msg}`);
+            lockedCountBins[row.rowKey] = lock.bin;
+        }
         // One delta per counted (item, bin): the variance is measured against THAT bin's on-hand, so a
         // count only ever moves the bin it was entered against — never the item's combined cross-bin total.
         const rowDeltas = countRows.map(row => {
@@ -2570,7 +2653,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // Don't send a Firestore doc id as a NetSuite item ref — skip unmapped items (they'd 400).
             if (!row.netSuiteInternalId) { skipped.push(row.itemName || row.erpId || row.id); return null; }
             const storedBin = (row.binLocation || '').trim().toUpperCase();
-            const rawEff = (row.isExistingBin ? row.countBin : ((binEdits[row.rowKey] ?? row.countBin) || '')).trim().toUpperCase();
+            const rawEff = row.isExistingBin ? String(row.countBin || '').trim() : (lockedCountBins[row.rowKey] || '');
             // "UNASSIGNED" is a UI placeholder, never a real bin — never create/push it to NetSuite.
             const effBin = rawEff === 'UNASSIGNED' ? '' : rawEff;
             return {
@@ -2580,7 +2663,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 binNumber: effBin,
                 // Only a brand-new bin assignment (new/unbinned row) needs creating in NetSuite + writing back
                 // to the item's home bin. Counting an existing bin must never reassign the item's home bin.
-                binChanged: !row.isExistingBin && effBin !== '' && effBin !== storedBin,
+                binChanged: !row.isExistingBin && effBin !== '' && effBin.toUpperCase() !== storedBin,
                 adjustQtyBy: delta
             };
         }).filter(Boolean);
@@ -2645,12 +2728,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         try {
             setIsSyncing(true);
 
-            // Ensure every bin we reference exists (idempotent), and write any new home-bin back onto the item.
-            const allBins = new Set();
-            transferItems.forEach(t => t.moves.forEach(m => { allBins.add(m.from); allBins.add(m.to); }));
-            adjustItems.forEach(a => a.bins.forEach(b => allBins.add(b.binNumber)));
-            rowDeltas.filter(a => a.binChanged).forEach(a => allBins.add(a.binNumber));
-            for (const bin of allBins) { if (bin) await ensureBinExists(bin, nsConfig.location); }
+            // Every bin here is a real one (NetSuite's rows, or typed and passed THE BIN LOCK) — a count
+            // creates no bins. Write any new home-bin assignment back onto the item.
             await Promise.all(rowDeltas.filter(a => a.binChanged).map(a =>
                 updateDoc(doc(db, "Approved_Designs", a.docId), { "manufacturingSpecs.binLocation": a.binNumber }).catch(() => {})
             ));
@@ -2734,8 +2813,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // Build via the RESTlet — it sources the BOM, sets the raw component's consume bin server-side,
             // and receives the finished /P into destBin (the plain REST record API can't do either at create).
             const consumeBin = String(srcBin).trim().toUpperCase();
-            const receiveBin = String(destBin || '').trim().toUpperCase();
+            let receiveBin = String(destBin || '').trim().toUpperCase();
             if (!receiveBin) { setIsSyncing(false); return alert(`${erpOf(target)} has no destination bin — set its home bin (or use the Convert cart, which takes a put-away bin per line). The /P is bin-tracked, so NetSuite needs a receive bin.`); }
+            const lockRx = await lockBin(receiveBin);   // THE BIN LOCK — the home bin has to be a real bin
+            if (!lockRx.ok) { setIsSyncing(false); return alert(lockRx.msg); }
+            receiveBin = lockRx.bin;
             const demandDoc = convertDemandId ? (convertDemands.find(d => d.id === convertDemandId) || {}) : {};
             const demandWo = (!demandDoc.nsWoOnErp || demandDoc.nsWoOnErp === demandDoc.targetErpId) ? demandDoc.nsWoId : null;
             const built = await postConvertBuild({ itemId: assemblyId, quantity: qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: nsMemo(memoText), workOrderId: demandWo || undefined });
@@ -2769,18 +2851,21 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const item = transferBase;
         const qty = parseInt(transferQty) || 0;
         const fromBin = (transferSrcScan || '').trim().toUpperCase();
-        const toBin = (transferDestScan || '').trim().toUpperCase();
-        if (!item || qty <= 0 || !fromBin || !toBin) return;
+        const toBinTyped = (transferDestScan || '').trim().toUpperCase();
+        if (!item || qty <= 0 || !fromBin || !toBinTyped) return;
         if (!item.netSuiteInternalId) return alert(`${item.erpId} has no NetSuite Internal ID — map it first (HQ → ERP Mapping Audit / Mass Update).`);
-        if (fromBin.toUpperCase() === toBin.toUpperCase()) return alert("Source and destination bins are the same.");
+        if (fromBin.toUpperCase() === toBinTyped) return alert("Source and destination bins are the same.");
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
         const memoText = `Bin transfer by ${operator?.name || 'Unknown'}${transferMemo.trim() ? ` — ${transferMemo.trim()}` : ''}`;
 
         try {
             setIsSyncing(true);
-            // Make sure the destination bin exists (idempotent — an existing bin is fine).
-            await ensureBinExists(toBin, nsConfig.location);
+            // THE BIN LOCK — the only door that may create a bin, and only a name unlike any real one, typed twice.
+            const lock = await lockBin(transferDestScan, { allowCreate: true });
+            if (!lock.ok) return alert(lock.msg);
+            const toBin = lock.bin;
+            if (lock.create) await createLockedBin(toBin, nsConfig.location);
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`,
                 method: 'POST',
@@ -2828,7 +2913,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const o = activeCut;
         if (!o) return;
         const srcBin = (cutSrcScan || '').trim().toUpperCase();
-        const destBin = (cutDestScan || '').trim().toUpperCase();
+        let destBin = (cutDestScan || '').trim().toUpperCase();
         if (!srcBin || !destBin || !cutConfirmed) return;
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
@@ -2842,7 +2927,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const memoText = `Rod cut by ${operator?.name || 'Unknown'}: ${o.qtySource} × ${o.sourceItemId} → ${yieldText}${o.scrapFt ? ` (+${o.scrapFt} ft scrap)` : ''}${cutMemo.trim() ? ` — ${cutMemo.trim()}` : ''}`;
         try {
             setIsSyncing(true);
-            await ensureBinExists(destBin, nsConfig.location);
+            const lock = await lockBin(cutDestScan);   // THE BIN LOCK — a real bin, NetSuite's spelling
+            if (!lock.ok) return alert(lock.msg);
+            destBin = lock.bin;
             const r = await nsProxyFetch({
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
                 method: 'POST',
@@ -2950,7 +3037,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const runBinTransfer = async (item, qty, fromBin, toBin, memo) => {
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) throw new Error("NetSuite routing configuration missing for this brand.");
-        await ensureBinExists(toBin, nsConfig.location);
+        const lock = await lockBin(toBin);   // THE BIN LOCK — the cart bin has to be a real bin
+        if (!lock.ok) throw new Error(lock.msg);
+        toBin = lock.bin;
         const payload = {
             targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`,
             method: 'POST',
@@ -3008,8 +3097,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!line.targetErpId) return alert("This line has no target /P assembly.");
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
-        const newBin = (cartBinEdits[line.lineId] ?? line.newBin ?? '').trim().toUpperCase();
+        let newBin = (cartBinEdits[line.lineId] ?? line.newBin ?? '').trim().toUpperCase();
         if (!newBin) return alert(`Enter a put-away bin for the finished ${line.targetErpId} on this line first — the /P is bin-tracked, so NetSuite needs a destination bin.`);
+        const lockNew = await lockBin(newBin);   // THE BIN LOCK — a real bin, NetSuite's spelling
+        if (!lockNew.ok) return alert(lockNew.msg);
+        newBin = lockNew.bin;
         try {
             setIsSyncing(true);
             const assembly = await resolveItemDetail(line.targetErpId);
@@ -3137,7 +3229,7 @@ ${barcode ? `<div class="bc">${code128BSvg(barcode)}<div class="bctxt">${esc(bar
         const item = platingBase;
         const qty = parseInt(platingQty) || 0;
         const fromBin = (platingSrcScan || '').trim().toUpperCase();
-        const platingBin = (platingDestScan || '').trim().toUpperCase();
+        let platingBin = (platingDestScan || '').trim().toUpperCase();
         if (!item || qty <= 0 || !fromBin || !platingBin) return;
         if (!item.netSuiteInternalId) return alert(`${item.erpId} has no NetSuite Internal ID — map it first (HQ → ERP Mapping Audit / Mass Update).`);
         if (fromBin === platingBin) return alert("Source and plating bins are the same.");
@@ -3157,7 +3249,10 @@ ${barcode ? `<div class="bc">${code128BSvg(barcode)}<div class="bctxt">${esc(bar
             setIsSyncing(true);
             const goodId = "1";  // "Good" available status (from) — user-confirmed internal id
             const wipId = "13";  // "WIP-Plating" non-available status (to) — user-confirmed internal id
-            await ensureBinExists(platingBin, nsConfig.location);
+            // THE BIN LOCK (the 2026-09-24 "PLANTING" pull): a real plating bin, NetSuite's spelling — never created here.
+            const lock = await lockBin(platingDestScan);
+            if (!lock.ok) return alert(lock.msg);
+            platingBin = lock.bin;
             // Bin Transfer (NOT Inventory Adjustment): moves the qty fromBin→platingBin AND flips status
             // Good→WIP-Plating in one transaction, without posting the inventory-adjustment GL records that
             // accounting flags. Net on-hand unchanged; available drops (WIP-Plating is non-available).
@@ -3716,17 +3811,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             setOpenCartPanel(cart.cartId);
         } catch (e) { alert('Could not save the cart: ' + (e.message || e)); }
     };
-    // Is that a real bin here? Same question the pack put-away asks, same helpers, same rule: a
-    // validator refuses only on COMPLETE knowledge, and warns otherwise.
+    // Is that a real bin here? THE BIN LOCK answers (a real bin, NetSuite's spelling in `bin`).
     const platingBinCheck = async (bin) => {
-        const { list: known, complete } = await loadBinIndex();
-        if (!known.length || known.includes(bin)) return { ok: true };
-        const near = nearestBins(bin, known);
-        const elsewhere = await lookupBinAnywhere(bin);
-        const where = elsewhere.length ? `\n\nNetSuite has a bin by that name at: ${elsewhere.join(', ')} — not at this brand's location.` : '';
-        const msg = `"${bin}" is not a bin at this location.${where}\n\n${near.length ? `Did you mean:\n${near.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}`;
-        if (complete && !elsewhere.length) return { ok: false, hard: true, msg: `${msg}\n\nNothing was posted — NetSuite rejects an unknown bin and the build would be lost.` };
-        return { ok: window.confirm(`${msg}\n\n(The bin list here may be incomplete, so this is a warning, not a refusal.)\n\nPut away to "${bin}" anyway?`) };
+        const lock = await lockBin(bin);
+        return lock.ok ? { ok: true, bin: lock.bin } : { ok: false, hard: true, msg: lock.msg };
     };
     // PUT AWAY = the whole NetSuite close for one line, in order, each step guarded:
     //   1 reversal  WIP-Plating → Good, for the pieces that came back
@@ -3751,6 +3839,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         for (const p of bins) {
             const chk = await platingBinCheck(p.bin);
             if (!chk.ok) return alert(chk.hard ? chk.msg : 'Nothing was posted.');
+            p.bin = chk.bin;   // NetSuite's spelling
         }
         // ── A CUSTOM-FABRICATED PIECE HAS NO NETSUITE INVENTORY (2026-09-11) ────────────────────
         // The OB scan-in moved nothing in NetSuite ("custom fab isn't stocked inventory"), so there
@@ -3847,7 +3936,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             const already = Array.isArray(line.builtPlacements) ? line.builtPlacements : [];
             const placements = [...already];
             for (const p of bins) {
-                if (already.some(d => String(d.bin || '').toUpperCase() === p.bin)) continue;
+                if (already.some(d => String(d.bin || '').toUpperCase() === String(p.bin).toUpperCase())) continue;
                 const res = await postConvertBuild({
                     itemId: String(assembly.id), quantity: p.qty,
                     subsidiary: nsConfig.subsidiary, location: nsConfig.location,
@@ -4252,10 +4341,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const countRows = baseFilteredItems.flatMap(item => {
         const bins = (nsStock[item.erpId]?.bins || []).filter(b => b.bin);
         if (bins.length > 0) {
+            // THE ROW KEY IS THE BIN'S NETSUITE ID (Eric 2026-09-24 → Stuart 2026-09-25: "that item is
+            // appearing in bin count no matter what items we are searching for"). H1-75SR sits in two
+            // NetSuite bins that both read PRODUCTION STOCK once upper-cased, so two rows shared one
+            // key; React cannot tell them apart, and when the search changed it left the old rows in
+            // the table — one more ghost copy per search. Keyed by id, the two are two rows, spelled
+            // as NetSuite spells them, and the count posts to the exact bin that was counted.
             return bins.map(b => ({
                 ...item,
-                rowKey: `${item.id}::${b.bin}`,
-                countBin: b.bin,        // fixed, real bin (read-only in the UI)
+                rowKey: `${item.id}::${b.id || b.bin}`,
+                countBin: b.name || b.bin,   // fixed, real bin (read-only in the UI), NetSuite's spelling
+                countBinId: b.id || '',
                 binOnHand: b.qty,       // on-hand in THIS bin — the basis for the delta
                 isExistingBin: true
             }));
@@ -4535,7 +4631,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const packCode = erpOf(packTarget);
         const compCode = erpOf(packComponent);
         const consumeBin = String(packSrcBin.bin).trim().toUpperCase();
-        const receiveBin = String(packDestBin).trim().toUpperCase();
+        let receiveBin = String(packDestBin).trim().toUpperCase();
+        const lockRx = await lockBin(receiveBin);   // THE BIN LOCK — a real bin, NetSuite's spelling
+        if (!lockRx.ok) return alert(lockRx.msg);
+        receiveBin = lockRx.bin;
         if (!window.confirm(`Build ${packQtyNum} × ${packCode}?\n\nConsumes ~${packEachesNeeded} × ${compCode} (finished each) from ${consumeBin}\nReceives ${packQtyNum} × ${packCode} into ${receiveBin}\n\nNetSuite's BOM decides the exact components.`)) return;
         try {
             setIsSyncing(true);
@@ -4580,8 +4679,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const packCode = erpOf(packTarget);
         const eachCode = packComponent ? erpOf(packComponent) : eachForPack(packCode);
         const srcBin = String(breakSrcBin.bin).trim().toUpperCase();
-        const destBin = String(breakDestBin).trim().toUpperCase();
-        const coreBin = String(breakCoreBin || '').trim().toUpperCase();
+        let destBin = String(breakDestBin).trim().toUpperCase();
+        let coreBin = String(breakCoreBin || '').trim().toUpperCase();
+        const lockD = await lockBin(destBin);   // THE BIN LOCK — real bins, NetSuite's spelling
+        if (!lockD.ok) return alert(lockD.msg);
+        destBin = lockD.bin;
+        if (breakToCore && coreBin) { const lockC = await lockBin(coreBin); if (!lockC.ok) return alert(lockC.msg); coreBin = lockC.bin; }
         const msg = breakToCore
             ? `Break ${packQtyNum} × ${packCode} ALL THE WAY BACK TO CORE?\n\n1) ${packQtyNum} × ${packCode} from ${srcBin} → ${breakEachesBack} × ${eachCode} into ${destBin}\n2) ${breakEachesBack} × ${eachCode} → ${breakEachesBack} × ${packRoot} into ${coreBin}\n\nTWO separate NetSuite records — if the second fails the first still stands, and you'll be told exactly where it stopped.`
             : `Break ${packQtyNum} × ${packCode} apart?\n\nTakes ${packQtyNum} × ${packCode} from ${srcBin}\nReturns ${breakEachesBack} × ${eachCode} into ${destBin}`;
@@ -4657,8 +4760,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const targetCode = erpOf(repackTarget);
         const eachCode = packComponent ? erpOf(packComponent) : eachForPack(packCode);
         const srcBin = String(breakSrcBin.bin).trim().toUpperCase();
-        const eachBin = String(repackEachBin).trim().toUpperCase();
-        const destBin = String(repackDestBin).trim().toUpperCase();
+        let eachBin = String(repackEachBin).trim().toUpperCase();
+        let destBin = String(repackDestBin).trim().toUpperCase();
+        const lockE = await lockBin(eachBin);   // THE BIN LOCK — real bins, NetSuite's spelling
+        if (!lockE.ok) return alert(lockE.msg);
+        eachBin = lockE.bin;
+        const lockD = await lockBin(destBin);
+        if (!lockD.ok) return alert(lockD.msg);
+        destBin = lockD.bin;
         const by = operator?.name || 'Unknown';
         const memoTail = packMemo.trim() ? ` — ${packMemo.trim()}` : '';
         if (!window.confirm(`Repack ${packQtyNum} × ${packCode} into ${repackPacksNum} × ${targetCode}?\n\n1) ${packQtyNum} × ${packCode} from ${srcBin} → ${repackEaches} × ${eachCode} into ${eachBin}\n2) ${repackPacksNum * repackSize} × ${eachCode} from ${eachBin} → ${repackPacksNum} × ${targetCode} into ${destBin}${repackLoose > 0 ? `\n\n${repackLoose} × ${eachCode} stay loose in ${eachBin}.` : ''}\n\nTWO separate NetSuite records — if the second fails the first still stands, and you'll be told exactly where it stopped.`)) return;
@@ -6138,7 +6247,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             {canClickBin && convSrcBins.length > 0 && (
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
                                                     {convSrcBins.map(b => { const sel = convertSrcScan.trim().toUpperCase() === String(b.bin).toUpperCase(); return (
-                                                        <button key={b.bin} onClick={() => setConvertSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                        <button key={b.id || b.bin} onClick={() => setConvertSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
                                                     ); })}
                                                 </div>
                                             )}
@@ -6328,7 +6437,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             {breakSrcBins.length > 0 && (
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
                                                     {breakSrcBins.slice().sort((a, b) => b.qty - a.qty).map(b => { const sel = breakSrcScan.trim().toUpperCase() === String(b.bin).toUpperCase(); return (
-                                                        <button key={b.bin} onClick={() => setBreakSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                        <button key={b.id || b.bin} onClick={() => setBreakSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
                                                     ); })}
                                                 </div>
                                             )}
@@ -6424,7 +6533,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             {breakSrcBins.length > 0 && (
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
                                                     {breakSrcBins.slice().sort((a, b) => b.qty - a.qty).map(b => { const sel = breakSrcScan.trim().toUpperCase() === String(b.bin).toUpperCase(); return (
-                                                        <button key={b.bin} onClick={() => setBreakSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                        <button key={b.id || b.bin} onClick={() => setBreakSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
                                                     ); })}
                                                 </div>
                                             )}
@@ -6524,7 +6633,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {packSrcBins.length > 0 && (
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
                                             {packSrcBins.slice().sort((a, b) => b.qty - a.qty).map(b => { const sel = packSrcScan.trim().toUpperCase() === String(b.bin).toUpperCase(); return (
-                                                <button key={b.bin} onClick={() => setPackSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                <button key={b.id || b.bin} onClick={() => setPackSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
                                             ); })}
                                         </div>
                                     )}
@@ -6669,7 +6778,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {canClickBin && cutBins.length > 0 && (
                                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
                                                         {cutBins.map(b => { const sel = cutSrc.toUpperCase() === String(b.bin).toUpperCase(); return (
-                                                            <button key={b.bin} onClick={() => setCutSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                            <button key={b.id || b.bin} onClick={() => setCutSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
                                                         ); })}
                                                     </div>
                                                 )}
@@ -6892,7 +7001,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             {canClickBin && xferBins.length > 0 && (
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
                                                     {xferBins.map(b => { const sel = (transferSrcScan || '').trim().toUpperCase() === String(b.bin).toUpperCase(); return (
-                                                        <button key={b.bin} onClick={() => setTransferSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                        <button key={b.id || b.bin} onClick={() => setTransferSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
                                                     ); })}
                                                 </div>
                                             )}
@@ -7194,7 +7303,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             {canClickBin && platBins.length > 0 && (
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
                                                     {platBins.map(b => { const sel = platFrom.toUpperCase() === String(b.bin).toUpperCase(); return (
-                                                        <button key={b.bin} onClick={() => setPlatingSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                        <button key={b.id || b.bin} onClick={() => setPlatingSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
                                                     ); })}
                                                 </div>
                                             )}
