@@ -78,6 +78,31 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
     } catch (e) { alert(`Couldn't acknowledge: ${e.message}`); }
   };
 
+  // ⚡ URGENT FROM THE FLOOR (Stuart 2026-09-26: "add a check box for urgent that highlights the card,
+  // we used to have an urgent feature but it seems it's gone … we need a way to mark the ones that
+  // need to be done first"). The flag was only ever set on RTG's WAITING cards, and with auto-release
+  // on an order leaves the board almost at once — so nothing could mark an order once it was here.
+  // Same fields RTG writes. The person ticking it has seen it, so it does not pin for acknowledgement;
+  // the RTG record carries the same flag (propagateFloorState `extra` — the floor phase is left alone).
+  const toggleUrgentHere = async (wo) => {
+    const on = !wo.urgent;
+    const who = currentUser || 'Floor';
+    const at = Date.now();
+    const finPatch = on
+      ? { urgent: true, urgentAck: true, urgentAckAt: at, urgentAckBy: who, urgentBy: who, urgentAt: at, urgentFrom: 'SETUP_QUEUE' }
+      : { urgent: false, urgentAck: false, urgentClearedBy: who, urgentClearedAt: at };
+    const hqPatch = on
+      ? { urgent: true, urgentBy: who, urgentAt: at, urgentFrom: 'SETUP_QUEUE' }
+      : { urgent: false, urgentClearedBy: who, urgentClearedAt: at };
+    try {
+      await updateDoc(doc(db, "fin_workorders", wo.id), finPatch);
+      try {
+        await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc }, { finWo: wo, by: who, extra: hqPatch });
+      } catch (e) { console.warn('RTG urgent propagate failed (the floor flag stands):', e); }
+      if (writeLog) writeLog(`${on ? '⚡ Marked URGENT' : 'Cleared urgent on'} ${woRefOf(wo)}`, 'setup');
+    } catch (e) { alert(`Couldn't change the urgent flag: ${e.message}`); }
+  };
+
   // 📅 PLANNED RUN DAY PER FINISH (Stuart 2026-07-30: "the operator can highlight the day they plan
   // to run that finish color so that the rest of the team will know and it can plan accordingly if
   // they need to place any more orders for parts in those finishes"). One shared doc so every
@@ -773,8 +798,12 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '24px' }}>
             {g.orders.map(wo => {
               const isMatched = wo.stagingStatus === 'MATCHED';
+              // An urgent card is red whatever else it is — the staged strip inside still says matched.
               return (
-            <div key={wo.id} style={{...cardStyle, background: isMatched ? '#f6fbf7' : (cardStyle.background || '#fff'), borderLeft: isMatched ? '4px solid #3a7d44' : '4px solid var(--ink)'}}>
+            <div key={wo.id} style={{...cardStyle,
+                background: wo.urgent ? '#fdf3f3' : (isMatched ? '#f6fbf7' : (cardStyle.background || '#fff')),
+                borderLeft: wo.urgent ? '6px solid #d9534f' : (isMatched ? '4px solid #3a7d44' : '4px solid var(--ink)'),
+                ...(wo.urgent ? { boxShadow: '0 0 0 1px #d9534f' } : {})}}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
                     <strong style={{ fontSize: '1.1rem', color: 'var(--ink)', fontWeight: 500 }}>
                         WO: {woRefOf(wo)}
@@ -794,6 +823,12 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                 <OrderStatusChips wo={wo} recipeLen={((recipes[wo.recipe] || recipes[(wo.recipe || '').toUpperCase()] || {}).steps || []).length} style={{ marginBottom: '12px' }} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
                     <div style={{ fontSize: '0.9rem', color: 'var(--ink)' }}><span style={{color:'var(--ink-soft)'}}>Req Date:</span> <span style={{ fontWeight: 500 }}>{wo.reqDate || 'ASAP'}</span></div>
+                    <label title={wo.urgent ? `Urgent${wo.urgentBy ? ` — marked by ${wo.urgentBy}` : ''}. Untick to clear.` : 'Mark this order URGENT — the card turns red and moves to the top of its finish batch'}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 12px', borderRadius: '999px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap',
+                            background: wo.urgent ? '#d9534f' : 'transparent', color: wo.urgent ? '#fff' : 'var(--ink-soft)', border: `1px solid ${wo.urgent ? '#d9534f' : 'var(--line)'}`, fontWeight: wo.urgent ? 700 : 400 }}>
+                        <input type="checkbox" checked={!!wo.urgent} onChange={() => toggleUrgentHere(wo)} style={{ margin: 0, cursor: 'pointer', accentColor: '#d9534f' }} />
+                        ⚡ Urgent
+                    </label>
                     {(() => {
                         const n = notesOf(wo);
                         const has = n.length > 0;
@@ -944,7 +979,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                     </div>
                 )}
 
-                <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                {/* The row WRAPS (2026-09-26): the Spin / Booth pair is too wide to sit beside Specs and View
+                    Item inside a 350px card, so it takes a line of its own — Stuart saw it run off the card. */}
+                <div style={{ display: 'flex', gap: '12px', marginTop: '24px', flexWrap: 'wrap' }}>
                     <button onClick={() => setActiveSpecs(wo)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>Specs</button>
                     {/* JUST FOR PAINT (Stuart 2026-09-04): a JFP order's quoteId is the JFP TEMPLATE's library
                         record, so the viewer would show "JFP" — not the item being painted, not the raw item
@@ -958,7 +995,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                         setupWaitsOnShop(wo)
                             ? <button disabled title="The pole is being fabricated on the shop floor and comes back through the staging bin. Setup starts when it is here." style={{ ...btnStyle, flex: 2, background: 'var(--paper-2)', border: '1px dashed var(--brass)', color: 'var(--brass)', cursor: 'not-allowed', opacity: 0.9 }}>⏳ {setupWaitsOnShop(wo)}</button>
                             : asksSprayStation(wo, recipes)
-                                ? <span style={{ display: 'flex', gap: '8px', flex: 2 }}>
+                                ? <span style={{ display: 'flex', gap: '8px', flex: '1 1 100%' }}>
                                     <button onClick={() => startSetup(wo, SPRAY_STATIONS.SPIN)} title="Start setup — the small parts are sprayed on the spin machine" style={{ ...btnStyle, flex: 1, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup → Spin</button>
                                     <button onClick={() => startSetup(wo, SPRAY_STATIONS.BOOTH)} title="Start setup — the small parts are sprayed in the large booth" style={{ ...btnStyle, flex: 1, background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)' }}>Start Setup → Booth</button>
                                   </span>
