@@ -15,6 +15,7 @@ import { woRefOf } from '../Shared/woRef';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutPlanFromSource, sourcesForLength, poleOptionsWithStock } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
+import { activeItemByNameQuery, activeItemByNameQueryLite, cutRecordOf, isStockItemType } from "../Shared/nsItemLookup.js";
 import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
 import { issuePlatedDemand } from '../Shared/platingDemand';
 import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf, fetchOpenPoLines, addToOpenPurchaseOrder, isOpenPo, discardDraftPurchaseOrder } from '../Shared/purchaseOrders';
@@ -3790,7 +3791,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const qn = parseInt(cutModal.qty) || 0;
                 const opts = cutOptionsFor(cutModal.sourceFt);
                 // Resolve every code the operator typed against the library — category + NetSuite id
-                // come from the record, never from the string.
+                // come from the record, never from the string. A code the library does not know is
+                // read LIVE from NetSuite when the cut is issued (Stuart 2026-09-26, Shared/nsItemLookup):
+                // the item is not required to be synced into the app to be cut.
                 const look = (code) => {
                     const k = String(code || '').trim().toUpperCase();
                     if (!k) return null;
@@ -3807,38 +3810,60 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const srcRec = look(cutModal.itemid) || { code: String(cutModal.itemid).toUpperCase(), internalId: String(cutModal.internalId || ''), productType: 'POLE' };
                 const rows = cutModal.rows || [];
                 const targets = rows.map(r => { const rec = look(r.code); return { code: r.code, per: r.per, rec, missing: !!String(r.code || '').trim() && !rec }; });
+                // The plan on what is known now; a code the library lacks is read from NetSuite at issue.
                 const plan = planManualCut({
                     source: srcRec,
-                    targets: targets.map(t => ({ code: t.code, per: t.per, internalId: t.rec?.internalId, productType: t.rec?.productType })),
+                    targets: targets.filter(t => !t.missing).map(t => ({ code: t.code, per: t.per, internalId: t.rec?.internalId, productType: t.rec?.productType })),
                     qtySource: qn, scrapFt: Number(cutModal.scrapFt) || 0,
                 });
                 const unknown = targets.filter(t => t.missing).map(t => String(t.code).toUpperCase());
-                const errs = [...plan.errors, ...unknown.map(c => `${c} is not in the synced library.`)];
-                const ready = plan.ok && !unknown.length;
+                const errs = unknown.length && !targets.filter(t => !t.missing).length ? plan.errors.filter(e => !/at least one cut length/i.test(e)) : plan.errors;
+                const ready = errs.length === 0 && rows.every(r => String(r.code || '').trim()) && qn > 0;
+                // THE LIVE READ: the same query the WMS bench uses; active items only, with the Product Type.
+                const liveLook = async (code) => {
+                    const run = async (q) => { const r = await nsProxyFetch({ targetUrl: NS_SUITEQL_URL, method: 'POST', payload: { q } }); const b = await r.json().catch(() => ({})); return (r.ok && b.items && b.items.length) ? b.items[0] : null; };
+                    const row = (await run(activeItemByNameQuery(code))) || (await run(activeItemByNameQueryLite(code)));
+                    return cutRecordOf(row, code);
+                };
                 const setRow = (i, patch) => setCutModal(m => ({ ...m, rows: m.rows.map((r, j) => j === i ? { ...r, ...patch } : r) }));
                 const pickOption = (o) => setCutModal(m => ({ ...m, optionKey: o.key, scrapFt: String(o.scrapFt), rows: o.targets.map(t => ({ code: targetCodeFor(m.itemid, t.ft), per: String(t.per) })) }));
                 const issue = async () => {
                     if (!ready) return;
                     try {
+                        // Read the unknown codes from NetSuite now, then plan the whole cut once more with them in.
+                        const resolved = [];
+                        for (const t of targets) {
+                            if (!t.missing) { resolved.push(t); continue; }
+                            const rec = await liveLook(t.code);
+                            if (!rec) return alert(`NetSuite has no active item called "${String(t.code).toUpperCase()}" — create it in NetSuite first.`);
+                            if (rec.type && !isStockItemType(rec.type)) return alert(`${rec.code} is a ${rec.type} item in NetSuite, not an inventory item — it cannot hold rod stock.`);
+                            resolved.push({ ...t, rec: { ...rec, productType: rec.productType || srcRec.productType || '' } });
+                        }
+                        const full = planManualCut({
+                            source: srcRec,
+                            targets: resolved.map(t => ({ code: t.code, per: t.per, internalId: t.rec?.internalId, productType: t.rec?.productType })),
+                            qtySource: qn, scrapFt: Number(cutModal.scrapFt) || 0,
+                        });
+                        if (!full.ok) return alert(`✂ Can't issue this cut:\n\n${full.errors.map(e => `• ${e}`).join('\n')}`);
                         const id = `RC-${Date.now()}`;
-                        const first = plan.lines[0];
+                        const first = full.lines[0];
                         await setDoc(doc(db, 'rod_cut_orders', id), {
                             id, brand: activeBrand, status: 'OPEN',
                             sourceItemId: srcRec.code, sourceInternalId: srcRec.internalId,
                             // MULTI-LENGTH CUTS (Eric: one 12 ft → one 6 ft + one 4 ft). `targets` is
                             // the real shape; the three legacy fields mirror line 1 so every screen
                             // and log written against the old single-target doc keeps working.
-                            targets: plan.lines,
+                            targets: full.lines,
                             targetItemId: first.itemId, targetInternalId: first.internalId,
-                            qtySource: plan.qtySource, qtyTarget: first.qty,
-                            cutTo: cutModal.optionKey, scrapFt: plan.scrapFt,
+                            qtySource: full.qtySource, qtyTarget: first.qty,
+                            cutTo: cutModal.optionKey, scrapFt: full.scrapFt,
                             sourceBin: null, destBin: null, nsAdjustmentId: null,
                             createdAt: Date.now(), createdBy: currentUser || '', createdVia: 'SALES_SNAPSHOT',
                             completedAt: null, completedBy: null
                         });
-                        const summary = plan.lines.map(l => `${l.qty} × ${l.itemId}`).join(' + ');
-                        addLog(`✂ Rod cut order ${id}: ${plan.qtySource} × ${srcRec.code} → ${summary}`, 'success');
-                        alert(`✂ Rod cut order issued:\n\n${plan.qtySource} × ${srcRec.code} → ${summary}${plan.scrapFt ? ` + ${plan.scrapFt} ft scrap` : ''}\n\nIt's queued on the WMS → ROD CUTS tab. NetSuite inventory adjusts when the operator scans the bins and confirms the cut.`);
+                        const summary = full.lines.map(l => `${l.qty} × ${l.itemId}`).join(' + ');
+                        addLog(`✂ Rod cut order ${id}: ${full.qtySource} × ${srcRec.code} → ${summary}`, 'success');
+                        alert(`✂ Rod cut order issued:\n\n${full.qtySource} × ${srcRec.code} → ${summary}${full.scrapFt ? ` + ${full.scrapFt} ft scrap` : ''}\n\nIt's queued on the WMS → ROD CUTS tab. NetSuite inventory adjusts when the operator scans the bins and confirms the cut.`);
                         setCutModal(null);
                     } catch (e) { alert('Failed to create the rod cut order: ' + (e.message || e)); }
                 };
@@ -3886,8 +3911,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             {rows.length > 1 && <button onClick={() => setCutModal(m => ({ ...m, rows: m.rows.filter((_, j) => j !== i) }))} style={{ ...inp, cursor: 'pointer', background: '#fff' }}>×</button>}
                                         </div>
                                         {String(r.code || '').trim() && (
-                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginTop: '4px', color: t.rec?.internalId ? '#3a7d44' : '#d9534f' }}>
-                                                {!t.rec ? `✗ ${String(r.code).toUpperCase()} is not in the synced library — create & sync it first.`
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginTop: '4px', color: t.rec?.internalId ? '#3a7d44' : (t.rec ? '#d9534f' : '#b8860b') }}>
+                                                {!t.rec ? `◌ ${String(r.code).toUpperCase()} is not in the synced library — read from NetSuite when issued (id, type and Product Type).`
                                                     : t.rec.internalId ? `✓ ${t.rec.code} · ${t.rec.productType || '—'} · NetSuite ${t.rec.internalId}`
                                                     : `✗ ${t.rec.code} has no NetSuite id.`}
                                             </div>

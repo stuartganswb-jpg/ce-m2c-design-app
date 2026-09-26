@@ -14,6 +14,7 @@ import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
+import { activeItemByNameQuery, activeItemByNameQueryLite, cutRecordOf, isStockItemType } from '../Shared/nsItemLookup.js';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { signInWithCustomToken } from 'firebase/auth';
@@ -2478,17 +2479,20 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const src = String(issueCut.code || '').trim().toUpperCase();
         const tgt = String(issueCut.target || '').trim().toUpperCase();
         const qn = parseInt(issueCut.qty) || 0;
-        // NOT IN THE LIBRARY, BUT IN NETSUITE (Eric 2026-09-25: HWMMP835/BL → HWMMP635/BL): a pole length the
-        // library never synced is resolved live for its NetSuite id, and takes its category from the library
-        // side of the cut — a stick cut from a pole is a pole. Neither side a known pole → still refused.
-        const liveLook = async (code) => { const d = await resolveItemDetail(code).catch(() => null); return d && d.id ? { code, internalId: String(d.id), productType: '', live: true } : null; };
+        // THE STICK LIVES IN NETSUITE, NOT THE LIBRARY (Stuart 2026-09-26, "how JFP works"): a code the
+        // library does not know is read live — id, item type and Product Type — and cuts on those. The
+        // library is consulted first when it has the item; it is never required on either side. A live
+        // item with no Product Type in NetSuite borrows the category of the other side when that side is
+        // a known pole (a stick cut from a pole is a pole); neither side categorised → the planner refuses.
+        const liveLook = async (code) => { const d = await resolveItemDetail(code).catch(() => null); return d && d.id ? cutRecordOf({ id: d.id, itemtype: d.type, product_type: d.productType }, code) : null; };
         let srcRec = cutLook(src) || (src ? await liveLook(src) : null);
         let tgtRec = cutLook(tgt) || (tgt ? await liveLook(tgt) : null);
-        if (src && !srcRec) return alert(`"${src}" is not in the Master Library, and NetSuite has no active item by that name.`);
-        if (tgt && !tgtRec) return alert(`"${tgt}" is not in the Master Library, and NetSuite has no active item by that name — create it in NetSuite first.`);
-        const knownCat = (srcRec && !srcRec.live && srcRec.productType) || (tgtRec && !tgtRec.live && tgtRec.productType) || '';
-        if (srcRec && srcRec.live) srcRec = { ...srcRec, productType: knownCat };
-        if (tgtRec && tgtRec.live) tgtRec = { ...tgtRec, productType: knownCat };
+        if (src && !srcRec) return alert(`NetSuite has no active item called "${src}".`);
+        if (tgt && !tgtRec) return alert(`NetSuite has no active item called "${tgt}" — create it in NetSuite first.`);
+        for (const rec of [srcRec, tgtRec]) if (rec && rec.live && rec.type && !isStockItemType(rec.type)) return alert(`${rec.code} is a ${rec.type} item in NetSuite, not an inventory item — it cannot hold rod stock.`);
+        const knownCat = (srcRec && srcRec.productType) || (tgtRec && tgtRec.productType) || '';
+        if (srcRec && !srcRec.productType) srcRec = { ...srcRec, productType: knownCat };
+        if (tgtRec && !tgtRec.productType) tgtRec = { ...tgtRec, productType: knownCat };
         const plan = planManualCut({
             source: srcRec || { code: src }, qtySource: qn, scrapFt: Number(issueCut.scrapFt) || 0,
             targets: [{ code: tgt, per: issueCut.per, internalId: tgtRec && tgtRec.internalId, productType: tgtRec && tgtRec.productType }],
@@ -2621,18 +2625,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const resolveItemDetail = async (itemNumber) => {
         const name = (itemNumber || '').trim();
         if (!name) return null;
-        const run = async (cols) => {
-            const r = await nsProxyFetch({
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                method: 'POST',
-                // ACTIVE ITEMS ONLY (Eric 2026-09-24): an inactive twin of the same name must never be the id a build or cut posts against.
-                payload: { q: `SELECT ${cols} FROM item WHERE UPPER(itemid) = '${name.toUpperCase().replace(/'/g, "''")}' AND NVL(isinactive, 'F') = 'F'` }
-            });
+        // ACTIVE ITEMS ONLY (Eric 2026-09-24): an inactive twin of the same name must never be the id a
+        // build or cut posts against. READ LIVE, WITH ITS CATEGORY (Stuart 2026-09-26): the Product Type
+        // droplist rides along, so a stick the library never synced cuts like one it did (Shared/nsItemLookup).
+        const run = async (q) => {
+            const r = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } });
             const b = await r.json().catch(() => ({}));
             return (r.ok && b.items && b.items.length) ? b.items[0] : null;
         };
-        const row = (await run('id, itemtype')) || (await run('id')); // fall back if itemtype column is unavailable
-        return row ? { id: String(row.id), type: String(row.itemtype || '') } : null;
+        const row = (await run(activeItemByNameQuery(name))) || (await run(activeItemByNameQueryLite(name)));   // fall back if the droplist column is unavailable
+        return row ? { id: String(row.id), type: String(row.itemtype || ''), productType: String(row.product_type || '') } : null;
     };
 
     const ensureBinExists = async (binNumber, locationId) => {
@@ -6923,7 +6925,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             )}
                                             <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, paddingBottom: '10px' }}>
                                                 {qn > 0 && per > 0 && issueCut.target
-                                                    ? `→ ${qn * per} × ${String(issueCut.target).toUpperCase()}${Number(issueCut.scrapFt) ? ` (+${qn * Number(issueCut.scrapFt)} ft scrap)` : ''}${tgtRec ? '' : ' · not in the library — its NetSuite id is read live at issue'}`
+                                                    ? `→ ${qn * per} × ${String(issueCut.target).toUpperCase()}${Number(issueCut.scrapFt) ? ` (+${qn * Number(issueCut.scrapFt)} ft scrap)` : ''}${tgtRec ? '' : ' · not in the library — read from NetSuite at issue'}`
                                                     : (srcFt ? `reads as ${srcFt} ft — the buttons fill the rest in` : 'no length in the code — set it by hand')}
                                             </span>
                                             <button onClick={issueRodCut} style={{ padding: '11px 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>✂ Issue</button>
