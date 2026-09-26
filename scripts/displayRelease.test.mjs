@@ -234,5 +234,27 @@ eq('…and writes lines only when handed some', Object.keys(displayAnchorPatch({
 eq('a CPQ order with no lines needs them written', soNeedsLines({ hqJobId: 'J' }), true);
 eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }] }), false);
 
+
+// ── REOPEN FOR ROWS (Stuart 2026-09-26: the wall's SO60585 / SO60586, closed "redoing" before any row started) ──
+{
+    const { soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, splitRetiredDoc, wholeOrderDocsOf } = await import('../src/components/Shared/displayRelease.js');
+    const closedSo = { id: 'SO-APP-ST091826-01', soId: 'SO60585', status: 'Closed', closedAt: 1790000000000, closedBy: 'stuart', closedFrom: 'WMS_SO_PACK', closeReason: 'redoing', stateBeforeClose: { status: 'Dispatched' }, displayRelease: true, lines: [{ erp: 'H1-75SR', qty: 70 }], nsInternalId: '921062' };
+    const finClosed = { id: 'WO-SO60585', status: 'Closed', currentPhase: 'Closed', closedFrom: 'WMS_SO_PACK' };
+    const shopStamped = { id: 'SHOP-SO60585', status: 'Completed' };   // the close's stamp, not the floor's
+    const whole = { fin: finClosed, shop: shopStamped, fins: [finClosed], shops: [shopStamped] };
+    eq('a closed order is closed by status or by stamp', [soIsClosed(closedSo), soIsClosed({ status: 'Dispatched' }), soIsClosed({ status: 'Dispatched', closedAt: 1 })], [true, false, true]);
+    eq('a closed order whose split never worked may reopen for rows', reopenForRowsCheck(closedSo, whole), { ok: true, why: [] });
+    eq('an OPEN order is sent to Retire instead', reopenForRowsCheck({ ...closedSo, status: 'Dispatched', closedAt: null }, whole).why, ['SO60585 is not closed (Dispatched) — use Retire the split instead']);
+    eq('real work refuses: a packed fin doc, a picked fin doc, an open shop doc', reopenForRowsCheck(closedSo, { fins: [{ ...finClosed, packStatus: 'Packed' }, { id: 'WO-SO60585-P24', status: 'Closed', pickStatus: 'Picked_Awaiting_Staging' }], shops: [{ id: 'SHOP-X', status: 'In Progress' }] }).why.length, 3);
+    const t = reopenForRowsText(closedSo, whole, [{ id: 'PKG-SO60585', status: 'pending' }]);
+    eq('the question names the close, the documents kept closed, and the pack card', [t.startsWith('⟲ REOPEN SO60585 FOR ROWS?'), t.includes('by stuart ("redoing") from WMS_SO_PACK'), t.includes('WO-SO60585, SHOP-SO60585'), t.includes('pack card PKG-SO60585 is closed'), t.includes('Nothing goes to the floor until you start a row')], [true, true, true, true, true]);
+    const { patch, clear } = reopenForRowsSoPatch({ so: closedSo, buildId: 'B1', by: 'stuart', now: 5 });
+    eq('the order comes back with the status it had, the close kept as history, on the row route', [patch.status, patch.reopenedFromClose.closeReason, patch.reopenedFrom, patch.splitRetired, patch.displayRelease, patch.displayBuildId, patch.orderClass, patch.pickStatus, patch.totalParts], ['Dispatched', 'redoing', '10.5', true, true, 'B1', 'QUICKSHIP', 'Pending', 70]);
+    eq('…and the close stamps it carries are the ones cleared', clear, ['closedAt', 'closedBy', 'closedFrom', 'closeReason', 'stateBeforeClose']);
+    eq('a close whose remembered state is itself Closed comes back Dispatched (SO60586)', reopenForRowsSoPatch({ so: { ...closedSo, stateBeforeClose: { status: 'Closed' } }, buildId: 'B1' }).patch.status, 'Dispatched');
+    const stamped = { ...finClosed, ...splitRetiredStamp('stuart', 5) };
+    eq('a closed document marked retired reads as retired, and leaves the whole-order read', [splitRetiredDoc(stamped), splitRetiredDoc(finClosed), wholeOrderDocsOf(closedSo, [stamped], [{ ...shopStamped, ...splitRetiredStamp('stuart', 5), closed: true }])], [true, false, null]);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

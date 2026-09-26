@@ -36,7 +36,7 @@ import { cancelPlatingDemand } from '../Shared/platingDemand';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
+import { soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -326,6 +326,47 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         setBusy('');
     };
 
+    // ⟲ REOPEN FOR ROWS (Stuart 2026-09-26, the wall's SO60585 / SO60586): a closed anchored order
+    // whose whole-order split never did any work goes back on the row route. Shared/displayRelease
+    // decides whether it may, says what happens, and shapes the patch; this writes it.
+    const reopenForRows = async (entry) => {
+        const so = entry?.so;
+        if (!so || !draft || !entry.whole) return;
+        const chk = reopenForRowsCheck(so, entry.whole);
+        if (!chk.ok) return alert(`Cannot reopen ${so.soId || so.id} for rows:\n\n${chk.why.map(w => `  • ${w}`).join('\n')}\n\nWork that was really done is reopened on RTG (⟲ Reopen), not here.`);
+        let lines = null;
+        if (soNeedsLines(so)) {
+            if (!so.hqJobId) return alert('This sales order has no lines and no CPQ job to read them from — nothing to release by rows.');
+            const job = await getDoc(doc(db, 'jobs', so.hqJobId));
+            lines = rowLinesFromBreakdown(job.exists() ? ((job.data().cpqData || {}).breakdown || []) : []);
+            if (!lines.length) return alert(`The CPQ job ${so.hqJobId} has no physical lines in its breakdown — nothing to release by rows.`);
+        }
+        if (!window.confirm(reopenForRowsText(so, entry.whole, entry.pkg || []))) return;
+        setBusy('Reopening for rows…');
+        const by = String(currentUser || '10.5');
+        const now = Date.now();
+        try {
+            const w = entry.whole;
+            const docs = [...(Array.isArray(w.fins) && w.fins.length ? w.fins : (w.fin ? [w.fin] : [])), ...(Array.isArray(w.shops) && w.shops.length ? w.shops : (w.shop ? [w.shop] : []))];
+            // The split's documents stay exactly as closed — only marked retired, so they leave the whole-order read.
+            for (const x of docs) {
+                const coll = String(x.id).startsWith('SHOP-') ? 'shop_custom_orders' : 'fin_workorders';
+                await updateDoc(doc(db, coll, x.id), splitRetiredStamp(by, now));
+            }
+            let pkgClosed = 0;
+            for (const pk of (entry.pkg || [])) {
+                if (!pk || pk.closed || String(pk.closedFrom || '') === '10.5') continue;
+                await updateDoc(doc(db, 'packaging_orders', pk.id), { status: 'closed', closed: true, closedAt: now, closedBy: by, closedFrom: '10.5', closeReason: 'reopened for rows from 10.5 (the whole-order split retired)' });
+                pkgClosed++;
+            }
+            const { patch, clear } = reopenForRowsSoPatch({ so, buildId: draft.id, lines, by, now });
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), { ...patch, ...Object.fromEntries(clear.map(k => [k, deleteField()])) });
+            alert(`⟲ ${so.soId || so.id} is open again, on the row route (${patch.status}). ${docs.length} whole-order document(s) marked retired${pkgClosed ? `, ${pkgClosed} pack card(s) closed` : ''}.\n\nIts rows read NOT STARTED — start them from here, one at a time.`);
+            await loadFloor(draft);
+        } catch (e) { alert('Reopen failed partway: ' + (e?.message || e) + '\n\nRead the floor again before doing anything else.'); }
+        setBusy('');
+    };
+
     // An order released by rows before the class rule (Shared/displayRelease.needsPackCard): the
     // same stamp the anchor and the retire write, applied by itself — nothing else on the order moves.
     const givePackCard = async (entry) => {
@@ -584,8 +625,11 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                 {s.whole
                                     ? <>
                                         <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>whole-order · split by RTG · managed there</span>
-                                        <button onClick={() => retireSplit(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
-                                            title="Close the whole-order finishing and shop documents (reopenable, through RTG's own close), keep the sales order, and release its rows from here. Refuses if any work has been logged on them.">⟲ Retire the split → release by rows</button>
+                                        {soIsClosed(s.so)
+                                            ? <button onClick={() => reopenForRows(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
+                                                title="This order was CLOSED before its rows were started, and its whole-order split never did any work. Reopen the sales order on the row route; the split's documents stay closed, marked retired. Refuses if any work was logged on them.">⟲ Reopen for rows</button>
+                                            : <button onClick={() => retireSplit(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
+                                                title="Close the whole-order finishing and shop documents (reopenable, through RTG's own close), keep the sales order, and release its rows from here. Refuses if any work has been logged on them.">⟲ Retire the split → release by rows</button>}
                                     </>
                                     : <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>⚓ rows start from here{!s.so.nsInternalId ? ' · ⚠ NetSuite has not accepted it yet' : ''}{splitRetiredOf(s.so, s.fin, s.shop) ? ` · split retired (${splitRetiredOf(s.so, s.fin, s.shop).map(d => d.id).join(', ')}) · released by rows` : ''}</span>}
                                 {!s.whole && needsPackCard(s.so) === 'class' && <button onClick={() => givePackCard(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
@@ -651,7 +695,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                         </td>
                                         <td style={{ ...td, textAlign: 'right' }}>
                                             {state.key === ROW_STATE.NEEDS_DECISION && (
-                                                <button onClick={() => { try { sessionStorage.setItem('hq_oe_review_so', (state.lines.find(l => l.key === 'REVIEW') || {}).soAppId || (floor.sos[0] && floor.sos[0].so.id) || ''); } catch (e) { /* the board still lists it */ } window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }}
+                                                <button onClick={() => { try { const rv = state.lines.filter(l => l.key === 'REVIEW'); const soApp = (rv[0] || {}).soAppId || (floor.sos[0] && floor.sos[0].so.id) || ''; sessionStorage.setItem('hq_oe_review_so', soApp); sessionStorage.setItem('hq_oe_review_lines', JSON.stringify(rv.filter(l => l.soAppId === soApp).map(l => l.lineIdx))); } catch (e) { /* the board still lists it */ } window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }}
                                                     style={btn(false, { padding: '5px 10px', color: '#b02d20', borderColor: '#b02d20' })} title="The lines this row could not start cleanly — decide them on Order Entry Needs">Review →</button>
                                             )}
                                         </td>

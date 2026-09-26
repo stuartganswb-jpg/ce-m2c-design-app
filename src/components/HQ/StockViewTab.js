@@ -2441,7 +2441,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const scoped = only && only.soId ? only : null;
         if (!scoped && (!oeNeeds || oeNeeds.loading)) return alert('The Order Entry Needs board is still loading.');
         const work = [];
-        (scoped ? scoped.orders.filter(e => e.so.id === scoped.soId) : oeNeeds.orders).forEach((entry) => (entry.so.lines || []).filter(oeIsTbf).forEach(l => {
+        // Scoped to a 10.5 row: only the line indexes it named. Unscoped: never a rows-released order.
+        const onlyIdx = scoped && Array.isArray(scoped.lineIdxs) && scoped.lineIdxs.length ? new Set(scoped.lineIdxs) : null;
+        (scoped ? scoped.orders.filter(e => e.so.id === scoped.soId) : oeNeeds.orders.filter(e => !e.so.displayRelease)).forEach((entry) => (entry.so.lines || []).forEach((l, idx) => {
+            if (!oeIsTbf(l)) return;
+            if (onlyIdx && !onlyIdx.has(idx)) return;
             if (!oeLinkFor(entry, l)) work.push({ so: entry.so, l });
         }));
         if (!work.length) return alert(scoped ? 'Every to-be-finished line on that order already has live work behind it — nothing to start.' : 'Every made-to-order line already has a linked order — nothing to generate.');
@@ -2466,7 +2470,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
         if (reviewable.length) await openOeReviewForLines(reviewable);
     };
-    const loadOeNeeds = async () => {
+    const loadOeNeeds = async ({ keepSoId = '' } = {}) => {
         setOeNeeds({ loading: true, orders: [] });
         try {
             const snap = await getDocs(query(collection(db, 'hq_sales_orders'), where('orderClass', '==', ORDER_ENTRY_CLASS), where('brand', '==', activeBrand)));
@@ -2475,7 +2479,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // A DISPLAY ORDER'S ROWS ARE STARTED FROM 10.5, one at a time (Shared/displayRelease) —
                 // the same rule RTG's automatic start follows. Listed here, the green Generate would sweep
                 // every row of it onto the floor in one press; its demand reaches the Snapshot on its own.
-                .filter(o => !o.displayRelease)
+                // …except the ONE a 10.5 row's Review → named (2026-09-26): it is loaded for that review
+                // only, and the unscoped Generate below never touches a rows-released order.
+                .filter(o => !o.displayRelease || (keepSoId && o.id === keepSoId))
                 .filter(o => (o.lines || []).some(oeIsTbf));
             // Live work linked to each order — work orders, purchase orders AND plating demands, by the
             // one loader RTG's automatic start reads too (Shared/oeGenerate.loadOeLinks). A closed or
@@ -2510,15 +2516,19 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const oeDeepLinkRef = useRef(false);
     useEffect(() => {
         if (oeDeepLinkRef.current || !hqParts.length) return;
-        let soId = '';
-        try { soId = sessionStorage.getItem('hq_oe_review_so') || ''; if (soId) sessionStorage.removeItem('hq_oe_review_so'); } catch (e) { soId = ''; }
+        let soId = '', lineIdxs = null;
+        try {
+            soId = sessionStorage.getItem('hq_oe_review_so') || ''; if (soId) sessionStorage.removeItem('hq_oe_review_so');
+            // A 10.5 row names its undecided lines — the review runs for those, never the whole order.
+            const raw = sessionStorage.getItem('hq_oe_review_lines'); if (raw) { sessionStorage.removeItem('hq_oe_review_lines'); const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length) lineIdxs = arr.map(Number); }
+        } catch (e) { soId = ''; lineIdxs = null; }
         if (!soId) return;
         oeDeepLinkRef.current = true;
         (async () => {
-            addLog(`🧾 From RTG: opening the review for sales order ${soId}…`, 'info');
-            const orders = await loadOeNeeds();
+            addLog(`🧾 From RTG: opening the review for sales order ${soId}${lineIdxs ? ` (line${lineIdxs.length === 1 ? '' : 's'} ${lineIdxs.map(i => i + 1).join(', ')})` : ''}…`, 'info');
+            const orders = await loadOeNeeds({ keepSoId: soId });
             if (!orders.some(e => e.so.id === soId)) return alert('That sales order is no longer open on Order Entry Needs (shipped, closed or deleted).');
-            await generateAllOeMissing({ orders, soId });
+            await generateAllOeMissing({ orders, soId, lineIdxs });
         })().finally(() => { oeDeepLinkRef.current = false; });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [hqParts]);

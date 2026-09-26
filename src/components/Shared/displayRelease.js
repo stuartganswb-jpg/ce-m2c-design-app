@@ -100,7 +100,10 @@ const wholeKeysOf = (so) => [...new Set([so && so.soId, so && so.id].map(k => St
  * closes from 10.5; a document RTG closed as FINISHED keeps counting, so a built whole-order
  * display still reads DONE off it and is never offered a Start.
  */
-export const splitRetiredDoc = (d) => !!d && (d.closed === true || U(d.status) === 'CLOSED') && String(d.closedFrom || '').trim() === '10.5';
+// A whole-order document is RETIRED when 10.5 closed it, or when 10.5 marked an already-closed one
+// retired (the wall's SO60585/SO60586, closed from the WMS pack screen "redoing", 2026-09-26).
+export const splitRetiredDoc = (d) => !!d && (d.closed === true || U(d.status) === 'CLOSED' || U(d.currentPhase) === 'CLOSED')
+    && (String(d.closedFrom || '').trim() === '10.5' || d.splitRetired === true);
 // A whole-order id is WO-<key>, or — since the split writes one pair per finish (2026-09-23) —
 // WO-<key>-<FINISH>. A row pair's id is WO-OE-…, never a sales-order key, so the two cannot meet.
 const isWholeId = (id, prefix, keys) => keys.some(k => String(id) === `${prefix}-${k}` || String(id).startsWith(`${prefix}-${k}-`));
@@ -337,3 +340,68 @@ export const rowStartText = (label, state) => {
         '\nEach work order lands on RTG under this sales order. Lines the plan cannot start cleanly are named for review, not guessed.',
     ].filter(Boolean).join('\n');
 };
+
+
+// ── REOPEN FOR ROWS (Stuart 2026-09-26) ──────────────────────────────────────────────────────
+// The wall's two sales orders were closed from the WMS pack screen ("redoing") before their rows
+// were ever started. That closed the sales orders and their whole-order documents, and 10.5 then
+// read every row as "on the whole-order documents (Closed)" — DONE, which looks like released.
+// The retire cannot help: it refuses closed documents. This is the door for exactly that state:
+// a closed anchored order whose whole-order split never did any work is put back on the row
+// route — the sales order restored from its close, the split's documents left closed but marked
+// retired, the pack card closed. Nothing is reopened on the floor.
+const isClosedRecord = (d) => !!d && (U(d.status) === 'CLOSED' || U(d.currentPhase) === 'CLOSED' || d.closed === true || !!d.closedAt);
+export const soIsClosed = (so) => !!so && (U(so.status) === 'CLOSED' || !!so.closedAt);
+export const SO_CLOSE_STAMPS = ['closedAt', 'closedBy', 'closedFrom', 'closeReason', 'stateBeforeClose', 'nsWoCloseRequired', 'nsWoCloseRequestedAt', 'nsWoCloseRequestedBy', 'nsWoClosePending'];
+
+/** May this closed order go back on the row route? { ok, why[] } — every reason, not the first. */
+export const reopenForRowsCheck = (so, whole) => {
+    const why = [];
+    if (!soIsClosed(so)) why.push(`${(so && (so.soId || so.id)) || 'the order'} is not closed (${(so && so.status) || '—'}) — use Retire the split instead`);
+    if (!whole) why.push('no whole-order split to retire');
+    const fins = whole ? (Array.isArray(whole.fins) && whole.fins.length ? whole.fins : (whole.fin ? [whole.fin] : [])) : [];
+    const shops = whole ? (Array.isArray(whole.shops) && whole.shops.length ? whole.shops : (whole.shop ? [whole.shop] : [])) : [];
+    fins.forEach(f => {
+        if (!isClosedRecord(f)) why.push(`${f.id} is still open on the finishing floor (${f.currentPhase || f.status || '—'})`);
+        if (f.packStatus) why.push(`${f.id} was packed (${f.packStatus}) — real work; reopen it on RTG instead`);
+        if (['PICKED_AWAITING_STAGING', 'STAGED_READY_FOR_FINISHING', 'PICKED', 'STAGED'].includes(U(f.pickStatus))) why.push(`${f.id} was picked (${f.pickStatus}) — real work; reopen it on RTG instead`);
+    });
+    shops.forEach(s => {
+        if (!isClosedRecord(s) && !['COMPLETED', 'COMPLETE'].includes(U(s.status))) why.push(`${s.id} is still open on the shop floor (${s.status || '—'})`);
+        if (s.startedAt && (s.cutsLogged || (Array.isArray(s.cutLog) && s.cutLog.length))) why.push(`${s.id} logged cuts — real work; reopen it on RTG instead`);
+    });
+    return { ok: why.length === 0, why };
+};
+
+/** The question 10.5 asks before it does it. */
+export const reopenForRowsText = (so, whole, pkg = []) => {
+    const ref = (so && (so.soId || so.id)) || '';
+    const docs = [...(whole && whole.fins ? whole.fins : (whole && whole.fin ? [whole.fin] : [])), ...(whole && whole.shops ? whole.shops : (whole && whole.shop ? [whole.shop] : []))].map(x => x.id);
+    const openPkg = (pkg || []).filter(p => p && !p.closed && String(p.closedFrom || '') !== '10.5').map(p => p.id);
+    return `⟲ REOPEN ${ref} FOR ROWS?\n\nIt was closed ${so && so.closedAt ? new Date(Number(so.closedAt) || so.closedAt).toLocaleString() : ''}${so && so.closedBy ? ` by ${so.closedBy}` : ''}${so && so.closeReason ? ` ("${so.closeReason}")` : ''}${so && so.closedFrom ? ` from ${so.closedFrom}` : ''}, and its whole-order split never did any work.\n\n`
+        + `• the sales order comes back open, on the row route — its rows start from here, one at a time\n`
+        + `• the whole-order documents stay closed and are marked retired: ${docs.join(', ') || '—'}\n`
+        + (openPkg.length ? `• the pack card ${openPkg.join(', ')} is closed; the order packs off its own lines\n` : '')
+        + `\nNothing goes to the floor until you start a row.`;
+};
+
+/**
+ * The sales-order patch: restored from its close (the status it had, else Dispatched), the close
+ * kept as history, the row-route stamps applied. `clear` names the fields the caller deletes.
+ */
+export const reopenForRowsSoPatch = ({ so, buildId, lines = null, by = '', now = Date.now() }) => {
+    const before = so && so.stateBeforeClose && so.stateBeforeClose.status;
+    const status = before && U(before) !== 'CLOSED' ? before : 'Dispatched';
+    return {
+        patch: {
+            status,
+            reopenedFromClose: { closedAt: (so && so.closedAt) || null, closedBy: (so && so.closedBy) || '', closedFrom: (so && so.closedFrom) || '', closeReason: (so && so.closeReason) || '' },
+            reopenedFrom: '10.5', reopenedAt: now, reopenedBy: by || '', reopenReason: 'reopened for rows — the whole-order split retired',
+            splitRetired: true, splitRetiredAt: now, splitRetiredBy: by || '',
+            ...displayAnchorPatch({ buildId, lines, so: { ...(so || {}), status } }),
+        },
+        clear: SO_CLOSE_STAMPS.filter(k => so && so[k] !== undefined),
+    };
+};
+/** What a whole-order document is stamped with — it stays closed. */
+export const splitRetiredStamp = (by = '', now = Date.now()) => ({ splitRetired: true, splitRetiredAt: now, splitRetiredBy: by || '', splitRetiredFrom: '10.5' });
