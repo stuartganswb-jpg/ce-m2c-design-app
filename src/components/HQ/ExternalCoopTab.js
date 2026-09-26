@@ -23,6 +23,7 @@ import { invoiceDocOf } from '../Shared/invoiceMath';
 import PayLinkPanel from '../Shared/PayLinkPanel';
 import { usePayBlock } from '../Shared/payBlock';
 import NsInvoicesPanel from '../Shared/NsInvoicesPanel';
+import OrderFinderPanel from '../Shared/OrderFinderPanel';
 import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
 import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { soHeaderOf, jobHeaderPatchOf, EMPTY_SHIP_ADDRESS } from '../Shared/salesOrderHeader';
@@ -717,8 +718,13 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   // (customer pays the KIT price; NetSuite carries the per-item accounting lines).
   useEffect(() => {
     const unsub = onSnapshot(query(collection(db, 'hq_sales_orders'), where('orderClass', '==', ORDER_ENTRY_CLASS)), snap => {
-      // NS_QUEUED = saved locally, NetSuite not yet accepted; deleted = tombstone. Neither is a real order on a customer card.
-      setQsOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand && o.status !== 'NS_QUEUED' && !o.deleted));
+      // AN ORDER AWAITING NETSUITE IS STILL AN ORDER (Stuart 2026-09-26). NS_QUEUED means saved
+      // here and not yet accepted by NetSuite — it was being hidden as "not a real order", but it
+      // is: RTG already has it, the floor may already be building it, and the customer card was
+      // the one place that pretended it did not exist. The row renders it as AWAITING NETSUITE,
+      // which is the honest state; that branch had been unreachable for as long as this filter
+      // existed. Only a tombstone is dropped.
+      setQsOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand && !o.deleted));
     }, () => { /* none yet */ });
     return () => unsub();
   }, [activeBrand]);
@@ -785,6 +791,36 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   const [draftDrawings, setDraftDrawings] = useState([]); 
 
   const [expandedSections, setExpandedSections] = useState({ active: true, archive: false, maintenance: false });
+  // THE ORDER THE FINDER SENT US TO (Stuart 2026-09-26). The finder does not render an order — it
+  // opens the customer's real card and marks the one that was asked for, so every rule about
+  // modifying, reopening and closing stays where it has always been: on the card.
+  const [focusOrderId, setFocusOrderId] = useState('');
+  const openOrderOnCard = (match) => {
+      const rec = crmData[match.customerId];
+      if (!rec) {
+          // Say which order and whose, rather than appearing to do nothing.
+          window.alert(`${match.soNumber || match.number} belongs to customer ${match.customerId || '(none recorded)'}, and there is no CRM record here by that id.\n\nIt may belong to another brand — check the brand selector.`);
+          return;
+      }
+      setActiveSubTab('CUSTOMERS');
+      setActiveCrmRecord(rec);
+      // The pipeline can be collapsed; landing on a card that shows nothing would look broken.
+      setExpandedSections(prev => ({ ...prev, active: true }));
+      setFocusOrderId(match.id);
+  };
+  // Scroll to it once the card has rendered. An effect, not a ref callback: an inline ref re-runs
+  // on every render and would fight the user for the scroll position.
+  useEffect(() => {
+      if (!focusOrderId || activeSubTab !== 'CUSTOMERS') return;
+      const t = setTimeout(() => {
+          const el = document.getElementById(`crm-order-${focusOrderId}`);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 120);
+      return () => clearTimeout(t);
+  }, [focusOrderId, activeSubTab, activeCrmRecord?.id]);
+  // The mark belongs to one visit: choosing another customer clears it.
+  const focusStyle = (id) => (focusOrderId && focusOrderId === id
+      ? { outline: '2px solid var(--brass)', outlineOffset: '3px' } : {});
   // ── FLOOR STATUS FOR THE PIPELINE (Stuart 2026-08-25: "this information needs to come from the
   // floor … all currently stamp to one place") ──────────────────────────────────────────────────
   // Confirmed: they do. Finishing (currentPhase/tasks/coats), WMS (pickStatus/packStatus) and the
@@ -1668,12 +1704,16 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch' }}>
           
           <div style={{ width: '250px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', flexShrink: 0, borderRadius: '2px', overflow: 'hidden' }}>
-              <button onClick={() => { setActiveSubTab('CUSTOMERS'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'CUSTOMERS' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'CUSTOMERS' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'CUSTOMERS' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Customer CRM</button>
-              <button onClick={() => { setActiveSubTab('VENDORS'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'VENDORS' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'VENDORS' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'VENDORS' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Vendor / Co-op CRM</button>
-              <button onClick={() => { setActiveSubTab('PIPELINE'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'PIPELINE' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'PIPELINE' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'PIPELINE' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Global Pipeline</button>
+              <button onClick={() => { setActiveSubTab('CUSTOMERS'); setActiveCrmRecord(null); setFocusOrderId(''); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'CUSTOMERS' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'CUSTOMERS' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'CUSTOMERS' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Customer CRM</button>
+              <button onClick={() => { setActiveSubTab('VENDORS'); setActiveCrmRecord(null); setFocusOrderId(''); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'VENDORS' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'VENDORS' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'VENDORS' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Vendor / Co-op CRM</button>
+              <button onClick={() => { setActiveSubTab('PIPELINE'); setActiveCrmRecord(null); setFocusOrderId(''); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'PIPELINE' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'PIPELINE' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'PIPELINE' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Global Pipeline</button>
               {/* THE CHASING LIST (Stuart 2026-09-24) — every open NetSuite invoice for this brand,
                   oldest due first, each payable by card link. */}
-              <button onClick={() => { setActiveSubTab('OPEN_INVOICES'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'OPEN_INVOICES' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'OPEN_INVOICES' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'OPEN_INVOICES' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Open Invoices (NetSuite)</button>
+              <button onClick={() => { setActiveSubTab('OPEN_INVOICES'); setActiveCrmRecord(null); setFocusOrderId(''); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'OPEN_INVOICES' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'OPEN_INVOICES' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'OPEN_INVOICES' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Open Invoices (NetSuite)</button>
+              {/* FIND AN ORDER BY ITS NUMBER (Stuart 2026-09-26) — until now the only way to reach an
+                  open order was to remember whose it was and read down their card. This opens that
+                  same card, at that order: the card keeps every rule, this only gets you there. */}
+              <button onClick={() => { setActiveSubTab('FIND_ORDER'); setActiveCrmRecord(null); setFocusOrderId(''); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'FIND_ORDER' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'FIND_ORDER' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'FIND_ORDER' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Find a Sales Order</button>
           </div>
 
           <div style={{ flex: 1, minWidth: 0, background: '#fff', border: '1px solid var(--line)', minHeight: '600px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
@@ -1705,7 +1745,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                   getFilteredCrmRecords(activeSubTab === 'CUSTOMERS').map(record => (
                                       <div 
                                           key={record.id} 
-                                          onClick={() => setActiveCrmRecord(record)}
+                                          onClick={() => { setActiveCrmRecord(record); setFocusOrderId(''); }}
                                           style={{ 
                                               padding: '16px 20px', 
                                               borderBottom: '1px solid var(--line)', 
@@ -2042,7 +2082,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                               <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px dashed var(--line)', paddingBottom: '6px', marginTop: label === 'Sales Orders' ? '10px' : 0 }}>{label} ({n})</div>
                                           );
                                           const pipelineCard = (job, isOrderCard = false) => (
-                                                  <div key={job.id} style={{ border: `1px solid ${job.portalDeleted ? '#e2b8b8' : 'var(--line)'}`, borderLeft: job.portalDeleted ? '4px solid #d9534f' : undefined, padding: '16px', background: job.portalDeleted ? '#fdf3f3' : 'var(--paper)' }}>
+                                                  <div key={job.id} id={`crm-order-${job.id}`} style={{ border: `1px solid ${job.portalDeleted ? '#e2b8b8' : 'var(--line)'}`, borderLeft: job.portalDeleted ? '4px solid #d9534f' : undefined, padding: '16px', background: job.portalDeleted ? '#fdf3f3' : 'var(--paper)', ...focusStyle(job.id) }}>
                                                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                           <span title={job.jobId || job.id} style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', textDecoration: job.portalDeleted ? 'line-through' : 'none', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{quoteDisplayNo(job)}</span>
                                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 8px', border: `1px solid ${job.portalDeleted ? '#d9534f' : 'var(--line)'}`, background: job.portalDeleted ? '#d9534f' : '#fff', color: job.portalDeleted ? '#fff' : 'var(--ink)' }}>{job.portalDeleted ? '🗑 Deleted by client' : job.status.replace(/_/g, ' ')}</span>
@@ -2237,7 +2277,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                       const state = o.status === 'NS_QUEUED' ? 'AWAITING NETSUITE' : (o.status || 'Pending');
                                                       return (
                                                       <div key={o.id}>
-                                                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', border: '1px solid var(--line)', background: 'var(--paper)', padding: '10px 14px', marginBottom: payRowId === o.id ? 0 : '8px' }}>
+                                                      <div id={`crm-order-${o.id}`} style={{ display: 'flex', alignItems: 'center', gap: '12px', border: '1px solid var(--line)', background: 'var(--paper)', padding: '10px 14px', marginBottom: payRowId === o.id ? 0 : '8px', ...focusStyle(o.id) }}>
                                                           <div style={{ flex: 1, minWidth: 0 }}>
                                                               <span style={{ fontFamily: 'var(--mono)', fontSize: '0.85rem', fontWeight: 600, color: 'var(--ink)' }}>SO {o.soId}</span>
                                                               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '10px' }}>{o.createdAt ? new Date(o.createdAt).toLocaleDateString() : ''}{o.jobName ? ` · ${o.jobName}` : ''} · ${Number(o.invoiceTotal || 0).toFixed(2)}</span>
@@ -2324,6 +2364,17 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                           raised. Tick the invoices a customer is paying, then show them the QR code or send the link.
                       </p>
                       <NsInvoicesPanel brand={activeBrand} mode="ALL" />
+                  </div>
+              )}
+
+              {activeSubTab === 'FIND_ORDER' && (
+                  <div style={{ padding: '24px' }}>
+                      <h3 style={{ margin: '0 0 6px', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Find a sales order</h3>
+                      <p style={{ margin: '0 0 16px', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
+                          Know the number, get the order. Picking one opens that customer's card at that order,
+                          where the header, reopen and close work exactly as they always have.
+                      </p>
+                      <OrderFinderPanel jobs={allBrandJobs} oeOrders={qsOrders} onOpen={openOrderOnCard} />
                   </div>
               )}
 
