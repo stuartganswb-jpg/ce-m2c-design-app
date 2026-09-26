@@ -151,6 +151,23 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       })).sort((a, b) => (a.firstSeq !== b.firstSeq) ? a.firstSeq - b.firstSeq : a.firstDate - b.firstDate);
   })();
 
+  // ⚡ N URGENT ↓ ON THE HEADER (Stuart 2026-09-26: "add up here in this card at the top the # of urgent
+  // orders, if you click on that it takes them down the page to see the urgent card/s"). The urgent
+  // cards in batch order, as drawn below; each tap scrolls to the next one and flashes it.
+  const urgentCards = finishGroups.flatMap(g => g.orders).filter(w => w.urgent);
+  const [urgentJump, setUrgentJump] = useState(-1);
+  const [urgentFlash, setUrgentFlash] = useState(null);
+  const jumpToUrgent = () => {
+    if (!urgentCards.length) return;
+    const next = (urgentJump + 1) % urgentCards.length;
+    const wo = urgentCards[next];
+    setUrgentJump(next);
+    const el = document.getElementById(`setup-card-${wo.id}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setUrgentFlash(wo.id);
+    setTimeout(() => setUrgentFlash(f => (f === wo.id ? null : f)), 1800);
+  };
+
   // THE ONE READER (Shared/pickLines.pickableLinesOf, 2026-09-23) — this was a local copy of the WMS
   // rule, and it counted a custom pair's own pole as a pickable line. The shared reader excludes it.
   const pickableCount = (wo) => pickableLinesOf(wo).length;
@@ -594,8 +611,16 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                 Active Floor: {activeFloorLoad} pcs
             </span>
         </div>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: '2px', background: '#fff' }}>
-            {finishGroups.length} finish batch{finishGroups.length === 1 ? '' : 'es'} · {pendingOrders.length} order{pendingOrders.length === 1 ? '' : 's'}
+        <span style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {urgentCards.length > 0 && (
+                <button onClick={jumpToUrgent} title="Tap to go to the urgent cards below - tap again for the next urgent card"
+                    style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 700, color: '#fff', padding: '6px 12px', border: '1px solid #d9534f', borderRadius: '2px', background: '#d9534f', cursor: 'pointer' }}>
+                    ⚡ {urgentCards.length} urgent ↓{urgentJump >= 0 && urgentJump < urgentCards.length ? ` · ${urgentJump + 1} of ${urgentCards.length}` : ''}
+                </button>
+            )}
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: '2px', background: '#fff' }}>
+                {finishGroups.length} finish batch{finishGroups.length === 1 ? '' : 'es'} · {pendingOrders.length} order{pendingOrders.length === 1 ? '' : 's'}
+            </span>
         </span>
       </div>
 
@@ -800,10 +825,10 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
               const isMatched = wo.stagingStatus === 'MATCHED';
               // An urgent card is red whatever else it is — the staged strip inside still says matched.
               return (
-            <div key={wo.id} style={{...cardStyle,
+            <div key={wo.id} id={`setup-card-${wo.id}`} style={{...cardStyle,
                 background: wo.urgent ? '#fdf3f3' : (isMatched ? '#f6fbf7' : (cardStyle.background || '#fff')),
                 borderLeft: wo.urgent ? '6px solid #d9534f' : (isMatched ? '4px solid #3a7d44' : '4px solid var(--ink)'),
-                ...(wo.urgent ? { boxShadow: '0 0 0 1px #d9534f' } : {})}}>
+                ...(wo.urgent ? { boxShadow: urgentFlash === wo.id ? '0 0 0 5px #d9534f' : '0 0 0 1px #d9534f', transition: 'box-shadow .3s' } : {})}}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
                     <strong style={{ fontSize: '1.1rem', color: 'var(--ink)', fontWeight: 500 }}>
                         WO: {woRefOf(wo)}
