@@ -1381,13 +1381,14 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               // Declared on the order so a repaint is never mistaken for a JFP on the floor or in
               // RTG — same machinery, different reason, and the reason is worth keeping.
               extra: { repaint: true, repaintFrom: chosen.code, repaintAvailAtIssue: chosen.available },
+              confirmDuplicate: (text) => window.confirm(text),   // already on order? the person decides
           });
           alert(`✅ ${newWoId} is on the finishing floor.\n\n${desc}\n\nIt is in the Setup Queue now and recorded in RTG. The pick pulls ${chosen.code}; packing adjusts ${target} into the scanned bin.`);
           setRepaint(null);
       } catch (err) {
           console.error('Repaint WO error:', err);
           setRepaint(r => r && ({ ...r, busy: false }));
-          alert('Failed to create the repaint run. Check console.');
+          alert(/^Not created/.test(String(err && err.message)) ? err.message : `Failed to create the repaint run: ${(err && err.message) || err}`);
       }
   };
 
@@ -1459,6 +1460,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               woId: newWoId, part: activePart, targetCode: code, nsItem,
               pullCode, nsPull, finishId: jfp.finishId, finishLabel, fin, qty, desc,
               runType: 'Just For Paint', handling,
+              confirmDuplicate: (text) => window.confirm(text),   // already on order? the person decides
           });
           alert(`✅ ${newWoId} is on the finishing floor.\n\n${desc}\n\nIt is in the Setup Queue now, and recorded in RTG. Packing does a bin count and adjusts ${code} into that bin.`);
           setJfp({ itemCode: '', finishId: '', note: '', pullFrom: '', busy: false });
@@ -1466,7 +1468,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       } catch (err) {
           console.error('JFP WO error:', err);
           setJfp(j => ({ ...j, busy: false }));
-          alert('Failed to create the paint run. Check console.');
+          alert(/^Not created/.test(String(err && err.message)) ? err.message : `Failed to create the paint run: ${(err && err.message) || err}`);
       }
   };
 

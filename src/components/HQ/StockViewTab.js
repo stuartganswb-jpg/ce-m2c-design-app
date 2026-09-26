@@ -2321,6 +2321,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 finishId: st.finishId, finishLabel, fin, qty, desc,
                 brand: activeBrand, by: currentUser || '', runType: 'Repaint', handling,
                 extra: { repaint: true, repaintFrom: chosen.code, repaintAvailAtIssue: chosen.available, raisedFrom: 'SALES_SNAPSHOT' },
+                confirmDuplicate: (text) => window.confirm(text),   // already on order? the person decides
             });
             addLog(`♻ ${res.woId}: ${desc} — on the finishing floor and recorded in RTG.`, 'success');
             alert(`✅ ${res.woId} is on the finishing floor.\n\n${desc}\n\nThe pick pulls ${chosen.code}; packing adjusts ${st.target} into the scanned bin.`);

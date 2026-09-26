@@ -10,10 +10,22 @@
 // posted +qty into the scanned bin as the TARGET. Both halves already existed (JFP, Eric
 // 2026-08-12); what this module owns is writing the order that drives them.
 import { db } from '../../firebase';
-import { doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, getDocs, query, collection, where } from 'firebase/firestore';
 import { withItemCode, makeFullTasks } from './workOrderContract';
 import { buildStockFinPayload, paintRunFloorFields } from './stockRun';
 import { buildFinDoc } from './floorRelease';
+import { openPaintRunsOf, duplicateRunText, duplicateStamp } from './paintRunGuard.js';
+export { openPaintRunsOf, duplicateRunText, duplicateStamp };
+
+/**
+ * IS THIS ITEM ALREADY ON ORDER? (Stuart 2026-09-26) A paint run has no NetSuite work order, so
+ * the RTG records are the only place it shows. Every open paint-only run of exactly this code,
+ * from any door — the pure filter decides (Shared/paintRunGuard).
+ */
+export const openPaintRunsFor = async (targetCode) => {
+    const snap = await getDocs(query(collection(db, 'hq_work_orders'), where('paintOnly', '==', true)));
+    return openPaintRunsOf(snap.docs.map(d => ({ id: d.id, ...d.data() })), targetCode);
+};
 
 /**
  * Release a run straight to the finishing floor: the RTG record and the floor document, in that
@@ -83,7 +95,18 @@ export const releaseRunToFloor = async ({
 export const raisePaintRun = async ({
     woId, part, targetCode, nsItem, pullCode, nsPull, finishId, finishLabel, fin,
     qty, desc, brand, by = '', runType = 'Just For Paint', extra = {}, handling,
+    confirmDuplicate = null,   // (text, runs) → true to create a deliberate second run; no answer = refused
 }) => {
+    // ALREADY ON ORDER? (Stuart 2026-09-26) — asked HERE so no door can forget it. With open runs of
+    // the same item the door must answer; a door that cannot answer creates nothing.
+    const openRuns = await openPaintRunsFor(targetCode);
+    let dupStamp = {};
+    if (openRuns.length) {
+        const text = duplicateRunText(targetCode, openRuns, qty);
+        const ok = typeof confirmDuplicate === 'function' ? await confirmDuplicate(text, openRuns) : false;
+        if (!ok) throw new Error(`Not created — ${String(targetCode).toUpperCase()} is already on order (${openRuns.map(x => x.woId).join(', ')}).`);
+        dupStamp = duplicateStamp(openRuns, by);
+    }
     // SMALL PARTS OR POLES — asked at the door (Shared/RunHandlingPrompt), refused here without it:
     // the template record cannot say, and a pole run on the small-parts track is how B4/B5 landed on
     // the Spin Machine (Stuart 2026-09-23).
@@ -97,6 +120,7 @@ export const raisePaintRun = async ({
             ? { jfpPullFrom: pullCode, jfpPullFromNsId: String(nsPull.id), jfpPullFromName: nsPull.displayname || '' }
             : {}),
         ...extra,
+        ...dupStamp,   // a confirmed second run says which runs it duplicates
     };
     return releaseRunToFloor({
         woId,
