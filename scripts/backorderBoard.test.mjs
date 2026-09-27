@@ -112,5 +112,23 @@ t('the pack doc is attached when there is one', () => {
     assert.strictEqual(rows[0].pack.bin, 'A12');
 });
 
+// ── WHAT NETSUITE HOLDS FOR THE ORDER (Stuart 2026-09-27) ───────────────────────────────
+// Arriving stock is committed to the waiting order, so the free shelf can stay 0 after it is in.
+t('arrived: the order\'s hold covers what it wants, the free shelf still 0', () => {
+    const orders = [{ id: 'SO-A', createdAt: 1, backorderLines: [{ code: 'H1-1BF/EP2', qty: 30, wanted: 50, kind: 'plated', coverCodes: ['H1-1BF/EP2'] }] }];
+    const r = rowsFor({ orders, availByCode: { 'H1-1BF/EP2': 0 }, heldByOrder: { 'SO-A': { 'H1-1BF/EP2': 50 } } });
+    assert.strictEqual(r[0].state, 'ARRIVED');
+});
+t('not arrived: held for the order but less than it wants', () => {
+    const orders = [{ id: 'SO-A', createdAt: 1, backorderLines: [{ code: 'H1-1BF/EP2', qty: 30, wanted: 50, kind: 'plated', coverCodes: ['H1-1BF/EP2'] }] }];
+    const r = rowsFor({ orders, availByCode: { 'H1-1BF/EP2': 0 }, heldByOrder: { 'SO-A': { 'H1-1BF/EP2': 20 } } });
+    assert.strictEqual(r[0].state, 'UNCOVERED');
+});
+t('no hold read for the order: the free shelf against the shortfall, as before', () => {
+    const orders = [{ id: 'SO-A', createdAt: 1, backorderLines: [{ code: 'H1-1BF/EP2', qty: 30, wanted: 50, kind: 'plated', coverCodes: ['H1-1BF/EP2'] }] }];
+    assert.strictEqual(rowsFor({ orders, availByCode: { 'H1-1BF/EP2': 30 } })[0].state, 'ARRIVED');
+    assert.strictEqual(rowsFor({ orders, availByCode: { 'H1-1BF/EP2': 29 } })[0].state, 'UNCOVERED');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

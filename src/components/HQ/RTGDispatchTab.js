@@ -18,7 +18,7 @@ import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderSh
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
 import { coverCodesOf, backorderHoldOf, isBackorderHold } from '../Shared/backorder';
 import { uomStampOf } from '../Shared/uom';
-import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
+import { fetchAvailabilityUnits, fetchStockForOrder, fetchOrderCommitted, withOrderHeld } from '../Shared/oeReviewPlan';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState, planBulkReopen, applyBulkReopen, planOrderReopen, identityKeysOf, BULK_CLOSE_FROM, toMs } from '../Shared/orderLifecycle';
@@ -1366,8 +1366,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     Object.assign(map, r.map || {});
                     if (r.unitsKnown === false) unitsKnown = false;
                 }
+                // A SALES document sees its OWN order's stock (Stuart 2026-09-27): the free shelf plus what
+                // NetSuite holds for that sales order — the figure the release wrote. Read free-only, the
+                // morning run turned SO60551's 62 × H1-138CC/P (50 held for it) into "12 on hand, 38 short".
+                const soOfDoc = (d) => {
+                    const keys = [d.soAppId, d.salesOrderId, d.orderKey, d.soId].filter(Boolean).map(String);
+                    return keys.length ? (liveSO.find(o => keys.includes(String(o.id)) || (o.soId && keys.includes(String(o.soId)))) || null) : null;
+                };
+                const nsOf = (d) => { const o = (d.orderType === 'stock') ? null : soOfDoc(d); return o && o.nsInternalId ? String(o.nsInternalId) : ''; };
+                const nsIds = [...new Set(targets.map(t => nsOf(t.d)).filter(Boolean))];
+                const held = {};
+                let heldKnown = true;
+                if (nsIds.length) {
+                    try { for (let i = 0; i < codes.length; i += 100) Object.assign(held, await fetchOrderCommitted(nsIds, codes.slice(i, i + 100))); }
+                    catch (e) { heldKnown = false; addLog(`⚠ Floor stock refresh: what NetSuite holds for each sales order could not be read (${e.message || e}) — sales documents show free stock only today.`, 'warn'); }
+                }
                 for (const t of targets) {
-                    const { rows, changed: ch } = refreshMaterialRows(t.d.materialRows, { map, unitsKnown });
+                    const ns = heldKnown ? nsOf(t.d) : '';
+                    const { rows, changed: ch } = refreshMaterialRows(t.d.materialRows, { map: ns ? withOrderHeld(map, held, ns) : map, unitsKnown });
                     if (ch) changed++;
                     // The as-of moves on every open document, changed or not — the card must say TODAY.
                     await updateDoc(doc(db, t.coll, t.d.id), { materialRows: rows, materialRefreshedAt: Date.now(), materialRefreshedBy: by });
@@ -1516,7 +1532,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // sales order posted (NetSuite has committed what it can): covered → a WMS pick line; short
             // → a BACKORDER line for the Snapshot to cover (never a plating demand from here); unknown →
             // picked with a warning. In-house lines go to the floor exactly as before. The reader is A's
-            // fetchAvailabilityUnits (available = net of all commitments; unitsKnown per pull).
+            // fetchStockForOrder (2026-09-27): free stock + what NetSuite holds for THIS order; unitsKnown per pull.
             const assetMap = hasSmall ? await loadAssetMap() : null;
             const allPartsList = hasSmall ? buildPartsList(smallLines, partCache, assetMap, custKeys) : [];
             let stockRead = null;
@@ -1526,7 +1542,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 // by one definition (Shared/backorder) with one read.
                 const platedCodes = [...new Set(allPartsList.flatMap(l => coverCodesOf(l, recipeCode)))];
                 if (platedCodes.length) {
-                    try { stockRead = await fetchAvailabilityUnits(platedCodes, (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17'); }
+                    // THE ORDER'S OWN STOCK (Stuart 2026-09-27): free shelf + what NetSuite already holds for this
+                    // sales order — `available` alone is net of this order's own commitment and read its
+                    // committed stock as short.
+                    try {
+                        stockRead = await fetchStockForOrder(platedCodes, (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17', so.nsInternalId);
+                        if (stockRead && stockRead.heldKnown === false) addLog(`⚠ SO ${orderKey}: what NetSuite holds for this order could not be read — free stock only; a line may read short that is not.`, 'warn');
+                    }
                     catch (e) { addLog(`⚠ SO ${orderKey}: plated-line stock read failed (${e.message || e}) — plated lines go to the pick with a warning, not as a shortage.`, 'warn'); }
                 }
             } else if (hasSmall && !so.nsInternalId) {

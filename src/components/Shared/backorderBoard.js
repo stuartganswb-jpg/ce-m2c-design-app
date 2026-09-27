@@ -77,7 +77,12 @@ export const availabilityOf = (line, coverCodes) => {
  *   UNCOVERED  nothing open, nothing on the shelf → NOBODY HAS ORDERED THIS. The reason the board
  *              exists, and the only state the button counts.
  */
-export const rowsFor = ({ orders = [], poByCode = {}, openWos = [], availByCode = {}, packByOrderKey = {} }) => {
+// heldByOrder: { [so.id]: { CODE: n } } — what NetSuite holds for each order (Shared/oeReviewPlan.
+// fetchOrderCommitted). Arriving stock is committed to the waiting order by NetSuite, so the FREE shelf can
+// stay 0 after the material has turned up (Stuart 2026-09-27). With the order's hold known, ARRIVED means the
+// order's own view (free + held) covers everything it WANTS on the line; without it, the free shelf covers
+// the shortfall, as before.
+export const rowsFor = ({ orders = [], poByCode = {}, openWos = [], availByCode = {}, packByOrderKey = {}, heldByOrder = {} }) => {
     const woIdx = {};
     (openWos || []).forEach(w => {
         const c = up(w.itemCode || w.partErpId || w.rootItem);
@@ -93,14 +98,16 @@ export const rowsFor = ({ orders = [], poByCode = {}, openWos = [], availByCode 
             const recorded = availabilityOf(line, covers);
             // Live availability beats what was recorded at split time — the whole question the
             // board answers is "has it turned up since?".
-            const liveBest = covers.reduce((best, c) => Math.max(best, num(availByCode[c])), 0);
+            const heldHere = (heldByOrder && heldByOrder[so.id]) || null;
+            const liveBest = covers.reduce((best, c) => Math.max(best, num(availByCode[c]) + (heldHere ? num(heldHere[c]) : 0)), 0);
+            const arrivedAt = heldHere ? (num(line.wanted) || short) : short;
             const openPo = covers.flatMap(c => (poByCode[c] || []).map(l => ({ ...l, forCode: c, kind: 'PO' })));
             const openWo = covers.flatMap(c => (woIdx[c] || []).map(w => ({
                 kind: 'WO', forCode: c, poNumber: w.woDisplayId || w.nsWoTran || w.id,
                 open: num(w.totalParts || w.qty), due: w.needBy || w.reqDate || '', status: w.status || '',
             })));
             const cover = [...openPo, ...openWo];
-            const state = liveBest >= short && short > 0 ? 'ARRIVED' : (cover.length ? 'COVERED' : 'UNCOVERED');
+            const state = liveBest >= arrivedAt && short > 0 ? 'ARRIVED' : (cover.length ? 'COVERED' : 'UNCOVERED');
             rows.push({
                 key: `${so.id}:${line.lineIndex != null ? line.lineIndex : i}`,
                 soId: so.id, soNumber: so.nsSoTran || so.soNumber || so.orderKey || so.id,

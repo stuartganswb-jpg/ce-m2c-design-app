@@ -123,6 +123,37 @@ export const fetchOrderCommitted = async (soInternalIds, codes) => {
     return out;
 };
 
+// What NetSuite holds for ONE order of ONE code, from fetchOrderCommitted's map. Every reader keys it the same way.
+export const orderHeldOf = (held, soNsId, code) => {
+    const so = String(parseInt(soNsId, 10) || '');
+    return so ? Math.max(0, Number((held || {})[`${so}|${String(code || '').toUpperCase()}`]) || 0) : 0;
+};
+
+// STOCK FOR ONE SALES ORDER (Stuart 2026-09-27): the free shelf (fetchAvailabilityUnits) PLUS what NetSuite
+// already holds for this order — the one reader for "can this order's line be covered?". The CPQ split,
+// the morning floor refresh, the Backorder board and the SO Pack all asked NetSuite's quantityavailable,
+// which is on hand NET of every commitment including this order's own, and called the order short of
+// its own stock. `available` in the returned map is the order's view; `heldForOrder` says how much of it
+// NetSuite holds for the order. heldKnown:false = the hold could not be read — free stock only, and said.
+// A free-stock map ({ CODE: { available, … } }) seen from ONE order: its held stock added in. Pure.
+export const withOrderHeld = (map, held, soNsId) => {
+    if (!soNsId) return map || {};
+    const out = {};
+    Object.entries(map || {}).forEach(([c, v]) => {
+        const h = orderHeldOf(held, soNsId, c);
+        out[c] = h ? { ...v, available: (Number(v && v.available) || 0) + h, heldForOrder: h } : v;
+    });
+    return out;
+};
+export const fetchStockForOrder = async (codes, locationId, soNsId) => {
+    const res = await fetchAvailabilityUnits(codes, locationId);
+    if (!soNsId || !codes || !codes.length) return { ...res, heldKnown: true };
+    let held;
+    try { held = await fetchOrderCommitted([soNsId], codes); }
+    catch (e) { return { ...res, heldKnown: false }; }
+    return { ...res, map: withOrderHeld(res.map, held, soNsId), heldKnown: true };
+};
+
 // The unit the APP believes an item is counted in. Unset means eaches — every screen has always
 // assumed eaches, so that IS the app's position until an operator aligns it.
 export const appUnitOf = (part) => String(part?.manufacturingSpecs?.stockUnit || 'EA').toUpperCase();
@@ -249,12 +280,12 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         try { heldLeft = await fetchOrderCommitted(soNsIds, [...codes]); }
         catch (e) { heldLeft = {}; heldKnown = false; }
     }
-    const heldFor = (soNs, code) => (soNs ? Math.max(0, Number(heldLeft[`${soNs}|${code}`]) || 0) : 0);
+    const heldFor = (soNs, code) => orderHeldOf(heldLeft, soNs, code);
     // Take `qty` of `code` for this order: its own held stock first, then the shared free shelf.
     const claim = (soNs, code, qty) => {
         const own = heldFor(soNs, code);
         const fromOwn = Math.min(own, qty);
-        if (fromOwn) heldLeft[`${soNs}|${code}`] = own - fromOwn;
+        if (fromOwn) heldLeft[`${String(parseInt(soNs, 10))}|${code}`] = own - fromOwn;
         remaining[code] = Math.max(0, (Number(remaining[code]) || 0) - (qty - fromOwn));
     };
 
