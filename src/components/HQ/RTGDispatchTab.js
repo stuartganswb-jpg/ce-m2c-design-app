@@ -3,7 +3,7 @@ import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, deleteField, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
-import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
+import { classifyLine, isDisplayOnlyLine, isParkedGeometryLine, DIVISION_CUSTOM, customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
@@ -19,6 +19,7 @@ import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
 import { coverCodesOf, backorderHoldOf, isBackorderHold } from '../Shared/backorder';
 import { uomStampOf } from '../Shared/uom';
 import { fetchAvailabilityUnits, fetchStockForOrder, fetchOrderCommitted, withOrderHeld } from '../Shared/oeReviewPlan';
+import { jobFabFactsOf, cutSheetMissingOf, jobDrawingOf, shopReleaseFieldsOf } from '../Shared/cpqJobFacts';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState, planBulkReopen, applyBulkReopen, planOrderReopen, identityKeysOf, BULK_CLOSE_FROM, toMs } from '../Shared/orderLifecycle';
@@ -43,7 +44,8 @@ import { queueNsAssemblyWorkOrder, pickNsWoItem, postNsAssemblyBuild } from "../
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers and
 // the trade-discount / net-total display rows).
-const getJobLines = (job) => (job?.cpqData?.breakdown || []).filter(l => !isDisplayOnlyLine(l));
+// PARKED GEOMETRY (HIDDEN- ids, no money) is not a part — the SO push and 10.5 drop it; the split did not (2026-09-27).
+const getJobLines = (job) => (job?.cpqData?.breakdown || []).filter(l => !isDisplayOnlyLine(l) && !isParkedGeometryLine(l));
 
 // Fixed ids for the Brimar test seed (shared by seed + remove so they can never drift). The floor
 // doc ids follow autoSplitSalesOrder's orderKey convention (WO-/SHOP-/PKG- + soNum).
@@ -1043,6 +1045,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // The line's own finish rides to the floor (Stuart 2026-08-30: the BOM said nothing
             // about the finish) — per-part exceptions included; blank = the WO recipe applies.
             ...(line.finishCode ? { finishCode: line.finishCode, finishLabel: line.finishLabel || line.finishCode } : {}),
+            // A straight wood rod classified to finishing (lineClassification's wood rule) keeps its cut (2026-09-27).
+            ...(Number(line.cutLength) > 0 ? { cutLength: Number(line.cutLength) } : {}),
             binLocation: part?.manufacturingSpecs?.binLocation || 'UNASSIGNED',
             // Scheduler keys (recipe lives on the WO; size + type live per part). The finishing
             // time matrix resolves minutes-per-part from (recipe × paintSize × productType).
@@ -1474,52 +1478,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // Vision-computed fabrication geometry (bend vs splice vs miter, shape, O2O) lives
             // on the job's engineeringNotes. Carry it to the floors so the shop knows HOW to
             // make the pole, and the drawing rides along to both halves (it shows placement).
-            const fabNotes = {
-                shape: eng.shape || null,
-                qtyBends: eng.qtyBends || 0,
-                qtySplices: eng.qtySplices || 0,
-                qtyMiters: eng.qtyMiters || 0,
-                qtyMiterReturns: eng.qtyMiterReturns || 0,
-                poleO2O: eng.poleO2O || null,
-                totalSystemO2O: eng.totalSystemO2O || null,
-                // Full cut sheet from Vision: per-segment finished lengths + raw cuts + miter saw / wall
-                // angles + bend radius / pole diameter, so the shop gets the cut+bend detail, not just counts.
-                pole1: eng.pole1 ?? null, pole2: eng.pole2 ?? null, pole3: eng.pole3 ?? null,
-                rawLeft: eng.rawLeft ?? null, rawCenter: eng.rawCenter ?? null, rawRight: eng.rawRight ?? null,
-                sawAngle1: eng.sawAngle1 ?? null, sawAngle2: eng.sawAngle2 ?? null,
-                wallAngleL: eng.wallAngleL ?? null, wallAngleR: eng.wallAngleR ?? null,
-                returnRadius: eng.returnRadius ?? null, poleDiameter: eng.poleDiameter ?? null,
-                // Hidden-hanger mount positions captured in Vision: FIPBH per bracket, FIPBHS per
-                // splice. The shop floor reads these to set the concealed hangers at the right spots.
-                hangerLocations: Array.isArray(eng.hangerLocations) ? eng.hangerLocations : [],
-                // Traverse (E, RTG_TRAVERSE_CUTS_PATCH 2026-09-08 — Stuart: "the drive type selection will
-                // drive the overall cut length sizes of the traverse tracks … these measurements must be
-                // added to the shop floor bom and raw cuts"): fascia / track / F-clip cuts by drive, from
-                // Vision via Shared/traverseTags. Absent on every solid-pole job. The shop cut sheet lists
-                // these rows instead of "Main Tube Raw Cut" (C).
-                traverseCuts: Array.isArray(eng.traverseCuts) ? eng.traverseCuts : null,
-                drive: eng.drive || null, setup: eng.setup || null, frontLayer: eng.frontLayer || null, rodKind: eng.rodKind || null
-            };
-            const fabMethod = eng.qtyBends > 0 ? 'BEND' : (eng.qtySplices > 0 ? 'SPLICE' : (eng.qtyMiters > 0 ? 'MITER' : null));
-
-            // Vision canvas notes captured on the cart items: free-floating shop notes (generalNotes)
-            // and per-bracket/splice note boxes (bracketNotes). Carry them to the floor verbatim.
-            const cartItems = job.cpqData?.cartItems || [];
-            const visionNotes = cartItems.flatMap(it => Array.isArray(it.generalNotes) ? it.generalNotes : []).map(s => String(s || '').trim()).filter(Boolean);
-            const bracketNotes = cartItems.flatMap(it => Array.isArray(it.bracketNotes) ? it.bracketNotes : []).filter(b => b && b.note && String(b.note).trim());
-            // THE CUT SHEET (C, 2026-09-03): a custom pole line with a cutLength whose job has no
-            // Vision engineering (no shape / O2O / per-pole lengths) reaches the shop with nothing to
-            // cut to. Stamped on the floor docs as a FACT; the shop card shows its red notice only when
-            // a Vision draft existed and still produced none (cutSheetMissing && visionUsed) — a plain
-            // straight cut stays quiet (Stuart). The board says so at the split.
-            const visionUsed = !!(Object.keys(eng).length || (Array.isArray(eng.hangerLocations) && eng.hangerLocations.length) || bracketNotes.length);
+            // ONE BUILDER for the job's shop facts (Shared/cpqJobFacts, 2026-09-27) — RTG's shop release for a row pair
+            // reads the same one, so a CPQ order's shop document and a row's carry the same cut sheet and notes.
+            const { fabNotes, fabMethod, visionNotes, bracketNotes, visionUsed } = jobFabFactsOf(job);
             for (const grp of finishGroups) {
             const { smallLines, customLines } = grp;   // this pair's lines — shadows the whole order's
-            const cutSheetMissing = customLines.some(l => l.cutLength) && !eng.shape && !eng.poleO2O && eng.pole1 == null && eng.pole2 == null && eng.pole3 == null;
+            const cutSheetMissing = cutSheetMissingOf(job, customLines);
             if (cutSheetMissing) addLog(`⚠ SO ${orderKey}: custom pole with NO cut sheet — the job has no Vision engineering specs${visionUsed ? '' : ' (no Vision draft on this job)'}; the shop card will say so.`, 'warn');
-            const drawingUrl = svgUri
-                || (eng.svgString ? "data:image/svg+xml;charset=utf-8," + encodeURIComponent(eng.svgString) : null)
-                || job.finalImageUrl || null;
+            const drawingUrl = jobDrawingOf(job, svgUri);
 
             const finId = `WO-${orderKey}${grp.suffix}`;
             const shopId = `SHOP-${orderKey}${grp.suffix}`;
@@ -1615,9 +1581,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     // stamps `recipe` as a CODE with `recipeSource` naming which of the five sources hit
                     // (c73263e). The job scan is the fallback for orders saved before that, and the doc
                     // says which one answered — so a PENDING-RECIPE card explains itself (B8).
-                    recipe: so.recipe || (finishRecipe !== "PENDING-RECIPE" ? finishRecipe : "PENDING-RECIPE"),
-                    recipeLabel: so.recipeLabel || null,
-                    recipeSource: so.recipe ? (so.recipeSource || 'sales order') : (finishRecipe !== "PENDING-RECIPE" ? 'job scan (order saved before the stamp)' : 'none'),
+                    // ONE PAIR PER FINISH carries ITS finish (2026-09-27): on a multi-finish order the order-level
+                    // recipe told the second pair's floor to spray the first pair's colour.
+                    recipe: finishGroups.length > 1 ? (grp.finish || orderRecipe || 'PENDING-RECIPE') : (so.recipe || (finishRecipe !== "PENDING-RECIPE" ? finishRecipe : "PENDING-RECIPE")),
+                    recipeLabel: finishGroups.length > 1 ? null : (so.recipeLabel || null),
+                    recipeSource: finishGroups.length > 1 ? 'finish group' : (so.recipe ? (so.recipeSource || 'sales order') : (finishRecipe !== "PENDING-RECIPE" ? 'job scan (order saved before the stamp)' : 'none')),
                     totalParts,
                     paintSize, paintSizes: hasSize ? paintSizes : null,
                     dimensions: { length: Number(so.length) || 0, width: Number(so.width) || 0, height: Number(so.height) || 0 },
@@ -1695,18 +1663,21 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 // demand and the plater PO (S3) bill feet, not pieces × lines. (SO60420 read "3 pcs".)
                 const customQty = customShopQtyOf(customLines);
                 const qty = customQty.qty;
-                const firstPart = customLines[0] && customLines[0].partId ? partCache.get(customLines[0].partId) : null;
+                // The shop document is named — and takes its shop instruction — from its POLE (the first line with a cut),
+                // never a fee listed first (2026-09-27); a custom order with no pole keeps its first line.
+                const leadLine = customLines.find(l => Number(l.cutLength) > 0) || customLines[0];
+                const firstPart = leadLine && leadLine.partId ? partCache.get(leadLine.partId) : null;
 
                 await setDoc(doc(db, "shop_custom_orders", shopId), buildShopDoc({
                     hqOrder: { ...so, hqJobId: so.hqJobId, soId: so.soId || null, orderKey, brand: activeBrand },
-                    orderType: 'sales', shopId, finishRecipe, finSiblingId: (finishingNeeded || pickOnly) ? finId : null,
+                    orderType: 'sales', shopId, finishRecipe: finishGroups.length > 1 ? (grp.finish || finishRecipe) : finishRecipe, finSiblingId: (finishingNeeded || pickOnly) ? finId : null,
                     part: firstPart, by: currentUser || '',
                     fields: {
                         quoteId: so.hqJobId,
                         // A single-line custom order carries its item identity canonically.
                         ...(customLines.length === 1 && (customLines[0].legacyErpId || customLines[0].partId) ? { itemCode: String(customLines[0].legacyErpId || customLines[0].partId).toUpperCase() } : {}),
-                        item: cleanLineName(customLines[0]?.name) || job.cpqData?.cartItems?.[0]?.assemblyName || 'Custom App Order',
-                        partNum: customLines[0]?.legacyErpId || customLines[0]?.partId || '',
+                        item: cleanLineName(leadLine?.name) || job.cpqData?.cartItems?.[0]?.assemblyName || 'Custom App Order',
+                        partNum: leadLine?.legacyErpId || leadLine?.partId || '',
                         qty,
                         poles: customQty.poles, feet: customQty.feet, billableFeet: customQty.billableFeet, riderLines: customQty.riders,
                         cutLength: cutLine?.cutLength || null,
@@ -2060,14 +2031,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // phosphate step. The pair's recipe is its group's finish code (Shared/rowPairShape).
             const finishRecipe = (hqOrder.source === 'ORDER_ENTRY' && hqOrder.recipe) ? String(hqOrder.recipe) : enriched.finishRecipe;
 
-            let cpqSpecs = {};
-            if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
-                originalJob.cpqData.breakdown.forEach(item => {
-                    if (isDisplayOnlyLine(item)) return; // headers, discount/net rows AND size/projection echoes
-                    cpqSpecs[item.name] = `Qty: ${item.qty}`;
-                });
-            }
-
             const shopJobId = `SHOP-${hqOrder.id}`;
             // The plater's price for the card — the OUTSOURCED decision itself is buildShopDoc's
             // (the shared finish rule), not this name-includes match.
@@ -2083,25 +2046,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             await setDoc(doc(db, "shop_custom_orders", shopJobId), buildShopDoc({
                 hqOrder: { ...hqOrder, brand: activeBrand }, orderType, shopId: shopJobId, finishRecipe,
                 finSiblingId: hqOrder.finSiblingId || null, part, by: currentUser || '',
-                fields: {
-                    partNum: hqOrder.rootItem || hqOrder.variantErpId || '',
-                    outsourcePrice: matchedOutsource ? (matchedOutsource.multiplier || 0) : 0,
-                    // Ensure the itemName gets populated correctly for stock builds
-                    item: originalJob?.itemName || originalJob?.name || hqOrder.variantErpId || hqOrder.rootItem || hqOrder.hqJobId || 'Custom App Order',
-                    qty: Number(hqOrder.totalParts) || 1,
-                    customerId: originalJob?.customer?.id || null,
-                    clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
-                    note: hqOrder.memo || originalJob?.sidemark || "",
-                    cpqSpecs,
-                    imageUrl: svgUri || originalJob?.finalImageUrl || null,
-                    // A ROW PAIR'S SHOP HALF (Shared/rowPair, 2026-09-23) carries its cut list, its pole pull
-                    // lines and the pole counts the plater bills on — they ride the parked record onto the
-                    // shop document exactly as the CPQ split writes them.
-                    ...(Array.isArray(hqOrder.cutList) && hqOrder.cutList.length ? { cutList: hqOrder.cutList } : {}),
-                    ...(Array.isArray(hqOrder.pullLines) && hqOrder.pullLines.length ? { pullLines: hqOrder.pullLines } : {}),
-                    ...(hqOrder.poles != null && typeof hqOrder.poles === 'number' ? { poles: hqOrder.poles, feet: hqOrder.feet || 0, billableFeet: hqOrder.billableFeet || 0, riderLines: hqOrder.riderLines || 0 } : {}),
-                    ...(hqOrder.rowLabel ? { rowLabel: hqOrder.rowLabel, rowKey: hqOrder.rowKey || '', finishGroup: hqOrder.finishGroup || '' } : {}),
-                },
+                // ONE FIELD BUILDER (Shared/cpqJobFacts.shopReleaseFieldsOf, 2026-09-27): a row pair carries its own name,
+                // cut list and — with a quote behind it — the job's cut sheet, notes and drawing, as the CPQ split does.
+                fields: shopReleaseFieldsOf({ hqOrder, originalJob, svgUri, outsourcePrice: matchedOutsource ? (matchedOutsource.multiplier || 0) : 0 }),
             }));
 
             // Change status to Dispatched so it leaves the RTG board

@@ -196,6 +196,9 @@ export async function releaseStockWoToFloor({ hqOrder, brand, by = '', log = noo
 // urgent flag, the item's shopInstruction for C's card, and the cut-sheet facts. The caller passes
 // what only it knows (lines, cut list, fab notes, drawing, customer) in `fields`.
 const MILL_RE = /\b(MILL|RAW|UNFINISHED)\b/i;
+// A WOOD STAIN (S01…S99 — the pole rule's small-parts stains, Stuart 2026-09-01) is an in-house finish on WOOD:
+// nothing to phosphate (Stuart 2026-09-27, SO60551 Row 2's stained oak fascia would have been sent to the station).
+const STAIN_RE = /^S\d+\b/i;
 export const isOutsourcedRecipe = (recipe) => {
     const r = String(recipe || '').trim();
     if (!r) return false;
@@ -220,7 +223,7 @@ export function buildShopDoc({ hqOrder = {}, orderType = 'stock', shopId, finish
     // and not mill/raw) → the custom parts get phosphated at the station adjacent to custom fab.
     // An explicit flag on the record wins.
     const needsPhosphating = hqOrder.needsPhosphating === true
-        || (!isOutsourced && recipe && recipe !== 'PENDING-RECIPE' && !MILL_RE.test(recipe));
+        || (!isOutsourced && recipe && recipe !== 'PENDING-RECIPE' && !MILL_RE.test(recipe) && !STAIN_RE.test(recipe.trim()));
     const orderKey = (orderType === 'sales' ? (hqOrder.soId || hqOrder.orderKey) : null) || hqOrder.hqJobId || hqOrder.id;
     const spec = part && part.manufacturingSpecs ? part.manufacturingSpecs : null;
     const docOut = {

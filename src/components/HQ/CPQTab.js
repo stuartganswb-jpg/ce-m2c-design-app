@@ -3291,6 +3291,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                   clientSku: line.clientSku || null,
                   isFee: !!line.isFee,
                   isSizeRow: !!line.isSizeRow,
+                  // THE OPERATOR'S "custom work on this step" (2026-09-27): the split's classifier reads it FIRST
+                  // (Shared/lineClassification, rule -1) but the saved breakdown never carried it, so the override
+                  // never reached the floor. Carried with its note and fee, as the cart line has them.
+                  ...(line.customOverrideHandling ? { customOverrideHandling: line.customOverrideHandling, customNote: line.customNote || '', customFee: line.customFee || '' } : {}),
+                  ...(line.lineIsFee ? { lineIsFee: true } : {}),
                   // The finish THIS line wears (the TAGS engine writes it per line) — carried so
                   // the split, the pick list and the plating gate read it off cpqData.breakdown
                   // without going back to the cart item. Absent = the line wears nothing (mill).
