@@ -22,6 +22,7 @@
 import { customShopQtyOf } from './splitPlan.js';
 import { uomStampOf } from './uom.js';
 import { rowKeyOf, rowOfLine } from './displayRelease.js';
+import { isOutsourcedFinishCode } from './finishRouting.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -165,7 +166,15 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
     const shopQty = customShopQtyOf(cutList);
     const poleOnly = custom.length > 0 && small.length === 0;
     const poleQty = custom.reduce((s, j) => s + (N(j.qty) || 0), 0);
-    const totalParts = smallPcs || poleQty || 1;
+    // A PLATED GROUP NEVER ENTERS THE FINISHING FLOOR (Stuart 2026-09-02 / 09-27 — the CPQ split's shape,
+    // HQ/RTGDispatchTab autoSplitSalesOrder): its small parts are PICK lines (pickOnly, from stock) and its
+    // pole is the shop's, sent to the plater. The finishing document is then PICK-ONLY — born Complete so
+    // no finishing screen selects it, while the WMS pick, staging, pack and fulfilment work unchanged.
+    const inHouse = partsList.filter(p => !p.pickOnly);
+    const finishingNeeded = inHouse.length > 0 || (custom.length > 0 && !isOutsourcedFinishCode(finish));
+    const pickOnlyDoc = !finishingNeeded;
+    const inHousePcs = inHouse.reduce((t, p) => t + (N(p.pcs) || N(p.quantity) || N(p.qty)), 0);
+    const totalParts = pickOnlyDoc ? inHousePcs : (inHousePcs || poleQty || 1);
     const lineIdxs = (group.jobs || []).map(j => j.lineIdx).filter(i => Number.isInteger(i) && i >= 0);
     const soRef = String((so && (so.soId || so.id)) || '');
     const label = `${rowLabel ? `${rowLabel} · ` : ''}${finish}`;
@@ -187,14 +196,16 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         rowKey: group.rowKey || '', rowLabel, finishGroup: finish,
         recipe: finish, recipeLabel: null, recipeSource: 'lineCode',
         totalParts,
-        paintSize: poleOnly ? null : paintSize, paintSizes: (!poleOnly && hasSize) ? paintSizes : null,
-        ...(poleOnly ? { poles: { qty: poleQty, type: 'POLE' }, totalPoles: poleQty, finishStream: 'POLES' } : {}),
+        paintSize: (poleOnly || pickOnlyDoc) ? null : paintSize, paintSizes: (!poleOnly && !pickOnlyDoc && hasSize) ? paintSizes : null,
+        ...(poleOnly && finishingNeeded ? { poles: { qty: poleQty, type: 'POLE' }, totalPoles: poleQty, finishStream: 'POLES' } : {}),
         note, memo: note,
         reqDate: needBy, needBy,
         cpqSpecs: {}, imageUrl: null,
         dimensions: { length: 10, width: 5, height: 2 },
         partsList, bomExploded: false,
-        currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
+        ...(pickOnlyDoc
+            ? { currentPhase: 'Complete', stepStatus: 'Complete', currentStepIndex: 0, pickOnly: true, finishingRequired: false, completedAt: now, completedBy: 'row (pick only)' }
+            : { currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0 }),
         tasks: tasks || {}, machineAssigned: null, redlineAlert: false,
         sentToPickPack: false, pickStatus: 'Pending',
         shopSiblingId: custom.length ? `SHOP-${shopWoId}` : null, hasCustomSibling: custom.length > 0,
@@ -212,7 +223,8 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         itemName,
         ...salesHeader,
         recipe: finish,
-        qty: totalParts, totalParts, reqDate: needBy, ...(needBy ? { needBy } : {}),
+        // RTG's count: what the pair handles — a pick-only pair's pieces are picked, not finished.
+        qty: pickOnlyDoc ? (smallPcs || totalParts) : totalParts, totalParts, reqDate: needBy, ...(needBy ? { needBy } : {}),
         note: note || label, memo: note || label,
         ...(partsList.length ? { partsList, bomExploded: false } : {}),
         ...(custom.length ? { shopSiblingId: `SHOP-${shopWoId}`, hasCustomSibling: true, shopWoId } : {}),

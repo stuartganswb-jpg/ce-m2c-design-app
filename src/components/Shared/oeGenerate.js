@@ -28,9 +28,8 @@ import { isReleasable } from './orderStatus';
 import { releaseFinWoToFloor } from './finishedRunPrecheck';
 import { buildOeReviewPlan, actionsOfReviewedJob } from './oeReviewPlan';
 import { createDraftPurchaseOrders } from './purchaseOrders';
-import { issuePlatedDemand } from './platingDemand';
 import { isAssemblyPart } from './finishedGoodsRun';
-import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig } from './oeLines';
+import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig, rowBackorderPatchOf } from './oeLines';
 import { floorGroupsOf, parkRowPair } from './rowPair.js';
 import { holdSplitGroups } from './rowPairShape.js';
 
@@ -86,12 +85,22 @@ export const loadOeLinks = async (soIds = [], { all = false } = {}) => {
 };
 
 // WHICH DOOR A LINE TAKES, before any plan is built. The same one rule as every other view.
-//   PLATING — an outsourced finish: a plating demand, never a work order.
+//   STOCK   — a PLATED small part: a stocked finished good, decided by live stock exactly as the CPQ
+//             split decides it (Shared/splitPlan, Stuart 2026-09-03): covered → a WMS pick line;
+//             short → the Snapshot's Backorder board. Never a plating demand from here.
 //   ASK     — the item is flagged BOTH (make and buy): a person answers, always (Brief E, S4).
 //   BUY     — we buy the raw: through the review gate as a buy.
-//   MAKE    — in-house manufacture: through the review gate.
+//   MAKE    — in-house manufacture: through the review gate. A PLATED POLE is MAKE: it is custom
+//             (Shared/finishRouting.handlingForErp), the shop cuts it and its "Sent to Plating" raises
+//             the plating demand — the CPQ split's custom half.
+// (Stuart 2026-09-27, SO60551 Base Front 3: "it put the plated finial on demand on the plating tab,
+//  when we had the finial in stock … the poles should have gone to the shop floor to be made then sent
+//  to plating." The old PLATING door sent every /EP line straight to the plater as raw cores.)
 export const oeDoorOf = (part, finish, inventory = []) => {
-    if (isOutsourcedFinishCode(finish || '')) return 'PLATING';
+    if (isOutsourcedFinishCode(finish || '')) {
+        const ptype = String((part && ((part.manufacturingSpecs || {}).productType || part.productType)) || '');
+        return isPoleCategory(U(ptype)) ? 'MAKE' : 'STOCK';
+    }
     // A FINISH APPLIED HERE IS MADE HERE (Stuart 2026-09-27, Base Front 2's H1-138CC/P06): the base
     // casting is BOUGHT from CAC, and the bought door sent the whole line out as material — a PO for
     // 50 raw, the finish dropped from the plan — while 62 × H1-138CC/P sat in 138R-010. When the raw
@@ -111,13 +120,13 @@ export const oeDoorOf = (part, finish, inventory = []) => {
 export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }) => {
     const jobs = [];
     for (let i = 0; i < items.length; i++) {
-        const { so, l, buy } = items[i];
+        const { so, l, buy, stock } = items[i];
         const erp = U(l.erp);
         const { part, aliasNote } = resolveOePart(erp, inventory);
         const finish = oeLineFinish(l);
         if (!part || !finish) continue;
         let pins = [];
-        if (!buy && isAssemblyPart(part)) {
+        if (!buy && !stock && isAssemblyPart(part)) {
             try {
                 const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
                 pins = pinsSnap.docs.map(d => d.data());
@@ -125,7 +134,7 @@ export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }
             } catch (e) { console.warn('pins load failed', e); }
         }
         jobs.push({
-            key: i, so, line: l, lineIdx: (so.lines || []).indexOf(l), part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy,
+            key: i, so, line: l, lineIdx: (so.lines || []).indexOf(l), part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy, stock: !!stock,
             // A per-foot line NEEDS feet from the vendor (the SO stored pieces + billedFeet).
             ...(l.perFoot ? { buyQty: Number(l.billedFeet) || (Number(l.qty) || 0) * (Number(l.feetPer) || 1) } : {}),
         });
@@ -140,25 +149,6 @@ const stampLineGenerated = async (so, lineIdx, entry) => {
     if (!so || !so.id || !(lineIdx >= 0)) return;
     try { await updateDoc(doc(db, 'hq_sales_orders', so.id), { [`oeGen.${lineIdx}`]: entry }); }
     catch (e) { console.warn('oeGen stamp failed', so.id, lineIdx, e); }
-};
-
-// OUTSOURCED FINISH → the plater, linked to the SO (the plated triple, issued once — Brief A, A3).
-export const issueOePlatedLine = async ({ so, line, lineIdx, brand, user, inventory = [], auto = false, log = () => {} }) => {
-    const erp = U(line.erp);
-    const finish = oeLineFinish(line);
-    const needBy = soNeedBy(so);
-    const prodNote = so.productionNotes || '';
-    const res = await issuePlatedDemand({
-        target: `${erp}/${finish}`, base: erp, qty: Number(line.qty) || 0, brand, from: 'oe-needs',
-        createdBy: user || '', inventory, coreAvailable: null, finishName: finish, reqDate: needBy,
-        // THE CUT (S5, 2026-09-17) rides the note — the demand's field list is frozen (Brief D).
-        note: `Order Entry ${so.soId || so.id} · ${so.customer || ''}${Number(line.cutLength) > 0 ? ` · cut ${Number(line.cutLength)}" (${Number(line.feetPer) || ''} ft pieces)` : ''}${needBy ? ` · need by ${needBy}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
-        // The demand's field list is frozen (Brief D) — which LINE it is for is recorded on the sales order (oeGen).
-        extra: { soAppId: so.id, customerId: so.customerId || null, customerName: so.customer || '' },
-    });
-    await stampLineGenerated(so, lineIdx, { kind: 'PLATING', ids: [res.demandId], ref: res.woNum || '', at: Date.now(), by: user || '', auto: !!auto });
-    res.made.forEach((m, i) => log(`${i === 0 ? '' : '   '}${m}${i === 0 ? ` (linked to ${so.soId || so.id})` : ''}`, i === 0 ? 'success' : 'info'));
-    return res;
 };
 
 // EXECUTE reviewed jobs — the ONLY writer on this path. Per job: make-up (converts + sourcing-correct
@@ -216,12 +206,16 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
                 ? `🎨 ${erp} ×${qty}: START NOW from stock — finishing releases and picks from the shelf.`
                 : `🎨 ${erp} ×${qty}: TO BE FINISHED — the pair is created now; its pick waits until the material arrives.`, 'info');
         }
-        const planLines = (job.plan?.lines || []).map(pl => (U(pl.legacyErpId) === finishedErp || (job.buy && U(pl.legacyErpId) === erp))
-            ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
+        // A PLATED PART FROM STOCK is picked as its finished code — the split's pick line (pickOnly,
+        // finishOutsourced), never sprayed, never swapped for its raw.
+        const planLines = job.stock
+            ? (job.plan?.lines || []).map(pl => ({ ...pl, pickOnly: true, finishOutsourced: true }))
+            : (job.plan?.lines || []).map(pl => (U(pl.legacyErpId) === finishedErp || (job.buy && U(pl.legacyErpId) === erp))
+                ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
         // ONE POLE TEST (sweep 2026-09-01) — the CUSTOM PAIR rule: a mill code plus an applied finish
         // is made to order and is the shop's; a complete assembly (/BS, /N90) is finishing's.
         const isPole = isPoleCategory(U(specs.productType));
-        const custom = isPole && handlingForErp(finishedErp) === 'Custom';
+        const custom = !job.stock && isPole && handlingForErp(finishedErp) === 'Custom';
         // ── THE POLE CHOICE THE OPERATOR MADE (Q5) — a finishing-side pole cut or waited for ──
         let poleCut = null, backOrder = '';
         if (job.poleChoice) {
@@ -368,17 +362,14 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = 
             if (!fin) { named(['no finish recorded on this line']); continue; }
             if (!(Number(line.qty) > 0)) { named(['the line has no quantity']); continue; }
             const door = oeDoorOf(part, fin, inventory);
-            if (door === 'PLATING') {
-                await issueOePlatedLine({ so, line, lineIdx, brand, user, inventory, auto: true, log });
-                ran++;
-            } else if (door === 'ASK') named([`${erp} is flagged BOTH (make and buy) — a person chooses`]);
+            if (door === 'ASK') named([`${erp} is flagged BOTH (make and buy) — a person chooses`]);
             // A BOUGHT LINE IS PLANNED, NOT PRE-REFUSED (Stuart 2026-09-22, SO60565: "why is it asking
             // for the review and decision? the stock is clearly enough for the order"). The 09-20
             // rule sent every bought item to review before the plan had looked at the shelf, so a
             // line with 110 ft on hand against 50 needed — nothing to order, no PO drafted — still
             // waited on a person to decide a purchase that did not exist. The plan reads the stock;
             // autoRunnable then asks the honest question: is there a purchase to decide?
-            else planItems.push({ so, l: line, buy: door === 'BUY' });
+            else planItems.push({ so, l: line, buy: door === 'BUY', stock: door === 'STOCK' });
         }
         if (planItems.length) {
             const jobs = await buildOeJobs({ items: planItems, inventory, log });
@@ -405,6 +396,15 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = 
                 lineIdx: job.lineIdx, erp: U(job.lineErp), finish: job.finish,
                 reasons: [`ready — waits with ${withErp} so this ${U(job.finish)} starts as ONE pair`],
             }));
+            // A PLATED PART THE SHELF CANNOT COVER IS A TRUE BACKORDER (the CPQ split's rule, Shared/
+            // splitPlan): recorded on the sales order, where the Snapshot's Backorder board lists it for a
+            // WO or PO. A plated line this run starts drops any record it had.
+            const boPatch = rowBackorderPatchOf({ so, jobs: plan.jobs, startedLineIdxs: start.map(j => j.lineIdx), since: so.createdAt || Date.now() });
+            if (boPatch) {
+                try { await updateDoc(doc(db, 'hq_sales_orders', so.id), { backorderLines: boPatch.lines, backorderAt: Date.now() }); so.backorderLines = boPatch.lines; }
+                catch (e) { log(`⚠ SO ${so.soId || so.id}: the backorder record could not be written (${e.message || e}) — the Snapshot board will not list ${boPatch.added.join(', ')}.`, 'warn'); }
+                if (boPatch.added.length) log(`📋 SO ${so.soId || so.id}: ${boPatch.added.join(', ')} short → the Snapshot Backorder board; the row starts when it arrives.`, 'warn');
+            }
             if (start.length) {
                 const res = await executeOeJobs({ jobs: start, brand, user, inventory, log, auto: true });
                 ran += res.linesStarted != null ? res.linesStarted : res.woIds.length;

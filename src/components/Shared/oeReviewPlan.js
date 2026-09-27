@@ -167,6 +167,14 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
     // itself: stock first, on-order coverage on the shortfall, PO only for what remains.
     const planned = jobs.map(j => {
         const erp = String(j.part.legacyErpId || j.part.itemId || '').toUpperCase();
+        // A PLATED SMALL PART (job.stock — Shared/oeGenerate.oeDoorOf) is a stocked finished good: ONE pull
+        // of the finished code, decided by the shelf as the CPQ split decides it (Shared/splitPlan). Short →
+        // the Snapshot's Backorder board; never raw cores to the plater from here (Stuart 2026-09-27).
+        if (j.stock) {
+            const finishedErp = `${erp}/${String(j.finish || '').toUpperCase()}`;
+            const fp = partOf(finishedErp);
+            return { ...j, finishedErp, plan: { erp: finishedErp, exploded: false, lines: [{ legacyErpId: finishedErp, partName: (fp && fp.itemName) || j.part.itemName || '', quantity: j.qty }] } };
+        }
         if (j.buy) {
             return {
                 ...j, finishedErp: erp,
@@ -188,7 +196,7 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
     // availability read below covers them too.
     planned.forEach(p => {
         const ptype = String(p.part?.manufacturingSpecs?.productType || p.part?.productType || '');
-        if (p.buy || p.plan.exploded || !isPoleCategory(ptype)) return;
+        if (p.buy || p.stock || p.plan.exploded || !isPoleCategory(ptype)) return;
         // What the run actually pulls: the planner's single pull line when there is one (the /P
         // core), else the raw code itself — which is what the floor synthesises from stockErpId.
         const pullErp = String((p.plan.lines[0] && p.plan.lines[0].legacyErpId) || p.erp || '').toUpperCase();
@@ -287,7 +295,9 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
                 noStockRecord: !(code in avail),
                 actions: [],
             };
-            if (short > 0 && p.buy) {
+            if (short > 0 && p.stock) {
+                comp.actions.push({ kind: 'BACKORDER', code, qty: short, reason: 'plated part short — the Snapshot Backorder board covers it' });
+            } else if (short > 0 && p.buy) {
                 // Bought line: the vendor covers what stock + inbound do not. The operator chose
                 // PO (or the item is flagged bought) — never invent a shop WO here.
                 const vendorName = String(compPart?.manufacturingSpecs?.vendorName || '').trim();
@@ -356,6 +366,9 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
             }
         }
 
+        if (p.stock) {
+            return { ...p, components, holds, nsPlan: { flow: 'STOCK', note: `Plated finished good — picked from stock as ${p.finishedErp}; no work order, nothing to the plater from here. Short → the Snapshot Backorder board.` } };
+        }
         if (p.buy) {
             // START-NOW OPTION (Stuart 2026-08-31): material on hand can begin finishing before
             // the PO lands — "a client may want some now". The review asks; default is 0 (wait).

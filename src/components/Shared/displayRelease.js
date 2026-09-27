@@ -369,7 +369,7 @@ export const rowStartText = (label, state) => {
     const again = go.filter(l => l.key === LINE_STATE.REVIEW).length;
     return [
         `Start ${label}?`,
-        go.length ? `\n${go.length} line(s) will be started — plated parts go to the plater, painted to finishing, custom to the shop${again ? ` (${again} of them named for a decision last time — the plan is read again from live stock)` : ''}:\n${go.map(l => `  • ${l.qty} × ${l.erp}${l.finish ? ` in ${l.finish}` : ''}`).join('\n')}` : '\nNothing to start on this row.',
+        go.length ? `\n${go.length} line(s) will be started — plated parts picked from stock (short → the Snapshot Backorder board), painted to finishing, poles to the shop (a plated pole goes on to the plater from there)${again ? ` (${again} of them named for a decision last time — the plan is read again from live stock)` : ''}:\n${go.map(l => `  • ${l.qty} × ${l.erp}${l.finish ? ` in ${l.finish}` : ''}`).join('\n')}` : '\nNothing to start on this row.',
         rest.length ? `\n${rest.length} line(s) already in motion or stocked are left as they are:\n${rest.map(l => `  • ${l.erp} — ${l.text}`).join('\n')}` : '',
         '\nEach work order lands on RTG under this sales order. Lines the plan cannot start cleanly are named for review, not guessed.',
     ].filter(Boolean).join('\n');

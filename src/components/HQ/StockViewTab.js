@@ -28,7 +28,8 @@ import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tie
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan } from '../Shared/oeReviewPlan';
-import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, issueOePlatedLine, oeDoorOf } from '../Shared/oeGenerate';
+import { holdSplitGroups } from '../Shared/rowPairShape';
+import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf } from '../Shared/oeGenerate';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import { runChunked, fetchAvailableById, fetchInboundById, backorderTallyOf } from '../Shared/stockPosition';
 
@@ -2460,14 +2461,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // THE ONE DOOR RULE (Shared/oeGenerate.oeDoorOf) — the rule 10.5's ▶ Start row / RTG's automatic
             // start already ask. This view kept its own copy and it drifted (Stuart 2026-09-27, Base Front 2):
             // H1-138CC/P06 is painted HERE, so it pulls H1-138CC/P, but the copy read "bought raw" and planned
-            // a PO for 50 × H1-138CC. A plated finish is a plating demand (the direct path below).
+            // a PO for 50 × H1-138CC. A plated small part is door STOCK, a plated pole door MAKE (2026-09-27).
             const door = part && finish ? oeDoorOf(part, finish, hqParts) : '';
-            if (door && door !== 'PLATING') reviewable.push({ ...w, buy: door === 'BUY' }); else direct.push(w);
+            if (door) reviewable.push({ ...w, buy: door === 'BUY', stock: door === 'STOCK' }); else direct.push(w);
         });
         for (const w of direct) {
             // A BOTH-sourced line whose operator picks "make" defers into the same batch review.
             const r = await generateOeLineOrder(w.so, w.l, { collectReview: true });
-            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line, buy: !!r.review.buy });
+            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line, buy: !!r.review.buy, stock: !!r.review.stock });
         }
         if (reviewable.length) await openOeReviewForLines(reviewable);
     };
@@ -2546,13 +2547,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const specs = part.manufacturingSpecs || {};
         setGenBusy(true);
         try {
-            // OUTSOURCED FINISH → the plater, linked to the SO (mirrors tab 7's routing).
-            if (isOutsourcedFinishCode(finish)) {
-                // THE PLATED TRIPLE, ISSUED ONCE (Brief A, A3) — by the shared issuer RTG's automatic start
-                // calls too; it records the demand on the sales-order line (Shared/oeGenerate).
-                await issueOePlatedLine({ so, line, lineIdx: (so.lines || []).indexOf(line), brand: activeBrand, user: currentUser || '', inventory: hqParts, log: addLog });
-                await loadOeNeeds(); setGenBusy(false); return;
-            }
+            // A PLATED LINE IS NOT PLATING WORK (Stuart 2026-09-27, the CPQ split's rule): a plated small part
+            // is picked from stock or backordered to the Snapshot board (door STOCK); a plated pole is the
+            // shop's, which sends it to plating (door MAKE). Both go through the review like everything else.
             // RAW ITEM WE BUY → a linked vendor PO (BOTH always asks, defaulted to make). Which door is
             // the ONE rule's answer (Shared/oeGenerate.oeDoorOf) — a finish applied here is made here.
             const vendorName = String(specs.vendorName || '').trim();
@@ -2572,8 +2569,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // needs to open a pop up window and show its work — show stock check, let operator
             // verify, then send on"). Nothing is written here; the plan modal decides.
             setGenBusy(false);
-            if (opts.collectReview) return { review: { so, line } };
-            await openOeReviewForLines([{ so, l: line }]);
+            if (opts.collectReview) return { review: { so, line, stock: door === 'STOCK' } };
+            await openOeReviewForLines([{ so, l: line, stock: door === 'STOCK' }]);
             return;
         } catch (e) { addLog(`OE generate failed: ${e.message || e}`, 'error'); alert('Generate failed:\n\n' + (e.message || e)); }
         setGenBusy(false);
@@ -2624,8 +2621,24 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // with awaitingNsWo so the floor waits for the number; PO drafts group per vendor+SO.
     const executeOeReview = async () => {
         const rev = oeReview; if (!rev || rev.busy) return;
-        const runnable = rev.jobs.filter(j => !oeJobBlocked(j));
-        if (!runnable.length) return alert('Every line is blocked — resolve the flagged holds first.');
+        // A ROW'S FINISH STARTS AS ONE PAIR on this path too (Stuart 2026-09-27, Shared/rowPairShape.
+        // holdSplitGroups): a line whose row + finish has a blocked line waits with it.
+        const ready = rev.jobs.filter(j => !oeJobBlocked(j));
+        const blocked = rev.jobs.filter(j => oeJobBlocked(j));
+        const runnable = [], waits = [];
+        [...new Set(rev.jobs.map(j => j.so && j.so.id))].forEach(soId => {
+            const so = (rev.jobs.find(j => j.so && j.so.id === soId) || {}).so || null;
+            const { start, held } = holdSplitGroups({
+                ready: ready.filter(j => j.so && j.so.id === soId),
+                waiting: blocked.filter(j => j.so && j.so.id === soId).map(j => ({ line: j.line, finish: j.finish, erp: j.lineErp })),
+                so,
+            });
+            runnable.push(...start); waits.push(...held);
+        });
+        if (!runnable.length) return alert(waits.length
+            ? `Nothing can start yet — every ready line waits with a blocked line of its row and finish (one pair per row and finish):\n\n${waits.map(w => `  • ${w.job.lineErp} waits with ${w.withErp}`).join('\n')}`
+            : 'Every line is blocked — resolve the flagged holds first.');
+        if (waits.length && !window.confirm(`${waits.length} ready line(s) wait with a blocked line of the same row and finish, so the row starts as ONE pair:\n\n${waits.map(w => `  • ${w.job.lineErp} waits with ${w.withErp}`).join('\n')}\n\nStart the other ${runnable.length} line(s) now?`)) return;
         setOeReview(prev => ({ ...prev, busy: true }));
         try {
             // THE WRITER IS Shared/oeGenerate.executeOeJobs (2026-09-20) — this function's body, moved
@@ -4687,7 +4700,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 }));
                 const actionText = (a) => a.kind === 'CONVERT' ? `⇄ CONVERT ${a.qty} × ${a.base} → ${a.target} (raw on hand ${a.rawHave})`
                     : a.kind === 'SHOP' ? `🏭 SHOP WO — mill ${a.qty} × ${a.code} (${a.reason})`
-                    : a.kind === 'PO' ? `🧾 PO → ${a.vendorName}` : a.kind === 'HOLD' ? `⛔ ${a.holdReason}` : '';
+                    : a.kind === 'PO' ? `🧾 PO → ${a.vendorName}` : a.kind === 'HOLD' ? `⛔ ${a.holdReason}`
+                    : a.kind === 'BACKORDER' ? `📋 ${a.qty} short — Snapshot Backorder board; this line waits for it` : '';
                 const runnable = oeReview.jobs.filter(j => !oeJobBlocked(j));
                 const mono9 = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
                 return (

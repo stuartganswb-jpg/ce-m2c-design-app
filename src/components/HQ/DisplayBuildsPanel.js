@@ -413,6 +413,49 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         setBusy('');
     };
 
+    // ↩ UNDO A PLATING START (Stuart 2026-09-27, SO60551 Base Front 3). Until 09-27 a row sent every plated
+    // line straight to the plater as raw cores — a finial on the shelf included, a pole never cut. Now a
+    // plated small part is picked from stock (or backordered to the Snapshot) and a plated pole goes to the
+    // shop, which sends it to plating. A row started under the old rule is put back: its plating demands are
+    // cancelled through the one cancel (ledgered; refused once anything has shipped) and each line's record
+    // cleared, so the row reads NOT STARTED and ▶ Start row runs it under the rule it should have had.
+    const undoPlatingStart = async (label, state) => {
+        const lines = (state.lines || []).filter(l => l.key === 'PLATING');
+        if (!lines.length || !draft) return;
+        if (!window.confirm(`↩ Undo the plating start of ${label}?\n\n${lines.map(l => `   ${l.soId} · ${l.qty} × ${l.erp}/${l.finish} — ${l.text}`).join('\n')}\n\nIts plating demands are cancelled (nothing has gone to the plater yet) and the lines read NOT STARTED. Then ▶ Start row: a plated finial is picked from stock, a plated pole goes to the shop and then to plating.`)) return;
+        setBusy('Undoing the plating start…');
+        const by = String(currentUser || '10.5');
+        const ctx = { db, doc, updateDoc, getDoc, getDocs, query, collection, where, deleteDoc, setDoc };
+        let cancelled = 0, cleared = 0;
+        const refused = [];
+        try {
+            for (const soAppId of [...new Set(lines.map(l => l.soAppId))]) {
+                const fresh = await getDoc(doc(db, 'hq_sales_orders', soAppId));
+                if (!fresh.exists()) continue;
+                const soNow = { id: fresh.id, ...fresh.data() };
+                const entry = (floor?.sos || []).find(x => x.so.id === soAppId) || {};
+                const shipments = (entry.plating || []).filter(p => p && p.__coll === 'plating_shipments');
+                const dSnap = await getDocs(query(collection(db, 'plating_demand'), where('soAppId', '==', soAppId)));
+                const demands = dSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+                for (const l of lines.filter(x => x.soAppId === soAppId)) {
+                    const gen = (soNow.oeGen || {})[l.lineIdx];
+                    if (!gen || gen.kind !== 'PLATING') continue;
+                    let ok = true;
+                    for (const id of (gen.ids || [])) {
+                        const d = demands.find(x => x.id === id);
+                        if (!d) continue;   // already gone
+                        const r = await cancelPlatingDemand(ctx, { id, record: d, by, from: '10.5', reason: `${label}: started under the old plated rule — restarted stock-first`, shipmentLines: shipments });
+                        if (r.ok) cancelled++; else { ok = false; refused.push(`${l.erp}/${l.finish}: ${r.reason}`); }
+                    }
+                    if (ok) { await updateDoc(doc(db, 'hq_sales_orders', soAppId), { [`oeGen.${l.lineIdx}`]: deleteField() }); cleared++; }
+                }
+            }
+            await loadFloor(draft);
+            alert(`${label}: ${cancelled} plating demand(s) cancelled, ${cleared} line(s) back to NOT STARTED.${refused.length ? `\n\nNot undone:\n${refused.map(x => `  • ${x}`).join('\n')}` : ''}${cleared ? '\n\nPress ▶ Start row to run it under the stock-first rule.' : ''}`);
+        } catch (e) { alert('Could not undo it: ' + (e?.message || e)); }
+        setBusy('');
+    };
+
     // Another sales order for this build: type its number, it resolves, ⚓ anchors it.
     const lookupSo = async () => {
         const v = String(addSo || '').trim();
@@ -690,7 +733,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 <div style={{ border: '1px solid var(--brass)', padding: '12px 14px', marginBottom: '16px', background: '#fff' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
                         <span style={{ ...mono, color: 'var(--ink)' }}>Rows — released from here</span>
-                        <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>Each row starts through the same route as any order: plated to the plater, painted to finishing, custom to the shop. Work orders land on RTG under this sales order; RTG still governs them.</span>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>Each row starts by the same rules as a CPQ order: plated parts picked from stock (short → the Snapshot Backorder board), painted to finishing, poles to the shop — a plated pole goes on to the plater from there. Work orders land on RTG under this sales order; RTG still governs them.</span>
                         {!anyAccepted && <span style={{ fontSize: '0.78rem', color: '#b02d20' }}>⚠ No anchored sales order that rows can start from has been accepted by NetSuite yet — rows can be read, not started.</span>}
                     </div>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -712,6 +755,11 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                             )}
                                         </td>
                                         <td style={{ ...td, textAlign: 'right' }}>
+                                            {state.lines.some(l => l.key === 'PLATING') && (
+                                                <button onClick={() => undoPlatingStart(label, state)} disabled={!!busy || !!starting}
+                                                    style={btn(false, { padding: '5px 10px', marginRight: '6px', color: '#b02d20', borderColor: '#b02d20' })}
+                                                    title="Started under the old rule: plated lines went straight to the plater. Cancel those plating demands (nothing has shipped) and restart the row stock-first.">↩ Undo plating start</button>
+                                            )}
                                             {state.key === ROW_STATE.NEEDS_DECISION && (
                                                 <button onClick={() => { try { const rv = state.lines.filter(l => l.key === 'REVIEW'); const soApp = (rv[0] || {}).soAppId || (floor.sos[0] && floor.sos[0].so.id) || ''; sessionStorage.setItem('hq_oe_review_so', soApp); sessionStorage.setItem('hq_oe_review_lines', JSON.stringify(rv.filter(l => l.soAppId === soApp).map(l => l.lineIdx))); } catch (e) { /* the board still lists it */ } window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }}
                                                     style={btn(false, { padding: '5px 10px', color: '#b02d20', borderColor: '#b02d20' })} title="The lines this row could not start cleanly — decide them on Order Entry Needs">Review →</button>

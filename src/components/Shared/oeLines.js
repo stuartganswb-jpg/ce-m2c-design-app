@@ -2,6 +2,8 @@
 // work already covers it, and whether its plan is safe to run without a person. No Firestore, so the
 // rules that decide "does this order start by itself" are node-tested (scripts/oeLines.test.mjs).
 
+import { backorderRecordOf } from './backorder.js';
+
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 
 // A made-to-order line. Lines saved before `toBeFinished` existed are recovered from the note.
@@ -12,9 +14,11 @@ export const soNeedBy = (so) => String((so && (so.needBy || so.needByDate)) || '
 
 // A job is blocked while a shortage sits behind an unresolved hold (unit mismatch, missing vendor,
 // missing library part) the operator has neither fixed nor overridden.
+// A plated part the shelf cannot cover is blocked too: it waits on the Snapshot's Backorder board, it is
+// never started short (Stuart 2026-09-27 — the CPQ split's rule, Shared/splitPlan).
 export const oeJobBlocked = (j) => ((j && j.components) || []).some(c =>
     (c.held && !c.overrideProceed && c.short > 0) ||
-    ((!c.held || c.overrideProceed) && (c.actions || []).some(a => a.kind === 'HOLD')));
+    ((!c.held || c.overrideProceed) && (c.actions || []).some(a => a.kind === 'HOLD' || a.kind === 'BACKORDER')));
 
 /**
  * What already covers ONE line of a sales order, or null.
@@ -103,6 +107,7 @@ export const autoRunnable = (job, { unitsKnown = true, heldKnown = true } = {}) 
         if (c.unitMismatch || c.held) { reasons.push(c.holdReason || `${c.code}: units disagree between NetSuite and the app`); return; }
         if (!(c.short > 0)) return;
         const acts = (c.actions || []);
+        if (acts.some(a => a.kind === 'BACKORDER')) { reasons.push(`${c.code}: ${c.short} short (have ${c.have} of ${c.need}) — on the Snapshot Backorder board; the row starts when it arrives`); return; }
         const routine = acts.length > 0 && acts.every(a => a.kind === 'CONVERT' && (Number(a.rawHave) || 0) >= (Number(a.qty) || 0));
         if (!routine) reasons.push(`${c.code}: ${c.short} short (have ${c.have} of ${c.need}) — sourcing it is a decision`);
     });
@@ -122,4 +127,27 @@ export const oeLineStateOf = ({ coverage, review = null }) => {
     if (st === 'Dispatched') return { key: 'FLOOR', text: `${w.id} — on the floor`, tone: 'green' };
     const waits = [w.awaitingNsWo && 'NetSuite work-order #', w.awaitingConvert && 'phosphate convert', w.awaitingComponents && 'component work orders', w.awaitingReceipt && 'material receipt', w.awaitingRodCut && 'rod cut'].filter(Boolean);
     return { key: 'PARKED', text: `${w.id} — parked${waits.length ? `: waiting on ${waits.join(' + ')}` : ' — releases on the next RTG pass'}`, tone: 'brass' };
+};
+
+// ── A PLATED SHORTFALL GOES ON THE SNAPSHOT'S BACKORDER BOARD (Stuart 2026-09-27) ────────────────
+// The board reads `hq_sales_orders.backorderLines` — written by the CPQ split and by tab 7's save, never
+// by a 10.5 row. A plated part a row cannot cover is recorded here in the split's own record shape
+// (Shared/backorder.backorderRecordOf), tagged OE_ROW. Only OE_ROW records are ever replaced or dropped
+// (a line re-planned, or started); a code that already has a record from another writer is not added
+// twice. Pure. @returns null when nothing changes, else { lines, added: ['50 × CODE'] }.
+export const rowBackorderPatchOf = ({ so, jobs = [], startedLineIdxs = [], since = null } = {}) => {
+    const existing = Array.isArray(so && so.backorderLines) ? so.backorderLines : [];
+    const fresh = [];
+    (jobs || []).filter(j => j && j.stock).forEach(j => (j.components || []).forEach(c => {
+        if (!(Number(c.short) > 0)) return;
+        const code = U(c.code);
+        const cls = { kind: 'plated', coverCodes: [code], readable: c.noStockRecord ? [] : [code], available: { [code]: Math.max(0, Number(c.have) || 0) }, onOrder: Number(c.onOrder) || 0, shortfall: Number(c.short) };
+        fresh.push({ ...backorderRecordOf({ legacyErpId: code, qty: c.need, name: c.name }, cls, { since, lineIndex: j.lineIdx }), source: 'OE_ROW' });
+    }));
+    const replace = new Set([...fresh.map(r => r.lineIndex), ...(startedLineIdxs || [])]);
+    const kept = existing.filter(r => !(r && r.source === 'OE_ROW' && replace.has(r.lineIndex)));
+    const keptCodes = new Set(kept.map(r => U(r && r.code)));
+    const added = fresh.filter(r => !keptCodes.has(U(r.code)));
+    if (!added.length && kept.length === existing.length) return null;
+    return { lines: [...kept, ...added], added: added.map(r => `${r.qty} × ${r.code}`) };
 };

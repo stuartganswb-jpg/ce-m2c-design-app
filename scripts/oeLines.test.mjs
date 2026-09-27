@@ -1,6 +1,6 @@
 // node scripts/oeLines.test.mjs — which Order Entry lines are covered, and which plans may run with
 // nobody looking (Stuart 2026-09-20: to-be-finished orders start from RTG by themselves).
-import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, autoRunnable, oeLineStateOf, oeJobBlocked } from '../src/components/Shared/oeLines.js';
+import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, autoRunnable, oeLineStateOf, oeJobBlocked, rowBackorderPatchOf } from '../src/components/Shared/oeLines.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 const ok = (n, c) => { if (c) pass++; else { fail++; console.log(`✗ ${n}`); } };
@@ -65,4 +65,17 @@ eq('nothing raised', oeLineStateOf({ coverage: null }).key, 'NONE');
 eq('named by the automatic run', oeLineStateOf({ coverage: null, review: { reasons: ['RAW: 7 short'] } }).text, 'needs a decision — RAW: 7 short');
 eq('parked, and why', oeLineStateOf({ coverage: { kind: 'WO', doc: { id: 'WO-A', status: 'Approved', awaitingConvert: true } } }).text, 'WO-A — parked: waiting on phosphate convert');
 eq('on the floor', oeLineStateOf({ coverage: { kind: 'WO', doc: { id: 'WO-A', status: 'Dispatched' } } }).key, 'FLOOR');
+// A PLATED PART THE SHELF CANNOT COVER (Stuart 2026-09-27): it waits on the Snapshot's Backorder board.
+{
+    const short = { stock: true, lineIdx: 7, components: [comp({ code: 'H1-1BF/EP2', need: 50, have: 20, short: 30, onOrder: 0, actions: [{ kind: 'BACKORDER', code: 'H1-1BF/EP2', qty: 30 }] })] };
+    eq('a short plated part is blocked in the review', oeJobBlocked(short), true);
+    ok('…and the automatic start names the board', /Snapshot Backorder board/.test(autoRunnable(short).reasons.join(' ')));
+    eq('a covered plated part runs by itself', autoRunnable({ stock: true, components: [comp({ code: 'H1-1BF/EP2', need: 50, have: 62, short: 0 })] }).ok, true);
+    const p1 = rowBackorderPatchOf({ so: { backorderLines: [{ code: 'OTHER', qty: 2, lineIndex: 0 }] }, jobs: [short], since: 9 });
+    eq('the shortfall is written in the split\'s record shape, tagged OE_ROW, others kept', p1.lines.map(r => [r.code, r.qty, r.wanted, r.kind, r.lineIndex, r.source || '']), [['OTHER', 2, 0, '', 0, ''], ['H1-1BF/EP2', 30, 50, 'plated', 7, 'OE_ROW']].map(x => x[3] === '' ? [x[0], x[1], undefined, undefined, x[4], ''] : x));
+    eq('…and named for the log', p1.added, ['30 × H1-1BF/EP2']);
+    eq('a line already on the board from another writer is not added twice', rowBackorderPatchOf({ so: { backorderLines: [{ code: 'H1-1BF/EP2', qty: 30, lineIndex: 3 }] }, jobs: [short] }), null);
+    eq('the row started → its OE_ROW record goes', rowBackorderPatchOf({ so: { backorderLines: p1.lines }, jobs: [], startedLineIdxs: [7] }).lines.map(r => r.code), ['OTHER']);
+    eq('nothing short and nothing started → no write', rowBackorderPatchOf({ so: { backorderLines: [] }, jobs: [{ stock: true, lineIdx: 1, components: [comp()] }] }), null);
+}
 console.log(`oeLines: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

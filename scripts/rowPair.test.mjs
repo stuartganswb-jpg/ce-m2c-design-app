@@ -86,4 +86,27 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
     const fg = floorGroupsOf([rctar, { line: L('H1-2RCTEC', 'Back Base 3'), finish: 'P14' }], disp);
     eq('…and once decided, the two write ONE group', fg.length, 1);
 }
+// A PLATED ROW IS THE CPQ SPLIT'S SHAPE (Stuart 2026-09-27, SO60551 Base Front 3): the finial is a PICK line
+// from stock on a PICK-ONLY document (born Complete, never on the finishing floor); the pole is the shop's.
+{
+    const display = { id: 'SO-APP-3', soId: 'SO60551', displayRelease: true, customer: 'Fabricut' };
+    const rod = { id: 'r1', legacyErpId: 'H1-1R', itemName: '1" Rod', manufacturingSpecs: { productType: 'RODS' } };
+    const fin = { id: 'f1', legacyErpId: 'H1-1BF/EP2', itemName: 'Ball Finial Polished Nickel', manufacturingSpecs: { productType: 'FINIALS', paintSize: 'S' } };
+    const finial = { so: null, part: { legacyErpId: 'H1-1BF', itemName: 'Ball Finial' }, finish: 'EP2', qty: 50, line: { idx: 7, erp: 'H1-1BF', row: 'Base Front 3' }, lineIdx: 7, key: 7, stock: true,
+        __planLines: [{ legacyErpId: 'H1-1BF/EP2', partName: 'Ball Finial Polished Nickel', quantity: 50, pickOnly: true, finishOutsourced: true }] };
+    const pole = { so: null, part: rod, finish: 'EP2', qty: 50, line: { idx: 6, erp: 'H1-1R', row: 'Base Front 3', cutLength: 18 }, lineIdx: 6, key: 6, custom: true,
+        __planLines: [{ legacyErpId: 'H1-1R', partName: '1" Rod', quantity: 50 }] };
+    const g = floorGroupsOf([pole, finial], display);
+    eq('the plated pole and the plated finial of one row are ONE group', g.map(x => [x.rowLabel, x.finish, x.jobs.length]), [['Base Front 3', 'EP2', 2]]);
+    const sh = pairShapeOf({ group: g[0], so: display, brand: 'ce', now: 5, inventory: [rod, fin], woId: 'WP', shopWoId: 'WP-C' });
+    eq('the finishing document is PICK-ONLY, born Complete, nothing for the finishing floor', [sh.finPayload.pickOnly, sh.finPayload.finishingRequired, sh.finPayload.currentPhase, sh.finPayload.stepStatus, sh.finPayload.totalParts, sh.finPayload.paintSize, 'poles' in sh.finPayload],
+        [true, false, 'Complete', 'Complete', 0, null, false]);
+    eq('…its line is the finished plated code, flagged a pick from stock', sh.finPayload.partsList.map(l => [l.legacyErpId, l.quantity, l.pickOnly, l.finishOutsourced]), [['H1-1BF/EP2', 50, true, true]]);
+    eq('…linked to the shop half, the pick released when the shop starts', [sh.finPayload.hasCustomSibling, sh.finPayload.sentToPickPack, sh.shopSibling.recipe, sh.shopSibling.cutList.map(c => [c.legacyErpId, c.cutLength])], [true, false, 'EP2', [['H1-1R', 18]]]);
+    eq('RTG still counts the pieces the pair handles', sh.hq.qty, 50);
+    const onlyPole = pairShapeOf({ group: floorGroupsOf([pole], display)[0], so: display, brand: 'ce', now: 5, inventory: [rod], woId: 'WQ', shopWoId: 'WQ-C' });
+    eq('a plated pole alone: a pick-only document with nothing to pick, no pole stream on the finishing floor', [onlyPole.finPayload.pickOnly, onlyPole.finPayload.partsList.length, 'finishStream' in onlyPole.finPayload], [true, 0, false]);
+    const painted = pairShapeOf({ group: floorGroupsOf([{ ...pole, finish: 'P06' }], display)[0], so: display, brand: 'ce', now: 5, inventory: [rod], woId: 'WR', shopWoId: 'WR-C' });
+    eq('a PAINTED pole alone is unchanged: the finishing floor paints it on the pole stream', [!!painted.finPayload.pickOnly, painted.finPayload.currentPhase, painted.finPayload.finishStream], [false, 'Setup', 'POLES']);
+}
 console.log(`rowPair: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
