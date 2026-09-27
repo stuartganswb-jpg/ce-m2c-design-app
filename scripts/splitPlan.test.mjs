@@ -37,6 +37,11 @@ eq('OE planner dialect (quantity) is read', planSmallLines([{ partId: 'H1-1CP-V/
 eq('all in-house → nothing to check', planSmallLines([{ legacyErpId: 'A/BS', qty: 1 }], 'BS', null).inHouse.length, 1);
 
 // ── a pole counts as a pole (Stuart 2026-09-12) ──
+// A per-foot pole quoted with no cut is counted by its feet per piece; a rider is never a pole (2026-09-27).
+{
+    const q = customShopQtyOf([{ qty: 10, feetPer: 8 }, { qty: 50, cutLength: 90 }, { qty: 50, rider: true, cutLength: 90 }]);
+    eq('per-foot poles by feet-per; the rider not a pole', [q.poles, q.feet, q.riders], [60, 455, 1]);
+}
 const so60420 = [{ name: '1" Round Hollow Rod Stock', qty: 1, cutLength: 90 }, { name: 'French return L', qty: 1 }, { name: 'French return R', qty: 1 }];
 eq('SO60420: one bent rod with two returns is ONE pole, 7.5 ft, billed as 8', customShopQtyOf(so60420), { qty: 1, poles: 1, feet: 7.5, billableFeet: 8, riders: 2, isPoleOrder: true });
 eq('two 8 ft poles with a miter line = qty 2, 16 billable feet, one rider line', customShopQtyOf([{ qty: 2, cutLength: 96 }, { qty: 2, name: 'miter' }]), { qty: 2, poles: 2, feet: 16, billableFeet: 16, riders: 1, isPoleOrder: true });

@@ -30,9 +30,9 @@ const trvDocLines = [
 const pull = quickShipPullLines(lines, trvDocLines);
 eq('every real line, in the split\'s shape; blank and zero dropped; kit + feet rows skipped, PART rows kept',
     pull.map(l => [l.legacyErpId, l.qty, !!l.finishOutsourced, !!l.trvComponent]),
-    [['H1-1CP-V/EP4', 4, false, false], ['HCUMR15/BS', 14, false, false], ['HCUMP610', 2, false, false], ['HCUMB410', 6, false, false], ['HCUFN1', 2, true, false], ['H1-2TRVCLP', 3, false, true]]);
+    [['H1-1CP-V/EP4', 4, false, false], ['HCUMR15/BS', 14, false, false], ['HCUMP610', 2, false, false], ['HCUMB410/CP', 6, false, false], ['HCUFN1/EP4', 2, true, false], ['H1-2TRVCLP', 3, false, true]]);
 eq('cover codes: plated = the code; painted = code, /P, mill; unique', quickShipCoverCodes(pull, 'CP').sort(),
-    ['H1-1CP-V/EP4', 'H1-2TRVCLP', 'H1-2TRVCLP/P', 'HCUFN1', 'HCUMB410', 'HCUMB410/P', 'HCUMP610', 'HCUMP610/P', 'HCUMR15', 'HCUMR15/BS', 'HCUMR15/P'].sort());
+    ['H1-1CP-V/EP4', 'H1-2TRVCLP', 'H1-2TRVCLP/P', 'HCUFN1/EP4', 'HCUMB410', 'HCUMB410/CP', 'HCUMB410/P', 'HCUMP610', 'HCUMP610/P', 'HCUMR15', 'HCUMR15/BS', 'HCUMR15/P'].sort());
 
 // ── the records, from the ONE planner ────────────────────────────────────────────────────────
 const map = {
@@ -45,7 +45,7 @@ const map = {
 };
 const bo = quickShipBackorderLines(pull, 'CP', { map, unitsKnown: true }, { since: 777 });
 eq('the shorts, and only the shorts', bo.map(b => [b.code, b.kind, b.qty, b.wanted]).sort(),
-    [['H1-1CP-V/EP4', 'plated', 3, 4], ['HCUMB410', 'painted', 6, 6], ['HCUMP610', 'painted', 2, 2]].sort());
+    [['H1-1CP-V/EP4', 'plated', 3, 4], ['HCUMB410/CP', 'painted', 6, 6], ['HCUMP610', 'painted', 2, 2]].sort());
 ok('a covered /P ring is not on the list', !bo.some(b => b.code === 'HCUMR15/BS'));
 ok('the plated-to-order finial with raw on hand is not on the list', !bo.some(b => b.code === 'HCUFN1'));
 ok('an unreadable component is unknown, not a backorder', !bo.some(b => b.code === 'H1-2TRVCLP'));

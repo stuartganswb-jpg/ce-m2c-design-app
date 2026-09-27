@@ -8,6 +8,7 @@
 // record from the same rule. Pure: the stock read (fetchAvailabilityUnits) is the caller's.
 import { planSmallLines } from './splitPlan.js';
 import { coverCodesOf } from './backorder.js';
+import { isOutsourcedFinishCode } from './finishRouting.js';
 
 const num = (v) => Number(v) || 0;
 
@@ -23,11 +24,18 @@ export function quickShipPullLines(lines = [], trvDocLines = []) {
         if (!l || !l.erp) return;
         const qty = l.perFoot ? num(l.qty) : num(l.eachQty != null ? l.eachQty : l.qty);
         if (qty <= 0) return;
+        // A TO-BE-FINISHED LINE IS CHECKED AS THE PIECE IT BECOMES (Stuart 2026-09-27): its finished code
+        // (H1-1BF/EP2 — a plated part is a stocked finished good; H1-75SR/P24 — painted from its /P or raw), the
+        // code the start and the SO Pack use (Shared/pickLines.soLineCodeOf). The raw code alone read a plated
+        // line against the unplated core, and a line could be recorded twice under two codes. Plated is the
+        // line's own stamp or its finish code's (Shared/finishRouting), the same test the start makes.
+        const fin = String(l.finishCode || '').trim().toUpperCase();
+        const erp = String(l.erp).toUpperCase();
+        const code = (l.toBeFinished && fin && !erp.endsWith(`/${fin}`)) ? `${erp}/${fin}` : String(l.erp);
+        const plated = !!(l.toBeFinished && (l.finishOutsourced === true || (fin && isOutsourcedFinishCode(fin))));
         out.push({
-            legacyErpId: String(l.erp), partName: l.name || '', qty,
-            // a to-be-finished line says whether its finish is outsourced (the line's own stamp);
-            // a plain stocked line lets the finish suffix decide, exactly as the split does.
-            ...(l.toBeFinished && l.finishOutsourced === true ? { finishOutsourced: true } : {}),
+            legacyErpId: code, partName: l.name || '', qty,
+            ...(plated ? { finishOutsourced: true } : (l.toBeFinished && fin ? { finishOutsourced: false } : {})),
         });
     });
     (trvDocLines || []).forEach(d => {

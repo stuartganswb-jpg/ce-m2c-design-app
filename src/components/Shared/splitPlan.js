@@ -88,10 +88,13 @@ export function planSmallLines(lines = [], orderRecipe = '', stock = null, { sin
 export function customShopQtyOf(customLines = []) {
     const lines = (customLines || []).filter(Boolean);
     const num = (v) => Number(v) || 0;
-    const poleLines = lines.filter(l => num(l.cutLength) > 0);
-    const riders = lines.filter(l => !(num(l.cutLength) > 0));
+    // A pole's length is its cut — or, on a per-foot line quoted with no cut, its feet per piece (2026-09-27: tab 7's
+    // per-foot rod with a blank cut reached the shop as 0 ft). A rider (a fee / return on the pole) is never a pole.
+    const lenFt = (l) => (num(l.cutLength) > 0 ? num(l.cutLength) / 12 : (num(l.feetPer) > 0 ? num(l.feetPer) : 0));
+    const poleLines = lines.filter(l => !l.rider && lenFt(l) > 0);
+    const riders = lines.filter(l => !poleLines.includes(l));
     const poles = poleLines.reduce((s, l) => s + (num(l.qty) || 1), 0);
-    const feet = poleLines.reduce((s, l) => s + (num(l.qty) || 1) * num(l.cutLength) / 12, 0);
+    const feet = poleLines.reduce((s, l) => s + (num(l.qty) || 1) * lenFt(l), 0);
     const lineQty = lines.reduce((s, l) => s + num(l.qty), 0) || lines.length;
     return {
         qty: poles > 0 ? poles : lineQty,
