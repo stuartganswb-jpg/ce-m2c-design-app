@@ -256,5 +256,22 @@ eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }]
     eq('a closed document marked retired reads as retired, and leaves the whole-order read', [splitRetiredDoc(stamped), splitRetiredDoc(finClosed), wholeOrderDocsOf(closedSo, [stamped], [{ ...shopStamped, ...splitRetiredStamp('stuart', 5), closed: true }])], [true, false, null]);
 }
 
+
+// ── THE LINE CARRIES THE BASE ITEM (Stuart 2026-09-27: H1-138CC/P + P06 must plan as H1-138CC/P06) ──
+{
+    const { rowLineErpOf, rowLinesFromBreakdown, lineCodeFixesOf, lineCodeFixText } = await import('../src/components/Shared/displayRelease.js');
+    eq('the shared paint SKU drops its /P when the finish is a paint', rowLineErpOf('H1-138CC/P', 'P06'), 'H1-138CC');
+    eq('the exact plated SKU drops its finish', rowLineErpOf('H1-1BF/EP2', 'EP2'), 'H1-1BF');
+    eq('a base item stays a base item; a /P with a plating finish is not touched; no finish, no change', [rowLineErpOf('H1-75SR', 'P24'), rowLineErpOf('H1-138CC/P', 'EP2'), rowLineErpOf('H1-138CC/P', '')], ['H1-75SR', 'H1-138CC/P', 'H1-138CC/P']);
+    const bd = [{ isHeader: true, sidemark: 'Base Front 2' }, { legacyErpId: 'H1-138CC/P', qty: 50, finishCode: 'P06', name: 'Center Cap' }, { legacyErpId: 'H1-1BF/EP2', qty: 50, finishCode: 'EP2', name: 'Ball Finial' }, { legacyErpId: 'H1-138TRV', qty: 50, finishCode: 'P06', name: 'Traverse' }];
+    const ls = rowLinesFromBreakdown(bd);
+    eq('the row writer puts the base on the line and keeps the billing SKU beside it', ls.map(l => [l.erp, l.billedErp || '', l.finishCode]), [['H1-138CC', 'H1-138CC/P', 'P06'], ['H1-1BF', 'H1-1BF/EP2', 'EP2'], ['H1-138TRV', '', 'P06']]);
+    const so = { soId: 'SO60551', lines: [{ erp: 'H1-138TRV', qty: 50, toBeFinished: true, finishCode: 'P06' }, { erp: 'H1-138CC/P', qty: 50, toBeFinished: true, finishCode: 'P06' }, { erp: 'HTTENDSTOP', qty: 100, toBeFinished: false }, { erp: 'H1-1BF/EP2', qty: 50, toBeFinished: true, finishCode: 'EP2' }] };
+    const fix = lineCodeFixesOf(so);
+    eq('an anchored order\'s wrong lines are named, by index, and rewritten; the right ones untouched', [fix.fixed, fix.lines.map(l => l.erp), fix.lines[1].billedErp], [[{ lineIdx: 1, from: 'H1-138CC/P', to: 'H1-138CC', finish: 'P06' }, { lineIdx: 3, from: 'H1-1BF/EP2', to: 'H1-1BF', finish: 'EP2' }], ['H1-138TRV', 'H1-138CC', 'HTTENDSTOP', 'H1-1BF'], 'H1-138CC/P']);
+    eq('an order with nothing wrong has no fix', lineCodeFixesOf({ lines: [{ erp: 'H1-75SR', toBeFinished: true, finishCode: 'P06' }] }), null);
+    eq('the question names each line', lineCodeFixText(so, fix).includes('line 2: H1-138CC/P → H1-138CC · P06'), true);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

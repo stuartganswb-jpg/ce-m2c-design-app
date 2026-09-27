@@ -42,6 +42,38 @@ export const rowOfLine = (line) => String((line && (line.row || line.memo)) || '
  * headers, discounts, fees, add-ons, size echoes and parked geometry are not parts. A line without a
  * finish is a stocked pick and is written `toBeFinished: false`, exactly as tab 7 writes it.
  */
+// THE LINE CARRIES THE BASE ITEM, THE FINISH RIDES BESIDE IT (Stuart 2026-09-27: "it is applying the
+// P then /P06, should just be H1-138CC/P06"). A CPQ breakdown line bills a painted part on the
+// shared "/P" SKU and a plated part on its exact "/EP2" SKU (Shared/nsTransmit) — that is the
+// NetSuite billing identity, not the item to make. Tab 7 writes the BASE item with the finish
+// beside it, and the Order Entry route composes base + finish; a line that already carried the
+// finish was composed twice (H1-138CC/P/P06, H1-1BF/EP2/EP2) and found no stock and no assembly.
+export const rowLineErpOf = (erp, fin) => {
+    const e = U(erp), f = U(fin);
+    if (!e) return '';
+    if (f && e.endsWith(`/${f}`)) return e.slice(0, -(f.length + 1));     // the exact finished SKU → its base
+    if (f && /^P\d/.test(f) && e.endsWith('/P')) return e.slice(0, -2);   // the shared paint SKU → its base
+    return e;
+};
+/** The lines an order already carries, with any billing-SKU codes put right; null when nothing needs it. */
+export const lineCodeFixesOf = (so) => {
+    const lines = Array.isArray(so && so.lines) ? so.lines : [];
+    const fixed = [];
+    const out = lines.map((l, i) => {
+        if (!l || !l.toBeFinished) return l;
+        const erp = U(l.erp), fin = U(oeLineFinish(l));
+        const want = rowLineErpOf(erp, fin);
+        if (!want || want === erp) return l;
+        fixed.push({ lineIdx: i, from: erp, to: want, finish: fin });
+        return { ...l, erp: want, billedErp: erp };
+    });
+    return fixed.length ? { lines: out, fixed } : null;
+};
+export const lineCodeFixText = (so, fix) =>
+    `↻ Fix ${fix.fixed.length} line code${fix.fixed.length === 1 ? '' : 's'} on ${(so && (so.soId || so.id)) || ''}?\n\nThese lines carry the CPQ billing SKU as the item, so the route composed the finish twice:\n\n`
+    + fix.fixed.map(x => `   line ${x.lineIdx + 1}: ${x.from} → ${x.to} · ${x.finish}`).join('\n')
+    + `\n\nThe item becomes the base part with its finish beside it — what tab 7 writes. Rows already started keep their work orders; rows not started plan on the corrected code.`;
+
 export const rowLinesFromBreakdown = (breakdown = []) => {
     const out = [];
     let row = '';
@@ -49,13 +81,15 @@ export const rowLinesFromBreakdown = (breakdown = []) => {
         if (!l) return;
         if (l.isHeader) { row = headerSidemarkOf(l); return; }       // the add-ons header carries no row
         if (isDisplayOnlyLine(l) || l.isFee || l.isAddOn || isParkedGeometryLine(l)) return;
-        const erp = U(l.legacyErpId || l.partId);
+        const billed = U(l.legacyErpId || l.partId);
         const qty = N(l.qty);
-        if (!erp || !(qty > 0)) return;
+        if (!billed || !(qty > 0)) return;
         const fin = U(l.finishCode || '');
+        const erp = rowLineErpOf(billed, fin);   // the base item; the billing SKU is kept beside it
         const feetPer = l.perFoot ? N(l.feet) : 0;
         out.push({
             erp, aliasErp: '', name: String(l.name || '').replace(/^\s*[-–▶]\s*/, '').trim(),
+            ...(billed !== erp ? { billedErp: billed } : {}),
             qty, row, memo: row,
             ...(l.perFoot ? { perFoot: true, feetPer, billedFeet: qty * feetPer } : {}),
             ...(N(l.cutLength) > 0 ? { cutLength: N(l.cutLength) } : {}),

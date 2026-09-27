@@ -36,7 +36,7 @@ import { cancelPlatingDemand } from '../Shared/platingDemand';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
+import { lineCodeFixesOf, lineCodeFixText, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -367,6 +367,22 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         setBusy('');
     };
 
+    // ↻ FIX LINE CODES (Stuart 2026-09-27): lines anchored before the base-item rule carry the CPQ
+    // billing SKU as the item. The pure fix says which; this writes the corrected lines[] only.
+    const fixLineCodes = async (entry) => {
+        const so = entry?.so;
+        const fix = so ? lineCodeFixesOf(so) : null;
+        if (!so || !draft || !fix) return;
+        if (!window.confirm(lineCodeFixText(so, fix))) return;
+        setBusy('Fixing line codes…');
+        try {
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: fix.lines, lineCodesFixedAt: Date.now(), lineCodesFixedBy: String(currentUser || '10.5') });
+            alert(`↻ ${fix.fixed.length} line code(s) fixed on ${so.soId || so.id}.`);
+            await loadFloor(draft);
+        } catch (e) { alert('Could not fix the line codes: ' + (e?.message || e)); }
+        setBusy('');
+    };
+
     // An order released by rows before the class rule (Shared/displayRelease.needsPackCard): the
     // same stamp the anchor and the retire write, applied by itself — nothing else on the order moves.
     const givePackCard = async (entry) => {
@@ -632,6 +648,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                                 title="Close the whole-order finishing and shop documents (reopenable, through RTG's own close), keep the sales order, and release its rows from here. Refuses if any work has been logged on them.">⟲ Retire the split → release by rows</button>}
                                     </>
                                     : <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>⚓ rows start from here{!s.so.nsInternalId ? ' · ⚠ NetSuite has not accepted it yet' : ''}{splitRetiredOf(s.so, s.fin, s.shop) ? ` · split retired (${splitRetiredOf(s.so, s.fin, s.shop).map(d => d.id).join(', ')}) · released by rows` : ''}</span>}
+                                {!s.whole && lineCodeFixesOf(s.so) && <button onClick={() => fixLineCodes(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
+                                    title="Some lines carry the CPQ billing SKU (…/P, …/EP2) as the item, so the route composes the finish twice and finds no stock. Rewrite them as base item + finish.">↻ Fix line codes ({lineCodeFixesOf(s.so).fixed.length})</button>}
                                 {!s.whole && needsPackCard(s.so) === 'class' && <button onClick={() => givePackCard(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
                                     title="This order was released by rows before the rule that makes such an order an Order Entry order. Without the stamp the WMS has no SO Pack card for it: its stocked lines are picked by nobody and its finished rows have nothing to hold them together.">📦 Give it its pack card</button>}
                                 {!s.whole && needsPackCard(s.so) === 'count' && <button onClick={() => givePackCard(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
