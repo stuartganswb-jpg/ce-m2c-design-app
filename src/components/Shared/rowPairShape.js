@@ -50,6 +50,35 @@ export const floorGroupsOf = (jobs = [], so = null) => {
 };
 
 /**
+ * A ROW'S FINISH STARTS AS ONE PAIR (Stuart 2026-09-27) — pure. The automatic start started every line
+ * the plan could run and left the rest for a person, so a row's finish reached the floor in pieces
+ * (Base Front 2: H1-138TRV/P06 on the floor, H1-138CC/P06 waiting → two finishing documents; Back Base 3
+ * would have started H1-2RCTAR/P14 without H1-2RCTEC/P14). A ready line whose row + finish has a line
+ * waiting on a decision now waits WITH it; the review starts the group together and the writer makes
+ * ONE pair. The key is floorGroupsOf's (row on a rows-released order, else one row · the line's finish).
+ * @param ready    jobs the plan could start ({ line, finish, … })
+ * @param waiting  lines named for a person ({ line, finish, erp })
+ * @returns { start: job[], held: [{ job, withErp }] }
+ */
+export const pairGroupKeyOf = (line, finish, so = null) => {
+    const byRows = !!(so && so.displayRelease);
+    return `${byRows ? rowKeyOf(String(rowOfLine(line || {}) || '')) : ''}|${U(finish)}`;
+};
+export const holdSplitGroups = ({ ready = [], waiting = [], so = null } = {}) => {
+    const waitingBy = new Map();
+    (waiting || []).forEach(w => {
+        const k = pairGroupKeyOf(w.line, w.finish, so);
+        if (!waitingBy.has(k)) waitingBy.set(k, U(w.erp));
+    });
+    const start = [], held = [];
+    (ready || []).forEach(j => {
+        const k = pairGroupKeyOf(j.line, j.finish, so);
+        if (waitingBy.has(k)) held.push({ job: j, withErp: waitingBy.get(k) }); else start.push(j);
+    });
+    return { start, held };
+};
+
+/**
  * THE SAME RULE FOR THE CPQ SPLIT (Stuart 2026-09-23: "the same should happen when this happens on a
  * normal order, there will be plenty of orders from cpq or order entry specifying a wood pole with
  * metal small parts"). The whole-order split wrote one pair per order whatever the finishes; now

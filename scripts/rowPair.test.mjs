@@ -1,6 +1,6 @@
 // node scripts/rowPair.test.mjs — a row hits the floor as a production order does (Stuart 2026-09-23):
 // grouped by row and finish, one pair per group, the pole the shop's, the small parts finishing's.
-import { floorGroupsOf, splitGroupJobs, pairShapeOf, pairIdsOf, finishGroupsOf } from '../src/components/Shared/rowPairShape.js';
+import { floorGroupsOf, splitGroupJobs, pairShapeOf, pairIdsOf, finishGroupsOf, holdSplitGroups, pairGroupKeyOf } from '../src/components/Shared/rowPairShape.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 const ok = (n, c) => { if (c) pass++; else { fail++; console.log(`✗ ${n}`); } };
@@ -63,5 +63,27 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
     eq('a line naming no finish takes the order recipe', g[0].smallLines.map(l => l.name), ['Bracket', 'Ring']);
     const one = finishGroupsOf({ smallLines: small.slice(0, 2), customLines: [], finishOf: () => 'P26' });
     eq('a single-finish order keeps its ids exactly — no suffix', [one.length, one[0].suffix], [1, '']);
+}
+// A ROW'S FINISH STARTS AS ONE PAIR (Stuart 2026-09-27) — Back Base 3: H1-2RCTAR/P14 ready, H1-2RCTEC/P14
+// short → RCTAR waits with it; another row, or another finish of the same row, is not held.
+{
+    const disp = { id: 'SO-D', displayRelease: true };
+    const L = (erp, row) => ({ erp, row, qty: 50 });
+    const rctar = { line: L('H1-2RCTAR', 'Back Base 3'), finish: 'P14', lineErp: 'H1-2RCTAR' };
+    const bf4 = { line: L('H1-75R', 'base front 4'), finish: 'P30', lineErp: 'H1-75R' };
+    const s08 = { line: L('H1-138WR-0', 'Back Base 2'), finish: 'S08', lineErp: 'H1-138WR-0' };
+    const r = holdSplitGroups({
+        ready: [rctar, bf4, s08],
+        waiting: [{ line: L('H1-2RCTEC', 'Back Base 3'), finish: 'P14', erp: 'h1-2rctec' }, { line: L('H1-138WFCON2', 'Back Base 2'), finish: 'P04', erp: 'H1-138WFCON2' }],
+        so: disp,
+    });
+    eq('a ready line waits with the short line of its row + finish', r.held.map(h => [h.job.lineErp, h.withErp]), [['H1-2RCTAR', 'H1-2RCTEC']]);
+    eq('another row, and another finish of the same row, still start', r.start.map(j => j.lineErp), ['H1-75R', 'H1-138WR-0']);
+    eq('nothing waiting → everything starts', holdSplitGroups({ ready: [rctar, bf4], waiting: [], so: disp }).start.length, 2);
+    eq('the key is floorGroupsOf\'s: row label spelling does not matter', pairGroupKeyOf(L('X', 'Back  Base 3'), 'p14', disp), pairGroupKeyOf(L('Y', 'back base 3'), 'P14', disp));
+    eq('an order not released by rows is ONE row — its finish group waits together', holdSplitGroups({ ready: [{ line: L('A', 'Row 1'), finish: 'P14' }], waiting: [{ line: L('B', 'Row 2'), finish: 'P14', erp: 'B' }], so: { id: 'SO-X' } }).held.length, 1);
+    eq('a waiting line with no line record holds nothing it cannot name', holdSplitGroups({ ready: [rctar], waiting: [{ line: undefined, finish: '', erp: 'Z' }], so: disp }).start.length, 1);
+    const fg = floorGroupsOf([rctar, { line: L('H1-2RCTEC', 'Back Base 3'), finish: 'P14' }], disp);
+    eq('…and once decided, the two write ONE group', fg.length, 1);
 }
 console.log(`rowPair: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

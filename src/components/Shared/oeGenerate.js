@@ -32,6 +32,7 @@ import { issuePlatedDemand } from './platingDemand';
 import { isAssemblyPart } from './finishedGoodsRun';
 import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig } from './oeLines';
 import { floorGroupsOf, parkRowPair } from './rowPair.js';
+import { holdSplitGroups } from './rowPairShape.js';
 
 export { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig };
 
@@ -393,8 +394,19 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = 
                 if (v.ok) clean.push(j);
                 else review.push({ lineIdx: j.lineIdx, erp: U(j.lineErp), finish: j.finish, reasons: v.reasons });
             });
-            if (clean.length) {
-                const res = await executeOeJobs({ jobs: clean, brand, user, inventory, log, auto: true });
+            // A ROW'S FINISH STARTS AS ONE PAIR (Stuart 2026-09-27): a ready line whose row + finish has a
+            // line waiting on a person waits with it, so the review starts the group and ONE pair is written.
+            const { start, held } = holdSplitGroups({
+                ready: clean,
+                waiting: review.map(r => ({ line: (so.lines || [])[r.lineIdx], finish: r.finish, erp: r.erp })),
+                so,
+            });
+            held.forEach(({ job, withErp }) => review.push({
+                lineIdx: job.lineIdx, erp: U(job.lineErp), finish: job.finish,
+                reasons: [`ready — waits with ${withErp} so this ${U(job.finish)} starts as ONE pair`],
+            }));
+            if (start.length) {
+                const res = await executeOeJobs({ jobs: start, brand, user, inventory, log, auto: true });
                 ran += res.linesStarted != null ? res.linesStarted : res.woIds.length;
             }
         }
