@@ -389,7 +389,7 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = 
             }
             const clean = [];
             plan.jobs.forEach(j => {
-                const v = autoRunnable(j, { unitsKnown: plan.unitsKnown });
+                const v = autoRunnable(j, { unitsKnown: plan.unitsKnown, heldKnown: plan.heldKnown !== false });
                 if (v.ok) clean.push(j);
                 else review.push({ lineIdx: j.lineIdx, erp: U(j.lineErp), finish: j.finish, reasons: v.reasons });
             });

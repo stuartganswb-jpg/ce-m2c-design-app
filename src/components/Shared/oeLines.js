@@ -85,7 +85,7 @@ export const oeAutoSig = (open = []) => open.map(x => `${x.lineIdx}:${U(x.line.e
  * units agree. The one make-up step allowed is the routine phosphate convert whose RAW is on the
  * shelf: that is how every painted part is made, and it asks nobody anything.
  */
-export const autoRunnable = (job, { unitsKnown = true } = {}) => {
+export const autoRunnable = (job, { unitsKnown = true, heldKnown = true } = {}) => {
     const reasons = [];
     if (!job) return { ok: false, reasons: ['no plan'] };
     // A BOUGHT LINE THAT IS SHORT is a purchase to decide; one the shelf covers is not (Stuart
@@ -94,6 +94,9 @@ export const autoRunnable = (job, { unitsKnown = true } = {}) => {
     // so there is nothing for a person to decide. Only a shortfall is a decision.
     if (job.buy && (job.components || []).some(c => Number(c.short) > 0)) reasons.push('a bought line that is short — the purchase is reviewed before anything is ordered');
     if (!unitsKnown) reasons.push('NetSuite could not tell us the stock units on this read');
+    // The plan counts what NetSuite already holds for this order as the order's own (Stuart 2026-09-27).
+    // Unread, a shortfall may be the order's own committed stock — a person looks before anything is ordered.
+    if (!heldKnown && (job.components || []).some(c => Number(c.short) > 0)) reasons.push('NetSuite could not tell us what it already holds for this order — the shortfall may be overstated');
     (job.holds || []).forEach(h => reasons.push(h));
     if (job.poleChoice) reasons.push(`${job.poleChoice.pullErp}: ${job.poleChoice.short} short of the ${job.poleChoice.pullFt} ft length — cut a longer stick or wait (a person chooses)`);
     (job.components || []).forEach(c => {

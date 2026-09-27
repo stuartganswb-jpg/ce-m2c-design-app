@@ -94,6 +94,35 @@ export const fetchAvailabilityUnits = async (codes, locationId) => {
     }
 };
 
+// ── WHAT NETSUITE ALREADY HOLDS FOR THIS ORDER (Stuart 2026-09-27, Base Front 2) ────────────────
+// quantityavailable is on hand MINUS committed — and the commitment may be THIS order's own. SO60551
+// bills H1-138CC/P × 50, so NetSuite holds 50 of the 62 in 138R-010 for it: the plan read 12, called
+// the order 38 short of its own stock and drafted a PO. What NetSuite has committed to a sales order
+// is that order's; the plan counts it as the order's own, once, before the shared shelf.
+// Returns { `${soInternalId}|${ITEMID}`: qty }.
+export const fetchOrderCommitted = async (soInternalIds, codes) => {
+    const soList = [...new Set((soInternalIds || []).map(id => parseInt(id, 10)).filter(n => n > 0))];
+    if (!soList.length || !codes || !codes.length) return {};
+    const { nsProxyFetch } = await import('./nsProxy');
+    const idList = codes.map(c => `'${String(c).toUpperCase().replace(/'/g, "''")}'`).join(',');
+    const q = `SELECT tl.transaction AS soid, Item.itemid AS itemid, SUM(ABS(tl.quantitycommitted)) AS held ` +
+        `FROM TransactionLine tl JOIN Item ON Item.id = tl.item ` +
+        `WHERE tl.transaction IN (${soList.join(',')}) AND UPPER(Item.itemid) IN (${idList}) ` +
+        `GROUP BY tl.transaction, Item.itemid`;
+    const resp = await nsProxyFetch({
+        targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
+        method: 'POST', payload: { q },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 300));
+    const out = {};
+    (data.items || []).forEach(r => {
+        const held = Number(r.held) || 0;
+        if (held > 0) out[`${r.soid}|${String(r.itemid || '').toUpperCase()}`] = held;
+    });
+    return out;
+};
+
 // The unit the APP believes an item is counted in. Unset means eaches — every screen has always
 // assumed eaches, so that IS the app's position until an operator aligns it.
 export const appUnitOf = (part) => String(part?.manufacturingSpecs?.stockUnit || 'EA').toUpperCase();
@@ -203,6 +232,24 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
     const onOrderLeft = {};
     Object.entries(avail).forEach(([c, v]) => { remaining[c] = v.available; onOrderLeft[c] = v.onOrder || 0; });
 
+    // What NetSuite already holds for each sales order in this batch — the order's own, read once.
+    // If the read fails the plan falls back to the free shelf alone and SAYS so (heldKnown).
+    const soNsOf = (p) => String((p.so && p.so.nsInternalId) || '');
+    const soNsIds = [...new Set(planned.map(soNsOf).filter(Boolean))];
+    let heldLeft = {}, heldKnown = true;
+    if (codes.size && soNsIds.length) {
+        try { heldLeft = await fetchOrderCommitted(soNsIds, [...codes]); }
+        catch (e) { heldLeft = {}; heldKnown = false; }
+    }
+    const heldFor = (soNs, code) => (soNs ? Math.max(0, Number(heldLeft[`${soNs}|${code}`]) || 0) : 0);
+    // Take `qty` of `code` for this order: its own held stock first, then the shared free shelf.
+    const claim = (soNs, code, qty) => {
+        const own = heldFor(soNs, code);
+        const fromOwn = Math.min(own, qty);
+        if (fromOwn) heldLeft[`${soNs}|${code}`] = own - fromOwn;
+        remaining[code] = Math.max(0, (Number(remaining[code]) || 0) - (qty - fromOwn));
+    };
+
     // A short already covered by inbound (open PO/WO in NetSuite) defaults to SKIP — shown with
     // "N on order" and a tick the operator can clear to order anyway (Stuart 2026-08-29: the app
     // "missed the fact that the component is already on order for sufficient qty").
@@ -220,19 +267,21 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
     const out = planned.map(p => {
         const components = [];
         const holds = [];
+        const soNs = soNsOf(p);
         p.plan.lines.forEach(l => {
             const code = String(l.legacyErpId || '').toUpperCase();
             if (!code) return;
             const need = Number(l.quantity) || 0;
-            const have = Math.max(0, Number(remaining[code]) || 0);
+            const soHeld = heldFor(soNs, code);
+            const have = soHeld + Math.max(0, Number(remaining[code]) || 0);
             const short = Math.max(0, need - have);
-            remaining[code] = Math.max(0, (Number(remaining[code]) || 0) - need);
+            claim(soNs, code, need);
             const compPart = partOf(code);
             const nsUnit = (avail[code] || {}).unit;
             const appUnit = appUnitOf(compPart);
             const mismatch = unitsDisagree(nsUnit, appUnit);
             const comp = {
-                code, name: l.partName || compPart?.itemName || '', need, have, short,
+                code, name: l.partName || compPart?.itemName || '', need, have, short, soHeld,
                 onOrder: (avail[code] || {}).onOrder || 0,
                 nsUnit, appUnit, unitMismatch: mismatch, partId: compPart?.id || null,
                 noStockRecord: !(code in avail),
@@ -248,9 +297,9 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
             } else if (short > 0) {
                 const mill = millBaseOf(code);
                 if (/\/P$/.test(code) && mill !== code) {
-                    const rawHave = Math.max(0, Number(remaining[mill]) || 0);
+                    const rawHave = heldFor(soNs, mill) + Math.max(0, Number(remaining[mill]) || 0);
                     const claimed = Math.min(rawHave, short);
-                    remaining[mill] = Math.max(0, (Number(remaining[mill]) || 0) - short);
+                    claim(soNs, mill, short);
                     // The convert itself always stands (phosphating must still happen — it waits
                     // on the WMS tab for raw, inbound or milled); coverage applies to ACQUIRING
                     // the raw behind it.
@@ -363,7 +412,7 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         }
     }
 
-    return { jobs: out, nsError: null, unitsKnown };
+    return { jobs: out, nsError: null, unitsKnown, heldKnown };
 };
 
 // Flatten a reviewed job's component actions into the executor's shapes, honoring operator

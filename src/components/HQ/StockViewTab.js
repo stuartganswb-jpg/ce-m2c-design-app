@@ -28,7 +28,7 @@ import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tie
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan } from '../Shared/oeReviewPlan';
-import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, issueOePlatedLine } from '../Shared/oeGenerate';
+import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, issueOePlatedLine, oeDoorOf } from '../Shared/oeGenerate';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import { runChunked, fetchAvailableById, fetchInboundById, backorderTallyOf } from '../Shared/stockPosition';
 
@@ -2457,12 +2457,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         work.forEach(w => {
             const { part } = resolveOePart(String(w.l.erp || '').toUpperCase());
             const finish = oeLineFinish(w.l);
-            const specs = part?.manufacturingSpecs || {};
-            // The same one rule as every other view (a plated finish is never a PO from here — it
-            // is a plating demand). Behaviour is unchanged for this path; it now reads from the
-            // shared answer rather than re-deriving it, so the doors cannot drift.
-            const isBuy = !isOutsourcedFinishCode(finish || '') && orderRouteFor(specs).route === ORDER_ROUTE.BUY;
-            if (part && finish && !isOutsourcedFinishCode(finish)) reviewable.push({ ...w, buy: isBuy }); else direct.push(w);
+            // THE ONE DOOR RULE (Shared/oeGenerate.oeDoorOf) — the rule 10.5's ▶ Start row / RTG's automatic
+            // start already ask. This view kept its own copy and it drifted (Stuart 2026-09-27, Base Front 2):
+            // H1-138CC/P06 is painted HERE, so it pulls H1-138CC/P, but the copy read "bought raw" and planned
+            // a PO for 50 × H1-138CC. A plated finish is a plating demand (the direct path below).
+            const door = part && finish ? oeDoorOf(part, finish, hqParts) : '';
+            if (door && door !== 'PLATING') reviewable.push({ ...w, buy: door === 'BUY' }); else direct.push(w);
         });
         for (const w of direct) {
             // A BOTH-sourced line whose operator picks "make" defers into the same batch review.
@@ -2553,10 +2553,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 await issueOePlatedLine({ so, line, lineIdx: (so.lines || []).indexOf(line), brand: activeBrand, user: currentUser || '', inventory: hqParts, log: addLog });
                 await loadOeNeeds(); setGenBusy(false); return;
             }
-            // RAW ITEM WE BUY → a linked vendor PO (BOTH always asks, defaulted to make).
+            // RAW ITEM WE BUY → a linked vendor PO (BOTH always asks, defaulted to make). Which door is
+            // the ONE rule's answer (Shared/oeGenerate.oeDoorOf) — a finish applied here is made here.
             const vendorName = String(specs.vendorName || '').trim();
-            let wantPo = specs.isInHouse === false && !!vendorName;
-            if (sourcingOf(specs) === SOURCING.BOTH) wantPo = window.confirm(`${erp} is flagged ⚖ BOTH (make and buy).\n\nOK = vendor PO to ${vendorName || 'its vendor'} · Cancel = finishing work order.`);
+            const door = oeDoorOf(part, finish, hqParts);
+            let wantPo = door === 'BUY';
+            if (door === 'ASK') wantPo = window.confirm(`${erp} is flagged ⚖ BOTH (make and buy).\n\nOK = vendor PO to ${vendorName || 'its vendor'} · Cancel = finishing work order.`);
             if (wantPo) {
                 // THROUGH THE REVIEW GATE like everything else (Stuart 2026-08-30: this branch
                 // created PO-1013 for a line with plenty already on order — no stock read, no
@@ -4697,6 +4699,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <div style={{ ...mono9, color: 'var(--ink-soft)', marginTop: '4px' }}>
                                         Live NetSuite stock · units verified · sourcing-routed · nothing is written until you approve
                                         {!oeReview.unitsKnown && <span style={{ color: '#d9534f' }}> · ⚠ UNITS UNREADABLE THIS PULL — shorts are held</span>}
+                                        {oeReview.heldKnown === false && <span style={{ color: '#d9534f' }}> · ⚠ WHAT NETSUITE HOLDS FOR THIS ORDER WAS UNREADABLE — shorts may be overstated</span>}
                                     </div>
                                 </div>
                                 <button onClick={() => setOeReview(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.7rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
@@ -4731,7 +4734,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     </div>
                                                     <div style={{ ...mono9, paddingTop: '3px', color: 'var(--ink)' }}>need {c.need}</div>
                                                     <div style={{ ...mono9, paddingTop: '3px', color: c.short > 0 ? '#d9534f' : '#3a7d44' }}>
-                                                        {c.noStockRecord ? 'no stock record' : `${c.have} avail`}{c.nsUnit ? ` (${c.nsUnit})` : ''}
+                                                        {c.noStockRecord ? 'no stock record' : c.soHeld > 0 ? `${c.have - c.soHeld} free + ${c.soHeld} held for this order` : `${c.have} avail`}{c.nsUnit ? ` (${c.nsUnit})` : ''}
                                                         {c.onOrder > 0 && <span style={{ color: 'var(--brass)' }}> · {c.onOrder} on ord</span>}
                                                         {c.short > 0 ? ` · short ${c.short}` : ' · ✓'}
                                                     </div>

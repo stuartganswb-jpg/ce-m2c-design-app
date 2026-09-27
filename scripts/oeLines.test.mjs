@@ -53,6 +53,11 @@ ok('…and it says why, naming the shortfall as the reason', /bought line that i
 eq('a bought line with a unit mismatch still waits, covered or not', autoRunnable({ buy: true, components: [comp({ short: 0, unitMismatch: true, held: true, holdReason: 'FT vs EA' })] }).ok, false);
 eq('a short pole (cut a longer stick or wait) → a person', autoRunnable({ components: [comp()], poleChoice: { pullErp: 'H1-1R-6', pullFt: 6, short: 2 } }).ok, false);
 eq('units unreadable on this NetSuite read → a person', autoRunnable({ components: [comp()] }, { unitsKnown: false }).ok, false);
+// WHAT NETSUITE HOLDS FOR THIS ORDER (Stuart 2026-09-27, Base Front 2): 62 × H1-138CC/P on hand, 50 held
+// for SO60551 → the plan's have is 12 free + 50 held; unread, a short may be the order's own stock.
+eq('the order\'s own held stock covers the line → runs', autoRunnable({ components: [comp({ code: 'H1-138CC/P', need: 50, have: 62, short: 0, soHeld: 50 })] }, { heldKnown: true }).ok, true);
+eq('the hold was unreadable but nothing is short → still runs', autoRunnable({ components: [comp()] }, { heldKnown: false }).ok, true);
+ok('the hold was unreadable AND a line reads short → a person, told why', /could not tell us what it already holds/.test(autoRunnable({ components: [comp({ have: 12, short: 38, actions: [{ kind: 'CONVERT', qty: 38, rawHave: 40 }] })] }, { heldKnown: false }).reasons.join(' ')));
 ok('the review-gate block rule moved here unchanged', oeJobBlocked({ components: [{ held: true, short: 1 }] }) && !oeJobBlocked({ components: [{ held: true, short: 0 }] }));
 
 // WHAT THE RTG CARD SAYS
