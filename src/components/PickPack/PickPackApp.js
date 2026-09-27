@@ -5130,6 +5130,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {renderClaimLine(job, 'pick')}
                                                 <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Item{pickable.length === 1 ? '' : 's'}{grouping.changed ? ` (${grouping.from} BOM lines grouped into ${grouping.to} picks)` : ''}{rawPickable.length !== (job.partsList?.length || 0) ? ` · ${(job.partsList?.length || 0) - rawPickable.length} return/fee line(s) ride the shop order` : ''} · tap for parts</div>
                                             </div>
+                                            {pickable.length === 0 ? (
+                                                // NOTHING TO PICK (Stuart 2026-09-27, SO60551 Base Front 2): a paired pole whose small parts
+                                                // are not on this document has no pick — START PICKING opened an empty pick and the screen
+                                                // went blank. Staging already matches such a document on the SHOP label alone (above).
+                                                <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: '240px', padding: '10px 14px', border: `1px solid ${theme.brass}`, color: theme.brass, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', lineHeight: 1.5 }}>
+                                                    {job.hasCustomSibling ? t('Nothing to pick — scan the shop label at staging') : t('Nothing to pick on this order')}
+                                                </div>
+                                            ) : (
                                             <button disabled={claimBlocks(job, 'pick') || !!holdGateOf(job)} onClick={async (e) => { e.stopPropagation();
                                                 if (heldRefusal(job, 'be picked')) return;
                                                 // CLAIM FIRST — the pick opens only once the order doc says it is ours.
@@ -5139,6 +5147,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); setPickSkips([]); setPickShorts([]); setValidation({ bin: '', qty: '' }); fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId)); }} style={{ padding: '10px 20px', background: claimBlocks(job, 'pick') ? theme.paper2 : theme.ink, color: claimBlocks(job, 'pick') ? theme.inkSoft : '#fff', cursor: claimBlocks(job, 'pick') ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => { if (!claimBlocks(job, 'pick')) e.currentTarget.style.background = theme.brass; }} onMouseOut={(e) => { if (!claimBlocks(job, 'pick')) e.currentTarget.style.background = theme.ink; }}>
                                                 START PICKING
                                             </button>
+                                            )}
                                         </div>
                                         {/* One status in one place — production wins. The pick stays actionable
                                             (the floor may genuinely still need the pull), but it is never presented

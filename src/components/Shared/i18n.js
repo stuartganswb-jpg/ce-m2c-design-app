@@ -45,6 +45,8 @@ const ES = {
     'START PICKING': 'EMPEZAR PICKING',
     // ── One order, one pair of hands (the pick / pack claim) ─────────────────────────────────
     'is picking this': 'está recogiendo esta orden',
+    'Nothing to pick — scan the shop label at staging': 'Nada que recoger — escanee la etiqueta del taller en preparación',
+    'Nothing to pick on this order': 'Nada que recoger en esta orden',
     'is packing this': 'está embalando esta orden',
     'You are picking this': 'Usted está recogiendo esta orden',
     'You are packing this': 'Usted está embalando esta orden',

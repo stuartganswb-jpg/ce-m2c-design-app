@@ -2030,7 +2030,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         if (!opts.auto && !window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
 
         try {
-            const { originalJob, svgUri, finishRecipe } = await fetchEnrichedJobData(hqOrder.hqJobId, orderType);
+            const enriched = await fetchEnrichedJobData(hqOrder.hqJobId, orderType);
+            const { originalJob, svgUri } = enriched;
+            // AN ORDER ENTRY / ROW PAIR CARRIES ITS OWN FINISH (Stuart 2026-09-27): it has no quote, so the
+            // lookup above answered PENDING-RECIPE and buildShopDoc read the pole as neither plated nor
+            // painted — an EP2 pole would Complete instead of going to plating, a P06 pole lost its
+            // phosphate step. The pair's recipe is its group's finish code (Shared/rowPairShape).
+            const finishRecipe = (hqOrder.source === 'ORDER_ENTRY' && hqOrder.recipe) ? String(hqOrder.recipe) : enriched.finishRecipe;
 
             let cpqSpecs = {};
             if (originalJob && originalJob.cpqData && originalJob.cpqData.breakdown) {
