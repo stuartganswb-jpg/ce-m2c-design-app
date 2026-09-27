@@ -9,7 +9,8 @@ import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
-import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, unpackedSiblingsOf } from '../Shared/pickLines';
+import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, soLineIsFee, unpackedSiblingsOf, soPackLineStateOf, soOrderReadyOf, gatherPlanOf } from '../Shared/pickLines';
+import { isFeePart } from '../Shared/oeClassify';
 import { fetchAvailabilityUnits, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
@@ -825,7 +826,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         ...(Array.isArray(r.riders) && r.riders.length ? { riders: r.riders.map(x => ({ code: x.code || '', name: x.name || '', qty: Number(x.qty) || 1 })) } : {}) }));
     // The riders of a pole line, on the same pack list (ticked with it, cleared with it).
     const ridersOf = (lines, poleKey) => (lines || []).filter(l => l.rider && l.riderOf === poleKey);
-    const packLinesFor = (job) => packLinesOf(job, { poleRows: poleRowsForPack(job) });
+    // A FEE IS NEVER PICKED OR PACKED (Shared/pickLines.soLineIsFee): the flag, the start's rider stamp, or the
+    // library's own Fee record (tab 7 stores fees with no flag).
+    const isFeeCode = (code) => isFeePart(findPartByErpCode(code));
+    const feeLine = (o, l, i) => soLineIsFee(o, l, i, isFeeCode);
+    const packLinesFor = (job) => packLinesOf(job, { poleRows: poleRowsForPack(job), isFeeCode });
     const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : woRefOf(j);
 
     // ── 🖨 PACKING LIST, from the pack station (Stuart 2026-09-11) ──────────────────────────────
@@ -1615,7 +1620,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const todo = (orders || []).filter(o => o && o.id && !soStatsRef.current.has(o.id));
         if (!todo.length) return;
         todo.forEach(o => soStatsRef.current.add(o.id));
-        const codes = [...new Set(todo.flatMap(o => (o.lines || []).map(lineCodeOf).filter(Boolean)))];
+        const codes = [...new Set(todo.flatMap(o => (o.lines || []).filter((l, i) => !feeLine(o, l, i)).map(lineCodeOf).filter(Boolean)))];
         const loc = BRAND_NETSUITE_MAP[activeBrand]?.location || '17';
         let availMap = {}, availErr = null, held = {};
         if (codes.length) {
@@ -1667,35 +1672,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // One line's four numbers and the word that follows from them. A to-be-finished line that is not a shelf
     // pick ARRIVES from a floor: it is ready when its pieces are gathered into the order, never from shelf stock
     // of its code (Stuart 2026-09-27 — it used to read the base code's stock and could turn green unmade).
-    const lineStats = (o, l, idx) => {
-        const c = lineCodeOf(l);
-        if (!soLineIsShelfPick(o, l, idx)) {
-            const ordered = Number(l.qty) || 0;
-            const committed = committedQtyOf(o, c);
-            return { code: c, ordered, committed, avail: null, held: 0, prod: 0, covered: committed, state: committed >= ordered && ordered > 0 ? 'GATHERED' : 'FROM THE FLOOR', fromFloor: true };
-        }
-        const st = (soStats[o.id] && soStats[o.id].codes[c]) || null;
-        const ordered = Number(l.qty) || 0;
-        const committed = committedQtyOf(o, c);
-        const free = st && st.avail != null ? st.avail : null;
-        const held = st ? (Number(st.held) || 0) : 0;
-        const avail = free != null ? Math.max(0, free) + held : null;     // the order's view: free + held for it
-        const prod = st ? st.prod : 0;
-        const covered = Math.max(committed, held) + (free != null ? Math.max(0, free) : 0);
-        const state = committed >= ordered && ordered > 0 ? 'GATHERED'
-            : covered >= ordered && ordered > 0 ? 'READY'
-                : (covered + prod) >= ordered && ordered > 0 ? 'IN PRODUCTION'
-                    : avail == null ? 'UNKNOWN' : 'SHORT';
-        return { code: c, ordered, committed, avail, held, prod, covered, state };
-    };
-    // An order is ready when every REAL line is. A to-be-finished line arrives from a floor and is
-    // never a shelf pull, so it answers to production, not to stock.
-    const orderReady = (o) => {
-        const lines = (o.lines || []).map((l, i) => ({ l, i })).filter(x => lineCodeOf(x.l));
-        if (!lines.length) return false;
-        if (!soStats[o.id]) return false;
-        return lines.every(x => { const st = lineStats(o, x.l, x.i); return st.state === 'GATHERED' || st.state === 'READY'; });
-    };
+    // One line's numbers and word, and the order's readiness — Shared/pickLines (the loop tests run the same code).
+    const lineStats = (o, l, idx) => soPackLineStateOf({ so: o, line: l, idx, stat: (soStats[o.id] && soStats[o.id].codes[lineCodeOf(l)]) || null, isFeeCode });
+    const orderReady = (o) => !!soStats[o.id] && soOrderReadyOf({ so: o, statOf: (c) => (soStats[o.id].codes[c] || null), isFeeCode });
 
     // ── GATHERING PIECES INTO AN ORDER'S COMMITTED BIN ───────────────────────────────────────
     // The rules live in Shared/committedBins (pure, 34 offline assertions); this is the Firestore
@@ -1835,11 +1814,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
 
     const printOrderLineLabels = (job, line) => printStockItemLabels({
-        itemId: line.erp || line.code || '', itemName: line.name || '', uom: lineUom(line),
+        itemId: soLineCodeOf(line) || line.erp || line.code || '', itemName: line.name || '', uom: lineUom(line),
         woNum: packRef(job), copies: Math.max(1, Math.min(50, Number(line.qty) || 1)),
     });
     const printAllOrderLabels = (job, lines) => {
-        const rows = (lines || []).filter(l => (l.erp || l.code));
+        const rows = (lines || []).filter((l, i) => (l.erp || l.code) && !feeLine(job, l, i));
         if (!rows.length) return alert('No item lines on this order to label.');
         const pcs = rows.reduce((a, l) => a + Math.max(1, Number(l.qty) || 1), 0);
         if (pcs > 50 && !window.confirm(`That is ${pcs} labels across ${rows.length} lines. Print them all?`)) return;
@@ -2263,9 +2242,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const item = U(job.rootItem || job.stockErpId || job.partErpId), fin = U(job.recipe);
             idxs = (order.lines || []).map((l, i) => ({ l, i })).filter(x => item && U(x.l.erp) === item && (!fin || U(x.l.finishCode) === fin)).map(x => x.i);
         }
-        const lines = idxs.map(i => ({ i, l: (order.lines || [])[i] })).filter(x => x.l && lineCodeOf(x.l));
-        if (!lines.length) return alert(`${packRef(job)} names no line of ${packRef(order)}, so it cannot be gathered into it.\n\nNothing was changed — tell RTG which lines it carries.`);
-        const want = lines.map(x => { const code = lineCodeOf(x.l); const qty = Number(x.l.qty) || 0; return { code, qty, add: Math.max(0, qty - committedQtyOf(order, code)) }; });
+        const want = gatherPlanOf({ job, order, lineIdxs: idxs, isFeeCode });
+        if (!want.length) return alert(`${packRef(job)} names no line of ${packRef(order)}, so it cannot be gathered into it.\n\nNothing was changed — tell RTG which lines it carries.`);
         if (!window.confirm(`Gather ${packRef(job)} into ${packRef(order)}?\n\n${want.map(w => `   ${w.add} × ${w.code}${w.add < w.qty ? ` (${w.qty - w.add} already gathered)` : ''}`).join('\n')}\n\nThe pieces go into the order's committed bin. The order is packed and shipped from SO Pack once every line is there — nothing is sent to NetSuite here.`)) return;
         packCompletingRef.current = true;
         let ord = order, bin = committedBinOf(order) || '';
@@ -5414,7 +5392,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         // (Packaging Prep, plating put-away). A work order's live phase never said that: a pick-only
                         // or gathered document never reads Complete, so this warned on every order.
                         const waiting = (o.lines || []).map((l, i) => ({ l, i }))
-                            .filter(x => lineCodeOf(x.l) && !soLineIsShelfPick(o, x.l, x.i))
+                            .filter(x => lineCodeOf(x.l) && !soLineIsShelfPick(o, x.l, x.i) && !feeLine(o, x.l, x.i))
                             .map(x => ({ code: lineCodeOf(x.l), qty: Number(x.l.qty) || 0, have: committedQtyOf(o, lineCodeOf(x.l)) }))
                             .filter(x => x.have < x.qty);
                         if (waiting.length && !window.confirm(`⏳ SO ${o.soId || o.id} has ${waiting.length} to-be-finished line(s) NOT YET GATHERED into the order:\n\n${waiting.slice(0, 8).map(w => `• ${w.code} — ${w.have} of ${w.qty} gathered`).join('\n')}${waiting.length > 8 ? `\n…and ${waiting.length - 8} more` : ''}\n\nPACK & HOLD until every part arrives is the model. Mark it ${status} anyway?`)) return;
@@ -5534,12 +5512,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {/* A made-to-order line: the pieces ARRIVE from the finishing floor (in-house)
                                                     or the plater (outsourced) — do NOT pull the raw off the shelf for it
                                                     (its WO / plating demand carries the pull lines). */}
-                                                {l.toBeFinished && (soLineIsShelfPick(o, l, i)
+                                                {feeLine(o, l, i) ? <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🔧 {(o.oeGen && o.oeGen[i] && o.oeGen[i].rider) ? 'rides the pole — fabrication on the shop cut list, not picked' : 'fee — billed on the order, not picked'}</div>
+                                                : l.toBeFinished && (soLineIsShelfPick(o, l, i)
                                                     ? <div style={{ color: '#3a7d44', fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>📦 {lineCodeOf(l)} IN STOCK — pick it from the shelf into this order</div>
                                                     : <div style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🎨 TO BE FINISHED · {l.finishCode || ''} — {lineCodeOf(l)} arrives from {l.finishOutsourced ? 'the plater (WMS Plating)' : 'the finishing floor'}, do not pull raw</div>)}
                                             </td>
                                             <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.toBeFinished ? theme.brass : (l.bin ? theme.ink : theme.inkSoft), borderBottom: `1px solid ${theme.paper2}` }}>{l.toBeFinished && !soLineIsShelfPick(o, l, i) ? (l.finishOutsourced ? 'FROM PLATING' : 'FROM FINISHING') : (l.toBeFinished ? 'SHELF' : (l.bin || 'UNASSIGNED'))}</td>
                                             {(() => {
+                                                if (feeLine(o, l, i)) return (<>{[0, 1, 2, 3].map(k => <td key={k} style={{ padding: '9px 10px', textAlign: 'center', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>—</td>)}<td style={{ padding: '9px 12px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{t('not picked')}</td></>);
                                                 const st = lineStats(o, l, i);
                                                 const num = (v, col) => <td style={{ padding: '9px 10px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: col || theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{v}</td>;
                                                 const tone = { GATHERED: '#2e7d32', READY: '#3a7d44', 'IN PRODUCTION': theme.brass, SHORT: '#c0392b', UNKNOWN: theme.inkSoft }[st.state];
@@ -5555,7 +5535,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 </>);
                                             })()}
                                             <td style={{ padding: '9px 12px', textAlign: 'right', borderBottom: `1px solid ${theme.paper2}` }}>
-                                                {committedQtyOf(o, l.erp) > 0 && <button onClick={() => releaseFromOrder(o, String(l.erp || '').toUpperCase(), Number(l.qty) || 0)} title={`${committedQtyOf(o, l.erp)} gathered for this order — release some or all back`} style={{ padding: '5px 9px', marginRight: '6px', background: 'transparent', border: '1px solid #d9534f', color: '#c0392b', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em' }}>{t('Release')}</button>}
+                                                {!feeLine(o, l, i) && committedQtyOf(o, lineCodeOf(l)) > 0 && <button onClick={() => releaseFromOrder(o, lineCodeOf(l), Number(l.qty) || 0)} title={`${committedQtyOf(o, lineCodeOf(l))} gathered for this order — release some or all back`} style={{ padding: '5px 9px', marginRight: '6px', background: 'transparent', border: '1px solid #d9534f', color: '#c0392b', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em' }}>{t('Release')}</button>}
                                                 <button onClick={() => printOrderLineLabels(o, l)} title={`Print ${Math.max(1, Math.min(50, Number(l.qty) || 1))} × ${l.erp || ''} item label(s)`} style={{ padding: '5px 9px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, cursor: 'pointer', fontSize: '12px' }}>🖨</button>
                                             </td>
                                         </tr>

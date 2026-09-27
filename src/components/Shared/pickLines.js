@@ -1,3 +1,4 @@
+import { committedQtyOf } from './committedBins.js';
 // ══ ONE READER FOR AN ORDER'S LINES ═══════════════════════════════════════════════════════════
 //
 // Brief D · D7. The warehouse takes work from two doors and they speak different dialects:
@@ -76,9 +77,9 @@ export const isQuickShip = (job) => !!job && String(job.orderClass || '').trim()
  * The lines to PICK: real parts off a shelf, in either dialect, fees removed.
  * A stock build has no pull lines of its own — the Setup Queue synthesises them — so it returns [].
  */
-export function pickableLinesOf(job) {
+export function pickableLinesOf(job, { isFeeCode = null } = {}) {
     if (!job) return [];
-    if (isQuickShip(job)) return (job.lines || []).filter(l => !lineIsFeeish(l));
+    if (isQuickShip(job)) return (job.lines || []).filter((l, i) => !soLineIsFee(job, l, i, isFeeCode));
     return (job.partsList || []).filter(l => !lineIsFeeish(l) && !isOwnCustomPole(job, l));
 }
 
@@ -120,6 +121,12 @@ export const soLineCodeOf = (l) => {
     if (!fin) return erp;
     return erp.endsWith(`/${fin}`) ? erp : `${erp}/${fin}`;
 };
+// A FEE ON AN ORDER IS NEVER PICKED OR PACKED (Stuart 2026-09-27). A fee cut into a pole (a French return, a
+// miter) rides the pole's shop cut list — the start stamps it `rider`; a billing-only fee is just money. Tab 7
+// stores a fee with no flag, so the library's word counts too: `isFeeCode(code)` → is the item a Fee record.
+export const soLineIsFee = (so, l, idx, isFeeCode = null) => !!l && (lineIsFeeish(l) || !!l.isFee
+    || !!(so && so.oeGen && so.oeGen[idx] && so.oeGen[idx].rider)
+    || (typeof isFeeCode === 'function' && !!isFeeCode(up(l.erp))));
 // A line the warehouse PICKS OFF THE SHELF for the order: a stocked line, or a plated to-be-finished line the
 // row start found in stock (the sales order's oeGen[idx] stamp, kind STOCK — Shared/oeGenerate). Every other
 // to-be-finished line ARRIVES from a floor and is ready only once it is gathered into the order.
@@ -140,6 +147,50 @@ export const unpackedSiblingsOf = (job, docs = []) => {
         && d.packStatus !== 'Packed' && d.packStatus !== 'Gathered');
 };
 
+// ── ONE SO PACK LINE: ITS NUMBERS AND ITS WORD (moved out of the WMS screen 2026-09-27 so the loop tests run the
+// same code the card does). A fee is never picked; a line that ARRIVES from a floor is ready only when its pieces
+// are gathered into the order; a shelf pick is ready when the order's own stock (free + what NetSuite holds for it,
+// or what is already gathered — never both) covers it.
+// @param stat { avail (free), held (NetSuite's hold for the order), prod } for the line's code, or null (unread)
+export const soPackLineStateOf = ({ so, line, idx, stat = null, isFeeCode = null }) => {
+    const c = soLineCodeOf(line);
+    const ordered = Number(line && line.qty) || 0;
+    const committed = committedQtyOf(so, c);
+    if (soLineIsFee(so, line, idx, isFeeCode)) return { code: c, ordered, committed, avail: null, held: 0, prod: 0, covered: 0, state: 'FEE', fee: true };
+    if (!soLineIsShelfPick(so, line, idx)) {
+        return { code: c, ordered, committed, avail: null, held: 0, prod: 0, covered: committed, state: committed >= ordered && ordered > 0 ? 'GATHERED' : 'FROM THE FLOOR', fromFloor: true };
+    }
+    const free = stat && stat.avail != null ? stat.avail : null;
+    const held = stat ? (Number(stat.held) || 0) : 0;
+    const avail = free != null ? Math.max(0, free) + held : null;     // the order's view: free + held for it
+    const prod = stat ? (Number(stat.prod) || 0) : 0;
+    const covered = Math.max(committed, held) + (free != null ? Math.max(0, free) : 0);
+    const state = committed >= ordered && ordered > 0 ? 'GATHERED'
+        : covered >= ordered && ordered > 0 ? 'READY'
+            : (covered + prod) >= ordered && ordered > 0 ? 'IN PRODUCTION'
+                : avail == null ? 'UNKNOWN' : 'SHORT';
+    return { code: c, ordered, committed, avail, held, prod, covered, state };
+};
+/** The order is ready when every line that is not a fee is GATHERED or READY. */
+export const soOrderReadyOf = ({ so, statOf = () => null, isFeeCode = null }) => {
+    const lines = ((so && so.lines) || []).map((l, i) => ({ l, i })).filter(x => soLineCodeOf(x.l) && !soLineIsFee(so, x.l, x.i, isFeeCode));
+    if (!lines.length) return false;
+    return lines.every(x => { const st = soPackLineStateOf({ so, line: x.l, idx: x.i, stat: statOf(soLineCodeOf(x.l)), isFeeCode }); return st.state === 'GATHERED' || st.state === 'READY'; });
+};
+/**
+ * What a finished floor document GATHERS into its Order Entry order at Packaging Prep: the order lines it carries
+ * (its soLineIdxs / its parts' soLineIdx, or the ones given), each under the piece's code, only what is not
+ * already gathered. A fee rides nothing into the box.
+ */
+export const gatherPlanOf = ({ job, order, lineIdxs = null, isFeeCode = null }) => {
+    const idxs = (Array.isArray(lineIdxs) && lineIdxs.length) ? lineIdxs
+        : [...new Set([...((job && Array.isArray(job.soLineIdxs)) ? job.soLineIdxs : []), ...((job && job.partsList) || []).map(l => l && l.soLineIdx)])];
+    return idxs.filter(i => Number.isInteger(i) && i >= 0)
+        .map(i => ({ i, l: ((order && order.lines) || [])[i] }))
+        .filter(x => x.l && soLineCodeOf(x.l) && !soLineIsFee(order, x.l, x.i, isFeeCode))
+        .map(x => { const code = soLineCodeOf(x.l); const qty = Number(x.l.qty) || 0; return { idx: x.i, code, qty, add: Math.max(0, qty - committedQtyOf(order, code)) }; });
+};
+
 /**
  * The lines to PACK, normalised to one shape: { key, erp, aliasErp, name, qty, isPole }.
  *
@@ -153,14 +204,15 @@ export const unpackedSiblingsOf = (job, docs = []) => {
  *   FINISHING    the exploded parts list, plus the poles, which are not on it — they came off the
  *                shop order and are counted separately.
  */
-export function packLinesOf(job, { poleRows = null } = {}) {
+export function packLinesOf(job, { poleRows = null, isFeeCode = null } = {}) {
     if (!job) return [];
     const out = [];
     if (isQuickShip(job)) {
         (job.lines || []).forEach((l, i) => {
-            if (lineIsFeeish(l)) return;   // ← the defect this module closes
+            if (soLineIsFee(job, l, i, isFeeCode)) return;   // ← the defect this module closes
             out.push({
-                key: `L${i}`, erp: l.erp || '', aliasErp: l.aliasErp || '',
+                // The piece in the box: the FINISHED code for a to-be-finished line (soLineCodeOf, 2026-09-27).
+                key: `L${i}`, erp: soLineCodeOf(l) || l.erp || '', aliasErp: l.aliasErp || '',
                 name: `${l.name || 'Item'}${l.kit ? ` · ${l.kit}` : ''}`, qty: Number(l.qty) || 1,
                 // The unit rides to the pack bench (Stuart 2026-09-16) — these rows are rebuilt to a
                 // fixed shape, so an unlisted field is silently dropped rather than passed through.
