@@ -11,7 +11,7 @@ import {
     poleDetailsOf, stockedPoleDetail, formatPoleLength, isOwnCustomPole, ownPoleCodesOf,
 } from '../src/components/Shared/pickLines.js';
 import { poleLengthOf } from '../src/components/Shared/poleCut.js';
-import { soLineCodeOf, soLineIsShelfPick } from '../src/components/Shared/pickLines.js';
+import { soLineCodeOf, soLineIsShelfPick, unpackedSiblingsOf } from '../src/components/Shared/pickLines.js';
 
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -181,5 +181,16 @@ eq('a stocked line is its own code', soLineCodeOf({ erp: 'httendstop' }), 'HTTEN
 ok('a stocked line is a shelf pick', soLineIsShelfPick({}, { erp: 'X' }, 0));
 ok('a to-be-finished line arrives from a floor', !soLineIsShelfPick({}, { erp: 'X', toBeFinished: true }, 0));
 ok('…unless the row start found it in stock (oeGen STOCK)', soLineIsShelfPick({ oeGen: { 2: { kind: 'STOCK' } } }, { erp: 'X', toBeFinished: true }, 2));
+// ── ONE ORDER SHIPS ONCE: a multi-finish CPQ order fulfils from its LAST pack (Stuart 2026-09-27) ──
+{
+    const a = { id: 'WO-SO1-P24', orderKey: 'SO1', orderType: 'sales', packStatus: 'Packed' };
+    const b = { id: 'WO-SO1-S03', orderKey: 'SO1', orderType: 'sales', packStatus: 'Pending' };
+    const old = { id: 'WO-SO1', orderKey: 'SO1', orderType: 'sales', status: 'Closed', closedFrom: '10.5' };
+    const other = { id: 'WO-SO2', orderKey: 'SO2', orderType: 'sales' };
+    eq('packing the first finish waits for the other', unpackedSiblingsOf(a, [a, b, old, other]).map(d => d.id), ['WO-SO1-S03']);
+    eq('packing the last one: nothing left to wait for → it fulfils', unpackedSiblingsOf(b, [a, { ...b, packStatus: 'Packed' }, old, other]).length, 0);
+    eq('a single-finish order has no siblings', unpackedSiblingsOf(other, [other]).length, 0);
+    eq('a retired or deleted document is never waited for', unpackedSiblingsOf(a, [a, old, { ...b, deleted: true }]).length, 0);
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -126,6 +126,20 @@ export const soLineCodeOf = (l) => {
 export const soLineIsShelfPick = (so, l, idx) => !lineIsTbf(l)
     || !!(so && so.oeGen && so.oeGen[idx] && so.oeGen[idx].kind === 'STOCK');
 
+// ── ONE ORDER SHIPS ONCE (Stuart 2026-09-27) ───────────────────────────────────────────────
+// A CPQ order split into several finishes (RTG's split, one pair per finish: WO-<key>-P24, WO-<key>-S03)
+// has several finishing documents, and packing ANY of them queued a NetSuite fulfilment of EVERY open line
+// of the sales order — the first pack shipped the whole order in NetSuite. The fulfilment waits for the LAST
+// of them: these are the order's other documents still to pack. Pure; `docs` is a fresh read of the
+// order's finishing documents (same orderKey). A closed, deleted or retired document is not waited for.
+export const unpackedSiblingsOf = (job, docs = []) => {
+    if (!job || !job.orderKey) return [];
+    const closed = (d) => d.deleted === true || [d.currentPhase, d.stepStatus, d.status].some(v => String(v || '') === 'Closed') || String(d.closedFrom || '') === '10.5';
+    return (docs || []).filter(d => d && d.id !== job.id && String(d.orderKey || '') === String(job.orderKey)
+        && (d.orderType || 'sales') === 'sales' && !closed(d)
+        && d.packStatus !== 'Packed' && d.packStatus !== 'Gathered');
+};
+
 /**
  * The lines to PACK, normalised to one shape: { key, erp, aliasErp, name, qty, isPole }.
  *

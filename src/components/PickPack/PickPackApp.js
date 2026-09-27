@@ -9,7 +9,7 @@ import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
-import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick } from '../Shared/pickLines';
+import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, unpackedSiblingsOf } from '../Shared/pickLines';
 import { fetchAvailabilityUnits, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
@@ -2437,7 +2437,18 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             try {
                 const soDoc = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || null);
                 const nsSoId = String((isQsOrder(job) ? (job.nsInternalId || job.soId) : (soDoc && soDoc.nsInternalId)) || '');
-                if (nsSoId && !job.nsFulfillQueued) {
+                // ONE ORDER SHIPS ONCE (Stuart 2026-09-27): a CPQ order split into several finishes queues its
+                // fulfilment from the LAST of its documents to pack — read fresh, after this one's Packed write.
+                let waitingOn = [];
+                if (nsSoId && !job.nsFulfillQueued && !isQsOrder(job) && job.orderKey) {
+                    const sib = await getDocs(query(collection(db, 'fin_workorders'), where('orderKey', '==', job.orderKey)));
+                    waitingOn = unpackedSiblingsOf(job, sib.docs.map(d => ({ id: d.id, ...d.data() })));
+                }
+                if (waitingOn.length) {
+                    await updateDoc(packDocOf(job), { nsFulfillDeferred: true, nsFulfillDeferredFor: waitingOn.map(d => d.id) });
+                    nsNote = `\n\n⏳ NetSuite fulfilment waits: ${waitingOn.length} other document${waitingOn.length === 1 ? '' : 's'} of this order ${waitingOn.length === 1 ? 'is' : 'are'} not packed yet (${waitingOn.map(packRef).join(', ')}). The last one packed queues the fulfilment for the whole order.`;
+                    writeLog(`Fulfilment deferred for ${packRef(job)} — waiting on ${waitingOn.map(packRef).join(', ')}`, 'packing');
+                } else if (nsSoId && !job.nsFulfillQueued) {
                     // S4 close-out 1 (Stuart-approved 2026-09-16): each fulfilled line carries the
                     // sales order line's OWN location — NetSuite refused the header-only transform
                     // with "Items list: Location". A shippable line with no location refuses the
@@ -2454,6 +2465,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     if (!isQsOrder(job) && soDoc && soDoc.id) writeBack.push({ collection: 'hq_sales_orders', docId: soDoc.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' });
                     await enqueueNsWrite({
                         kind: 'itemfulfillment',
+                        // One fulfilment per sales order in flight — two tablets packing an order's last two
+                        // documents at once must not queue it twice.
+                        dedupeKey: `if:${nsSoId}`,
                         label: `NS Fulfillment — ${packRef(job)} (${job.customerName || job.clientName || job.customer || ''})`,
                         sourceApp: 'WMS', createdBy: operator?.name || '',
                         targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${nsSoId}/!transform/itemFulfillment`,
