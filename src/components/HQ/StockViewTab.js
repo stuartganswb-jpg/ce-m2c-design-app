@@ -4773,7 +4773,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{c.code}</span>
                                                         <div style={{ fontSize: '0.75rem', color: 'var(--ink-soft)' }}>{c.name}</div>
                                                     </div>
-                                                    <div style={{ ...mono9, paddingTop: '3px', color: 'var(--ink)' }}>need {c.need}</div>
+                                                    <div style={{ ...mono9, paddingTop: '3px', color: 'var(--ink)' }} title={c.unitNote || ''}>need {c.need}{c.unitNote ? ` ft (${c.pieces} pcs)` : ''}</div>
                                                     <div style={{ ...mono9, paddingTop: '3px', color: c.short > 0 ? '#d9534f' : '#3a7d44' }}>
                                                         {c.noStockRecord ? 'no stock record' : c.soHeld > 0 ? `${c.have - c.soHeld} free + ${c.soHeld} held for this order` : `${c.have} avail`}{c.nsUnit ? ` (${c.nsUnit})` : ''}
                                                         {c.onOrder > 0 && <span style={{ color: 'var(--brass)' }}> · {c.onOrder} on ord</span>}

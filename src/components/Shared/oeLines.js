@@ -3,6 +3,7 @@
 // rules that decide "does this order start by itself" are node-tested (scripts/oeLines.test.mjs).
 
 import { backorderRecordOf } from './backorder.js';
+import { isPoleCategory } from './poleCut.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 
@@ -154,4 +155,26 @@ export const rowBackorderPatchOf = ({ so, jobs = [], startedLineIdxs = [], since
     const added = fresh.filter(r => !keptCodes.has(U(r.code)));
     if (!added.length && kept.length === existing.length) return null;
     return { lines: [...kept, ...added], added: added.map(r => `${r.qty} × ${r.code}`) };
+};
+
+// ── A ROD IS COUNTED IN FEET (Stuart 2026-09-27, SO60551's rows) ────────────────────────────────
+// NetSuite stocks H1-1R, H1-75R, H1-138WR-O, H1-2RCTAR… in FEET; a row line orders POLES (50 pieces at a
+// cut length). The plan compared 50 "pieces" with feet on the shelf, saw the units disagree and held every
+// pole row "Align before routing" — and aligning the item to FOOT would have made 50 mean 50 feet. The CPQ
+// split never checked a custom pole's rod at all (the shop cuts from rod stock). Here the pole's rod is read
+// in NetSuite's own unit: feet = pieces × the line's cut (feetPer from the breakdown, else cutLength ÷ 12) —
+// net length, cut waste not counted. Pure.
+// @returns null (not a pole, or NetSuite does not count it in feet) · { feet, feetPer, pieces, note } ·
+//          { error } when NetSuite counts feet but the line carries no cut to convert with.
+const FOOT_UNIT_RE = /^(FT|FT\.|FOOT|FEET|LF|LIN\.? ?FT|LINEAR ?F(OO|EE)T)$/i;
+export const isFootUnit = (u) => FOOT_UNIT_RE.test(String(u || '').trim());
+export const poleFeetOf = ({ line = {}, part = null, code = '', pieces = 0, nsUnit = '' } = {}) => {
+    if (!isFootUnit(nsUnit)) return null;
+    const ptype = String((part && ((part.manufacturingSpecs || {}).productType || part.productType)) || '');
+    if (!isPoleCategory(ptype)) return null;
+    const cut = Number(line && line.cutLength) || 0;
+    const feetPer = Number(line && line.feetPer) > 0 ? Number(line.feetPer) : (cut > 0 ? cut / 12 : 0);
+    if (!(feetPer > 0)) return { error: `NetSuite counts ${code || 'this rod'} in feet and this line carries no cut length — set the cut on the line, then retry` };
+    const feet = Math.round(Number(pieces) * feetPer * 100) / 100;
+    return { feet, feetPer, pieces: Number(pieces) || 0, note: `${Number(pieces) || 0} pcs × ${cut > 0 ? `${cut}"` : `${feetPer} ft`} = ${feet} ft (net, cut waste not counted)` };
 };

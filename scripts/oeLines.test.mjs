@@ -1,6 +1,6 @@
 // node scripts/oeLines.test.mjs — which Order Entry lines are covered, and which plans may run with
 // nobody looking (Stuart 2026-09-20: to-be-finished orders start from RTG by themselves).
-import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, autoRunnable, oeLineStateOf, oeJobBlocked, rowBackorderPatchOf } from '../src/components/Shared/oeLines.js';
+import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, autoRunnable, oeLineStateOf, oeJobBlocked, rowBackorderPatchOf, poleFeetOf, isFootUnit } from '../src/components/Shared/oeLines.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 const ok = (n, c) => { if (c) pass++; else { fail++; console.log(`✗ ${n}`); } };
@@ -85,5 +85,15 @@ eq('on the floor', oeLineStateOf({ coverage: { kind: 'WO', doc: { id: 'WO-A', st
     eq('a STOCK stamp covers the line — never raised twice', cov && cov.kind, 'STOCK');
     eq('…and reads as a shelf pick at SO Pack', oeLineStateOf({ coverage: cov }).key, 'STOCKED');
     eq('a document gathered into its order reads DONE', oeLineStateOf({ coverage: { kind: 'WO', doc: { id: 'W', status: 'Dispatched', packStatus: 'Gathered' } } }).key, 'DONE');
+}
+// A ROD IS COUNTED IN FEET (Stuart 2026-09-27): a pole line's rod is read in NetSuite's unit.
+{
+    const rod = { manufacturingSpecs: { productType: 'RODS' } };
+    eq('50 poles at 45" = 187.5 ft of rod', poleFeetOf({ line: { cutLength: 45 }, part: rod, pieces: 50, nsUnit: 'FOOT' }).feet, 187.5);
+    eq('the breakdown\'s feet-per wins over the cut', poleFeetOf({ line: { cutLength: 45, feetPer: 4 }, part: rod, pieces: 50, nsUnit: 'FT' }).feet, 200);
+    ok('no cut on the line → a named hold, never a guess', /no cut length/.test(poleFeetOf({ line: {}, part: rod, code: 'H1-1R', pieces: 50, nsUnit: 'FOOT' }).error));
+    eq('counted in eaches → nothing to convert', poleFeetOf({ line: { cutLength: 45 }, part: rod, pieces: 50, nsUnit: 'EA' }), null);
+    eq('not a pole → nothing to convert', poleFeetOf({ line: { cutLength: 45 }, part: { manufacturingSpecs: { productType: 'FINIALS' } }, pieces: 50, nsUnit: 'FOOT' }), null);
+    ok('FOOT, FT and LF are feet; EA is not', isFootUnit('FOOT') && isFootUnit('ft') && isFootUnit('LF') && !isFootUnit('EA'));
 }
 console.log(`oeLines: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

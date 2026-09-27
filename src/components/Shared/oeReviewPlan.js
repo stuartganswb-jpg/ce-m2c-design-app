@@ -30,6 +30,7 @@
 //           against a work order — flagged, never silent.
 
 import { planFinishedRun, isAssemblyPart } from './finishedGoodsRun.js';
+import { poleFeetOf } from './oeLines.js';
 import { millBaseOf } from './finishRouting.js';
 import { SOURCING, sourcingOf } from './sourcing.js';
 import { isPoleCategory, poleLengthOf, sourcesForLength, targetCodeFor, poleOptionsWithStock } from './poleCut.js';
@@ -310,17 +311,22 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         p.plan.lines.forEach(l => {
             const code = String(l.legacyErpId || '').toUpperCase();
             if (!code) return;
-            const need = Number(l.quantity) || 0;
+            const nsUnit = (avail[code] || {}).unit;
+            // A POLE'S ROD IN NETSUITE'S UNIT (2026-09-27, oeLines.poleFeetOf): pieces × cut → feet.
+            const pf = (!p.buy && !p.stock) ? poleFeetOf({ line: p.line || {}, part: p.part, code, pieces: Number(l.quantity) || 0, nsUnit }) : null;
+            const inFeet = !!(pf && !pf.error);
+            const need = inFeet ? pf.feet : (Number(l.quantity) || 0);
             const soHeld = heldFor(soNs, code);
             const have = soHeld + Math.max(0, Number(remaining[code]) || 0);
             const short = Math.max(0, need - have);
             claim(soNs, code, need);
             const compPart = partOf(code);
-            const nsUnit = (avail[code] || {}).unit;
             const appUnit = appUnitOf(compPart);
-            const mismatch = unitsDisagree(nsUnit, appUnit);
+            // Converted, the numbers ARE NetSuite's unit — nothing disagrees. The app item is never relabelled.
+            const mismatch = inFeet ? false : unitsDisagree(nsUnit, appUnit);
             const comp = {
                 code, name: l.partName || compPart?.itemName || '', need, have, short, soHeld,
+                ...(inFeet ? { unitNote: pf.note, pieces: pf.pieces, feetPer: pf.feetPer } : {}),
                 onOrder: (avail[code] || {}).onOrder || 0,
                 nsUnit, appUnit, unitMismatch: mismatch, partId: compPart?.id || null,
                 noStockRecord: !(code in avail),
@@ -352,7 +358,10 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
             }
             // A unit disagreement makes every number on this row unreliable — hold its actions
             // until the operator aligns or overrides. NONE-action rows still show the flag.
-            if (mismatch || (!unitsKnown && short > 0)) {
+            if (pf && pf.error) {
+                comp.held = true;
+                comp.holdReason = pf.error;
+            } else if (mismatch || (!unitsKnown && short > 0)) {
                 comp.held = true;
                 comp.holdReason = mismatch
                     ? `NetSuite counts ${code} in ${nsUnit} — the app has ${appUnit}. Align before routing.`
