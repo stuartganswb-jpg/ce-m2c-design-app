@@ -110,8 +110,12 @@ export const routeShort = (part, code, qty, reason) => {
     if (!part) return { kind: 'HOLD', code, qty, reason, holdReason: `${code} is not in the Master Library — sync it first` };
     const specs = part.manufacturingSpecs || {};
     const vendorName = String(specs.vendorName || '').trim();
-    if (isAssemblyPart(part)) return { kind: 'SHOP', code, qty, reason };
     const src = sourcingOf(specs);
+    // A BOUGHT RAW IS BOUGHT, however NetSuite models it (Stuart 2026-09-27): a casting like H1-138CC
+    // is a NetSuite ASSEMBLY (its BOM is the steel it is cut from) and is outsourced to CAC — the
+    // assembly test used to win and send it to the shop to be milled. Sourcing decides first.
+    if (src === SOURCING.OUT && vendorName) return { kind: 'PO', code, qty, reason, vendorName, part };
+    if (isAssemblyPart(part)) return { kind: 'SHOP', code, qty, reason };
     if (src === SOURCING.BOTH) return { kind: 'ASK', code, qty, reason, vendorName, chosen: 'SHOP' };
     if (src === SOURCING.OUT) {
         return vendorName

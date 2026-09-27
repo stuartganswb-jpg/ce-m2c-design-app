@@ -89,9 +89,17 @@ export const loadOeLinks = async (soIds = [], { all = false } = {}) => {
 //   ASK     — the item is flagged BOTH (make and buy): a person answers, always (Brief E, S4).
 //   BUY     — we buy the raw: through the review gate as a buy.
 //   MAKE    — in-house manufacture: through the review gate.
-export const oeDoorOf = (part, finish) => {
+export const oeDoorOf = (part, finish, inventory = []) => {
     if (isOutsourcedFinishCode(finish || '')) return 'PLATING';
+    // A FINISH APPLIED HERE IS MADE HERE (Stuart 2026-09-27, Base Front 2's H1-138CC/P06): the base
+    // casting is BOUGHT from CAC, and the bought door sent the whole line out as material — a PO for
+    // 50 raw, the finish dropped from the plan — while 62 × H1-138CC/P sat in 138R-010. When the raw
+    // has a /P record the line's work is the finishing route: pull the /P shelf, convert from the raw
+    // behind it, and only the RAW SHORTFALL is sourced by the part's own sourcing (the review's
+    // routeShort: a PO for a bought raw, ASK for BOTH, the shop for in-house).
     const specs = (part && part.manufacturingSpecs) || {};
+    const raw = U(part && (part.legacyErpId || part.itemId));
+    if (String(finish || '').trim() && raw && (inventory || []).some(p => U(p && p.legacyErpId) === `${raw}/P`)) return 'MAKE';
     if (sourcingOf(specs) === SOURCING.BOTH) return 'ASK';
     const vendorName = String(specs.vendorName || '').trim();
     if ((specs.isInHouse === false && !!vendorName) || orderRouteFor(specs).route === ORDER_ROUTE.BUY) return 'BUY';
@@ -358,7 +366,7 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = 
             if (!part) { named([`${erp} is not in the Master Library (real codes, customer codes and aliases searched)`]); continue; }
             if (!fin) { named(['no finish recorded on this line']); continue; }
             if (!(Number(line.qty) > 0)) { named(['the line has no quantity']); continue; }
-            const door = oeDoorOf(part, fin);
+            const door = oeDoorOf(part, fin, inventory);
             if (door === 'PLATING') {
                 await issueOePlatedLine({ so, line, lineIdx, brand, user, inventory, auto: true, log });
                 ran++;
