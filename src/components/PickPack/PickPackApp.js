@@ -9,8 +9,8 @@ import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
-import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
-import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
+import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick } from '../Shared/pickLines';
+import { fetchAvailabilityUnits, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
@@ -1449,7 +1449,19 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // for a pick nobody should do. Both of those now clear the pick fields as well; this guard is
     // what heals the ones already sitting in the queue.
     const isOpenPick = (j) => j.pickStatus === 'Pending'
-        && j.currentPhase !== 'Closed' && j.stepStatus !== 'Closed' && j.status !== 'Closed';
+        && j.currentPhase !== 'Closed' && j.stepStatus !== 'Closed' && j.status !== 'Closed'
+        && !noPickNeeded(j);
+    // NOTHING TO PICK AND NOTHING TO FINISH (Stuart 2026-09-27): a plated custom pole's document — the pole
+    // goes shop → plater, and its pieces reach the order at plating put-away (an Order Entry order) or the
+    // pack document (a CPQ order). It has no pick and no staging, so it never waits in the pick queue.
+    function noPickNeeded(j) { return !!j && j.pickOnly === true && j.finishingRequired === false && pickableLines(j).length === 0; }
+    // THE ORDER ENTRY ORDER A FLOOR DOCUMENT BELONGS TO, or null. An Order Entry order (tab 7, a 10.5 row)
+    // packs ONCE, on its SO Pack card: its floor documents gather into it, they never pack and fulfil alone.
+    function oeOrderOfDoc(j) {
+        if (!j || isQsOrder(j) || j.orderType === 'stock') return null;
+        const so = soIndex[String(j.soAppId || '')] || soIndex[String(j.salesOrderId || '')] || soIndex[String(j.orderKey || '')] || null;
+        return so && isQsOrder(so) ? so : null;
+    }
 
     // ── REOPENED — CONFIRM PICK STATE (S2 hand-off, 2026-09-10) ──────────────────────────────
     // RTG's "⟲ Reopen a bulk close" restores a finishing doc from its own stamps and, where the
@@ -1523,7 +1535,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         // Custom orders AND stock builds (Stuart 2026-07-20): a finished stock build lands here
         // too — its "packing" is binning the finished goods back to the shelf, and this is the
         // only queue that keeps a completed WO visible after it leaves the finishing floor.
-        ...finAll.filter(j => j.currentPhase === 'Complete' && j.packStatus !== 'Packed')
+        ...finAll.filter(j => j.currentPhase === 'Complete' && j.packStatus !== 'Packed' && j.packStatus !== 'Gathered' && !(noPickNeeded(j) && oeOrderOfDoc(j)))
     ].sort((a, b) => (a.packedReadyAt || a.completedAt || a.createdAt || 0) - (b.packedReadyAt || b.completedAt || b.createdAt || 0));
     const packedRecent = [...finAll, ...quickShipOrders].filter(j => j.packStatus === 'Packed').sort((a, b) => (b.packedAt || 0) - (a.packedAt || 0)).slice(0, 6);
 
@@ -1578,36 +1590,43 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     //   ORDERED    the line. Compared against NetSuite quantities via `nsQty` when E stamps it —
     //              until then a per-foot rod line reads pieces here and feet there, so the compare
     //              is deliberately NOT made against NetSuite yet.
-    //   ON HAND    `available` from Shared/oeReviewPlan.fetchAvailabilityUnits — NetSuite's
-    //              quantityavailable, i.e. on hand NET OF COMMITTED, unit-aware. Free stock: what
-    //              is on the shelf and promised to nobody. NOT raw on-hand, or an order would be
-    //              told it can have pieces another order already owns.
+    //   ON HAND    THE ORDER'S VIEW (Stuart 2026-09-27): free stock (NetSuite's quantityavailable,
+    //              unit-aware — on the shelf and promised to nobody) PLUS what NetSuite already holds
+    //              for THIS order (Shared/oeReviewPlan.fetchOrderCommitted, TransactionLine
+    //              .quantitycommitted). Free alone read an order's own committed stock as short.
+    //              Never raw on-hand, or an order would be told it can have pieces another owns.
     //   PRODUCTION open work orders and un-received purchase-order quantity STAMPED FOR THIS ORDER
     //              (soAppId) — the app's own claim on inbound stock, which Stuart chose over
     //              NetSuite's allocation ("build it for what the parts were ordered for, it will be
-    //              better than netsuites"). The app cannot read NetSuite's per-SO commitment at
-    //              all: the only commitment figure anywhere is an item-level aggregate.
+    //              better than netsuites"). (NetSuite's per-SO commitment IS readable since
+    //              2026-09-27 — it feeds ON HAND above, not this column.)
     //   COMMITTED pieces physically GATHERED for this order — the committed-bin allocation. Zero
     //              until that flow lands; it is the number that turns a card green.
     //
     // COVERAGE, and why green is not "committed" alone yet: a line is READY when what is gathered
     // plus what is free on the shelf meets the order. Free stock is genuinely available, so an
-    // order whose parts are all sitting in stock IS ready to pack. As the committed-bin flow fills
-    // `committedQty`, the same test tightens on its own — gathered pieces stop being counted twice
-    // because `available` already excludes what NetSuite has committed.
+    // order whose parts are all sitting in stock IS ready to pack. Gathered pieces are still committed
+    // in NetSuite, so the order's own stock is the LARGER of gathered and NetSuite's hold — never both.
     const [soStats, setSoStats] = useState({}); // orderId → { codes: {CODE: {avail, unit, prod}}, at, error }
     const soStatsRef = useRef(new Set());
-    const lineCodeOf = (l) => String((l && (l.erp || l.code)) || '').trim().toUpperCase();
+    // The code the warehouse handles for the line — the FINISHED piece for a to-be-finished line (Shared/pickLines).
+    const lineCodeOf = (l) => soLineCodeOf(l);
     const loadSoStats = async (orders) => {
         const todo = (orders || []).filter(o => o && o.id && !soStatsRef.current.has(o.id));
         if (!todo.length) return;
         todo.forEach(o => soStatsRef.current.add(o.id));
         const codes = [...new Set(todo.flatMap(o => (o.lines || []).map(lineCodeOf).filter(Boolean)))];
         const loc = BRAND_NETSUITE_MAP[activeBrand]?.location || '17';
-        let availMap = {}, availErr = null;
+        let availMap = {}, availErr = null, held = {};
         if (codes.length) {
             try { const r = await fetchAvailabilityUnits(codes, loc); availMap = r.map || {}; }
             catch (e) { availErr = e.message || String(e); }
+            // What NetSuite holds for each of these orders — the order's own stock (2026-09-27).
+            const nsIds = [...new Set(todo.map(o => o.nsInternalId).filter(Boolean).map(String))];
+            if (nsIds.length) {
+                try { held = await fetchOrderCommitted(nsIds, codes); }
+                catch (e) { availErr = availErr || `what NetSuite holds for the order could not be read (${e.message || e}) — on hand shows free stock only`; }
+            }
         }
         const next = {};
         for (const o of todo) {
@@ -1639,34 +1658,43 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 const c = lineCodeOf(l);
                 if (!c || codeMap[c]) return;
                 const a = availMap[c] || null;
-                codeMap[c] = { avail: a ? Number(a.available) || 0 : null, unit: a ? a.unit : null, prod: prod[c] || 0 };
+                codeMap[c] = { avail: a ? Number(a.available) || 0 : null, held: orderHeldOf(held, o.nsInternalId, c), unit: a ? a.unit : null, prod: prod[c] || 0 };
             });
             next[o.id] = { codes: codeMap, at: Date.now(), error: availErr };
         }
         setSoStats(prev => ({ ...prev, ...next }));
     };
-    // One line's four numbers and the word that follows from them.
-    const lineStats = (o, l) => {
+    // One line's four numbers and the word that follows from them. A to-be-finished line that is not a shelf
+    // pick ARRIVES from a floor: it is ready when its pieces are gathered into the order, never from shelf stock
+    // of its code (Stuart 2026-09-27 — it used to read the base code's stock and could turn green unmade).
+    const lineStats = (o, l, idx) => {
         const c = lineCodeOf(l);
+        if (!soLineIsShelfPick(o, l, idx)) {
+            const ordered = Number(l.qty) || 0;
+            const committed = committedQtyOf(o, c);
+            return { code: c, ordered, committed, avail: null, held: 0, prod: 0, covered: committed, state: committed >= ordered && ordered > 0 ? 'GATHERED' : 'FROM THE FLOOR', fromFloor: true };
+        }
         const st = (soStats[o.id] && soStats[o.id].codes[c]) || null;
         const ordered = Number(l.qty) || 0;
         const committed = committedQtyOf(o, c);
-        const avail = st && st.avail != null ? st.avail : null;
+        const free = st && st.avail != null ? st.avail : null;
+        const held = st ? (Number(st.held) || 0) : 0;
+        const avail = free != null ? Math.max(0, free) + held : null;     // the order's view: free + held for it
         const prod = st ? st.prod : 0;
-        const covered = committed + (avail != null ? Math.max(0, avail) : 0);
+        const covered = Math.max(committed, held) + (free != null ? Math.max(0, free) : 0);
         const state = committed >= ordered && ordered > 0 ? 'GATHERED'
             : covered >= ordered && ordered > 0 ? 'READY'
                 : (covered + prod) >= ordered && ordered > 0 ? 'IN PRODUCTION'
                     : avail == null ? 'UNKNOWN' : 'SHORT';
-        return { code: c, ordered, committed, avail, prod, covered, state };
+        return { code: c, ordered, committed, avail, held, prod, covered, state };
     };
     // An order is ready when every REAL line is. A to-be-finished line arrives from a floor and is
     // never a shelf pull, so it answers to production, not to stock.
     const orderReady = (o) => {
-        const lines = (o.lines || []).filter(l => lineCodeOf(l));
+        const lines = (o.lines || []).map((l, i) => ({ l, i })).filter(x => lineCodeOf(x.l));
         if (!lines.length) return false;
         if (!soStats[o.id]) return false;
-        return lines.every(l => { const st = lineStats(o, l); return st.state === 'GATHERED' || st.state === 'READY'; });
+        return lines.every(x => { const st = lineStats(o, x.l, x.i); return st.state === 'GATHERED' || st.state === 'READY'; });
     };
 
     // ── GATHERING PIECES INTO AN ORDER'S COMMITTED BIN ───────────────────────────────────────
@@ -1737,7 +1765,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return quickShipOrders
             .filter(o => soOpenFor(o) && o.packStatus !== 'Packed')
             .map(o => {
-                const line = (o.lines || []).find(l => String(l.erp || '').trim().toUpperCase() === c);
+                const line = (o.lines || []).find(l => soLineCodeOf(l) === c);
                 if (!line) return null;
                 return {
                     orderId: o.id, ref: o.soId || o.id,
@@ -1766,7 +1794,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         for (const a of plan.allocations) {
             const order = quickShipOrders.find(o => o.id === a.orderId);
             if (!order) continue;
-            const oline = (order.lines || []).find(l => String(l.erp || '').trim().toUpperCase() === c);
+            const oline = (order.lines || []).find(l => soLineCodeOf(l) === c);
             const done = await commitToOrder(order, { code: c, qty: a.qty, ordered: Number(oline && oline.qty) || 0 });
             if (done) taken += a.qty;   // a refusal or a cancelled bin prompt leaves those pieces for stock
         }
@@ -2218,6 +2246,47 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { alert('Could not re-queue: ' + (e.message || e)); }
     };
 
+    const gatherDocIntoOrder = async (job, order) => {
+        const U = (v) => String(v || '').trim().toUpperCase();
+        let idxs = [...new Set([...(Array.isArray(job.soLineIdxs) ? job.soLineIdxs : []), ...(job.partsList || []).map(l => l && l.soLineIdx)]
+            .filter(i => Number.isInteger(i) && i >= 0))];
+        // A document from the per-line route (before the row pairs, 2026-09-23) records its line on the RTG
+        // record only; failing that, the line with its item and finish.
+        if (!idxs.length) {
+            try {
+                const h = await getDoc(doc(db, 'hq_work_orders', job.id));
+                const hd = h.exists() ? h.data() : {};
+                idxs = Number.isInteger(hd.soLineIdx) ? [hd.soLineIdx] : (Array.isArray(hd.soLineIdxs) ? hd.soLineIdxs.filter(i => Number.isInteger(i)) : []);
+            } catch (e) { /* the item match below */ }
+        }
+        if (!idxs.length) {
+            const item = U(job.rootItem || job.stockErpId || job.partErpId), fin = U(job.recipe);
+            idxs = (order.lines || []).map((l, i) => ({ l, i })).filter(x => item && U(x.l.erp) === item && (!fin || U(x.l.finishCode) === fin)).map(x => x.i);
+        }
+        const lines = idxs.map(i => ({ i, l: (order.lines || [])[i] })).filter(x => x.l && lineCodeOf(x.l));
+        if (!lines.length) return alert(`${packRef(job)} names no line of ${packRef(order)}, so it cannot be gathered into it.\n\nNothing was changed — tell RTG which lines it carries.`);
+        const want = lines.map(x => { const code = lineCodeOf(x.l); const qty = Number(x.l.qty) || 0; return { code, qty, add: Math.max(0, qty - committedQtyOf(order, code)) }; });
+        if (!window.confirm(`Gather ${packRef(job)} into ${packRef(order)}?\n\n${want.map(w => `   ${w.add} × ${w.code}${w.add < w.qty ? ` (${w.qty - w.add} already gathered)` : ''}`).join('\n')}\n\nThe pieces go into the order's committed bin. The order is packed and shipped from SO Pack once every line is there — nothing is sent to NetSuite here.`)) return;
+        packCompletingRef.current = true;
+        let ord = order, bin = committedBinOf(order) || '';
+        try {
+            for (const w of want) {
+                if (!w.add) continue;
+                const plan = await commitToOrder(ord, { code: w.code, qty: w.add, ordered: w.qty, bin: bin || undefined });
+                if (!plan) throw new Error(`${w.code} was not gathered — the document stays here; nothing after it was changed`);
+                bin = plan.bin;
+                ord = { ...ord, committedBin: plan.bin, committedQty: { ...(ord.committedQty || {}), [plan.code]: plan.total } };
+            }
+            const stamp = { packStatus: 'Gathered', gatheredAt: Date.now(), gatheredBy: operator?.name || '', gatheredInto: order.id, gatheredBin: bin || null };
+            await updateDoc(doc(db, 'fin_workorders', job.id), stamp);
+            await updateDoc(doc(db, 'hq_work_orders', job.id), { floorPhase: 'Complete', ...stamp }).catch(() => { /* a document with no RTG record of the same id */ });
+            releaseClaim(job, 'pack');
+            writeLog(`Gathered ${packRef(job)} into ${packRef(order)}${bin ? ` (bin ${bin})` : ''}: ${want.map(w => `${w.add}×${w.code}`).join(', ')} — packs and ships from SO Pack.`, 'packing');
+            setPackOrderId(null);
+            alert(`📦 ${packRef(job)} gathered into ${packRef(order)}${bin ? ` — bin ${bin}` : ''}.\n\nPack and ship it from SO Pack when the order is complete.`);
+        } catch (e) { alert('Gather stopped: ' + (e.message || e)); }
+        finally { packCompletingRef.current = false; }
+    };
     const completePacking = async (job) => {
         if (packCompletingRef.current) return;
         if (job.packStatus === 'Packed') return alert('This order is already packed.');
@@ -2234,6 +2303,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const c = claimOf(job, 'pack');
             return alert(c ? `${c.by} ${t('is packing this')} — ${t('since')} ${claimSince(c)}. Ask them, or have an admin release it.` : 'Press START PACKING first — this order is not yours yet.');
         }
+        // AN ORDER ENTRY FLOOR DOCUMENT GATHERS INTO ITS ORDER (Stuart 2026-09-27). Packed here it queued a
+        // NetSuite fulfilment of EVERY open line of the sales order — one row document of SO60551 would have
+        // shipped the whole display. Its pieces go into the order's committed bin; the SO Pack card packs and
+        // fulfils the order ONCE, when every line is there.
+        { const oeOrder = oeOrderOfDoc(job); if (oeOrder) return gatherDocIntoOrder(job, oeOrder); }
         const isStockPutaway = job.orderType === 'stock';
         if (!(job.packPhotos || []).length && !isStockPutaway) return alert('A photo of the packaged parts is required — tap 📷 Add Photo first.');
         let bin = normalizeBin(putawayBin);
@@ -3903,7 +3977,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 const soId = line.soAppId || null;
                 const forOrder = soId ? quickShipOrders.find(o => o.id === soId || String(o.soId || '') === String(soId)) : null;
                 if (forOrder) {
-                    const oline = (forOrder.lines || []).find(l => String(l.erp || '').toUpperCase() === String(target).toUpperCase());
+                    const oline = (forOrder.lines || []).find(l => soLineCodeOf(l) === String(target).toUpperCase());
                     await commitToOrder(forOrder, { code: target, qty: got, ordered: Number(oline && oline.qty) || 0 });
                 } else if (soId) {
                     writeLog(`⚠ Plating put-away (custom fab): ${target} carries sales order ${soId} but no matching order is open in this brand — left in ${bins.map(p => p.bin).join(', ')}.`, 'wms');
@@ -3999,7 +4073,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             const soId = line.soAppId || null;
             const forOrder = soId ? quickShipOrders.find(o => o.id === soId || String(o.soId || '') === String(soId)) : null;
             if (forOrder) {
-                const oline = (forOrder.lines || []).find(l => String(l.erp || '').toUpperCase() === String(target).toUpperCase());
+                const oline = (forOrder.lines || []).find(l => soLineCodeOf(l) === String(target).toUpperCase());
                 await commitToOrder(forOrder, { code: target, qty: got, ordered: Number(oline && oline.qty) || 0 });
             } else if (soId) {
                 writeLog(`⚠ Plating put-away: ${target} carries sales order ${soId} but no matching order is open in this brand — left in ${bins.map(p => p.bin).join(', ')} rather than guessed into a committed bin.`, 'wms');
@@ -4921,7 +4995,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div style={{ fontFamily: theme.mono, fontSize: '11px', color: routed ? '#3a7d44' : '#a33', letterSpacing: '.05em' }}>
                                             {routed ? `✓ ${sh.short} ROUTED TO PLATING` : `SHORT ${sh.short}`} — this order needs {sh.need} of {sh.code}, stock holds {sh.have}.
                                         </div>
-                                        {routed ? (
+                                        {Number(line.backorderedQty) > 0 && !routed ? (
+                                            // ON THE BACKORDER BOARD ALREADY (the CPQ split recorded it, 2026-09-27): the cover is ordered
+                                            // from the Snapshot — routing it to the plater here would order it twice.
+                                            <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.ink, marginTop: '8px' }}>{line.backorderedQty} of these are on the Snapshot's Backorder board — ordered from there, not here. Pick what is in the bin and confirm the SHORT quantity; the order waits for the rest.</div>
+                                        ) : routed ? (
                                             <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, marginTop: '8px' }}>Pick what is in the bin and confirm the SHORT quantity — the remainder is covered by the plating order.</div>
                                         ) : sh.plateable ? (
                                             <>
@@ -5317,17 +5395,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         // running — this SO's completed work MEETS it here; marking it moved with
                         // made-to-order lines outstanding ships a box missing its parts. The linked
                         // work orders are checked LIVE, not assumed.
-                        const tbf = (o.lines || []).filter(l => l.toBeFinished);
-                        if (tbf.length) {
-                            let openWos = [];
-                            try {
-                                const ws = await getDocs(query(collection(db, 'hq_work_orders'), where('soAppId', '==', o.id)));
-                                openWos = ws.docs.map(d => ({ id: d.id, ...d.data() }))
-                                    .filter(w => !w.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(w.status || '')))
-                                    .filter(w => w.floorPhase !== 'Complete' && String(w.status) !== 'Completed' && String(w.status) !== 'Built');
-                            } catch (e) { console.warn('TBF production check failed', e); }
-                            if (openWos.length && !window.confirm(`⏳ SO ${o.soId || o.id} has ${tbf.length} TO-BE-FINISHED line(s) and ${openWos.length} work order(s) STILL IN PRODUCTION:\n\n${openWos.slice(0, 6).map(w => `• ${w.nsWoTran || w.woDisplayId || w.id} — ${w.rootItem || ''} (${(w.awaitingConvert && 'awaiting convert') || (w.awaitingComponents && !w.componentsDone && 'awaiting milling') || w.floorPhase || w.status})`).join('\n')}${openWos.length > 6 ? `\n…and ${openWos.length - 6} more` : ''}\n\nPACK & HOLD until every part arrives is the model. Mark it ${status} anyway?`)) return;
-                        }
+                        // WHAT HAS ARRIVED IS WHAT IS GATHERED (Stuart 2026-09-27): a to-be-finished line is in the box
+                        // when its pieces are in the order's committed bin — the floor documents gather them there
+                        // (Packaging Prep, plating put-away). A work order's live phase never said that: a pick-only
+                        // or gathered document never reads Complete, so this warned on every order.
+                        const waiting = (o.lines || []).map((l, i) => ({ l, i }))
+                            .filter(x => lineCodeOf(x.l) && !soLineIsShelfPick(o, x.l, x.i))
+                            .map(x => ({ code: lineCodeOf(x.l), qty: Number(x.l.qty) || 0, have: committedQtyOf(o, lineCodeOf(x.l)) }))
+                            .filter(x => x.have < x.qty);
+                        if (waiting.length && !window.confirm(`⏳ SO ${o.soId || o.id} has ${waiting.length} to-be-finished line(s) NOT YET GATHERED into the order:\n\n${waiting.slice(0, 8).map(w => `• ${w.code} — ${w.have} of ${w.qty} gathered`).join('\n')}${waiting.length > 8 ? `\n…and ${waiting.length - 8} more` : ''}\n\nPACK & HOLD until every part arrives is the model. Mark it ${status} anyway?`)) return;
                         if (status === 'Shipped' && o.packStatus !== 'Packed' && !window.confirm(`SO ${o.soId || o.id} has NOT been packed on the PACKING tab (piece-by-piece confirm + photo).\n\nShip anyway?`)) return;
                         try {
                             await updateDoc(doc(db, "hq_sales_orders", o.id), { status, pickStatus: status });
@@ -5444,11 +5520,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {/* A made-to-order line: the pieces ARRIVE from the finishing floor (in-house)
                                                     or the plater (outsourced) — do NOT pull the raw off the shelf for it
                                                     (its WO / plating demand carries the pull lines). */}
-                                                {l.toBeFinished && <div style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🎨 TO BE FINISHED · {l.finishCode || ''} — arrives from {l.finishOutsourced ? 'the plater (WMS Plating)' : 'the finishing floor'}, do not pull raw</div>}
+                                                {l.toBeFinished && (soLineIsShelfPick(o, l, i)
+                                                    ? <div style={{ color: '#3a7d44', fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>📦 {lineCodeOf(l)} IN STOCK — pick it from the shelf into this order</div>
+                                                    : <div style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🎨 TO BE FINISHED · {l.finishCode || ''} — {lineCodeOf(l)} arrives from {l.finishOutsourced ? 'the plater (WMS Plating)' : 'the finishing floor'}, do not pull raw</div>)}
                                             </td>
-                                            <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.toBeFinished ? theme.brass : (l.bin ? theme.ink : theme.inkSoft), borderBottom: `1px solid ${theme.paper2}` }}>{l.toBeFinished ? (l.finishOutsourced ? 'FROM PLATING' : 'FROM FINISHING') : (l.bin || 'UNASSIGNED')}</td>
+                                            <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.toBeFinished ? theme.brass : (l.bin ? theme.ink : theme.inkSoft), borderBottom: `1px solid ${theme.paper2}` }}>{l.toBeFinished && !soLineIsShelfPick(o, l, i) ? (l.finishOutsourced ? 'FROM PLATING' : 'FROM FINISHING') : (l.toBeFinished ? 'SHELF' : (l.bin || 'UNASSIGNED'))}</td>
                                             {(() => {
-                                                const st = lineStats(o, l);
+                                                const st = lineStats(o, l, i);
                                                 const num = (v, col) => <td style={{ padding: '9px 10px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: col || theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{v}</td>;
                                                 const tone = { GATHERED: '#2e7d32', READY: '#3a7d44', 'IN PRODUCTION': theme.brass, SHORT: '#c0392b', UNKNOWN: theme.inkSoft }[st.state];
                                                 return (<>
@@ -5457,7 +5535,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     {num(st.prod || '—', st.prod ? theme.brass : theme.inkSoft)}
                                                     {num(st.committed || '—', st.committed ? '#2e7d32' : theme.inkSoft)}
                                                     <td style={{ padding: '9px 12px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', color: tone, borderBottom: `1px solid ${theme.paper2}`, whiteSpace: 'nowrap' }}>
-                                                        {l.toBeFinished ? t('from the floor') : t(st.state)}
+                                                        {st.fromFloor ? (st.state === 'GATHERED' ? t('GATHERED') : t('from the floor')) : t(st.state)}
                                                         {st.unit && <span style={{ color: theme.inkSoft }}> · {st.unit}</span>}
                                                     </td>
                                                 </>);
@@ -5570,8 +5648,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     // "every line packed" says nothing about whether the right poles are in the box.
                     const needsPoleMatch = !!(packJob && packJob.hasCustomSibling && !packJob.packCustomMatchedAt && !packJob.packCustomMatchWaived);
                     const poleMatched = !needsPoleMatch || stagingScanMatches(packJob, packCustomScan);
-                    const boxesChosen = isStockJob || ((!lines.some(l => l.cat !== 'POLE') || !!String(packBoxSel.SMALL || '').trim()) && (!lines.some(l => l.cat === 'POLE') || !!String(packBoxSel.POLE || '').trim()));
-                    const canComplete = packJob && toPack.length === 0 && poleMatched && !poleAway && boxesChosen && (isStockJob ? !!putawayBin.trim() : photos.length > 0);
+                    // An Order Entry document GATHERS into its order here (gatherDocIntoOrder): the customer box, its
+                    // photo and its packaging are the SO Pack card's, when the whole order is packed.
+                    const gathersIntoOrder = !!oeOrderOfDoc(packJob);
+                    const boxesChosen = isStockJob || gathersIntoOrder || ((!lines.some(l => l.cat !== 'POLE') || !!String(packBoxSel.SMALL || '').trim()) && (!lines.some(l => l.cat === 'POLE') || !!String(packBoxSel.POLE || '').trim()));
+                    const canComplete = packJob && toPack.length === 0 && poleMatched && !poleAway && boxesChosen && (isStockJob ? !!putawayBin.trim() : (gathersIntoOrder || photos.length > 0));
                     const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
                     // A GREY BUTTON SAYS WHY (Stuart on WO-SO60169, Andrea 09-14: "doesn't let me hit the complete
                     // button"): the first unmet condition, in the order completePacking refuses them.
@@ -5579,7 +5660,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         if (!packJob || canComplete) return null;
                         if (toPack.length) return `${toPack.length} line${toPack.length === 1 ? '' : 's'} still on the TO PACK side`;
                         if (isStockJob && !putawayBin.trim()) return 'scan the put-away bin';
-                        if (!isStockJob && !photos.length) return 'take a photo of the packaged parts (📷 Add Photo)';
+                        if (!isStockJob && !gathersIntoOrder && !photos.length) return 'take a photo of the packaged parts (📷 Add Photo)';
                         if (!poleMatched) return 'scan the CUSTOM SHOP label on the poles (or waive it)';
                         if (poleAway) return packJob.customFabStatus === 'Sent to Plating' ? 'the poles are AT THE PLATER — receive and put them away first' : `custom parts are not ready (${packJob.customFabStatus || 'Pending'})`;
                         if (!boxesChosen) {
@@ -5794,7 +5875,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             </button>
                                         )}
                                         <button onClick={() => completePacking(packJob)} disabled={!canComplete} style={{ marginLeft: isQsOrder(packJob) ? 'auto' : '0', background: canComplete ? theme.ink : theme.paper2, color: canComplete ? '#fff' : theme.inkSoft, border: `1px solid ${canComplete ? theme.ink : theme.line}`, padding: '14px 26px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: canComplete ? 'pointer' : 'default' }}>
-                                            {isStockJob ? '✓ Put Away to Bin' : '✓ Complete Packing'}
+                                            {isStockJob ? '✓ Put Away to Bin' : (oeOrderOfDoc(packJob) ? `✓ Gather into ${packRef(oeOrderOfDoc(packJob))}` : '✓ Complete Packing')}
                                         </button>
                                     </div>
                                     {completeBlocker && (

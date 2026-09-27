@@ -78,4 +78,12 @@ eq('on the floor', oeLineStateOf({ coverage: { kind: 'WO', doc: { id: 'WO-A', st
     eq('the row started → its OE_ROW record goes', rowBackorderPatchOf({ so: { backorderLines: p1.lines }, jobs: [], startedLineIdxs: [7] }).lines.map(r => r.code), ['OTHER']);
     eq('nothing short and nothing started → no write', rowBackorderPatchOf({ so: { backorderLines: [] }, jobs: [{ stock: true, lineIdx: 1, components: [comp()] }] }), null);
 }
+// A PLATED PART FROM STOCK IS A SO PACK PICK; A GATHERED DOCUMENT IS DONE (2026-09-27)
+{
+    const so = { id: 'S', oeGen: { 4: { kind: 'STOCK', code: 'H1-1BF/EP2', qty: 50 } }, lines: [] };
+    const cov = oeCoverageOf({ so, line: { erp: 'H1-1BF', toBeFinished: true, finishCode: 'EP2' }, lineIdx: 4, any: true });
+    eq('a STOCK stamp covers the line — never raised twice', cov && cov.kind, 'STOCK');
+    eq('…and reads as a shelf pick at SO Pack', oeLineStateOf({ coverage: cov }).key, 'STOCKED');
+    eq('a document gathered into its order reads DONE', oeLineStateOf({ coverage: { kind: 'WO', doc: { id: 'W', status: 'Dispatched', packStatus: 'Gathered' } } }).key, 'DONE');
+}
 console.log(`oeLines: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

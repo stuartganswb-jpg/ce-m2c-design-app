@@ -52,6 +52,8 @@ export const oeCoverageOf = ({ so, line, lineIdx, wos = [], pos = [], demands = 
     const exact = best(wos.filter(w => Number.isInteger(w.soLineIdx) && w.soLineIdx === lineIdx && usable(w)));
     if (exact) return wrap('WO', exact);
     const gen = so && so.oeGen && so.oeGen[lineIdx];
+    // A plated part the row start found on the shelf: picked by the warehouse at SO Pack (2026-09-27).
+    if (gen && gen.kind === 'STOCK') return { kind: 'STOCK', doc: null, stamp: gen };
     if (gen && gen.kind === 'PLATING') {
         const live = demands.find(d => (gen.ids || []).includes(d.id)) || null;
         return { kind: 'PLATING', doc: live, stamp: gen };
@@ -107,7 +109,7 @@ export const autoRunnable = (job, { unitsKnown = true, heldKnown = true } = {}) 
         if (c.unitMismatch || c.held) { reasons.push(c.holdReason || `${c.code}: units disagree between NetSuite and the app`); return; }
         if (!(c.short > 0)) return;
         const acts = (c.actions || []);
-        if (acts.some(a => a.kind === 'BACKORDER')) { reasons.push(`${c.code}: ${c.short} short (have ${c.have} of ${c.need}) — on the Snapshot Backorder board; the row starts when it arrives`); return; }
+        if (acts.some(a => a.kind === 'BACKORDER')) { reasons.push(`${c.code}: ${c.short} short (have ${c.have} of ${c.need}) — on the Snapshot Backorder board; ▶ Start row picks it up once it arrives`); return; }
         const routine = acts.length > 0 && acts.every(a => a.kind === 'CONVERT' && (Number(a.rawHave) || 0) >= (Number(a.qty) || 0));
         if (!routine) reasons.push(`${c.code}: ${c.short} short (have ${c.have} of ${c.need}) — sourcing it is a decision`);
     });
@@ -119,10 +121,12 @@ export const autoRunnable = (job, { unitsKnown = true, heldKnown = true } = {}) 
 export const oeLineStateOf = ({ coverage, review = null }) => {
     if (coverage && coverage.dead) return { key: 'DEAD', text: `${coverage.doc ? coverage.doc.id : 'its work order'} was deleted or cancelled — NOT in production; restart it from the review`, tone: 'red' };
     if (!coverage) return review ? { key: 'REVIEW', text: `needs a decision — ${(review.reasons || []).join('; ')}`, tone: 'red' } : { key: 'NONE', text: 'not started', tone: 'red' };
+    if (coverage.kind === 'STOCK') return { key: 'STOCKED', text: `${(coverage.stamp && coverage.stamp.code) || 'plated part'} from stock — picked by the warehouse at SO Pack`, tone: 'grey' };
     if (coverage.kind === 'PLATING') return coverage.doc ? { key: 'PLATING', text: `plating demand ${coverage.doc.woNum || ''} open — WMS Plating`, tone: 'brass' } : { key: 'PLATING_SENT', text: `plating issued${coverage.stamp && coverage.stamp.ref ? ` (${coverage.stamp.ref})` : ''} — with the plater or received`, tone: 'green' };
     if (coverage.kind === 'PO') return { key: 'PO', text: `on purchase order ${coverage.doc.poId || coverage.doc.id}`, tone: 'brass' };
     const w = coverage.doc || {};
     const st = String(w.status || '');
+    if (w.packStatus === 'Gathered') return { key: 'DONE', text: `${w.id} — gathered into the order at SO Pack`, tone: 'green' };
     if (/complete|done|closed/i.test(st)) return { key: 'DONE', text: `${w.id} — ${st}`, tone: 'green' };
     if (st === 'Dispatched') return { key: 'FLOOR', text: `${w.id} — on the floor`, tone: 'green' };
     const waits = [w.awaitingNsWo && 'NetSuite work-order #', w.awaitingConvert && 'phosphate convert', w.awaitingComponents && 'component work orders', w.awaitingReceipt && 'material receipt', w.awaitingRodCut && 'rod cut'].filter(Boolean);

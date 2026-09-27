@@ -104,6 +104,28 @@ export const isOwnCustomPole = (job, line) => {
     return codes.includes(c) || codes.includes(c.split('/')[0]);
 };
 
+// ── THE CODE THE WAREHOUSE HANDLES FOR A SALES-ORDER LINE (Stuart 2026-09-27) ────────────────
+// An Order Entry line carries the BASE item with its finish beside it (Shared/displayRelease.rowLineErpOf),
+// but what reaches the order's box for a to-be-finished line is the FINISHED piece: H1-1R/EP2 back from the
+// plater, H1-138CC/P06 off the finishing floor, H1-1BF/EP2 off the shelf. Every SO Pack reader — the line's
+// stock, what is gathered for it, the arrival alert, the plating put-away — matches the line by this code.
+// Matched by the base code, a row's plated pole never met its order at put-away, and a raw receipt of
+// H1-75SR was offered to an order that wanted H1-75SR/P24.
+const lineIsTbf = (l) => !!(l && (l.toBeFinished || /TO BE FINISHED/i.test(String(l.note || ''))));
+const lineFinishOf = (l) => up((l && (l.finishCode || (String(l.note || '').match(/TO BE FINISHED\s*·\s*([A-Z0-9-]+)/i) || [])[1])) || '');
+export const soLineCodeOf = (l) => {
+    const erp = up(l && (l.erp || l.code));
+    if (!erp || !lineIsTbf(l)) return erp;
+    const fin = lineFinishOf(l);
+    if (!fin) return erp;
+    return erp.endsWith(`/${fin}`) ? erp : `${erp}/${fin}`;
+};
+// A line the warehouse PICKS OFF THE SHELF for the order: a stocked line, or a plated to-be-finished line the
+// row start found in stock (the sales order's oeGen[idx] stamp, kind STOCK — Shared/oeGenerate). Every other
+// to-be-finished line ARRIVES from a floor and is ready only once it is gathered into the order.
+export const soLineIsShelfPick = (so, l, idx) => !lineIsTbf(l)
+    || !!(so && so.oeGen && so.oeGen[idx] && so.oeGen[idx].kind === 'STOCK');
+
 /**
  * The lines to PACK, normalised to one shape: { key, erp, aliasErp, name, qty, isPole }.
  *

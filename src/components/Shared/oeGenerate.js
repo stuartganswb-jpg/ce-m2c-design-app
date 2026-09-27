@@ -155,7 +155,8 @@ const stampLineGenerated = async (so, lineIdx, entry) => {
 // shop WOs), the WO doc with its gates, the NetSuite work order (FLOW2) with awaitingNsWo so the floor
 // waits for the number; PO drafts group per vendor+SO. `jobs` are the RUNNABLE ones (not blocked).
 // Returns { draftPos, woIds }. Throws only on a failure that stops the run partway.
-export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [], log = () => {}, auto = false }) => {
+export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inventory = [], log = () => {}, auto = false }) => {
+    let jobs = allJobs;
     const locationId = (BRAND_NETSUITE_MAP[brand] || {}).location || '17';
     const poBuckets = {}; // `${vendor}|${soId}` → { vendorName, so, lines: [] }
     // Work orders parked AWAITING RECEIPT in this run: { woId, soAppId, itemId }. The review raises
@@ -168,6 +169,20 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
     // START-NOW SPLIT (Stuart 2026-08-31): a bought TO-BE-FINISHED line with stock on hand may begin
     // finishing immediately for the reviewed portion — that portion gets its own WO (-NOW) and picks
     // from the shelf; the remainder's WO (-PO) waits for the material. PO lines are collected once.
+    // A PLATED PART FROM STOCK IS NOT FLOOR WORK (Stuart 2026-09-27: "this finial should have been committed
+    // from stock and pulled to the packing area for the order"). The line is recorded on the sales order as a
+    // SHELF PICK (oeGen kind STOCK) — the warehouse picks the finished code off the SO Pack card into the
+    // order's committed bin, exactly as it picks a stocked line. No work order, no pair, nothing to the plater.
+    // Only covered stock jobs arrive here: a short one is blocked (the Snapshot Backorder board).
+    let stockPicked = 0;
+    for (const job of jobs.filter(j => j.stock)) {
+        const code = U(job.finishedErp);
+        const g = floorGroupsOf([job], job.so)[0] || {};
+        await stampLineGenerated(job.so, job.lineIdx, { kind: 'STOCK', code, qty: Number(job.qty) || 0, at: Date.now(), by: user || '', auto: !!auto, rowKey: g.rowKey || '', finish: U(job.finish) });
+        log(`📦 ${job.qty} × ${code} (SO ${job.so.soId || job.so.id}${g.rowLabel ? ` · ${g.rowLabel}` : ''}) — in stock: picked by the warehouse at SO Pack into the order's bin. No work order.`, 'success');
+        stockPicked++;
+    }
+    jobs = jobs.filter(j => !j.stock);
     const expanded = [];
     for (const job of jobs) {
         const nowQty = job.buy && job.finish ? Math.max(0, Math.min(Number(job.startNow) || 0, job.startNowMax || 0, job.qty)) : 0;
@@ -183,7 +198,7 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
     // row and finish and each group is written as the pair the CPQ split writes — one finishing
     // document with every small part, one shop sibling with the custom pole(s), linked. A pair opens
     // NO NetSuite work order: the sales order is the NetSuite record, exactly as a CPQ pair.
-    let linesStarted = 0;
+    let linesStarted = stockPicked;
     const bookPurchase = (job) => { if (!bookedJobs.has(job.key)) { bookedJobs.add(job.key); (job.__poLines || []).forEach(pl => {
         const k = `${pl.vendorName}|${job.so.id}`;
         (poBuckets[k] = poBuckets[k] || { vendorName: pl.vendorName, so: job.so, lines: [] }).lines.push(pl);
@@ -206,16 +221,12 @@ export const executeOeJobs = async ({ jobs = [], brand, user = '', inventory = [
                 ? `🎨 ${erp} ×${qty}: START NOW from stock — finishing releases and picks from the shelf.`
                 : `🎨 ${erp} ×${qty}: TO BE FINISHED — the pair is created now; its pick waits until the material arrives.`, 'info');
         }
-        // A PLATED PART FROM STOCK is picked as its finished code — the split's pick line (pickOnly,
-        // finishOutsourced), never sprayed, never swapped for its raw.
-        const planLines = job.stock
-            ? (job.plan?.lines || []).map(pl => ({ ...pl, pickOnly: true, finishOutsourced: true }))
-            : (job.plan?.lines || []).map(pl => (U(pl.legacyErpId) === finishedErp || (job.buy && U(pl.legacyErpId) === erp))
-                ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
+        const planLines = (job.plan?.lines || []).map(pl => (U(pl.legacyErpId) === finishedErp || (job.buy && U(pl.legacyErpId) === erp))
+            ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
         // ONE POLE TEST (sweep 2026-09-01) — the CUSTOM PAIR rule: a mill code plus an applied finish
         // is made to order and is the shop's; a complete assembly (/BS, /N90) is finishing's.
         const isPole = isPoleCategory(U(specs.productType));
-        const custom = !job.stock && isPole && handlingForErp(finishedErp) === 'Custom';
+        const custom = isPole && handlingForErp(finishedErp) === 'Custom';
         // ── THE POLE CHOICE THE OPERATOR MADE (Q5) — a finishing-side pole cut or waited for ──
         let poleCut = null, backOrder = '';
         if (job.poleChoice) {
@@ -387,11 +398,14 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = 
             });
             // A ROW'S FINISH STARTS AS ONE PAIR (Stuart 2026-09-27): a ready line whose row + finish has a
             // line waiting on a person waits with it, so the review starts the group and ONE pair is written.
-            const { start, held } = holdSplitGroups({
-                ready: clean,
-                waiting: review.map(r => ({ line: (so.lines || [])[r.lineIdx], finish: r.finish, erp: r.erp })),
+            // A plated part from stock is a SO Pack pick, not part of any pair: it neither holds nor is held.
+            const stockIdx = new Set(plan.jobs.filter(j => j.stock).map(j => j.lineIdx));
+            const { start: floorStart, held } = holdSplitGroups({
+                ready: clean.filter(j => !j.stock),
+                waiting: review.filter(r => !stockIdx.has(r.lineIdx)).map(r => ({ line: (so.lines || [])[r.lineIdx], finish: r.finish, erp: r.erp })),
                 so,
             });
+            const start = [...clean.filter(j => j.stock), ...floorStart];
             held.forEach(({ job, withErp }) => review.push({
                 lineIdx: job.lineIdx, erp: U(job.lineErp), finish: job.finish,
                 reasons: [`ready — waits with ${withErp} so this ${U(job.finish)} starts as ONE pair`],
@@ -403,7 +417,7 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = 
             if (boPatch) {
                 try { await updateDoc(doc(db, 'hq_sales_orders', so.id), { backorderLines: boPatch.lines, backorderAt: Date.now() }); so.backorderLines = boPatch.lines; }
                 catch (e) { log(`⚠ SO ${so.soId || so.id}: the backorder record could not be written (${e.message || e}) — the Snapshot board will not list ${boPatch.added.join(', ')}.`, 'warn'); }
-                if (boPatch.added.length) log(`📋 SO ${so.soId || so.id}: ${boPatch.added.join(', ')} short → the Snapshot Backorder board; the row starts when it arrives.`, 'warn');
+                if (boPatch.added.length) log(`📋 SO ${so.soId || so.id}: ${boPatch.added.join(', ')} short → the Snapshot Backorder board; ▶ Start row picks it up once it arrives.`, 'warn');
             }
             if (start.length) {
                 const res = await executeOeJobs({ jobs: start, brand, user, inventory, log, auto: true });

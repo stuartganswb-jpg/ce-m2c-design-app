@@ -11,6 +11,7 @@ import {
     poleDetailsOf, stockedPoleDetail, formatPoleLength, isOwnCustomPole, ownPoleCodesOf,
 } from '../src/components/Shared/pickLines.js';
 import { poleLengthOf } from '../src/components/Shared/poleCut.js';
+import { soLineCodeOf, soLineIsShelfPick } from '../src/components/Shared/pickLines.js';
 
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -172,5 +173,13 @@ eq('a single-cutLength shop doc names its code', poleDetailsOf({ job: customDoc,
     eq('a document with NO custom sibling picks its pole as before (a stocked pole pulled from the shelf)', pickableLinesOf({ ...paired, hasCustomSibling: false, shopSiblingId: null }).map(l => l.legacyErpId), ['H1-75SR', 'H1-75SBP-S']);
     eq('a document written before the writer fix (pole still on its list) is cured by the reader alone', pickableLinesOf({ ...paired }).length, 1);
 }
+// ── THE CODE THE WAREHOUSE HANDLES FOR A SALES-ORDER LINE (Stuart 2026-09-27) ─────────────
+eq('a to-be-finished line answers to its FINISHED piece', soLineCodeOf({ erp: 'H1-1R', toBeFinished: true, finishCode: 'EP2' }), 'H1-1R/EP2');
+eq('…never composed twice', soLineCodeOf({ erp: 'H1-1R/EP2', toBeFinished: true, finishCode: 'EP2' }), 'H1-1R/EP2');
+eq('…a legacy line read from its note', soLineCodeOf({ erp: 'H1-75SR', note: 'TO BE FINISHED · P24' }), 'H1-75SR/P24');
+eq('a stocked line is its own code', soLineCodeOf({ erp: 'httendstop' }), 'HTTENDSTOP');
+ok('a stocked line is a shelf pick', soLineIsShelfPick({}, { erp: 'X' }, 0));
+ok('a to-be-finished line arrives from a floor', !soLineIsShelfPick({}, { erp: 'X', toBeFinished: true }, 0));
+ok('…unless the row start found it in stock (oeGen STOCK)', soLineIsShelfPick({ oeGen: { 2: { kind: 'STOCK' } } }, { erp: 'X', toBeFinished: true }, 2));
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

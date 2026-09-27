@@ -86,8 +86,9 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
     const fg = floorGroupsOf([rctar, { line: L('H1-2RCTEC', 'Back Base 3'), finish: 'P14' }], disp);
     eq('…and once decided, the two write ONE group', fg.length, 1);
 }
-// A PLATED ROW IS THE CPQ SPLIT'S SHAPE (Stuart 2026-09-27, SO60551 Base Front 3): the finial is a PICK line
-// from stock on a PICK-ONLY document (born Complete, never on the finishing floor); the pole is the shop's.
+// A PLATED GROUP NEVER ENTERS THE FINISHING FLOOR (Stuart 2026-09-27, SO60551 Base Front 3): the shape supports
+// the CPQ split's pick lines (pickOnly) on a PICK-ONLY document born Complete. (The Order Entry route itself now
+// sends a plated part in stock to the SO Pack card as a shelf pick — oeGen STOCK — so its pairs carry the pole only.)
 {
     const display = { id: 'SO-APP-3', soId: 'SO60551', displayRelease: true, customer: 'Fabricut' };
     const rod = { id: 'r1', legacyErpId: 'H1-1R', itemName: '1" Rod', manufacturingSpecs: { productType: 'RODS' } };
