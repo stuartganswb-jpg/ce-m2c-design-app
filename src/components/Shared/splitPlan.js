@@ -6,8 +6,10 @@
 //
 // A plated finish is NOT plating work: plated finished goods are commonly stocked. So a PLATED
 // small-parts line is decided by LIVE STOCK, after the sales order has posted (NetSuite has then
-// committed what it can — `available` is net of every commitment, Stuart's definition of
-// "committed"): covered → a pick line; genuinely short → a BACKORDER line the Snapshot covers
+// committed what it can). The caller passes the ORDER's view (Shared/oeReviewPlan.fetchStockForOrder,
+// 2026-09-27): free stock PLUS what NetSuite holds for this order — `available` alone is net of this
+// order's own commitment too, and read its committed stock as short (SO60551, 62 on hand / 50 held /
+// 12 available). Covered → a pick line; genuinely short → a BACKORDER line the Snapshot covers
 // with a WO or PO (never a plating demand from the split — A's Q4 design issues those together);
 // cannot be answered → a pick line that says so, never invented as a shortage. In-house lines
 // (painted here) are untouched: the floor paints them from the raw pull as today.
@@ -56,13 +58,18 @@ export function planSmallLines(lines = [], orderRecipe = '', stock = null, { sin
         const have = remaining[code];
         const covered = Math.min(qty, have);
         remaining[code] = have - covered;
-        if (covered > 0) out.pick.push({ ...l, qty: covered, quantity: covered, pickOnly: true, finishOutsourced: true, stockAvailable: have });
         const short = qty - covered;
+        // THE WHOLE LINE STAYS ON THE PICK (Stuart 2026-09-27). The pick line used to carry only what the shelf
+        // covered, so once the backordered pieces arrived (and the hold lifted) nothing picked them — the order
+        // packed short. The line keeps the full quantity; `backorderedQty` says how much of it is on the
+        // Snapshot Backorder board, so the WMS never sends that part to the plater a second time.
+        out.pick.push({ ...l, qty, quantity: qty, pickOnly: true, finishOutsourced: true, stockAvailable: have, ...(short > 0 ? { backorderedQty: short } : {}) });
         if (short > 0) out.backorder.push({ ...backorderRecordOf(l, { kind: 'plated', coverCodes: [code], readable: [code], available: { [code]: have }, onOrder: Number(map[code].onOrder) || 0, shortfall: short }, { since, lineIndex: i }), unit: map[code].unit || null });
     });
     out.summary = [
         out.inHouse.length ? `${out.inHouse.length} in-house line${out.inHouse.length === 1 ? '' : 's'} → finishing` : '',
-        out.pick.length ? `${out.pick.length} plated line${out.pick.length === 1 ? '' : 's'} in stock → WMS pick` : '',
+        (() => { const full = out.pick.filter(l => !l.backorderedQty).length, part = out.pick.length - full;
+            return out.pick.length ? `${full} plated line${full === 1 ? '' : 's'} in stock → WMS pick${part ? ` (+${part} on the pick waiting for their backorder)` : ''}` : ''; })(),
         out.backorder.length ? `${out.backorder.length} TRUE BACKORDER${out.backorder.length === 1 ? '' : 'S'} (${out.backorder.map(b => `${b.qty} × ${b.code} ${b.kind}`).join(', ')})` : '',
         out.unknown.length ? `${out.unknown.length} plated line${out.unknown.length === 1 ? '' : 's'} stock UNKNOWN → picked with a warning` : '',
     ].filter(Boolean).join(' · ');

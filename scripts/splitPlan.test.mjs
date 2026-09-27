@@ -21,11 +21,13 @@ const lines = [
 ];
 const p = planSmallLines(lines, 'EP4', stock);
 eq('in-house untouched', p.inHouse.map(l => l.legacyErpId), ['HCUMB410/BS']);
-eq('covered picks (running remainder)', p.pick.map(l => [l.legacyErpId, l.qty]), [['H1-1CP-V/EP4', 3], ['H1-1CP-V/EP4', 2]]);
+// THE WHOLE LINE STAYS ON THE PICK (2026-09-27): a short plated line keeps its full quantity, the backordered
+// part named — once it arrives the pick takes it; before, nothing picked it and the order packed short.
+eq('every plated line is on the pick at its full quantity, the short part named', p.pick.map(l => [l.legacyErpId, l.qty, l.backorderedQty || 0]), [['H1-1CP-V/EP4', 3, 0], ['H1-1CP-V/EP4', 4, 2], ['H1-1R-V/EP4', 2, 2]]);
 eq('short goes to backorder with the shortfall named', p.backorder.map(b => [b.code, b.qty, b.wanted]), [['H1-1CP-V/EP4', 2, 4], ['H1-1R-V/EP4', 2, 2]]);
 eq('no inventory row = unknown, not a shortage', p.unknown.map(l => [l.legacyErpId, l.stockUnknown]), [['H1-1X-V/EP4', 'no inventory row at this location']]);
 ok('pick lines are flagged pickOnly + finishOutsourced', p.pick.every(l => l.pickOnly && l.finishOutsourced));
-ok('summary names every bucket', /1 in-house/.test(p.summary) && /2 plated lines in stock/.test(p.summary) && /TRUE BACKORDER/.test(p.summary) && /UNKNOWN/.test(p.summary));
+ok('summary names every bucket', /1 in-house/.test(p.summary) && /1 plated line in stock/.test(p.summary) && /\+2 on the pick waiting for their backorder/.test(p.summary) && /TRUE BACKORDER/.test(p.summary) && /UNKNOWN/.test(p.summary));
 
 const noRead = planSmallLines([{ legacyErpId: 'H1-1CP-V/EP4', qty: 3 }], 'EP4', null);
 eq('stock not read → unknown, never backorder', [noRead.unknown.length, noRead.backorder.length], [1, 0]);

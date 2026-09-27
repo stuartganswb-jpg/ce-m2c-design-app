@@ -27,7 +27,7 @@ import { runBatchPrecheck } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
-import { buildOeReviewPlan } from '../Shared/oeReviewPlan';
+import { buildOeReviewPlan, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { holdSplitGroups } from '../Shared/rowPairShape';
 import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf } from '../Shared/oeGenerate';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
@@ -1674,22 +1674,48 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const k = String(f.orderKey || String(f.id).replace(/^WO-/, '')).toUpperCase();
                 if (k) packByOrderKey[k] = { id: f.id, bin: f.putawayBin || '', status: f.packStatus || f.currentPhase || '' };
             });
-            setBackorders({ loading: false, error: '', filter: 'ALL', rows: rowsFor({ orders, poByCode, openWos, availByCode, packByOrderKey }) });
+            // What NetSuite holds for each waiting order (2026-09-27): arriving stock is committed to it, so the
+            // free shelf alone can stay 0 after the material is in. Unreadable → the free shelf, as before.
+            const heldByOrder = {};
+            const nsIds = [...new Set(orders.map(o => o.nsInternalId).filter(Boolean).map(String))];
+            if (nsIds.length && covers.length) {
+                try {
+                    const held = {};
+                    for (let i = 0; i < covers.length; i += 100) Object.assign(held, await fetchOrderCommitted(nsIds, covers.slice(i, i + 100)));
+                    orders.forEach(o => { if (!o.nsInternalId) return; const m = {}; covers.forEach(c => { const h = orderHeldOf(held, o.nsInternalId, c); if (h) m[c] = h; }); heldByOrder[o.id] = m; });
+                } catch (e) { addLog(`⚠ Backorders: what NetSuite holds for each order could not be read (${e.message || e}) — ARRIVED reads the free shelf only.`, 'warn'); }
+            }
+            setBackorders({ loading: false, error: '', filter: 'ALL', rows: rowsFor({ orders, poByCode, openWos, availByCode, packByOrderKey, heldByOrder }) });
         } catch (e) {
             setBackorders({ loading: false, rows: [], error: e.message || String(e), filter: 'ALL' });
         }
     };
 
-    // "Order it" — the shortfall lands in the grid's own Order column, which is the ONE ordering
-    // path this screen has (Generate Orders decides PO vs WO per the item's sourcing, S4). A second
-    // ordering door here would be a second thing to keep in step.
+    // "Order it" — the shortfall lands in the SNAPSHOT's own Order column (orderQty, keyed by the row's
+    // NetSuite internal id), which is what "⚙ Generate Orders (PO + WO)" reads: the item's sourcing decides
+    // PO vs WO, a plated item goes to the plater with a live core read (S4). It used to land in the MAIN
+    // grid's drafts (orderDrafts) while the alert sent the operator to Generate Orders, which never reads
+    // them — the shortfall was never ordered (Stuart 2026-09-27). A code that is not a Snapshot row (no
+    // stocked-sales history) still goes to the main grid, and the alert names THAT grid's push buttons.
     const orderBackorderLine = (row) => {
-        const code = (row.covers || []).find(c => partByKey['erp:' + c]) || row.code;
+        const U = (v) => String(v || '').trim().toUpperCase();
+        const qty = String(Math.max(1, Math.floor(Number(row.short) || 1)));
+        const covers = (row.covers && row.covers.length) ? row.covers : [row.code];
+        const snapRows = (salesHist && salesHist.rows) || [];
+        const hit = covers.map(c => snapRows.find(r => U(r.itemid) === U(c))).find(Boolean);
+        if (hit) {
+            setOrderQty(prev => ({ ...prev, [hit.internalId]: qty }));
+            setSnapView('FIN');
+            setSalesHistSearch(String(hit.itemid));
+            setBackorders(null);
+            return alert(`${qty} × ${hit.itemid} is in the Snapshot's Order column (Finished Items, filtered to it).\n\nReview it, then press "⚙ Generate Orders (PO + WO)" — the item's sourcing decides purchase order or work order; a plated item goes to the plater.`);
+        }
+        const code = covers.find(c => partByKey['erp:' + c]) || row.code;
         const part = partByKey['erp:' + code];
-        if (!part) return alert(`${row.code} is not in the synced library, so the grid cannot order it.\n\nRaise the PO or work order from the item itself, or sync it first.`);
-        setOrderDrafts(d => ({ ...d, [part.id]: String(Math.max(1, Math.floor(Number(row.short) || 1))) }));
+        if (!part) return alert(`${row.code} is not in the synced library, so no grid can order it.\n\nRaise the PO or work order from the item itself, or sync it first.`);
+        setOrderDrafts(d => ({ ...d, [part.id]: qty }));
         setBackorders(null);
-        alert(`${row.short} × ${code} is in the Order column.\n\nReview it in the grid, then press "⚙ Generate Orders (PO + WO)" — the item's sourcing decides whether it becomes a purchase order or a work order.`);
+        alert(`${qty} × ${code} is not a Snapshot row (no stocked-sales history), so it is in the MAIN grid's Order column instead.\n\nClose the Snapshot, review it in Global Inventory Health, then press "Push PO to RTG Dispatch" (Purchasing) or "Push Work Order to RTG Dispatch" (Production) on the right.`);
     };
 
     const loadOpenWos = async () => {
@@ -2628,12 +2654,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const runnable = [], waits = [];
         [...new Set(rev.jobs.map(j => j.so && j.so.id))].forEach(soId => {
             const so = (rev.jobs.find(j => j.so && j.so.id === soId) || {}).so || null;
+            // A plated part from stock is a SO Pack pick, not part of a pair: it neither holds nor is held.
             const { start, held } = holdSplitGroups({
-                ready: ready.filter(j => j.so && j.so.id === soId),
-                waiting: blocked.filter(j => j.so && j.so.id === soId).map(j => ({ line: j.line, finish: j.finish, erp: j.lineErp })),
+                ready: ready.filter(j => j.so && j.so.id === soId && !j.stock),
+                waiting: blocked.filter(j => j.so && j.so.id === soId && !j.stock).map(j => ({ line: j.line, finish: j.finish, erp: j.lineErp })),
                 so,
             });
-            runnable.push(...start); waits.push(...held);
+            runnable.push(...ready.filter(j => j.so && j.so.id === soId && j.stock), ...start); waits.push(...held);
         });
         if (!runnable.length) return alert(waits.length
             ? `Nothing can start yet — every ready line waits with a blocked line of its row and finish (one pair per row and finish):\n\n${waits.map(w => `  • ${w.job.lineErp} waits with ${w.withErp}`).join('\n')}`
@@ -4701,7 +4728,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const actionText = (a) => a.kind === 'CONVERT' ? `⇄ CONVERT ${a.qty} × ${a.base} → ${a.target} (raw on hand ${a.rawHave})`
                     : a.kind === 'SHOP' ? `🏭 SHOP WO — mill ${a.qty} × ${a.code} (${a.reason})`
                     : a.kind === 'PO' ? `🧾 PO → ${a.vendorName}` : a.kind === 'HOLD' ? `⛔ ${a.holdReason}`
-                    : a.kind === 'BACKORDER' ? `📋 ${a.qty} short — Snapshot Backorder board; this line waits for it` : '';
+                    : a.kind === 'BACKORDER' ? `📋 ${a.qty} short — Snapshot Backorder board; the line is picked at SO Pack once it arrives` : '';
                 const runnable = oeReview.jobs.filter(j => !oeJobBlocked(j));
                 const mono9 = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
                 return (
