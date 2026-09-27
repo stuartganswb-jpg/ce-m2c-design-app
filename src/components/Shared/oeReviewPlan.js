@@ -202,6 +202,9 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         // A PLATED SMALL PART (job.stock — Shared/oeGenerate.oeDoorOf) is a stocked finished good: ONE pull
         // of the finished code, decided by the shelf as the CPQ split decides it (Shared/splitPlan). Short →
         // the Snapshot's Backorder board; never raw cores to the plater from here (Stuart 2026-09-27).
+        // A RIDER (a fee / return / miter cut into its pole — Shared/oeClassify) is fabrication, not material:
+        // nothing to pull, nothing to stock-check, nothing to order. It rides the pole's shop cut list.
+        if (j.rider) return { ...j, finishedErp: `${erp}/${String(j.finish || '').toUpperCase()}`, plan: { erp, exploded: false, lines: [] } };
         if (j.stock) {
             const finishedErp = `${erp}/${String(j.finish || '').toUpperCase()}`;
             const fp = partOf(finishedErp);
@@ -228,7 +231,7 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
     // availability read below covers them too.
     planned.forEach(p => {
         const ptype = String(p.part?.manufacturingSpecs?.productType || p.part?.productType || '');
-        if (p.buy || p.stock || p.plan.exploded || !isPoleCategory(ptype)) return;
+        if (p.buy || p.stock || p.rider || p.plan.exploded || !isPoleCategory(ptype)) return;
         // What the run actually pulls: the planner's single pull line when there is one (the /P
         // core), else the raw code itself — which is what the floor synthesises from stockErpId.
         const pullErp = String((p.plan.lines[0] && p.plan.lines[0].legacyErpId) || p.erp || '').toUpperCase();
@@ -415,6 +418,9 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
             }
         }
 
+        if (p.rider) {
+            return { ...p, components, holds, nsPlan: { flow: 'RIDER', note: `Fabrication on its pole — rides the shop's cut list; nothing to pull or order.` } };
+        }
         if (p.stock) {
             return { ...p, components, holds, nsPlan: { flow: 'STOCK', note: `Plated finished good — picked from stock as ${p.finishedErp}; no work order, nothing to the plater from here. Short → the Snapshot Backorder board.` } };
         }

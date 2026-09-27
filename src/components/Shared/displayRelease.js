@@ -23,7 +23,7 @@
 
 import { isQuickShip, ORDER_ENTRY_CLASS } from './pickLines.js';
 import { isDisplayOnlyLine, isParkedGeometryLine, headerSidemarkOf } from './lineClassification.js';
-import { oeIsTbf, oeLineFinish, oeCoverageOf, oeLineStateOf } from './oeLines.js';
+import { oeIsFloorLine, oeLineFinish, oeCoverageOf, oeLineStateOf } from './oeLines.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -80,7 +80,11 @@ export const rowLinesFromBreakdown = (breakdown = []) => {
     (breakdown || []).forEach(l => {
         if (!l) return;
         if (l.isHeader) { row = headerSidemarkOf(l); return; }       // the add-ons header carries no row
-        if (isDisplayOnlyLine(l) || l.isFee || l.isAddOn || isParkedGeometryLine(l)) return;
+        // THE CPQ SPLIT'S FILTER, NOTHING MORE (Stuart 2026-09-27). Fee and add-on lines used to be dropped here,
+        // so a return or miter flagged as a fee never reached the order, while CPQ keeps them: a fee cut into a
+        // rod rides the shop's cut list (Shared/lineClassification, rule 0), a checkout add-on routes by its own
+        // handling. Headers, discounts, size echoes and parked geometry are still not parts.
+        if (isDisplayOnlyLine(l) || isParkedGeometryLine(l)) return;
         const billed = U(l.legacyErpId || l.partId);
         const qty = N(l.qty);
         if (!billed || !(qty > 0)) return;
@@ -94,6 +98,21 @@ export const rowLinesFromBreakdown = (breakdown = []) => {
             ...(l.perFoot ? { perFoot: true, feetPer, billedFeet: qty * feetPer } : {}),
             ...(N(l.cutLength) > 0 ? { cutLength: N(l.cutLength) } : {}),
             ...(fin ? { toBeFinished: true, finishCode: fin, ...(isOutsourcedFinishCode(fin) ? { finishOutsourced: true } : {}) } : { toBeFinished: false }),
+            // WHAT CPQ'S CLASSIFIER READS ON THE LINE (Shared/oeClassify → classifyLine), and what its pick and
+            // cut lists carry — kept, so a row decides shop-or-small exactly as the split does.
+            ...(l.partId ? { partId: String(l.partId) } : {}),
+            ...(l.partHandling ? { partHandling: String(l.partHandling) } : {}),
+            ...(l.customOverrideHandling ? { customOverrideHandling: String(l.customOverrideHandling) } : {}),
+            ...(l.isFee || l.lineIsFee ? { isFee: true } : {}),
+            ...(l.isAddOn ? { isAddOn: true } : {}),
+            ...(l.qtyEach != null ? { qtyEach: N(l.qtyEach) } : {}),
+            ...(l.configQty != null ? { configQty: N(l.configQty) } : {}),
+            ...(l.clientSku ? { clientSku: String(l.clientSku) } : {}),
+            ...(l.hidden ? { hidden: true } : {}),
+            ...(l.shopOnly ? { shopOnly: true } : {}),
+            ...(l.noFinish ? { noFinish: true } : {}),
+            ...(l.subFinishCode ? { subFinishCode: U(l.subFinishCode) } : {}),
+            ...(l.finishLabel ? { finishLabel: String(l.finishLabel) } : {}),
             fromBreakdown: true,
         });
     });
@@ -242,7 +261,9 @@ export const lineStateOf = ({ so, line, lineIdx, links, shipments = [], review =
         const done = whole.fin && /closed|complete|packed|shelved/i.test(String(whole.fin.currentPhase || whole.fin.status || ''));
         return { key: done ? LINE_STATE.DONE : LINE_STATE.WHOLE, text: `on the whole-order documents (${wholeOrderText(whole)}) — managed on RTG`, tone: done ? 'green' : 'brass' };
     }
-    if (!oeIsTbf(line)) return { key: LINE_STATE.STOCKED, text: 'stocked — picked by the warehouse, not started here', tone: 'grey' };
+    // A shelf pick — unless it is made (cut, a fee on a pole, custom handling: oeIsFloorLine) or a start has
+    // already raised something for it (a custom line quoted with no finish, 2026-09-27).
+    if (!oeIsFloorLine(line) && !(so && so.oeGen && so.oeGen[lineIdx])) return { key: LINE_STATE.STOCKED, text: 'stocked — picked by the warehouse, not started here', tone: 'grey' };
     const coverage = oeCoverageOf({ so, line, lineIdx, ...(links || {}), any: true });
     const base = oeLineStateOf({ coverage, review });
     // A plated line, once pulled: follow its shipment.
@@ -439,3 +460,67 @@ export const reopenForRowsSoPatch = ({ so, buildId, lines = null, by = '', now =
 };
 /** What a whole-order document is stamped with — it stays closed. */
 export const splitRetiredStamp = (by = '', now = Date.now()) => ({ splitRetired: true, splitRetiredAt: now, splitRetiredBy: by || '', splitRetiredFrom: '10.5' });
+
+// ── ↻ RE-READ LINES FROM THE CPQ JOB (Stuart 2026-09-27, SO60551) ─────────────────────────────────────────
+// Lines anchored before 09-27 were built by the old reader: fee and add-on lines dropped, and none of the
+// fields CPQ's classifier reads. This re-reads the job's breakdown with today's reader and returns the patch —
+// WITHOUT moving any line: work already raised is keyed by line position (oeGen[idx], soLineIdx), so an existing
+// line keeps its place, code, finish and quantity and only gains the missing fields; a line the old reader
+// dropped is appended. On a rows-released order the retired split's backorder records (not OE_ROW) go too.
+// Pure. @returns null when nothing changes, else { lines, enriched, added: [{ erp, row, qty }], droppedBackorders }
+const REREAD_FIELDS = ['partId', 'partHandling', 'customOverrideHandling', 'isFee', 'isAddOn', 'qtyEach', 'configQty', 'clientSku', 'hidden', 'shopOnly', 'noFinish', 'subFinishCode', 'finishLabel', 'cutLength'];
+export const rereadLinesPatchOf = ({ so, breakdown = [] }) => {
+    const existing = Array.isArray(so && so.lines) ? so.lines : [];
+    const fresh = rowLinesFromBreakdown(breakdown);
+    const used = new Set();
+    const lines = existing.map(l => ({ ...l }));
+    let enriched = 0;
+    const added = [];
+    fresh.forEach(f => {
+        const i = lines.findIndex((e, k) => !used.has(k) && U(e.erp) === U(f.erp) && rowKeyOf(rowOfLine(e)) === rowKeyOf(rowOfLine(f)) && N(e.qty) === N(f.qty));
+        if (i < 0) { lines.push(f); used.add(lines.length - 1); added.push({ erp: f.erp, row: f.row, qty: f.qty }); return; }
+        used.add(i);
+        let changed = false;
+        REREAD_FIELDS.forEach(k => { if (f[k] != null && f[k] !== '' && lines[i][k] == null) { lines[i][k] = f[k]; changed = true; } });
+        if (changed) enriched++;
+    });
+    const bo = Array.isArray(so && so.backorderLines) ? so.backorderLines : [];
+    const keptBo = (so && so.displayRelease) ? bo.filter(r => r && r.source === 'OE_ROW') : bo;
+    const droppedBackorders = bo.length - keptBo.length;
+    if (!enriched && !added.length && !droppedBackorders) return null;
+    return { lines, enriched, added, droppedBackorders, backorderLines: keptBo };
+};
+export const rereadLinesText = (so, p) => [
+    `↻ Re-read ${(so && (so.soId || so.id)) || ''}'s lines from its CPQ job?`,
+    p.enriched ? `\n${p.enriched} line(s) gain the fields CPQ's classifier reads (part id, handling, fee flag, per-config counts, customer code…) — code, finish, quantity and position unchanged.` : '',
+    p.added.length ? `\n${p.added.length} line(s) the old reader dropped are ADDED:\n${p.added.map(a => `  • ${a.qty} × ${a.erp}${a.row ? ` (${a.row})` : ' (no row — assign it)'}`).join('\n')}` : '',
+    p.droppedBackorders ? `\n${p.droppedBackorders} backorder record(s) from the retired whole-order split are removed — each row records its own when it starts.` : '',
+    '\nNothing is started, ordered or sent to NetSuite.',
+].filter(Boolean).join('\n');
+
+// ── ↩ UNDO A ROW START — only while nothing on its documents has moved (Stuart 2026-09-27) ─────────────────
+// A row started under an older rule (SO60551's ROW 1 without its French returns; Row 2's stained fascia sent to
+// finishing as a small part) is put back: its pair's documents are removed through the ledger and its lines read
+// NOT STARTED, so ▶ Start row writes it again under today's rules. Refused — with the reasons — once anything has
+// moved: a pick, a stage, a shop start, a coat, a pack or a gather, or make-up the pair raised (converts,
+// component work orders, rod cuts, purchase orders), which is closed by a person on RTG who can see it.
+export const rowUndoBlockersOf = ({ hqs = [], fins = [], shops = [], gatheredCodes = [] } = {}) => {
+    const out = [];
+    const finsMoved = (fins || []).filter(f => !(f && f.pickOnly === true && U(f.currentPhase) === 'COMPLETE'));   // a pick-only doc is BORN Complete
+    retireBlockersOf({ fins: finsMoved, shops }).forEach(b => out.push(b));
+    (fins || []).filter(f => f && f.pickOnly === true).forEach(f => {
+        if (!['', 'PENDING'].includes(U(f.pickStatus))) out.push(`${f.id} has been picked (${f.pickStatus})`);
+        if (f.packStatus) out.push(`${f.id} has been ${String(f.packStatus).toLowerCase()}`);
+    });
+    (fins || []).forEach(f => { if (f && f.stagingStatus) out.push(`${f.id} is staged (${f.stagingStatus})`); });
+    (hqs || []).forEach(h => {
+        if (!h) return;
+        if (h.awaitingConvert || (h.convertIds && h.convertIds.length)) out.push(`${h.id} raised a phosphate convert`);
+        if ((h.componentShopWoIds || []).length) out.push(`${h.id} raised component work orders`);
+        if (h.rodCutId) out.push(`${h.id} raised rod cut ${h.rodCutId}`);
+        if (h.awaitingReceipt || (h.receiptPoIds || []).length) out.push(`${h.id} is waiting on a purchase order`);
+        if (h.nsWoId) out.push(`${h.id} has NetSuite work order ${h.nsWoTran || h.nsWoId}`);
+    });
+    (gatheredCodes || []).forEach(c => out.push(`${c} is already gathered into the order at SO Pack`));
+    return [...new Set(out)];
+};

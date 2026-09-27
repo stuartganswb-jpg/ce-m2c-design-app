@@ -273,5 +273,32 @@ eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }]
     eq('the question names each line', lineCodeFixText(so, fix).includes('line 2: H1-138CC/P → H1-138CC · P06'), true);
 }
 
+// ── ↻ RE-READ LINES / ↩ UNDO A ROW START (Stuart 2026-09-27, SO60551) ──
+{
+    const { rereadLinesPatchOf, rowUndoBlockersOf } = await import('../src/components/Shared/displayRelease.js');
+    const bd = [
+        { isHeader: true, sidemark: 'ROW 1' },
+        { legacyErpId: 'H1-1R/EP4', partId: 'H1-1R/EP4', qty: 50, finishCode: 'EP4', cutLength: 18, partHandling: 'Custom' },
+        { legacyErpId: 'H1-FRPF/EP4', partId: 'H1-FRPF/EP4', qty: 50, finishCode: 'EP4', isFee: true },          // the old reader dropped this
+        { legacyErpId: 'H1-1CP-V/EP4', partId: 'H1-1CP-V/EP4', qty: 50, finishCode: 'EP4', clientSku: 'FAB-CP' },
+    ];
+    const so = { id: 'S', displayRelease: true, lines: [
+        { erp: 'H1-1R', qty: 50, row: 'ROW 1', toBeFinished: true, finishCode: 'EP4', cutLength: 18 },
+        { erp: 'H1-1CP-V', qty: 50, row: 'ROW 1', toBeFinished: true, finishCode: 'EP4' },
+    ], oeGen: { 0: { kind: 'WO' } }, backorderLines: [{ code: 'OLD', qty: 1 }, { code: 'H1-1STDOFF/EP4', qty: 50, source: 'OE_ROW', lineIndex: 7 }] };
+    const p = rereadLinesPatchOf({ so, breakdown: bd });
+    eq('existing lines keep their place, code and finish — and gain the classifier fields', p.lines.slice(0, 2).map(l => [l.erp, l.finishCode, l.partHandling || '', l.clientSku || '']), [['H1-1R', 'EP4', 'Custom', ''], ['H1-1CP-V', 'EP4', '', 'FAB-CP']]);
+    eq('a line the old reader dropped is appended at the end', [p.added, p.lines[2].erp, p.lines[2].isFee], [[{ erp: 'H1-FRPF', row: 'ROW 1', qty: 50 }], 'H1-FRPF', true]);
+    eq('the retired split\'s backorder records go, the rows\' own stay', p.backorderLines.map(r => r.code), ['H1-1STDOFF/EP4']);
+    eq('nothing new to read → no patch', rereadLinesPatchOf({ so: { ...so, lines: p.lines, backorderLines: p.backorderLines }, breakdown: bd }), null);
+    const hq = { id: 'W' }; const fin = { id: 'W', currentPhase: 'Setup', pickStatus: 'Pending' }; const shop = { id: 'SHOP-W-C', status: 'Pending' };
+    eq('a pair nothing has touched can be undone', rowUndoBlockersOf({ hqs: [hq], fins: [fin], shops: [shop] }), []);
+    eq('a pick-only document is born Complete — still untouched', rowUndoBlockersOf({ fins: [{ id: 'P', pickOnly: true, currentPhase: 'Complete', pickStatus: 'Pending' }] }), []);
+    ok('a started shop job refuses', rowUndoBlockersOf({ shops: [{ ...shop, status: 'In Process' }] }).length === 1);
+    ok('a picked document refuses', rowUndoBlockersOf({ fins: [{ ...fin, pickStatus: 'Picked_Awaiting_Staging' }] }).length >= 1);
+    ok('make-up the pair raised refuses (a convert)', /convert/.test(rowUndoBlockersOf({ hqs: [{ id: 'W', awaitingConvert: true }] }).join(' ')));
+    ok('a gathered line refuses', /gathered/.test(rowUndoBlockersOf({ gatheredCodes: ['H1-1CP-V/EP4'] }).join(' ')));
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

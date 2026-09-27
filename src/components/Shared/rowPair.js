@@ -19,7 +19,7 @@ const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
  * material grid is the group's. Writes the RTG record, its finishing payload and the shop sibling.
  * @returns { woId, shopWoId, gate, finPayload, made, custom }
  */
-export const parkRowPair = async ({ group, so, brand, user = '', inventory = [], now = Date.now(), poleCutsOf = () => ({ poleCut: null, backOrder: '' }), receiptRefs = [], makeupActions = [], nsIdOf = null }) => {
+export const parkRowPair = async ({ group, so, brand, user = '', inventory = [], now = Date.now(), poleCutsOf = () => ({ poleCut: null, backOrder: '' }), receiptRefs = [], makeupActions = [], nsIdOf = null, custKeys = null }) => {
     const { custom, small } = splitGroupJobs(group);
     const { woId, shopWoId } = pairIdsOf(so, group, now);
     const made = [];
@@ -67,7 +67,7 @@ export const parkRowPair = async ({ group, so, brand, user = '', inventory = [],
         backOrder, shopWoIds: execRes ? execRes.shopWoIds : [], unitsKnown: !(group.jobs || []).some(j => j.unitsKnown === false),
     }), now);
     const note = `Order Entry ${soRef} · ${(so && so.customer) || ''} · ${group.rowLabel ? `${group.rowLabel} · ` : ''}${group.finish}${so && so.productionNotes ? ` · 📝 ${so.productionNotes}` : ''}`;
-    const shape = pairShapeOf({ group, so, brand, createdBy: user, now, inventory, gate: fullGate, materialStamp, woId, shopWoId, tasks: makeFullTasks(), note });
+    const shape = pairShapeOf({ group, so, brand, createdBy: user, now, inventory, gate: fullGate, materialStamp, woId, shopWoId, tasks: makeFullTasks(), note, custKeys });
     const hq = withItemCode({ ...shape.hq, finPayload: withItemCode(shape.finPayload) });
     await setDoc(doc(db, 'hq_work_orders', woId), hq, { merge: true });
     if (shape.shopSibling) {
@@ -86,6 +86,6 @@ export const parkRowPair = async ({ group, so, brand, user = '', inventory = [],
             overrun: rc.overrun, createdAt: now, createdBy: user, completedAt: null, completedBy: null,
         }, { merge: true });
     }
-    made.unshift(`🎨 ${woId} — ${group.rowLabel ? `${group.rowLabel} · ` : ''}${group.finish}: ${small.length} small-part line${small.length === 1 ? '' : 's'}${custom.length ? ` + ${custom.length} custom pole line${custom.length === 1 ? '' : 's'}` : ''} (SO ${soRef}) → RTG${Object.keys(fullGate).length ? ` — gated: ${Object.keys(fullGate).filter(k => /^awaiting|^backOrdered$/.test(k)).join(', ')}` : ''}`);
-    return { woId, shopWoId: shape.shopSibling ? shopWoId : null, gate: fullGate, finPayload: hq.finPayload, made, custom, small };
+    made.unshift(`🎨 ${woId} — ${group.rowLabel ? `${group.rowLabel} · ` : ''}${group.finish}: ${small.length} small-part line${small.length === 1 ? '' : 's'}${custom.length ? ` + ${custom.filter(j => !j.rider).length} custom pole line${custom.filter(j => !j.rider).length === 1 ? '' : 's'}${custom.some(j => j.rider) ? ` (${custom.filter(j => j.rider).length} fee/return/miter riding)` : ''}` : ''} (SO ${soRef}) → RTG${Object.keys(fullGate).length ? ` — gated: ${Object.keys(fullGate).filter(k => /^awaiting|^backOrdered$/.test(k)).join(', ')}` : ''}`);
+    return { woId, shopWoId: shape.shopSibling ? shopWoId : null, gate: fullGate, finPayload: hq.finPayload, hq, made, custom, small };
 };

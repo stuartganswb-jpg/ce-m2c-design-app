@@ -23,6 +23,7 @@ import { customShopQtyOf } from './splitPlan.js';
 import { uomStampOf } from './uom.js';
 import { rowKeyOf, rowOfLine } from './displayRelease.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
+import { findClientPriceRow } from './clientPricing.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -121,7 +122,7 @@ const partByCode = (inventory, code) => {
  * per-line route did; a mixed group carries the sled stream and the pole is painted with the small
  * parts after staging, as a CPQ pair is (buildFinDoc refuses both streams on one document).
  */
-export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now(), inventory = [], gate = {}, materialStamp = {}, woId, shopWoId, tasks = null, note = '' }) => {
+export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now(), inventory = [], gate = {}, materialStamp = {}, woId, shopWoId, tasks = null, note = '', custKeys = null }) => {
     const { custom, small } = splitGroupJobs(group);
     const finish = group.finish;
     const rowLabel = group.rowLabel || '';
@@ -143,6 +144,9 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
                 paintSize: (specs.paintSize || '').toUpperCase() || null,
                 productType: (specs.productType || (part && part.productType) || '').toUpperCase() || null,
                 soLineIdx: job.lineIdx,
+                // THE CUSTOMER'S CODE on the pick line, as the CPQ split puts it (buildPartsList): the line's own,
+                // else the item's clientPricing row for this customer (Shared/clientPricing).
+                clientSku: (job.line && job.line.clientSku) || ((findClientPriceRow((part && part.clientPricing) || (job.part && job.part.clientPricing), custKeys) || {}).clientSku) || '',
                 ...uomStampOf(part || pl, N(pl.quantity != null ? pl.quantity : pl.qty)),
             });
         });
@@ -152,12 +156,16 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
     const paintSize = hasSize ? Object.keys(paintSizes).sort((a, b) => paintSizes[b] - paintSizes[a]).find(k => paintSizes[k] > 0) : null;
     const smallPcs = partsList.reduce((s, p) => s + (N(p.pcs) || N(p.quantity) || N(p.qty)), 0);
     // ── the shop side: the custom poles as the cut list, their pull lines ──
-    const cutList = custom.map(job => {
+    // Poles first, then what rides them (fees, returns, miters — Shared/oeClassify), as the CPQ split lists them.
+    const cutList = [...custom].sort((a, b) => Number(!!a.rider) - Number(!!b.rider)).map(job => {
         const erp = U(job.part && (job.part.legacyErpId || job.part.itemId));
         return {
             name: (job.part && job.part.itemName) || erp, legacyErpId: erp, partId: (job.part && job.part.id) || erp,
             qty: N(job.qty) || 1, qtyEach: null, configQty: null,
-            cutLength: N(job.line && job.line.cutLength) > 0 ? N(job.line.cutLength) : null,
+            cutLength: !job.rider && N(job.line && job.line.cutLength) > 0 ? N(job.line.cutLength) : null,
+            // A per-foot line quoted with no cut still has a length: its feet per piece (splitPlan.customShopQtyOf).
+            ...(!job.rider && job.line && job.line.perFoot && N(job.line.feetPer) > 0 && !(N(job.line.cutLength) > 0) ? { feetPer: N(job.line.feetPer) } : {}),
+            ...(job.rider ? { rider: true } : {}),
             finishCode: job.finish, soLineIdx: job.lineIdx,
             ...uomStampOf(job.part, N(job.qty) || 1),
         };
@@ -165,13 +173,15 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
     const pullLines = custom.flatMap(job => (job.__planLines || []).map(pl => ({ ...pl, soLineIdx: job.lineIdx })));
     const shopQty = customShopQtyOf(cutList);
     const poleOnly = custom.length > 0 && small.length === 0;
-    const poleQty = custom.reduce((s, j) => s + (N(j.qty) || 0), 0);
+    // Poles are the pieces the shop cuts — a rider is fabrication on one, never a pole of its own.
+    const poleQty = custom.filter(j => !j.rider).reduce((s, j) => s + (N(j.qty) || 0), 0);
     // A PLATED GROUP NEVER ENTERS THE FINISHING FLOOR (Stuart 2026-09-02 / 09-27 — the CPQ split's shape,
     // HQ/RTGDispatchTab autoSplitSalesOrder): its small parts are PICK lines (pickOnly, from stock) and its
     // pole is the shop's, sent to the plater. The finishing document is then PICK-ONLY — born Complete so
     // no finishing screen selects it, while the WMS pick, staging, pack and fulfilment work unchanged.
     const inHouse = partsList.filter(p => !p.pickOnly);
-    const finishingNeeded = inHouse.length > 0 || (custom.length > 0 && !isOutsourcedFinishCode(finish));
+    const plated = isOutsourcedFinishCode(finish) || (group.jobs || []).some(j => j.line && j.line.finishOutsourced === true && String(j.line.finishCode || '').toUpperCase() === String(finish || '').toUpperCase());
+    const finishingNeeded = inHouse.length > 0 || (custom.length > 0 && !plated);
     const pickOnlyDoc = !finishingNeeded;
     const inHousePcs = inHouse.reduce((t, p) => t + (N(p.pcs) || N(p.quantity) || N(p.qty)), 0);
     const totalParts = pickOnlyDoc ? inHousePcs : (inHousePcs || poleQty || 1);
@@ -182,6 +192,9 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
     const salesHeader = {
         orderClass: 'ORDER_ENTRY', soAppId: so && so.id, soId: soRef, customerId: (so && so.customerId) || null, customer: cust,
         soAccepted: !!(so && so.nsInternalId), soLineIdxs: lineIdxs,
+        // THE QUOTE, when the order has one (a CPQ order released by rows): RTG's shop release reads the job's
+        // cut sheet, Vision notes and drawing from it — the facts the CPQ split puts on its shop document.
+        ...(so && so.hqJobId ? { hqJobId: so.hqJobId, quoteId: so.hqJobId } : {}),
         // THE GROUP (2026-09-23): which row and which finish this pair is — every reader that
         // wants to show a row reads these two, never the door.
         rowKey: group.rowKey || '', rowLabel, finishGroup: finish, floorGroupKey: group.key,
@@ -242,7 +255,8 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         type: cutList.length === 1 ? cutList[0].legacyErpId : 'Mixed',
         erpId: cutList.length === 1 ? cutList[0].legacyErpId : '', partErpId: cutList.length === 1 ? cutList[0].legacyErpId : '', variantErpId: cutList.length === 1 ? `${cutList[0].legacyErpId}/${finish}` : '',
         rootItem: cutList.length === 1 ? cutList[0].legacyErpId : '',
-        itemName: cutList.length === 1 ? cutList[0].name : `${cutList.length} custom pole lines`,
+        // Named for the row: its poles and what rides them (a French return is not a pole — 2026-09-27).
+        itemName: cutList.length === 1 ? cutList[0].name : `${rowLabel ? `${rowLabel} · ` : ''}${finish} · ${cutList.filter(c => !c.rider).length} pole line${cutList.filter(c => !c.rider).length === 1 ? '' : 's'}${cutList.some(c => c.rider) ? ` + ${cutList.filter(c => c.rider).length} riding` : ''}`,
         ...salesHeader,
         recipe: finish,
         qty: shopQty.qty, totalParts: shopQty.qty,

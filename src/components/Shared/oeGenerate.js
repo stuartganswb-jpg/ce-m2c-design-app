@@ -16,7 +16,8 @@
 // screen reads its own copy of the truth). Screen concerns — the modal, the logs panel, the PO
 // preview — stay with the screen; everything that writes is here.
 import { db } from '../../firebase';
-import { doc, updateDoc, getDocs, query, collection, where, runTransaction } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, getDocs, query, collection, where, runTransaction } from 'firebase/firestore';
+import { customerKeys } from './clientPricing';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { customerCodesOf } from './aliasSearch';
 import { realPartOf, isAliasDoc } from './aliasIdentity';
@@ -32,6 +33,8 @@ import { isAssemblyPart } from './finishedGoodsRun';
 import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig, rowBackorderPatchOf } from './oeLines';
 import { floorGroupsOf, parkRowPair } from './rowPair.js';
 import { holdSplitGroups } from './rowPairShape.js';
+import { oeDivisionOf, rowFabOf, rowFinishesOf, fabKindOf, DIVISION_CUSTOM } from './oeClassify.js';
+import { rowKeyOf, rowOfLine } from './displayRelease.js';
 
 export { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig };
 
@@ -96,8 +99,10 @@ export const loadOeLinks = async (soIds = [], { all = false } = {}) => {
 // (Stuart 2026-09-27, SO60551 Base Front 3: "it put the plated finial on demand on the plating tab,
 //  when we had the finial in stock … the poles should have gone to the shop floor to be made then sent
 //  to plating." The old PLATING door sent every /EP line straight to the plater as raw cores.)
-export const oeDoorOf = (part, finish, inventory = []) => {
-    if (isOutsourcedFinishCode(finish || '')) {
+export const oeDoorOf = (part, finish, inventory = [], { outsourced = false } = {}) => {
+    // PLATED is the finish code's word — or the line's own stamp (tab 7 records it from the outsource list,
+    // which can name a finish the code pattern does not; 2026-09-27: the two readings must not disagree).
+    if (outsourced === true || isOutsourcedFinishCode(finish || '')) {
         const ptype = String((part && ((part.manufacturingSpecs || {}).productType || part.productType)) || '');
         return isPoleCategory(U(ptype)) ? 'MAKE' : 'STOCK';
     }
@@ -116,17 +121,70 @@ export const oeDoorOf = (part, finish, inventory = []) => {
     return 'MAKE';
 };
 
+// ── WHAT EACH LINE OF AN ORDER BECOMES — one answer for every door (Stuart 2026-09-27) ──────────────
+// CPQ's own classifier (Shared/oeClassify → lineClassification.classifyLine) says shop or small and which
+// lines RIDE the pole; the row's rod gives a rider, and a custom line quoted with no finish, its finish; the
+// one door rule says how a small line is sourced. RTG's automatic start, 10.5's ▶ Start row and the review
+// on Order Entry Needs all read this — never their own copy.
+// @returns [{ line, lineIdx, erp, part, finishedPart, ownFinish, finish, finishWhy, division, rider, pole, fee, door }]
+export const oeLinePlansOf = ({ so, inventory = [] }) => {
+    const lines = (so && so.lines) || [];
+    const byRows = !!(so && so.displayRelease);
+    const finishedOf = (part, fin) => {
+        const code = U(part && (part.legacyErpId || part.itemId));
+        if (!code || !fin) return null;
+        let hit = null;
+        inventory.forEach(p => { if (U(p.legacyErpId || p.itemId) === `${code}/${U(fin)}`) hit = p; });
+        return hit;
+    };
+    const base = lines.map((line, lineIdx) => {
+        const erp = U(line && line.erp);
+        const { part } = resolveOePart(erp, inventory);
+        const ownFinish = U(oeLineFinish(line));
+        return { line, lineIdx, erp, part, finishedPart: finishedOf(part, ownFinish), ownFinish, rowKey: byRows ? rowKeyOf(rowOfLine(line)) : '' };
+    });
+    const out = [];
+    [...new Set(base.map(b => b.rowKey))].forEach(rk => {
+        const row = base.filter(b => b.rowKey === rk);
+        const fab = rowFabOf(row.map(b => ({ line: b.line, part: b.part })));
+        const classed = row.map(b => ({ ...b, ...oeDivisionOf({ line: b.line, basePart: b.part, finishedPart: b.finishedPart, erp: U(b.part && (b.part.legacyErpId || b.part.itemId)) || b.erp, finish: b.ownFinish, fab }) }));
+        const fins = rowFinishesOf(classed.map(c => ({ lineIdx: c.lineIdx, ownFinish: c.ownFinish, division: c.division, rider: c.rider })));
+        classed.forEach(c => {
+            const f = fins[c.lineIdx] || { finish: c.ownFinish, why: '' };
+            let door = '';
+            if (c.part && f.finish) {
+                if (c.rider) door = 'RIDER';
+                else {
+                    door = oeDoorOf(c.part, f.finish, inventory, { outsourced: !!(c.line && c.line.finishOutsourced === true && f.finish === c.ownFinish) });
+                    // A custom line is made (the shop), never a shelf pick of a plated finished good.
+                    if (c.division === DIVISION_CUSTOM && door === 'STOCK') door = 'MAKE';
+                }
+            }
+            // A FEE THAT IS NOT FABRICATION (rush, handling, a finish upcharge) is billing only: the sales
+            // order carries it to NetSuite; nothing is made or picked for it. (The CPQ split lists every fee on
+            // its shop cut list; a row lists only what is cut into a pole.)
+            const billingOnly = !!c.fee && !fabKindOf(`${(c.part && c.part.itemName) || ''} ${(c.line && c.line.name) || ''} ${c.erp}`);
+            out.push({ ...c, finish: f.finish, finishWhy: f.why, door: billingOnly ? '' : door, billingOnly });
+        });
+    });
+    return out.sort((a, b) => a.lineIdx - b.lineIdx);
+};
+// The lines a start considers: to-be-finished lines, and every line the classifier sends to the shop
+// (a cut rod quoted with no finish, a fee that rides a pole) — a shelf pick is not a start's business.
+export const oeStartsLine = (plan) => !!plan && !plan.billingOnly && (oeIsTbf(plan.line) || plan.division === DIVISION_CUSTOM);
+
 // items: [{ so, l, buy }] → the review jobs buildOeReviewPlan takes (pins loaded for assemblies).
 export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }) => {
     const jobs = [];
     for (let i = 0; i < items.length; i++) {
-        const { so, l, buy, stock } = items[i];
+        const { so, l, buy, stock, rider, division } = items[i];
         const erp = U(l.erp);
         const { part, aliasNote } = resolveOePart(erp, inventory);
-        const finish = oeLineFinish(l);
+        // The finish the line TAKES (oeLinePlansOf: a rider wears its rod's; a no-finish custom line the row's rod).
+        const finish = U(items[i].finish || oeLineFinish(l));
         if (!part || !finish) continue;
         let pins = [];
-        if (!buy && !stock && isAssemblyPart(part)) {
+        if (!buy && !stock && !rider && isAssemblyPart(part)) {
             try {
                 const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
                 pins = pinsSnap.docs.map(d => d.data());
@@ -135,6 +193,7 @@ export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }
         }
         jobs.push({
             key: i, so, line: l, lineIdx: (so.lines || []).indexOf(l), part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy, stock: !!stock,
+            ...(division ? { division } : {}), ...(rider ? { rider: true } : {}),
             // A per-foot line NEEDS feet from the vendor (the SO stored pieces + billedFeet).
             ...(l.perFoot ? { buyQty: Number(l.billedFeet) || (Number(l.qty) || 0) * (Number(l.feetPer) || 1) } : {}),
         });
@@ -149,6 +208,23 @@ const stampLineGenerated = async (so, lineIdx, entry) => {
     if (!so || !so.id || !(lineIdx >= 0)) return;
     try { await updateDoc(doc(db, 'hq_sales_orders', so.id), { [`oeGen.${lineIdx}`]: entry }); }
     catch (e) { console.warn('oeGen stamp failed', so.id, lineIdx, e); }
+};
+
+// A CUSTOM LINE QUOTED WITH NO FINISH takes its row's rod finish at the start (Shared/oeClassify.rowFinishesOf —
+// SO60551's wood track, S04). The finish is written ON THE LINE, so every screen after — the SO Pack, the labels,
+// the 10.5 board — names the piece being made (H1-2TRV/S04), not the bare rod. A rider's own code is never
+// rewritten (a fee is never picked or packed); a line that names a finish keeps it.
+const stampLineFinish = async (so, lineIdx, finish) => {
+    if (!so || !so.id || !(lineIdx >= 0) || !finish) return;
+    try {
+        const snap = await getDoc(doc(db, 'hq_sales_orders', so.id));
+        const lines = snap.exists() ? [...(snap.data().lines || [])] : [];
+        const l = lines[lineIdx];
+        if (!l || String(l.finishCode || '').trim()) return;
+        lines[lineIdx] = { ...l, finishCode: String(finish).toUpperCase(), toBeFinished: true, finishFromRod: true, ...(isOutsourcedFinishCode(finish) ? { finishOutsourced: true } : {}) };
+        await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines });
+        if (Array.isArray(so.lines)) so.lines = lines;
+    } catch (e) { console.warn('line finish stamp failed', so.id, lineIdx, e); }
 };
 
 // EXECUTE reviewed jobs — the ONLY writer on this path. Per job: make-up (converts + sourcing-correct
@@ -219,14 +295,19 @@ export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inve
             if (!finish) { bookPurchase(prepared1); continue; }
             log(job.__tag === '-NOW'
                 ? `🎨 ${erp} ×${qty}: START NOW from stock — finishing releases and picks from the shelf.`
-                : `🎨 ${erp} ×${qty}: TO BE FINISHED — the pair is created now; its pick waits until the material arrives.`, 'info');
+                : (poLines.length || job.__skipPo)
+                    ? `🎨 ${erp} ×${qty}: TO BE FINISHED — the pair is created now; its pick waits until the material arrives.`
+                    : `🎨 ${erp} ×${qty}: TO BE FINISHED — the material is on hand; the pair is created now.`, 'info');
         }
-        const planLines = (job.plan?.lines || []).map(pl => (U(pl.legacyErpId) === finishedErp || (job.buy && U(pl.legacyErpId) === erp))
+        // A RIDER pulls nothing: it is fabrication on its pole, listed on the shop's cut list (Shared/rowPairShape).
+        const planLines = job.rider ? [] : (job.plan?.lines || []).map(pl => (U(pl.legacyErpId) === finishedErp || (job.buy && U(pl.legacyErpId) === erp))
             ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
         // ONE POLE TEST (sweep 2026-09-01) — the CUSTOM PAIR rule: a mill code plus an applied finish
         // is made to order and is the shop's; a complete assembly (/BS, /N90) is finishing's.
         const isPole = isPoleCategory(U(specs.productType));
-        const custom = isPole && handlingForErp(finishedErp) === 'Custom';
+        // SHOP OR SMALL is the classifier's answer (Shared/oeClassify — CPQ's classifyLine) when the start
+        // carried it; the pole test only for a job built without it.
+        const custom = job.division ? job.division === DIVISION_CUSTOM : (isPole && handlingForErp(finishedErp) === 'Custom');
         // ── THE POLE CHOICE THE OPERATOR MADE (Q5) — a finishing-side pole cut or waited for ──
         let poleCut = null, backOrder = '';
         if (job.poleChoice) {
@@ -248,6 +329,12 @@ export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inve
     prepared.forEach(j => { const k = j.so.id; if (!bySo.has(k)) bySo.set(k, []); bySo.get(k).push(j); });
     for (const jobsOfSo of bySo.values()) {
         const so = jobsOfSo[0].so;
+        // The customer's own codes on the pick lines (clientSku), keyed the way the CPQ split keys them.
+        let custKeys = null;
+        try {
+            const cs = so.customerId ? await getDoc(doc(db, 'crm_records', String(so.customerId))) : null;
+            custKeys = customerKeys(so.customerId || null, cs && cs.exists() ? cs.data() : { name: so.customer || '' });
+        } catch (e) { custKeys = customerKeys(so.customerId || null, { name: so.customer || '' }); }
         for (const group of floorGroupsOf(jobsOfSo, so)) {
             const receiptRefs = group.jobs.flatMap(j => j.__rcptRefs || []);
             let res;
@@ -255,7 +342,7 @@ export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inve
                 res = await parkRowPair({
                     group, so, brand, user, inventory,
                     poleCutsOf: (j) => ({ poleCut: j.__poleCut, backOrder: j.__backOrder }),
-                    receiptRefs, makeupActions: group.jobs.flatMap(j => j.__makeup || []), nsIdOf,
+                    receiptRefs, makeupActions: group.jobs.flatMap(j => j.__makeup || []), nsIdOf, custKeys,
                 });
             } catch (e) {
                 if (e instanceof ParkRefusal) { log(`⛔ ${group.rowLabel || 'order'} · ${group.finish} (SO ${so.soId || so.id}): ${e.message}`, 'error'); continue; }
@@ -271,12 +358,14 @@ export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inve
             for (const job of group.jobs) {
                 const lk = `${so.id}|${job.lineIdx}`;
                 idsByLine[lk] = [...(idsByLine[lk] || []), res.woId, ...(res.shopWoId ? [res.shopWoId] : [])];
-                await stampLineGenerated(so, job.lineIdx, { kind: 'WO', ids: idsByLine[lk], at: Date.now(), by: user || '', auto: !!auto, rowKey: group.rowKey || '', finish: group.finish });
+                await stampLineGenerated(so, job.lineIdx, { kind: 'WO', ids: idsByLine[lk], at: Date.now(), by: user || '', auto: !!auto, rowKey: group.rowKey || '', finish: group.finish, ...(job.rider ? { rider: true } : {}) });
+                if (!job.rider && !String(oeLineFinish(job.line) || '').trim()) await stampLineFinish(so, job.lineIdx, group.finish);
             }
             const g = res.gate || {};
             const waitingText = [g.awaitingConvert ? 'its phosphate convert' : '', g.awaitingComponents ? 'its component work orders' : '', g.awaitingRodCut ? 'its rod cut' : '', g.awaitingReceipt ? 'its purchased material' : ''].filter(Boolean).join(' + ');
             if (isReleasable(g)) {
-                await releaseFinWoToFloor({ id: res.woId, finPayload: res.finPayload }, user || 'oe-review');
+                // The WHOLE record, as RTG's release passes it: urgent / held / NetSuite stamps reach the floor document.
+                await releaseFinWoToFloor({ ...(res.hq || {}), id: res.woId, finPayload: res.finPayload }, user || 'oe-review');
                 log(`✅ ${group.rowLabel ? `${group.rowLabel} · ` : ''}${group.finish} (SO ${so.soId || so.id}) — ${auto ? 'clean plan' : 'approved in review'} → RELEASED to the finishing floor (${res.woId})${res.shopWoId ? `; the shop job ${res.shopWoId} releases from RTG` : ''}.`, 'success');
             } else {
                 log(`✅ ${res.woId} (SO ${so.soId || so.id}) — waiting on ${waitingText || 'its gates'}; RTG releases it when they clear.`, 'success');
@@ -352,7 +441,10 @@ export const claimOeAuto = async (soId, user, sig, slot = 'oeAuto', { force = fa
 export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = null, log = () => {}, only = null, slot = 'oeAuto', force = false }) => {
     // Read FRESH, and read everything ever raised — the run must never raise a line twice on its own.
     const linkSet = links || (await loadOeLinks([so.id], { all: true }))[so.id] || { wos: [], pos: [], demands: [] };
-    const open = uncoveredTbfOf(so, linkSet, { any: true }).filter(x => (typeof only === 'function' ? only(x.line, x.lineIdx) : true));
+    const plans = oeLinePlansOf({ so, inventory });
+    const open = plans.filter(oeStartsLine)
+        .filter(p => !oeCoverageOf({ so, line: p.line, lineIdx: p.lineIdx, ...linkSet, any: true }))
+        .filter(p => (typeof only === 'function' ? only(p.line, p.lineIdx) : true));
     const sig = oeAutoSig(open);
     if (!open.length) return { ran: 0, review: [], state: 'DONE' };
     if (!(await claimOeAuto(so.id, user, sig, slot, { force }))) return { ran: 0, review: [], state: 'SKIPPED' };
@@ -364,23 +456,23 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], links = 
     };
     try {
         const planItems = [];
-        for (const { line, lineIdx } of open) {
-            const erp = U(line.erp);
-            const fin = oeLineFinish(line);
-            const { part } = resolveOePart(erp, inventory);
-            const named = (reasons) => review.push({ lineIdx, erp, finish: fin, reasons });
+        for (const pl of open) {
+            const { line, lineIdx, erp, part, door } = pl;
+            const fin = pl.finish;
+            const named = (reasons) => review.push({ lineIdx, erp, finish: fin || pl.ownFinish, reasons });
             if (!part) { named([`${erp} is not in the Master Library (real codes, customer codes and aliases searched)`]); continue; }
-            if (!fin) { named(['no finish recorded on this line']); continue; }
+            if (!fin) { named([pl.finishWhy || 'no finish recorded on this line']); continue; }
             if (!(Number(line.qty) > 0)) { named(['the line has no quantity']); continue; }
-            const door = oeDoorOf(part, fin, inventory);
             if (door === 'ASK') named([`${erp} is flagged BOTH (make and buy) — a person chooses`]);
+            // A RIDER (a fee, a return, a miter) is fabrication ON its pole: the pair's cut list, nothing to plan.
+            else if (door === 'RIDER') planItems.push({ so, l: line, rider: true, division: pl.division, finish: fin });
             // A BOUGHT LINE IS PLANNED, NOT PRE-REFUSED (Stuart 2026-09-22, SO60565: "why is it asking
             // for the review and decision? the stock is clearly enough for the order"). The 09-20
             // rule sent every bought item to review before the plan had looked at the shelf, so a
             // line with 110 ft on hand against 50 needed — nothing to order, no PO drafted — still
             // waited on a person to decide a purchase that did not exist. The plan reads the stock;
             // autoRunnable then asks the honest question: is there a purchase to decide?
-            else planItems.push({ so, l: line, buy: door === 'BUY', stock: door === 'STOCK' });
+            else planItems.push({ so, l: line, buy: door === 'BUY', stock: door === 'STOCK', division: pl.division, finish: fin });
         }
         if (planItems.length) {
             const jobs = await buildOeJobs({ items: planItems, inventory, log });

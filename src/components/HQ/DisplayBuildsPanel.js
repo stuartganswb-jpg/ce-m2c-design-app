@@ -33,10 +33,11 @@ import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc, query, where
 import { DISPLAY_STYLES, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, cpqEntryRows, cpqEntryCsv, SAMPLE_BIN_BY_STYLE, floorLinksByLine } from '../Shared/displayBom';
 import { linkedDocsOf, identityKeysOf, closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { cancelPlatingDemand } from '../Shared/platingDemand';
+import { hardDeleteWithLedger } from '../Shared/orderLifecycle';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { lineCodeFixesOf, lineCodeFixText, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
+import { lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, rowUndoBlockersOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -319,7 +320,9 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 await updateDoc(doc(db, 'packaging_orders', p.id), { status: 'closed', closed: true, closedAt: Date.now(), closedBy: by, closedFrom: '10.5', closeReason: 'released by rows from 10.5 (the whole-order split retired)', stateBeforeClose: { status: p.status || 'pending' } });
                 pkgClosed++;
             }
-            await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, lines, so }));
+            // The retired split's own backorder records go with it (2026-09-27): each row records its own shortfalls
+            // (OE_ROW) when it starts — a stale split record would sit on the Snapshot board after its row covered it.
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), { ...displayAnchorPatch({ buildId: draft.id, lines, so }), backorderLines: (so.backorderLines || []).filter(r => r && r.source === 'OE_ROW') });
             alert(`Retired: ${res.fin} finishing doc(s), ${res.shop} shop doc(s)${pkgClosed ? `, ${pkgClosed} packaging doc(s)` : ''} closed${res.rodCuts ? `, ${res.rodCuts} rod cut(s) cancelled` : ''}${(res.nsWritesCancelled || []).length ? `, ${res.nsWritesCancelled.length} queued NetSuite write(s) cancelled` : ''}${cancelled ? `, ${cancelled} plating demand(s) cancelled` : ''}${res.nsNeedsManualClose ? `.\n\n⚠ NetSuite work order ${res.ns} must be closed by hand — a task was raised.` : '.'}\n\n${so.soId || so.id} is now released by rows from here.`);
             await loadFloor(draft);
         } catch (e) { alert('Retire failed partway: ' + (e?.message || e) + '\n\nRead the floor again before doing anything else — some documents may already be closed.'); }
@@ -380,6 +383,79 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             alert(`↻ ${fix.fixed.length} line code(s) fixed on ${so.soId || so.id}.`);
             await loadFloor(draft);
         } catch (e) { alert('Could not fix the line codes: ' + (e?.message || e)); }
+        setBusy('');
+    };
+
+    // ↻ RE-READ LINES FROM THE CPQ JOB (Shared/displayRelease.rereadLinesPatchOf, 2026-09-27): lines anchored by the
+    // old reader gain the fields CPQ's classifier reads, and the lines it dropped (fees, add-ons) come back — no line
+    // moves, nothing is started.
+    const rereadLines = async (entry) => {
+        const so = entry?.so;
+        if (!so || !draft || !so.hqJobId) return;
+        setBusy('Reading the CPQ job…');
+        try {
+            const job = await getDoc(doc(db, 'jobs', so.hqJobId));
+            const patch = rereadLinesPatchOf({ so, breakdown: job.exists() ? ((job.data().cpqData || {}).breakdown || []) : [] });
+            setBusy('');
+            if (!patch) return alert(`${so.soId || so.id}'s lines already carry everything its CPQ job has — nothing to re-read.`);
+            if (!window.confirm(rereadLinesText(so, patch))) return;
+            setBusy('Re-reading lines…');
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: patch.lines, backorderLines: patch.backorderLines, linesRereadAt: Date.now(), linesRereadBy: String(currentUser || '10.5') });
+            alert(`↻ ${so.soId || so.id}: ${patch.enriched} line(s) completed, ${patch.added.length} added${patch.droppedBackorders ? `, ${patch.droppedBackorders} stale backorder record(s) removed` : ''}.`);
+            await loadFloor(draft);
+        } catch (e) { alert('Could not re-read the lines: ' + (e?.message || e)); }
+        setBusy('');
+    };
+
+    // ↩ UNDO A ROW START (Shared/displayRelease.rowUndoBlockersOf, 2026-09-27): a row started under an older rule is put
+    // back while nothing on its documents has moved — its pair's documents leave through the ledger, its lines read
+    // NOT STARTED, and ▶ Start row writes it again under today's rules.
+    const undoRowStart = async (label, state) => {
+        if (!draft) return;
+        const by = String(currentUser || '10.5');
+        const ctx = { db, doc, updateDoc, getDoc, getDocs, query, collection, where, deleteDoc, setDoc };
+        setBusy('Checking the row…');
+        try {
+            const soIds = [...new Set((state.lines || []).map(l => l.soAppId).filter(Boolean))];
+            const plan = [];   // { so, idxs, hqs, fins, shops, stockIdxs }
+            for (const soAppId of soIds) {
+                const fresh = await getDoc(doc(db, 'hq_sales_orders', soAppId));
+                if (!fresh.exists()) continue;
+                const so = { id: fresh.id, ...fresh.data() };
+                const idxs = (state.lines || []).filter(l => l.soAppId === soAppId).map(l => l.lineIdx).filter(i => so.oeGen && so.oeGen[i]);
+                const ids = [...new Set(idxs.flatMap(i => (so.oeGen[i].kind === 'WO' ? (so.oeGen[i].ids || []) : [])))];
+                const hqs = [], fins = [], shops = [];
+                for (const id of ids) {
+                    const h = await getDoc(doc(db, 'hq_work_orders', id)); if (h.exists()) hqs.push({ id: h.id, ...h.data() });
+                    const f = await getDoc(doc(db, 'fin_workorders', id)); if (f.exists()) fins.push({ id: f.id, ...f.data() });
+                    const sh = await getDoc(doc(db, 'shop_custom_orders', `SHOP-${id}`)); if (sh.exists()) shops.push({ id: sh.id, ...sh.data() });
+                }
+                const plating = idxs.filter(i => so.oeGen[i].kind === 'PLATING');
+                const gatheredCodes = idxs.filter(i => so.oeGen[i].kind === 'STOCK').map(i => String(so.oeGen[i].code || '')).filter(c => ((so.committedQty || {})[c] || 0) > 0);
+                plan.push({ so, idxs, hqs, fins, shops, plating, gatheredCodes });
+            }
+            const blockers = plan.flatMap(p => rowUndoBlockersOf({ hqs: p.hqs, fins: p.fins, shops: p.shops, gatheredCodes: p.gatheredCodes }))
+                .concat(plan.some(p => p.plating.length) ? ['it has plating demands — use ↩ Undo plating start'] : []);
+            setBusy('');
+            if (blockers.length) return alert(`Cannot undo ${label} — work has moved:\n\n${blockers.map(b => `  • ${b}`).join('\n')}\n\nClose or finish it on RTG, where that work is visible.`);
+            const docs = plan.flatMap(p => [...p.hqs.map(d => `hq ${d.id}`), ...p.fins.map(d => `floor ${d.id}`), ...p.shops.map(d => `shop ${d.id}`)]);
+            if (!window.confirm(`↩ Undo the start of ${label}?\n\nNothing on it has moved. These leave (recorded in the deletion ledger):\n${docs.map(d => `  • ${d}`).join('\n') || '  • (no documents — stock picks only)'}\n\nIts lines read NOT STARTED; press ▶ Start row to write it under today's rules.`)) return;
+            setBusy('Undoing the row…');
+            const reason = `${label}: started under an older rule — restarted under today's (10.5 ↩ Undo row start)`;
+            for (const p of plan) {
+                for (const d of p.fins) await hardDeleteWithLedger(ctx, { collection: 'fin_workorders', docId: d.id, record: d, kind: 'fin_workorder', by, from: '10.5', reason });
+                for (const d of p.shops) await hardDeleteWithLedger(ctx, { collection: 'shop_custom_orders', docId: d.id, record: d, kind: 'shop_custom_order', by, from: '10.5', reason });
+                for (const d of p.hqs) await hardDeleteWithLedger(ctx, { collection: 'hq_work_orders', docId: d.id, record: d, kind: 'hq_work_order', by, from: '10.5', reason });
+                const patch = {};
+                p.idxs.forEach(i => { patch[`oeGen.${i}`] = deleteField(); });
+                const boLeft = (p.so.backorderLines || []).filter(r => !(r && r.source === 'OE_ROW' && p.idxs.includes(r.lineIndex)));
+                if (boLeft.length !== (p.so.backorderLines || []).length) patch.backorderLines = boLeft;
+                patch[`displayRows.${rowKeyOf(label)}`] = deleteField();
+                await updateDoc(doc(db, 'hq_sales_orders', p.so.id), patch);
+            }
+            alert(`${label} is NOT STARTED again — ${docs.length} document(s) removed through the ledger. Press ▶ Start row.`);
+            await loadFloor(draft);
+        } catch (e) { alert('Could not undo the row: ' + (e?.message || e)); }
         setBusy('');
     };
 
@@ -691,6 +767,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                                 title="Close the whole-order finishing and shop documents (reopenable, through RTG's own close), keep the sales order, and release its rows from here. Refuses if any work has been logged on them.">⟲ Retire the split → release by rows</button>}
                                     </>
                                     : <span style={{ ...mono, color: 'var(--brass)', marginLeft: '10px' }}>⚓ rows start from here{!s.so.nsInternalId ? ' · ⚠ NetSuite has not accepted it yet' : ''}{splitRetiredOf(s.so, s.fin, s.shop) ? ` · split retired (${splitRetiredOf(s.so, s.fin, s.shop).map(d => d.id).join(', ')}) · released by rows` : ''}</span>}
+                                {!s.whole && s.so.hqJobId && <button onClick={() => rereadLines(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px' })}
+                                    title="Re-read this order's lines from its CPQ job: lines gain the fields CPQ's classifier reads, lines the old reader dropped (fees, add-ons) come back. No line moves; nothing is started.">↻ Re-read lines</button>}
                                 {!s.whole && lineCodeFixesOf(s.so) && <button onClick={() => fixLineCodes(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
                                     title="Some lines carry the CPQ billing SKU (…/P, …/EP2) as the item, so the route composes the finish twice and finds no stock. Rewrite them as base item + finish.">↻ Fix line codes ({lineCodeFixesOf(s.so).fixed.length})</button>}
                                 {!s.whole && needsPackCard(s.so) === 'class' && <button onClick={() => givePackCard(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
@@ -755,6 +833,11 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                             )}
                                         </td>
                                         <td style={{ ...td, textAlign: 'right' }}>
+                                            {state.lines.some(l => ['FLOOR', 'PARKED', 'STOCKED'].includes(l.key) && !/stocked — picked by the warehouse, not started here/.test(l.text)) && (
+                                                <button onClick={() => undoRowStart(label, state)} disabled={!!busy || !!starting}
+                                                    style={btn(false, { padding: '5px 10px', marginRight: '6px', color: '#b02d20', borderColor: '#b02d20' })}
+                                                    title="Put this row back to NOT STARTED while nothing on its documents has moved, so ▶ Start row writes it under today's rules.">↩ Undo row start</button>
+                                            )}
                                             {state.lines.some(l => l.key === 'PLATING') && (
                                                 <button onClick={() => undoPlatingStart(label, state)} disabled={!!busy || !!starting}
                                                     style={btn(false, { padding: '5px 10px', marginRight: '6px', color: '#b02d20', borderColor: '#b02d20' })}

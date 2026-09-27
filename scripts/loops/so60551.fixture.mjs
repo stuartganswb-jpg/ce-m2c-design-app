@@ -1,0 +1,85 @@
+// SO60551's ROW 1 and Row 2 as CPQ saved them on 2026-09-16 (the Fabricut tabletop), with the library facts
+// the route reads. The item facts are the ones read off the live library on 2026-09-27: H1-FRPF and
+// H1-2TRVMTR are Fee records; H1-2TRV is Part Handling CUSTOM, product type POLE (a wood traverse, S04, with
+// miter cuts — Stuart); the rods are counted in FEET by NetSuite. The 9/16 quote still carries the miter fee
+// as EP4 — CPQ was corrected on 9/18 (a return cut into a rod wears the rod's finish).
+export const BRAND = 'ce';
+export const SO_APP_ID = 'SO-APP-QUOTE-TEST';
+export const SO_NS_ID = '777001';
+export const JOB_ID = 'QUOTE-TEST';
+
+const inv = (code, name, specs = {}, more = {}) => ({ id: `lib-${code}`, legacyErpId: code, itemId: code, itemName: name, brandId: BRAND, partClass: 'Inventory', netSuiteInternalId: String(100000 + code.length * 7 + code.charCodeAt(code.length - 1)), manufacturingSpecs: { isInHouse: true, ...specs }, ...more });
+
+export const library = [
+    // ROW 1 — a plated pole with two French returns bent into it, plated fittings beside it
+    inv('H1-1R', '1" Round Rod', { productType: 'RODS', partHandling: 'Custom', material: 'STEEL', isInHouse: false, vendorName: 'Metals USA' }),
+    inv('H1-FRPF', 'French Return', { productType: 'FEE' }, { partClass: 'Fee' }),
+    inv('H1-1CP-V', 'Cap Finial'), inv('H1-1CP-V/EP4', 'Cap Finial Satin Gold', {}, { partClass: 'Assembly' }),
+    inv('H1-1BR', '1" Bracket', { partHandling: 'Small Parts' }), inv('H1-1BR/EP4', '1" Bracket Satin Gold', { partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
+    inv('H1-1STDOFF', 'Standoff'), inv('H1-1STDOFF/EP4', 'Standoff Satin Gold', {}, { partClass: 'Assembly' }),
+    // Row 2 — a stained wood traverse: the fascia and the track (both mitered), their miter fees, plated wall
+    // brackets, and the stocked hardware that rides along
+    inv('H1-2RCTWR-O', 'Rect Wood Fascia Oak', { productType: 'POLE', partHandling: 'Custom', material: 'WOOD', isInHouse: false, vendorName: 'Oak Supply' }),
+    inv('H1-2TRV', '1.5" Square Traverse Track', { productType: 'POLE', partHandling: 'Custom', material: 'WOOD', isInHouse: false, vendorName: 'Oak Supply' }),
+    inv('H1-2TRVMTR', 'Traverse Miter', { productType: 'FEE' }, { partClass: 'Fee' }),
+    inv('H1-2TRV-WB', 'Traverse Wall Bracket', { partHandling: 'Small Parts' }, { partClass: 'Kit' }),
+    inv('H1-2TRV-WB/EP4', 'Traverse Wall Bracket Satin Gold', { partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
+    inv('H1-2TRVPLUG', 'Traverse End Plug', { partHandling: 'Small Parts' }),
+    inv('HTSLNTCAR', 'Silent Carrier', { partHandling: 'Small Parts' }),
+    // base front 4 — a bought 3/4" rod (NetSuite counts it in feet) and a painted finial the customer knows by
+    // its own code
+    inv('H1-75R', '3/4" Round Hollow Rod Stock', { productType: 'POLE', isInHouse: false, vendorName: 'Metals USA' }),
+    inv('H1-75KF', '3/4" Knob Finial', { partHandling: 'Small Parts' }, { clientPricing: [{ customerId: 'CUST-FAB', clientSku: 'FAB-KF-75', price: 4 }] }),
+    inv('H1-75KF/P', '3/4" Knob Finial — phosphated', { partHandling: 'Small Parts' }),
+];
+
+// NetSuite at location 17: free stock (quantityavailable) and each item's stock unit.
+export const stock = {
+    'H1-1R': { available: 900, unit: 'FOOT' },
+    'H1-1CP-V/EP4': { available: 120, unit: 'EACH' },
+    'H1-1BR/EP4': { available: 60, unit: 'EACH' },
+    'H1-1STDOFF/EP4': { available: 0, unit: 'EACH' },
+    'H1-2RCTWR-O': { available: 400, unit: 'FOOT' },
+    'H1-2TRV': { available: 400, unit: 'FOOT' },
+    'H1-2TRV-WB/EP4': { available: 0, unit: 'EACH' },
+    'H1-2TRVPLUG': { available: 500, unit: 'EACH' },
+    'HTSLNTCAR': { available: 5000, unit: 'EACH' },
+    'H1-75R': { available: 430, unit: 'FOOT' },
+    'H1-75KF/P': { available: 100, unit: 'EACH' },
+};
+
+const header = (row) => ({ isHeader: true, sidemark: row, name: `▶ Configuration — SM: ${row}` });
+const L = (legacyErpId, qty, more = {}) => ({ legacyErpId, partId: legacyErpId, name: legacyErpId, qty, price: 1, total: qty, ...more });
+export const breakdown = [
+    header('ROW 1'),
+    L('H1-1R/EP4', 50, { finishCode: 'EP4', cutLength: 18 }),
+    L('H1-FRPF/EP4', 50, { finishCode: 'EP4' }),                       // French return L — a Fee, 9/16: no isFee flag
+    L('H1-FRPF/EP4', 50, { finishCode: 'EP4' }),                       // French return R
+    L('H1-1CP-V/EP4', 50, { finishCode: 'EP4' }),
+    L('H1-1BR/EP4', 50, { finishCode: 'EP4' }),
+    L('H1-1STDOFF/EP4', 50, { finishCode: 'EP4', hidden: true }),      // BOM-only standoff
+    header('Row 2'),
+    L('H1-2RCTWR-O/S04', 50, { finishCode: 'S04', cutLength: 30 }),    // stained oak fascia, mitered
+    L('H1-2TRV', 50, { cutLength: 30 }),                               // the track: no finish on the 9/16 quote
+    L('H1-2TRVMTR/EP4', 50, { finishCode: 'EP4' }),                    // miter fee — EP4 is the pre-9/18 error
+    L('H1-2TRVMTR/EP4', 50, { finishCode: 'EP4' }),
+    L('H1-2TRV-WB/EP4', 50, { finishCode: 'EP4' }),
+    L('H1-2TRVPLUG', 50),
+    L('HTSLNTCAR', 500),
+    header('base front 4'),
+    L('H1-75R/P', 50, { finishCode: 'P30', cutLength: 84 }),           // CPQ bills paint on the shared /P SKU
+    L('H1-75KF/P', 50, { finishCode: 'P30' }),
+];
+
+export const job = {
+    id: JOB_ID,
+    customer: { id: 'CUST-FAB', name: 'FABRICUT' },
+    cpqData: { breakdown, cartItems: [{ assemblyName: 'Fabricut H1 Tabletop', generalNotes: 'Tabletop display', finishLabel: 'EP4 - Satin Gold' }] },
+    // CPQ keeps ONE cart item's cut facts for the whole job (the first) — here ROW 1's, which has no miters.
+    engineeringNotes: { shape: 'STRAIGHT', qtyMiters: 0, qtyBends: 0, qtySplices: 0, qtyMiterReturns: 0, svgString: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' },
+};
+
+export const salesOrder = (lines) => ({
+    id: SO_APP_ID, soId: 'SO60551', brand: BRAND, customer: 'FABRICUT', customerId: 'CUST-FAB',
+    nsInternalId: SO_NS_ID, hqJobId: JOB_ID, status: 'Dispatched', createdAt: 1, lines,
+});

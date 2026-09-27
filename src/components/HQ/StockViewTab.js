@@ -29,7 +29,7 @@ import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { holdSplitGroups } from '../Shared/rowPairShape';
-import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf } from '../Shared/oeGenerate';
+import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf, oeLinePlansOf, oeStartsLine } from '../Shared/oeGenerate';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import { runChunked, fetchAvailableById, fetchInboundById, backorderTallyOf } from '../Shared/stockPosition';
 
@@ -2471,10 +2471,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const work = [];
         // Scoped to a 10.5 row: only the line indexes it named. Unscoped: never a rows-released order.
         const onlyIdx = scoped && Array.isArray(scoped.lineIdxs) && scoped.lineIdxs.length ? new Set(scoped.lineIdxs) : null;
-        (scoped ? scoped.orders.filter(e => e.so.id === scoped.soId) : oeNeeds.orders.filter(e => !e.so.displayRelease)).forEach((entry) => (entry.so.lines || []).forEach((l, idx) => {
-            if (!oeIsTbf(l)) return;
-            if (onlyIdx && !onlyIdx.has(idx)) return;
-            if (!oeLinkFor(entry, l)) work.push({ so: entry.so, l });
+        // WHAT EACH LINE BECOMES is the one answer every start reads (Shared/oeGenerate.oeLinePlansOf — CPQ's
+        // classifier, the one door rule, a rider's rod finish), never this view's own (Stuart 2026-09-27).
+        (scoped ? scoped.orders.filter(e => e.so.id === scoped.soId) : oeNeeds.orders.filter(e => !e.so.displayRelease)).forEach((entry) => oeLinePlansOf({ so: entry.so, inventory: hqParts }).forEach(pl => {
+            if (!oeStartsLine(pl)) return;
+            if (onlyIdx && !onlyIdx.has(pl.lineIdx)) return;
+            if (!oeLinkFor(entry, pl.line)) work.push({ so: entry.so, l: pl.line, plan: pl });
         }));
         if (!work.length) return alert(scoped ? 'Every to-be-finished line on that order already has live work behind it — nothing to start.' : 'Every made-to-order line already has a linked order — nothing to generate.');
         // Outsourced-finish (plating) and bought-raw (PO) lines keep their existing per-line
@@ -2482,19 +2484,17 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         // operator sees the whole batch's stock/units/routing/NS plan before anything writes.
         const reviewable = [], direct = [];
         work.forEach(w => {
-            const { part } = resolveOePart(String(w.l.erp || '').toUpperCase());
-            const finish = oeLineFinish(w.l);
-            // THE ONE DOOR RULE (Shared/oeGenerate.oeDoorOf) — the rule 10.5's ▶ Start row / RTG's automatic
-            // start already ask. This view kept its own copy and it drifted (Stuart 2026-09-27, Base Front 2):
-            // H1-138CC/P06 is painted HERE, so it pulls H1-138CC/P, but the copy read "bought raw" and planned
-            // a PO for 50 × H1-138CC. A plated small part is door STOCK, a plated pole door MAKE (2026-09-27).
-            const door = part && finish ? oeDoorOf(part, finish, hqParts) : '';
-            if (door) reviewable.push({ ...w, buy: door === 'BUY', stock: door === 'STOCK' }); else direct.push(w);
+            // THE ONE DOOR RULE — the answer 10.5's ▶ Start row / RTG's automatic start read. This view kept its
+            // own copy and it drifted twice (Base Front 2's H1-138CC/P06 planned as a bought raw; the French
+            // returns stock-checked as plated parts). A rider rides its pole; a plated small part is STOCK.
+            const pl = w.plan;
+            const door = pl && pl.part && pl.finish ? pl.door : '';
+            if (door) reviewable.push({ so: w.so, l: w.l, buy: door === 'BUY', stock: door === 'STOCK', rider: door === 'RIDER', division: pl.division, finish: pl.finish }); else direct.push(w);
         });
         for (const w of direct) {
             // A BOTH-sourced line whose operator picks "make" defers into the same batch review.
             const r = await generateOeLineOrder(w.so, w.l, { collectReview: true });
-            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line, buy: !!r.review.buy, stock: !!r.review.stock });
+            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line, buy: !!r.review.buy, stock: !!r.review.stock, rider: !!r.review.rider, division: r.review.division, finish: r.review.finish });
         }
         if (reviewable.length) await openOeReviewForLines(reviewable);
     };
@@ -2566,8 +2566,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const { part, aliasNote } = resolveOePart(erp);
         if (!part) return alert(`${erp} is not in the Master Library (searched real codes, customer codes and aliases) — sync or alias it first.`);
         if (aliasNote) addLog(`🔗 ${aliasNote} — planning the real item.`, 'info');
-        const finish = oeLineFinish(line);
-        if (!finish) return alert(`${erp}: no finish recorded on this line — the order predates finish capture. Add it to the line note in the form "TO BE FINISHED · CODE", or re-enter the line on tab 7.`);
+        const pl = oeLinePlansOf({ so, inventory: hqParts }).find(p => p.line === line) || null;
+        const finish = (pl && pl.finish) || oeLineFinish(line);
+        if (!finish) return alert(`${erp}: ${(pl && pl.finishWhy) || 'no finish recorded on this line — the order predates finish capture. Add it to the line note in the form "TO BE FINISHED · CODE", or re-enter the line on tab 7.'}`);
         const qty = Number(line.qty) || 0;
         if (!qty) return alert('Line has no quantity.');
         const specs = part.manufacturingSpecs || {};
@@ -2579,7 +2580,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // RAW ITEM WE BUY → a linked vendor PO (BOTH always asks, defaulted to make). Which door is
             // the ONE rule's answer (Shared/oeGenerate.oeDoorOf) — a finish applied here is made here.
             const vendorName = String(specs.vendorName || '').trim();
-            const door = oeDoorOf(part, finish, hqParts);
+            const door = pl ? pl.door : oeDoorOf(part, finish, hqParts);
+            const carry = { rider: door === 'RIDER', division: pl ? pl.division : undefined, finish };
             let wantPo = door === 'BUY';
             if (door === 'ASK') wantPo = window.confirm(`${erp} is flagged ⚖ BOTH (make and buy).\n\nOK = vendor PO to ${vendorName || 'its vendor'} · Cancel = finishing work order.`);
             if (wantPo) {
@@ -2587,16 +2589,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // created PO-1013 for a line with plenty already on order — no stock read, no
                 // review). The plan shows avail + on-order; a covered short defaults to skip.
                 setGenBusy(false);
-                if (opts.collectReview) return { review: { so, line, buy: true } };
-                await openOeReviewForLines([{ so, l: line, buy: true }]);
+                if (opts.collectReview) return { review: { so, line, buy: true, ...carry } };
+                await openOeReviewForLines([{ so, l: line, buy: true, ...carry }]);
                 return;
             }
             // IN-HOUSE MANUFACTURE → THE REVIEW GATE (Stuart 2026-08-29: "the auto sequence …
             // needs to open a pop up window and show its work — show stock check, let operator
             // verify, then send on"). Nothing is written here; the plan modal decides.
             setGenBusy(false);
-            if (opts.collectReview) return { review: { so, line, stock: door === 'STOCK' } };
-            await openOeReviewForLines([{ so, l: line, stock: door === 'STOCK' }]);
+            if (opts.collectReview) return { review: { so, line, stock: door === 'STOCK', ...carry } };
+            await openOeReviewForLines([{ so, l: line, stock: door === 'STOCK', ...carry }]);
             return;
         } catch (e) { addLog(`OE generate failed: ${e.message || e}`, 'error'); alert('Generate failed:\n\n' + (e.message || e)); }
         setGenBusy(false);
