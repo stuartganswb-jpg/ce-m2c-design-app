@@ -9,6 +9,7 @@
 import { planSmallLines } from './splitPlan.js';
 import { coverCodesOf } from './backorder.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
+import { finishedCodeOf } from './subFinish.js';
 
 const num = (v) => Number(v) || 0;
 
@@ -31,7 +32,7 @@ export function quickShipPullLines(lines = [], trvDocLines = []) {
         // line's own stamp or its finish code's (Shared/finishRouting), the same test the start makes.
         const fin = String(l.finishCode || '').trim().toUpperCase();
         const erp = String(l.erp).toUpperCase();
-        const code = (l.toBeFinished && fin && !erp.endsWith(`/${fin}`)) ? `${erp}/${fin}` : String(l.erp);
+        const code = (l.toBeFinished && fin) ? finishedCodeOf(erp, fin) : String(l.erp);
         const plated = !!(l.toBeFinished && (l.finishOutsourced === true || (fin && isOutsourcedFinishCode(fin))));
         out.push({
             legacyErpId: code, partName: l.name || '', qty,

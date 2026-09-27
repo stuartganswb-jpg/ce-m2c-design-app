@@ -25,6 +25,7 @@ import { isQuickShip, ORDER_ENTRY_CLASS } from './pickLines.js';
 import { isDisplayOnlyLine, isParkedGeometryLine, headerSidemarkOf } from './lineClassification.js';
 import { oeIsFloorLine, oeLineFinish, oeCoverageOf, oeLineStateOf } from './oeLines.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
+import { rowRestampOf } from './subFinish.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -469,7 +470,12 @@ export const splitRetiredStamp = (by = '', now = Date.now()) => ({ splitRetired:
 // dropped is appended. On a rows-released order the retired split's backorder records (not OE_ROW) go too.
 // Pure. @returns null when nothing changes, else { lines, enriched, added: [{ erp, row, qty }], droppedBackorders }
 const REREAD_FIELDS = ['partId', 'partHandling', 'customOverrideHandling', 'isFee', 'isAddOn', 'qtyEach', 'configQty', 'clientSku', 'hidden', 'shopOnly', 'noFinish', 'subFinishCode', 'finishLabel', 'cutLength'];
-export const rereadLinesPatchOf = ({ so, breakdown = [] }) => {
+// THEN CPQ'S CURRENT RULES FOR EACH ROW (Shared/subFinish.rowRestampOf, Stuart 2026-09-27 — SO60551 Row 2): a track /
+// F-clip gains its sub finish and CPQ's cut deduction, a part made in a stock colour but quoted in another finish
+// becomes the stocked colour item ("yes /C the ep4 is a mistake"), a fee cut into the rod takes the rod's finish.
+// These change what the line IS — so each is listed for the person confirming, the NetSuite line to change named.
+// `finishes` = 4.5's finish records; `inventory` = the library (id or code lookup).
+export const rereadLinesPatchOf = ({ so, breakdown = [], finishes = [], inventory = [] }) => {
     const existing = Array.isArray(so && so.lines) ? so.lines : [];
     const fresh = rowLinesFromBreakdown(breakdown);
     const used = new Set();
@@ -477,24 +483,44 @@ export const rereadLinesPatchOf = ({ so, breakdown = [] }) => {
     let enriched = 0;
     const added = [];
     fresh.forEach(f => {
-        const i = lines.findIndex((e, k) => !used.has(k) && U(e.erp) === U(f.erp) && rowKeyOf(rowOfLine(e)) === rowKeyOf(rowOfLine(f)) && N(e.qty) === N(f.qty));
+        // A line CPQ's rules made another item (the stock colour — `identityFrom` names what it was quoted as) is still
+        // the quote's line: matched by the code it came from, never re-added.
+        const sameItem = (e) => U(e.erp) === U(f.erp) || (!!e.identityFrom && [U(f.billedErp), U(f.erp)].includes(U(e.identityFrom)));
+        const i = lines.findIndex((e, k) => !used.has(k) && sameItem(e) && rowKeyOf(rowOfLine(e)) === rowKeyOf(rowOfLine(f)) && N(e.qty) === N(f.qty));
         if (i < 0) { lines.push(f); used.add(lines.length - 1); added.push({ erp: f.erp, row: f.row, qty: f.qty }); return; }
         used.add(i);
         let changed = false;
         REREAD_FIELDS.forEach(k => { if (f[k] != null && f[k] !== '' && lines[i][k] == null) { lines[i][k] = f[k]; changed = true; } });
         if (changed) enriched++;
     });
+    const byId = new Map((inventory || []).map(p => [String(p.id), p]));
+    const byCode = new Map((inventory || []).map(p => [U(p.legacyErpId || p.itemId), p]));
+    const partOfLine = (l) => byId.get(String(l.partId || '')) || byCode.get(U(l.erp)) || byCode.get(U(String(l.erp || '').split('/')[0])) || null;
+    const restamped = [];
+    const notes = [];
+    [...new Set(lines.map(l => rowKeyOf(rowOfLine(l))))].forEach(rk => {
+        const rows = lines.map((line, idx) => ({ idx, line, part: partOfLine(line) })).filter(r => rowKeyOf(rowOfLine(r.line)) === rk);
+        const rs = rowRestampOf({ rows, finishes, swapIdentity: true, findByCode: (c) => byCode.get(U(c)) || null });
+        Object.entries(rs.patches).forEach(([idx, patch]) => { lines[Number(idx)] = { ...lines[Number(idx)], ...patch }; });
+        rs.changes.forEach(c => restamped.push({ ...c, row: rowOfLine(lines[c.idx]) }));
+        rs.notes.forEach(n => notes.push({ ...n, row: rowOfLine(lines[n.idx]) }));
+    });
     const bo = Array.isArray(so && so.backorderLines) ? so.backorderLines : [];
-    const keptBo = (so && so.displayRelease) ? bo.filter(r => r && r.source === 'OE_ROW') : bo;
+    // A line that became another item (the stock colour) leaves its old code's backorder records behind.
+    const swappedFrom = new Set(restamped.filter(c => c.netsuite).map(c => U(lines[c.idx].identityFrom)));
+    const keptBo = ((so && so.displayRelease) ? bo.filter(r => r && r.source === 'OE_ROW') : bo).filter(r => !swappedFrom.has(U(r && r.code)));
     const droppedBackorders = bo.length - keptBo.length;
-    if (!enriched && !added.length && !droppedBackorders) return null;
-    return { lines, enriched, added, droppedBackorders, backorderLines: keptBo };
+    if (!enriched && !added.length && !droppedBackorders && !restamped.length) return null;
+    return { lines, enriched, added, droppedBackorders, backorderLines: keptBo, restamped, notes };
 };
 export const rereadLinesText = (so, p) => [
     `↻ Re-read ${(so && (so.soId || so.id)) || ''}'s lines from its CPQ job?`,
     p.enriched ? `\n${p.enriched} line(s) gain the fields CPQ's classifier reads (part id, handling, fee flag, per-config counts, customer code…) — code, finish, quantity and position unchanged.` : '',
     p.added.length ? `\n${p.added.length} line(s) the old reader dropped are ADDED:\n${p.added.map(a => `  • ${a.qty} × ${a.erp}${a.row ? ` (${a.row})` : ' (no row — assign it)'}`).join('\n')}` : '',
-    p.droppedBackorders ? `\n${p.droppedBackorders} backorder record(s) from the retired whole-order split are removed — each row records its own when it starts.` : '',
+    (p.restamped || []).length ? `\nCPQ's rules for these lines (the traverse track and F-clip, stock-colour parts, cuts into a rod):\n${p.restamped.map(c => `  • ${c.row ? `${c.row}: ` : ''}${c.text}`).join('\n')}` : '',
+    p.droppedBackorders ? `\n${p.droppedBackorders} backorder record(s) from the retired whole-order split or for a replaced item are removed — each row records its own when it starts.` : '',
+    (p.notes || []).length ? `\nStill needs a person:\n${p.notes.map(n => `  • ${n.row ? `${n.row}: ` : ''}${n.text}`).join('\n')}` : '',
+    (p.restamped || []).some(c => c.netsuite) ? '\n⚠ An item changed: change the same line in NetSuite before the order is packed, or the fulfilment ships the old item.' : '',
     '\nNothing is started, ordered or sent to NetSuite.',
 ].filter(Boolean).join('\n');
 

@@ -12,9 +12,11 @@
 //     (finishRouting.handlingForErp, the finish suffix — Stuart 2026-09-01);
 //   · the cut facts — CPQ reads counts off the job's engineeringNotes (one cart item's); a row reads them off
 //     its OWN fee lines (a miter fee on the row means the row's wood is mitered).
-// And the finish a line takes when it names none, or rides: CPQ's rule since 9/18 (Shared/HardwareConfigurator
-// "A RETURN CUT INTO THE POLE WEARS THE POLE'S FINISH") — a fee cut into a rod wears the rod's finish, and a
-// custom line quoted with no finish takes its row's rod finish. Pure.
+// And the finish a RIDER takes: CPQ's rule since 9/18 (Shared/HardwareConfigurator "A RETURN CUT INTO THE POLE
+// WEARS THE POLE'S FINISH") — a fee cut into a rod wears the rod's finish. A traverse track or F-clip wears the
+// sub finish 4.5 aligns to the rod's (Shared/subFinish.rowRestampOf, applied before this reads the row). Nothing
+// else is given a finish it was not quoted in (2026-09-27: the "no finish takes the rod's" rule was this module's
+// own invention — CPQ has none — and it stained SO60551's track S04). Pure.
 import { classifyLine, DIVISION_CUSTOM, DIVISION_SMALL } from './lineClassification.js';
 import { isPoleCategory } from './poleCut.js';
 import { handlingForErp } from './finishRouting.js';
@@ -61,7 +63,7 @@ export const rowFabOf = (entries = []) => {
  *          (a fee, a return, a miter): fabrication ON the pole, on the shop's cut list, never stock-checked,
  *          picked or backordered.
  */
-export const oeDivisionOf = ({ line = {}, basePart = null, finishedPart = null, erp = '', finish = '', fab = null } = {}) => {
+export const oeDivisionOf = ({ line = {}, basePart = null, finishedPart = null, erp = '', finish = '', fab = null, trvCut = false } = {}) => {
     const part = finishedPart || basePart;
     const fee = !!(line.isFee || line.lineIsFee || isFeePart(basePart) || isFeePart(finishedPart));
     const cls = {
@@ -74,7 +76,9 @@ export const oeDivisionOf = ({ line = {}, basePart = null, finishedPart = null, 
     const pole = !fee && (isPoleCategory(typeOf(basePart)) || isPoleCategory(typeOf(finishedPart)));
     // A pole whose finished SKU has no record: the importers' rule for that SKU — mill / applied finish =
     // Custom, /BS /N90 /CP… = Small Parts. Wood is decided by its cut (above); an operator override stands.
-    if (pole && !finishedPart && !isWoodPart(basePart) && !U(line.customOverrideHandling)) {
+    // A traverse track or F-clip (`trvCut`) is CUT to its fascia and finished here in its sub finish — the item's
+    // own Custom handling stands (its /C is the colour it leaves the floor in, not a stocked length).
+    if (pole && !finishedPart && !isWoodPart(basePart) && !U(line.customOverrideHandling) && !trvCut) {
         const code = U(erp || line.erp);
         division = handlingForErp(finish ? `${code}/${U(finish)}` : code) === 'Custom' ? DIVISION_CUSTOM : DIVISION_SMALL;
     }
@@ -84,24 +88,30 @@ export const oeDivisionOf = ({ line = {}, basePart = null, finishedPart = null, 
 
 /**
  * The finish each line of ONE row takes. A line keeps its own finish — except a RIDER, which wears its rod's
- * finish (CPQ, 9/18: SO60551's miter went out EP4 on a stained oak fascia), and a custom line quoted with no
- * finish, which takes the rod's. The rod = the row's custom non-rider lines that name a finish; when they
- * name more than one, a rider keeps its own finish if it is one of them, otherwise it is left for a person.
- * @param items [{ lineIdx, ownFinish, division, rider }]
- * @returns { [lineIdx]: { finish, source: 'line' | 'rod' | '', why } }
+ * finish (CPQ, 9/18: SO60551's miter went out EP4 on a stained oak fascia). The rod = the row's custom non-rider
+ * lines that name a finish and are not a traverse sub-finish part (`sub` — the track and the F-clip wear the colour
+ * aligned to the rod, never the rod's own finish); when they name more than one, a rider keeps its own finish if it
+ * is one of them, otherwise it is left for a person. A custom line quoted with no finish is named for a person —
+ * it is never given one.
+ * @param items [{ lineIdx, ownFinish, division, rider, sub }]
+ * @returns { [lineIdx]: { finish, source: 'line' | 'rod' | 'sub' | '', why } }
  */
 export const rowFinishesOf = (items = []) => {
-    const rods = [...new Set((items || []).filter(i => i.division === DIVISION_CUSTOM && !i.rider && U(i.ownFinish)).map(i => U(i.ownFinish)))];
+    const rods = [...new Set((items || []).filter(i => i.division === DIVISION_CUSTOM && !i.rider && !i.sub && U(i.ownFinish)).map(i => U(i.ownFinish)))];
     const out = {};
     (items || []).forEach(i => {
         const own = U(i.ownFinish);
-        const needsRod = i.rider || (i.division === DIVISION_CUSTOM && !own);
-        if (!needsRod) { out[i.lineIdx] = { finish: own, source: own ? 'line' : '', why: '' }; return; }
+        if (!i.rider) {
+            out[i.lineIdx] = own
+                ? { finish: own, source: i.sub ? 'sub' : 'line', why: '' }
+                : { finish: '', source: '', why: i.division === DIVISION_CUSTOM ? (i.why || 'no finish on the line — CPQ quoted it with none; set the finish, or mark it unfinished') : '' };
+            return;
+        }
         if (rods.length === 1) { out[i.lineIdx] = { finish: rods[0], source: 'rod', why: '' }; return; }
         if (own && rods.includes(own)) { out[i.lineIdx] = { finish: own, source: 'line', why: '' }; return; }
         out[i.lineIdx] = {
             finish: '', source: '',
-            why: rods.length ? `rides a rod, and the row's rods take ${rods.join(' and ')} — which one is it cut into?` : `no finish, and no rod in its row names one — set the finish on the line`,
+            why: rods.length ? `rides a rod, and the row's rods take ${rods.join(' and ')} — which one is it cut into?` : `rides a rod, and no rod in its row names a finish — set the rod's finish`,
         };
     });
     return out;

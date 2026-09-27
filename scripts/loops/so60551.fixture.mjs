@@ -1,8 +1,10 @@
 // SO60551's ROW 1 and Row 2 as CPQ saved them on 2026-09-16 (the Fabricut tabletop), with the library facts
-// the route reads. The item facts are the ones read off the live library on 2026-09-27: H1-FRPF and
-// H1-2TRVMTR are Fee records; H1-2TRV is Part Handling CUSTOM, product type POLE (a wood traverse, S04, with
-// miter cuts — Stuart); the rods are counted in FEET by NetSuite. The 9/16 quote still carries the miter fee
-// as EP4 — CPQ was corrected on 9/18 (a return cut into a rod wears the rod's finish).
+// the route reads. Row 2 is the LIVE row, read off the job and the sales order on 2026-09-27: an 18" oak fascia
+// stained S04 (2 ft billed), the track H1-2TRV at the fascia's 18" (the quote predates CPQ's 9/19 track deduction)
+// stamped TCP by CPQ, two miter fees quoted EP4 and two H1-2TRV-WB brackets quoted EP4 (both before CPQ's 9/18 rules
+// — "the ep4 is a mistake", Stuart), end plugs, two F-clip lines with no cut, carriers and a square nut.
+// Library: H1-FRPF and H1-2TRVMTR are Fee records; H1-2TRV (the track) and H1-2TRVCLP (the F-clip) are Custom Poles;
+// H1-2TRV-WB is a Kit flagged usesSubFinish with /B /C /EP4 records. 4.5: S04 → TCP (Traverse Champagne).
 export const BRAND = 'ce';
 export const SO_APP_ID = 'SO-APP-QUOTE-TEST';
 export const SO_NS_ID = '777001';
@@ -17,15 +19,18 @@ export const library = [
     inv('H1-1CP-V', 'Cap Finial'), inv('H1-1CP-V/EP4', 'Cap Finial Satin Gold', {}, { partClass: 'Assembly' }),
     inv('H1-1BR', '1" Bracket', { partHandling: 'Small Parts' }), inv('H1-1BR/EP4', '1" Bracket Satin Gold', { partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
     inv('H1-1STDOFF', 'Standoff'), inv('H1-1STDOFF/EP4', 'Standoff Satin Gold', {}, { partClass: 'Assembly' }),
-    // Row 2 — a stained wood traverse: the fascia and the track (both mitered), their miter fees, plated wall
-    // brackets, and the stocked hardware that rides along
-    inv('H1-2RCTWR-O', 'Rect Wood Fascia Oak', { productType: 'POLE', partHandling: 'Custom', material: 'WOOD', isInHouse: false, vendorName: 'Oak Supply' }),
-    inv('H1-2TRV', '1.5" Square Traverse Track', { productType: 'POLE', partHandling: 'Custom', material: 'WOOD', isInHouse: false, vendorName: 'Oak Supply' }),
-    inv('H1-2TRVMTR', 'Traverse Miter', { productType: 'FEE' }, { partClass: 'Fee' }),
-    inv('H1-2TRV-WB', 'Traverse Wall Bracket', { partHandling: 'Small Parts' }, { partClass: 'Kit' }),
-    inv('H1-2TRV-WB/EP4', 'Traverse Wall Bracket Satin Gold', { partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
-    inv('H1-2TRVPLUG', 'Traverse End Plug', { partHandling: 'Small Parts' }),
-    inv('HTSLNTCAR', 'Silent Carrier', { partHandling: 'Small Parts' }),
+    // Row 2 — a stained oak fascia with miters, the traverse track and F-clips cut from it, stock-colour brackets,
+    // and the stocked hardware that rides along
+    inv('H1-2RCTWR-O', '2" x 3/4" Rectangular Oak Rod', { productType: 'Pole', partHandling: 'Custom', material: 'Wood', isInHouse: false, vendorName: 'Oak Supply' }),
+    inv('H1-2TRV', '1.5" Square Traverse Track', { productType: 'Pole', partHandling: 'Custom' }),
+    inv('H1-2TRVCLP', 'F-Clip Hanger for 1.5" Square Traverse Track', { productType: 'Pole', partHandling: 'Custom' }),
+    inv('H1-2TRVMTR', 'Miter Return 2" Rectangular Rod', { productType: 'FEE' }, { partClass: 'Fee' }),
+    inv('H1-2TRV-WB', '2" Traverse Wall Bracket (3-5/8" P)', { productType: 'BRACKET', partHandling: 'Small Parts', usesSubFinish: true }, { partClass: 'Kit' }),
+    inv('H1-2TRV-WB/C', '2" Traverse Wall Bracket (3-5/8" P) - Champagne', { productType: 'Bracket', partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
+    inv('H1-2TRV-WB/EP4', '2" Traverse Wall Bracket (3-5/8" P) - Satin Gold', { productType: 'Bracket', partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
+    inv('H1-2TRVPLUG', 'End Plug for 1.5" Square Traverse', { productType: 'Component', partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
+    inv('H1-2TRVNUT', 'Square Nut for 1.5" Traverse Track', { productType: 'Component', partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
+    inv('HTSLNTCAR', 'Silent Carrier', { productType: 'Traverse', partHandling: 'Small Parts' }),
     // base front 4 — a bought 3/4" rod (NetSuite counts it in feet) and a painted finial the customer knows by
     // its own code
     inv('H1-75R', '3/4" Round Hollow Rod Stock', { productType: 'POLE', isInHouse: false, vendorName: 'Metals USA' }),
@@ -41,8 +46,11 @@ export const stock = {
     'H1-1STDOFF/EP4': { available: 0, unit: 'EACH' },
     'H1-2RCTWR-O': { available: 400, unit: 'FOOT' },
     'H1-2TRV': { available: 400, unit: 'FOOT' },
+    'H1-2TRVCLP': { available: 400, unit: 'FOOT' },
     'H1-2TRV-WB/EP4': { available: 0, unit: 'EACH' },
+    'H1-2TRV-WB/C': { available: 200, unit: 'EACH' },
     'H1-2TRVPLUG': { available: 500, unit: 'EACH' },
+    'H1-2TRVNUT': { available: 500, unit: 'EACH' },
     'HTSLNTCAR': { available: 5000, unit: 'EACH' },
     'H1-75R': { available: 430, unit: 'FOOT' },
     'H1-75KF/P': { available: 100, unit: 'EACH' },
@@ -59,16 +67,31 @@ export const breakdown = [
     L('H1-1BR/EP4', 50, { finishCode: 'EP4' }),
     L('H1-1STDOFF/EP4', 50, { finishCode: 'EP4', hidden: true }),      // BOM-only standoff
     header('Row 2'),
-    L('H1-2RCTWR-O/S04', 50, { finishCode: 'S04', cutLength: 30 }),    // stained oak fascia, mitered
-    L('H1-2TRV', 50, { cutLength: 30 }),                               // the track: no finish on the 9/16 quote
-    L('H1-2TRVMTR/EP4', 50, { finishCode: 'EP4' }),                    // miter fee — EP4 is the pre-9/18 error
-    L('H1-2TRVMTR/EP4', 50, { finishCode: 'EP4' }),
-    L('H1-2TRV-WB/EP4', 50, { finishCode: 'EP4' }),
+    L('H1-2RCTWR-O', 50, { finishCode: 'S04', cutLength: 18, perFoot: true, feet: 2, partId: 'lib-H1-2RCTWR-O' }),   // stained oak fascia, mitered
+    L('H1-2TRV', 50, { cutLength: 18, perFoot: true, feet: 2, subFinishCode: 'TCP', partId: 'lib-H1-2TRV' }),        // the track: TCP, the fascia's length
+    L('H1-2TRVMTR', 50, { finishCode: 'EP4' }),                         // miter fee — EP4 is the pre-9/18 error
+    L('H1-2TRVMTR', 50, { finishCode: 'EP4' }),
+    L('H1-2TRV-WB/EP4', 50, { finishCode: 'EP4', partId: 'lib-H1-2TRV-WB' }),   // bracket — /C since 9/18
+    L('H1-2TRV-WB/EP4', 50, { finishCode: 'EP4', partId: 'lib-H1-2TRV-WB' }),
     L('H1-2TRVPLUG', 50),
+    L('H1-2TRVPLUG', 50),
+    L('H1-2TRVCLP', 50),                                                // F-clips: no cut on the 9/16 quote
+    L('H1-2TRVCLP', 50),
     L('HTSLNTCAR', 500),
+    L('H1-2TRVNUT', 50),
     header('base front 4'),
     L('H1-75R/P', 50, { finishCode: 'P30', cutLength: 84 }),           // CPQ bills paint on the shared /P SKU
     L('H1-75KF/P', 50, { finishCode: 'P30' }),
+];
+
+// 4.5 — the finishes the route reads the sub finish from (live values, 2026-09-27).
+export const finishes = [
+    { code: 'S04', name: 'S04', subFinishCode: 'TCP', type: 'MIXED' },
+    { code: 'P30', name: 'P30', subFinishCode: 'TCP', type: 'MIXED' },
+    { code: 'P14', name: 'P14', subFinishCode: 'TBR', type: 'MIXED' },
+    { code: 'TBR', name: 'TRAVERSE BRONZE', isSubFinish: true, type: 'TRAVERSE TRACK AND PARTS' },
+    { code: 'TCP', name: 'TRAVERSE CHAMPAGNE', isSubFinish: true, type: 'TRAVERSE TRACK AND PARTS' },
+    { code: 'EP4', name: 'SATIN GOLD', outsourced: true },
 ];
 
 export const job = {

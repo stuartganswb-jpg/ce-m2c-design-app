@@ -12,6 +12,7 @@
 // Pure. The split (B) writes the record; Stock View's Backorders board (A) reads it and pairs each
 // line with the open PO/WO that covers any of its cover codes; the receipt (D) marks it covered.
 import { finishSuffixOf, isOutsourcedFinishCode, millBaseOf } from './finishRouting.js';
+import { isStockColourCode } from './subFinish.js';
 
 const U = (v) => String(v || '').trim().toUpperCase();
 export const lineCodeOf = (l) => U(l && (l.legacyErpId || l.partId));
@@ -19,6 +20,9 @@ export const lineCodeOf = (l) => U(l && (l.legacyErpId || l.partId));
 export const isPlatedLine = (line, orderRecipe) => {
     if (!line) return false;
     if (line.finishOutsourced === true) return true;
+    // A STOCK-COLOUR ITEM (H1-2TRV-WB/C — Shared/subFinish, 2026-09-27) is a stocked finished good exactly as a plated
+    // one is: picked from the shelf, or a true backorder; never sprayed from the order's recipe.
+    if (line.stockColour === true || isStockColourCode(lineCodeOf(line))) return true;
     if (line.finishOutsourced === false) return false;
     const sfx = finishSuffixOf(lineCodeOf(line));
     if (sfx) return isOutsourcedFinishCode(sfx);

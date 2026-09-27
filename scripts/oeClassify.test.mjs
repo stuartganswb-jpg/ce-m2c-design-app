@@ -35,17 +35,19 @@ eq('isFeePart reads the class and the product type', [isFeePart(frpf), isFeePart
 
 // ── the finish a line takes ──
 const row2 = [
-    { lineIdx: 0, ownFinish: 'S04', division: DIVISION_CUSTOM, rider: false },   // the oak fascia
-    { lineIdx: 1, ownFinish: '', division: DIVISION_CUSTOM, rider: false },      // the wood track, no finish on the quote
-    { lineIdx: 2, ownFinish: 'EP4', division: DIVISION_CUSTOM, rider: true },    // the miter, EP4 on the 9/16 quote
-    { lineIdx: 3, ownFinish: 'EP4', division: DIVISION_SMALL, rider: false },    // a plated wall bracket
+    { lineIdx: 0, ownFinish: 'S04', division: DIVISION_CUSTOM, rider: false },            // the oak fascia
+    { lineIdx: 1, ownFinish: 'TCP', division: DIVISION_CUSTOM, rider: false, sub: true },  // the track, in the sub finish (Shared/subFinish)
+    { lineIdx: 2, ownFinish: 'EP4', division: DIVISION_CUSTOM, rider: true },               // the miter, EP4 on the 9/16 quote
+    { lineIdx: 3, ownFinish: 'EP4', division: DIVISION_SMALL, rider: false },               // a plated wall bracket
 ];
 const f = rowFinishesOf(row2);
-eq('the fascia keeps S04; the track and the miter take the rod\'s S04; the bracket keeps EP4', [f[0].finish, f[1].finish, f[2].finish, f[3].finish], ['S04', 'S04', 'S04', 'EP4']);
-eq('…and say where it came from', [f[1].source, f[2].source], ['rod', 'rod']);
+eq('the fascia keeps S04; the track keeps its sub finish TCP; the miter takes the rod\'s S04; the bracket keeps EP4', [f[0].finish, f[1].finish, f[2].finish, f[3].finish], ['S04', 'TCP', 'S04', 'EP4']);
+eq('…and say where it came from', [f[1].source, f[2].source], ['sub', 'rod']);
+eq('the track\'s sub finish is never the rod the miter follows', rowFinishesOf([{ lineIdx: 0, ownFinish: 'TCP', division: DIVISION_CUSTOM, sub: true }, { lineIdx: 1, ownFinish: 'EP4', division: DIVISION_CUSTOM, rider: true }])[1].finish, '');
 const two = rowFinishesOf([{ lineIdx: 0, ownFinish: 'S04', division: DIVISION_CUSTOM }, { lineIdx: 1, ownFinish: 'P06', division: DIVISION_CUSTOM }, { lineIdx: 2, ownFinish: '', division: DIVISION_CUSTOM, rider: true }]);
 eq('two rods in two finishes: a rider with no finish of its own waits for a person', [two[2].finish, /which one/.test(two[2].why)], ['', true]);
-const lone = rowFinishesOf([{ lineIdx: 0, ownFinish: '', division: DIVISION_CUSTOM, rider: false }]);
-eq('a custom line with no finish and no rod in its row is named', [lone[0].finish, /set the finish/.test(lone[0].why)], ['', true]);
+const lone = rowFinishesOf([{ lineIdx: 0, ownFinish: '', division: DIVISION_CUSTOM, rider: false }, { lineIdx: 1, ownFinish: 'S04', division: DIVISION_CUSTOM }]);
+eq('a custom line quoted with no finish is NEVER given the rod\'s (CPQ has no such rule) — it is named', [lone[0].finish, /set the finish/.test(lone[0].why)], ['', true]);
+eq('the traverse track keeps CPQ\'s Custom handling in its sub finish (not the /C suffix rule)', oeDivisionOf({ line: { cutLength: 17.5 }, basePart: P('H1-2TRV', { productType: 'Pole', partHandling: 'Custom' }), erp: 'H1-2TRV', finish: 'TCP', trvCut: true }).division, DIVISION_CUSTOM);
 
 console.log(`oeClassify: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

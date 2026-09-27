@@ -1,4 +1,5 @@
 import { committedQtyOf } from './committedBins.js';
+import { finishedCodeOf } from './subFinish.js';
 // ══ ONE READER FOR AN ORDER'S LINES ═══════════════════════════════════════════════════════════
 //
 // Brief D · D7. The warehouse takes work from two doors and they speak different dialects:
@@ -119,7 +120,9 @@ export const soLineCodeOf = (l) => {
     if (!erp || !lineIsTbf(l)) return erp;
     const fin = lineFinishOf(l);
     if (!fin) return erp;
-    return erp.endsWith(`/${fin}`) ? erp : `${erp}/${fin}`;
+    // One naming rule (Shared/subFinish.finishedCodeOf): <code>/<finish>, and a traverse sub finish names its stock
+    // colour — the track made TCP leaves the floor as H1-2TRVTRK/C, an F-clip as H1-2TRVCLP/C (2026-09-27).
+    return finishedCodeOf(erp, fin);
 };
 // A FEE ON AN ORDER IS NEVER PICKED OR PACKED (Stuart 2026-09-27). A fee cut into a pole (a French return, a
 // miter) rides the pole's shop cut list — the start stamps it `rider`; a billing-only fee is just money. Tab 7

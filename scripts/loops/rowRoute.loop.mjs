@@ -33,14 +33,16 @@ globalThis.__NS = async ({ payload }) => {
 __fs.reset();
 F.library.forEach(p => __fs.seed('Approved_Designs', p.id, p));
 __fs.seed('jobs', F.JOB_ID, F.job);
-const lines = rowLinesFromBreakdown(F.breakdown);
+// The live order was anchored by the OLD reader: no part id, no sub finish on its lines — reproduced here, so the
+// route is proven to derive the track's colour from the row itself.
+const lines = rowLinesFromBreakdown(F.breakdown).map(l => { const x = { ...l }; delete x.subFinishCode; delete x.finishLabel; delete x.partId; return x; });
 __fs.seed('hq_sales_orders', F.SO_APP_ID, { ...F.salesOrder(lines), ...displayAnchorPatch({ buildId: 'BUILD-T', lines, so: F.salesOrder(lines) }) });
 const inventory = oeInventoryOf(F.library, F.BRAND);
 const logs = [];
 for (const label of ['ROW 1', 'Row 2', 'base front 4']) {
     const so = __fs.get('hq_sales_orders', F.SO_APP_ID);
     const key = rowKeyOf(label);
-    await runOeAuto({ so: { id: F.SO_APP_ID, ...so }, brand: F.BRAND, user: 'loop', inventory, log: (m) => logs.push(m),
+    await runOeAuto({ so: { id: F.SO_APP_ID, ...so }, brand: F.BRAND, user: 'loop', inventory, finishes: F.finishes, log: (m) => logs.push(m),
         only: (line) => rowKeyOf(rowOfLine(line)) === key, slot: `displayRows.${key}`, force: true });
 }
 const so = __fs.get('hq_sales_orders', F.SO_APP_ID);
@@ -63,19 +65,25 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     eq('plated fittings in stock are SO Pack picks', [gen('H1-1CP-V')?.kind, gen('H1-1BR')?.kind], ['STOCK', 'STOCK']);
     ok('a plated fitting with none in stock is on the Backorder board', bo.includes('H1-1STDOFF/EP4'), `backorders: ${bo.join(', ')}`);
 }
-// ── Row 2: the stained fascia and the wood track (no finish on the quote → the row's rod finish S04) are ONE
-//    S04 shop job with their miters riding; the plated wall bracket is stock-first; the rest is stocked ──
+// ── Row 2 (CPQ's traverse rules, Stuart 2026-09-27): the stained fascia and its two miters are ONE S04 shop job; the
+//    track and the F-clips are cut shorter than the fascia (manual: −0.5" / −1") and finished TCP — the sub finish 4.5
+//    aligns to S04 — as their own pair; nothing in Row 2 is EP4 but the (not yet re-read) brackets ──
 {
     const p = pairOf('Row 2', 'S04'); const s = shopOf(p);
     ok('Row 2 · S04 pair written', !!p && !!s, `pairs: ${hq.map(h => `${h.id}(${h.rowLabel}/${h.finishGroup}/${h.routeTo})`).join(', ')}`);
-    eq('Row 2 shop cut list = fascia + track (poles) + both miters (riders)', (s?.cutList || []).map(c => [c.legacyErpId, c.cutLength || null]).sort(), [['H1-2RCTWR-O', 30], ['H1-2TRV', 30], ['H1-2TRVMTR', null], ['H1-2TRVMTR', null]].sort());
+    eq('S04 shop cut list = the fascia at 18" + both miters riding', (s?.cutList || []).map(c => [c.legacyErpId, c.cutLength || null, !!c.rider]).sort(), [['H1-2RCTWR-O', 18, false], ['H1-2TRVMTR', null, true], ['H1-2TRVMTR', null, true]].sort());
     eq('…recipe S04, not EP4', [s?.recipe, p?.recipe], ['S04', 'S04']);
-    ok('no Row 2 wood goes to the finishing floor as a small part', !(p?.finPayload?.partsList || []).some(l => /RCTWR|2TRV$/.test(l.legacyErpId)));
+    const pt = pairOf('Row 2', 'TCP'); const st = shopOf(pt);
+    ok('Row 2 · TCP pair written (the track and F-clips)', !!pt && !!st, `pairs: ${hq.map(h => `${h.id}(${h.rowLabel}/${h.finishGroup}/${h.routeTo})`).join(', ')}`);
+    eq('TCP shop cut list = the track at 17.5" and both F-clip lines at 17"', (st?.cutList || []).map(c => [c.legacyErpId, c.cutLength, c.finishedCode]).sort(), [['H1-2TRV', 17.5, 'H1-2TRVTRK/C'], ['H1-2TRVCLP', 17, 'H1-2TRVCLP/C'], ['H1-2TRVCLP', 17, 'H1-2TRVCLP/C']].sort());
+    eq('…recipe TCP, not S04 or EP4', [st?.recipe, pt?.recipe], ['TCP', 'TCP']);
+    ok('no Row 2 wood or track goes to the finishing floor as a small part', ![...(p?.finPayload?.partsList || []), ...(pt?.finPayload?.partsList || [])].some(l => /RCTWR|2TRV$|2TRVCLP/.test(l.legacyErpId)));
     ok('the miters are never stock-checked or backordered', !bo.some(c => /TRVMTR/.test(c)), `backorders: ${bo.join(', ')}`);
-    eq('the track is covered by the pair', gen('H1-2TRV')?.kind, 'WO');
-    ok('the plated wall bracket with none in stock is on the Backorder board', bo.includes('H1-2TRV-WB/EP4'), `backorders: ${bo.join(', ')}`);
-    eq('stocked hardware stays a shelf pick', [gen('H1-2TRVPLUG'), gen('HTSLNTCAR')], [null, null]);
-    ok('no EP4 pair is written for Row 2 (the miters follow their rod)', !pairOf('Row 2', 'EP4'));
+    eq('the track, F-clips and miters are covered by the pairs', [gen('H1-2TRV')?.kind, gen('H1-2TRVCLP', 0)?.kind, gen('H1-2TRVCLP', 1)?.kind, gen('H1-2TRVMTR')?.kind], ['WO', 'WO', 'WO', 'WO']);
+    eq('the start wrote CPQ\'s rules on the track line (so every screen names what is made)', [so.lines[lineIdx('H1-2TRV')].finishCode, so.lines[lineIdx('H1-2TRV')].subFinishCode, so.lines[lineIdx('H1-2TRV')].cutLength], ['TCP', 'TCP', 17.5]);
+    ok('the EP4 brackets (not re-read yet) are on the Backorder board as quoted', bo.includes('H1-2TRV-WB/EP4'), `backorders: ${bo.join(', ')}`);
+    eq('stocked hardware stays a shelf pick', [gen('H1-2TRVPLUG'), gen('HTSLNTCAR'), gen('H1-2TRVNUT')], [null, null, null]);
+    ok('no EP4 pair is written for Row 2', !pairOf('Row 2', 'EP4'));
 }
 // ── base front 4: a bought rod read in FEET (50 × 84" = 350 ft of 430) and a painted finial with the customer's code ──
 {
@@ -97,8 +105,10 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     eq('ROW 1 shop doc: plated EP4 → goes to the plater, no phosphate', [r1.finishRecipe, r1.isOutsourced, r1.needsPhosphating], ['EP4', true, false]);
     eq('…carries the returns on its cut list and the job\'s cut sheet + drawing, named for the row', [(r1.cutList || []).filter(c => c.rider).length, !!r1.fabNotes, /^data:image\/svg/.test(r1.imageUrl || ''), /ROW 1/.test(r1.item), r1.customerId], [2, true, true, true, 'CUST-FAB']);
     const r2 = release(shopOf(pairOf('Row 2', 'S04')));
-    eq('Row 2 shop doc: S04 stain on wood → in-house, NOT phosphated, not plated', [r2.finishRecipe, r2.isOutsourced, r2.needsPhosphating], ['S04', false, false]);
-    eq('…fascia + track + both miters on the cut list', (r2.cutList || []).map(c => c.legacyErpId).sort(), ['H1-2RCTWR-O', 'H1-2TRV', 'H1-2TRVMTR', 'H1-2TRVMTR']);
+    eq('Row 2 S04 shop doc: stain on wood → in-house, NOT phosphated, not plated', [r2.finishRecipe, r2.isOutsourced, r2.needsPhosphating], ['S04', false, false]);
+    eq('…fascia + both miters on the cut list', (r2.cutList || []).map(c => c.legacyErpId).sort(), ['H1-2RCTWR-O', 'H1-2TRVMTR', 'H1-2TRVMTR']);
+    const r3 = release(shopOf(pairOf('Row 2', 'TCP')));
+    eq('Row 2 TCP shop doc: in-house TCP, the track and F-clips at their deducted cuts', [r3.finishRecipe, r3.isOutsourced, (r3.cutList || []).map(c => `${c.legacyErpId}@${c.cutLength}`).sort()], ['TCP', false, ['H1-2TRV@17.5', 'H1-2TRVCLP@17', 'H1-2TRVCLP@17']]);
 }
 // ── WHAT THE 10.5 BOARD SAYS ABOUT THE ROWS NOW ──
 {
@@ -107,19 +117,19 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     const entries = (label) => so.lines.map((line, lineIdx) => ({ line, lineIdx })).filter(x => rowKeyOf(rowOfLine(x.line)) === rowKeyOf(label));
     const r2 = rowStateOf({ so, entries: entries('Row 2'), links });
     const tr = r2.lines.find(l => l.erp === 'H1-2TRV');
-    ok('the wood track reads as made (on its pair), not as a shelf pick', tr && tr.key !== 'STOCKED', JSON.stringify(tr));
+    ok('the track reads as made (on its pair), not as a shelf pick', tr && tr.key !== 'STOCKED', JSON.stringify(tr));
     const mt = r2.lines.find(l => l.erp === 'H1-2TRVMTR');
     ok('a miter reads "rides the pole"', mt && /rides the pole/.test(mt.text), JSON.stringify(mt));
 }
 // ── THE BACK HALF: SO Pack (Shared/pickLines — the card's own functions) and the gather at Packaging Prep ──
 {
-    const { soPackLineStateOf, soOrderReadyOf, gatherPlanOf, packLinesOf } = await import('../../src/components/Shared/pickLines.js');
+    const { soPackLineStateOf, soOrderReadyOf, gatherPlanOf, packLinesOf, soLineCodeOf } = await import('../../src/components/Shared/pickLines.js');
     const libFee = (code) => { const p = F.library.find(x => x.legacyErpId === code); return !!p && (p.partClass === 'Fee' || String(p.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE'); };
     const statOf = (code) => (F.stock[code] ? { avail: F.stock[code].available, held: 0, prod: 0 } : null);
     let order = __fs.get('hq_sales_orders', F.SO_APP_ID); order.id = F.SO_APP_ID;
     const stateOf = (erp, n = 0) => { const i = lineIdx(erp, n); return soPackLineStateOf({ so: order, line: order.lines[i], idx: i, stat: statOf(require_code(order.lines[i])), isFeeCode: libFee }); };
-    function require_code(l) { return (l.toBeFinished && l.finishCode && !String(l.erp).endsWith('/' + l.finishCode)) ? `${l.erp}/${l.finishCode}` : l.erp; }
-    eq('the wood track now names what is made (the rod\'s S04 written on the line)', [order.lines[lineIdx('H1-2TRV')].finishCode, stateOf('H1-2TRV').code], ['S04', 'H1-2TRV/S04']);
+    function require_code(l) { return soLineCodeOf(l); }
+    eq('the track names what comes off the floor (TCP written on the line → H1-2TRVTRK/C)', [order.lines[lineIdx('H1-2TRV')].finishCode, stateOf('H1-2TRV').code, stateOf('H1-2TRVCLP').code], ['TCP', 'H1-2TRVTRK/C', 'H1-2TRVCLP/C']);
     eq('fees are never picked', [stateOf('H1-FRPF').state, stateOf('H1-2TRVMTR').state], ['FEE', 'FEE']);
     eq('stocked hardware and in-stock plated picks read READY from the shelf', [stateOf('HTSLNTCAR').state, stateOf('H1-1CP-V').state, stateOf('H1-1BR').state], ['READY', 'READY', 'READY']);
     eq('a line made on a floor waits for its pieces', [stateOf('H1-2TRV').state, stateOf('H1-1R').state], ['FROM THE FLOOR', 'FROM THE FLOOR']);
@@ -129,13 +139,50 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     const gather = (plan) => { order.committedQty = { ...(order.committedQty || {}) }; plan.forEach(w => { order.committedQty[w.code] = (order.committedQty[w.code] || 0) + w.add; }); };
     const docFor = (row, fin) => __fs.get('fin_workorders', pairOf(row, fin).id);
     const row2 = gatherPlanOf({ job: docFor('Row 2', 'S04'), order, isFeeCode: libFee });
-    eq('Row 2\'s document gathers the fascia and the track, not its miters', row2.map(w => [w.code, w.add]).sort(), [['H1-2RCTWR-O/S04', 50], ['H1-2TRV/S04', 50]]);
+    eq('Row 2\'s S04 document gathers the fascia, not its miters', row2.map(w => [w.code, w.add]).sort(), [['H1-2RCTWR-O/S04', 50]]);
     gather(row2);
+    const row2t = gatherPlanOf({ job: docFor('Row 2', 'TCP'), order, isFeeCode: libFee });
+    eq('Row 2\'s TCP document gathers the finished track and F-clips', row2t.map(w => [w.code, w.add]).sort(), [['H1-2TRVCLP/C', 50], ['H1-2TRVCLP/C', 50], ['H1-2TRVTRK/C', 50]]);
+    gather(row2t);
     gather(gatherPlanOf({ job: docFor('base front 4', 'P30'), order, isFeeCode: libFee }));
     gather([{ code: 'H1-1R/EP4', add: 50 }]);   // ROW 1's plated pole: plating put-away commits the plated code
-    eq('gathered lines read GATHERED', [stateOf('H1-2TRV').state, stateOf('H1-2RCTWR-O').state, stateOf('H1-75R').state, stateOf('H1-75KF').state, stateOf('H1-1R').state], ['GATHERED', 'GATHERED', 'GATHERED', 'GATHERED', 'GATHERED']);
+    eq('gathered lines read GATHERED', [stateOf('H1-2TRV').state, stateOf('H1-2TRVCLP', 1).state, stateOf('H1-2RCTWR-O').state, stateOf('H1-75R').state, stateOf('H1-75KF').state, stateOf('H1-1R').state], ['GATHERED', 'GATHERED', 'GATHERED', 'GATHERED', 'GATHERED', 'GATHERED']);
     const blockers = order.lines.map((l, i) => ({ l, i })).filter(x => { const st = soPackLineStateOf({ so: order, line: x.l, idx: x.i, stat: statOf(require_code(x.l)), isFeeCode: libFee }); return !['GATHERED', 'READY', 'FEE'].includes(st.state); }).map(x => require_code(x.l));
-    eq('what still holds the order is exactly its backorders', blockers.sort(), ['H1-1STDOFF/EP4', 'H1-2TRV-WB/EP4'].sort());
+    eq('what still holds the order is exactly its backorders', blockers.sort(), ['H1-1STDOFF/EP4', 'H1-2TRV-WB/EP4', 'H1-2TRV-WB/EP4'].sort());
+}
+// ── ↻ RE-READ LINES ON THE LIVE ROW 2, THEN ▶ START ROW (a fresh order — the repair Stuart presses) ──
+{
+    const { rereadLinesPatchOf, rereadLinesText } = await import('../../src/components/Shared/displayRelease.js');
+    const { soPackLineStateOf } = await import('../../src/components/Shared/pickLines.js');
+    const soAt = { id: 'SO-APP-REREAD', ...F.salesOrder(lines), ...displayAnchorPatch({ buildId: 'BUILD-R', lines, so: F.salesOrder(lines) }),
+        // as live: the retired split's record for the bracket, and the old row start's OE_ROW record for a miter line
+        backorderLines: [{ code: 'H1-2TRV-WB/EP4', qty: 50 }, { code: 'H1-2TRVMTR/EP4', qty: 50, source: 'OE_ROW', lineIndex: lines.findIndex(l => l.erp === 'H1-2TRVMTR') }] };
+    const patch = rereadLinesPatchOf({ so: soAt, breakdown: F.breakdown, finishes: F.finishes, inventory: F.library });
+    ok('↻ Re-read has something to do', !!patch);
+    const text = rereadLinesText(soAt, patch || {});
+    const L2 = (erp, n = 0) => (patch.lines.map((l, i) => ({ l, i })).filter(x => x.l.erp === erp || x.l.identityFrom === erp)[n] || {}).l || {};
+    eq('the track: TCP, 17.5"', [L2('H1-2TRV').finishCode, L2('H1-2TRV').subFinishCode, L2('H1-2TRV').cutLength], ['TCP', 'TCP', 17.5]);
+    eq('both F-clips: TCP, 17"', [L2('H1-2TRVCLP', 0).cutLength, L2('H1-2TRVCLP', 1).cutLength, L2('H1-2TRVCLP', 1).finishCode], [17, 17, 'TCP']);
+    eq('both brackets become the stocked champagne item, picked', [L2('H1-2TRV-WB/C', 0).erp, L2('H1-2TRV-WB/C', 1).erp, L2('H1-2TRV-WB/C', 0).toBeFinished, L2('H1-2TRV-WB/C', 0).subFinishCode], ['H1-2TRV-WB/C', 'H1-2TRV-WB/C', false, 'TCP']);
+    eq('both miters take the fascia\'s S04', [L2('H1-2TRVMTR', 0).finishCode, L2('H1-2TRVMTR', 1).finishCode], ['S04', 'S04']);
+    ok('the confirm names the NetSuite line to change', /change the NetSuite line to H1-2TRV-WB\/C/.test(text) && /change the same line in NetSuite/.test(text), text);
+    eq('the EP4 bracket backorder goes with the old item', (patch.backorderLines || []).map(b => b.code), ['H1-2TRVMTR/EP4']);
+    eq('ROW 1 is untouched by the traverse rules', patch.lines.filter(l => /ROW 1/i.test(l.row || '')).map(l => [l.erp, l.finishCode || '', l.cutLength || null]), lines.filter(l => /ROW 1/i.test(l.row || '')).map(l => [l.erp, l.finishCode || '', l.cutLength || null]));
+    // Idempotent: a second press changes nothing more.
+    const again = rereadLinesPatchOf({ so: { ...soAt, lines: patch.lines, backorderLines: patch.backorderLines }, breakdown: F.breakdown, finishes: F.finishes, inventory: F.library });
+    ok('a second ↻ Re-read finds nothing to change', !again || (!(again.restamped || []).length && !again.added.length), JSON.stringify(again && again.restamped));
+    // ▶ Start row on the re-read order
+    __fs.seed('hq_sales_orders', soAt.id, { ...soAt, lines: patch.lines, backorderLines: patch.backorderLines });
+    const before = new Set(__fs.all('hq_work_orders').map(h => h.id));
+    await runOeAuto({ so: { ...__fs.get('hq_sales_orders', soAt.id), id: soAt.id }, brand: F.BRAND, user: 'loop', inventory, finishes: F.finishes, log: (m) => logs.push(m),
+        only: (line) => rowKeyOf(rowOfLine(line)) === rowKeyOf('Row 2'), slot: 'displayRows.ROW_2', force: true });
+    const so2 = __fs.get('hq_sales_orders', soAt.id); so2.id = soAt.id;
+    const fresh = __fs.all('hq_work_orders').filter(h => !before.has(h.id));
+    eq('Row 2 after the re-read starts exactly two pairs: S04 and TCP', [...new Set(fresh.filter(h => h.routeTo === 'FINISHING').map(h => h.finishGroup))].sort(), ['S04', 'TCP']);
+    const bo2 = (so2.backorderLines || []).map(b => b.code);
+    ok('nothing in Row 2 is backordered now (brackets are on the shelf)', !bo2.some(c => /2TRV/.test(c)), `backorders: ${bo2.join(', ')}`);
+    const bi = so2.lines.findIndex(l => l.erp === 'H1-2TRV-WB/C');
+    eq('the /C bracket is a SO Pack shelf pick', soPackLineStateOf({ so: so2, line: so2.lines[bi], idx: bi, stat: { avail: 200, held: 0, prod: 0 } }).state, 'READY');
 }
 if (globalThis.__NS_UNANSWERED) console.log('⚠ unanswered NetSuite calls:', globalThis.__NS_UNANSWERED.map(b => String(b.payload?.q || b.targetUrl).slice(0, 80)));
 if (fail) console.log('\n--- route log ---\n' + logs.join('\n'));

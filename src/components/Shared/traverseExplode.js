@@ -15,7 +15,15 @@ const U = (v) => String(v ?? '').trim().toUpperCase();
 export const TRAVERSE_FAMILY_PARTS = {
     'H1-2TRV': {
         fascia: { W: 'H1-2RCTWR', P: 'H1-2RCTAR', EP: 'H1-2RCTAR' },   // wood vs aluminum
+        // THE TRACK IS CUT FROM ONE ITEM AND LEAVES THE FLOOR AS ANOTHER (Stuart 2026-09-27, SO60551 Row 2):
+        // "the track has cut reduction for manual and motorized … they are finished to either B or C, which is
+        // the sub finish associated to main finish in the mass update" · "H1-2TRVTRK/C is correct" — that is
+        // what it is when it comes off the floor. The library's track, the item CPQ sells and the shop cuts,
+        // is H1-2TRV (1.5" Square Traverse Track); H1-2TRVTRK/<B|C> names the finished piece. The F-clip is
+        // cut beside it (−1" / −3", Shared/traverseTags) and finished with it. Shared/subFinish reads these.
         track: 'H1-2TRVTRK/C',
+        rawTrack: 'H1-2TRV',
+        fclip: 'H1-2TRVCLP',
         plug: 'H1-2TRVPLUG',
         baseMotor: 'HSOM-21',
         // ⚠ A SINGLE'S BRACKET IS THREE ITEMS, ONE PER PROJECTION (Stuart 2026-08-22, refining tab

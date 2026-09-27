@@ -24,6 +24,7 @@ import { finishLabelOf, takesNoFinish } from './finishLabel';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 import { captureTransparentPng, saveGuideCapture } from './guideCapture';
+import { subFinishOfFinish } from './subFinish';
 import { BoardFrame, captureBoardFrame, readDisplayMode, writeDisplayMode } from './displayFrame';   // DISPLAY MODE (S5, Stuart 2026-09-13) — one guarded block, see below
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -834,7 +835,8 @@ function HardwareConfiguratorInner({
         if (!choice) return '';
         const takes = choice.role === 'TRACK' || !!(part || findPart(choice.partId))?.manufacturingSpecs?.usesSubFinish;
         if (!takes) return '';
-        const subOf = (code) => String(finishByCode.get(String(code || '').toUpperCase())?.subFinishCode || '').trim().toUpperCase();
+        // The ONE lookup the floor routes read too (Shared/subFinish.subFinishOfFinish, 2026-09-27).
+        const subOf = (code) => subFinishOfFinish(code, [finishByCode.get(String(code || '').toUpperCase())].filter(Boolean));
         return subOf(rodFinishFor(choice)) || subOf(globalFinish);
     }, [findPart, finishByCode, rodFinishFor, globalFinish]);
     const lineFinishFor = useCallback((choice) => {

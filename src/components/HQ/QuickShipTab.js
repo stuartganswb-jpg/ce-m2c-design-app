@@ -14,6 +14,7 @@ import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
+import { traverseOrderLinesOf } from '../Shared/subFinish';
 import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary, isCheckoutForCustomer } from '../Shared/feeRules';
 import { priceChoice } from '../Shared/hardwarePricing';
 import { customerPriceLevel } from '../Shared/priceLevels';
@@ -1321,8 +1322,19 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     const cfgCodes = new Set(pricedCart
                         .filter(x => !x.trvKitCode && ((x.trvOfKit && String(x.trvOfKit).toUpperCase() === kitCodeU) || String(x.note || '').toUpperCase().includes(`[${kitCodeU}]`)))
                         .map(x => String(x.erp || '').toUpperCase()).filter(Boolean));
-                    ex.lines.forEach(c => {
-                        const { part: cd, suffix: codeSub } = resolveComponent(c.code);
+                    // ── WHAT EACH CONSUMED PART IS ON THE FLOOR — CPQ's traverse rules (Shared/subFinish.traverseOrderLinesOf,
+                    // Stuart 2026-09-27): the fascia is cut at the system's length and finished in the kit's finish; the
+                    // track is the library's raw track (H1-2TRV — what CPQ sells and the shop cuts), cut by CPQ's deduction for
+                    // the kit's drive and finished in the sub finish 4.5 aligns to the kit's finish, leaving the floor as
+                    // H1-2TRVTRK/<B|C>; a bracket made in the base colours is the stocked colour item (H1-2TRV-WB/C).
+                    const align0 = kitDoc?.manufacturingSpecs?.kitAlign || {};
+                    const shaped = traverseOrderLinesOf({
+                        exploded: ex.lines, family: fam, finish: l.trvFinish, feet: l.trvFeet, drive: align0.drive,
+                        finishes: finishList, resolve: resolveComponent,
+                    });
+                    shaped.forEach(c => {
+                        const cd = c.part;
+                        const codeSub = c.suffix || '';
                         if (!cd) { addLog(`Component ${c.code} is not in the Master Library — NOT consumed (${c.why}). Check the code, or the traverse rules doc.`, 'warn'); return; }
                         if (cfgCodes.has(String(c.code).toUpperCase()) || cfgCodes.has(String(cd.legacyErpId || '').toUpperCase())) {
                             addLog(`${cd.legacyErpId || c.code} (${c.why}) is already on the order from the components configurator — not consumed twice.`, 'info');
@@ -1330,15 +1342,21 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         }
                         if (!cd.netSuiteInternalId) { addLog(`Component ${cd.legacyErpId || c.code} has no NetSuite ID — NOT consumed (${c.why}).`, 'warn'); return; }
                         if (codeSub) addLog(`${c.code} → consuming ${cd.legacyErpId || c.code} (the /${codeSub} is the sub finish it is made in, not a separate item).`, 'info');
+                        if (c.note) addLog(`${c.code}: ${c.note}`, 'warn');
                         const takesSub = !!cd?.manufacturingSpecs?.usesSubFinish || !!c.subFinish;
-                        const finShown = codeSub ? `${codeSub} (sub finish)`
+                        const finShown = (c.floor && c.floor.subFinishCode) ? `${c.floor.subFinishCode} (sub finish)`
+                            : codeSub ? `${codeSub} (sub finish)`
                             : takesSub && finObj?.subFinishCode ? `${finObj.subFinishCode} (sub finish)` : (l.trvFinish || '');
                         if (takesSub && !finObj?.subFinishCode) addLog(`${c.code} (${c.role || 'sub-finish part'}) is made in the base colours, but ${l.trvFinish || 'the chosen finish'} has no aligned one (set it in 4.5) — pushing in the mainline finish.`, 'warn');
                         trvPushLines.push({
                             item: { id: String(cd.netSuiteInternalId) }, quantity: c.qty, rate: 0, price: { id: '-1' },
                             description: `${cd.legacyErpId || c.code} — ${cd.itemName || c.code} · ${c.why} · ${finShown} [consumed — $ in the traverse system line]`,
                         });
-                        trvDocLines.push({ kind: 'PART', ofKey: l.key, code: cd.legacyErpId || c.code, name: cd.itemName || c.code, note: `${c.why}${finShown ? ` · ${finShown}` : ''}`, qty: c.qty, rate: 0 });
+                        trvDocLines.push({
+                            kind: 'PART', ofKey: l.key, code: cd.legacyErpId || c.code, name: cd.itemName || c.code, note: `${c.why}${finShown ? ` · ${finShown}` : ''}`, qty: c.qty, rate: 0,
+                            // The floor's reading of the part (cut, finish, stock colour) — the order line carries it.
+                            ...(c.floor && Object.keys(c.floor).length ? { floor: c.floor } : {}),
+                        });
                     });
                     ex.skipped.forEach(sk => addLog(`Traverse: ${sk}`, 'info'));
                     // The extra footage beyond the kit's base length bills on its own line — the
@@ -1556,7 +1574,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // NetSuite ($0 lines) and prints them on the documents, but they never reached lines[] — so the SO Pack
                 // never listed the track, fascia and brackets to pick. Each goes on as the item NetSuite consumes, in
                 // NetSuite's unit, a shelf pick of its kit (trvComponent) — exactly what leaves the shelf.
-                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '' }))],
+                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never

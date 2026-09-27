@@ -7,7 +7,8 @@ import { classifyLine, isDisplayOnlyLine, isParkedGeometryLine, DIVISION_CUSTOM,
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
-import { runOeAuto, oeInventoryOf } from '../Shared/oeGenerate';
+import { runOeAuto, oeInventoryOf, loadOeFinishes } from '../Shared/oeGenerate';
+import { restampBreakdownLines } from '../Shared/subFinish';
 import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
@@ -1435,8 +1436,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             const job = jobSnap.data();
             if (isOrderEntryOrder(so, job)) return oeRefusal(`its quote ${so.hqJobId} was built in Order Entry`);
 
-            const lines = getJobLines(job);
-            if (lines.length === 0) return alert("Linked job has no CPQ lines to split.");
+            const lines0 = getJobLines(job);
+            if (lines0.length === 0) return alert("Linked job has no CPQ lines to split.");
 
             const orderKey = so.soId || so.id || so.hqJobId;
             const customerId = job.customer?.id || null;
@@ -1450,7 +1451,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             }
             const custKeys = customerKeys(customerId, custRec || { name: customerName });
 
-            const partCache = await loadPartsForLines(lines);
+            const partCache = await loadPartsForLines(lines0);
+            // CPQ'S TRAVERSE RULES, ROW BY ROW (Shared/subFinish, Stuart 2026-09-27): a track or F-clip with no finish of its
+            // own wears the sub finish 4.5 aligns to its fascia (S04 → TCP) and is cut shorter than the fascia (−0.5" / −1"
+            // manual, −2" / −3" motorized). Without this the no-finish track fell into the order's recipe (SO60551's EP4).
+            const trvRules = restampBreakdownLines({
+                breakdown: (job.cpqData && job.cpqData.breakdown) || [],
+                keep: (l) => !isDisplayOnlyLine(l) && !isParkedGeometryLine(l),
+                partOf: (l) => (l.partId ? partCache.get(l.partId) : null) || null,
+                finishes: await loadOeFinishes(), drive: (job.engineeringNotes || {}).drive || '',
+            });
+            trvRules.notes.forEach(n => addLog(`⚠ SO ${orderKey}: ${n}`, 'warn'));
+            const lines = trvRules.lines.length === lines0.length ? trvRules.lines : lines0;
 
             const smallLines = [];
             const customLines = [];
@@ -1470,7 +1482,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // stained beside metal parts painted is two batches — two pairs. A single-finish order is
             // exactly what it was, same ids. A line naming no finish takes the order's recipe.
             const orderRecipe = so.recipe || (finishRecipe !== "PENDING-RECIPE" ? finishRecipe : '');
-            const finishGroups = finishGroupsOf({ smallLines, customLines, finishOf: (l) => String(l.finishCode || '').toUpperCase() || orderRecipe });
+            // A traverse track / F-clip / stock-colour part groups by its SUB finish (TCP), never the order's recipe.
+            const finishGroups = finishGroupsOf({ smallLines, customLines, finishOf: (l) => String(l.finishCode || l.subFinishCode || '').toUpperCase() || orderRecipe });
             if (finishGroups.length > 1) addLog(`🎨 SO ${orderKey}: ${finishGroups.length} finishes (${finishGroups.map(g => g.finish || 'none').join(', ')}) — one finishing + shop pair per finish.`, 'info');
             let firstPair = null, anyFin = false, anyShop = false;
             const allBackorder = [];

@@ -279,6 +279,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // 1 · WHO IS WAITING — total short qty per item across open sales orders, for the BO column.
     const [boByCode, setBoByCode] = useState({});
     const [inHouseFinishes, setInHouseFinishes] = useState([]);
+    // 4.5's finishes as the Order Entry route reads them (Shared/oeGenerate.oeLinePlansOf): the sub finish a traverse
+    // track wears is set on the master finish (S04 → TCP).
+    const oeFinishes = [...inHouseFinishes, ...outsourceFinishes.map(f => ({ ...f, outsourced: true }))];
     // 2 · ♻ REPAINT from the Snapshot row, beside the ✂ rod cut.
     const [snapRepaint, setSnapRepaint] = useState(null);
     const [rawStock, setRawStock] = useState(null);     // { loading, availById, inboundById } — raw cores' NetSuite stock, fetched on first RAW toggle
@@ -2473,7 +2476,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const onlyIdx = scoped && Array.isArray(scoped.lineIdxs) && scoped.lineIdxs.length ? new Set(scoped.lineIdxs) : null;
         // WHAT EACH LINE BECOMES is the one answer every start reads (Shared/oeGenerate.oeLinePlansOf — CPQ's
         // classifier, the one door rule, a rider's rod finish), never this view's own (Stuart 2026-09-27).
-        (scoped ? scoped.orders.filter(e => e.so.id === scoped.soId) : oeNeeds.orders.filter(e => !e.so.displayRelease)).forEach((entry) => oeLinePlansOf({ so: entry.so, inventory: hqParts }).forEach(pl => {
+        (scoped ? scoped.orders.filter(e => e.so.id === scoped.soId) : oeNeeds.orders.filter(e => !e.so.displayRelease)).forEach((entry) => oeLinePlansOf({ so: entry.so, inventory: hqParts, finishes: oeFinishes }).forEach(pl => {
             if (!oeStartsLine(pl)) return;
             if (onlyIdx && !onlyIdx.has(pl.lineIdx)) return;
             if (!oeLinkFor(entry, pl.line)) work.push({ so: entry.so, l: pl.line, plan: pl });
@@ -2489,12 +2492,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // returns stock-checked as plated parts). A rider rides its pole; a plated small part is STOCK.
             const pl = w.plan;
             const door = pl && pl.part && pl.finish ? pl.door : '';
-            if (door) reviewable.push({ so: w.so, l: w.l, buy: door === 'BUY', stock: door === 'STOCK', rider: door === 'RIDER', division: pl.division, finish: pl.finish }); else direct.push(w);
+            if (door) reviewable.push({ so: w.so, l: w.l, lineIdx: pl.lineIdx, buy: door === 'BUY', stock: door === 'STOCK', rider: door === 'RIDER', division: pl.division, finish: pl.finish, ...(pl.linePatch ? { linePatch: pl.linePatch } : {}) }); else direct.push(w);
         });
         for (const w of direct) {
             // A BOTH-sourced line whose operator picks "make" defers into the same batch review.
             const r = await generateOeLineOrder(w.so, w.l, { collectReview: true });
-            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line, buy: !!r.review.buy, stock: !!r.review.stock, rider: !!r.review.rider, division: r.review.division, finish: r.review.finish });
+            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line, buy: !!r.review.buy, stock: !!r.review.stock, rider: !!r.review.rider, division: r.review.division, finish: r.review.finish, ...(r.review.lineIdx != null ? { lineIdx: r.review.lineIdx } : {}), ...(r.review.linePatch ? { linePatch: r.review.linePatch } : {}) });
         }
         if (reviewable.length) await openOeReviewForLines(reviewable);
     };
@@ -2566,7 +2569,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const { part, aliasNote } = resolveOePart(erp);
         if (!part) return alert(`${erp} is not in the Master Library (searched real codes, customer codes and aliases) — sync or alias it first.`);
         if (aliasNote) addLog(`🔗 ${aliasNote} — planning the real item.`, 'info');
-        const pl = oeLinePlansOf({ so, inventory: hqParts }).find(p => p.line === line) || null;
+        const pl = oeLinePlansOf({ so, inventory: hqParts, finishes: oeFinishes }).find(p => p.line === line) || null;
         const finish = (pl && pl.finish) || oeLineFinish(line);
         if (!finish) return alert(`${erp}: ${(pl && pl.finishWhy) || 'no finish recorded on this line — the order predates finish capture. Add it to the line note in the form "TO BE FINISHED · CODE", or re-enter the line on tab 7.'}`);
         const qty = Number(line.qty) || 0;
@@ -2581,7 +2584,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // the ONE rule's answer (Shared/oeGenerate.oeDoorOf) — a finish applied here is made here.
             const vendorName = String(specs.vendorName || '').trim();
             const door = pl ? pl.door : oeDoorOf(part, finish, hqParts);
-            const carry = { rider: door === 'RIDER', division: pl ? pl.division : undefined, finish };
+            // CPQ's rules for the line ride with it (a track's sub finish and deducted cut — Shared/subFinish), and its
+            // position on the order, since the patched line is a copy.
+            const carry = { rider: door === 'RIDER', division: pl ? pl.division : undefined, finish, ...(pl ? { lineIdx: pl.lineIdx } : {}), ...(pl && pl.linePatch ? { linePatch: pl.linePatch } : {}) };
             let wantPo = door === 'BUY';
             if (door === 'ASK') wantPo = window.confirm(`${erp} is flagged ⚖ BOTH (make and buy).\n\nOK = vendor PO to ${vendorName || 'its vendor'} · Cancel = finishing work order.`);
             if (wantPo) {
@@ -4754,7 +4759,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         <div key={j.key} style={{ border: `1px solid ${blocked ? '#d9534f' : 'var(--line)'}`, marginBottom: '16px' }}>
                                             <div style={{ padding: '12px 16px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
                                                 <span>
-                                                    <b style={{ fontFamily: 'var(--mono)' }}>{j.finishedErp}</b> × {j.qty}
+                                                    <b style={{ fontFamily: 'var(--mono)' }}>{j.finishedLabel || j.finishedErp}</b> × {j.qty}
                                                     <span style={{ color: 'var(--ink-soft)' }}> · SO {j.so.soId || j.so.id} · {j.so.customer || ''}</span>
                                                     {j.aliasNote && <span style={{ ...mono9, color: 'var(--brass)', marginLeft: '8px' }}>🔗 {j.aliasNote}</span>}
                                                 </span>

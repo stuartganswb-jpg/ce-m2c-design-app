@@ -32,6 +32,7 @@
 import { planFinishedRun, isAssemblyPart } from './finishedGoodsRun.js';
 import { poleFeetOf, isFootUnit } from './oeLines.js';
 import { millBaseOf } from './finishRouting.js';
+import { finishedCodeOf } from './subFinish.js';
 import { SOURCING, sourcingOf } from './sourcing.js';
 import { isPoleCategory, poleLengthOf, sourcesForLength, targetCodeFor, poleOptionsWithStock } from './poleCut.js';
 import { fetchOpenPoLines } from './purchaseOrders.js';
@@ -206,7 +207,7 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         // nothing to pull, nothing to stock-check, nothing to order. It rides the pole's shop cut list.
         if (j.rider) return { ...j, finishedErp: `${erp}/${String(j.finish || '').toUpperCase()}`, plan: { erp, exploded: false, lines: [] } };
         if (j.stock) {
-            const finishedErp = `${erp}/${String(j.finish || '').toUpperCase()}`;
+            const finishedErp = finishedCodeOf(erp, j.finish);
             const fp = partOf(finishedErp);
             return { ...j, finishedErp, plan: { erp: finishedErp, exploded: false, lines: [{ legacyErpId: finishedErp, partName: (fp && fp.itemName) || j.part.itemName || '', quantity: j.qty }] } };
         }
@@ -221,7 +222,9 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         const finishedErp = `${erp}/${j.finish}`;
         const plan = planFinishedRun({ part: { ...j.part, legacyErpId: finishedErp }, qty: j.qty, pins: j.pins || [], inventory });
         const lines = plan.exploded ? plan.lines : plan.lines.filter(l => String(l.legacyErpId || '').toUpperCase() !== plan.erp);
-        return { ...j, finishedErp, plan: { ...plan, lines } };
+        // The piece a person reads (Shared/subFinish.finishedCodeOf — a traverse track made TCP is H1-2TRVTRK/C); the
+        // plan keeps <code>/<finish>, from which its mill base is read.
+        return { ...j, finishedErp, finishedLabel: finishedCodeOf(erp, j.finish), plan: { ...plan, lines } };
     });
     // ── A POLE IS CUT, NEVER MILLED (Brief A, Q5 — Stuart 2026-09-02) ──────────────────────────
     // A stocked-length pole ordered with an applied or small-parts finish pulls a physical stick at

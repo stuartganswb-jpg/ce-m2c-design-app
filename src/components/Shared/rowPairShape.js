@@ -24,6 +24,7 @@ import { uomStampOf } from './uom.js';
 import { rowKeyOf, rowOfLine } from './displayRelease.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
 import { findClientPriceRow } from './clientPricing.js';
+import { finishedCodeOf } from './subFinish.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -166,6 +167,10 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
             // A per-foot line quoted with no cut still has a length: its feet per piece (splitPlan.customShopQtyOf).
             ...(!job.rider && job.line && job.line.perFoot && N(job.line.feetPer) > 0 && !(N(job.line.cutLength) > 0) ? { feetPer: N(job.line.feetPer) } : {}),
             ...(job.rider ? { rider: true } : {}),
+            // A traverse track / F-clip is cut shorter than its fascia by CPQ's deduction (Shared/subFinish) and leaves
+            // the floor in its stock colour — the cut list says both, so the bench reads what it is making.
+            ...(!job.rider && job.line && job.line.trvRole ? { trvRole: job.line.trvRole, ...(N(job.line.trvCutFrom) > 0 ? { trvCutFrom: N(job.line.trvCutFrom), trvDrive: job.line.trvDrive || 'MANUAL' } : {}) } : {}),
+            ...(!job.rider ? { finishedCode: finishedCodeOf(erp, job.finish) } : {}),
             finishCode: job.finish, soLineIdx: job.lineIdx,
             ...uomStampOf(job.part, N(job.qty) || 1),
         };
@@ -253,7 +258,7 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         source: 'ORDER_ENTRY', intent: 'ORDER_ENTRY', routeTo: 'SHOP', orderType: 'sales', autoFlow: true,
         finSiblingId: woId, hasSmallSibling: true,
         type: cutList.length === 1 ? cutList[0].legacyErpId : 'Mixed',
-        erpId: cutList.length === 1 ? cutList[0].legacyErpId : '', partErpId: cutList.length === 1 ? cutList[0].legacyErpId : '', variantErpId: cutList.length === 1 ? `${cutList[0].legacyErpId}/${finish}` : '',
+        erpId: cutList.length === 1 ? cutList[0].legacyErpId : '', partErpId: cutList.length === 1 ? cutList[0].legacyErpId : '', variantErpId: cutList.length === 1 ? (cutList[0].finishedCode || `${cutList[0].legacyErpId}/${finish}`) : '',
         rootItem: cutList.length === 1 ? cutList[0].legacyErpId : '',
         // Named for the row: its poles and what rides them (a French return is not a pole — 2026-09-27).
         itemName: cutList.length === 1 ? cutList[0].name : `${rowLabel ? `${rowLabel} · ` : ''}${finish} · ${cutList.filter(c => !c.rider).length} pole line${cutList.filter(c => !c.rider).length === 1 ? '' : 's'}${cutList.some(c => c.rider) ? ` + ${cutList.filter(c => c.rider).length} riding` : ''}`,

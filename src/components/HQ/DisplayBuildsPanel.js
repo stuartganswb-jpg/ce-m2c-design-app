@@ -395,13 +395,21 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         setBusy('Reading the CPQ job…');
         try {
             const job = await getDoc(doc(db, 'jobs', so.hqJobId));
-            const patch = rereadLinesPatchOf({ so, breakdown: job.exists() ? ((job.data().cpqData || {}).breakdown || []) : [] });
+            // CPQ's row rules read the library (a part made in a stock colour, its /C record) and 4.5 (the sub finish).
+            if (!libraryRef.current) {
+                const snap = await getDocs(collection(db, 'Approved_Designs'));
+                libraryRef.current = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            }
+            const patch = rereadLinesPatchOf({
+                so, breakdown: job.exists() ? ((job.data().cpqData || {}).breakdown || []) : [],
+                finishes: [...(finishes.inHouse || []), ...(finishes.outsourced || [])], inventory: libraryRef.current,
+            });
             setBusy('');
             if (!patch) return alert(`${so.soId || so.id}'s lines already carry everything its CPQ job has — nothing to re-read.`);
             if (!window.confirm(rereadLinesText(so, patch))) return;
             setBusy('Re-reading lines…');
             await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: patch.lines, backorderLines: patch.backorderLines, linesRereadAt: Date.now(), linesRereadBy: String(currentUser || '10.5') });
-            alert(`↻ ${so.soId || so.id}: ${patch.enriched} line(s) completed, ${patch.added.length} added${patch.droppedBackorders ? `, ${patch.droppedBackorders} stale backorder record(s) removed` : ''}.`);
+            alert(`↻ ${so.soId || so.id}: ${patch.enriched} line(s) completed, ${patch.added.length} added${(patch.restamped || []).length ? `, ${patch.restamped.length} brought to CPQ's rules` : ''}${patch.droppedBackorders ? `, ${patch.droppedBackorders} stale backorder record(s) removed` : ''}.${(patch.restamped || []).some(c => c.netsuite) ? `\n\n⚠ Change in NetSuite before packing:\n${patch.restamped.filter(c => c.netsuite).map(c => `  • line ${c.idx + 1}: ${c.text.split(':')[0]}`).join('\n')}` : ''}`);
             await loadFloor(draft);
         } catch (e) { alert('Could not re-read the lines: ' + (e?.message || e)); }
         setBusy('');
@@ -587,6 +595,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 log(`${label} · ${soNow.soId || soNow.id}:`);
                 const res = await runOeAuto({
                     so: soNow, brand: activeBrand, user: currentUser || '10.5', inventory, log,
+                    finishes: [...(finishes.inHouse || []), ...(finishes.outsourced || [])],
                     only: (line) => rowKeyOf(rowOfLine(line)) === key,
                     slot: `displayRows.${key}`,
                     // A person pressing the button asks again on purpose — the automatic run's
