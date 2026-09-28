@@ -300,5 +300,16 @@ eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }]
     ok('a gathered line refuses', /gathered/.test(rowUndoBlockersOf({ gatheredCodes: ['H1-1CP-V/EP4'] }).join(' ')));
 }
 
+// ── THE RETIRED SPLIT'S PACK CARD LEFT PENDING (2026-09-28, PKG-SO60551) ──
+{
+    const { stalePackCardsOf, packCardCloseStamp } = await import('../src/components/Shared/displayRelease.js');
+    const pkg = [{ id: 'PKG-SO60551', status: 'pending', items: [1, 2] }, { id: 'PKG-X', status: 'closed', closed: true }, { id: 'PKG-Y', status: 'packed' }];
+    ok('a rows-released order: only the PENDING split card is stale', JSON.stringify(stalePackCardsOf({ so: {}, whole: null, pkg }).map(p => p.id)) === JSON.stringify(['PKG-SO60551']));
+    ok('a whole-order order keeps its pack card (it packs there)', stalePackCardsOf({ so: {}, whole: { fin: {} }, pkg }).length === 0);
+    ok('a packed card is a person\'s call, never closed here', !stalePackCardsOf({ so: {}, whole: null, pkg }).some(p => p.id === 'PKG-Y'));
+    const st = packCardCloseStamp('stuart', 'r', 5);
+    ok('the close stamp is the retire\'s own shape', st.status === 'closed' && st.closed === true && st.closedFrom === '10.5' && st.closedBy === 'stuart' && st.closedAt === 5);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

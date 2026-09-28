@@ -37,7 +37,7 @@ import { hardDeleteWithLedger } from '../Shared/orderLifecycle';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { ORDER_ROW_LABEL, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, rowUndoBlockersOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
+import { ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, rowUndoBlockersOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 import { finishedCodeOf } from '../Shared/subFinish';
 
@@ -384,6 +384,24 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             alert(`↻ ${fix.fixed.length} line code(s) fixed on ${so.soId || so.id}.`);
             await loadFloor(draft);
         } catch (e) { alert('Could not fix the line codes: ' + (e?.message || e)); }
+        setBusy('');
+    };
+
+    // ✕ THE RETIRED SPLIT'S PACK CARD (Shared/displayRelease.stalePackCardsOf, Stuart 2026-09-28): a rows-released order
+    // packs at SO Pack; a PKG-<key> still pending on it is the whole-order split's, left behind by the retire — it sat in
+    // the Packaging tab as live work. Closed with the retire's own stamp, so it leaves the queue and can be read back.
+    const closeStalePackCards = async (entry) => {
+        const so = entry?.so;
+        const cards = stalePackCardsOf(entry);
+        if (!so || !cards.length) return;
+        if (!window.confirm(`Close ${so.soId || so.id}'s retired pack card${cards.length === 1 ? '' : 's'}?\n\n${cards.map(p => `  • ${p.id} · ${p.status || 'pending'} · ${(p.items || []).length} item(s) · written ${p.createdBy ? `by ${p.createdBy}` : ''}`).join('\n')}\n\nThe whole-order split that wrote ${cards.length === 1 ? 'it' : 'them'} is retired — this order is released by rows and packs at SO Pack. ${cards.length === 1 ? 'It leaves' : 'They leave'} the Packaging tab (closed, not deleted).`)) return;
+        setBusy('Closing the pack card…');
+        try {
+            const by = String(currentUser || '10.5');
+            for (const p of cards) await updateDoc(doc(db, 'packaging_orders', p.id), packCardCloseStamp(by, 'the whole-order split was retired — the order is released by rows and packs at SO Pack; this card was left pending'));
+            alert(`✕ ${cards.map(p => p.id).join(', ')} closed.`);
+            await loadFloor(draft);
+        } catch (e) { alert('Could not close the pack card: ' + (e?.message || e)); }
         setBusy('');
     };
 
@@ -792,6 +810,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                     title="The pack card's piece count is not the sum of this order's lines — it still carries the count from before the lines were written.">📦 Fix its piece count</button>}
                                 {packCardToRemove(s.so, s.whole) && <button onClick={() => removePackCard(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
                                     title="This order is split whole by RTG and packs on its whole-order documents at Packaging Prep. Its SO Pack card is a second pack home with no lines on it.">↩ Remove its pack card</button>}
+                                {stalePackCardsOf(s).length > 0 && <button onClick={() => closeStalePackCards(s)} disabled={dirty || !!busy} style={btn(false, { padding: '3px 9px', marginLeft: '10px', color: '#b02d20', borderColor: '#b02d20' })}
+                                    title="The retired whole-order split's packing document is still pending in the Packaging tab. This order is released by rows and packs at SO Pack — close it (closed, not deleted).">✕ Close the retired split's pack card ({stalePackCardsOf(s).map(p => p.id).join(', ')})</button>}
                                 {!s.links && <span style={{ ...mono, color: '#b02d20', marginLeft: '10px' }}>⚠ could not read its work orders</span>}
                             </div>
                             {(s.fin.length + s.shop.length + s.plating.length + (s.pkg || []).length === 0)

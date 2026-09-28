@@ -176,6 +176,18 @@ export const wholeOrderDocsOf = (so, fin = [], shop = []) => {
 };
 /** The packaging document ids the split gives an order: PKG-<orderKey>, one per identity key. */
 export const packagingIdsOf = (so) => wholeKeysOf(so).map(k => `PKG-${k}`);
+/**
+ * THE RETIRED SPLIT'S PACK CARD LEFT PENDING (Stuart 2026-09-28, SO60551's PKG-SO60551: written by the whole-order
+ * split on 09-17, still pending in the Packaging tab after the 09-23 retire). An order released by rows packs at SO
+ * Pack — a row never writes a PKG-<key> — so a pending one on it is the retired split's, left behind. Only a card
+ * still PENDING: one that has moved (packed) was worked against the whole order and is a person's call. Pure.
+ * @param entry  10.5's read of the order ({ so, whole, pkg })
+ */
+export const stalePackCardsOf = (entry) => (!entry || entry.whole) ? []
+    : (entry.pkg || []).filter(p => p && !p.closed && ['', 'PENDING'].includes(U(p.status)));
+/** The stamp every 10.5 close of a pack card writes (the retire, the reopen, and this). */
+export const packCardCloseStamp = (by = '', reason = '', now = Date.now()) => ({ status: 'closed', closed: true, closedAt: now, closedBy: by || '', closedFrom: '10.5', closeReason: reason });
+
 /** The whole-order documents the retire closed on this order — the strip says so instead of offering the retire again. */
 export const splitRetiredOf = (so, fin = [], shop = []) => {
     const keys = wholeKeysOf(so);
