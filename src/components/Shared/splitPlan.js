@@ -124,3 +124,18 @@ export const shopLeadCodeOf = (lines) => {
     const l = shopLeadLineOf(lines);
     return l ? String(l.legacyErpId || l.partId || '').trim().toUpperCase() : '';
 };
+
+/**
+ * FEET PER PIECE of a shop job's poles — what the plater bills a custom pole on (Stuart 2026-09-28: "$20.00 per foot").
+ * The job's own count first (feet ÷ poles, customShopQtyOf's numbers), else its lead pole's length (a cut, or a
+ * per-foot line's feet per piece), else the job's single cut. 0 when the job says no length at all.
+ */
+export const shopFeetPerPieceOf = (shop = {}) => {
+    const r4 = (n) => Math.round(n * 10000) / 10000;
+    const feet = Number(shop && shop.feet) || 0, poles = Number(shop && shop.poles) || 0;
+    if (feet > 0 && poles > 0) return r4(feet / poles);
+    const l = shopLeadLineOf(shop && shop.cutList);
+    const len = l ? (Number(l.cutLength) > 0 ? Number(l.cutLength) / 12 : (Number(l.feetPer) || 0)) : 0;
+    if (len > 0) return r4(len);
+    return Number(shop && shop.cutLength) > 0 ? r4(Number(shop.cutLength) / 12) : 0;
+};

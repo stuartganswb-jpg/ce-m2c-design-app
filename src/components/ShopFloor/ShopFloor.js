@@ -19,7 +19,7 @@ import SopViewer from '../Shared/SopViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { mirrorCustomStatusToSibling, releaseSiblingToPickPack, woItemCodeOf, CUSTOM_FAB_STATUS, stagingKeyOf } from '../Shared/workOrderContract';
-import { shopLeadCodeOf } from '../Shared/splitPlan';
+import { shopLeadCodeOf, shopFeetPerPieceOf } from '../Shared/splitPlan';
 import { isHeld, holdFirst, HOLD_STAGES } from '../Shared/orderHold';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import MaterialGridCard from '../Shared/MaterialGridCard';
@@ -1413,6 +1413,8 @@ const ShopFloor = () => {
                             id: demandId, brandId: order.brand || 'ce', status: 'open', woNum: order.woNum || order.id,
                             baseItemId: null, baseErpId: baseErp, targetErpId: `${baseErp}/${finishCode}`,
                             finishCode, finishName: finText || finishCode, qty: Number(order.qty) || 1,
+                            // What the plater bills a custom pole on (Shared/platingRate, 2026-09-28): its feet per piece.
+                            feetPerPiece: shopFeetPerPieceOf(order) || null,
                             custom: true, source: 'custom-shop',
                             // THE LOOP BACK TO THE ORDER (Brief C → D, 2026-09-03): the WMS pull copies
                             // these onto the plating_shipments line; the build-back mirrors 'Complete'

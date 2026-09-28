@@ -35,6 +35,7 @@ import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i1
 import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
+import { platingLineRateOf } from '../Shared/platingRate';
 import { printUomLabels, printSalesOrderLabels, printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, printBoxLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { partImageOf, buildSpeciesBaseIndex } from '../Shared/partPicture';
 import { encodeUomScan, uomDisplay } from '../Shared/labelScan';
@@ -1975,6 +1976,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 finishCode: d.finishCode || '', finishName: d.finishName || '', targetErpId: d.targetErpId || '',
                 vendorCrmId, nsVendorId, vendorName: (fin && fin.vendor) || '',
                 qty: Number(d.qty) || 1, fromBin: 'CUSTOM FAB', platingBin: 'OB PLATING', woNum: d.woNum || '',
+                // The plater bills a custom pole by the foot (Shared/platingRate, 2026-09-28) — the piece's feet ride along.
+                ...(Number(d.feetPerPiece) > 0 ? { feetPerPiece: Number(d.feetPerPiece) } : {}),
                 // THE LOOP BACK TO THE ORDER (2026-09-11, read before the round trip ran): the shop's demand
                 // carries finSiblingId / orderKey / salesOrderId / shopOrderId (Brief C, 2026-09-03) and the
                 // stock pull copies them onto its line (platingDemandLink) — this path dropped them, so the
@@ -3589,12 +3592,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         // plating $/unit = the PLATING FEE for the item's product type (HQ Admin → Plating Fees), kept
         // separate from the NetSuite assembly cost. Per-piece for most types; poles are priced per foot
         // and their qty is already in feet, so cost = fee × qty either way. Manual ship-modal override wins.
-        const rateOf = (l) => {
-            const v = shipCosts[l.id];
-            if (v !== undefined) return parseFloat(v) || 0;
-            const pt = String(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.productType || '').toUpperCase();
-            return parseFloat(platingFees[pt]?.fee) || 0;
-        };
+        // The same rate the modal shows (the typed $/ea, else the rule — Shared/platingRate).
+        const rateOf = (l) => platingRateFor(l);
         const total = lines.reduce((s, l) => s + rateOf(l) * (parseInt(l.qty) || 0), 0);
         const pcs = lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0);
         // ZERO-RATE GUARD (Eric 2026-08-13: the screw plating service rode the EP11 PO at $0 —
@@ -4570,10 +4569,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
     // Plating shipment cost helper: $/unit = the PLATING FEE for the item's product type
     // (HQ Admin → Plating Fees). Per-piece for most; poles are per-foot with qty already in feet.
-    const platingBaseCost = (l) => {
-        const pt = String(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.productType || '').toUpperCase();
-        return parseFloat(platingFees[pt]?.fee) || 0;
-    };
+    // THE DEFAULT $/EA (Stuart 2026-09-28: "$20.00 per foot … $25 for the H1-2 poles"): the Plating Fees rule for the
+    // item — a pole by its SHAPE (round / square), a custom pole by the foot × its feet per piece (Shared/platingRate).
+    // A custom line carries no item id; its base item is found by code.
+    const platingPartOf = (l) => hqParts.find(p => p.id === l.itemId)
+        || (l.custom ? hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === String(l.erpId || '').toUpperCase()) : null) || null;
+    const platingBaseCost = (l) => platingLineRateOf({ line: l, part: platingPartOf(l), rules: platingFees });
     const platingRateFor = (l) => { const v = shipCosts[l.id]; return v !== undefined ? (parseFloat(v) || 0) : platingBaseCost(l); };
 
     // Re-printable plating PO (Stuart 2026-08-13: "my vendor just asked for a copy of this po") —
