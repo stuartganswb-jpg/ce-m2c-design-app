@@ -136,6 +136,39 @@ export const docStreamsOf = ({ parts = [], shopPoles = 0 } = {}) => {
     return { poles, smallPcs, totalParts: smallPcs + poles, fields };
 };
 
+/**
+ * A DOCUMENT WRITTEN BEFORE THE TWO TRACKS GETS ITS POLES COUNTED (Stuart 2026-09-28) — pure. docStreamsOf shapes every
+ * finishing document written since 2e311997; the ones already waiting in the setup queue kept the old shape — no pole
+ * count — so the shop's poles, joining them at staging, would still run the small parts' -S coats (WO-SO60676, GL5: two
+ * 1" rods on GL5-S's 4 coats instead of GL5-P's 5). This is the same rule applied to such a document, only while nothing
+ * on it has run:
+ *   · it has a shop sibling whose poles are finished here (not plated — the plater's; not UNFINISHED — cut and packed);
+ *   · it counts no poles (the floor's woHasPoles reads false), is not pick-only, is not closed;
+ *   · the finishing floor has not started it (Setup · Pending · step 0 · every task Pending, none begun).
+ * The shop's poles are counted as the CPQ split counts them (its poles, else its pieces — Shared/splitPlan customShopQtyOf).
+ * @param fin   the finishing document (fin_workorders)
+ * @param shop  its shop sibling (shop_custom_orders), or null
+ * @returns { poles, smallPcs, totalParts, patch } — `patch` holds only what docStreamsOf writes, plus the parts total — or null
+ */
+export const poleCountRepairOf = (fin, shop) => {
+    if (!fin || !shop || fin.deleted || shop.deleted) return null;
+    if (fin.pickOnly === true || fin.finishingRequired === false) return null;
+    const counted = N(fin.totalPoles) > 0 || N(fin.poles && fin.poles.qty) > 0 || fin.type === 'Poles' || isPoleCategory(fin.productType);
+    if (counted) return null;
+    const finish = U(String(fin.recipe || fin.finishGroup || '').split(' - ')[0]);
+    if (!finish || isOutsourcedFinishCode(finish) || isUnfinishedFinish(finish)) return null;
+    if (['CLOSED', 'CANCELLED', 'SENT TO PLATING'].includes(U(shop.status)) || shop.closed === true) return null;
+    const untouched = (t) => !t || (U(t.status || 'Pending') === 'PENDING' && !t.startTime);
+    const notStarted = U(fin.currentPhase) === 'SETUP' && U(fin.stepStatus || 'Pending') === 'PENDING'
+        && N(fin.currentStepIndex) === 0 && Object.values(fin.tasks || {}).every(untouched);
+    if (!notStarted) return null;
+    const shopPoles = N(shop.poles) || N(shop.qty) || 1;
+    const inHouse = (fin.partsList || []).filter(p => p && !p.pickOnly);
+    const streams = docStreamsOf({ parts: inHouse, shopPoles });
+    if (!(streams.poles > 0)) return null;
+    return { poles: streams.poles, smallPcs: streams.smallPcs, totalParts: streams.totalParts, patch: { ...streams.fields, totalParts: streams.totalParts } };
+};
+
 /** Which jobs of a group are the SHOP's (a custom pole) and which the finishing side's. */
 export const splitGroupJobs = (group) => ({
     custom: (group.jobs || []).filter(j => !!j.custom),

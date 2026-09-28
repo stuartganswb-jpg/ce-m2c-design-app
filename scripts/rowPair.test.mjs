@@ -58,6 +58,29 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
         const wood = docStreamsOf({ parts: [{ legacyErpId: 'H1-138WR-O', productType: 'POLE', quantity: 50 }, { legacyErpId: 'H1-138WGF-O', productType: 'FINIAL TOP', quantity: 50, paintSize: 'S' }], shopPoles: 0 });
         const woodDoc = { ...wood.fields, totalParts: wood.totalParts };
         eq('a straight wood rod on the parts list is a POLE (pole track); the finial is the sled\'s', [woodDoc.totalPoles, woodDoc.paintSizes, FA.partsStreamOf(woodDoc), FA.poleStreamOf(woodDoc), FA.woHasSmallParts(woodDoc)], [50, { S: 50, M: 0, L: 0 }, 'SMALL', 'POLES', true]);
+        // A DOCUMENT WRITTEN BEFORE THE TWO TRACKS (WO-SO60676, live 2026-09-28): GL5, 94 small parts, no pole count, its
+        // shop sibling cutting 2 rods — the floor would run the rods on GL5-S. Counting them puts them on GL5-P.
+        const { poleCountRepairOf } = await import('../src/components/Shared/rowPairShape.js');
+        const pending = () => ({ spinSetup: { status: 'Pending', assignedTo: null }, spinSpray: { status: 'Pending', assignedTo: null }, poleSpray: { status: 'Pending', assignedTo: null } });
+        const old = { id: 'WO-SO60676', recipe: 'GL5', type: 'Mixed', totalParts: 94, paintSize: null, paintSizes: null, currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0, tasks: pending(), shopSiblingId: 'SHOP-SO60676', hasCustomSibling: true,
+            partsList: [{ legacyErpId: 'H1-1RG', productType: 'RING', qty: 88 }, { legacyErpId: 'H1-1MB', productType: 'ACCESSORY', qty: 4 }, { legacyErpId: 'H1-1ELB', productType: 'BRACKET', qty: 1 }, { legacyErpId: 'H1-1JNR', productType: 'JOINER', qty: 1 }] };
+        const shop60676 = { id: 'SHOP-SO60676', recipe: 'GL5', finishRecipe: 'GL5 - GL5', poles: 2, qty: 2, status: 'In Process' };
+        eq('before: the old document has no pole track — its rods would run GL5-S', [FA.woHasPoles(old), rOf(FA.partsStreamOf(old))], [false, 'GL5-S']);
+        const fix = poleCountRepairOf(old, shop60676);
+        const healed = { ...old, ...(fix && fix.patch) };
+        eq('the repair counts the shop\'s 2 rods: poles on GL5-P, the 94 small parts stay on GL5-S', [fix && fix.poles, fix && fix.smallPcs, healed.totalParts, FA.woHasPoles(healed), FA.woHasSmallParts(healed), rOf(FA.partsStreamOf(healed)), rOf(FA.poleStreamOf(healed))], [2, 94, 96, true, true, 'GL5-S', 'GL5-P']);
+        eq('…and writes only the two-track fields and the parts total', Object.keys(fix.patch).sort(), ['paintSize', 'paintSizes', 'poles', 'totalParts', 'totalPoles']);
+        eq('a pole-only old document becomes the pole stream', (poleCountRepairOf({ ...old, partsList: [], totalParts: 1 }, shop60676) || {}).patch, { poles: { qty: 2, type: 'POLE' }, totalPoles: 2, paintSize: null, paintSizes: null, finishStream: 'POLES', totalParts: 2 });
+        eq('nothing to repair: already counted · started on the floor · set up · pick-only · plated · unfinished · sent to plating · no shop half', [
+            poleCountRepairOf({ ...old, totalPoles: 2, poles: { qty: 2, type: 'POLE' } }, shop60676),
+            poleCountRepairOf({ ...old, tasks: { ...pending(), spinSpray: { status: 'Running', startTime: 5 } } }, shop60676),
+            poleCountRepairOf({ ...old, currentPhase: 'Painting', stepStatus: 'Staged' }, shop60676),
+            poleCountRepairOf({ ...old, pickOnly: true, finishingRequired: false }, shop60676),
+            poleCountRepairOf({ ...old, recipe: 'EP2' }, shop60676),
+            poleCountRepairOf({ ...old, recipe: 'UNFINISHED' }, shop60676),
+            poleCountRepairOf(old, { ...shop60676, status: 'Sent to Plating' }),
+            poleCountRepairOf(old, null),
+        ], [null, null, null, null, null, null, null, null]);
         eq('small parts alone: the sled only, no pole track', (() => { const x = docStreamsOf({ parts: [{ productType: 'FINIAL', quantity: 10, paintSize: 'S' }] }); return [x.fields.totalPoles || 0, x.fields.finishStream || null]; })(), [0, null]);
     }
     eq('the shop sibling carries the pole as its cut list and its pull line, with the cut', [shape.shopSibling.cutList.map(c => [c.legacyErpId, c.qty, c.cutLength]), shape.shopSibling.pullLines.map(l => l.legacyErpId), shape.shopSibling.cutLength, shape.shopSibling.finSiblingId, shape.shopSibling.routeTo],

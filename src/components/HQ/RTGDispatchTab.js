@@ -13,7 +13,7 @@ import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineS
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
-import { finishGroupsOf, docStreamsOf } from '../Shared/rowPairShape';
+import { finishGroupsOf, docStreamsOf, poleCountRepairOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe } from '../Shared/floorRelease';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
@@ -2463,6 +2463,63 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         }),
         [liveWO, liveSO, liveFin, liveShop, liveConvD, livePlatD, liveRodCuts, purchaseOrders, flaggedOutbox]
     );
+    // POLES NOT COUNTED (Stuart 2026-09-28): a finishing document written before the two tracks (2e311997) carries no
+    // pole count, so the shop's poles that join it at staging would run the small parts' recipe (-S). Listed from the
+    // same live feeds while the finishing floor has not started it; the count is the one rule (Shared/rowPairShape).
+    const poleCountRepairs = useMemo(() => {
+        const shopById = new Map(liveShop.map(s => [s.id, s]));
+        return liveFin.map(fin => ({ fin, r: poleCountRepairOf(fin, shopById.get(fin.shopSiblingId) || null) })).filter(x => x.r);
+    }, [liveFin, liveShop]);
+    const countPoles = async (items) => {
+        const list = (items || []).filter(Boolean);
+        if (!list.length) return;
+        if (!window.confirm(`🎨 Count the poles on ${list.length} finishing document${list.length === 1 ? '' : 's'}?\n\n${list.map(x => `${woRefOf(x.fin)} · ${x.fin.recipe}: ${x.r.poles} pole${x.r.poles === 1 ? '' : 's'} → the pole recipe (-P)${x.r.smallPcs ? `, ${x.r.smallPcs} small part${x.r.smallPcs === 1 ? '' : 's'} stay on the small-parts recipe (-S)` : ''}`).join('\n')}\n\nOnly the pole count and the parts total are written; each document is read again first and skipped if the floor has started it.`)) return;
+        let done = 0; const skipped = [];
+        for (const x of list) {
+            try {
+                // Read both documents fresh: the floor may have started it since the list was drawn.
+                const finSnap = await getDoc(doc(db, 'fin_workorders', x.fin.id));
+                const shopSnap = x.fin.shopSiblingId ? await getDoc(doc(db, 'shop_custom_orders', x.fin.shopSiblingId)) : null;
+                const fin = finSnap.exists() ? { id: finSnap.id, ...finSnap.data() } : null;
+                const r = poleCountRepairOf(fin, shopSnap && shopSnap.exists() ? { id: shopSnap.id, ...shopSnap.data() } : null);
+                if (!r) { skipped.push(woRefOf(x.fin)); continue; }
+                await updateDoc(doc(db, 'fin_workorders', fin.id), {
+                    ...r.patch,
+                    poleCountRepairedAt: Date.now(), poleCountRepairedBy: currentUser || '',
+                    poleCountRepairedFrom: { totalParts: fin.totalParts == null ? null : fin.totalParts },
+                });
+                done++;
+                addLog(`🎨 ${woRefOf(fin)} (${fin.recipe}): ${r.poles} pole${r.poles === 1 ? '' : 's'} counted — the pole recipe for the poles, the small-parts recipe for ${r.smallPcs} small part${r.smallPcs === 1 ? '' : 's'}; parts total ${fin.totalParts} → ${r.totalParts}.`, 'success');
+            } catch (e) { skipped.push(`${woRefOf(x.fin)} (${e.message || e})`); }
+        }
+        if (skipped.length) addLog(`🎨 Not counted (started on the floor, or changed since the list was drawn): ${skipped.join(' · ')}`, 'warn');
+        if (!done && skipped.length) alert(`Nothing was written — ${skipped.join(' · ')}`);
+    };
+    const poleCountPanel = () => {
+        if (!poleCountRepairs.length) return null;
+        return (
+            <div style={{ padding: '10px 24px', borderBottom: '1px solid var(--paper-2)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>
+                        🎨 Poles not counted — they would run the small parts' recipe · {poleCountRepairs.length}
+                    </span>
+                    {poleCountRepairs.length > 1 && (
+                        <button onClick={() => countPoles(poleCountRepairs)} style={{ ...btnStyle, padding: '4px 12px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>🎨 Count all {poleCountRepairs.length}</button>
+                    )}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--ink-soft)', margin: '4px 0 8px', lineHeight: 1.5 }}>
+                    Written before the finishing floor ran each part on its own recipe (2026-09-28): the shop's poles join this document at staging, and with no pole count the floor runs them on the small parts' recipe (-S). Counting them puts the poles on the pole recipe (-P) and leaves the small parts on -S. Only documents the finishing floor has not started are listed; nothing else on them changes.
+                </div>
+                {poleCountRepairs.map(({ fin, r }) => (
+                    <div key={fin.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 0', fontSize: '0.85rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{woRefOf(fin)}</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{fin.recipe} · {r.poles} pole{r.poles === 1 ? '' : 's'} + {r.smallPcs} small part{r.smallPcs === 1 ? '' : 's'} · parts {fin.totalParts} → {r.totalParts}</span>
+                        <button onClick={() => countPoles([{ fin, r }])} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>🎨 Count the poles</button>
+                    </div>
+                ))}
+            </div>
+        );
+    };
     const ORPHAN_COPY = {
         ORPHAN_FLOOR:   { label: 'On the floor, not on this board', why: 'A live floor job with no RTG record — nothing here can dispatch, close or report it.' },
         FLOOR_CLOSED:   { label: 'Closed on the floor, open here',  why: 'The floor finished with it; the board still lists it as live work.' },
@@ -3512,6 +3569,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                             </button>
                         </div>
                         {bulkReopenPanel()}
+                        {poleCountPanel()}
                         {reconcilePanel()}
                     </div>
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>
