@@ -100,6 +100,7 @@ test('the track AND the brackets wear the base colour; the fascia and the ends d
     const r = explodeTraverse({ align: A(), feet: 4, rules, proj: '4.625' });
     const line = (code) => r.lines.find(l => l.code === code);
     assert.equal(line('H1-2TRVTRK/C').subFinish, true);    // track
+    assert.equal(line('H1-2TRVCLP').subFinish, true);      // the F-clip runs with the track (2026-09-28)
     assert.equal(line('H1-2TRV-EWB').subFinish, true);     // the bracket goes with it
     assert.equal(line('H1-2RCTAR').subFinish, false);      // fascia — the colour that was sold
     assert.equal(line('H1-2TRVPLUG').subFinish, false);    // end treatment

@@ -74,13 +74,15 @@ eq('the pack bench names the finished pieces', packLinesOf(so, { isFeeCode: libF
     const T = (code, name, specs = {}, more = {}) => ({ id: `t-${code}`, legacyErpId: code, itemId: code, itemName: name, brandId: BRAND, partClass: 'Inventory', netSuiteInternalId: String(7000 + code.length), manufacturingSpecs: { isInHouse: true, ...specs }, ...more });
     const trvLib = [
         T('H1-2RCTWR', '2" x 3/4" Rectangular Rod Wood Mill', { productType: 'Pole', partHandling: 'Custom', material: 'Wood', isInHouse: false, vendorName: 'Oak Supply' }),
+        T('H1-2RCTWR-O', '2" x 3/4" Rectangular Oak Rod', { productType: 'Pole', partHandling: 'Custom', material: 'Wood', isInHouse: false, vendorName: 'Oak Supply' }),
         T('H1-2TRV', '1.5" Square Traverse Track', { productType: 'Pole', partHandling: 'Custom' }),
+        T('H1-2TRVCLP', 'F-Clip Hanger for 1.5" Square Traverse Track', { productType: 'Pole', partHandling: 'Custom' }),
         T('H1-2TRV-WB', 'Traverse Wall Bracket', { productType: 'BRACKET', partHandling: 'Small Parts', usesSubFinish: true }, { partClass: 'Kit' }),
         T('H1-2TRV-WB/C', 'Traverse Wall Bracket - Champagne', { productType: 'Bracket', partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
         T('H1-2TRVPLUG', 'End Plug', { productType: 'Component', partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
     ];
-    Object.assign(stock, { 'H1-2RCTWR': { available: 300, unit: 'FOOT' }, 'H1-2TRV': { available: 300, unit: 'FOOT' }, 'H1-2TRV-WB/C': { available: 40, unit: 'EACH' }, 'H1-2TRVPLUG': { available: 400, unit: 'EACH' } });
-    const finishes = [{ code: 'S04', subFinishCode: 'TCP' }, { code: 'TCP', isSubFinish: true }];
+    Object.assign(stock, { 'H1-2RCTWR-O': { available: 300, unit: 'FOOT' }, 'H1-2TRV': { available: 300, unit: 'FOOT' }, 'H1-2TRVCLP': { available: 300, unit: 'FOOT' }, 'H1-2TRV-WB/C': { available: 40, unit: 'EACH' }, 'H1-2TRVPLUG': { available: 400, unit: 'EACH' } });
+    const finishes = [{ code: 'S04', subFinishCode: 'TCP', bomSuffix: 'OAK' }, { code: 'TCP', isSubFinish: true }];
     const byCode = (c) => trvLib.find(p => p.legacyErpId === String(c).toUpperCase()) || null;
     // tab 7's resolveComponent: the exact code, else the base with the suffix carried
     const resolve = (code) => { const x = byCode(code); if (x) return { part: x, suffix: '' }; const m = String(code).match(/^(.+)\/([A-Za-z0-9]+)$/); return m && byCode(m[1]) ? { part: byCode(m[1]), suffix: m[2].toUpperCase() } : { part: null, suffix: '' }; };
@@ -88,7 +90,9 @@ eq('the pack bench names the finished pieces', packLinesOf(so, { isFeeCode: libF
     const ex = explodeTraverse({ family: 'H1-2TRV', align, feet: 8, proj: '3.625', rules: null });
     const shaped = traverseOrderLinesOf({ exploded: ex.lines, family: 'H1-2TRV', finish: 'S04', feet: 8, drive: 'MANUAL', finishes, resolve });
     const tLines = shaped.filter(c => c.part).map(c => ({ erp: c.consumeCode, name: c.part.itemName, qty: c.qty, trvComponent: true, trvOfKit: 'K1', ...(c.floor || {}) }));
-    eq('tab 7 consumes the fascia, the library\'s track, the champagne bracket and the plugs', tLines.map(l => l.erp), ['H1-2RCTWR', 'H1-2TRV', 'H1-2TRV-WB/C', 'H1-2TRVPLUG']);
+    eq('tab 7 consumes the OAK fascia, the library\'s track, its F-clip, the champagne bracket and the plugs', tLines.map(l => l.erp), ['H1-2RCTWR-O', 'H1-2TRV', 'H1-2TRVCLP', 'H1-2TRV-WB/C', 'H1-2TRVPLUG']);
+    const fc = tLines.find(l => l.erp === 'H1-2TRVCLP');
+    eq('…the F-clip: by the foot like the track (8 ft), cut 95" (manual −1"), finished TCP → H1-2TRVCLP/C', [fc.qty, fc.billedFeet, fc.cutLength, fc.finishCode, shaped.find(c => c.consumeCode === 'H1-2TRVCLP').finishedCode], [1, 8, 95, 'TCP', 'H1-2TRVCLP/C']);
     const tr = tLines.find(l => l.erp === 'H1-2TRV');
     eq('…the track: 1 piece of 8 ft, cut 95.5", finished TCP → H1-2TRVTRK/C', [tr.qty, tr.billedFeet, tr.cutLength, tr.finishCode, shaped.find(c => c.consumeCode === 'H1-2TRV').finishedCode], [1, 8, 95.5, 'TCP', 'H1-2TRVTRK/C']);
     __fs.seed('hq_sales_orders', 'OE-2', { id: 'OE-2', soId: 'SO70002', brand: BRAND, orderClass: 'QUICKSHIP', customer: 'Test Co', customerId: 'C1', nsInternalId: '8802', status: 'Pending', createdAt: 1, lines: tLines });
@@ -99,7 +103,7 @@ eq('the pack bench names the finished pieces', packLinesOf(so, { isFeeCode: libF
     const hq2 = __fs.all('hq_work_orders').filter(h => h.soAppId === 'OE-2');
     const g2 = (erp) => (so2.oeGen || {})[so2.lines.findIndex(l => l.erp === erp)] || null;
     const tcp = hq2.find(h => h.routeTo === 'SHOP' && h.finishGroup === 'TCP');
-    eq('the track is its own TCP shop job at 95.5"', (tcp?.cutList || []).map(c => [c.legacyErpId, c.cutLength, c.finishedCode]), [['H1-2TRV', 95.5, 'H1-2TRVTRK/C']]);
+    eq('the track and its F-clip are the TCP shop job at 95.5" / 95"', (tcp?.cutList || []).map(c => [c.legacyErpId, c.cutLength, c.finishedCode]), [['H1-2TRV', 95.5, 'H1-2TRVTRK/C'], ['H1-2TRVCLP', 95, 'H1-2TRVCLP/C']]);
     ok('the S04 fascia is started (CPQ\'s rule: a straight wood rod is finishing\'s)', !!hq2.find(h => h.routeTo === 'FINISHING' && h.finishGroup === 'S04'), hq2.map(h => `${h.routeTo}/${h.finishGroup}`).join(', ') + ' | ' + logs2.join(' | '));
     eq('the champagne bracket and the plugs are shelf picks — never started', [g2('H1-2TRV-WB/C'), g2('H1-2TRVPLUG')], [null, null]);
     const { soPackLineStateOf: sp } = await import('../../src/components/Shared/pickLines.js');

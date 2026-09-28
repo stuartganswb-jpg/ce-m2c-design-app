@@ -46,7 +46,7 @@ export const TRAVERSE_FAMILY_PARTS = {
         //
         // Declared per family as ROLES, so the answer travels with the line rather than depending
         // on every bracket item in the library having had a checkbox ticked.
-        subFinishRoles: ['track', 'bracket'],
+        subFinishRoles: ['track', 'bracket', 'fclip'],
         splice: 'H1-2TRVSPLC',
         frontRingPole: 'H1-2RCTPR',
     },
@@ -169,6 +169,9 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
     } else {
         add(P.fascia[U(align.material)] || P.fascia.P, ft, 'fascia (per ft)', 'fascia');
         add(P.track, ft * (setup === 'DOUBLE' && !ring ? 2 : 1), setup === 'DOUBLE' && !ring ? 'two tracks (per ft)' : 'track (per ft)', 'track');
+        // THE F-CLIP RUNS WITH ITS TRACK (Stuart 2026-09-28: "fclip is same usage as track, by foot") — one run per
+        // track, consumed by the foot, cut and finished with it (Shared/subFinish.traverseOrderLinesOf).
+        if (P.fclip) add(P.fclip, ft * (setup === 'DOUBLE' && !ring ? 2 : 1), setup === 'DOUBLE' && !ring ? 'two F-clip runs (per ft)' : 'F-clip (per ft)', 'fclip');
         if (ring) { add(P.frontRingPole, 1, 'front ring pole', 'ringPole'); skipped.push('ring COUNT rides the configurator — front pole consumed, rings not yet'); }
     }
 

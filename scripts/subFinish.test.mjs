@@ -79,4 +79,18 @@ const tf = t7.find(c => c.role === 'fascia'), tt = t7.find(c => c.role === 'trac
 eq('tab 7 fascia: 72", finished P14', [tf.consumeCode, tf.floor.cutLength, tf.floor.finishCode, tf.floor.billedFeet], ['H1-2RCTAR', 72, 'P14', 6]);
 eq('tab 7 track: the library\'s H1-2TRV, 70" (motorized), TBR → H1-2TRVTRK/B', [tt.consumeCode, tt.floor.cutLength, tt.floor.finishCode, tt.finishedCode], ['H1-2TRV', 70, 'TBR', 'H1-2TRVTRK/B']);
 
+// an 8 ft manual wood kit in S04 (oak): the fascia is the species S04 consumes, the F-clip runs with the track
+const oak = P('H1-2RCTWR-O', { productType: 'Pole', material: 'Wood' });
+const woodMill = P('H1-2RCTWR', { productType: 'Pole', material: 'Wood' });
+const wf = [...finishes.filter(f => f.code !== 'S04'), { code: 'S04', subFinishCode: 'TCP', bomSuffix: 'OAK' }];
+const exW = explodeTraverse({ family: 'H1-2TRV', align: { setup: 'SINGLE', material: 'W', drive: 'MANUAL', minFeet: 4 }, feet: 8, proj: '3.625', rules: null });
+eq('the explosion: the F-clip by the foot, the same feet as the track, in the base colour', [exW.lines.find(l => l.role === 'fclip')?.code, exW.lines.find(l => l.role === 'fclip')?.qty, exW.lines.find(l => l.role === 'track')?.qty, exW.lines.find(l => l.role === 'fclip')?.subFinish], ['H1-2TRVCLP', 8, 8, true]);
+const exD = explodeTraverse({ family: 'H1-2TRV', align: { setup: 'DOUBLE', frontRail: 'TRACK', material: 'W', drive: 'MANUAL', minFeet: 4 }, feet: 8, rules: null });
+eq('a double with a track front: two F-clip runs, as two tracks', exD.lines.find(l => l.role === 'fclip')?.qty, 16);
+const w7 = traverseOrderLinesOf({ exploded: exW.lines, family: 'H1-2TRV', finish: 'S04', feet: 8, drive: 'MANUAL', finishes: wf, findByCode: (c) => [oak, woodMill, track, fclip, wb, wbC, plug].find(p => p.legacyErpId === String(c).toUpperCase()) || null });
+const wfa = w7.find(c => c.role === 'fascia'), wfc = w7.find(c => c.role === 'fclip');
+eq('tab 7: S04 consumes the OAK fascia (CPQ\'s species rule)', [wfa.consumeCode, wfa.floor.finishCode, wfa.finishedCode], ['H1-2RCTWR-O', 'S04', 'H1-2RCTWR-O/S04']);
+eq('tab 7: the F-clip 95" (manual −1"), TCP → H1-2TRVCLP/C, 8 ft consumed', [wfc.consumeCode, wfc.floor.cutLength, wfc.floor.finishCode, wfc.finishedCode, wfc.qty], ['H1-2TRVCLP', 95, 'TCP', 'H1-2TRVCLP/C', 8]);
+eq('tab 7: a painted kit keeps its aluminium fascia (no species)', t7.find(c => c.role === 'fascia').consumeCode, 'H1-2RCTAR');
+
 console.log(`subFinish: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

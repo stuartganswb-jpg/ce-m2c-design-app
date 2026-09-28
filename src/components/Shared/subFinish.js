@@ -21,6 +21,7 @@ import { TRAVERSE_FAMILY_PARTS } from './traverseExplode.js';
 import { traverseCutLength } from './traverseTags.js';
 import { isPoleCategory } from './poleCut.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
+import { speciesVariantOf } from './sizeMatrix.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -210,8 +211,10 @@ export const restampBreakdownLines = ({ breakdown = [], keep = () => true, partO
  * TAB 7'S TRAVERSE KIT, AS ORDER LINES THE FLOOR READS — pure. The explosion (Shared/traverseExplode) says what
  * NetSuite consumes; this says what each consumed part IS on the floor, by the same rules as a CPQ row:
  *   · the fascia — cut at the system's length, finished in the kit's finish (a to-be-finished pole);
+ *   · the fascia — the species the kit's stain consumes (S04 → H1-2RCTWR-O, CPQ's speciesVariantOf);
  *   · the track — the library's raw track (the family's rawTrack, what CPQ sells), cut by CPQ's deduction for the
  *     kit's drive, finished in the sub finish 4.5 aligns to the kit's finish; it leaves the floor as H1-2TRVTRK/<B|C>;
+ *   · the F-clip — consumed by the foot like the track, cut by its own deduction (−1" / −3"), finished with it;
  *   · a part made in the base colours (the explosion's subFinish lines — the brackets) — the stocked colour item
  *     when the library has it (CPQ's stockColourVariantOf), a shelf pick;
  *   · everything else — a shelf pick, as before.
@@ -229,13 +232,35 @@ export const traverseOrderLinesOf = ({ exploded = [], family = 'H1-2TRV', finish
     const P = TRAVERSE_FAMILY_PARTS[family] || {};
     const fin = U(finish);
     const sub = subFinishOfFinish(fin, finishes);
+    const finishObj = (finishes || []).find(f => f && U(f.code || f.name) === fin) || null;
     const inches = Math.round(N(feet) * 12 * 100) / 100;
     const res = (code) => (typeof resolve === 'function' ? resolve(code) : { part: (typeof findByCode === 'function' ? findByCode(U(code)) : null), suffix: '' }) || { part: null, suffix: '' };
+    const exact = (x) => { const hit = res(x); return hit && hit.part && !hit.suffix ? hit.part : null; };
+    // The track and the F-clip: cut from the fascia by CPQ's deduction for their role, finished in the sub finish.
+    const cutPart = (c, code, trvRole, qty) => {
+        const { part } = res(code);
+        const pieces = /^two /i.test(String(c.why || '')) ? 2 : 1;
+        const cut = inches > 0 ? traverseCutLength({ fasciaInches: inches, role: trvRole, drive: U(drive) || 'MANUAL' }) : null;
+        return {
+            ...c, consumeCode: codeOfPart(part) || U(code), part, qty,
+            floor: {
+                qty: pieces, perFoot: true, feetPer: qty / pieces, billedFeet: qty,
+                ...(cut ? { cutLength: cut, trvCutFrom: inches } : {}),
+                ...(sub ? { toBeFinished: true, finishCode: sub, subFinishCode: sub, finishLabel: `${sub} (sub finish)` } : {}),
+                trvRole, trvDrive: U(drive) || 'MANUAL',
+            },
+            finishedCode: sub ? finishedCodeOf(code, sub) : U(code),
+            ...(sub ? {} : { note: `${fin || 'the kit finish'} has no sub finish aligned in 4.5 — the ${trvRole === 'TRACK' ? 'track' : 'F-clip'} has no colour` }),
+        };
+    };
     return (exploded || []).map(c => {
         const role = String(c.role || '').toLowerCase();
         const qty = N(c.qty);
         if (role === 'fascia') {
-            const { part } = res(c.code);
+            // THE SPECIES THE STAIN CONSUMES (Stuart 2026-09-28: "fix H1-2RCTWR needs -O") — CPQ's own rule
+            // (Shared/sizeMatrix.speciesVariantOf, the finish's bomSuffix in 4.5): S04 → the oak H1-2RCTWR-O.
+            const { part: base } = res(c.code);
+            const part = speciesVariantOf(base, finishObj, exact) || base;
             const pieces = 1;
             return {
                 ...c, consumeCode: codeOfPart(part) || U(c.code), part, qty,
@@ -248,22 +273,8 @@ export const traverseOrderLinesOf = ({ exploded = [], family = 'H1-2TRV', finish
                 finishedCode: fin ? finishedCodeOf(codeOfPart(part) || c.code, fin) : (codeOfPart(part) || U(c.code)),
             };
         }
-        if (role === 'track' && P.rawTrack) {
-            const { part } = res(P.rawTrack);
-            const pieces = /two tracks/i.test(String(c.why || '')) ? 2 : 1;
-            const cut = inches > 0 ? traverseCutLength({ fasciaInches: inches, role: 'TRACK', drive: U(drive) || 'MANUAL' }) : null;
-            return {
-                ...c, consumeCode: codeOfPart(part) || U(P.rawTrack), part, qty,
-                floor: {
-                    qty: pieces, perFoot: true, feetPer: qty / pieces, billedFeet: qty,
-                    ...(cut ? { cutLength: cut, trvCutFrom: inches } : {}),
-                    ...(sub ? { toBeFinished: true, finishCode: sub, subFinishCode: sub, finishLabel: `${sub} (sub finish)` } : {}),
-                    trvRole: 'TRACK', trvDrive: U(drive) || 'MANUAL',
-                },
-                finishedCode: sub ? finishedCodeOf(P.rawTrack, sub) : U(c.code),
-                ...(sub ? {} : { note: `${fin || 'the kit finish'} has no sub finish aligned in 4.5 — the track has no colour` }),
-            };
-        }
+        if (role === 'track' && P.rawTrack) return cutPart(c, P.rawTrack, 'TRACK', qty);
+        if (role === 'fclip' && P.fclip) return cutPart(c, P.fclip, 'FCLIP', qty);
         const { part, suffix } = res(c.code);
         if (c.subFinish && part && sub) {
             const variant = stockColourVariantOf(part, sub, (x) => {
