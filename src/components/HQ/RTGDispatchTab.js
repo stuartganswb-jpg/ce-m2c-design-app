@@ -8,14 +8,14 @@ import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { runOeAuto, oeInventoryOf, loadOeFinishes } from '../Shared/oeGenerate';
-import { restampBreakdownLines, splitLineFinishOf } from '../Shared/subFinish';
+import { restampBreakdownLines, splitLineFinishOf, isUnfinishedFinish } from '../Shared/subFinish';
 import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
 import { finishGroupsOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
-import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
+import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe } from '../Shared/floorRelease';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
 import { coverCodesOf, backorderHoldOf, isBackorderHold } from '../Shared/backorder';
 import { uomStampOf } from '../Shared/uom';
@@ -1566,8 +1566,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             const pickLines = [...plan.pick, ...plan.unknown];
             // The floor doc exists when there is anything to finish, anything to pick, or a custom half
             // that needs a pack document to land in (the custom-only order had none — D's finding).
-            const finishingNeeded = inHouseLines.length > 0;
+            // A POLE THAT IS PAINTED HERE IS FINISHING'S, EVEN WITH NO SMALL PARTS BESIDE IT (Stuart 2026-09-28: "the 3 need
+            // to be identical in how they handle items to be finished"). This read only the in-house small parts, so a
+            // pole-only group (a painted pole, nothing else) got the pick-only document — born Complete, never on the
+            // finishing floor, the pole packed unpainted. The row / Order Entry route (Shared/rowPairShape) has always given
+            // it a finishing document on the POLE stream; the split now does the same. A plated pole (the plater) and a
+            // piece that wears nothing (UNFINISHED — cut and packed) still take the pick-only document.
+            const poleOnlyFinish = inHouseLines.length === 0 && hasCustom && !isOutsourcedRecipe(recipeCode) && !isUnfinishedFinish(recipeCode);
+            const finishingNeeded = inHouseLines.length > 0 || poleOnlyFinish;
             const pickOnly = !finishingNeeded && (pickLines.length > 0 || hasCustom);
+            const poleCount = poleOnlyFinish ? (customShopQtyOf(customLines).poles || customShopQtyOf(customLines).qty || 1) : 0;
 
             // --- Finishing (small parts) — or the pick-only document ---
             if (finishingNeeded || pickOnly) {
@@ -1611,8 +1619,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     recipe: finishGroups.length > 1 ? (grp.finish || orderRecipe || 'PENDING-RECIPE') : (so.recipe || (finishRecipe !== "PENDING-RECIPE" ? finishRecipe : "PENDING-RECIPE")),
                     recipeLabel: finishGroups.length > 1 ? null : (so.recipeLabel || null),
                     recipeSource: finishGroups.length > 1 ? 'finish group' : (so.recipe ? (so.recipeSource || 'sales order') : (finishRecipe !== "PENDING-RECIPE" ? 'job scan (order saved before the stamp)' : 'none')),
-                    totalParts,
-                    paintSize, paintSizes: hasSize ? paintSizes : null,
+                    totalParts: poleOnlyFinish ? poleCount : totalParts,
+                    // A pole-only finishing document is on the POLE stream (never also a sled — buildFinDoc's assertion).
+                    ...(poleOnlyFinish
+                        ? { paintSize: null, paintSizes: null, poles: { qty: poleCount, type: 'POLE' }, totalPoles: poleCount, finishStream: 'POLES' }
+                        : { paintSize, paintSizes: hasSize ? paintSizes : null }),
                     dimensions: { length: Number(so.length) || 0, width: Number(so.width) || 0, height: Number(so.height) || 0 },
                     cpqSpecs,
                     imageUrl: drawingUrl,
