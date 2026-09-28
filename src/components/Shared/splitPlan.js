@@ -105,3 +105,22 @@ export function customShopQtyOf(customLines = []) {
         isPoleOrder: poles > 0,
     };
 }
+
+// ── THE POLE A SHOP JOB IS NAMED FOR (Stuart 2026-09-28: "french returns fees with rods will happen often and needs
+// to work from all screens") ──────────────────────────────────────────────────────────────────────────────────────
+// A French return, a fee, a miter RIDES the pole — it is never the item. SO60551's ROW 1 shop job (H1-1R 16.75" ×50
+// + two H1-FRPF riders) had no item code, because the readers took a code only from a ONE-line cut list: its plating
+// demand named the row ("ROW 1 · EP4 · 1 pole line + 2 riding") and the plater put-away could not gather the poles
+// into the order. The lead is the first line with a length (a cut, or a per-foot line's feet per piece) that is not a
+// rider — the pole customShopQtyOf counts first; a one-line job is its line. The CPQ split already names its shop
+// document from its first line with a cut (partNum, 2026-09-27); a tab-7 / 10.5 pair now carries the same.
+export function shopLeadLineOf(lines = []) {
+    const list = (lines || []).filter(Boolean);
+    if (list.length === 1) return list[0];
+    return list.find(l => !l.rider && (Number(l.cutLength) > 0 || Number(l.feetPer) > 0)) || null;
+}
+/** The lead pole's code ('' when the job has none). */
+export const shopLeadCodeOf = (lines) => {
+    const l = shopLeadLineOf(lines);
+    return l ? String(l.legacyErpId || l.partId || '').trim().toUpperCase() : '';
+};

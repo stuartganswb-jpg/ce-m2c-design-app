@@ -14,4 +14,8 @@ eq('a row pair names itself and lists its own cut list as its spec', [r.item, Ob
 eq('…and carries the job\'s cut sheet and drawing, as the CPQ split does', [r.fabMethod, !!r.fabNotes, /^data:image/.test(r.imageUrl), r.customerId, r.rowLabel], ['MITER', true, true, 'C1', 'Row 2']);
 const stock = shopReleaseFieldsOf({ hqOrder: { id: 'WO1', source: 'STOCK_VIEW', rootItem: 'H1-75R', totalParts: 20 }, originalJob: null });
 eq('a stock build is unchanged: no fab facts, its item', [stock.item, 'fabNotes' in stock, stock.qty], ['H1-75R', false, 20]);
+// A ROW PAIR WITH RIDERS names its shop document for the pole, as the CPQ split does (partNum, 2026-09-28 — SO60551 ROW 1).
+const riders = shopReleaseFieldsOf({ hqOrder: { id: 'WO-OE-SO60551-1234', source: 'ORDER_ENTRY', rootItem: '', variantErpId: '', itemName: 'ROW 1 · EP4 · 1 pole line + 2 riding', totalParts: 50,
+    cutList: [{ legacyErpId: 'H1-1R', qty: 50, cutLength: 16.75 }, { legacyErpId: 'H1-FRPF', qty: 50, rider: true }, { legacyErpId: 'H1-FRPF', qty: 50, rider: true }] }, originalJob: null });
+eq('a pole with two French return riders: partNum is the pole, the name stays the row\'s', [riders.partNum, riders.item], ['H1-1R', 'ROW 1 · EP4 · 1 pole line + 2 riding']);
 console.log(`cpqJobFacts: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

@@ -1,4 +1,5 @@
 import { isDisplayOnlyLine } from './lineClassification.js';
+import { shopLeadCodeOf } from './splitPlan.js';
 
 // ── THE SHOP'S FACTS FROM A CPQ JOB — one builder (Stuart 2026-09-27, SO60551) ─────────────────────
 // The CPQ split (HQ/RTGDispatchTab.autoSplitSalesOrder) put the job's cut sheet, fabrication method, Vision
@@ -75,7 +76,9 @@ export const shopReleaseFieldsOf = ({ hqOrder = {}, originalJob = null, svgUri =
     }
     const jobFacts = (isOePair && originalJob) ? jobFabFactsOf(originalJob) : null;
     return {
-        partNum: hqOrder.rootItem || hqOrder.variantErpId || '',
+        // A pole with riders (a French return, a fee) is named for its POLE, as the CPQ split names its shop document
+        // (Shared/splitPlan shopLeadCodeOf, 2026-09-28) — a multi-line row pair carries no rootItem of its own.
+        partNum: hqOrder.rootItem || hqOrder.variantErpId || shopLeadCodeOf(hqOrder.cutList) || '',
         outsourcePrice: outsourcePrice || 0,
         item: (isOePair && hqOrder.itemName) || (originalJob && (originalJob.itemName || originalJob.name)) || hqOrder.variantErpId || hqOrder.rootItem || hqOrder.hqJobId || 'Custom App Order',
         qty: Number(hqOrder.totalParts) || 1,

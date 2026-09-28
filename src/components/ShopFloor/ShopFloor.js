@@ -19,6 +19,7 @@ import SopViewer from '../Shared/SopViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { mirrorCustomStatusToSibling, releaseSiblingToPickPack, woItemCodeOf, CUSTOM_FAB_STATUS, stagingKeyOf } from '../Shared/workOrderContract';
+import { shopLeadCodeOf } from '../Shared/splitPlan';
 import { isHeld, holdFirst, HOLD_STAGES } from '../Shared/orderHold';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import MaterialGridCard from '../Shared/MaterialGridCard';
@@ -34,9 +35,11 @@ import { millBaseOf, finishRouteOf, finishSuffixOf } from '../Shared/finishRouti
 // canonical itemCode field woItemCodeOf knows. Resolve instead of trusting one field — the
 // partNum / single-line cutList fallbacks reuse woItemCodeOf's own code validation.
 const soNumOf = (o) => o?.soNum || o?.salesOrderId || o?.orderKey || 'N/A';
+// The pole the job is named for — a French return / fee / miter rides it and is never the item (Shared/splitPlan
+// shopLeadCodeOf, 2026-09-28: a one-line-only rule left SO60551's ROW 1 pole + riders with no code at all).
 const shopItemCodeOf = (o) => woItemCodeOf(o)
     || woItemCodeOf({ itemCode: o?.partNum })
-    || woItemCodeOf({ itemCode: (o?.cutList || []).length === 1 ? o.cutList[0].legacyErpId : null });
+    || woItemCodeOf({ itemCode: shopLeadCodeOf(o?.cutList) || null });
 
 // RTG's job log sorts on updatedAt — every shop write stamps it (2026-08-26).
 const touched = (p) => ({ ...p, updatedAt: serverTimestamp() });
