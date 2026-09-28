@@ -133,8 +133,15 @@ export const soLineIsFee = (so, l, idx, isFeeCode = null) => !!l && (lineIsFeeis
 // A line the warehouse PICKS OFF THE SHELF for the order: a stocked line, or a plated to-be-finished line the
 // row start found in stock (the sales order's oeGen[idx] stamp, kind STOCK — Shared/oeGenerate). Every other
 // to-be-finished line ARRIVES from a floor and is ready only once it is gathered into the order.
-export const soLineIsShelfPick = (so, l, idx) => !lineIsTbf(l)
-    || !!(so && so.oeGen && so.oeGen[idx] && so.oeGen[idx].kind === 'STOCK');
+export const soLineIsShelfPick = (so, l, idx) => {
+    const g = so && so.oeGen && so.oeGen[idx];
+    if (g && g.kind === 'STOCK') return true;
+    // MADE ON A FLOOR, THOUGH IT WEARS NOTHING (Stuart 2026-09-28, SO60551's clear acrylic rod): a line the start put
+    // on a work order, or a piece cut to length, comes from the floor — it is never looked for on the shelf.
+    if (g && g.kind === 'WO') return false;
+    if (Number(l && l.cutLength) > 0) return false;
+    return !lineIsTbf(l);
+};
 
 // ── ONE ORDER SHIPS ONCE (Stuart 2026-09-27) ───────────────────────────────────────────────
 // A CPQ order split into several finishes (RTG's split, one pair per finish: WO-<key>-P24, WO-<key>-S03)

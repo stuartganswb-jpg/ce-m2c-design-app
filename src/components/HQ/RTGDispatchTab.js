@@ -8,7 +8,7 @@ import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { runOeAuto, oeInventoryOf, loadOeFinishes } from '../Shared/oeGenerate';
-import { restampBreakdownLines } from '../Shared/subFinish';
+import { restampBreakdownLines, splitLineFinishOf } from '../Shared/subFinish';
 import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
@@ -1045,9 +1045,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             configQty: line.configQty != null ? Number(line.configQty) : null,
             // The line's own finish rides to the floor (Stuart 2026-08-30: the BOM said nothing
             // about the finish) — per-part exceptions included; blank = the WO recipe applies.
-            ...(line.finishCode ? { finishCode: line.finishCode, finishLabel: line.finishLabel || line.finishCode } : {}),
+            ...(line.finishCode && !line.noFinish ? { finishCode: line.finishCode, finishLabel: line.finishLabel || line.finishCode } : {}),
             // A straight wood rod classified to finishing (lineClassification's wood rule) keeps its cut (2026-09-27).
             ...(Number(line.cutLength) > 0 ? { cutLength: Number(line.cutLength) } : {}),
+            // A part that wears nothing (Shared/subFinish UNFINISHED) is a PICK, never sprayed (2026-09-28).
+            ...(line.noFinish ? { noFinish: true } : {}),
             binLocation: part?.manufacturingSpecs?.binLocation || 'UNASSIGNED',
             // Scheduler keys (recipe lives on the WO; size + type live per part). The finishing
             // time matrix resolves minutes-per-part from (recipe × paintSize × productType).
@@ -1482,8 +1484,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // stained beside metal parts painted is two batches — two pairs. A single-finish order is
             // exactly what it was, same ids. A line naming no finish takes the order's recipe.
             const orderRecipe = so.recipe || (finishRecipe !== "PENDING-RECIPE" ? finishRecipe : '');
-            // A traverse track / F-clip / stock-colour part groups by its SUB finish (TCP), never the order's recipe.
-            const finishGroups = finishGroupsOf({ smallLines, customLines, finishOf: (l) => String(l.finishCode || l.subFinishCode || '').toUpperCase() || orderRecipe });
+            // THE SAME FINISH EVERY DOOR GIVES A LINE (Shared/subFinish.splitLineFinishOf, 2026-09-28): an item tagged
+            // Unfinished wears nothing; a traverse part its SUB finish (TCP); a line CPQ's engine stamped no finish is
+            // UNFINISHED — cut or picked as it is, never the order's recipe (SO60551's EP4). Only a job from before
+            // per-line finishes (no line carries one) still takes the order's recipe.
+            const jobHasLineFinishes = lines.some(l => String(l.finishCode || '').trim());
+            const finOfLine = (l) => splitLineFinishOf({ line: l, part: l.partId ? partCache.get(l.partId) : null, jobHasLineFinishes, orderRecipe });
+            // A SMALL PART THAT WEARS NOTHING rides the order's main pair as a PICK line (noFinish — picked from stock,
+            // never sprayed), as a plated pick does, rather than a document of its own. Only an order with nothing else
+            // (or a cut piece that wears nothing — the shop's) makes an UNFINISHED pair.
+            const hostFinish = [...customLines, ...smallLines].map(finOfLine).find(f => f && f !== 'UNFINISHED') || '';
+            const smallForGroups = smallLines.map(l => (finOfLine(l) === 'UNFINISHED' && hostFinish ? { ...l, noFinish: true, __host: hostFinish } : l));
+            const finishGroups = finishGroupsOf({ smallLines: smallForGroups, customLines, finishOf: (l) => l.__host || finOfLine(l) });
             if (finishGroups.length > 1) addLog(`🎨 SO ${orderKey}: ${finishGroups.length} finishes (${finishGroups.map(g => g.finish || 'none').join(', ')}) — one finishing + shop pair per finish.`, 'info');
             let firstPair = null, anyFin = false, anyShop = false;
             const allBackorder = [];

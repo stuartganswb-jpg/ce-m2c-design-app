@@ -32,7 +32,7 @@
 import { planFinishedRun, isAssemblyPart } from './finishedGoodsRun.js';
 import { poleFeetOf, isFootUnit } from './oeLines.js';
 import { millBaseOf } from './finishRouting.js';
-import { finishedCodeOf } from './subFinish.js';
+import { finishedCodeOf, isUnfinishedFinish } from './subFinish.js';
 import { SOURCING, sourcingOf } from './sourcing.js';
 import { isPoleCategory, poleLengthOf, sourcesForLength, targetCodeFor, poleOptionsWithStock } from './poleCut.js';
 import { fetchOpenPoLines } from './purchaseOrders.js';
@@ -218,6 +218,10 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
                 // count that item in feet; production still counts pieces.
                 plan: { erp, exploded: false, lines: [{ legacyErpId: erp, partName: j.part.itemName || '', quantity: j.buyQty || j.qty }] },
             };
+        }
+        // A PART THAT WEARS NOTHING (UNFINISHED — Shared/subFinish): one pull of the raw item itself, cut by the shop.
+        if (isUnfinishedFinish(j.finish)) {
+            return { ...j, finishedErp: `${erp}/${String(j.finish).toUpperCase()}`, finishedLabel: erp, plan: { erp, exploded: false, lines: [{ legacyErpId: erp, partName: j.part.itemName || '', quantity: j.qty }] } };
         }
         const finishedErp = `${erp}/${j.finish}`;
         const plan = planFinishedRun({ part: { ...j.part, legacyErpId: finishedErp }, qty: j.qty, pins: j.pins || [], inventory });

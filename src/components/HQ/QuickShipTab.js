@@ -20,6 +20,7 @@ import { priceChoice } from '../Shared/hardwarePricing';
 import { customerPriceLevel } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { sizeKeyOf, SIZE_FAMILIES, speciesVariantOf } from "../Shared/sizeMatrix";
+import { takesNoFinish } from "../Shared/finishLabel";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
 import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode, isAliasDoc, realPartOf, aliasTargetIdOf } from "../Shared/aliasIdentity";
 
@@ -828,6 +829,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             // What the floor paints it (a to-be-finished line), and the fee rule that prices it.
             ...(opts && opts.finishCode ? { finishCode: opts.finishCode } : {}),
             ...(opts && opts.toBeFinished ? { toBeFinished: true } : {}),
+            // …or that it wears nothing: an item tagged Unfinished, cut only (2026-09-28).
+            ...(opts && opts.noFinish ? { noFinish: true } : {}),
             ...(opts && opts.feeRule ? { feeRule: opts.feeRule } : {}),
             // A traverse components-configurator line names the KIT it belongs to, so the save-time
             // explosion never consumes the same component a second time (E6.1, 2026-09-03).
@@ -914,7 +917,6 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const addToBeFinished = () => {
         const it = tbfItem;
         if (!it) return alert('Pick the raw item — the code before the "/".');
-        if (!tbfFinish) return alert('Pick the finish. A part cannot go to the floor as "painted" without saying which paint.');
         if (!(parseInt(tbfQty) > 0)) return alert('Enter a quantity.');
         // An ALIAS pick dereferences here: the LINE is the real item (stock, BOM, NetSuite, the
         // floor); the alias rides as the customer-facing code and the line PRICES from it
@@ -922,11 +924,18 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const isAl = isAliasDoc(it);
         const real = isAl ? realPartOf(it, rawFindReal) : it;
         if (isAl && (!real || real === it)) return alert(`${erpOf(it)} is an alias but its main item (${aliasTargetIdOf(it)}) is not in this brand's library — fix the alias link first.`);
+        // ── AN ITEM TAGGED UNFINISHED NEVER WEARS A FINISH (Stuart 2026-09-28: "the 3 need to be identical in how they
+        // handle items to be finished") — CPQ's rule (Shared/finishLabel.takesNoFinish, the item wins). Such an item
+        // comes here only to be CUT (the clear acrylic rod): no finish, the shop cuts it, it goes to packaging.
+        const noFinishItem = takesNoFinish(real);
+        if (noFinishItem && tbfFinish) return alert(`${erpOf(real)} is tagged Unfinished in the Master Library — CPQ never finishes it, and neither does this form. Leave the finish blank to have it cut only.`);
+        if (!noFinishItem && !tbfFinish) return alert('Pick the finish. A part cannot go to the floor as "painted" without saying which paint.');
         const feetPer = parseFloat(tbfFeet);
         if (tbfPerFoot && !(feetPer > 0)) return alert(`${erpOf(real)} sells by the FOOT — enter the feet billed per piece, then how many pieces.`);
         const cutIn = tbfPerFoot && String(tbfCut).trim() !== '' ? parseFloat(tbfCut) : null;
         if (cutIn != null && !(cutIn > 0)) return alert('The cut length is in inches and has to be more than zero — or leave it blank for a full-length piece.');
         if (cutIn != null && cutIn > feetPer * 12 + 0.001) return alert(`A ${cutIn}" cut does not come out of ${feetPer} ft billed (${feetPer * 12}"). Bill the next whole foot up, or shorten the cut.`);
+        if (noFinishItem && cutIn == null) return alert(`${erpOf(real)} takes no finish — with no cut there is nothing for the floor to do. Add it as an ordinary stocked line instead.`);
         if (isAl && String(it.manufacturingSpecs?.uom || 'EA').toUpperCase() !== String(real.manufacturingSpecs?.uom || 'EA').toUpperCase()) {
             addLog(`⚠ Alias ${erpOf(it)} UOM (${it.manufacturingSpecs?.uom || 'EA'}) disagrees with ${erpOf(real)} (${real.manufacturingSpecs?.uom || 'EA'}) — the REAL item's UOM was used. Align the alias in the Library.`, 'warn');
         }
@@ -941,18 +950,20 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         // stays what the operator saw — one product, one price — so nothing below reprices.
         const speciesItem = speciesVariantOf(real, fin, (c) => rawFindReal(c)) || real;
         if (speciesItem !== real) addLog(`Species: ${erpOf(real)} in ${tbfFinish} is ${erpOf(speciesItem)} — the line carries the species item.`, 'info');
-        pushLine(speciesItem, tbfQty, `TO BE FINISHED · ${tbfFinish}${fin?.name && fin.name !== tbfFinish ? ` (${fin.name})` : ''}${tbfPerFoot ? (cutIn != null ? ` · Cut ${cutIn}" (billed ${feetPer} ft)` : ` · Cut ${feetPer} ft`) : ''}`, null, {
+        const cutText = tbfPerFoot ? (cutIn != null ? ` · Cut ${cutIn}" (billed ${feetPer} ft)` : ` · Cut ${feetPer} ft`) : '';
+        pushLine(speciesItem, tbfQty, noFinishItem ? `CUT ONLY · UNFINISHED${cutText}` : `TO BE FINISHED · ${tbfFinish}${fin?.name && fin.name !== tbfFinish ? ` (${fin.name})` : ''}${cutText}`, null, {
             noPack: true,                                  // a made-to-order part is not a pack
             // Only override when the operator actually changed the number — otherwise the line
             // keeps repricing live, which is how every other line on this tab behaves.
             rateOverride: Math.abs(priced - tbfResolved) > 0.004 ? priced : null,
-            finishCode: tbfFinish, toBeFinished: true,
+            // An unfinished item is cut only: no finish, not "to be finished" — the route makes it UNFINISHED.
+            ...(noFinishItem ? { noFinish: true } : { finishCode: tbfFinish, toBeFinished: true }),
             ...(isAl ? { aliasErp: erpOf(it), aliasItemId: it.id } : {}),
             ...(tbfPerFoot ? { perFoot: true, feetPer } : {}),
             // The cut rides the SO line → Order Entry Needs → the work order → the shop card (0690922).
             ...(cutIn != null ? { cutLength: cutIn } : {}),
         });
-        addLog(`To be finished: ${isAl ? `${erpOf(it)} (= ${erpOf(real)})` : erpOf(it)} ×${tbfQty}${tbfPerFoot ? ` pcs @ ${feetPer} ft (${(feetPer * (parseInt(tbfQty) || 0)).toFixed(0)} ft billed)` : ''} in ${tbfFinish}`, 'success');
+        addLog(`${noFinishItem ? 'Cut only (unfinished)' : 'To be finished'}: ${isAl ? `${erpOf(it)} (= ${erpOf(real)})` : erpOf(it)} ×${tbfQty}${tbfPerFoot ? ` pcs @ ${feetPer} ft (${(feetPer * (parseInt(tbfQty) || 0)).toFixed(0)} ft billed)` : ''}${noFinishItem ? '' : ` in ${tbfFinish}`}`, 'success');
         setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setTbfPrice(''); setTbfFeet(''); setTbfCut('');
     };
 
@@ -1574,7 +1585,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // NetSuite ($0 lines) and prints them on the documents, but they never reached lines[] — so the SO Pack
                 // never listed the track, fascia and brackets to pick. Each goes on as the item NetSuite consumes, in
                 // NetSuite's unit, a shelf pick of its kit (trvComponent) — exactly what leaves the shelf.
-                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
+                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -1936,7 +1947,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 <div>
                                     <span style={lbl}>Finish</span>
                                     <select value={tbfFinish} onChange={e => setTbfFinish(e.target.value)} style={inp}>
-                                        <option value="">— finish —</option>
+                                        <option value="">{takesNoFinish(tbfReal) ? '— none: the item is Unfinished (cut only) —' : '— finish —'}</option>
                                         {[...new Map(finishList.map(f => [f.code, f])).values()]
                                             .sort((a, b) => Number(a.outsourced) - Number(b.outsourced) || a.code.localeCompare(b.code))
                                             .map(f => <option key={f.code} value={f.code}>{f.code}{f.name && f.name !== f.code ? ` — ${f.name}` : ''}{f.outsourced ? ' · outsourced' : ''}</option>)}

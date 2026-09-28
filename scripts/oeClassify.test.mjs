@@ -47,7 +47,10 @@ eq('the track\'s sub finish is never the rod the miter follows', rowFinishesOf([
 const two = rowFinishesOf([{ lineIdx: 0, ownFinish: 'S04', division: DIVISION_CUSTOM }, { lineIdx: 1, ownFinish: 'P06', division: DIVISION_CUSTOM }, { lineIdx: 2, ownFinish: '', division: DIVISION_CUSTOM, rider: true }]);
 eq('two rods in two finishes: a rider with no finish of its own waits for a person', [two[2].finish, /which one/.test(two[2].why)], ['', true]);
 const lone = rowFinishesOf([{ lineIdx: 0, ownFinish: '', division: DIVISION_CUSTOM, rider: false }, { lineIdx: 1, ownFinish: 'S04', division: DIVISION_CUSTOM }]);
-eq('a custom line quoted with no finish is NEVER given the rod\'s (CPQ has no such rule) — it is named', [lone[0].finish, /set the finish/.test(lone[0].why)], ['', true]);
+eq('a custom line quoted with no finish is NEVER given the rod\'s — it wears nothing (UNFINISHED: cut, no finishing)', [lone[0].finish, lone[0].source], ['UNFINISHED', 'unfinished']);
+const acr = rowFinishesOf([{ lineIdx: 0, ownFinish: '', division: DIVISION_CUSTOM }, { lineIdx: 1, ownFinish: 'EP1', division: DIVISION_CUSTOM, rider: true }]);
+eq('a fee cut into an unfinished rod rides it UNFINISHED', acr[1].finish, 'UNFINISHED');
+eq('a small line with no finish is not started (a shelf pick)', rowFinishesOf([{ lineIdx: 0, ownFinish: '', division: DIVISION_SMALL }])[0].finish, '');
 eq('the traverse track keeps CPQ\'s Custom handling in its sub finish (not the /C suffix rule)', oeDivisionOf({ line: { cutLength: 17.5 }, basePart: P('H1-2TRV', { productType: 'Pole', partHandling: 'Custom' }), erp: 'H1-2TRV', finish: 'TCP', trvCut: true }).division, DIVISION_CUSTOM);
 
 console.log(`oeClassify: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

@@ -39,7 +39,7 @@ const lines = rowLinesFromBreakdown(F.breakdown).map(l => { const x = { ...l }; 
 __fs.seed('hq_sales_orders', F.SO_APP_ID, { ...F.salesOrder(lines), ...displayAnchorPatch({ buildId: 'BUILD-T', lines, so: F.salesOrder(lines) }) });
 const inventory = oeInventoryOf(F.library, F.BRAND);
 const logs = [];
-for (const label of ['ROW 1', 'Row 2', 'base front 4']) {
+for (const label of ['ROW 1', 'Row 2', 'Base Back 1', 'base front 4']) {
     const so = __fs.get('hq_sales_orders', F.SO_APP_ID);
     const key = rowKeyOf(label);
     await runOeAuto({ so: { id: F.SO_APP_ID, ...so }, brand: F.BRAND, user: 'loop', inventory, finishes: F.finishes, log: (m) => logs.push(m),
@@ -63,7 +63,8 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     ok('the French returns are never stock-checked or backordered', !bo.includes('H1-FRPF/EP4') && !bo.includes('H1-FRPF'), `backorders: ${bo.join(', ')}`);
     eq('the French returns are covered by the pair', [gen('H1-FRPF', 0)?.kind, gen('H1-FRPF', 1)?.kind], ['WO', 'WO']);
     eq('plated fittings in stock are SO Pack picks', [gen('H1-1CP-V')?.kind, gen('H1-1BR')?.kind], ['STOCK', 'STOCK']);
-    ok('a plated fitting with none in stock is on the Backorder board', bo.includes('H1-1STDOFF/EP4'), `backorders: ${bo.join(', ')}`);
+    ok('the standoffs (tagged Unfinished — CPQ never finishes them) are never plated or backordered', !bo.some(c => /STDOFF/.test(c)), `backorders: ${bo.join(', ')}`);
+    eq('…and never started: they are shelf picks of the plain item', [gen('H1-1STDOFF', 0), gen('H1-1STDOFF', 1)], [null, null]);
 }
 // ── Row 2 (CPQ's traverse rules, Stuart 2026-09-27): the stained fascia and its two miters are ONE S04 shop job; the
 //    track and the F-clips are cut shorter than the fascia (manual: −0.5" / −1") and finished TCP — the sub finish 4.5
@@ -84,6 +85,15 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     ok('the EP4 brackets (not re-read yet) are on the Backorder board as quoted', bo.includes('H1-2TRV-WB/EP4'), `backorders: ${bo.join(', ')}`);
     eq('stocked hardware stays a shelf pick', [gen('H1-2TRVPLUG'), gen('HTSLNTCAR'), gen('H1-2TRVNUT')], [null, null, null]);
     ok('no EP4 pair is written for Row 2', !pairOf('Row 2', 'EP4'));
+}
+// ── Base Back 1 (Stuart 2026-09-28): the clear acrylic rod wears nothing — the shop cuts it, no finishing floor ──
+{
+    const p = pairOf('Base Back 1', 'UNFINISHED'); const s = shopOf(p);
+    ok('Base Back 1 · UNFINISHED pair written', !!p && !!s, `pairs: ${hq.map(h => `${h.rowLabel}/${h.finishGroup}/${h.routeTo}`).join(', ')} | ${logs.filter(m => /Base Back 1|RCTACR/.test(m)).join(' | ')}`);
+    eq('the shop cuts the acrylic at 12"', (s?.cutList || []).map(c => [c.legacyErpId, c.cutLength, c.finishedCode]), [['H1-2RCTACR', 12, 'H1-2RCTACR']]);
+    const fdoc = fin.find(f => f.id === p?.id);
+    eq('its finishing half is the pick-only document — the finishing floor never sees it', [fdoc?.pickOnly, fdoc?.finishingRequired, fdoc?.currentPhase], [true, false, 'Complete']);
+    eq('the plated end cap in stock is a SO Pack pick', gen('H1-2RCTAEC')?.kind, 'STOCK');
 }
 // ── base front 4: a bought rod read in FEET (50 × 84" = 350 ft of 430) and a painted finial with the customer's code ──
 {
@@ -107,6 +117,8 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     const r2 = release(shopOf(pairOf('Row 2', 'S04')));
     eq('Row 2 S04 shop doc: stain on wood → in-house, NOT phosphated, not plated', [r2.finishRecipe, r2.isOutsourced, r2.needsPhosphating], ['S04', false, false]);
     eq('…fascia + both miters on the cut list', (r2.cutList || []).map(c => c.legacyErpId).sort(), ['H1-2RCTWR-O', 'H1-2TRVMTR', 'H1-2TRVMTR']);
+    const ra = release(shopOf(pairOf('Base Back 1', 'UNFINISHED')));
+    eq('Base Back 1 shop doc: UNFINISHED — not plated, NOT phosphated', [ra.finishRecipe, ra.isOutsourced, ra.needsPhosphating], ['UNFINISHED', false, false]);
     const r3 = release(shopOf(pairOf('Row 2', 'TCP')));
     eq('Row 2 TCP shop doc: in-house TCP, the track and F-clips at their deducted cuts', [r3.finishRecipe, r3.isOutsourced, (r3.cutList || []).map(c => `${c.legacyErpId}@${c.cutLength}`).sort()], ['TCP', false, ['H1-2TRV@17.5', 'H1-2TRVCLP@17', 'H1-2TRVCLP@17']]);
 }
@@ -145,10 +157,16 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     eq('Row 2\'s TCP document gathers the finished track and F-clips', row2t.map(w => [w.code, w.add]).sort(), [['H1-2TRVCLP/C', 50], ['H1-2TRVCLP/C', 50], ['H1-2TRVTRK/C', 50]]);
     gather(row2t);
     gather(gatherPlanOf({ job: docFor('base front 4', 'P30'), order, isFeeCode: libFee }));
+    eq('the acrylic comes from the floor (a cut piece is never looked for on the shelf)', stateOf('H1-2RCTACR').state, 'FROM THE FLOOR');
+    const bb1 = gatherPlanOf({ job: docFor('Base Back 1', 'UNFINISHED'), order, isFeeCode: libFee });
+    eq('Base Back 1\'s document gathers the acrylic as it is', bb1.map(w => [w.code, w.add]), [['H1-2RCTACR', 50]]);
+    gather(bb1);
     gather([{ code: 'H1-1R/EP4', add: 50 }]);   // ROW 1's plated pole: plating put-away commits the plated code
     eq('gathered lines read GATHERED', [stateOf('H1-2TRV').state, stateOf('H1-2TRVCLP', 1).state, stateOf('H1-2RCTWR-O').state, stateOf('H1-75R').state, stateOf('H1-75KF').state, stateOf('H1-1R').state], ['GATHERED', 'GATHERED', 'GATHERED', 'GATHERED', 'GATHERED', 'GATHERED']);
     const blockers = order.lines.map((l, i) => ({ l, i })).filter(x => { const st = soPackLineStateOf({ so: order, line: x.l, idx: x.i, stat: statOf(require_code(x.l)), isFeeCode: libFee }); return !['GATHERED', 'READY', 'FEE'].includes(st.state); }).map(x => require_code(x.l));
-    eq('what still holds the order is exactly its backorders', blockers.sort(), ['H1-1STDOFF/EP4', 'H1-2TRV-WB/EP4', 'H1-2TRV-WB/EP4'].sort());
+    // Before ↻ Re-read the standoff lines still SAY EP4 (the 9/16 quote) and the brackets are the EP4 backorder.
+    eq('what still holds the order: the stale standoff lines and the EP4 brackets (both fixed by ↻ Re-read, below)', blockers.sort(), ['H1-1STDOFF/EP4', 'H1-1STDOFF/EP4', 'H1-2TRV-WB/EP4', 'H1-2TRV-WB/EP4'].sort());
+    eq('the base H1-TTB1 is READY from the shelf', stateOf('H1-TTB1').state, 'READY');
 }
 // ── ↻ RE-READ LINES ON THE LIVE ROW 2, THEN ▶ START ROW (a fresh order — the repair Stuart presses) ──
 {
@@ -165,9 +183,19 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     eq('both F-clips: TCP, 17"', [L2('H1-2TRVCLP', 0).cutLength, L2('H1-2TRVCLP', 1).cutLength, L2('H1-2TRVCLP', 1).finishCode], [17, 17, 'TCP']);
     eq('both brackets become the stocked champagne item, picked', [L2('H1-2TRV-WB/C', 0).erp, L2('H1-2TRV-WB/C', 1).erp, L2('H1-2TRV-WB/C', 0).toBeFinished, L2('H1-2TRV-WB/C', 0).subFinishCode], ['H1-2TRV-WB/C', 'H1-2TRV-WB/C', false, 'TCP']);
     eq('both miters take the fascia\'s S04', [L2('H1-2TRVMTR', 0).finishCode, L2('H1-2TRVMTR', 1).finishCode], ['S04', 'S04']);
+    eq('the standoffs lose the stale EP4 — tagged Unfinished, picked as H1-1STDOFF', [L2('H1-1STDOFF', 0).finishCode, L2('H1-1STDOFF', 0).toBeFinished, L2('H1-1STDOFF', 0).noFinish, L2('H1-1STDOFF', 1).finishCode], ['', false, true, '']);
+    ok('the confirm names the standoff change', /H1-1STDOFF\/EP4 → H1-1STDOFF: tagged Unfinished/.test(text), text);
     ok('the confirm names the NetSuite line to change', /change the NetSuite line to H1-2TRV-WB\/C/.test(text) && /change the same line in NetSuite/.test(text), text);
     eq('the EP4 bracket backorder goes with the old item', (patch.backorderLines || []).map(b => b.code), ['H1-2TRVMTR/EP4']);
-    eq('ROW 1 is untouched by the traverse rules', patch.lines.filter(l => /ROW 1/i.test(l.row || '')).map(l => [l.erp, l.finishCode || '', l.cutLength || null]), lines.filter(l => /ROW 1/i.test(l.row || '')).map(l => [l.erp, l.finishCode || '', l.cutLength || null]));
+    {
+        const { soRowsOf, ORDER_ROW_LABEL } = await import('../../src/components/Shared/displayRelease.js');
+        const rows = ['ROW 1', 'Row 2', 'Base Back 1', 'base front 4'];
+        eq('the base H1-TTB1 names no row → unassigned', soRowsOf({ lines: patch.lines }, rows).unassigned.map(e => e.line.erp), ['H1-TTB1']);
+        const marked = patch.lines.map(l => (l.erp === 'H1-TTB1' ? { ...l, row: '', orderLevel: true } : l));
+        const r = soRowsOf({ lines: marked }, rows);
+        eq('marked "' + ORDER_ROW_LABEL + '": no longer unassigned, the order\'s own line', [r.unassigned.length, r.orderLines.map(e => e.line.erp)], [0, ['H1-TTB1']]);
+    }
+    eq('ROW 1: only the standoffs change (their stale EP4) — the pole, returns and fittings are as quoted', patch.lines.filter(l => /ROW 1/i.test(l.row || '') && !/STDOFF/.test(l.erp)).map(l => [l.erp, l.finishCode || '', l.cutLength || null]), lines.filter(l => /ROW 1/i.test(l.row || '') && !/STDOFF/.test(l.erp)).map(l => [l.erp, l.finishCode || '', l.cutLength || null]));
     // Idempotent: a second press changes nothing more.
     const again = rereadLinesPatchOf({ so: { ...soAt, lines: patch.lines, backorderLines: patch.backorderLines }, breakdown: F.breakdown, finishes: F.finishes, inventory: F.library });
     ok('a second ↻ Re-read finds nothing to change', !again || (!(again.restamped || []).length && !again.added.length), JSON.stringify(again && again.restamped));
@@ -183,6 +211,8 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     ok('nothing in Row 2 is backordered now (brackets are on the shelf)', !bo2.some(c => /2TRV/.test(c)), `backorders: ${bo2.join(', ')}`);
     const bi = so2.lines.findIndex(l => l.erp === 'H1-2TRV-WB/C');
     eq('the /C bracket is a SO Pack shelf pick', soPackLineStateOf({ so: so2, line: so2.lines[bi], idx: bi, stat: { avail: 200, held: 0, prod: 0 } }).state, 'READY');
+    const si = so2.lines.findIndex(l => l.erp === 'H1-1STDOFF');
+    eq('the re-read standoff is a SO Pack shelf pick of H1-1STDOFF', [soPackLineStateOf({ so: so2, line: so2.lines[si], idx: si, stat: { avail: 300, held: 0, prod: 0 } }).code, soPackLineStateOf({ so: so2, line: so2.lines[si], idx: si, stat: { avail: 300, held: 0, prod: 0 } }).state], ['H1-1STDOFF', 'READY']);
 }
 if (globalThis.__NS_UNANSWERED) console.log('⚠ unanswered NetSuite calls:', globalThis.__NS_UNANSWERED.map(b => String(b.payload?.q || b.targetUrl).slice(0, 80)));
 if (fail) console.log('\n--- route log ---\n' + logs.join('\n'));

@@ -125,17 +125,24 @@ export const rowLinesFromBreakdown = (breakdown = []) => {
  * so "row 2" typed on a tab-7 line meets "Row 2" on the display. A line naming no row, or a row the
  * display does not have, is UNASSIGNED — it belongs to no button until somebody says which row.
  */
+// THE ORDER'S OWN LINES (Stuart 2026-09-28: "H1-TTB1 is the actual base it is not a row") — a line marked
+// `orderLevel` belongs to the whole display (its base), not to a row: it is neither unassigned nor started with a
+// row. It routes exactly as a tab-7 line does (the same Order Entry route): stocked → picked at SO Pack; made → its
+// own ▶ Start, grouped by finish with no row.
+export const ORDER_ROW_LABEL = 'The order (not a row)';
 export const soRowsOf = (so, rowLabels = []) => {
     const byKey = new Map((rowLabels || []).map(l => [rowKeyOf(l), l]));
     const rows = {};
     (rowLabels || []).forEach(l => { rows[l] = []; });
     const unassigned = [];
+    const orderLines = [];
     ((so && so.lines) || []).forEach((line, lineIdx) => {
+        if (line && line.orderLevel === true) { orderLines.push({ line, lineIdx }); return; }
         const label = byKey.get(rowKeyOf(rowOfLine(line)));
         if (label) rows[label].push({ line, lineIdx });
         else unassigned.push({ line, lineIdx });
     });
-    return { rows, unassigned };
+    return { rows, unassigned, orderLines };
 };
 
 /**
@@ -507,7 +514,8 @@ export const rereadLinesPatchOf = ({ so, breakdown = [], finishes = [], inventor
     });
     const bo = Array.isArray(so && so.backorderLines) ? so.backorderLines : [];
     // A line that became another item (the stock colour) leaves its old code's backorder records behind.
-    const swappedFrom = new Set(restamped.filter(c => c.netsuite).map(c => U(lines[c.idx].identityFrom)));
+    // …and a line whose stale finish came off (an item tagged Unfinished) leaves its plated code's records too.
+    const swappedFrom = new Set(restamped.filter(c => c.netsuite || c.dropBackorder).map(c => U(c.dropBackorder || lines[c.idx].identityFrom)));
     const keptBo = ((so && so.displayRelease) ? bo.filter(r => r && r.source === 'OE_ROW') : bo).filter(r => !swappedFrom.has(U(r && r.code)));
     const droppedBackorders = bo.length - keptBo.length;
     if (!enriched && !added.length && !droppedBackorders && !restamped.length) return null;
@@ -517,7 +525,7 @@ export const rereadLinesText = (so, p) => [
     `↻ Re-read ${(so && (so.soId || so.id)) || ''}'s lines from its CPQ job?`,
     p.enriched ? `\n${p.enriched} line(s) gain the fields CPQ's classifier reads (part id, handling, fee flag, per-config counts, customer code…) — code, finish, quantity and position unchanged.` : '',
     p.added.length ? `\n${p.added.length} line(s) the old reader dropped are ADDED:\n${p.added.map(a => `  • ${a.qty} × ${a.erp}${a.row ? ` (${a.row})` : ' (no row — assign it)'}`).join('\n')}` : '',
-    (p.restamped || []).length ? `\nCPQ's rules for these lines (the traverse track and F-clip, stock-colour parts, cuts into a rod):\n${p.restamped.map(c => `  • ${c.row ? `${c.row}: ` : ''}${c.text}`).join('\n')}` : '',
+    (p.restamped || []).length ? `\nCPQ's rules for these lines (the traverse track and F-clip, stock-colour parts, cuts into a rod, parts tagged Unfinished):\n${p.restamped.map(c => `  • ${c.row ? `${c.row}: ` : ''}${c.text}`).join('\n')}` : '',
     p.droppedBackorders ? `\n${p.droppedBackorders} backorder record(s) from the retired whole-order split or for a replaced item are removed — each row records its own when it starts.` : '',
     (p.notes || []).length ? `\nStill needs a person:\n${p.notes.map(n => `  • ${n.row ? `${n.row}: ` : ''}${n.text}`).join('\n')}` : '',
     (p.restamped || []).some(c => c.netsuite) ? '\n⚠ An item changed: change the same line in NetSuite before the order is packed, or the fulfilment ships the old item.' : '',

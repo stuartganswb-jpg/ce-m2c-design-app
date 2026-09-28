@@ -1,7 +1,7 @@
 // node scripts/subFinish.test.mjs — CPQ'S TRAVERSE RULES ON EVERY DOOR (Stuart 2026-09-27, SO60551 Row 2): the track
 // and F-clip wear the sub finish 4.5 aligns to the fascia and are cut shorter by CPQ's deduction; a part made in a
 // stock colour is the stocked colour item; one naming rule for what leaves the floor.
-import { subFinishOfFinish, isStockColourCode, trvRoleOfCode, finishedCodeOf, rowRestampOf, traverseOrderLinesOf, restampBreakdownLines } from '../src/components/Shared/subFinish.js';
+import { subFinishOfFinish, isStockColourCode, trvRoleOfCode, finishedCodeOf, rowRestampOf, traverseOrderLinesOf, restampBreakdownLines, splitLineFinishOf, isUnfinishedFinish } from '../src/components/Shared/subFinish.js';
 import { explodeTraverse } from '../src/components/Shared/traverseExplode.js';
 
 let pass = 0, fail = 0;
@@ -92,5 +92,23 @@ const wfa = w7.find(c => c.role === 'fascia'), wfc = w7.find(c => c.role === 'fc
 eq('tab 7: S04 consumes the OAK fascia (CPQ\'s species rule)', [wfa.consumeCode, wfa.floor.finishCode, wfa.finishedCode], ['H1-2RCTWR-O', 'S04', 'H1-2RCTWR-O/S04']);
 eq('tab 7: the F-clip 95" (manual −1"), TCP → H1-2TRVCLP/C, 8 ft consumed', [wfc.consumeCode, wfc.floor.cutLength, wfc.floor.finishCode, wfc.finishedCode, wfc.qty], ['H1-2TRVCLP', 95, 'TCP', 'H1-2TRVCLP/C', 8]);
 eq('tab 7: a painted kit keeps its aluminium fascia (no species)', t7.find(c => c.role === 'fascia').consumeCode, 'H1-2RCTAR');
+
+// ── A PART THAT WEARS NOTHING — the same answer on every door (2026-09-28) ──
+const stdoff = P('H1-1STDOFF', { productType: 'Component', customData: { unfinished: true } }, { partClass: 'Assembly' });
+const acrylic = P('H1-2RCTACR', { productType: 'POLE', partHandling: 'Custom' });
+eq('UNFINISHED names the plain item', [finishedCodeOf('H1-2RCTACR', 'UNFINISHED'), isUnfinishedFinish('mill'), isUnfinishedFinish('P06')], ['H1-2RCTACR', true, false]);
+const row1 = [
+    { idx: 0, part: P('H1-1R', { productType: 'RODS' }), line: { erp: 'H1-1R', finishCode: 'EP4', cutLength: 18 } },
+    { idx: 1, part: stdoff, line: { erp: 'H1-1STDOFF', finishCode: 'EP4', billedErp: 'H1-1STDOFF/EP4', toBeFinished: true, note: 'TO BE FINISHED · EP4' } },
+];
+const rr = rowRestampOf({ rows: row1, finishes, swapIdentity: true, findByCode: () => null });
+eq('↻ Re-read: a standoff tagged Unfinished loses its stale EP4, picked as H1-1STDOFF', [rr.patches[1].finishCode, rr.patches[1].toBeFinished, rr.patches[1].noFinish, rr.patches[1].erp, rr.patches[1].note], ['', false, true, 'H1-1STDOFF', '']);
+eq('…and names the backorder code to drop', rr.changes.find(c => c.idx === 1).dropBackorder, 'H1-1STDOFF/EP4');
+eq('the route: the same finish cleared, no identity change', (() => { const x = rowRestampOf({ rows: row1, finishes }).patches[1]; return [x.finishCode, x.erp]; })(), ['', undefined]);
+// the CPQ split's answer
+eq('split: an item tagged Unfinished → UNFINISHED even quoted EP4', splitLineFinishOf({ line: { finishCode: 'EP4' }, part: stdoff }), 'UNFINISHED');
+eq('split: a line CPQ stamped no finish → UNFINISHED (never the order recipe)', splitLineFinishOf({ line: {}, part: acrylic, jobHasLineFinishes: true, orderRecipe: 'EP4' }), 'UNFINISHED');
+eq('split: a traverse part → its sub finish; a line → its own', [splitLineFinishOf({ line: { subFinishCode: 'TCP' }, part: track }), splitLineFinishOf({ line: { finishCode: 'P06' }, part: fascia })], ['TCP', 'P06']);
+eq('split: a job from before per-line finishes keeps the order recipe', splitLineFinishOf({ line: {}, part: acrylic, jobHasLineFinishes: false, orderRecipe: 'P24' }), 'P24');
 
 console.log(`subFinish: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

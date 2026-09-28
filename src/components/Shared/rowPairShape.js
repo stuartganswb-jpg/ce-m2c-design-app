@@ -24,7 +24,7 @@ import { uomStampOf } from './uom.js';
 import { rowKeyOf, rowOfLine } from './displayRelease.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
 import { findClientPriceRow } from './clientPricing.js';
-import { finishedCodeOf } from './subFinish.js';
+import { finishedCodeOf, isUnfinishedFinish } from './subFinish.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -186,7 +186,9 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
     // no finishing screen selects it, while the WMS pick, staging, pack and fulfilment work unchanged.
     const inHouse = partsList.filter(p => !p.pickOnly);
     const plated = isOutsourcedFinishCode(finish) || (group.jobs || []).some(j => j.line && j.line.finishOutsourced === true && String(j.line.finishCode || '').toUpperCase() === String(finish || '').toUpperCase());
-    const finishingNeeded = inHouse.length > 0 || (custom.length > 0 && !plated);
+    // A PART THAT WEARS NOTHING (UNFINISHED — Stuart 2026-09-28, the clear acrylic rod): the shop cuts it and it goes to
+    // packaging — its finishing half is the pick-only document, exactly as a plated group's, with no plater after.
+    const finishingNeeded = inHouse.length > 0 || (custom.length > 0 && !plated && !isUnfinishedFinish(finish));
     const pickOnlyDoc = !finishingNeeded;
     const inHousePcs = inHouse.reduce((t, p) => t + (N(p.pcs) || N(p.quantity) || N(p.qty)), 0);
     const totalParts = pickOnlyDoc ? inHousePcs : (inHousePcs || poleQty || 1);

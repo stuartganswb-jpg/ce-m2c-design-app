@@ -18,7 +18,8 @@ export const library = [
     inv('H1-FRPF', 'French Return', { productType: 'FEE' }, { partClass: 'Fee' }),
     inv('H1-1CP-V', 'Cap Finial'), inv('H1-1CP-V/EP4', 'Cap Finial Satin Gold', {}, { partClass: 'Assembly' }),
     inv('H1-1BR', '1" Bracket', { partHandling: 'Small Parts' }), inv('H1-1BR/EP4', '1" Bracket Satin Gold', { partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
-    inv('H1-1STDOFF', 'Standoff'), inv('H1-1STDOFF/EP4', 'Standoff Satin Gold', {}, { partClass: 'Assembly' }),
+    // the standoff is tagged Unfinished (live, 2026-09-28) and there is no /EP4 record — it rides the returns
+    inv('H1-1STDOFF', 'Standoff', { productType: 'Component', partHandling: 'Small Parts', customData: { unfinished: true } }, { partClass: 'Assembly' }),
     // Row 2 — a stained oak fascia with miters, the traverse track and F-clips cut from it, stock-colour brackets,
     // and the stocked hardware that rides along
     inv('H1-2RCTWR-O', '2" x 3/4" Rectangular Oak Rod', { productType: 'Pole', partHandling: 'Custom', material: 'Wood', isInHouse: false, vendorName: 'Oak Supply' }),
@@ -31,6 +32,11 @@ export const library = [
     inv('H1-2TRVPLUG', 'End Plug for 1.5" Square Traverse', { productType: 'Component', partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
     inv('H1-2TRVNUT', 'Square Nut for 1.5" Traverse Track', { productType: 'Component', partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
     inv('HTSLNTCAR', 'Silent Carrier', { productType: 'Traverse', partHandling: 'Small Parts' }),
+    // Base Back 1 — a clear acrylic rod cut to 12" (no finish: it wears nothing) and plated end caps
+    inv('H1-2RCTACR', '2" x 3/4" Rectangular Acrylic Pole', { productType: 'POLE', partHandling: 'Custom', isInHouse: false, vendorName: 'ARLINEA INDUSTRIES CO.' }),
+    inv('H1-2RCTAEC', 'Acrylic End Cap', { partHandling: 'Small Parts' }), inv('H1-2RCTAEC/EP1', 'Acrylic End Cap Satin Nickel', { partHandling: 'Small Parts' }, { partClass: 'Assembly' }),
+    // the display's own base — not a row
+    inv('H1-TTB1', 'WALNUT TABLE TOP BASE', { productType: 'SAMPLE CHIP', partHandling: 'Small Parts', material: 'Wood' }, { partClass: 'Assembly' }),
     // base front 4 — a bought 3/4" rod (NetSuite counts it in feet) and a painted finial the customer knows by
     // its own code
     inv('H1-75R', '3/4" Round Hollow Rod Stock', { productType: 'POLE', isInHouse: false, vendorName: 'Metals USA' }),
@@ -43,7 +49,10 @@ export const stock = {
     'H1-1R': { available: 900, unit: 'FOOT' },
     'H1-1CP-V/EP4': { available: 120, unit: 'EACH' },
     'H1-1BR/EP4': { available: 60, unit: 'EACH' },
-    'H1-1STDOFF/EP4': { available: 0, unit: 'EACH' },
+    'H1-1STDOFF': { available: 300, unit: 'EACH' },
+    'H1-2RCTACR': { available: 200, unit: 'FOOT' },
+    'H1-2RCTAEC/EP1': { available: 60, unit: 'EACH' },
+    'H1-TTB1': { available: 50, unit: 'EACH' },
     'H1-2RCTWR-O': { available: 400, unit: 'FOOT' },
     'H1-2TRV': { available: 400, unit: 'FOOT' },
     'H1-2TRVCLP': { available: 400, unit: 'FOOT' },
@@ -65,7 +74,8 @@ export const breakdown = [
     L('H1-FRPF/EP4', 50, { finishCode: 'EP4' }),                       // French return R
     L('H1-1CP-V/EP4', 50, { finishCode: 'EP4' }),
     L('H1-1BR/EP4', 50, { finishCode: 'EP4' }),
-    L('H1-1STDOFF/EP4', 50, { finishCode: 'EP4', hidden: true }),      // BOM-only standoff
+    L('H1-1STDOFF', 50, { finishCode: 'EP4', hidden: true, partId: 'lib-H1-1STDOFF' }),   // standoffs: quoted EP4 on 9/16 (stale)
+    L('H1-1STDOFF', 50, { finishCode: 'EP4', hidden: true, partId: 'lib-H1-1STDOFF' }),
     header('Row 2'),
     L('H1-2RCTWR-O', 50, { finishCode: 'S04', cutLength: 18, perFoot: true, feet: 2, partId: 'lib-H1-2RCTWR-O' }),   // stained oak fascia, mitered
     L('H1-2TRV', 50, { cutLength: 18, perFoot: true, feet: 2, subFinishCode: 'TCP', partId: 'lib-H1-2TRV' }),        // the track: TCP, the fascia's length
@@ -79,9 +89,14 @@ export const breakdown = [
     L('H1-2TRVCLP', 50),
     L('HTSLNTCAR', 500),
     L('H1-2TRVNUT', 50),
+    header('Base Back 1'),
+    L('H1-2RCTACR', 50, { cutLength: 12, perFoot: true, feet: 1, partId: 'lib-H1-2RCTACR' }),   // clear acrylic: no finish
+    L('H1-2RCTAEC/EP1', 50, { finishCode: 'EP1', partId: 'lib-H1-2RCTAEC' }),
     header('base front 4'),
     L('H1-75R/P', 50, { finishCode: 'P30', cutLength: 84 }),           // CPQ bills paint on the shared /P SKU
     L('H1-75KF/P', 50, { finishCode: 'P30' }),
+    { isHeader: true, name: '▶ ADD-ONS' },
+    L('H1-TTB1', 50, { partId: 'lib-H1-TTB1' }),                         // the tabletop base — the order's own line
 ];
 
 // 4.5 — the finishes the route reads the sub finish from (live values, 2026-09-27).

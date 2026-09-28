@@ -20,6 +20,7 @@
 import { classifyLine, DIVISION_CUSTOM, DIVISION_SMALL } from './lineClassification.js';
 import { isPoleCategory } from './poleCut.js';
 import { handlingForErp } from './finishRouting.js';
+import { UNFINISHED } from './subFinish.js';   // the group a part that wears nothing is made in
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const specsOf = (p) => (p && p.manufacturingSpecs) || {};
@@ -89,29 +90,33 @@ export const oeDivisionOf = ({ line = {}, basePart = null, finishedPart = null, 
 /**
  * The finish each line of ONE row takes. A line keeps its own finish — except a RIDER, which wears its rod's
  * finish (CPQ, 9/18: SO60551's miter went out EP4 on a stained oak fascia). The rod = the row's custom non-rider
- * lines that name a finish and are not a traverse sub-finish part (`sub` — the track and the F-clip wear the colour
- * aligned to the rod, never the rod's own finish); when they name more than one, a rider keeps its own finish if it
- * is one of them, otherwise it is left for a person. A custom line quoted with no finish is named for a person —
- * it is never given one.
+ * lines that are not a traverse sub-finish part (`sub` — the track and the F-clip wear the colour aligned to the
+ * rod, never the rod's own finish); when they name more than one, a rider keeps its own finish if it is one of them,
+ * otherwise it is left for a person. A custom line with NO finish is UNFINISHED (Stuart 2026-09-28, SO60551's clear
+ * acrylic rod): CPQ's engine stamps every part that wears a finish, so silence means none — the shop cuts it and it
+ * goes to packaging, no finishing floor (Shared/subFinish). The caller has already applied the item's Unfinished tag.
  * @param items [{ lineIdx, ownFinish, division, rider, sub }]
- * @returns { [lineIdx]: { finish, source: 'line' | 'rod' | 'sub' | '', why } }
+ * @returns { [lineIdx]: { finish, source: 'line' | 'rod' | 'sub' | 'unfinished' | '', why } }
  */
 export const rowFinishesOf = (items = []) => {
-    const rods = [...new Set((items || []).filter(i => i.division === DIVISION_CUSTOM && !i.rider && !i.sub && U(i.ownFinish)).map(i => U(i.ownFinish)))];
+    const rodOf = (i) => U(i.ownFinish) || UNFINISHED;
+    const rods = [...new Set((items || []).filter(i => i.division === DIVISION_CUSTOM && !i.rider && !i.sub).map(rodOf))];
     const out = {};
     (items || []).forEach(i => {
         const own = U(i.ownFinish);
         if (!i.rider) {
             out[i.lineIdx] = own
                 ? { finish: own, source: i.sub ? 'sub' : 'line', why: '' }
-                : { finish: '', source: '', why: i.division === DIVISION_CUSTOM ? (i.why || 'no finish on the line — CPQ quoted it with none; set the finish, or mark it unfinished') : '' };
+                : i.division === DIVISION_CUSTOM
+                    ? (i.why ? { finish: '', source: '', why: i.why } : { finish: UNFINISHED, source: 'unfinished', why: '' })
+                    : { finish: '', source: '', why: '' };
             return;
         }
         if (rods.length === 1) { out[i.lineIdx] = { finish: rods[0], source: 'rod', why: '' }; return; }
         if (own && rods.includes(own)) { out[i.lineIdx] = { finish: own, source: 'line', why: '' }; return; }
         out[i.lineIdx] = {
             finish: '', source: '',
-            why: rods.length ? `rides a rod, and the row's rods take ${rods.join(' and ')} — which one is it cut into?` : `rides a rod, and no rod in its row names a finish — set the rod's finish`,
+            why: rods.length ? `rides a rod, and the row's rods take ${rods.join(' and ')} — which one is it cut into?` : `rides a rod, and there is no rod in its row`,
         };
     });
     return out;

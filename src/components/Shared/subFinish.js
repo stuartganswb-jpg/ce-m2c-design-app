@@ -22,6 +22,7 @@ import { traverseCutLength } from './traverseTags.js';
 import { isPoleCategory } from './poleCut.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
 import { speciesVariantOf } from './sizeMatrix.js';
+import { takesNoFinish } from './finishLabel.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -67,6 +68,15 @@ export const trvRoleOfCode = (code) => {
     return null;
 };
 
+// ── A PART THAT WEARS NOTHING (Stuart 2026-09-28, SO60551: the clear acrylic rod, the standoffs) ──────────────
+// CPQ's contract (Shared/hardwareHandoff): "a part that wears nothing carries nothing, and the floor reads that as
+// mill" — and an item tagged Unfinished in the Master Library never wears a finish, whatever the line says (Shared/
+// finishLabel.takesNoFinish: the item wins). On the floor such a part is what it is: a small part is picked from the
+// shelf as its plain code; a cut piece is cut by the shop and goes to packaging — no finishing floor, no phosphate.
+// The floors already read these words as "no finish" (floorRelease MILL_RE, ShopFloor); UNFINISHED is the group.
+export const UNFINISHED = 'UNFINISHED';
+export const isUnfinishedFinish = (code) => /^(UNFINISHED|MILL|RAW)$/i.test(String(code || '').trim());
+
 /**
  * What a line IS once it is finished — the code the SO Pack, the labels and the gather read.
  * A sub finish names the stock colour (TCP → /C, TBR → /B); the family's track leaves the floor as its
@@ -75,7 +85,7 @@ export const trvRoleOfCode = (code) => {
 export const finishedCodeOf = (erp, finish) => {
     const code = U(erp);
     const fin = U(finish);
-    if (!code || !fin) return code;
+    if (!code || !fin || isUnfinishedFinish(fin)) return code;
     const sfx = STOCK_COLOUR_SUFFIX[fin];
     if (sfx) {
         const r = trvRoleOfCode(code);
@@ -153,6 +163,17 @@ export const rowRestampOf = ({ rows = [], finishes = [], swapIdentity = false, f
             if (!(out.patches[r.idx] && out.patches[r.idx].trvRole) && U(l.trvRole) !== r.trv.role) put(r.idx, { trvRole: r.trv.role });
             return;
         }
+        // ── THE ITEM WINS: a part tagged Unfinished never wears a finish (CPQ's takesNoFinish) — SO60551's standoffs
+        //    were quoted EP4 on 9/16, the day before the tag was read at save. The same plain item is sold and picked
+        //    (there is no /EP4 record), so NetSuite's line does not change; the floor stops planning a plated part.
+        if (!r.fee && own && takesNoFinish(r.part)) {
+            const base = baseOf(r.code);
+            const note = String(l.note || '').replace(/\s*·?\s*TO BE FINISHED\s*·\s*[A-Z0-9-]+/i, '').trim();
+            put(r.idx, { finishCode: '', toBeFinished: false, noFinish: true, finishOutsourced: false, finishLabel: '',
+                ...(swapIdentity ? { erp: base, billedErp: base, note, identityFrom: `${base}/${own}` } : {}) });
+            if (swapIdentity) out.changes.push({ idx: r.idx, code: r.code, dropBackorder: `${base}/${own}`, text: `${base}/${own} → ${base}: tagged Unfinished in the Master Library — never finished (CPQ's rule), picked from the shelf as it is` });
+            return;
+        }
         if (!swapIdentity || !rodFinish) return;
         // ── a part made in the stock colour, quoted in another finish → the stocked colour item ──
         if (!r.fee && specsOf(r.part).usesSubFinish && !isStockColourCode(r.code) && own !== rodFinish && !isSubFinishCode(own, finishes)) {
@@ -176,6 +197,21 @@ export const rowRestampOf = ({ rows = [], finishes = [], swapIdentity = false, f
         }
     });
     return out;
+};
+
+/**
+ * THE FINISH A CPQ SPLIT LINE IS FINISHED IN (HQ/RTGDispatchTab.autoSplitSalesOrder) — the same answer as the Order
+ * Entry route's (Shared/oeClassify.rowFinishesOf): an item tagged Unfinished wears nothing; the line's own finish;
+ * a traverse part's sub finish; and a line CPQ's engine gave no finish is UNFINISHED — the engine stamps every part
+ * that wears a finish, so silence means none. Only a job built before per-line finishes (no line carries one)
+ * falls back to the order's recipe, as it always did.
+ * @param jobHasLineFinishes  does any line of the job carry a finishCode
+ */
+export const splitLineFinishOf = ({ line = {}, part = null, jobHasLineFinishes = true, orderRecipe = '' } = {}) => {
+    if (takesNoFinish(part, line)) return UNFINISHED;
+    const f = U(line.finishCode || line.subFinishCode);
+    if (f) return f;
+    return jobHasLineFinishes ? UNFINISHED : U(orderRecipe);
 };
 
 /**

@@ -35,7 +35,7 @@ import { floorGroupsOf, parkRowPair } from './rowPair.js';
 import { holdSplitGroups } from './rowPairShape.js';
 import { oeDivisionOf, rowFabOf, rowFinishesOf, fabKindOf, DIVISION_CUSTOM } from './oeClassify.js';
 import { rowKeyOf, rowOfLine } from './displayRelease.js';
-import { rowRestampOf, trvRoleOfCode } from './subFinish.js';
+import { rowRestampOf, trvRoleOfCode, isUnfinishedFinish } from './subFinish.js';
 
 export { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig };
 
@@ -115,7 +115,8 @@ export const oeDoorOf = (part, finish, inventory = [], { outsourced = false } = 
     // routeShort: a PO for a bought raw, ASK for BOTH, the shop for in-house).
     const specs = (part && part.manufacturingSpecs) || {};
     const raw = U(part && (part.legacyErpId || part.itemId));
-    if (String(finish || '').trim() && raw && (inventory || []).some(p => U(p && p.legacyErpId) === `${raw}/P`)) return 'MAKE';
+    // A part that wears nothing (UNFINISHED — Shared/subFinish) is cut from its raw item, never painted from a /P.
+    if (String(finish || '').trim() && !isUnfinishedFinish(finish) && raw && (inventory || []).some(p => U(p && p.legacyErpId) === `${raw}/P`)) return 'MAKE';
     if (sourcingOf(specs) === SOURCING.BOTH) return 'ASK';
     const vendorName = String(specs.vendorName || '').trim();
     if ((specs.isInHouse === false && !!vendorName) || orderRouteFor(specs).route === ORDER_ROUTE.BUY) return 'BUY';

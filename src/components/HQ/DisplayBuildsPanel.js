@@ -37,7 +37,7 @@ import { hardDeleteWithLedger } from '../Shared/orderLifecycle';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, rowUndoBlockersOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
+import { ORDER_ROW_LABEL, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, rowUndoBlockersOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 import { finishedCodeOf } from '../Shared/subFinish';
 
@@ -563,7 +563,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             const fresh = await getDoc(doc(db, 'hq_sales_orders', soAppId));
             const cur = (fresh.data() || {}).lines || [];
             if (!cur[lineIdx]) throw new Error('that line is no longer on the sales order');
-            const next = cur.map((l, i) => (i === lineIdx ? { ...l, row: label } : l));
+            // "The order itself" marks the display's own line (its base) — not a row, never unassigned.
+            const next = cur.map((l, i) => (i !== lineIdx ? l : label === ORDER_ROW_LABEL ? { ...l, row: '', orderLevel: true } : { ...l, row: label, orderLevel: false }));
             await updateDoc(doc(db, 'hq_sales_orders', soAppId), { lines: next });
             await loadFloor(draft);
         } catch (e) { alert('Could not assign the row: ' + (e?.message || e)); }
@@ -587,7 +588,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 libraryRef.current = snap.docs.map(d => ({ id: d.id, ...d.data() }));
             }
             const inventory = oeInventoryOf(libraryRef.current, activeBrand);
-            const key = rowKeyOf(label);
+            const key = label === ORDER_ROW_LABEL ? 'ORDER' : rowKeyOf(label);
+            const onlyThese = label === ORDER_ROW_LABEL ? (line) => !!(line && line.orderLevel) : (line) => !(line && line.orderLevel) && rowKeyOf(rowOfLine(line)) === key;
             // Only the orders that hold a startable line of this row; a whole-order one never does.
             const targets = (floor.sos || []).filter(s => !s.whole && state.lines.some(l => l.soAppId === s.so.id && (l.key === 'NONE' || l.key === 'REVIEW')));
             for (const s of targets) {
@@ -597,7 +599,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 const res = await runOeAuto({
                     so: soNow, brand: activeBrand, user: currentUser || '10.5', inventory, log,
                     finishes: [...(finishes.inHouse || []), ...(finishes.outsourced || [])],
-                    only: (line) => rowKeyOf(rowOfLine(line)) === key,
+                    only: onlyThese,
                     slot: `displayRows.${key}`,
                     // A person pressing the button asks again on purpose — the automatic run's
                     // "already answered" guard does not apply to them.
@@ -633,17 +635,20 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     const rowsView = useMemo(() => {
         if (!anchored) return null;
         const byRow = {}; rowOrder.forEach(l => { byRow[l] = []; });
+        byRow[ORDER_ROW_LABEL] = [];
         const unassigned = [];
         (floor.sos || []).forEach(s => {
             const soLike = { ...s.so, lines: linesOf(s) };
-            const { rows, unassigned: un } = soRowsOf(soLike, rowOrder);
+            const { rows, unassigned: un, orderLines } = soRowsOf(soLike, rowOrder);
             const reviews = {};
             Object.entries(s.so.displayRows || {}).forEach(([, rec]) => ((rec && rec.review) || []).forEach(r => { reviews[r.lineIdx] = r.reasons || []; }));
             const ctx = { so: soLike, links: s.links || { wos: [], pos: [], demands: [] }, shipments: s.shipments || [], whole: s.whole, reviews };
             rowOrder.forEach(l => (rows[l] || []).forEach(e => byRow[l].push({ ...e, ...ctx })));
+            (orderLines || []).forEach(e => byRow[ORDER_ROW_LABEL].push({ ...e, ...ctx }));
             un.forEach(e => unassigned.push({ ...e, soAppId: s.so.id, soId: s.so.soId || s.so.id, whole: !!s.whole }));
         });
-        return { rows: rowOrder.map(label => ({ label, state: rowStateOf({ entries: byRow[label] }) })), unassigned };
+        const labels = [...rowOrder, ...(byRow[ORDER_ROW_LABEL].length ? [ORDER_ROW_LABEL] : [])];
+        return { rows: labels.map(label => ({ label, state: rowStateOf({ entries: byRow[label] }) })), unassigned };
     }, [anchored, floor, rowOrder]); // eslint-disable-line react-hooks/exhaustive-deps
     const anyAccepted = (floor?.sos || []).some(s => !s.whole && s.so.nsInternalId);
     // The plater's own word for a part line, from its shipments — by the code's base, since the
@@ -878,6 +883,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                     <span>{line.qty} × {line.erp}{line.finishCode ? `/${line.finishCode}` : ''}{line.memo ? ` · "${line.memo}"` : ''} <span style={{ color: 'var(--ink-soft)' }}>· {soId}</span></span>
                                     {whole ? <span style={{ ...mono }}>whole-order · read only</span> : <select value="" onChange={e => e.target.value && assignRow(soAppId, lineIdx, e.target.value)} disabled={!!busy} style={{ ...inp, padding: '2px 6px', fontSize: '11px' }}>
                                         <option value="">— assign to a row —</option>
+                                        <option value={ORDER_ROW_LABEL}>{ORDER_ROW_LABEL} — the display's own line (its base)</option>
                                         {rowOrder.map(r => <option key={r} value={r}>{r}</option>)}
                                     </select>}
                                 </div>

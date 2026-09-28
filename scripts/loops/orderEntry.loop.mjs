@@ -111,6 +111,35 @@ eq('the pack bench names the finished pieces', packLinesOf(so, { isFeeCode: libF
     eq('SO Pack: the bracket is READY from the shelf; the track names H1-2TRVTRK/C', [sp({ so: so2, line: so2.lines[bi], idx: bi, stat: { avail: 40 } }).state, sp({ so: so2, line: so2.lines[1], idx: 1, stat: null }).code], ['READY', 'H1-2TRVTRK/C']);
 }
 
+// ── TAB 7, SAME RULES AS CPQ AND 10.5 (Stuart 2026-09-28): an item tagged Unfinished is entered CUT ONLY — the
+//    clear acrylic rod at 12" — and a standoff (Unfinished) as an ordinary stocked line ──
+{
+    const A = (code, name, specs = {}, more = {}) => ({ id: `a-${code}`, legacyErpId: code, itemId: code, itemName: name, brandId: BRAND, partClass: 'Inventory', netSuiteInternalId: String(8000 + code.length), manufacturingSpecs: { isInHouse: true, ...specs }, ...more });
+    const aLib = [
+        A('H1-2RCTACR', '2" x 3/4" Rectangular Acrylic Pole', { productType: 'POLE', partHandling: 'Custom', isInHouse: false, vendorName: 'ARLINEA', uom: 'FT', customData: { unfinished: true } }),
+        A('H1-1STDOFF', 'Standoff', { productType: 'Component', partHandling: 'Small Parts', customData: { unfinished: true } }, { partClass: 'Assembly' }),
+    ];
+    Object.assign(stock, { 'H1-2RCTACR': { available: 100, unit: 'FOOT' }, 'H1-1STDOFF': { available: 300, unit: 'EACH' } });
+    aLib.forEach(p => __fs.seed('Approved_Designs', p.id, p));
+    // what QuickShipTab's cut-only add writes (noFinish, no finish, not to be finished) and a stocked line
+    const aLines = [
+        { erp: 'H1-2RCTACR', name: 'Acrylic Pole', qty: 20, perFoot: true, feetPer: 1, billedFeet: 20, cutLength: 12, noFinish: true, note: 'CUT ONLY · UNFINISHED · Cut 12" (billed 1 ft)' },
+        { erp: 'H1-1STDOFF', name: 'Standoff', qty: 40 },
+    ];
+    __fs.seed('hq_sales_orders', 'OE-3', { id: 'OE-3', soId: 'SO70003', brand: BRAND, orderClass: 'QUICKSHIP', customer: 'Test Co', customerId: 'C1', nsInternalId: '8803', status: 'Pending', createdAt: 1, lines: aLines });
+    const logs3 = [];
+    await runOeAuto({ so: { id: 'OE-3', ...__fs.get('hq_sales_orders', 'OE-3') }, brand: BRAND, user: 'rtg-auto', inventory: oeInventoryOf([...library, ...aLib], BRAND), finishes: [], log: (m) => logs3.push(m) });
+    const so3 = { id: 'OE-3', ...__fs.get('hq_sales_orders', 'OE-3') };
+    const hq3 = __fs.all('hq_work_orders').filter(h => h.soAppId === 'OE-3');
+    const sh3 = hq3.find(h => h.routeTo === 'SHOP'); const fh3 = hq3.find(h => h.routeTo === 'FINISHING');
+    eq('tab 7: the acrylic is an UNFINISHED shop cut at 12" — the same as a 10.5 row', [sh3?.finishGroup, (sh3?.cutList || []).map(c => [c.legacyErpId, c.cutLength])], ['UNFINISHED', [['H1-2RCTACR', 12]]], );
+    eq('…its finishing half is pick-only (never on the finishing floor)', [fh3?.finPayload?.pickOnly, fh3?.finPayload?.finishingRequired], [true, false]);
+    eq('the standoff is never started — a shelf pick', (so3.oeGen || {})[1] || null, null);
+    const { soPackLineStateOf: sp3 } = await import('../../src/components/Shared/pickLines.js');
+    eq('SO Pack: the acrylic comes from the floor, the standoff from the shelf', [sp3({ so: so3, line: so3.lines[0], idx: 0, stat: { avail: 100 } }).state, sp3({ so: so3, line: so3.lines[1], idx: 1, stat: { avail: 300 } }).state], ['FROM THE FLOOR', 'READY']);
+    if (!sh3) console.log(logs3.join('\n'));
+}
+
 if (globalThis.__NS_UNANSWERED) console.log('⚠ unanswered NetSuite calls:', globalThis.__NS_UNANSWERED.map(b => String(b.payload?.q || b.targetUrl).slice(0, 80)));
 if (fail) console.log('\n--- route log ---\n' + logs.join('\n'));
 console.log(`orderEntry loop: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
