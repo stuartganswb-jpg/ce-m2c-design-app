@@ -33,7 +33,11 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
 
     // ── THE PAIR ──────────────────────────────────────────────────────────────────────────
     const { woId, shopWoId } = pairIdsOf(display, groups[0], 1790000000000);
-    eq('the ids name the order, the row and the finish; the shop half is -C', [woId, shopWoId], ['WO-OE-SO60565-BASE-FRONT-1-P24-1790000000000', 'WO-OE-SO60565-BASE-FRONT-1-P24-1790000000000-C']);
+    // SHORT ENOUGH TO SCAN (Stuart 2026-09-28): the order + the clock's last four digits; the row and finish are fields.
+    eq('the id names the order and four digits of the clock; the shop half is -C', [woId, shopWoId], ['WO-OE-SO60565-0000', 'WO-OE-SO60565-0000-C']);
+    eq('…18 characters, where the row-and-finish id was 43', pairIdsOf({ ...display, soId: 'SO60551' }, groups[0], 1790629033765).woId, 'WO-OE-SO60551-3765');
+    eq('a start-now split adds one letter', [pairIdsOf(display, { ...groups[0], tag: '-NOW' }, 1790629033765).woId, pairIdsOf(display, { ...groups[0], tag: '-PO' }, 1790629033765).woId], ['WO-OE-SO60565-3765N', 'WO-OE-SO60565-3765P']);
+    ok('still a row pair, never a whole-order document (WO-OE-, not WO-<order>-)', !woId.startsWith(`WO-${display.soId}`) && woId.startsWith('WO-OE-'));
     const shape = pairShapeOf({ group: groups[0], so: display, brand: 'ce', createdBy: 'stuart', now: 1, inventory, gate: { awaitingComponents: true }, materialStamp: { materialRows: [{ code: 'X' }], materialAsOf: 1 }, woId, shopWoId, tasks: { spinSetup: {} }, note: 'n' });
     eq('the finishing document carries every small part with its finish, and never the pole', shape.finPayload.partsList.map(l => [l.legacyErpId, l.quantity, l.finishCode, l.soLineIdx]), [['H1-75SPF', 50, 'P24', 1], ['H1-75SBP-S', 100, 'P24', 2]]);
     eq('…is a sled job sized from its parts, one recipe, linked to its shop half, pick released at shop start', [shape.finPayload.recipe, shape.finPayload.paintSize, shape.finPayload.paintSizes, shape.finPayload.totalParts, shape.finPayload.shopSiblingId, shape.finPayload.hasCustomSibling, shape.finPayload.sentToPickPack, shape.finPayload.finishStream || null],

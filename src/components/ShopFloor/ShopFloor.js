@@ -1318,7 +1318,7 @@ const ShopFloor = () => {
             const one = (qty, cutLength, cutTag, uom) => `
                 ^XA
                 ^FO50,50^A0N,40,40^FDWO: ${order.woNum}${cutTag ? `  ${cutTag}` : ''}^FS
-                ^FO50,100^A0N,30,30^FDSO: ${soNumOf(order)}^FS
+                ^FO50,100^A0N,30,30^FDSO: ${soNumOf(order)}${order.rowLabel ? ` - ${order.rowLabel}` : ''}^FS
                 ${order.isOutsourced ? `^FO50,150^A0N,30,30^FDFinish: ${order.finishRecipe}^FS` : ''}
                 ${order.isOutsourced ? `^FO50,200^A0N,30,30^FDService/Ea: $${order.outsourcePrice}^FS` : ''}
                 ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
@@ -1333,6 +1333,8 @@ const ShopFloor = () => {
             emitLabel(zpl, () => printShopCompletionLabel({
                 // THE STAGING KEY IS THE WORK ORDER (2026-09-23): the barcode names the finishing half — the pair's spine.
                 woNum: order.woNum, soNum: soNumOf(order), orderKey: stagingKeyOf(order),
+                // A row pair's short id no longer spells its row (2026-09-28, Shared/rowPairShape.pairIdsOf) — the label says it.
+                rowLabel: order.rowLabel || '',
                 item: shopItemCodeOf(order) || order.item || order.partNum, qty: order.qty, cutLength: order.cutLength,
                 cuts, uom: order.uom || null,
                 finishRecipe: order.finishRecipe, isOutsourced: order.isOutsourced,

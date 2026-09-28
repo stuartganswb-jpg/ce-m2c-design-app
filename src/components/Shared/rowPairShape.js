@@ -346,9 +346,21 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
     return { hq, finPayload, shopSibling, partsList, cutList, custom, small };
 };
 
-/** The pair's ids: the finishing work order (the pair's spine, the staging key) and its shop sibling. */
+/**
+ * The pair's ids: the finishing work order (the pair's spine, the staging key) and its shop sibling.
+ * SHORT ENOUGH TO SCAN (Stuart 2026-09-28: "the labels do not scan at staging the barcode is too long"). The id named the
+ * order, the row, the finish and the whole millisecond clock — 43 characters (WO-OE-SO60551-BACK-BASE-2-S08-1790629033765),
+ * a barcode wider than the 4" label at the shop's Zebra bar width. It is now the order and the clock's last four digits —
+ * WO-OE-SO60551-3765, 18 — and the row and the finish ride the document's own fields and print on the labels as text.
+ * `WO-OE-` stays: it is what keeps a row pair from reading as a whole-order document (Shared/displayRelease). A start-now
+ * split adds one letter (N / P). The writer (Shared/rowPair.parkRowPair) steps the clock while an id is taken, so an id is
+ * never reused — not even a deleted document's.
+ */
+const TAG_LETTER = { '-NOW': 'N', '-PO': 'P' };
 export const pairIdsOf = (so, group, now = Date.now()) => {
-    const woId = `WO-OE-${slug((so && (so.soId || so.id)) || 'SO')}-${slug(group.rowLabel || 'ORDER')}-${slug(group.finish)}-${now}${group.tag || ''}`;
+    const tag = String((group && group.tag) || '');
+    const clock = String(Math.floor(Math.abs(N(now)))).slice(-4).padStart(4, '0');
+    const woId = `WO-OE-${slug((so && (so.soId || so.id)) || 'SO')}-${clock}${TAG_LETTER[tag] || slug(tag)}`;
     return { woId, shopWoId: `${woId}-C` };
 };
 

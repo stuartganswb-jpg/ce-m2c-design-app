@@ -4331,7 +4331,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             woRef: packRef(job),
             // THE STAGING KEY IS THE WORK ORDER (2026-09-23, Shared/stagingKey) — one row, one key.
             orderKey: stagingKeyOf(job),
-            item: job.stockErpId || job.type || '',
+            // A row pair's short id no longer spells its row (2026-09-28, Shared/rowPairShape.pairIdsOf) — the label says it.
+            item: job.rowLabel || job.stockErpId || job.type || '',
             qty: job.totalParts || '',
             finish: job.recipe || '',
             qtyLabel: `${job.totalParts || 0} pcs`,

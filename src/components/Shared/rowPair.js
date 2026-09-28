@@ -1,10 +1,10 @@
 // ── THE ONE WRITER FOR A ROW PAIR (Stuart 2026-09-23) — the shape and the grouping rule are pure, in
 // Shared/rowPairShape (asserted by scripts/rowPair.test.mjs); this file writes them.
 import { db } from '../../firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { withItemCode, makeFullTasks } from './workOrderContract';
 import { executeMakeupActions } from './finishedRunPrecheck';
-import { receiptGateFields } from './workOrderCreate';
+import { receiptGateFields, ParkRefusal } from './workOrderCreate';
 import { materialRowsOf, materialStampOf } from './materialGrid.js';
 import { floorGroupsOf, splitGroupJobs, pairShapeOf, pairIdsOf } from './rowPairShape.js';
 export { floorGroupsOf, splitGroupJobs, pairShapeOf, pairIdsOf };
@@ -21,7 +21,14 @@ const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
  */
 export const parkRowPair = async ({ group, so, brand, user = '', inventory = [], now = Date.now(), poleCutsOf = () => ({ poleCut: null, backOrder: '' }), receiptRefs = [], makeupActions = [], nsIdOf = null, custKeys = null }) => {
     const { custom, small } = splitGroupJobs(group);
-    const { woId, shopWoId } = pairIdsOf(so, group, now);
+    // AN ID IS NEVER REUSED (2026-09-28): the short id carries four digits of the clock, so one already taken — a live
+    // pair, or a deleted one's record or tombstone — steps the clock until it is free.
+    const taken = async (ids) => (await getDoc(doc(db, 'hq_work_orders', ids.woId))).exists()
+        || (await getDoc(doc(db, 'fin_workorders', ids.woId))).exists();
+    let ids = pairIdsOf(so, group, now);
+    for (let step = 1; step <= 50 && await taken(ids); step++) ids = pairIdsOf(so, group, now + step);
+    if (await taken(ids)) throw new ParkRefusal('ID_TAKEN', `no free work order id for ${group.rowLabel || 'the order'} · ${group.finish} — try again`);
+    const { woId, shopWoId } = ids;
     const made = [];
     const soRef = String((so && (so.soId || so.id)) || '');
     const needBy = String((so && (so.needBy || so.reqDate)) || '');

@@ -487,7 +487,7 @@ export const printShopCompletionLabel = (o = {}) => {
   <div class="k">${toPlating ? 'CUSTOM · TO PLATING' : 'CUSTOM · SHOP COMPLETE'}${cutTag ? ` &nbsp;·&nbsp; ${cutTag}` : ''}</div>
   <div class="wo">${esc(o.woNum || key)}</div>
   <div class="rows">
-    ${o.soNum ? `<div class="r"><b>SO:</b> ${esc(o.soNum)}</div>` : ''}
+    ${o.soNum || o.rowLabel ? `<div class="r">${o.soNum ? `<b>SO:</b> ${esc(o.soNum)}` : ''}${o.soNum && o.rowLabel ? ' &nbsp;·&nbsp; ' : ''}${o.rowLabel ? esc(o.rowLabel) : ''}</div>` : ''}
     <div class="r">${esc(o.item || o.partNum || '')}${qty ? (uom ? ` &nbsp;·&nbsp; ${esc(uomLabel(qty, uom))}` : ` &nbsp;×${esc(qty)}`) : ''}${cutLength ? ` &nbsp;·&nbsp; CUT ${esc(cutLength)}"` : ''}</div>
     ${o.finishRecipe ? `<div class="r"><b>FINISH:</b> ${esc(o.finishRecipe)}</div>` : ''}
     ${toPlating && o.outsourcePrice ? `<div class="r"><b>SERVICE/EA:</b> $${esc(o.outsourcePrice)}</div>` : ''}

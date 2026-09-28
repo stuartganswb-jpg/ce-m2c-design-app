@@ -219,6 +219,21 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     const si = so2.lines.findIndex(l => l.erp === 'H1-1STDOFF');
     eq('the re-read standoff is a SO Pack shelf pick of H1-1STDOFF', [soPackLineStateOf({ so: so2, line: so2.lines[si], idx: si, stat: { avail: 300, held: 0, prod: 0 } }).code, soPackLineStateOf({ so: so2, line: so2.lines[si], idx: si, stat: { avail: 300, held: 0, prod: 0 } }).state], ['H1-1STDOFF', 'READY']);
 }
+// ── SHORT ENOUGH TO SCAN (Stuart 2026-09-28): every pair this route wrote has the short id, and an id already taken
+// (a live pair or a deleted one's record) steps the clock to the next free one — never an overwrite. ──
+{
+    const pairIds = __fs.all('hq_work_orders').filter(h => h.routeTo === 'FINISHING' && String(h.id).startsWith('WO-OE-')).map(h => h.id);
+    ok('every row pair the route wrote has the short id (WO-OE-<order>-<4 digits>, ≤ 19 characters)', pairIds.length > 0 && pairIds.every(id => /^WO-OE-SO\d+-\d{4}[NP]?$/.test(id) && id.length <= 19), pairIds.join(', '));
+    const { parkRowPair } = await import('../../src/components/Shared/rowPair.js');
+    const so = { ...__fs.get('hq_sales_orders', F.SO_APP_ID), id: F.SO_APP_ID };
+    const group = { key: 'T|P06|', rowKey: 'T', rowLabel: 'Collision Test', finish: 'P06', tag: '', jobs: [] };
+    const NOW = 1790000001234;
+    __fs.seed('hq_work_orders', `WO-OE-${so.soId}-1234`, { id: 'taken', deleted: true });
+    const a = await parkRowPair({ group, so, brand: F.BRAND, user: 'loop', now: NOW });
+    const b = await parkRowPair({ group, so, brand: F.BRAND, user: 'loop', now: NOW });
+    eq('a taken id (here a deleted record) steps to the next free one; a second pair at the same instant steps again', [a.woId, b.woId], [`WO-OE-${so.soId}-1235`, `WO-OE-${so.soId}-1236`]);
+    eq('…and the record that held the id is untouched', __fs.get('hq_work_orders', `WO-OE-${so.soId}-1234`).id, 'taken');
+}
 if (globalThis.__NS_UNANSWERED) console.log('⚠ unanswered NetSuite calls:', globalThis.__NS_UNANSWERED.map(b => String(b.payload?.q || b.targetUrl).slice(0, 80)));
 if (fail) console.log('\n--- route log ---\n' + logs.join('\n'));
 console.log(`rowRoute loop: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
