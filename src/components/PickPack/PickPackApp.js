@@ -16,7 +16,7 @@ import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered,
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { activeItemByNameQuery, activeItemByNameQueryLite, cutRecordOf, isStockItemType } from '../Shared/nsItemLookup.js';
-import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction, FieldPath } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
@@ -1681,6 +1681,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // half. NOTHING HERE POSTS TO NETSUITE — a committed bin is app-only by Stuart's instruction,
     // and NetSuite goes on believing the stock is in its shelf bin while showing it committed.
     const soOpenFor = (o) => !['Shipped', 'Closed'].includes(String((o && o.status) || ''));
+    // ONE GATHERED COUNT PER CODE, WHATEVER THE CODE (Stuart 2026-09-28, SO60551's plated poles): the count was written as
+    // the dotted path `committedQty.${code}`, and Firestore refuses a '/' in a path — so every finished code (H1-1R/EP2,
+    // H1-75KF/P …) failed to gather into its order, on every path that gathers (plating put-away, the arrival alert, the
+    // pack gather, release). FieldPath makes the code ONE key; it lands exactly where committedQtyOf reads it.
+    const updateCommittedQty = (orderId, code, n, fields = {}) =>
+        updateDoc(doc(db, 'hq_sales_orders', orderId), new FieldPath('committedQty', String(code)), n, ...Object.entries(fields).flat());
     const commitToOrder = async (order, { code, qty, ordered, bin }) => {
         let want = bin || committedBinOf(order);
         if (!want) {
@@ -1692,9 +1698,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const plan = planCommit({ order, code, qty, bin: want, ordered: Number(ordered) || 0, orders: quickShipOrders, isOpen: soOpenFor });
         if (!plan.ok) { alert(`Cannot gather that into ${packRef(order)}:\n\n${plan.reason}`); return null; }
         try {
-            await updateDoc(doc(db, 'hq_sales_orders', order.id), {
+            await updateCommittedQty(order.id, plan.code, plan.total, {
                 committedBin: plan.bin,
-                [`committedQty.${plan.code}`]: plan.total,
                 committedUpdatedAt: Date.now(), committedUpdatedBy: operator?.name || '',
                 ...(plan.wasFirst ? { committedBinAt: Date.now(), committedBinBy: operator?.name || '' } : {}),
             });
@@ -1715,8 +1720,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const reason = String(why).trim();
         if (!reason) return alert('A reason is needed — nothing was changed.');
         try {
-            await updateDoc(doc(db, 'hq_sales_orders', order.id), {
-                [`committedQty.${plan.code}`]: plan.left,
+            await updateCommittedQty(order.id, plan.code, plan.left, {
                 ...(plan.emptyAfter ? { committedBin: null, committedBinAt: null } : {}),
                 committedUpdatedAt: Date.now(), committedUpdatedBy: operator?.name || '',
                 committedReleases: arrayUnion({ code: plan.code, qty: plan.qty, at: Date.now(), by: operator?.name || '', reason }),
