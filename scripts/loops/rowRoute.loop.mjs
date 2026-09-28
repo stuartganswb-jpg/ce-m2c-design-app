@@ -103,6 +103,11 @@ const shopOf = (pair) => pair && hq.find(h => h.id === pair.shopWoId);
     const fl = (p?.finPayload?.partsList || []).find(l => /H1-75KF/.test(l.legacyErpId));
     eq('the finial is painted from its /P, carrying the customer\'s code', [fl?.legacyErpId, fl?.clientSku], ['H1-75KF/P', 'FAB-KF-75']);
     ok('the released finishing document exists', fin.some(f => f.id === p?.id));
+    const FA = await import('../../src/components/Shared/floorActivity.js');
+    const fd = fin.find(f => f.id === p?.id) || {};
+    eq('…and it runs TWO tracks: the 50 poles on the pole recipe, the finial on the small-parts recipe', [fd.totalPoles, FA.woHasPoles(fd), FA.woHasSmallParts(fd), FA.partsStreamOf(fd), FA.poleStreamOf(fd), fd.finishStream || null, fd.shapeWarning || null], [50, true, true, 'SMALL', 'POLES', null, null]);
+    const r2d = fin.find(f => f.id === pairOf('Row 2', 'S04')?.id) || {};
+    eq('Row 2\'s S04 document is poles alone (the fascia) — the pole stream, no sled to wait on', [r2d.finishStream, FA.woHasSmallParts(r2d)], ['POLES', false]);
 }
 // ── THE SHOP DOCUMENT RTG WRITES FOR EACH PAIR (HQ/RTGDispatchTab.pushToShop: buildShopDoc + the shared fields) ──
 {

@@ -36,8 +36,30 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
     eq('the ids name the order, the row and the finish; the shop half is -C', [woId, shopWoId], ['WO-OE-SO60565-BASE-FRONT-1-P24-1790000000000', 'WO-OE-SO60565-BASE-FRONT-1-P24-1790000000000-C']);
     const shape = pairShapeOf({ group: groups[0], so: display, brand: 'ce', createdBy: 'stuart', now: 1, inventory, gate: { awaitingComponents: true }, materialStamp: { materialRows: [{ code: 'X' }], materialAsOf: 1 }, woId, shopWoId, tasks: { spinSetup: {} }, note: 'n' });
     eq('the finishing document carries every small part with its finish, and never the pole', shape.finPayload.partsList.map(l => [l.legacyErpId, l.quantity, l.finishCode, l.soLineIdx]), [['H1-75SPF', 50, 'P24', 1], ['H1-75SBP-S', 100, 'P24', 2]]);
-    eq('…is a sled job sized from its parts, one recipe, linked to its shop half, pick released at shop start', [shape.finPayload.recipe, shape.finPayload.paintSize, shape.finPayload.paintSizes, shape.finPayload.totalParts, shape.finPayload.shopSiblingId, shape.finPayload.hasCustomSibling, shape.finPayload.sentToPickPack, 'poles' in shape.finPayload],
-        ['P24', 'M', { S: 50, M: 100, L: 0 }, 150, `SHOP-${shopWoId}`, true, false, false]);
+    eq('…is a sled job sized from its parts, one recipe, linked to its shop half, pick released at shop start', [shape.finPayload.recipe, shape.finPayload.paintSize, shape.finPayload.paintSizes, shape.finPayload.totalParts, shape.finPayload.shopSiblingId, shape.finPayload.hasCustomSibling, shape.finPayload.sentToPickPack, shape.finPayload.finishStream || null],
+        ['P24', 'M', { S: 50, M: 100, L: 0 }, 200, `SHOP-${shopWoId}`, true, false, null]);
+    // EACH PART ON ITS OWN RECIPE (Stuart 2026-09-28): the shop's pole is COUNTED on the finishing document, so the
+    // floor runs it on the pole track (-P) while the small parts run the sled track (-S) — read with the floor's own
+    // functions (Shared/floorActivity).
+    {
+        const FA = await import('../src/components/Shared/floorActivity.js');
+        const fp = shape.finPayload;
+        eq('…and counts the shop\'s pole: two tracks, poles on -P, small parts on -S', [fp.totalPoles, fp.poles && fp.poles.qty, FA.woHasPoles(fp), FA.woHasSmallParts(fp), FA.partsStreamOf(fp), FA.poleStreamOf(fp)], [50, 50, true, true, 'SMALL', 'POLES']);
+        // GL5 (Stuart's screenshot): -S 4 coats for the small parts, -P 5 coats for the poles — which recipe each track runs.
+        const { resolveStreamRecipe } = await import('../src/components/Shared/finishingTime.js');
+        const recipes = [{ id: 'GL5', code: 'GL5', steps: [1, 2, 3, 4] }, { id: 'GL5-S', code: 'GL5-S', steps: [1, 2, 3, 4] }, { id: 'GL5-P', code: 'GL5-P', steps: [1, 2, 3, 4, 5] }];
+        const gl5 = { ...fp, recipe: 'GL5' };
+        const rOf = (stream) => { const r = resolveStreamRecipe(recipes, 'GL5', stream); return r && (r.code || r.id); };
+        eq('GL5 on a mixed document: small parts run GL5-S (4 coats), poles GL5-P (5 coats)', [rOf(FA.partsStreamOf(gl5)), rOf(FA.poleStreamOf(gl5))], ['GL5-S', 'GL5-P']);
+        const { docStreamsOf } = await import('../src/components/Shared/rowPairShape.js');
+        const only = docStreamsOf({ parts: [], shopPoles: 20 });
+        const onlyDoc = { ...only.fields, totalParts: only.totalParts };
+        eq('poles alone: the pole stream only (no sled track to wait on)', [onlyDoc.finishStream, FA.woHasSmallParts(onlyDoc), rOf(FA.poleStreamOf(onlyDoc))], ['POLES', false, 'GL5-P']);
+        const wood = docStreamsOf({ parts: [{ legacyErpId: 'H1-138WR-O', productType: 'POLE', quantity: 50 }, { legacyErpId: 'H1-138WGF-O', productType: 'FINIAL TOP', quantity: 50, paintSize: 'S' }], shopPoles: 0 });
+        const woodDoc = { ...wood.fields, totalParts: wood.totalParts };
+        eq('a straight wood rod on the parts list is a POLE (pole track); the finial is the sled\'s', [woodDoc.totalPoles, woodDoc.paintSizes, FA.partsStreamOf(woodDoc), FA.poleStreamOf(woodDoc), FA.woHasSmallParts(woodDoc)], [50, { S: 50, M: 0, L: 0 }, 'SMALL', 'POLES', true]);
+        eq('small parts alone: the sled only, no pole track', (() => { const x = docStreamsOf({ parts: [{ productType: 'FINIAL', quantity: 10, paintSize: 'S' }] }); return [x.fields.totalPoles || 0, x.fields.finishStream || null]; })(), [0, null]);
+    }
     eq('the shop sibling carries the pole as its cut list and its pull line, with the cut', [shape.shopSibling.cutList.map(c => [c.legacyErpId, c.qty, c.cutLength]), shape.shopSibling.pullLines.map(l => l.legacyErpId), shape.shopSibling.cutLength, shape.shopSibling.finSiblingId, shape.shopSibling.routeTo],
         [[['H1-75SR', 50, 7.5]], ['H1-75SR'], 7.5, woId, 'SHOP']);
     eq('…and the counts the plater bills on', [shape.shopSibling.poles, shape.shopSibling.feet, shape.shopSibling.billableFeet], [50, 31.25, 32]);

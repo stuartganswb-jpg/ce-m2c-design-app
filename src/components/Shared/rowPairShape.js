@@ -25,6 +25,7 @@ import { rowKeyOf, rowOfLine } from './displayRelease.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
 import { findClientPriceRow } from './clientPricing.js';
 import { finishedCodeOf, isUnfinishedFinish } from './subFinish.js';
+import { isPoleCategory } from './poleCut.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -104,6 +105,37 @@ export const finishGroupsOf = ({ smallLines = [], customLines = [], finishOf = (
     return out.map(g => ({ ...g, suffix: out.length > 1 ? `-${slug(g.finish) || 'NOFINISH'}` : '' }));
 };
 
+/**
+ * THE TWO TRACKS OF ONE FINISHING DOCUMENT — the same on every door (Stuart 2026-09-28: "the poles have more finish
+ * steps than the small parts so it is imperative the correct parts follow the correct recipe"). The finishing floor
+ * runs a document's POLES on the pole track (the recipe's -P variant) and its SMALL PARTS on the sled track (-S), and
+ * shows the pole track only when the document COUNTS its poles (Shared/floorActivity woHasPoles). A mixed pair's
+ * document carried no count, so the shop's poles joined it at staging and ran the small parts' -S coats. Now:
+ *   · poles = the shop's poles finished on this document + every pole / rod on its parts list (a straight wood rod);
+ *   · small parts = everything else, with their own sled sizes;
+ *   · a document with poles AND small parts carries both (two tracks) — never finishStream 'POLES', which would put
+ *     its small parts on -P too; a document of poles alone is the POLE stream.
+ * Pure. @param parts     the document's in-house parts-list lines ({ productType, paintSize, pcs|quantity|qty })
+ *        @param shopPoles the shop sibling's poles finished here (0 when plated or unfinished — never on this floor)
+ * @returns { poles, smallPcs, totalParts, fields } — `fields` go on the finishing document
+ */
+export const docStreamsOf = ({ parts = [], shopPoles = 0 } = {}) => {
+    const pcsOf = (p) => N(p && p.pcs) || N(p && p.quantity) || N(p && p.qty);
+    const isPole = (p) => isPoleCategory(p && p.productType);
+    const partPoles = (parts || []).filter(isPole).reduce((t, p) => t + pcsOf(p), 0);
+    const small = (parts || []).filter(p => p && !isPole(p));
+    const smallPcs = small.reduce((t, p) => t + pcsOf(p), 0);
+    const sizes = small.reduce((acc, p) => { const z = String(p.paintSize || '').toUpperCase(); if (['S', 'M', 'L'].includes(z)) acc[z] += pcsOf(p); return acc; }, { S: 0, M: 0, L: 0 });
+    const hasSize = (sizes.S + sizes.M + sizes.L) > 0;
+    const paintSize = hasSize ? Object.keys(sizes).sort((a, b) => sizes[b] - sizes[a]).find(k => sizes[k] > 0) : null;
+    const poles = N(shopPoles) + partPoles;
+    const sled = { paintSize, paintSizes: hasSize ? sizes : null };
+    const fields = poles > 0
+        ? { poles: { qty: poles, type: 'POLE' }, totalPoles: poles, ...(small.length ? sled : { paintSize: null, paintSizes: null, finishStream: 'POLES' }) }
+        : sled;
+    return { poles, smallPcs, totalParts: smallPcs + poles, fields };
+};
+
 /** Which jobs of a group are the SHOP's (a custom pole) and which the finishing side's. */
 export const splitGroupJobs = (group) => ({
     custom: (group.jobs || []).filter(j => !!j.custom),
@@ -152,9 +184,6 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
             });
         });
     });
-    const paintSizes = partsList.reduce((acc, p) => { if (p.paintSize && ['S', 'M', 'L'].includes(p.paintSize)) acc[p.paintSize] += N(p.pcs || p.quantity || p.qty) || 0; return acc; }, { S: 0, M: 0, L: 0 });
-    const hasSize = (paintSizes.S + paintSizes.M + paintSizes.L) > 0;
-    const paintSize = hasSize ? Object.keys(paintSizes).sort((a, b) => paintSizes[b] - paintSizes[a]).find(k => paintSizes[k] > 0) : null;
     const smallPcs = partsList.reduce((s, p) => s + (N(p.pcs) || N(p.quantity) || N(p.qty)), 0);
     // ── the shop side: the custom poles as the cut list, their pull lines ──
     // Poles first, then what rides them (fees, returns, miters — Shared/oeClassify), as the CPQ split lists them.
@@ -177,7 +206,6 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
     });
     const pullLines = custom.flatMap(job => (job.__planLines || []).map(pl => ({ ...pl, soLineIdx: job.lineIdx })));
     const shopQty = customShopQtyOf(cutList);
-    const poleOnly = custom.length > 0 && small.length === 0;
     // Poles are the pieces the shop cuts — a rider is fabrication on one, never a pole of its own.
     const poleQty = custom.filter(j => !j.rider).reduce((s, j) => s + (N(j.qty) || 0), 0);
     // A PLATED GROUP NEVER ENTERS THE FINISHING FLOOR (Stuart 2026-09-02 / 09-27 — the CPQ split's shape,
@@ -191,7 +219,9 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
     const finishingNeeded = inHouse.length > 0 || (custom.length > 0 && !plated && !isUnfinishedFinish(finish));
     const pickOnlyDoc = !finishingNeeded;
     const inHousePcs = inHouse.reduce((t, p) => t + (N(p.pcs) || N(p.quantity) || N(p.qty)), 0);
-    const totalParts = pickOnlyDoc ? inHousePcs : (inHousePcs || poleQty || 1);
+    // Each part on the recipe it belongs to: the poles on -P, the small parts on -S (docStreamsOf).
+    const streams = docStreamsOf({ parts: inHouse, shopPoles: (custom.length > 0 && !plated && !isUnfinishedFinish(finish)) ? poleQty : 0 });
+    const totalParts = pickOnlyDoc ? inHousePcs : (streams.totalParts || 1);
     const lineIdxs = (group.jobs || []).map(j => j.lineIdx).filter(i => Number.isInteger(i) && i >= 0);
     const soRef = String((so && (so.soId || so.id)) || '');
     const label = `${rowLabel ? `${rowLabel} · ` : ''}${finish}`;
@@ -216,8 +246,7 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         rowKey: group.rowKey || '', rowLabel, finishGroup: finish,
         recipe: finish, recipeLabel: null, recipeSource: 'lineCode',
         totalParts,
-        paintSize: (poleOnly || pickOnlyDoc) ? null : paintSize, paintSizes: (!poleOnly && !pickOnlyDoc && hasSize) ? paintSizes : null,
-        ...(poleOnly && finishingNeeded ? { poles: { qty: poleQty, type: 'POLE' }, totalPoles: poleQty, finishStream: 'POLES' } : {}),
+        ...(pickOnlyDoc ? { paintSize: null, paintSizes: null } : streams.fields),
         note, memo: note,
         reqDate: needBy, needBy,
         cpqSpecs: {}, imageUrl: null,

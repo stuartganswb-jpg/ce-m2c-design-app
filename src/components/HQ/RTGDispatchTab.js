@@ -13,7 +13,7 @@ import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineS
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
-import { finishGroupsOf } from '../Shared/rowPairShape';
+import { finishGroupsOf, docStreamsOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe } from '../Shared/floorRelease';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
@@ -1572,10 +1572,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // finishing floor, the pole packed unpainted. The row / Order Entry route (Shared/rowPairShape) has always given
             // it a finishing document on the POLE stream; the split now does the same. A plated pole (the plater) and a
             // piece that wears nothing (UNFINISHED — cut and packed) still take the pick-only document.
-            const poleOnlyFinish = inHouseLines.length === 0 && hasCustom && !isOutsourcedRecipe(recipeCode) && !isUnfinishedFinish(recipeCode);
-            const finishingNeeded = inHouseLines.length > 0 || poleOnlyFinish;
+            const shopPolesHere = (hasCustom && !isOutsourcedRecipe(recipeCode) && !isUnfinishedFinish(recipeCode))
+                ? (customShopQtyOf(customLines).poles || customShopQtyOf(customLines).qty || 1) : 0;
+            const finishingNeeded = inHouseLines.length > 0 || shopPolesHere > 0;
             const pickOnly = !finishingNeeded && (pickLines.length > 0 || hasCustom);
-            const poleCount = poleOnlyFinish ? (customShopQtyOf(customLines).poles || customShopQtyOf(customLines).qty || 1) : 0;
+            // EACH PART ON ITS OWN RECIPE (Stuart 2026-09-28: "the poles have more finish steps than the small parts"): the
+            // shop's poles and any pole on the parts list run the pole track (-P), the small parts the sled track (-S) —
+            // the same two-track shape a 10.5 row and a tab-7 order write (Shared/rowPairShape.docStreamsOf).
+            const streams = finishingNeeded ? docStreamsOf({ parts: inHouseLines, shopPoles: shopPolesHere }) : null;
 
             // --- Finishing (small parts) — or the pick-only document ---
             if (finishingNeeded || pickOnly) {
@@ -1619,11 +1623,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     recipe: finishGroups.length > 1 ? (grp.finish || orderRecipe || 'PENDING-RECIPE') : (so.recipe || (finishRecipe !== "PENDING-RECIPE" ? finishRecipe : "PENDING-RECIPE")),
                     recipeLabel: finishGroups.length > 1 ? null : (so.recipeLabel || null),
                     recipeSource: finishGroups.length > 1 ? 'finish group' : (so.recipe ? (so.recipeSource || 'sales order') : (finishRecipe !== "PENDING-RECIPE" ? 'job scan (order saved before the stamp)' : 'none')),
-                    totalParts: poleOnlyFinish ? poleCount : totalParts,
-                    // A pole-only finishing document is on the POLE stream (never also a sled — buildFinDoc's assertion).
-                    ...(poleOnlyFinish
-                        ? { paintSize: null, paintSizes: null, poles: { qty: poleCount, type: 'POLE' }, totalPoles: poleCount, finishStream: 'POLES' }
-                        : { paintSize, paintSizes: hasSize ? paintSizes : null }),
+                    totalParts: streams ? streams.totalParts : totalParts,
+                    ...(streams ? streams.fields : { paintSize, paintSizes: hasSize ? paintSizes : null }),
                     dimensions: { length: Number(so.length) || 0, width: Number(so.width) || 0, height: Number(so.height) || 0 },
                     cpqSpecs,
                     imageUrl: drawingUrl,

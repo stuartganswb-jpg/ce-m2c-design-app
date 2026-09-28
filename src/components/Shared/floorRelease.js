@@ -26,6 +26,7 @@ import { enqueueNsWrite } from './nsOutbox';
 import { withItemCode } from './workOrderContract';
 import { isOutsourcedFinishCode, finishRouteOf } from './finishRouting';
 import { uomStampOf } from './uom.js';
+import { isPoleCategory } from './poleCut';
 
 const noop = () => {};
 
@@ -134,11 +135,15 @@ const hasSled = (d) => !!d.paintSize || (d.paintSizes && Object.values(d.paintSi
 export function buildFinDoc({ hqOrder = {}, finPayload, by = '', now = Date.now(), extra = {} }) {
     if (!finPayload || !finPayload.id) throw new Error('buildFinDoc: finPayload with an id is required');
     const fp = finPayload;
-    // A POLE IS NOT A SLED (00b26f3, Sandra's WO11535: an order carrying both streams could never
-    // complete). The writer decides; this asserts. Dev throws so the writer bug is found; prod
-    // logs and stamps shapeWarning so the board can count it — it never silently strips a stream.
+    // A POLE IS NOT A SLED (00b26f3, Sandra's WO11535: a pole order stamped with sled sizes could never
+    // complete — its sled steps waited for small parts it did not have). The writer decides; this asserts.
+    // A sales order WITH small parts and poles legitimately carries both tracks (Stuart 2026-09-28: the poles run
+    // the -P recipe, the small parts -S — Shared/rowPairShape.docStreamsOf), so only sled sizes on a document with no
+    // small part on its parts list are the WO11535 shape. Dev throws so the writer bug is found; prod logs and
+    // stamps shapeWarning so the board can count it — it never silently strips a stream.
     let shapeWarning = null;
-    if (hasPoles(fp) && hasSled(fp)) {
+    const hasSmallParts = (fp.partsList || []).some(p => p && !p.pickOnly && !isPoleCategory(p.productType));
+    if (hasPoles(fp) && hasSled(fp) && !hasSmallParts) {
         shapeWarning = `poles/totalPoles AND paintSize/paintSizes both present on ${fp.id} — a pole order must not carry a sled stream`;
         if (IS_DEV) throw new Error(`buildFinDoc: ${shapeWarning}`);
         console.error('buildFinDoc:', shapeWarning);
