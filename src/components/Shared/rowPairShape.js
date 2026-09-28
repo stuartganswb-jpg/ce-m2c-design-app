@@ -256,7 +256,11 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
             ? { currentPhase: 'Complete', stepStatus: 'Complete', currentStepIndex: 0, pickOnly: true, finishingRequired: false, completedAt: now, completedBy: 'row (pick only)' }
             : { currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0 }),
         tasks: tasks || {}, machineAssigned: null, redlineAlert: false,
-        sentToPickPack: false, pickStatus: 'Pending',
+        // §A1: a pair with a shop half is released to the pick when the shop STARTS (ShopFloor → releaseSiblingToPickPack).
+        // A pair with NO shop half has no such event (Stuart 2026-09-28, SO60551's Back Base 2: the S08 oak pole and
+        // finial, the P04 connector — never reached the pick queue): it goes to the pick now, as the CPQ split writes
+        // it (`sentToPickPack: !hasCustom`, HQ/RTGDispatchTab).
+        sentToPickPack: custom.length === 0, pickStatus: 'Pending',
         shopSiblingId: custom.length ? `SHOP-${shopWoId}` : null, hasCustomSibling: custom.length > 0,
         customFabStatus: 'Pending',
         brand: brand || null, createdAt: now, updatedAt: now, createdBy,

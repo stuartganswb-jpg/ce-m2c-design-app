@@ -125,6 +125,12 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
     eq('the finishing document is PICK-ONLY, born Complete, nothing for the finishing floor', [sh.finPayload.pickOnly, sh.finPayload.finishingRequired, sh.finPayload.currentPhase, sh.finPayload.stepStatus, sh.finPayload.totalParts, sh.finPayload.paintSize, 'poles' in sh.finPayload],
         [true, false, 'Complete', 'Complete', 0, null, false]);
     eq('…its line is the finished plated code, flagged a pick from stock', sh.finPayload.partsList.map(l => [l.legacyErpId, l.quantity, l.pickOnly, l.finishOutsourced]), [['H1-1BF/EP2', 50, true, true]]);
+    {
+        // A pair with NO shop half goes to the pick at once — no shop start will ever release it (SO60551 Back Base 2).
+        const smallOnly = { key: '|P04|', rowKey: 'BACK_BASE_2', rowLabel: 'Back Base 2', finish: 'P04', tag: '', jobs: [{ line: { erp: 'H1-138WFCON2', qty: 50 }, lineIdx: 33, part: { legacyErpId: 'H1-138WFCON2', itemName: 'Connector', manufacturingSpecs: { productType: 'CONNECTOR' } }, finish: 'P04', qty: 50, custom: false, __planLines: [{ legacyErpId: 'H1-138WFCON2/P', quantity: 50 }] }] };
+        const so1 = pairShapeOf({ group: smallOnly, so: display, brand: 'ce', createdBy: 't', now: 1, inventory, woId: 'W1', shopWoId: 'W1-C', tasks: {} });
+        eq('a pair with no shop half is sent to the pick straight away (no shop start will release it)', [so1.finPayload.hasCustomSibling, so1.finPayload.sentToPickPack, so1.shopSibling], [false, true, null]);
+    }
     eq('…linked to the shop half, the pick released when the shop starts', [sh.finPayload.hasCustomSibling, sh.finPayload.sentToPickPack, sh.shopSibling.recipe, sh.shopSibling.cutList.map(c => [c.legacyErpId, c.cutLength])], [true, false, 'EP2', [['H1-1R', 18]]]);
     eq('RTG still counts the pieces the pair handles', sh.hq.qty, 50);
     const onlyPole = pairShapeOf({ group: floorGroupsOf([pole], display)[0], so: display, brand: 'ce', now: 5, inventory: [rod], woId: 'WQ', shopWoId: 'WQ-C' });
