@@ -70,6 +70,7 @@ import { boxSizeLabel } from "../Shared/fulfilment";
 import { fetchNsPurchaseOrder, importNsPurchaseOrder, fetchNsPoLines, fetchPreferredBins, recordPoReceipt, openQtyOf, overRoomOf, maxReceivableOf, poRef } from "../Shared/purchaseOrders";
 import { itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText, binTransferLineOf, followNsPoLines } from "../Shared/poReceiptLines";
 import { platingBalancesSql, assemblyBomSql, balancesOf, bomOf, platingPutAwayCheck } from "../Shared/platingPutAway";
+import { fetchStockHolds, holdsView, holdNote, ownRefsOf, heldByRef } from "../Shared/stockHolds";
 import { onceAtATime } from "../Shared/onceAtATime";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
 
@@ -621,6 +622,26 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // card expands / picking starts / ⟳ Live is tapped; the display and the bin-scan
     // validation both prefer this truth over the stamped or stored bin.
     const [liveBins, setLiveBins] = useState({}); // ITEMID → { bins: [{bin, qty}] desc, total, at }
+    // WHO NETSUITE HOLDS THE STOCK FOR (Stuart 2026-09-30, commitments A — "warn and go ahead"): the flows that
+    // TAKE stock (pick, plating pull, convert, arrival alert) read on hand; this says when what a job takes is
+    // committed in NetSuite to another order or work order (Shared/stockHolds). ITEMID → { committed, holds }.
+    const [stockHolds, setStockHolds] = useState({});
+    const refreshHolds = async (codes) => {
+        const r = await fetchStockHolds(codes, BRAND_NETSUITE_MAP[activeBrand]?.location || '17');
+        if (r.known) setStockHolds(prev => ({ ...prev, ...r.map }));
+        return r;
+    };
+    // The warning for one job taking `need` of `code` with `onHand` on the shelf — null when nothing to say.
+    const holdNoteFor = (code, need, onHand, ...ownDocs) => {
+        const e = stockHolds[String(code || '').toUpperCase()];
+        return e ? holdNote(code, need, holdsView(onHand, e, ownRefsOf(...ownDocs))) : null;
+    };
+    // The convert and plating-pull forms read who holds their item the moment one is chosen.
+    const convertHoldCode = String((convertBase && (convertBase.erpId || convertBase.legacyErpId)) || '').toUpperCase();
+    const platingHoldCode = String((platingBase && (platingBase.erpId || platingBase.legacyErpId)) || '').toUpperCase();
+    useEffect(() => { if (convertHoldCode) refreshHolds([convertHoldCode]).catch(() => {}); }, [convertHoldCode]);   // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { if (platingHoldCode) refreshHolds([platingHoldCode]).catch(() => {}); }, [platingHoldCode]);   // eslint-disable-line react-hooks/exhaustive-deps
+    const holdNoteBox = (text) => text ? <div style={{ margin: '8px 0', padding: '8px 12px', background: '#fdf6e3', border: `1px solid ${theme.brass}`, fontFamily: theme.mono, fontSize: '11px', color: theme.ink, lineHeight: 1.5 }}>{text}</div> : null;
     const fetchLiveBins = async (codes) => {
         const list = Array.from(new Set((codes || []).map(c => String(c || '').toUpperCase()).filter(c => c && c !== 'PENDING' && c !== 'N/A')));
         if (!list.length) return;
@@ -649,6 +670,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             });
             Object.values(map).forEach(m => m.bins.sort((a, b) => b.qty - a.qty));
             setLiveBins(prev => ({ ...prev, ...map }));
+            refreshHolds(list).catch(() => {});
             return map;   // the caller that must act on this read (the close-short scrap) gets it now, not next render
         } catch (e) { console.warn('Live bin pull failed:', e); return null; }
     };
@@ -1885,15 +1907,25 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // Returns how many pieces were taken by orders — the caller puts the REST on the shelf.
     const offerAllocation = async (code, qty, { from = '' } = {}) => {
         const c = String(code || '').trim().toUpperCase();
-        const plan = planAllocation({ qty, demands: demandsFor(c) });
+        // NETSUITE'S HOLD FIRST (Stuart 2026-09-30, commitments A): read, fresh, who NetSuite committed the
+        // arriving code to — those orders are served before the rest (Shared/committedBins.planAllocation).
+        const hr = await refreshHolds([c]).catch(() => ({ map: {}, known: false }));
+        const entry = hr && hr.known ? (hr.map[c] || null) : null;
+        const demands = demandsFor(c);
+        const plan = planAllocation({ qty, demands, nsHeld: entry ? heldByRef(entry) : null });
         if (!plan.allocations.length) return 0;
         const lines = plan.allocations.map(a => {
             const ord = quickShipOrders.find(x => x.id === a.orderId);
             // An order set to finish as available does not sit waiting to be whole — say so here,
             // where the operator is deciding what to do with the pieces in their hands.
-            return `   ${a.qty} → ${a.ref}${a.qty < a.outstanding ? ` (still short ${a.outstanding - a.qty})` : ''}${finishAsAvailable(ord) ? '  ⚡ finishes as available' : ''}`;
+            return `   ${a.qty} → ${a.ref}${a.qty < a.outstanding ? ` (still short ${a.outstanding - a.qty})` : ''}${a.nsHeld ? `  · NetSuite holds ${a.nsHeld} for it` : ''}${finishAsAvailable(ord) ? '  ⚡ finishes as available' : ''}`;
         }).join('\n');
-        if (!window.confirm(`⚠ ${qty} × ${c} just arrived, and open orders are waiting for ${plan.demandTotal}.\n\n${lines}\n${plan.toStock > 0 ? `   ${plan.toStock} → stock\n` : ''}\nSend each order's share to its committed bin? You will be asked for the bin once per order.\n\nNo = put it all away as ordinary stock and leave the orders short.`)) {
+        // Held for a transaction that is not waiting here (a work order, an order off this screen): said, never acted on.
+        const waitingRefs = new Set(demands.map(d => String(d.ref || '').toUpperCase()));
+        const elsewhere = entry ? entry.holds.filter(h => !waitingRefs.has(h.tran) && !waitingRefs.has(h.tid)) : [];
+        const holdsNote = (hr && !hr.known) ? `\n(NetSuite's commitments could not be read — shared oldest need first.)\n`
+            : elsewhere.length ? `\n⚠ NetSuite also holds ${c} for ${elsewhere.slice(0, 3).map(h => `${h.tran || h.tid} (${h.qty})`).join(', ')}${elsewhere.length > 3 ? ` +${elsewhere.length - 3} more` : ''} — not waiting on this screen.\n` : '';
+        if (!window.confirm(`⚠ ${qty} × ${c} just arrived, and open orders are waiting for ${plan.demandTotal}.\n\n${lines}\n${plan.toStock > 0 ? `   ${plan.toStock} → stock\n` : ''}${holdsNote}\nSend each order's share to its committed bin? You will be asked for the bin once per order.\n\nNo = put it all away as ordinary stock and leave the orders short.`)) {
             writeLog(`Arrival alert declined: ${qty} × ${c} put to stock while ${plan.demandTotal} were outstanding${from ? ` (${from})` : ''}.`, 'wms');
             return 0;
         }
@@ -5201,6 +5233,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <button onClick={() => fetchLiveBins([line.legacyErpId || line.partId])} title="Re-pull live per-bin stock from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 8px', fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>⟳ Live</button>
                             </div>
                             
+                            {/* ⚠ HELD IN NETSUITE FOR SOMEONE ELSE — this line's item, the order's whole need of it. */}
+                            {(() => {
+                                const c = String(line.legacyErpId || line.partId || '').toUpperCase();
+                                const need = (activePickJob.partsList || []).filter(l => String(l.legacyErpId || l.partId || '').toUpperCase() === c).reduce((a, l) => a + lineQty(l), 0);
+                                return holdNoteBox(holdNoteFor(c, need, availOf(c), finAll.find(j => j.id === activePickJob.id) || activePickJob));
+                            })()}
                             {(() => {
                                 const sh = shortageOfLine(activePickJob, line);
                                 if (!sh) return null;
@@ -5471,6 +5509,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     <button onClick={() => fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId))} title="Re-pull live per-bin stock from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 8px', fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>⟳ Live</button>
                                                 </div>
                                                 {pickable.length === 0 && <div style={{ padding: '12px 0', fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No pickable parts on this order.</div>}
+                                                {/* ⚠ HELD IN NETSUITE FOR SOMEONE ELSE (commitments A, 2026-09-30) — per ITEM across the
+                                                    order, like SHORT below. A warning: the pick still goes ahead. */}
+                                                {(() => {
+                                                    const need = {};
+                                                    pickable.forEach(l => { const c = String(l.legacyErpId || l.partId || '').toUpperCase(); if (c) need[c] = (need[c] || 0) + lineQty(l); });
+                                                    return Object.entries(need).map(([c, q]) => { const txt = holdNoteFor(c, q, availOf(c), job); return txt ? <div key={`hold-${c}`}>{holdNoteBox(txt)}</div> : null; });
+                                                })()}
                                                 {/* SHORT = the order needs more than the bins hold. Counted per ITEM across the
                                                     order, so two 100-pc lines of the same code read as 200 against a 100 bin. */}
                                                 {shortagesFor(job).map(sh => (
@@ -6582,6 +6627,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Quantity</label>
                                             <input type="number" min="1" max={convSrcBin ? convSrcQty : convertBase.onHand} value={convertQty} onChange={e => setConvertQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${convQtyNum > 0 && convQtyNum <= (convSrcBin ? convSrcQty : convertBase.onHand) ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            {/* ⚠ HELD IN NETSUITE FOR SOMEONE ELSE (commitments A): the raw this convert eats. A warning only. */}
+                                            {(() => { const dm = convertDemandId ? convertDemands.find(d => d.id === convertDemandId) : null; const fin = dm && dm.finWoId ? finAll.find(j => j.id === dm.finWoId) : null;
+                                                const oh = convSrcBins.length ? convSrcBins.reduce((t, b) => t + (Number(b.qty) || 0), 0) : (convertBase.onHand || 0);
+                                                return holdNoteBox(holdNoteFor(convertHoldCode, convQtyNum, oh, dm, fin)); })()}
                                         </div>
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Source bin {canClickBin ? '(pick one)' : '(scan)'}</label>
@@ -7677,6 +7726,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Quantity</label>
                                             <input type="number" min="1" max={platAvail} value={platingQty} onChange={e => setPlatingQty(e.target.value)} placeholder="0" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `2px solid ${platQtyNum > 0 && platQtyNum <= platAvail ? theme.brass : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            {/* ⚠ HELD IN NETSUITE FOR SOMEONE ELSE (commitments A): the Good pieces this pull takes. A warning only. */}
+                                            {(() => { const dm = platingDemandId ? platingDemands.find(d => d.id === platingDemandId) : null; const fin = dm && (dm.finWoId || dm.finSiblingId) ? finAll.find(j => j.id === (dm.finWoId || dm.finSiblingId)) : null;
+                                                return holdNoteBox(holdNoteFor(platingHoldCode, platQtyNum, platAvail, dm, fin)); })()}
                                         </div>
                                         <div>
                                             <label style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Scan / enter plating bin</label>

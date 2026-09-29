@@ -158,25 +158,36 @@ export function lineGathering({ order, code, ordered }) {
 // order must not lose its pieces to a newer one.
 //
 // Pure: the caller resolves its own orders into `demands` and keeps line shapes out of here.
+//
+// NETSUITE'S HOLD COMES FIRST (Stuart 2026-09-30, commitments A): when NetSuite has committed the item to
+// chosen orders — the scarce-stock decision made in NetSuite — those orders are served before the rest, then
+// oldest need first as always. `nsHeld` = { orderRef: qty NetSuite holds of this code for it } (from
+// Shared/stockHolds.heldByRef, keyed by SO number); absent, the plan is exactly what it always was.
 
 /**
  * @param {number} qty      pieces that just arrived
  * @param {Array}  demands  [{ orderId, ref, ordered, gathered, needBy, createdAt }] — open orders
  *                          carrying this code. `ordered - gathered` is what each still needs.
+ * @param {Object} nsHeld   optional { REF: qty } — what NetSuite holds of the code for each order
  * @returns {{allocations: Array, toStock: number, demandTotal: number, shortfall: number}}
  */
-export function planAllocation({ qty, demands = [] }) {
+export function planAllocation({ qty, demands = [], nsHeld = null }) {
+    const heldMap = {};
+    Object.entries(nsHeld || {}).forEach(([k, v]) => { const key = String(k || '').trim().toUpperCase(); if (key) heldMap[key] = (heldMap[key] || 0) + (Number(v) || 0); });
+    const heldOf = (ref) => Math.max(0, heldMap[String(ref || '').trim().toUpperCase()] || 0);
     let left = Math.max(0, Math.floor(Number(qty) || 0));
     const rows = (demands || [])
         .map(d => ({
             orderId: d.orderId, ref: d.ref || d.orderId,
             outstanding: Math.max(0, (Math.floor(Number(d.ordered) || 0)) - (Math.floor(Number(d.gathered) || 0))),
             needBy: String(d.needBy || ''), createdAt: Number(d.createdAt) || 0,
+            nsHeld: heldOf(d.ref || d.orderId),
         }))
         .filter(d => d.orderId && d.outstanding > 0)
-        // Oldest NEED first; an order with no date sorts after ones that have one (it is not
-        // urgent by absence), then by when the order was raised.
+        // NetSuite's hold first; then oldest NEED first — an order with no date sorts after ones that have
+        // one (it is not urgent by absence), then by when the order was raised.
         .sort((a, b) => {
+            if (!!a.nsHeld !== !!b.nsHeld) return a.nsHeld ? -1 : 1;
             const an = a.needBy || '￿', bn = b.needBy || '￿';
             if (an !== bn) return an < bn ? -1 : 1;
             return a.createdAt - b.createdAt;
@@ -187,7 +198,7 @@ export function planAllocation({ qty, demands = [] }) {
     for (const r of rows) {
         if (left <= 0) break;
         const take = Math.min(left, r.outstanding);
-        allocations.push({ orderId: r.orderId, ref: r.ref, qty: take, outstanding: r.outstanding });
+        allocations.push({ orderId: r.orderId, ref: r.ref, qty: take, outstanding: r.outstanding, ...(r.nsHeld ? { nsHeld: r.nsHeld } : {}) });
         left -= take;
     }
     return {

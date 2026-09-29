@@ -114,5 +114,21 @@ eq('zero arriving allocates nothing', planAllocation({ qty: 0, demands }).alloca
 ok('the summary names the orders', /QS-A/.test(allocationSummary(planAllocation({ qty: 20, demands }), 'h1-1')));
 ok('the summary says so when nobody is waiting', /no open order/.test(allocationSummary(planAllocation({ qty: 3, demands: [] }), 'h1-1')));
 
+// ── NetSuite's hold comes first (commitments A, 2026-09-30) ─────────────────────────────────────
+{
+    const waiting = [
+        { orderId: 'old', ref: 'SO60161', ordered: 20, gathered: 0, needBy: '2026-09-01' },
+        { orderId: 'held', ref: 'SO60676', ordered: 88, gathered: 0, needBy: '2026-10-15' },
+    ];
+    let p = planAllocation({ qty: 50, demands: waiting });
+    eq('without NetSuite\'s holds: oldest need first, as always', p.allocations.map(a => [a.ref, a.qty]), [['SO60161', 20], ['SO60676', 30]]);
+    p = planAllocation({ qty: 50, demands: waiting, nsHeld: { SO60676: 88 } });
+    eq('with them: the order NetSuite holds the item for is served first', p.allocations.map(a => [a.ref, a.qty]), [['SO60676', 50]]);
+    eq('…and each allocation says what NetSuite holds for it', p.allocations[0].nsHeld, 88);
+    p = planAllocation({ qty: 120, demands: waiting, nsHeld: { so60676: 88 } });
+    eq('held order filled, then the rest oldest first; refs matched whatever the case', p.allocations.map(a => [a.ref, a.qty]), [['SO60676', 88], ['SO60161', 20]]);
+    eq('two held orders keep the oldest-need order between them', planAllocation({ qty: 10, demands: waiting, nsHeld: { SO60676: 5, SO60161: 5 } }).allocations.map(a => a.ref), ['SO60161']);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
