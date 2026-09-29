@@ -29,6 +29,7 @@ import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints
 import RodPieceInventory, { RodCutPanel } from '../Shared/RodPieceInventory';
 import { shopDb, cleanId, SHOP_TABS } from './shopShared';
 import { millBaseOf, finishRouteOf, finishSuffixOf } from '../Shared/finishRouting';
+import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, shortBuildStamps } from '../Shared/scrapClose';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
 // salesOrderId/orderKey but no soNum ("SO: undefined" on cards AND printed labels), and no
@@ -418,11 +419,11 @@ const ShopFloor = () => {
     // `extra` carries the mill facts beside it. D's root-build automation reads millGoodQty +
     // nsWoId from that record; the shop never posts the NetSuite build itself. Never throws: a
     // stamp that fails must not stop the run from finalizing on the floor.
-    const stampMillRecord = async (row, phase, extra) => {
+    const stampMillRecord = async (row, phase, extra, extraOf) => {
         const spine = spineOf(row);
         if (!spine) return null;
         try {
-            return await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc }, { finWo: spine, phase, by: user?.name || '', extra });
+            return await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc }, { finWo: spine, phase, by: user?.name || '', extra, extraOf });
         } catch (e) { console.warn('mill record stamp failed:', spine.id, e); return null; }
     };
     const heldGuard = (row) => {
@@ -648,7 +649,22 @@ const ShopFloor = () => {
                 }).catch(e => console.warn('spine completion stamp failed:', e));
                 // C2: RTG's board shows "built 18 / 20", not only "gate clear"; millScrapQty is
                 // this finalize's scrap (earlier shifts log good counts only).
-                await stampMillRecord(task, 'Complete', { millGoodQty: grandTotalGood, millScrapQty: sQty, millCompletedAt: Date.now(), millCompletedBy: user.name });
+                // ⚖ STOCK MILLING CLOSES SHORT (Stuart 2026-09-29: "yes" — the finishing floor's rule). Under the
+                // work order's own quantity (read off the RTG record), the record carries the close and the
+                // balance RTG lists for its NetSuite close once the mill build posts. Scrap = every op of this
+                // route's count. A custom shop half is untouched. One reading, Shared/scrapClose.
+                const spine = spineOf(task);
+                const routeScrap = sQty + schedule
+                    .filter(s => s.id !== taskId && s.woNum === task.woNum && (s.sourceCustomOrderId || null) === (task.sourceCustomOrderId || null))
+                    .reduce((a, s) => a + (Number(s.scrapQty) || 0), 0);
+                const closeOf = (spine && spine.isStock === true) ? (rec) => {
+                    if (isCustomSalesDoc(rec)) return {};
+                    const plan = stockCloseShortOf({ ordered: rec.totalParts || rec.qty, good: grandTotalGood, scrap: routeScrap });
+                    if (!plan.short) return {};
+                    writeLog(`⚖ Closed short: ${task.woNum} — ${closeShortLine(plan)}`, 'production');
+                    return { ...closeShortStamps(plan, { by: user.name || '', at: Date.now() }), ...(rec.nsWoId ? shortBuildStamps({ ordered: plan.ordered, built: plan.good }) : {}) };
+                } : null;
+                await stampMillRecord(task, 'Complete', { millGoodQty: grandTotalGood, millScrapQty: sQty, millCompletedAt: Date.now(), millCompletedBy: user.name }, closeOf);
             }
         } else {
             // A failed op leaves the order stuck in the shop — the record says why, so RTG and

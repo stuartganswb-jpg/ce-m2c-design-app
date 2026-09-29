@@ -15,6 +15,8 @@ import { isFeePart } from '../Shared/oeClassify';
 import { fetchAvailabilityUnits, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
+import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, closeShortNext, shortBuildStamps, scrapRawOf, scrapBinOf, adjustmentPayload } from '../Shared/scrapClose';
+import { isFloorSupervisor, normRole } from '../Shared/finishingRoles';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { activeItemByNameQuery, activeItemByNameQueryLite, cutRecordOf, isStockItemType } from '../Shared/nsItemLookup.js';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction, FieldPath } from "firebase/firestore";
@@ -647,7 +649,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             });
             Object.values(map).forEach(m => m.bins.sort((a, b) => b.qty - a.qty));
             setLiveBins(prev => ({ ...prev, ...map }));
-        } catch (e) { console.warn('Live bin pull failed:', e); }
+            return map;   // the caller that must act on this read (the close-short scrap) gets it now, not next render
+        } catch (e) { console.warn('Live bin pull failed:', e); return null; }
     };
     const liveOf = (l) => liveBins[String((l && (l.legacyErpId || l.partId)) || '').toUpperCase()] || null;
     // Lines carry `quantity` (custom BOM splits, synthetic stock lines) or `qty` (older docs) —
@@ -810,8 +813,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // floor reads (fin_workorders.sprayStation, Shared/floorActivity). Asked only where the small parts
     // have a sprayed coat (asksSprayStation); it moves only before the coat's first spin step — the rule
     // the Active Floor's ⇄ reads (sprayStationLockOf). Unchosen reads Spin, as it always has.
+    // MANAGER OR HIGHER CHOOSES THE STATION (Stuart 2026-09-29: "raise the access level to manager or higher so the
+    // floor operators do not see it and hit it accidentally"). The finishing floor's supervisor rule
+    // (Shared/finishingRoles — …manager, supervisor, …lead, admin, owner) plus executive, read from the login's
+    // role as every WMS manager gate is. Everyone else does not see the pair at all.
+    const canChooseSprayStation = isFloorSupervisor(operator) || normRole(operator?.role) === 'executive';
     const setPickSprayStation = async (job, to) => {
         if (!job || isQsOrder(job)) return;
+        if (!canChooseSprayStation) return alert('Choosing the spin machine or the large booth is for a manager or higher.');
         const cur = job.sprayStation ? sprayStationOf(job) : null;
         if (cur === to) return;
         const begun = sprayStationLockOf(job);
@@ -823,7 +832,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { alert('Could not set the spray station: ' + (e.message || e)); }
     };
     const renderSprayStationChoice = (job) => {
-        if (!job || isQsOrder(job) || !asksSprayStation(job, finRecipeMap)) return null;
+        if (!canChooseSprayStation || !job || isQsOrder(job) || !asksSprayStation(job, finRecipeMap)) return null;
         const cur = job.sprayStation ? sprayStationOf(job) : null;
         const pick = (st, label) => (
             <button type="button" onClick={(e) => { e.stopPropagation(); setPickSprayStation(job, st); }}
@@ -2008,9 +2017,49 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
     // ⚠ PACKING SCRAP OUTLET (Stuart 2026-07-20): bad pieces found while bagging — same QC
     // semantics as the finishing floor's final gate, for orders that already passed it. Stock
-    // builds: scrap counts recorded AND a −qty finished-goods adjustment queues to NetSuite
-    // (the QC good-count already posted at completion). Customs: redline alert to the finishing
+    // builds: scrap counts recorded; before the put-away the order closes short there, after it a
+    // −qty finished-goods adjustment queues to NetSuite (the build posted at put-away). Customs: redline alert to the finishing
     // supervisor — a custom order can't quietly ship short. Fin-sourced orders only (not QS).
+    // ⚖ THE SCRAPPED PIECES' RAW COMES OFF NETSUITE (Stuart 2026-09-29: floor scrap is thrown out). A build
+    // consumes only what it builds, so the raw that went into the scrap is still on the books. Taken from the
+    // order's own pull list, out of a LIVE bin that holds it — never a guessed bin. Anything that cannot be
+    // posted is named and left for a person; nothing here can fail the put-away. Returns the note for the alert.
+    const postScrapRaw = async (job, plan) => {
+        if (!plan || !plan.scrap || job.scrapRawQueued) return '';
+        try {
+            const rows = scrapRawOf({ partsList: job.partsList, ordered: plan.ordered, scrap: plan.scrap, skipped: job.pickSkips });
+            if (!rows.length) return `\n⚠ ${plan.scrap} scrapped, but this order carries no pull list — take their raw off NetSuite by hand.`;
+            const nsCfg = BRAND_NETSUITE_MAP[activeBrand];
+            if (!nsCfg) return `\n⚠ No NetSuite subsidiary / location for this brand — take the raw off by hand: ${rows.map(r => `${r.qty} × ${r.code}`).join(', ')}.`;
+            const live = (await fetchLiveBins(rows.map(r => r.code))) || {};
+            const done = [], left = [];
+            for (const r of rows) {
+                const part = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === r.code);
+                if (!part || !part.netSuiteInternalId) { left.push(`${r.qty} × ${r.code} (no NetSuite id — sync the item)`); continue; }
+                const bin = scrapBinOf((live[r.code] || {}).bins, r.qty);
+                if (!bin) { left.push(`${r.qty} × ${r.code} (no bin holds ${r.qty} in NetSuite)`); continue; }
+                const binName = bin.name || bin.bin;
+                try {
+                    await enqueueNsWrite({
+                        kind: 'inventoryadjustment',
+                        label: `Scrap −${r.qty} × ${r.code} (${packRef(job)} closed short)`,
+                        dedupeKey: `scrapraw:${job.id}:${r.code}`,
+                        sourceApp: 'WMS', createdBy: operator?.name || '',
+                        targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
+                        method: 'POST',
+                        payload: adjustmentPayload({ nsItemId: part.netSuiteInternalId, qty: -r.qty, binExact: binName, location: nsCfg.location, subsidiary: nsCfg.subsidiary, memo: `Scrap ${packRef(job)} ${r.code}` }),
+                        writeBack: { collection: 'fin_workorders', docId: job.id, patch: { scrapRawPosted: true }, idField: 'scrapRawAdjId', tranField: 'scrapRawAdjTran' },
+                    });
+                    done.push(`−${r.qty} × ${r.code} from ${binName}`);
+                } catch (e) { left.push(`${r.qty} × ${r.code} (${String(e.message || e).slice(0, 120)})`); }
+            }
+            await updateDoc(packDocOf(job), { scrapRawQueued: true, scrapRawQueuedAt: Date.now(), scrapRaw: done, ...(left.length ? { scrapRawNotPosted: left } : {}) }).catch(() => {});
+            writeLog(`⚖ Close short ${packRef(job)}: scrap raw ${done.length ? `queued ${done.join(', ')}` : 'NOT queued'}${left.length ? ` — by hand: ${left.join('; ')}` : ''}`, left.length ? 'alert' : 'wms');
+            return `${done.length ? `\nScrap queued to NetSuite: ${done.join(', ')}.` : ''}${left.length ? `\n⚠ NOT taken off — do it by hand: ${left.join('; ')}.` : ''}`;
+        } catch (e) {
+            return `\n⚠ The scrapped raw was NOT taken off NetSuite (${e.message || e}) — do it by hand.`;
+        }
+    };
     const reportPackScrap = async (job) => {
         if (isQsOrder(job)) return;
         const n = parseInt(window.prompt(`How many pieces are BAD (scrap) on ${packRef(job)}?`, '1')) || 0;
@@ -2027,6 +2076,17 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             else patch.redlineAlert = `${operator?.name || 'Packer'} found ${n} bad piece(s) at PACKING on ${packRef(job)} — ${note}. Short-ship blocked until resolved.`;
             await updateDoc(packDocOf(job), patch);
             writeLog(`⚠ PACKING SCRAP: ${n} pc(s) on ${packRef(job)} (${job.stockErpId || job.type || ''}) — ${note}`, 'alert');
+            // ⚖ BEFORE THE PUT-AWAY IT IS THE SAME CLOSE SHORT (Stuart 2026-09-29, "yes"). The build posts at the
+            // put-away, from the good count just lowered, so a finished-goods adjustment here took the same
+            // pieces off a SECOND time and the shelf came up short. Now the put-away closes it short: builds the
+            // good, takes the scrapped pieces' raw off NetSuite. After the put-away (the build already posted
+            // them as finished goods) the finished-goods adjustment below is still the right write.
+            if (isStock && job.packStatus !== 'Packed') {
+                const ordered = Number(job.totalParts) || 0;
+                const plan = stockCloseShortOf({ ordered, good: patch.completedParts, scrap: patch.scrapReported });
+                alert(`⚠ ${n} scrap recorded on ${packRef(job)}.\n\nIt closes short at put-away — ${closeShortLine(plan)}. ${closeShortNext(plan, { paintOnly: isPaintOnlyOrder(job), hasNsWo: !!job.nsWoId })}`);
+                return;
+            }
             if (isStock) {
                 const erp = String(job.stockErpId || job.type || '').toUpperCase();
                 const part = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === erp);
@@ -2415,8 +2475,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const lv = liveBins[String(job.stockErpId || job.type || '').toUpperCase()];
             if (lv && lv.bins.length && !lv.bins.some(x => x.bin === bin.toUpperCase()) && !window.confirm(`Bin ${bin} isn't where NetSuite holds this item today (${lv.bins.slice(0, 3).map(x => x.bin).join(', ')}).\n\nPut away to ${bin} anyway? (Recorded as the physical location — no NetSuite move.)`)) return;
         }
+        // ⚖ A STOCK ORDER CLOSES SHORT HERE (Stuart 2026-09-29): the floor counted it (and packing may have
+        // added scrap); this is where the build posts, so this is where the close lands — the good count
+        // built, the scrapped pieces' raw off NetSuite, the work order's balance stamped for RTG's close
+        // list. One reading, Shared/scrapClose.
+        const closeShort = (isStockPutaway && !isCustomSalesDoc(job))
+            ? stockCloseShortOf({ ordered: job.totalParts, good: job.completedParts != null ? job.completedParts : job.totalParts, scrap: job.scrapReported })
+            : null;
+        const shortClose = closeShort && closeShort.short ? closeShort : null;
         const confirmMsg = isStockPutaway
-            ? `Put away ${packRef(job)} to bin ${bin}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} confirmed · stocked goods to the shelf (no customer packing).`
+            ? `Put away ${packRef(job)} to bin ${bin}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} confirmed · stocked goods to the shelf (no customer packing).${shortClose ? `\n\n⚖ CLOSES SHORT — ${closeShortLine(shortClose)}. ${closeShortNext(shortClose, { paintOnly: isPaintOnlyOrder(job), hasNsWo: !!job.nsWoId })}` : ''}`
             : `Complete packing for ${packRef(job)}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} packed · ${(job.packPhotos || []).length} photo${(job.packPhotos || []).length === 1 ? '' : 's'}\nSmall parts box: ${packBoxSel.SMALL || '—'}\nPole box: ${packBoxSel.POLE || '—'}`;
         // BOTH HALVES OR NEITHER. Staging matched poles to small parts on the way IN to finishing;
         // nothing re-checked them at the box, so one order's parts could ship with another's poles
@@ -2448,13 +2516,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', packInProgress: null,
                 ...(poleRowsAtPack.length ? { poleLines: poleLinesStamp(poleRowsAtPack) } : {}),
                 ...(job.hasCustomSibling && !job.packCustomMatchedAt ? { packCustomMatchedAt: Date.now(), packCustomMatchedBy: operator?.name || '', packCustomMatchedScan: custMatch } : {}),
-                ...(isStockPutaway ? { putawayBin: bin, packMode: 'PUTAWAY' } : { packBoxes: packBoxSel }) });
+                ...(isStockPutaway ? { putawayBin: bin, packMode: 'PUTAWAY' } : { packBoxes: packBoxSel }),
+                // The close, stamped in the SAME write the build trigger reads: RTG lists the balance once it posts.
+                ...(shortClose ? { closedShort: true, ...(job.nsWoId ? shortBuildStamps({ ordered: shortClose.ordered, built: shortClose.good }) : {}) } : {}) });
             setPackCustomScan('');
             // The board hears about packing/put-away like every other floor event (2026-08-29
             // audit: WMS events never reported). Best-effort — the pack stands regardless.
             try {
                 await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
-                    { finWo: job, phase: isStockPutaway ? 'Shelved' : 'Packed', by: operator?.name || '' });
+                    { finWo: job, phase: isStockPutaway ? 'Shelved' : 'Packed', by: operator?.name || '',
+                      ...(shortClose ? { extra: { ...closeShortStamps(shortClose, { by: operator?.name || '', at: Date.now() }), ...(job.nsWoId ? shortBuildStamps({ ordered: shortClose.ordered, built: shortClose.good }) : {}) } } : {}) });
             } catch (e) { console.warn('RTG propagate failed (pack stands):', e); }
             writeLog(isStockPutaway ? `Put away ${packRef(job)} → bin ${bin} (${lines.length} lines)` : `Packed ${packRef(job)} (${lines.length} lines, ${(job.packPhotos || []).length} photos)`, 'packing');
             // PACKED → NETSUITE (Stuart 2026-07-18): transform the NetSuite SO into an Item
@@ -2516,7 +2587,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 } catch (e) { console.warn('arrival alert failed (the put-away stands):', e); }
                 { const r = await coverBackordersOn(woItemCodeOf(job), Number(job.completedParts) > 0 ? Number(job.completedParts) : (Number(job.totalParts) || 0), `put-away ${packRef(job)}`); allocNote += coverNoteOf(r); }   // close-out #18
                 setPackOrderId(null);
-                alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\nThe NetSuite assembly build is queued now and receives into ${bin} — watch it land in 11.1 → NetSuite Sync Queue (~1 min).${allocNote}`);
+                const scrapNote = (shortClose && shortClose.scrap && job.nsWoId) ? await postScrapRaw(job, shortClose) : '';
+                alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\nThe NetSuite assembly build is queued now and receives into ${bin} — watch it land in 11.1 → NetSuite Sync Queue (~1 min).${allocNote}${shortClose ? `\n\n⚖ Closed short — ${closeShortLine(shortClose)}.${scrapNote}${job.nsWoId ? `\nRTG lists the work order's balance of ${shortClose.balance} to close in NetSuite once the build lands.` : ''}` : ''}`);
                 return;
             }
             try {

@@ -177,6 +177,17 @@ eq('no to-do: the fin doc says the build posted', todo({ id: 'WO-A', status: 'Cl
 eq('no to-do: the record itself says built', todo({ id: 'WO-A', status: 'Closed', nsWoId: '11', nsWoCloseRequired: true, nsWoCompletionPosted: true }, []).length, 0);
 eq('to-do stays when confirmed closed is false and nothing built', todo({ id: 'WO-B', status: 'Closed', nsWoId: '12', nsWoCloseRequired: true }, [{ id: 'WO-B', nsWoId: '12' }]).length, 1);
 
+// ── a SHORT build is not done: 96 of 100 leaves NetSuite's work order open for 4 (Stuart 2026-09-29) ──
+const shortRec = { id: 'WO-STK-1', nsWoId: '930188', nsWoTran: 'WO11631', nsWoShortBalance: 4, nsWoShortBuilt: 96, nsWoShortOrdered: 100 };
+const shortFin = { id: 'WO-STK-1', orderKey: 'WO-STK-1', nsWoId: '930188', completedParts: 96, totalParts: 100, nsWoShortBalance: 4 };
+eq('short: nothing listed until the build posts (closed first, NetSuite would refuse the build)', todo(shortRec, [shortFin]).length, 0);
+eq('short: listed once the fin doc says the build posted', todo(shortRec, [{ ...shortFin, nsWoCompletionPosted: true }]).length, 1);
+eq('short: gone once someone confirms the close', todo({ ...shortRec, nsWoClosed: true }, [{ ...shortFin, nsWoCompletionPosted: true, nsWoClosed: true }]).length, 0);
+eq('short: listed once, from the record — never twice from the fin doc beside it', auditOrphans({ hqOrders: [shortRec], finWos: [{ ...shortFin, nsWoCompletionPosted: true }] }).filter(x => x.type === 'NS_CLOSE_TODO').map(x => x.parent && x.parent.id), ['WO-STK-1']);
+eq('short: a fin doc with no record surfaces on its own', auditOrphans({ hqOrders: [], finWos: [{ ...shortFin, nsWoCompletionPosted: true }] }).filter(x => x.type === 'NS_CLOSE_TODO').length, 1);
+eq('short: the shop\'s mill build counts as posted for its own balance', todo({ id: 'WO-CMP-X', nsWoId: '77', nsWoShortBalance: 2, nsRootBuildPosted: true }, []).length, 1);
+eq('a full build stays done exactly as before', todo({ id: 'WO-A', status: 'Closed', nsWoId: '11', nsWoCloseRequired: true }, [{ id: 'WO-A', nsWoId: '11', nsWoCompletionPosted: true }]).length, 0);
+
 // ── linkedDocsOf finds a CPQ sales-order record by soId (2026-09-12) ──
 const fakeCtx = (soHit) => {
     const calls = [];

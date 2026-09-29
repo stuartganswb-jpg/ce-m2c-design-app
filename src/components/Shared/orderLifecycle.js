@@ -22,6 +22,7 @@
 import { strandedGatesOf } from './orderStatus.js';
 import { isQuickShip } from './pickLines.js';
 import { isOpenPo } from './poLock.js';
+import { shortBalanceOpen } from './scrapClose.js';
 
 export const identityKeysOf = (o) => {
     const raw = [
@@ -343,17 +344,20 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
  * works if the floor keeps it informed — before this, an order finished on the floor sat on the
  * dispatch board as live work forever.
  */
-export async function propagateFloorState(ctx, { finWo, phase, by, extra }) {
+export async function propagateFloorState(ctx, { finWo, phase, by, extra, extraOf }) {
     const { db, doc, updateDoc } = ctx;
     if (!finWo) return null;
     const links = await linkedDocsOf(ctx, finWo, finWo.orderType === 'sales' ? 'sales' : 'stock');
     if (!links.hq) return null;                       // orphan — the audit below is what surfaces it
     // `extra` (2026-09-04): facts the floor wants on the record beside the phase — a scrap count,
     // a red-line alert, a reset. With no `phase` the record's floorPhase is left alone.
+    // `extraOf(record)` (2026-09-29): facts that depend on the RECORD itself — the shop's stock close-short
+    // reads the work order's own quantity from it — computed from the record this call already found.
     const patch = phase === 'Complete'
         ? { floorPhase: 'Complete', floorCompletedAt: Date.now(), floorCompletedBy: by || '' }
         : (phase ? { floorPhase: phase, floorUpdatedAt: Date.now() } : { floorUpdatedAt: Date.now() });
-    await updateDoc(doc(db, links.hq.coll, links.hq.id), { ...patch, ...(extra || {}) }).catch(() => {});
+    const derived = typeof extraOf === 'function' ? (extraOf(links.hq.data || {}) || {}) : {};
+    await updateDoc(doc(db, links.hq.coll, links.hq.id), { ...patch, ...(extra || {}), ...derived }).catch(() => {});
     return links.hq.id;
 }
 
@@ -406,15 +410,22 @@ export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], conver
     });
     // A work order whose BUILD POSTED needs no balance close — NetSuite already has the assembly
     // (the completion write-back stamps the fin doc; the record's to-do was raised blind).
-    const builtWoIds = new Set(finWos.filter(d => d && d.nsWoCompletionPosted && d.nsWoId).map(d => String(d.nsWoId)));
-    const woBuilt = (o) => !!o && (o.nsWoCompletionPosted === true || (o.nsWoId && builtWoIds.has(String(o.nsWoId))));
+    // A SHORT BUILD IS NOT DONE (Stuart 2026-09-29, stock close-short): 96 built of 100 leaves NetSuite's
+    // work order open for 4, which a person closes by hand — listed once the build has POSTED (a work
+    // order closed ahead of its build refuses the build). Shared/scrapClose stamps the balance.
+    const postedWoIds = new Set(finWos.filter(d => d && d.nsWoCompletionPosted && d.nsWoId).map(d => String(d.nsWoId)));
+    const buildPosted = (o) => !!o && (o.nsWoCompletionPosted === true || !!(o.nsWoId && postedWoIds.has(String(o.nsWoId))));
+    const woBuilt = (o) => buildPosted(o) && !shortBalanceOpen(o);
+    // The shop's mill build (nsRootBuildPosted) counts as posted for its own short balance.
+    const closeTodo = (o) => (o.nsWoCloseRequired && !o.nsWoClosed && !woBuilt(o))
+        || (shortBalanceOpen(o) && (buildPosted(o) || o.nsRootBuildPosted === true));
     hqOrders.forEach(o => {
         // Not an error — a job someone still has to do in NetSuite by hand (Eric's Option 3).
-        if (o.nsWoCloseRequired && !o.nsWoClosed && !woBuilt(o)) out.push({ type: 'NS_CLOSE_TODO', coll: null, floor: null, parent: o });
+        if (closeTodo(o)) out.push({ type: 'NS_CLOSE_TODO', coll: null, floor: null, parent: o });
     });
     // The fin doc is stamped first by closeOrderEverywhere — an hq-less close must still surface.
     finWos.forEach(d => {
-        if (d.nsWoCloseRequired && !d.nsWoClosed && !woBuilt(d) && !parentOf(d)) out.push({ type: 'NS_CLOSE_TODO', coll: 'fin_workorders', floor: d, parent: null });
+        if (closeTodo(d) && !parentOf(d)) out.push({ type: 'NS_CLOSE_TODO', coll: 'fin_workorders', floor: d, parent: null });
     });
     // Demands live only as long as the order they serve. finWoId points at hq_work_orders;
     // a demand whose parent is gone, tombstoned, or closed gates NOTHING and must be named.

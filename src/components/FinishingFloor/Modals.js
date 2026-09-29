@@ -3,6 +3,8 @@ import { finishingDb as db } from '../../firebase'; // 🔒 SECURE IMPORT
 import { doc, updateDoc, setDoc, getDoc, getDocs, query, collection, where } from "firebase/firestore";
 import { btnStyle, inputStyle, labelStyle } from './finishingStyles';
 import { propagateFloorState } from '../Shared/orderLifecycle';
+import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, closeShortNext } from '../Shared/scrapClose';
+import { isPaintOnlyOrder } from '../Shared/paintOnly';
 
 // SCRAP REACHES THE RECORD (Stuart 2026-09-04 sweep: "no leftover places where a work order can be
 // closed/adjusted/changed and not alert RTG"). QC scrap and the custom-order red line were written
@@ -120,7 +122,7 @@ export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrde
         if (!wo || busy) return;
         setBusy(true);
 
-        const isCustomSalesOrder = wo.orderType === 'sales' || (wo.orderType !== 'stock' && (wo.soId || wo.salesOrderId));
+        const isCustomSalesOrder = isCustomSalesDoc(wo);   // the same test, now one reading (Shared/scrapClose)
 
         // THE REDLINE BLOCKER
         if (isCustomSalesOrder && Number(scrap) > 0) {
@@ -135,11 +137,30 @@ export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrde
             return;
         }
 
+        // ⚖ A STOCK ORDER CLOSES SHORT (Stuart 2026-09-29: "order is 100, 96 good, 4 scrap we need to be
+        // able to close out the work order and call it complete … for stock orders this should be the
+        // standard close short"). The order completes with the good count; the put-away builds it in
+        // NetSuite and takes the scrapped pieces' raw off the books; RTG then lists the work order's
+        // balance for its NetSuite close. One reading, Shared/scrapClose.
+        const plan = (!isCustomSalesOrder && !qcModal.taskType) ? stockCloseShortOf({ ordered: wo.totalParts || qcModal.parts, good, scrap }) : null;
+        if (plan && plan.short) {
+            if (Number(good) + Number(scrap) > plan.ordered) {
+                alert(`${Number(good)} good + ${Number(scrap)} scrap is more than the ${plan.ordered} on this order — check the counts.`);
+                setBusy(false);
+                return;
+            }
+            if (!window.confirm(`⚖ CLOSE SHORT — ${wo.stockErpId || wo.id}\n\n${closeShortLine(plan)}.\n\nThe order completes with ${plan.good}. ${closeShortNext(plan, { paintOnly: isPaintOnlyOrder(wo), hasNsWo: !!wo.nsWoId })}\n\nClose it short?`)) {
+                setBusy(false);
+                return;
+            }
+        }
+
         // Normal Completion Processing (taskType null = the FINAL-STEP order QC gate — no task
         // to stamp, the caller's onPassed finishes the order once the counts are recorded).
         const updates = {
             completedParts: Number(good),
-            scrapReported: Number(scrap) // §10: name Summary actually reads (was scrapParts)
+            scrapReported: Number(scrap), // §10: name Summary actually reads (was scrapParts)
+            ...(plan && plan.short ? { closedShort: true, closedShortAt: Date.now(), closedShortBy: user.name || '' } : {}),
         };
         if (qcModal.taskType) updates[`tasks.${qcModal.taskType}.status`] = 'Complete';
 
@@ -151,7 +172,13 @@ export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrde
 
         await updateDoc(doc(db, "fin_workorders", wo.id), updates);
         writeLog(`QC ${qcModal.taskType || 'final'} on ${wo.id} — ${Number(good)} good · ${Number(scrap)} scrap`, 'production');
-        if (Number(scrap) > 0) {
+        if (plan && plan.short) {
+            writeLog(`⚖ CLOSED SHORT: ${wo.id} (${wo.stockErpId || wo.type || ''}) — ${closeShortLine(plan)}`, 'production');
+            await tellRtgScrap(wo, {
+                ...(plan.scrap ? { scrapReported: plan.scrap, scrapReportedBy: user.name || '', scrapReportedAt: Date.now() } : {}),
+                ...closeShortStamps(plan, { by: user.name || '', at: Date.now() }),
+            });
+        } else if (Number(scrap) > 0) {
             writeLog(`⚠ SCRAP: ${Number(scrap)} pc(s) on ${wo.id} (${wo.stockErpId || wo.type || ''}) — re-make from the Setup Queue ⟲ panel`, 'alert');
             await tellRtgScrap(wo, { scrapReported: Number(scrap), scrapReportedBy: user.name || '', scrapReportedAt: Date.now() });
         }

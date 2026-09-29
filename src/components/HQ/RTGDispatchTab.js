@@ -31,7 +31,7 @@ import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, 
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
-import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance } from '../Shared/scrapClose';
+import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance, closeShortLine } from '../Shared/scrapClose';
 import { millBaseOf } from '../Shared/finishRouting';
 import { woRecipeCode } from '../Shared/finishingTime';
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
@@ -2895,6 +2895,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                     {type === 'NS_CLOSE_TODO' && (
                                         <>
                                             <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>NS WO {(t && (t.nsWoTran || t.nsWoId)) || '—'}</span>
+                                            {t && Number(t.nsWoShortBalance) > 0 && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)' }}>built {t.nsWoShortBuilt} of {t.nsWoShortOrdered} — close the balance of {t.nsWoShortBalance}</span>}
                                             <button onClick={() => markNsClosed(f)} title="Tick this once the balance is closed on the NetSuite work order — it is the only way this can be marked done, because the app cannot perform the close itself."
                                                 style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#3a7d44', borderColor: '#3a7d44' }}>✓ Closed in NetSuite</button>
                                         </>
@@ -2933,7 +2934,13 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                         return <span style={{ marginLeft: '8px', color: tone }}>· custom: {customFabLabel(f)}</span>;
                     })()}
                     {/* SCRAP REPORTED ON THE FLOOR reaches the record (2026-09-04 sweep). */}
-                    {(o.redlineAlert || Number(o.scrapReported) > 0) && (
+                    {/* ⚖ CLOSED SHORT ON THE FLOOR (Stuart 2026-09-29) — a stock order's standard close, not an alarm. */}
+                    {o.closedShort === true && !o.redlineAlert && (
+                        <span title={`${o.balanceClosedBy ? `${o.balanceClosedBy} ` : ''}${o.balanceClosedAt ? whenStr(o.balanceClosedAt) : ''}`} style={{ marginLeft: '8px', color: 'var(--brass)', fontWeight: 700 }}>
+                            ⚖ closed short · {closeShortLine({ ordered: Number(o.builtQty || 0) + Number(o.balanceClosed || 0), good: Number(o.builtQty || 0), scrap: Number(o.badQty || 0), balance: Number(o.balanceClosed || 0) })}
+                        </span>
+                    )}
+                    {(o.redlineAlert || (Number(o.scrapReported) > 0 && o.closedShort !== true)) && (
                         <span title={`${o.redlineAlert || ''}${o.scrapReportedBy ? ` — ${o.scrapReportedBy}` : ''}${o.scrapReportedAt ? ` ${whenStr(o.scrapReportedAt)}` : ''}`} style={{ marginLeft: '8px', color: '#d9534f', fontWeight: 700 }}>
                             ⚠ SCRAP {Number(o.scrapReported) > 0 ? `${o.scrapReported} ` : ''}reported on the floor{o.redlineAlert ? ' · completion blocked' : ''}
                         </span>
@@ -3003,7 +3010,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
             {/* CLOSE SHORT — the scrap/partial-build path. Manager and above, because it moves
                 NetSuite inventory (Stuart 2026-08-19). Stock builds only: a custom sales order
                 cannot ship short, which the floor already enforces. */}
-            {kind !== 'sales' && mayCloseBalance && (
+            {kind !== 'sales' && mayCloseBalance && o.closedShort !== true && (
                 <button title="Built fewer than ordered? Record what was good, say what happened to the rest, close the balance and re-issue the shortfall."
                     style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}
                     onClick={() => setBalanceModal({ order: o, kind, ordered: Number(o.totalParts || o.qty || 0), good: '', bad: '', salvage: true })}>⚖ Close Short</button>
