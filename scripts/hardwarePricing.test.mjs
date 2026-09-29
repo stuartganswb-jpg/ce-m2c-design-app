@@ -358,6 +358,24 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     ok('…and it is LOUD', pricingWarnings(broken).some(w => w.sev === 'red' && /CE-ASM-64805/.test(w.msg)));
     const plain = priceConfiguration({ bom: [{ partId: 'CE-INV-59101', name: 'cuff', role: 'BRACKET', qty: 2 }] }, { findPart: find, findByCode: find, finishFor: () => '' });
     eq('an ordinary part is exactly one line, as before', [plain.lines.length, plain.lines[0].isKit], [1, undefined]);
+
+    // A STOCK-COLOUR KIT'S PARTS WEAR ITS COLOUR (Stuart 2026-09-28, SO60551's H1-2TRV-WB/C): the kit's TCP was dropped,
+    // so the backplate, lower arm and arm billed and pushed RAW. Each part now takes the kit's sub finish → its /C item.
+    const trv = {
+        'KIT-WB': { id: 'KIT-WB', legacyErpId: 'H1-2TRV-WB', itemName: '2" Traverse Wall Bracket', partClass: 'Kit',
+            manufacturingSpecs: { kitComponents: [{ partId: 'BP', qty: 1 }, { partId: 'LA', qty: 1 }, { partId: 'BA', qty: 1 }] } },
+        BP: { id: 'BP', legacyErpId: 'H1-2TRVBP', itemName: 'Backplate', manufacturingSpecs: {} },
+        LA: { id: 'LA', legacyErpId: 'H1-2TRVLA', itemName: 'Lower Arm', manufacturingSpecs: {} },
+        BA: { id: 'BA', legacyErpId: 'H1-2TRVBA', itemName: 'Bracket Arm', manufacturingSpecs: {} },
+        'H1-2TRVBP/C': { id: 'BPC', legacyErpId: 'H1-2TRVBP/C', manufacturingSpecs: {} },
+        'H1-2TRVLA/C': { id: 'LAC', legacyErpId: 'H1-2TRVLA/C', manufacturingSpecs: {} },
+        'H1-2TRVBA/C': { id: 'BAC', legacyErpId: 'H1-2TRVBA/C', manufacturingSpecs: {} },
+    };
+    const tfind = (k) => trv[String(k || '').toUpperCase()] || trv[k] || null;
+    const wb = priceConfiguration({ bom: [{ id: 'WB', partId: 'KIT-WB', name: 'wall bracket', role: 'BRACKET', qty: 2 }] },
+        { findPart: tfind, findByCode: tfind, finishFor: () => '', subFinishFor: () => 'TCP' });
+    eq('a /C wall-bracket kit: the kit line, then BP / LA / BA each as its /C item in TCP', wb.lines.map(l => [l.billedId, l.finishCode || '', l.subFinishCode || '', !!l.inKit, l.qty]),
+        [['H1-2TRV-WB', '', 'TCP', false, 2], ['H1-2TRVBP/C', '', 'TCP', true, 2], ['H1-2TRVLA/C', '', 'TCP', true, 2], ['H1-2TRVBA/C', '', 'TCP', true, 2]]);
 }
 
 // ── A TWO-PART FINIAL IS PRICED BY ITS COLLAR'S FINISH (Stuart 2026-09-19, the wood gem) ────────

@@ -311,5 +311,35 @@ eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }]
     ok('the close stamp is the retire\'s own shape', st.status === 'closed' && st.closed === true && st.closedFrom === '10.5' && st.closedBy === 'stuart' && st.closedAt === 5);
 }
 
+// ── ↻ RE-READ: A KIT ON THE ORDER BECOMES ITS PARTS (Stuart 2026-09-28, Shared/itemKit) — SO60551's lines as they are:
+//    two 50 × H1-2TRV-WB/C lines in Row 2 (quoted before the kit rule), the acrylic end cap kit in EP1 in Base Back 1 ──
+{
+    const { rereadLinesPatchOf } = await import('../src/components/Shared/displayRelease.js');
+    const rec = (id, code, extra = {}) => ({ id, legacyErpId: code, itemName: code, manufacturingSpecs: {}, ...extra });
+    const inv = [
+        rec('K-WB', 'H1-2TRV-WB', { partClass: 'Kit', manufacturingSpecs: { kitComponents: [{ partId: 'BP', qty: 1 }, { partId: 'LA', qty: 1 }, { partId: 'BA', qty: 1 }] } }),
+        rec('BP', 'H1-2TRVBP'), rec('LA', 'H1-2TRVLA'), rec('BA', 'H1-2TRVBA'),
+        rec('K-EC', 'H1-2RCTAEC', { partClass: 'Kit', manufacturingSpecs: { kitComponents: [{ partId: 'ECC', qty: 1 }, { partId: 'ACEC', qty: 1 }] } }),
+        rec('ECC', 'H1-2RCTAECC'), rec('ACEC', 'H1-2RCTACEC', { manufacturingSpecs: { customData: { unfinished: true } } }),
+        rec('NUT', 'H1-2TRVNUT'),
+    ];
+    const lines = [
+        { erp: 'H1-2TRVNUT', qty: 50, row: 'Row 2', memo: 'Row 2' },
+        { erp: 'H1-2TRV-WB/C', qty: 50, row: 'Row 2', memo: 'Row 2', identityFrom: 'H1-2TRV-WB/EP4' },
+        { erp: 'H1-2TRV-WB/C', qty: 50, row: 'Row 2', memo: 'Row 2', identityFrom: 'H1-2TRV-WB/EP4' },
+        { erp: 'H1-2RCTAEC/EP1', qty: 50, row: 'Base Back 1', memo: 'Base Back 1', toBeFinished: true, finishCode: 'EP1' },
+    ];
+    const so = { id: 'S', soId: 'SO60551', displayRelease: true, lines, backorderLines: [{ code: 'H1-2TRV-WB/C', qty: 100, source: 'OE_ROW' }, { code: 'H1-2TRVNUT', qty: 4, source: 'OE_ROW' }] };
+    const p = rereadLinesPatchOf({ so, breakdown: [], inventory: inv });
+    eq('no line already on the order moves: the kit lines stay where they were, flagged as sold kits', p.lines.slice(0, 4).map(l => [l.erp, !!l.isKit]), [['H1-2TRVNUT', false], ['H1-2TRV-WB/C', true], ['H1-2TRV-WB/C', true], ['H1-2RCTAEC/EP1', true]]);
+    eq('each kit line\'s parts are added at the END, tied to it — both 50-bracket lines get their own (100 of each part)', p.lines.slice(4).map(l => [l.erp, l.qty, l.kitLineIdx, l.row]),
+        [['H1-2TRVBP/C', 50, 1, 'Row 2'], ['H1-2TRVLA/C', 50, 1, 'Row 2'], ['H1-2TRVBA/C', 50, 1, 'Row 2'], ['H1-2TRVBP/C', 50, 2, 'Row 2'], ['H1-2TRVLA/C', 50, 2, 'Row 2'], ['H1-2TRVBA/C', 50, 2, 'Row 2'],
+         ['H1-2RCTAECC', 50, 3, 'Base Back 1'], ['H1-2RCTACEC', 50, 3, 'Base Back 1']]);
+    eq('the collar is plated EP1 (to be finished), the clear acrylic wears nothing', p.lines.slice(10).map(l => [l.erp, l.finishCode || '', !!l.noFinish]), [['H1-2RCTAECC', 'EP1', false], ['H1-2RCTACEC', '', true]]);
+    eq('the kit\'s own backorder record goes (its parts are what is short now); the nut\'s stays', p.backorderLines.map(b => b.code), ['H1-2TRVNUT']);
+    eq('the re-read says what it did', p.kitsExploded.map(k => [k.idx, k.erp, k.parts.length]), [[1, 'H1-2TRV-WB/C', 3], [2, 'H1-2TRV-WB/C', 3], [3, 'H1-2RCTAEC/EP1', 2]]);
+    eq('a second re-read adds nothing', rereadLinesPatchOf({ so: { ...so, lines: p.lines, backorderLines: p.backorderLines }, breakdown: [], inventory: inv }), null);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

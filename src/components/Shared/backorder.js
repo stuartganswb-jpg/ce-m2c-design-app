@@ -31,10 +31,16 @@ export const isPlatedLine = (line, orderRecipe) => {
     return isOutsourcedFinishCode(U(orderRecipe));
 };
 
+// A STOCK-COLOUR line (H1-2TRVBP/C): the shelf first, else painted from its /P, else from raw (Stuart 2026-09-28: "first
+// look to /B or /C components for stock, if none then look to the /P and we paint, if none then look for the raw").
+export const isStockColourLine = (line) => !!line && line.finishOutsourced !== true && line.noFinish !== true
+    && (line.stockColour === true || isStockColourCode(lineCodeOf(line)));
+
 // The codes whose stock can satisfy a line, in the order the floor would use them.
 export const coverCodesOf = (line, orderRecipe) => {
     const code = lineCodeOf(line);
     if (!code) return [];
+    if (isStockColourLine(line)) { const mill = U(millBaseOf(code)); return [...new Set([code, `${mill}/P`, mill].filter(Boolean))]; }
     if (isPlatedLine(line, orderRecipe)) return [code];
     const mill = U(millBaseOf(code));
     return [...new Set([code, `${mill}/P`, mill].filter(Boolean))];
@@ -46,7 +52,8 @@ export const coverCodesOf = (line, orderRecipe) => {
  *             onOrder: number, state: 'covered'|'backorder'|'unknown', shortfall: number }}
  */
 export const classifyLine = (line, orderRecipe, stockMap, qtyWanted) => {
-    const kind = isPlatedLine(line, orderRecipe) ? 'plated' : 'painted';
+    // A stock colour can be painted when its shelf is short — it is a TRUE backorder only when its /P and raw are short too.
+    const kind = !isStockColourLine(line) && isPlatedLine(line, orderRecipe) ? 'plated' : 'painted';
     const coverCodes = coverCodesOf(line, orderRecipe);
     const map = stockMap || {};
     const readable = coverCodes.filter(c => c in map);

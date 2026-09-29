@@ -26,6 +26,7 @@ import { isDisplayOnlyLine, isParkedGeometryLine, headerSidemarkOf } from './lin
 import { oeIsFloorLine, oeLineFinish, oeCoverageOf, oeLineStateOf } from './oeLines.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
 import { rowRestampOf } from './subFinish.js';
+import { isKitLine, itemKitOrderLinesOf } from './itemKit.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -114,6 +115,8 @@ export const rowLinesFromBreakdown = (breakdown = []) => {
             ...(l.noFinish ? { noFinish: true } : {}),
             ...(l.subFinishCode ? { subFinishCode: U(l.subFinishCode) } : {}),
             ...(l.finishLabel ? { finishLabel: String(l.finishLabel) } : {}),
+            // A KIT'S PART (CPQ's engine, Shared/itemKit): made and picked as itself, sold inside its kit.
+            ...(l.inKit ? { inKit: true, ...(l.kitOf ? { kitOf: U(l.kitOf) } : {}) } : {}),
             fromBreakdown: true,
         });
     });
@@ -524,23 +527,40 @@ export const rereadLinesPatchOf = ({ so, breakdown = [], finishes = [], inventor
         rs.changes.forEach(c => restamped.push({ ...c, row: rowOfLine(lines[c.idx]) }));
         rs.notes.forEach(n => notes.push({ ...n, row: rowOfLine(lines[n.idx]) }));
     });
+    // ── A KIT ON THE ORDER IS ITS PARTS (Stuart 2026-09-28, Shared/itemKit) ─────────────────────────────────────────
+    // A quote from before the kit rule carries the kit as ONE line (SO60551's H1-2TRV-WB/C, H1-2RCTAEC/EP1) — picked as a
+    // code nobody stocks. The kit line stays (sold, billed — never made or picked); its parts are ADDED at the END of the
+    // order, each tied to its kit line, so no line already on the order moves (work orders and stamps point at positions).
+    const kitsExploded = [];
+    const n0 = lines.length;
+    for (let idx = 0; idx < n0; idx++) {
+        const l = lines[idx];
+        if (!l || isKitLine(l) || l.inKit) continue;
+        const k = itemKitOrderLinesOf({ line: l, findByCode: (c) => byCode.get(U(c)) || null, findPart: (id) => byId.get(String(id)) || null });
+        if (!k) continue;
+        lines[idx] = k.kitLine;
+        if (!lines.some(x => x && x.inKit && x.kitLineIdx === idx)) k.parts.forEach(pt => lines.push({ ...pt, kitLineIdx: idx }));
+        kitsExploded.push({ idx, erp: U(l.erp), row: rowOfLine(l), parts: k.parts.map(pt => `${pt.qty} × ${pt.erp}${pt.finishCode ? ` · ${pt.finishCode}` : (pt.subFinishCode ? ` (shelf, else ${pt.subFinishCode})` : '')}`), missing: k.missing });
+    }
     const bo = Array.isArray(so && so.backorderLines) ? so.backorderLines : [];
     // A line that became another item (the stock colour) leaves its old code's backorder records behind.
     // …and a line whose stale finish came off (an item tagged Unfinished) leaves its plated code's records too.
-    const swappedFrom = new Set(restamped.filter(c => c.netsuite || c.dropBackorder).map(c => U(c.dropBackorder || lines[c.idx].identityFrom)));
+    const swappedFrom = new Set([...restamped.filter(c => c.netsuite || c.dropBackorder).map(c => U(c.dropBackorder || lines[c.idx].identityFrom)), ...kitsExploded.map(k => k.erp)]);
     const keptBo = ((so && so.displayRelease) ? bo.filter(r => r && r.source === 'OE_ROW') : bo).filter(r => !swappedFrom.has(U(r && r.code)));
     const droppedBackorders = bo.length - keptBo.length;
-    if (!enriched && !added.length && !droppedBackorders && !restamped.length) return null;
-    return { lines, enriched, added, droppedBackorders, backorderLines: keptBo, restamped, notes };
+    if (!enriched && !added.length && !droppedBackorders && !restamped.length && !kitsExploded.length) return null;
+    return { lines, enriched, added, droppedBackorders, backorderLines: keptBo, restamped, notes, kitsExploded };
 };
 export const rereadLinesText = (so, p) => [
     `↻ Re-read ${(so && (so.soId || so.id)) || ''}'s lines from its CPQ job?`,
     p.enriched ? `\n${p.enriched} line(s) gain the fields CPQ's classifier reads (part id, handling, fee flag, per-config counts, customer code…) — code, finish, quantity and position unchanged.` : '',
     p.added.length ? `\n${p.added.length} line(s) the old reader dropped are ADDED:\n${p.added.map(a => `  • ${a.qty} × ${a.erp}${a.row ? ` (${a.row})` : ' (no row — assign it)'}`).join('\n')}` : '',
     (p.restamped || []).length ? `\nCPQ's rules for these lines (the traverse track and F-clip, stock-colour parts, cuts into a rod, parts tagged Unfinished):\n${p.restamped.map(c => `  • ${c.row ? `${c.row}: ` : ''}${c.text}`).join('\n')}` : '',
+    (p.kitsExploded || []).length ? `\nKits become their parts (the kit line stays, sold and billed; its parts are added at the end of the order):\n${p.kitsExploded.map(k => `  • ${k.row ? `${k.row}: ` : ''}${k.erp} → ${k.parts.join(', ')}${k.missing.length ? ` — ⚠ ${k.missing.join(', ')} not in the library` : ''}`).join('\n')}` : '',
     p.droppedBackorders ? `\n${p.droppedBackorders} backorder record(s) from the retired whole-order split or for a replaced item are removed — each row records its own when it starts.` : '',
     (p.notes || []).length ? `\nStill needs a person:\n${p.notes.map(n => `  • ${n.row ? `${n.row}: ` : ''}${n.text}`).join('\n')}` : '',
     (p.restamped || []).some(c => c.netsuite) ? '\n⚠ An item changed: change the same line in NetSuite before the order is packed, or the fulfilment ships the old item.' : '',
+    (p.kitsExploded || []).length ? '\n⚠ NetSuite: the sales order must carry the kit\'s PARTS (at $0, the kit\'s price on the rollup) in place of the kit line before the order is fulfilled.' : '',
     '\nNothing is started, ordered or sent to NetSuite.',
 ].filter(Boolean).join('\n');
 

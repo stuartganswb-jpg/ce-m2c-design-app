@@ -2491,13 +2491,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // own copy and it drifted twice (Base Front 2's H1-138CC/P06 planned as a bought raw; the French
             // returns stock-checked as plated parts). A rider rides its pole; a plated small part is STOCK.
             const pl = w.plan;
-            const door = pl && pl.part && pl.finish ? pl.door : '';
-            if (door) reviewable.push({ so: w.so, l: w.l, lineIdx: pl.lineIdx, buy: door === 'BUY', stock: door === 'STOCK', rider: door === 'RIDER', division: pl.division, finish: pl.finish, ...(pl.linePatch ? { linePatch: pl.linePatch } : {}) }); else direct.push(w);
+            // An unexploded kit is named, never made as one part (Shared/itemKit, 2026-09-28).
+            if (pl && pl.door === 'KIT') { addLog(`🧰 ${pl.erp}: a kit whose parts are not on the order — re-read the lines (10.5) or enter it again (tab 7).`, 'warn'); return; }
+            // A stock colour (the shelf first, else painted) is planned from its base item — its /C record need not exist.
+            const door = pl && (pl.part || pl.door === 'STOCK_FIRST') && pl.finish ? pl.door : '';
+            if (door) reviewable.push({ so: w.so, l: w.l, lineIdx: pl.lineIdx, buy: door === 'BUY', stock: door === 'STOCK', stockFirst: door === 'STOCK_FIRST', rider: door === 'RIDER', division: pl.division, finish: pl.finish, ...(pl.linePatch ? { linePatch: pl.linePatch } : {}) }); else direct.push(w);
         });
         for (const w of direct) {
             // A BOTH-sourced line whose operator picks "make" defers into the same batch review.
             const r = await generateOeLineOrder(w.so, w.l, { collectReview: true });
-            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line, buy: !!r.review.buy, stock: !!r.review.stock, rider: !!r.review.rider, division: r.review.division, finish: r.review.finish, ...(r.review.lineIdx != null ? { lineIdx: r.review.lineIdx } : {}), ...(r.review.linePatch ? { linePatch: r.review.linePatch } : {}) });
+            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line, buy: !!r.review.buy, stock: !!r.review.stock, stockFirst: !!r.review.stockFirst, rider: !!r.review.rider, division: r.review.division, finish: r.review.finish, ...(r.review.lineIdx != null ? { lineIdx: r.review.lineIdx } : {}), ...(r.review.linePatch ? { linePatch: r.review.linePatch } : {}) });
         }
         if (reviewable.length) await openOeReviewForLines(reviewable);
     };
@@ -2566,10 +2569,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
     const generateOeLineOrder = async (so, line, opts = {}) => {
         const erp = String(line.erp || '').toUpperCase();
-        const { part, aliasNote } = resolveOePart(erp);
+        const pl = oeLinePlansOf({ so, inventory: hqParts, finishes: oeFinishes }).find(p => p.line === line) || null;
+        if (pl && pl.door === 'KIT') return alert(`${erp} is a kit and its parts are not on the order — re-read the lines (10.5) or enter it again (tab 7) so its parts are made and picked.`);
+        // A stock colour is planned from its base item (Shared/oeGenerate STOCK_FIRST) — its /C record need not exist.
+        const { part, aliasNote } = resolveOePart(pl && pl.door === 'STOCK_FIRST' && erp.includes('/') ? erp.slice(0, erp.lastIndexOf('/')) : erp);
         if (!part) return alert(`${erp} is not in the Master Library (searched real codes, customer codes and aliases) — sync or alias it first.`);
         if (aliasNote) addLog(`🔗 ${aliasNote} — planning the real item.`, 'info');
-        const pl = oeLinePlansOf({ so, inventory: hqParts, finishes: oeFinishes }).find(p => p.line === line) || null;
         const finish = (pl && pl.finish) || oeLineFinish(line);
         if (!finish) return alert(`${erp}: ${(pl && pl.finishWhy) || 'no finish recorded on this line — the order predates finish capture. Add it to the line note in the form "TO BE FINISHED · CODE", or re-enter the line on tab 7.'}`);
         const qty = Number(line.qty) || 0;
@@ -2602,8 +2607,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // needs to open a pop up window and show its work — show stock check, let operator
             // verify, then send on"). Nothing is written here; the plan modal decides.
             setGenBusy(false);
-            if (opts.collectReview) return { review: { so, line, stock: door === 'STOCK', ...carry } };
-            await openOeReviewForLines([{ so, l: line, stock: door === 'STOCK', ...carry }]);
+            if (opts.collectReview) return { review: { so, line, stock: door === 'STOCK', stockFirst: door === 'STOCK_FIRST', ...carry } };
+            await openOeReviewForLines([{ so, l: line, stock: door === 'STOCK', stockFirst: door === 'STOCK_FIRST', ...carry }]);
             return;
         } catch (e) { addLog(`OE generate failed: ${e.message || e}`, 'error'); alert('Generate failed:\n\n' + (e.message || e)); }
         setGenBusy(false);

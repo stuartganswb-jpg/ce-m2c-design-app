@@ -207,7 +207,10 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
     // document they are the arithmetic: without them a discounted quote printed every line at
     // gross and a total that was less, and nothing on the page said why. Money documents keep
     // them (the CRM print already renders them: no qty, no unit, the amount, net in bold).
-    const real = (lines || []).filter(l => !isDisplayOnlyLine(l) || (money && l && (l.isDiscount || l.isNetLine)))
+    // AN ITEM KIT IS WHAT THE CUSTOMER BOUGHT (Stuart 2026-09-28, Shared/itemKit): its line — their number, its price — is
+    // on their paper; its parts (hidden) are not, on a money document. The floors never read this (isDisplayOnlyLine still
+    // keeps the kit line off every pick and floor list).
+    const real = (lines || []).filter(l => !isDisplayOnlyLine(l) || (l && l.itemKit === true) || (money && l && (l.isDiscount || l.isNetLine)))
         .map(l => withLineFinish(reResolve(l, findPart, custKeys), finishFallback));
     if (!money) return real;
     // ── A POLE IS SOLD BY THE FOOT AND SHIPPED AS ONE PIECE (Stuart 2026-08-25) ──────────────

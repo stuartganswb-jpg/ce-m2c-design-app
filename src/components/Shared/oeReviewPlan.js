@@ -228,7 +228,9 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         const lines = plan.exploded ? plan.lines : plan.lines.filter(l => String(l.legacyErpId || '').toUpperCase() !== plan.erp);
         // The piece a person reads (Shared/subFinish.finishedCodeOf — a traverse track made TCP is H1-2TRVTRK/C); the
         // plan keeps <code>/<finish>, from which its mill base is read.
-        return { ...j, finishedErp, finishedLabel: finishedCodeOf(erp, j.finish), plan: { ...plan, lines } };
+        // A STOCK COLOUR (j.stockFirst — Shared/oeGenerate STOCK_FIRST) is planned as the paint run here; its stocked colour
+        // item (H1-2TRVBP/C) is read below with everything else, and wins when the shelf covers the line.
+        return { ...j, finishedErp, finishedLabel: finishedCodeOf(erp, j.finish), plan: { ...plan, lines }, ...(j.stockFirst ? { stockFirstCode: finishedCodeOf(erp, j.finish) } : {}) };
     });
     // ── A POLE IS CUT, NEVER MILLED (Brief A, Q5 — Stuart 2026-09-02) ──────────────────────────
     // A stocked-length pole ordered with an applied or small-parts finish pulls a physical stick at
@@ -258,6 +260,8 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         const mill = millBaseOf(c);
         if (/\/P$/.test(c) && mill !== c) codes.add(mill);
     }));
+    // A stock colour's stocked item is read with everything else (the shelf first — below).
+    planned.forEach(p => { if (p.stockFirstCode) codes.add(p.stockFirstCode); });
     // The pole pull and every stick that could be cut into it — read in the same pull.
     planned.forEach(p => {
         if (!p.poleInfo) return;
@@ -299,6 +303,28 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         if (fromOwn) heldLeft[`${String(parseInt(soNs, 10))}|${code}`] = own - fromOwn;
         remaining[code] = Math.max(0, (Number(remaining[code]) || 0) - (qty - fromOwn));
     };
+
+    // ── THE SHELF FIRST FOR A STOCK COLOUR (Stuart 2026-09-28) ───────────────────────────────────────────────────
+    // "first look to /B or /C components for stock, if none then look to the /P and we paint, if none then look for the
+    // raw component." The order's view of the colour item (what NetSuite holds for it + the free shelf) covers the WHOLE
+    // line → a shelf pick of that item, exactly as a plated finished good is (no work order, picked at SO Pack). Otherwise
+    // the whole line is painted in the sub finish from its /P — and the /P converted from raw behind it — as planned above.
+    // A running remainder per order and code, so two lines never both count one shelf.
+    const sfLeft = {};
+    planned.forEach((p, i) => {
+        if (!p.stockFirstCode) return;
+        const code = p.stockFirstCode, soNs = soNsOf(p), k = `${soNs}|${code}`;
+        if (!(k in sfLeft)) sfLeft[k] = heldFor(soNs, code) + Math.max(0, Number(remaining[code]) || 0);
+        const have = sfLeft[k], need = Number(p.qty) || 0;
+        if (need > 0 && have >= need && (code in avail)) {
+            sfLeft[k] = have - need;
+            const fp = partOf(code);
+            planned[i] = { ...p, stock: true, finishedErp: code, finishedLabel: code, stockFirstNote: `${have} × ${code} on the shelf for this order — picked, not painted`,
+                plan: { erp: code, exploded: false, lines: [{ legacyErpId: code, partName: (fp && fp.itemName) || p.part.itemName || '', quantity: need }] } };
+        } else {
+            planned[i] = { ...p, stockFirstNote: `${code}: ${have} of ${need} on the shelf${code in avail ? '' : ' (no stock record)'} — painted ${p.finish} from its /P${have > 0 ? '; the shelf pieces stay for the next order' : ''}` };
+        }
+    });
 
     // A short already covered by inbound (open PO/WO in NetSuite) defaults to SKIP — shown with
     // "N on order" and a tick the operator can clear to order anyway (Stuart 2026-08-29: the app
@@ -429,7 +455,9 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
             return { ...p, components, holds, nsPlan: { flow: 'RIDER', note: `Fabrication on its pole — rides the shop's cut list; nothing to pull or order.` } };
         }
         if (p.stock) {
-            return { ...p, components, holds, nsPlan: { flow: 'STOCK', note: `Plated finished good — picked from stock as ${p.finishedErp}; no work order, nothing to the plater from here. Short → the Snapshot Backorder board.` } };
+            return { ...p, components, holds, nsPlan: { flow: 'STOCK', note: p.stockFirstCode
+                ? `Stock colour — picked from the shelf as ${p.finishedErp}; no work order, no paint. (${p.stockFirstNote})`
+                : `Plated finished good — picked from stock as ${p.finishedErp}; no work order, nothing to the plater from here. Short → the Snapshot Backorder board.` } };
         }
         if (p.buy) {
             // START-NOW OPTION (Stuart 2026-08-31): material on hand can begin finishing before

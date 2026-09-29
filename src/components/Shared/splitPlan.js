@@ -17,7 +17,12 @@
 // Pure. The three-way answer is the contract; a data fault (no inventory row, units unknown for
 // the pull) is its own bucket — the Backorder window must never fill with data problems wearing
 // the costume of demand (D, 2026-09-03).
-import { isPlatedLine as isPlated, coverCodesOf, classifyLine, backorderRecordOf, lineCodeOf } from './backorder.js';
+import { isPlatedLine as isPlated, coverCodesOf, classifyLine, backorderRecordOf, lineCodeOf, isStockColourLine } from './backorder.js';
+import { millBaseOf } from './finishRouting.js';
+import { STOCK_COLOUR_SUFFIX } from './finishVariant.js';
+
+// C → TCP, B → TBR — the sub finish a stock-colour item is painted in when its shelf is short (4.5).
+const SUB_OF_SUFFIX = Object.fromEntries(Object.entries(STOCK_COLOUR_SUFFIX).map(([sub, sfx]) => [sfx, sub]));
 
 // The definition lives in Shared/backorder.js (A's board and D's receipt read the same one).
 export const isPlatedLine = isPlated;
@@ -50,6 +55,24 @@ export function planSmallLines(lines = [], orderRecipe = '', stock = null, { sin
             return;
         }
         // PLATED — a stocked finished good, decided by stock, never by the floor.
+        // A STOCK COLOUR THE SHELF DOES NOT COVER IS PAINTED (Stuart 2026-09-28: "first look to /B or /C components for
+        // stock, if none then look to the /P and we paint, if none then look for the raw") — the whole line, in the sub
+        // finish its colour is made in (C → TCP, B → TBR), from its /P; a TRUE backorder only when the /P and raw are
+        // short as well. A colour item with no stock record is simply not on the shelf. The same rule as Order Entry's
+        // STOCK_FIRST door (Shared/oeReviewPlan).
+        if (isStockColourLine(l) && map && unitsKnown) {
+            if (code in map && !(code in remaining)) remaining[code] = Math.max(0, Number(map[code].available) || 0);
+            const shelf = code in map ? remaining[code] : 0;
+            if (shelf < qty) {
+                const mill = String(millBaseOf(code) || '').toUpperCase();
+                const sub = SUB_OF_SUFFIX[code.slice(code.lastIndexOf('/') + 1)] || String(l.subFinishCode || '').toUpperCase();
+                const painted = { ...l, legacyErpId: `${mill}/P`, partName: l.partName || l.name || '', finishCode: sub, finishLabel: sub, stockColour: false, paintedFor: code, qty, quantity: qty };
+                out.inHouse.push(painted);
+                const cls = classifyLine(painted, orderRecipe, map, qty);
+                if (cls.state === 'backorder') out.backorder.push(backorderRecordOf(painted, cls, { since, lineIndex: i }));
+                return;
+            }
+        }
         if (!map) { out.unknown.push({ ...l, stockUnknown: 'stock not read', pickOnly: true, finishOutsourced: true }); return; }
         if (!(code in map)) { out.unknown.push({ ...l, stockUnknown: 'no inventory row at this location', pickOnly: true, finishOutsourced: true }); return; }
         if (!unitsKnown) { out.unknown.push({ ...l, stockUnknown: 'stock unit could not be read — retry the pull', pickOnly: true, finishOutsourced: true }); return; }

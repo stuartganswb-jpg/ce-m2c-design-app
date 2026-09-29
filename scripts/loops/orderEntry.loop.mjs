@@ -105,7 +105,23 @@ eq('the pack bench names the finished pieces', packLinesOf(so, { isFeeCode: libF
     const tcp = hq2.find(h => h.routeTo === 'SHOP' && h.finishGroup === 'TCP');
     eq('the track and its F-clip are the TCP shop job at 95.5" / 95"', (tcp?.cutList || []).map(c => [c.legacyErpId, c.cutLength, c.finishedCode]), [['H1-2TRV', 95.5, 'H1-2TRVTRK/C'], ['H1-2TRVCLP', 95, 'H1-2TRVCLP/C']]);
     ok('the S04 fascia is started (CPQ\'s rule: a straight wood rod is finishing\'s)', !!hq2.find(h => h.routeTo === 'FINISHING' && h.finishGroup === 'S04'), hq2.map(h => `${h.routeTo}/${h.finishGroup}`).join(', ') + ' | ' + logs2.join(' | '));
-    eq('the champagne bracket and the plugs are shelf picks — never started', [g2('H1-2TRV-WB/C'), g2('H1-2TRVPLUG')], [null, null]);
+    // THE SHELF FIRST FOR A STOCK COLOUR (Stuart 2026-09-28): the start reads the champagne bracket's shelf — 40 on hand
+    // covers 2 — and records it a SHELF PICK: no work order, no paint. The plugs are an ordinary stocked line, untouched.
+    eq('the champagne bracket: the shelf covers it — a shelf pick (STOCK), not painted; the plugs untouched', [g2('H1-2TRV-WB/C') && g2('H1-2TRV-WB/C').kind, g2('H1-2TRV-WB/C') && g2('H1-2TRV-WB/C').code, g2('H1-2TRVPLUG')], ['STOCK', 'H1-2TRV-WB/C', null]);
+    // …and when the shelf does NOT cover it (60 wanted, 40 on hand): the whole line is painted TCP from its /P.
+    {
+        const wbp = T('H1-2TRV-WB/P', 'Traverse Wall Bracket - Phosphate', { productType: 'Bracket', partHandling: 'Small Parts' }, { partClass: 'Assembly' });
+        __fs.seed('Approved_Designs', wbp.id, wbp);
+        Object.assign(stock, { 'H1-2TRV-WB/P': { available: 100, unit: 'EACH' } });
+        __fs.seed('hq_sales_orders', 'OE-2B', { id: 'OE-2B', soId: 'SO70012', brand: BRAND, orderClass: 'QUICKSHIP', customer: 'Test Co', customerId: 'C1', nsInternalId: '8812', status: 'Pending', createdAt: 1,
+            lines: [{ erp: 'H1-2TRV-WB/C', name: 'Traverse Wall Bracket - Champagne', qty: 60 }] });
+        const logs2b = [];
+        await runOeAuto({ so: { id: 'OE-2B', ...__fs.get('hq_sales_orders', 'OE-2B') }, brand: BRAND, user: 'rtg-auto', inventory: oeInventoryOf([...library, ...trvLib, wbp], BRAND), finishes, log: (m) => logs2b.push(m) });
+        const so2b = __fs.get('hq_sales_orders', 'OE-2B');
+        const fin2b = __fs.all('hq_work_orders').filter(h => h.soAppId === 'OE-2B' && h.routeTo === 'FINISHING');
+        eq('short on the shelf: a TCP finishing pair painting 60 from the /P — no shelf pick', [(so2b.oeGen || {})[0] && so2b.oeGen[0].kind, fin2b.map(h => h.finishGroup), fin2b.flatMap(h => (h.partsList || []).map(l => [l.legacyErpId, l.quantity]))],
+            ['WO', ['TCP'], [['H1-2TRV-WB/P', 60]]], logs2b.join(' | '));
+    }
     const { soPackLineStateOf: sp } = await import('../../src/components/Shared/pickLines.js');
     const bi = so2.lines.findIndex(l => l.erp === 'H1-2TRV-WB/C');
     eq('SO Pack: the bracket is READY from the shelf; the track names H1-2TRVTRK/C', [sp({ so: so2, line: so2.lines[bi], idx: bi, stat: { avail: 40 } }).state, sp({ so: so2, line: so2.lines[1], idx: 1, stat: null }).code], ['READY', 'H1-2TRVTRK/C']);

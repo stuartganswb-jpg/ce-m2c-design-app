@@ -35,7 +35,9 @@ import { floorGroupsOf, parkRowPair } from './rowPair.js';
 import { holdSplitGroups } from './rowPairShape.js';
 import { oeDivisionOf, rowFabOf, rowFinishesOf, fabKindOf, DIVISION_CUSTOM } from './oeClassify.js';
 import { rowKeyOf, rowOfLine } from './displayRelease.js';
-import { rowRestampOf, trvRoleOfCode, isUnfinishedFinish } from './subFinish.js';
+import { rowRestampOf, trvRoleOfCode, isUnfinishedFinish, isStockColourCode } from './subFinish.js';
+import { isKitLine, itemKitOfCode } from './itemKit.js';
+import { STOCK_COLOUR_SUFFIX } from './finishVariant.js';
 
 export { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig };
 
@@ -123,6 +125,22 @@ export const oeDoorOf = (part, finish, inventory = [], { outsourced = false } = 
     return 'MAKE';
 };
 
+// ── A STOCK COLOUR: THE SHELF FIRST, ELSE PAINTED (Stuart 2026-09-28) ─────────────────────────────────────────────
+// "first look to /B or /C components for stock, if none then look to the /P and we paint, if none then look for the raw
+// component, so basically same rules as always." A part made in a traverse stock colour — a kit's backplate in TCP, a
+// line that names its /C item — is picked from the shelf when the order's view of it covers the line, else painted in the
+// sub finish from its /P (and the /P converted from raw behind it). The review decides which (Shared/oeReviewPlan).
+// The sub finish a line is made in: its own finish when that is one (TCP / TBR), or the one its /C · /B code names.
+const SUB_OF_SUFFIX = Object.fromEntries(Object.entries(STOCK_COLOUR_SUFFIX).map(([sub, sfx]) => [sfx, sub]));
+const stockColourSubOf = (line, finish) => {
+    const f = U(finish);
+    if (STOCK_COLOUR_SUFFIX[f]) return f;
+    const code = U(line && line.erp);
+    if (f || !isStockColourCode(code)) return '';
+    return SUB_OF_SUFFIX[code.slice(code.lastIndexOf('/') + 1)] || '';
+};
+const baseCodeOf = (code) => { const c = U(code); const i = c.lastIndexOf('/'); return i > 0 ? c.slice(0, i) : c; };
+
 // ── WHAT EACH LINE OF AN ORDER BECOMES — one answer for every door (Stuart 2026-09-27) ──────────────
 // CPQ's own classifier (Shared/oeClassify → lineClassification.classifyLine) says shop or small and which
 // lines RIDE the pole; the row's rod gives a rider its finish; CPQ's traverse rules (Shared/subFinish.rowRestampOf)
@@ -169,7 +187,16 @@ export const oeLinePlansOf = ({ so, inventory = [], finishes = [] }) => {
         classed.forEach(c => {
             const f = fins[c.lineIdx] || { finish: c.ownFinish, why: '' };
             let door = '';
-            if (c.part && f.finish) {
+            let finish = f.finish;
+            // A KIT LINE is sold and billed, never made or picked (Shared/itemKit) — its parts, beneath it, are. A kit code
+            // with no parts beneath it (a quote from before the kit rule) is named, never made as one part.
+            const kitLine = isKitLine(c.line);
+            const kitUnexploded = !kitLine && !!itemKitOfCode(c.erp, byCode);
+            const sub = (kitLine || kitUnexploded || c.division === DIVISION_CUSTOM || c.rider) ? '' : stockColourSubOf(c.eff, f.finish);
+            if (kitLine) door = '';
+            else if (kitUnexploded) door = 'KIT';
+            else if (sub) { door = 'STOCK_FIRST'; finish = sub; }
+            else if (c.part && f.finish) {
                 if (c.rider) door = 'RIDER';
                 else {
                     door = oeDoorOf(c.part, f.finish, inventory, { outsourced: !!(c.eff && c.eff.finishOutsourced === true && f.finish === c.ownFinish) });
@@ -180,27 +207,29 @@ export const oeLinePlansOf = ({ so, inventory = [], finishes = [] }) => {
             // A FEE THAT IS NOT FABRICATION (rush, handling, a finish upcharge) is billing only: the sales
             // order carries it to NetSuite; nothing is made or picked for it. (The CPQ split lists every fee on
             // its shop cut list; a row lists only what is cut into a pole.)
-            const billingOnly = !!c.fee && !fabKindOf(`${(c.part && c.part.itemName) || ''} ${(c.line && c.line.name) || ''} ${c.erp}`);
-            out.push({ ...c, finish: f.finish, finishWhy: f.why || noteOf(c.lineIdx), door: billingOnly ? '' : door, billingOnly });
+            const billingOnly = kitLine || (!!c.fee && !fabKindOf(`${(c.part && c.part.itemName) || ''} ${(c.line && c.line.name) || ''} ${c.erp}`));
+            out.push({ ...c, finish, finishWhy: f.why || noteOf(c.lineIdx), door: billingOnly ? '' : door, billingOnly, ...(kitUnexploded ? { kitUnexploded: true } : {}) });
         });
     });
     return out.sort((a, b) => a.lineIdx - b.lineIdx);
 };
 // The lines a start considers: to-be-finished lines, and every line the classifier sends to the shop
 // (a cut rod quoted with no finish, a fee that rides a pole) — a shelf pick is not a start's business.
-export const oeStartsLine = (plan) => !!plan && !plan.billingOnly && (oeIsTbf(plan.eff || plan.line) || plan.division === DIVISION_CUSTOM);
+// A stock colour is the start's business too (its shelf-or-paint decision); an unexploded kit is named by it.
+export const oeStartsLine = (plan) => !!plan && !plan.billingOnly && (oeIsTbf(plan.eff || plan.line) || plan.division === DIVISION_CUSTOM || plan.door === 'STOCK_FIRST' || plan.door === 'KIT');
 
 // items: [{ so, l, buy }] → the review jobs buildOeReviewPlan takes (pins loaded for assemblies).
 export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }) => {
     const jobs = [];
     for (let i = 0; i < items.length; i++) {
-        const { so, l: soLine, buy, stock, rider, division, linePatch } = items[i];
+        const { so, l: soLine, buy, stock, stockFirst, rider, division, linePatch } = items[i];
         // The line as CPQ's rules make it (oeLinePlansOf's linePatch — a track's sub finish and deducted cut); its
         // POSITION on the sales order is the plan's, since the patched line is a copy.
         const lineIdx = Number.isInteger(items[i].lineIdx) ? items[i].lineIdx : (so.lines || []).indexOf(soLine);
         const l = linePatch ? { ...soLine, ...linePatch } : soLine;
         const erp = U(l.erp);
-        const { part, aliasNote } = resolveOePart(erp, inventory);
+        // A stock colour is planned from its BASE item (H1-2TRVBP/C → H1-2TRVBP in TCP): the shelf first, else its /P painted.
+        const { part, aliasNote } = resolveOePart(stockFirst && isStockColourCode(erp) ? baseCodeOf(erp) : erp, inventory);
         // The finish the line TAKES (oeLinePlansOf: a rider wears its rod's; a track / F-clip its sub finish).
         const finish = U(items[i].finish || oeLineFinish(l));
         if (!part || !finish) continue;
@@ -213,7 +242,7 @@ export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }
             } catch (e) { console.warn('pins load failed', e); }
         }
         jobs.push({
-            key: i, so, line: l, lineIdx, ...(linePatch ? { linePatch } : {}), part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy, stock: !!stock,
+            key: i, so, line: l, lineIdx, ...(linePatch ? { linePatch } : {}), part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy, stock: !!stock, ...(stockFirst ? { stockFirst: true } : {}),
             ...(division ? { division } : {}), ...(rider ? { rider: true } : {}),
             // A per-foot line NEEDS feet from the vendor (the SO stored pieces + billedFeet).
             ...(l.perFoot ? { buyQty: Number(l.billedFeet) || (Number(l.qty) || 0) * (Number(l.feetPer) || 1) } : {}),
@@ -490,9 +519,12 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], finishes
     try {
         const planItems = [];
         for (const pl of open) {
-            const { line, lineIdx, erp, part, door } = pl;
+            const { line, lineIdx, erp, door } = pl;
+            // A stock colour is planned from its base item — the /C record need not be in the library for the paint path.
+            const part = pl.part || (door === 'STOCK_FIRST' ? resolveOePart(baseCodeOf(erp), inventory).part : null);
             const fin = pl.finish;
             const named = (reasons) => review.push({ lineIdx, erp, finish: fin || pl.ownFinish, reasons });
+            if (door === 'KIT') { named([`${erp} is a kit and its parts are not on the order — re-read the lines (10.5) or enter it again (tab 7) so its parts are made and picked`]); continue; }
             if (!part) { named([`${erp} is not in the Master Library (real codes, customer codes and aliases searched)`]); continue; }
             if (!fin) { named([pl.finishWhy || 'no finish recorded on this line']); continue; }
             if (!(Number(line.qty) > 0)) { named(['the line has no quantity']); continue; }
@@ -505,7 +537,7 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], finishes
             // line with 110 ft on hand against 50 needed — nothing to order, no PO drafted — still
             // waited on a person to decide a purchase that did not exist. The plan reads the stock;
             // autoRunnable then asks the honest question: is there a purchase to decide?
-            else planItems.push({ so, l: line, lineIdx, buy: door === 'BUY', stock: door === 'STOCK', division: pl.division, finish: fin, ...(pl.linePatch ? { linePatch: pl.linePatch } : {}) });
+            else planItems.push({ so, l: line, lineIdx, buy: door === 'BUY', stock: door === 'STOCK', stockFirst: door === 'STOCK_FIRST', division: pl.division, finish: fin, ...(pl.linePatch ? { linePatch: pl.linePatch } : {}) });
         }
         if (planItems.length) {
             const jobs = await buildOeJobs({ items: planItems, inventory, log });

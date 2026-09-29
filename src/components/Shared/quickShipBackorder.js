@@ -10,6 +10,7 @@ import { planSmallLines } from './splitPlan.js';
 import { coverCodesOf } from './backorder.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
 import { finishedCodeOf } from './subFinish.js';
+import { isKitLine } from './itemKit.js';
 
 const num = (v) => Number(v) || 0;
 
@@ -22,7 +23,8 @@ const num = (v) => Number(v) || 0;
 export function quickShipPullLines(lines = [], trvDocLines = []) {
     const out = [];
     (lines || []).forEach(l => {
-        if (!l || !l.erp) return;
+        // A KIT LINE is sold, never stocked or picked — its PARTS are what the shelf is checked for (Shared/itemKit).
+        if (!l || !l.erp || isKitLine(l)) return;
         const qty = l.perFoot ? num(l.qty) : num(l.eachQty != null ? l.eachQty : l.qty);
         if (qty <= 0) return;
         // A TO-BE-FINISHED LINE IS CHECKED AS THE PIECE IT BECOMES (Stuart 2026-09-27): its finished code
@@ -37,6 +39,8 @@ export function quickShipPullLines(lines = [], trvDocLines = []) {
         out.push({
             legacyErpId: code, partName: l.name || '', qty,
             ...(plated ? { finishOutsourced: true } : (l.toBeFinished && fin ? { finishOutsourced: false } : {})),
+            // A stock-colour part: the shelf first, else painted (Shared/splitPlan) — a backorder only when its /P and raw are short.
+            ...(l.stockColour ? { stockColour: true, ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}) } : {}),
         });
     });
     (trvDocLines || []).forEach(d => {

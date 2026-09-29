@@ -176,5 +176,18 @@ for (const type of MONEY_DOC_TYPES) {
         '  SM: Row 2 — Net Line Total');
 }
 
+// ── AN ITEM KIT IS WHAT THE CUSTOMER BOUGHT (Stuart 2026-09-28, Shared/itemKit): the kit line — their number, its price —
+//    on every money document; its parts (hidden, $0) are not. A traverse SYSTEM holder keeps its old treatment. ──
+{
+    const kitDoc = [
+        { name: '2" Traverse Wall Bracket', legacyErpId: 'H1-2TRV-WB/C', clientSku: 'H3642F', qty: 50, price: 14, total: 700, isKit: true, itemKit: true },
+        { name: 'Backplate', legacyErpId: 'H1-2TRVBP/C', qty: 50, price: 0, total: 0, hidden: true, inKit: true, kitOf: 'H1-2TRV-WB/C' },
+        { name: 'Lower Arm', legacyErpId: 'H1-2TRVLA/C', qty: 50, price: 0, total: 0, hidden: true, inKit: true, kitOf: 'H1-2TRV-WB/C' },
+        { name: 'Traverse system', legacyErpId: 'H1-2TRV-4M/P', qty: 1, price: 900, total: 900, isKit: true },
+    ];
+    eq('on the invoice: the item kit under the customer\'s number at its price — no parts, no traverse holder', customerDocLines(kitDoc, 'INVOICE').map(l => [l.legacyErpId, l.total]), [['H3642F', 700]]);
+    eq('on the quote the same', customerDocLines(kitDoc, 'QUOTE').map(l => l.legacyErpId), ['H3642F']);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

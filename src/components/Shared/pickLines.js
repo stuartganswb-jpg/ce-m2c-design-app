@@ -1,4 +1,5 @@
 import { committedQtyOf } from './committedBins.js';
+import { isKitLine } from './itemKit.js';
 import { finishedCodeOf } from './subFinish.js';
 // ══ ONE READER FOR AN ORDER'S LINES ═══════════════════════════════════════════════════════════
 //
@@ -127,7 +128,8 @@ export const soLineCodeOf = (l) => {
 // A FEE ON AN ORDER IS NEVER PICKED OR PACKED (Stuart 2026-09-27). A fee cut into a pole (a French return, a
 // miter) rides the pole's shop cut list — the start stamps it `rider`; a billing-only fee is just money. Tab 7
 // stores a fee with no flag, so the library's word counts too: `isFeeCode(code)` → is the item a Fee record.
-export const soLineIsFee = (so, l, idx, isFeeCode = null) => !!l && (lineIsFeeish(l) || !!l.isFee
+// A KIT LINE is sold and billed, never picked or gathered (Shared/itemKit, 2026-09-28): its PARTS, beneath it, are.
+export const soLineIsFee = (so, l, idx, isFeeCode = null) => !!l && (lineIsFeeish(l) || !!l.isFee || isKitLine(l)
     || !!(so && so.oeGen && so.oeGen[idx] && so.oeGen[idx].rider)
     || (typeof isFeeCode === 'function' && !!isFeeCode(up(l.erp))));
 // A line the warehouse PICKS OFF THE SHELF for the order: a stocked line, or a plated to-be-finished line the

@@ -36,6 +36,7 @@ import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { platingLineRateOf } from '../Shared/platingRate';
+import { isKitLine } from '../Shared/itemKit';
 import { printUomLabels, printSalesOrderLabels, printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, printBoxLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { partImageOf, buildSpeciesBaseIndex } from '../Shared/partPicture';
 import { encodeUomScan, uomDisplay } from '../Shared/labelScan';
@@ -5528,10 +5529,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {/* A made-to-order line: the pieces ARRIVE from the finishing floor (in-house)
                                                     or the plater (outsourced) — do NOT pull the raw off the shelf for it
                                                     (its WO / plating demand carries the pull lines). */}
-                                                {feeLine(o, l, i) ? <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🔧 {(o.oeGen && o.oeGen[i] && o.oeGen[i].rider) ? 'rides the pole — fabrication on the shop cut list, not picked' : 'fee — billed on the order, not picked'}</div>
-                                                : l.toBeFinished && (soLineIsShelfPick(o, l, i)
+                                                {feeLine(o, l, i) ? <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>{isKitLine(l) ? '🧰 kit — sold as one; its parts, beneath it, are what is picked or made' : `🔧 ${(o.oeGen && o.oeGen[i] && o.oeGen[i].rider) ? 'rides the pole — fabrication on the shop cut list, not picked' : 'fee — billed on the order, not picked'}`}</div>
+                                                : (l.toBeFinished || (l.stockColour && o.oeGen && o.oeGen[i] && o.oeGen[i].kind === 'WO')) && (soLineIsShelfPick(o, l, i)
                                                     ? <div style={{ color: '#3a7d44', fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>📦 {lineCodeOf(l)} IN STOCK — pick it from the shelf into this order</div>
-                                                    : <div style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🎨 TO BE FINISHED · {l.finishCode || ''} — {lineCodeOf(l)} arrives from {l.finishOutsourced ? 'the plater (WMS Plating)' : 'the finishing floor'}, do not pull raw</div>)}
+                                                    : <div style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🎨 TO BE FINISHED · {l.finishCode || l.subFinishCode || ''} — {lineCodeOf(l)} arrives from {l.finishOutsourced ? 'the plater (WMS Plating)' : 'the finishing floor'}, do not pull raw</div>)}
                                             </td>
                                             <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.toBeFinished ? theme.brass : (l.bin ? theme.ink : theme.inkSoft), borderBottom: `1px solid ${theme.paper2}` }}>{l.toBeFinished && !soLineIsShelfPick(o, l, i) ? (l.finishOutsourced ? 'FROM PLATING' : 'FROM FINISHING') : (l.toBeFinished ? 'SHELF' : (l.bin || 'UNASSIGNED'))}</td>
                                             {(() => {

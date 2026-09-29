@@ -21,6 +21,7 @@ import { customerPriceLevel } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { sizeKeyOf, SIZE_FAMILIES, speciesVariantOf } from "../Shared/sizeMatrix";
 import { takesNoFinish } from "../Shared/finishLabel";
+import { isItemKit, itemKitOrderLinesOf } from "../Shared/itemKit";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
 import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode, isAliasDoc, realPartOf, aliasTargetIdOf } from "../Shared/aliasIdentity";
 
@@ -832,6 +833,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             // …or that it wears nothing: an item tagged Unfinished, cut only (2026-09-28).
             ...(opts && opts.noFinish ? { noFinish: true } : {}),
             ...(opts && opts.feeRule ? { feeRule: opts.feeRule } : {}),
+            // AN ITEM KIT (Shared/itemKit, 2026-09-28): the kit line is sold and billed (no NetSuite item — its money rides
+            // the rollup); each part rides beneath it at $0, made and picked as itself, in the kit's finish or stock colour.
+            ...(opts && opts.isKit ? { isKit: true, itemKit: true, kitCode: opts.kitCode || '' } : {}),
+            ...(opts && opts.inKit ? { inKit: true, kitOf: opts.kitOf || '', hidden: true } : {}),
+            ...(opts && opts.subFinishCode ? { subFinishCode: opts.subFinishCode } : {}),
+            ...(opts && opts.stockColour ? { stockColour: true } : {}),
             // A traverse components-configurator line names the KIT it belongs to, so the save-time
             // explosion never consumes the same component a second time (E6.1, 2026-09-03).
             ...(opts && opts.trvOfKit ? { trvOfKit: opts.trvOfKit } : {}),
@@ -843,10 +850,35 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         }]);
     };
 
+    // ── AN ITEM KIT GOES ON AS ITS PARTS (Stuart 2026-09-28: "correct and very important rule for all screens") ─────
+    // The kit line — the record the operator picked, so it prices and prints as they sold it — then each part beneath it
+    // at $0, in the kit's finish or stock colour (Shared/itemKit: the same parts CPQ's engine builds). Returns false when
+    // the item is not a kit.
+    const kitCodeLookup = (c) => allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c || '').toUpperCase()) || null;
+    const pushItemKitLines = (it, qty, { finishCode = '', note = '', rateOverride = null, aliasOpts = {} } = {}) => {
+        const k = itemKitOrderLinesOf({ line: { erp: erpOf(it), qty: Math.max(1, parseInt(qty) || 1), finishCode }, findByCode: kitCodeLookup, findPart: (id) => itemById(id) || null });
+        if (!k) return false;
+        if (k.missing.length) { alert(`${erpOf(it)} is a kit, and ${k.missing.join(', ')} in it is not in the library — fix the kit's parts in the Master Library first. Nothing was added.`); return true; }
+        pushLine(it, qty, note || `KIT · ${k.parts.length} part${k.parts.length === 1 ? '' : 's'} below`, null, { noPack: true, noNs: true, isKit: true, kitCode: k.kitLine.kitCode, rateOverride, ...aliasOpts });
+        k.parts.forEach(pt => {
+            const rec = kitCodeLookup(pt.erp) || itemById(pt.partId);
+            if (!rec) return;
+            pushLine(rec, pt.qty, `in kit ${erpOf(it)}${pt.finishCode ? ` · TO BE FINISHED · ${pt.finishCode}` : (pt.subFinishCode ? ` · ${pt.subFinishCode} (shelf, else painted)` : '')}`, null, {
+                noPack: true, rateOverride: 0, inKit: true, kitOf: erpOf(it),
+                ...(pt.finishCode ? { finishCode: pt.finishCode, toBeFinished: true } : {}),
+                ...(pt.subFinishCode ? { subFinishCode: pt.subFinishCode, stockColour: true } : {}),
+                ...(pt.noFinish ? { noFinish: true } : {}),
+            });
+        });
+        addLog(`Kit ${erpOf(it)} ×${qty}: ${k.parts.map(pt => `${pt.qty} × ${pt.erp}${pt.finishCode ? ` (${pt.finishCode})` : ''}`).join(', ')} — the parts are made and picked; the kit is what the customer buys.`, 'success');
+        return true;
+    };
+
     const addQuick = () => {
         const it = itemById(quickItemId);
         if (!it) return alert('Pick a stocked item first.');
         if (!(parseInt(quickQty) > 0)) return alert('Enter a quantity.');
+        if (pushItemKitLines(it, quickQty)) { setQuickItemId(''); setQuickQty(''); return; }
         pushLine(it, quickQty, '');
         setQuickItemId(''); setQuickQty('');
         addLog(`Added ${erpOf(it)} ×${quickQty}`, 'success');
@@ -865,7 +897,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const rawOk = (it) => !!it
             && !isFinished(it)                            // no /SUFFIX — this is the mill part
             && !isFeeItemRecord(it)
-            && it.partClass !== 'Kit'
+            && (it.partClass !== 'Kit' || isItemKit(it))    // an item kit IS offered: it goes on as its parts in the finish
             && it.manufacturingSpecs?.isRetired !== true
             && !!erpOf(it);
         return allItems.filter(it => {
@@ -896,6 +928,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const isFee = isFeeItemRecord(it);
         const rule = isFee ? feeRuleOf(it.manufacturingSpecs) : null;
         const qty = (isFee && rule.mode === 'PERCENT') ? 1 : (parseInt(ccQty[it.id]) || 1);
+        if (!isFee && pushItemKitLines(it, qty)) { setCcQty(prev => ({ ...prev, [it.id]: '' })); return; }
         pushLine(it, qty, isFee && rule.mode === 'PERCENT' ? feeRuleSummary(rule, null) : '', null,
             isFee ? { noPack: true, feeRule: rule } : {});
         addLog(`Customer add-on: ${erpOf(it)}${isFee && rule.mode === 'PERCENT' ? ` (${rule.percent}% of the order)` : ` ×${qty}`}`, 'success');
@@ -927,6 +960,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         // ── AN ITEM TAGGED UNFINISHED NEVER WEARS A FINISH (Stuart 2026-09-28: "the 3 need to be identical in how they
         // handle items to be finished") — CPQ's rule (Shared/finishLabel.takesNoFinish, the item wins). Such an item
         // comes here only to be CUT (the clear acrylic rod): no finish, the shop cuts it, it goes to packaging.
+        // AN ITEM KIT IN A FINISH (2026-09-28): its parts go on in that finish, beneath the kit (Shared/itemKit).
+        if (isItemKit(real)) {
+            if (!tbfFinish) return alert('Pick the finish the kit is made in.');
+            const kPriced = parseFloat(tbfPrice);
+            pushItemKitLines(real, tbfQty, { finishCode: tbfFinish, note: `KIT · TO BE FINISHED · ${tbfFinish}`, rateOverride: Number.isFinite(kPriced) && Math.abs(kPriced - tbfResolved) > 0.004 ? kPriced : null, aliasOpts: isAl ? { aliasErp: erpOf(it), aliasItemId: it.id } : {} });
+            setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setTbfPrice(''); setTbfFeet(''); setTbfCut('');
+            return;
+        }
         const noFinishItem = takesNoFinish(real);
         if (noFinishItem && tbfFinish) return alert(`${erpOf(real)} is tagged Unfinished in the Master Library — CPQ never finishes it, and neither does this form. Leave the finish blank to have it cut only.`);
         if (!noFinishItem && !tbfFinish) return alert('Pick the finish. A part cannot go to the floor as "painted" without saying which paint.');
@@ -1232,13 +1273,16 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         // NetSuite gets the exploded COMPONENTS (consumed from inventory, $0 rate) plus ONE generic
         // traverse $-holder carrying the order's traverse dollars so the SO total matches the quote.
         const trvOrder = pricedCart.filter(l => l.trvKitCode);
-        const unmapped = pricedCart.filter(l => !l.nsId && !l.trvKitCode);
+        // AN ITEM KIT has no NetSuite item BY DESIGN (Stuart 2026-09-28: "just push the 3 independant parts for consumption"):
+        // its parts push as real lines at $0, and the kit's money rides the rollup holder — the CPQ push's shape.
+        const unmapped = pricedCart.filter(l => !l.nsId && !l.trvKitCode && !l.isKit);
         if (unmapped.length) {
             if (!window.confirm(`${unmapped.length} line(s) have no NetSuite ID and will be skipped:\n\n${unmapped.map(l => `• ${l.erp || l.name}`).join('\n')}\n\nContinue with the rest?`)) return;
         }
-        const lines = pricedCart.filter(l => l.nsId);
+        const lines = pricedCart.filter(l => l.nsId || l.isKit);
+        const kitSold = lines.filter(l => l.isKit);
         if (!lines.length && !trvOrder.length) return alert('No lines have a NetSuite item ID. Sync these items to NetSuite first.');
-        if (!window.confirm(`Create a ${asLabel} for ${selectedCustomer?.name || customerId} with ${lines.length} stock line(s)${trvOrder.length ? ` + a traverse system (components consumed + $ holder)` : ''}?\n\nThe record is saved HERE first, and the NetSuite write rides the staged sync (posts in ~1 min — RTG Transmit Log / 11.1 Sync Queue show progress).`)) return;
+        if (!window.confirm(`Create a ${asLabel} for ${selectedCustomer?.name || customerId} with ${lines.length - kitSold.length} stock line(s)${kitSold.length ? ` (the parts of ${kitSold.length} kit${kitSold.length === 1 ? '' : 's'} at $0, each kit's price on the rollup)` : ''}${trvOrder.length ? ` + a traverse system (components consumed + $ holder)` : ''}?\n\nThe record is saved HERE first, and the NetSuite write rides the staged sync (posts in ~1 min — RTG Transmit Log / 11.1 Sync Queue show progress).`)) return;
 
         setPushing(true);
         try {
@@ -1409,7 +1453,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     // PACKS never reach NetSuite: we stock and transmit EACH (2 × 7-pack = 14), and
                     // the pack only shows on the customer-facing quote/invoice. The description
                     // still names it so the SO reads the way the customer ordered.
-                    items: lines.map(l => ({
+                    items: lines.filter(l => !l.isKit).map(l => ({
                         item: { id: l.nsId.toString() },
                         quantity: l.eachQty,
                         rate: parseFloat((l.rate || 0).toFixed(2)),
@@ -1418,7 +1462,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         // they ordered, while the LINE ITEM stays the real stocked part.
                         description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : l.feeRule ? ' [fee]' : ' [Quick Ship stock]'}`,
                         ...((String(l.lineMemo || '').trim() || lineTag) ? { custcol3: String(l.lineMemo || '').trim().slice(0, 300) || lineTag } : {}),
-                    })).concat(trvPushLines.map(t => (kitMemo || lineTag) ? { ...t, custcol3: String(kitMemo || lineTag).slice(0, 300) } : t))
+                    })).concat(kitSold.map(l => ({
+                        // THE KIT'S MONEY (Shared/itemKit): one rollup line per kit sold — its parts are the $0 lines above.
+                        item: { id: '61502' },   // the CPQ rollup item — the same holder the CPQ push puts a kit's money on
+                        quantity: l.eachQty, rate: parseFloat((l.rate || 0).toFixed(2)), price: { id: '-1' },
+                        description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.erp} ${l.name} [kit — its parts are the $0 lines]${l.note ? ' (' + l.note + ')' : ''}`,
+                        ...((String(l.lineMemo || '').trim() || lineTag) ? { custcol3: String(l.lineMemo || '').trim().slice(0, 300) || lineTag } : {}),
+                    }))).concat(trvPushLines.map(t => (kitMemo || lineTag) ? { ...t, custcol3: String(kitMemo || lineTag).slice(0, 300) } : t))
                 }
             }, asType);
 
@@ -1463,6 +1513,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 qty: l.eachQty, price: l.rate, total: l.rate * l.eachQty, legacyErpId: l.erp,
                                 ...(indent ? { inKit: true } : {}),
                                 ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}),
+                                // An item kit (Shared/itemKit): the kit row is what the customer bought; its parts are hidden.
+                                ...(l.isKit ? { isKit: true, itemKit: true } : {}),
+                                ...(l.inKit ? { inKit: true, hidden: true } : {}),
                             });
                             const partRow = (d) => ({ name: `   · ${d.code} — ${d.name}${d.note ? ` · ${d.note}` : ''}`, qty: d.qty, price: 0, total: 0, legacyErpId: d.code, inKit: true });
                             // The extra footage is a CHARGE, not a content — its own line, its own
@@ -1585,7 +1638,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // NetSuite ($0 lines) and prints them on the documents, but they never reached lines[] — so the SO Pack
                 // never listed the track, fascia and brackets to pick. Each goes on as the item NetSuite consumes, in
                 // NetSuite's unit, a shelf pick of its kit (trvComponent) — exactly what leaves the shelf.
-                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
+                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -1615,7 +1668,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     // Loose lines invoice in the unit the customer BUYS: "2 × 7 PACK" at the pack
                     // price, with the each count kept for reference. qty stays the each count so an
                     // older invoice reader (which knows nothing about packs) still totals correctly.
-                    lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', packSize: l.packSize || 1, rate: l.rate, total: l.rate * l.eachQty, note: l.note || '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) }));
+                    // An item kit's parts are the kit's contents — the customer pays the KIT line (Shared/itemKit).
+                    lines.filter(l => !l.kitKey && !l.inKit).forEach(l => out.push({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', packSize: l.packSize || 1, rate: l.rate, total: l.rate * l.eachQty, note: l.note || '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) }));
                     // The set % is already in every rate above — the invoice says so on one $0 row.
                     if (orderDiscountPct > 0) out.push({ type: 'ITEM', erp: '', realErp: '', name: `Order Discount (${orderDiscountPct}%) — item prices are net of it · saved $${orderDiscountSaved.toFixed(2)}`, qty: 1, packs: null, packUom: '', packSize: 1, rate: 0, total: 0, note: '', isDiscount: true });
                     return out;

@@ -36,6 +36,7 @@
 
 import { customerKeys, clientPriceFor, findClientPriceRow } from './clientPricing.js';
 import { takesNoFinish } from './finishLabel.js';
+import { isItemKit, kitComponentsOf, kitPartFinishOf } from './itemKit.js';
 import { fabricutPriceOf, fabricutCodeOf, priceLevelShort, isPlatedSuffix } from './priceLevels.js';
 import { finishVariantOf, stockColourVariantOf } from './finishVariant.js';
 import { speciesVariantOf } from './sizeMatrix.js';
@@ -223,24 +224,25 @@ export function priceChoice(choice, part, ctx = {}) {
 //     kit's price) and `hidden` (built and picked, never on a customer document), wearing the finish
 //     the kit was given, resolved to its own /P · /EPn item by the same identity rule as any part.
 // Quantities multiply: three centre brackets are three cuffs and three arms.
-export const isItemKit = (part) => !!part && part.partClass === 'Kit'
-    && Array.isArray(part.manufacturingSpecs?.kitComponents) && part.manufacturingSpecs.kitComponents.length > 0
-    && !part.manufacturingSpecs?.kitAlign;
+// The kit and each part's finish come from ONE module (Shared/itemKit, 2026-09-28) — the order doors read the same.
+export { isItemKit };
 
 function kitComponentLines(holder, kitPart, ctx) {
     const { findPart } = ctx;
     const missing = [];
-    const lines = (kitPart.manufacturingSpecs.kitComponents || []).map(c => {
+    const lines = kitComponentsOf(kitPart).map(c => {
         const part = typeof findPart === 'function' ? findPart(c.partId) : null;
-        const per = Number(c.qty) > 0 ? Number(c.qty) : 1;
+        const per = c.per;
         if (!part) missing.push(String(c.partId || '?'));
-        const finishCode = part && !takesNoFinish(part) ? (holder.finishCode || '') : '';
-        const p = priceChoice({ partId: c.partId, role: holder.role }, part, { ...ctx, finishCode, subFinishCode: '' });
+        // A PART WEARS THE KIT'S FINISH — OR ITS STOCK COLOUR (Stuart 2026-09-28). The kit's traverse colour (TCP → /C)
+        // was dropped here, so a /C wall-bracket kit billed and pushed its backplate, lower arm and arm RAW.
+        const f = kitPartFinishOf(part, { finishCode: holder.finishCode, subFinishCode: holder.subFinishCode });
+        const p = priceChoice({ partId: c.partId, role: holder.role }, part, { ...ctx, finishCode: f.finishCode, subFinishCode: f.subFinishCode });
         return {
             partId: c.partId, name: part?.itemName || String(c.partId || ''), role: holder.role || '', position: holder.position || '',
             sku: '', aliasCode: '', billedId: p.billedId,
             qty: per * (Number(holder.qty) > 0 ? Number(holder.qty) : 1), perFoot: false,
-            finishCode, noFinish: !finishCode,
+            finishCode: f.finishCode, ...(f.subFinishCode ? { subFinishCode: f.subFinishCode } : {}), noFinish: f.noFinish,
             unit: 0, total: 0, source: PRICE_SOURCES.BASE, detail: `in the ${holder.billedId || 'kit'} kit`,
             hidden: true, inKit: true, kitOf: holder.billedId || '',
         };

@@ -1,5 +1,5 @@
 // Stock-first at the split, offline.   node scripts/splitPlan.test.mjs
-import { planSmallLines, isPlatedLine, customShopQtyOf, shopLeadLineOf, shopLeadCodeOf } from '../src/components/Shared/splitPlan.js';
+import { planSmallLines, isPlatedLine, customShopQtyOf, shopLeadLineOf, shopLeadCodeOf, coverCodesOf } from '../src/components/Shared/splitPlan.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -62,6 +62,25 @@ eq('empty → 0', customShopQtyOf([]).qty, 0);
     eq('a one-line job is its line (unchanged)', [shopLeadCodeOf([{ legacyErpId: 'H1-75R', qty: 50, cutLength: 7.5 }]), shopLeadCodeOf([{ partId: 'h1-bkt', qty: 4 }])], ['H1-75R', 'H1-BKT']);
     eq('riders alone name nothing; nothing names nothing', [shopLeadCodeOf([{ legacyErpId: 'H1-FRPF', qty: 2, rider: true }, { legacyErpId: 'H1-MITER', qty: 2, rider: true }]), shopLeadCodeOf([]), shopLeadLineOf(null)], ['', '', null]);
     eq('two different poles: the first pole, as the CPQ split names its shop document', shopLeadCodeOf([{ legacyErpId: 'H1-2TRV', qty: 50, cutLength: 17.5, rider: false }, { legacyErpId: 'H1-2TRVCLP', qty: 50, cutLength: 17 }]), 'H1-2TRV');
+}
+// A STOCK COLOUR: THE SHELF FIRST, ELSE PAINTED FROM ITS /P, ELSE RAW (Stuart 2026-09-28) — the CPQ split, the same rule
+// as Order Entry's STOCK_FIRST door. A kit's backplate in champagne is H1-2TRVBP/C.
+{
+    const bp = { legacyErpId: 'H1-2TRVBP/C', name: 'Backplate', qty: 50, subFinishCode: 'TCP' };
+    const st = (m) => ({ map: m, unitsKnown: true });
+    const cov = planSmallLines([bp], 'S04', st({ 'H1-2TRVBP/C': { available: 60 }, 'H1-2TRVBP/P': { available: 0 }, 'H1-2TRVBP': { available: 0 } }));
+    eq('the shelf covers it → a pick of the /C item, nothing painted', [cov.pick.map(l => [l.legacyErpId, l.qty]), cov.inHouse.length, cov.backorder.length], [[['H1-2TRVBP/C', 50]], 0, 0]);
+    const short = planSmallLines([bp], 'S04', st({ 'H1-2TRVBP/C': { available: 20 }, 'H1-2TRVBP/P': { available: 80 }, 'H1-2TRVBP': { available: 0 } }));
+    eq('20 of 50 on the shelf → the whole line painted TCP from its /P; the shelf pieces stay', [short.pick.length, short.inHouse.map(l => [l.legacyErpId, l.finishCode, l.qty, l.paintedFor]), short.backorder.length], [0, [['H1-2TRVBP/P', 'TCP', 50, 'H1-2TRVBP/C']], 0]);
+    const raw = planSmallLines([bp], 'S04', st({ 'H1-2TRVBP/C': { available: 0 }, 'H1-2TRVBP/P': { available: 0 }, 'H1-2TRVBP': { available: 70 } }));
+    eq('no /C and no /P, raw on hand → still painted (the /P converted from raw) — not a backorder', [raw.inHouse.length, raw.backorder.length], [1, 0]);
+    const none = planSmallLines([bp], 'S04', st({ 'H1-2TRVBP/C': { available: 0 }, 'H1-2TRVBP/P': { available: 0 }, 'H1-2TRVBP': { available: 0 } }));
+    eq('nothing anywhere → painted, AND a true backorder of the /P (the floor cannot make it yet)', [none.inHouse.length, none.backorder.map(b => [b.code, b.kind, b.qty])], [1, [['H1-2TRVBP/P', 'painted', 50]]]);
+    const norow = planSmallLines([bp], 'S04', st({ 'H1-2TRVBP/P': { available: 80 } }));
+    eq('a colour item with no stock record is simply not on the shelf → painted', norow.inHouse.map(l => l.legacyErpId), ['H1-2TRVBP/P']);
+    eq('its cover codes: the colour item, its /P, its raw', coverCodesOf(bp, 'S04'), ['H1-2TRVBP/C', 'H1-2TRVBP/P', 'H1-2TRVBP']);
+    const plated = planSmallLines([{ legacyErpId: 'H1-1BF/EP2', qty: 50 }], 'EP2', st({ 'H1-1BF/EP2': { available: 10 } }));
+    eq('a PLATED line is unchanged: picked, the rest a plated backorder (never painted)', [plated.pick.length, plated.inHouse.length, plated.backorder.map(b => b.kind)], [1, 0, ['plated']]);
 }
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
