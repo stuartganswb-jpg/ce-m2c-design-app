@@ -28,6 +28,7 @@ import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 import RodPieceInventory, { RodCutPanel } from '../Shared/RodPieceInventory';
 import { shopDb, cleanId, SHOP_TABS } from './shopShared';
+import { routingForOrder } from './routingMatch';
 import { millBaseOf, finishRouteOf, finishSuffixOf } from '../Shared/finishRouting';
 import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, shortBuildStamps } from '../Shared/scrapClose';
 
@@ -999,7 +1000,8 @@ const ShopFloor = () => {
                         <select onChange={(e) => {
                             const order = customOrders.find(o => o.id === e.target.value);
                             if (order) {
-                                const matchedRouting = routings.find(r => r.displayName === order.item || r.partId === order.item || (order.partNum && r.partId === order.partNum));
+                                // By the item CODE too — routings are filed under the library id and show the code (routingMatch).
+                                const matchedRouting = routingForOrder(routings, order);
                                 setMillForm({
                                     ...millForm,
                                     partNum: matchedRouting ? matchedRouting.partId : (order.partNum || ''),
