@@ -5149,7 +5149,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     }
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: theme.paper, fontFamily: theme.sans }}>
+        // THE WHOLE PAGE SCROLLS (Kevin, App Imp 2026-09-28: "top portion of screen takes up majority of
+        // space … not able to scroll to use full page"). The page was exactly one screen tall with only
+        // <main> scrolling, so the header — title, operator, three rows of tabs on a tablet — never left
+        // the screen. At least one screen tall now, with the page itself scrolling: the header scrolls away.
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', backgroundColor: theme.paper, fontFamily: theme.sans }}>
 
             {/* TABLET-FIRST HEADER (Stuart 2026-08-20: "the warehouse app is not filling the android
                 tablet screen well and she often zooms in and out"). The title and a dozen tabs on one
@@ -5204,7 +5208,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 </div>
             </header>
 
-            <main style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
+            <main style={{ flex: 1, padding: '30px' }}>
                 
                 {/* 📦 TAB: PICK QUEUE */}
                 {activeTab === 'QUEUE' && (
