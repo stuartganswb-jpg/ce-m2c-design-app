@@ -1,4 +1,5 @@
 import { isQuickShip, pickableLinesOf } from './pickLines.js';
+import { poleCoatIndexOf } from './floorActivity.js';
 // WHERE IS IT? — the one answer, derived (Stuart 2026-08-03: "of utmost importance is the clarity
 // on the status of an item, my team is confused and i want them to see clearly each stage exactly
 // where something is at… from the time an order hits the custom or finishing floor till the time
@@ -131,9 +132,8 @@ const runningOf = (tasks, keys) => {
 // One finishing stream (small parts, or poles). `len` = the recipe's coat count.
 function finishingStream(wo, { key, label, idxField, taskKeys, ovenKey, len }) {
     const tasks = wo.tasks || {};
-    const idx = num(idxField === 'poleStepIndex'
-        ? (wo.poleStepIndex !== undefined && wo.poleStepIndex !== null ? wo.poleStepIndex : wo.currentStepIndex)
-        : wo.currentStepIndex);
+    // The poles' own coat — never the small parts' on a two-track document (Shared/floorActivity.poleCoatIndexOf).
+    const idx = num(idxField === 'poleStepIndex' ? poleCoatIndexOf(wo) : wo.currentStepIndex);
     const coat = `coat ${Math.min(idx + 1, len || 1)} of ${len || '?'}`;
 
     if (len && idx >= len) return { key, label, stage: 'FINISHED', detail: `done (${len}/${len})` };

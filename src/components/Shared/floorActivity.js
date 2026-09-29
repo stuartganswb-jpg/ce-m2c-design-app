@@ -121,6 +121,19 @@ export const woHasSmallParts = (wo) => {
     if (!poleQty) return true;
     return total > poleQty;
 };
+// THE POLES' OWN COAT — one reading for every screen (Stuart 2026-09-29, SO60551 Back Base 2 S08). Poles advance on
+// `poleStepIndex`, which the floor writes the moment the poles finish a coat. A document that never set it used to let the
+// poles BORROW the small parts' coat — right for the documents older than the two tracks, wrong on a document that carries
+// both: the finials finished coat 1 and the poles jumped to coat 2, stranding their coat-1 hand step. With poles AND small
+// parts, an unset index means the poles have not finished a coat yet — coat 1. A pole-only document keeps the old reading
+// (there is no second track to borrow from). The writers set poleStepIndex 0 at release (Shared/rowPairShape.docStreamsOf);
+// this holds the floor to the same answer whatever wrote the document (a stock build, a paint run, a reset).
+export const poleCoatIndexOf = (wo) => {
+    if (!wo) return 0;
+    if (wo.poleStepIndex !== undefined && wo.poleStepIndex !== null) return Number(wo.poleStepIndex) || 0;
+    if (woHasPoles(wo) && woHasSmallParts(wo)) return 0;
+    return Number(wo.currentStepIndex) || 0;
+};
 // FINISH-STREAM EXCEPTION (the elbow): a WO stamped finishStream 'POLES' (from the item
 // master's flag) runs its PARTS stream on the -P recipe — physically still a small part on a
 // sled, finished to match the poles. 'SMALL' forces the reverse on a pole item.

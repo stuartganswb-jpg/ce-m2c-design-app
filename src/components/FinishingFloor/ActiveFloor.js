@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { isFloorSupervisor } from '../Shared/finishingRoles';
 import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
-    FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, sprayStationLockOf, sprayStationPatch } from '../Shared/floorActivity';
+    FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, sprayStationLockOf, sprayStationPatch, poleCoatIndexOf } from '../Shared/floorActivity';
 import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
@@ -189,7 +189,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   };
   // woHasPoles / woHasSmallParts / partsStreamOf / poleStreamOf / isHandStep live in
   // Shared/floorActivity (moved 2026-09-23 so the Setup Queue reads the same answers).
-  const poleIdxOf = (wo) => (wo.poleStepIndex !== undefined && wo.poleStepIndex !== null) ? wo.poleStepIndex : (wo.currentStepIndex || 0);
+  // The poles' own coat — never the small parts' on a two-track document (Shared/floorActivity.poleCoatIndexOf, 2026-09-29).
+  const poleIdxOf = (wo) => poleCoatIndexOf(wo);
   // STREAM RECIPE VARIANTS (Stuart & Grace 2026-08-11): the order says `CP`; the small parts run
   // `CP-S` and the poles run `CP-P` when those recipes exist — Grace's CP case, where poles take
   // 4 coats of DTM-7/Champagne/hand/30-sheen and the small parts 2 coats of DTM-11/tinted. Base
@@ -1834,7 +1835,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                 <div onClick={() => onViewWo && onViewWo(wo)} title={`${wo.id} — tap for order details`} style={{ color: 'var(--ink)', fontWeight: 500, fontSize: '0.95rem', cursor: onViewWo ? 'pointer' : 'default', textDecoration: onViewWo ? 'underline' : 'none', textDecorationColor: 'var(--line)' }}>{woRef(wo)}</div>
                 {sled && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{sled} Station (Oven)</div>}
                 <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)', margin: '16px 0' }}>{rem} mins</div>
-                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete', [`tasks.${type}.completedAt`]: Date.now(), [`tasks.${type}.completedBy`]: (user && user.name) || task.assignedTo || 'Tablet', [`tasks.${type}.completedVia`]: 'tablet', [`tasks.${type}.completedCoat`]: ((type.startsWith('pole') ? (wo.poleStepIndex ?? wo.currentStepIndex) : wo.currentStepIndex) || 0) + 1 }); }} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
+                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete', [`tasks.${type}.completedAt`]: Date.now(), [`tasks.${type}.completedBy`]: (user && user.name) || task.assignedTo || 'Tablet', [`tasks.${type}.completedVia`]: 'tablet', [`tasks.${type}.completedCoat`]: ((type.startsWith('pole') ? poleCoatIndexOf(wo) : wo.currentStepIndex) || 0) + 1 }); }} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
             </div>
         );
     }
@@ -1882,7 +1883,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                     updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() });
                 }} style={{ width: '100%', padding: '12px', background: disabledStart ? 'var(--paper-2)' : 'var(--ink)', color: disabledStart ? 'var(--ink-soft)' : '#fff', border: disabledStart ? '1px solid var(--line)' : 'none', cursor: disabledStart ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>{btnText}</button>
             ) : (
-                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete', [`tasks.${type}.completedAt`]: Date.now(), [`tasks.${type}.completedBy`]: (user && user.name) || task.assignedTo || 'Tablet', [`tasks.${type}.completedVia`]: 'tablet', [`tasks.${type}.completedCoat`]: ((type.startsWith('pole') ? (wo.poleStepIndex ?? wo.currentStepIndex) : wo.currentStepIndex) || 0) + 1 }); }} style={{ width: '100%', padding: '12px', background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper)'}>Complete Task</button>
+                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete', [`tasks.${type}.completedAt`]: Date.now(), [`tasks.${type}.completedBy`]: (user && user.name) || task.assignedTo || 'Tablet', [`tasks.${type}.completedVia`]: 'tablet', [`tasks.${type}.completedCoat`]: ((type.startsWith('pole') ? poleCoatIndexOf(wo) : wo.currentStepIndex) || 0) + 1 }); }} style={{ width: '100%', padding: '12px', background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper)'}>Complete Task</button>
             )}
         </div>
     )

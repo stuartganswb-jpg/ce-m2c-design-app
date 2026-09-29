@@ -9,7 +9,7 @@
 import {
     woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
     sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, asksSprayStation,
-    sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS,
+    sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS, poleCoatIndexOf,
 } from '../src/components/Shared/floorActivity.js';
 
 let pass = 0, fail = 0;
@@ -72,6 +72,17 @@ eq('a hand or pole task does not lock the small-parts station', sprayStationLock
 eq('to the booth: stamped, and the sled is freed', sprayStationPatch('BOOTH', 'Sandra', 5), { sprayStation: 'BOOTH', sprayStationAt: 5, sprayStationBy: 'Sandra', machineAssigned: null });
 eq('to the spin machine: stamped, the sled untouched', sprayStationPatch(SPRAY_STATIONS.SPIN, 'Sandra', 5), { sprayStation: 'SPIN', sprayStationAt: 5, sprayStationBy: 'Sandra' });
 eq('anything unknown reads as the spin machine, as sprayStationOf does', sprayStationPatch('spn', '', 5).sprayStation, 'SPIN');
+
+// ── THE POLES' OWN COAT (Stuart 2026-09-29, SO60551 Back Base 2 S08: the finials finished coat 1 and the poles jumped
+//    to coat 2, stranding their coat-1 hand step) — one reading for the floor, RTG and the WMS ──
+{
+    const s08 = { currentStepIndex: 1, totalParts: 100, totalPoles: 50, poles: { qty: 50, type: 'POLE' } };
+    eq('a two-track document with no pole coat of its own: the poles are on coat 1, whatever the small parts did', poleCoatIndexOf(s08), 0);
+    eq('…its own coat, once the floor has written one', [poleCoatIndexOf({ ...s08, poleStepIndex: 2 }), poleCoatIndexOf({ ...s08, poleStepIndex: 0 })], [2, 0]);
+    eq('a pole-only document keeps the old reading (no second track to borrow from)', poleCoatIndexOf({ currentStepIndex: 3, totalParts: 20, totalPoles: 20 }), 3);
+    eq('a document with no poles reads its own coat (nothing else asks)', poleCoatIndexOf({ currentStepIndex: 2, totalParts: 40 }), 2);
+    eq('a spin-load rollover (small parts back to coat 1) never moves the poles', poleCoatIndexOf({ ...s08, currentStepIndex: 0, poleStepIndex: 3 }), 3);
+}
 
 console.log(`floorActivity: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
