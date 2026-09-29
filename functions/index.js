@@ -691,6 +691,7 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
 // Only spines RTG dispatched are stamped by C2 (the hq id derives from the shop doc's SHOP-<hqId>),
 // so a hand-keyed shop order never triggers a build. That is correct and worth knowing: this
 // automates RTG's button, not every milling job that ever happens.
+const MILL_BUILD_BIN = 'RAW';   // where a mill build receives (Stuart 2026-09-29) — see the payload below
 exports.onMillComplete = onDocumentWritten('hq_work_orders/{woId}', async (event) => {
     const after = event.data && event.data.after && event.data.after.exists ? event.data.after.data() : null;
     if (!after) return;
@@ -744,9 +745,17 @@ exports.onMillComplete = onDocumentWritten('hq_work_orders/{woId}', async (event
             sourceApp: 'SHOP', createdBy: `auto (mill complete${after.millCompletedBy ? ` · ${after.millCompletedBy}` : ''})`,
             targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${after.nsWoId}/!transform/assemblyBuild`,
             method: 'POST',
+            // THE MILL BUILD LANDS IN RAW (Stuart 2026-09-29: "when we complete the order it should build in
+            // netsuite, have it default and build to the RAW bin and from there it gets either converted
+            // for phosphate, sent to plater, or put in a storage bin depending on the demand"). A bin-tracked
+            // root was refused without it — H2-138-TB3/TB4 (WO11575/WO11577): "Please configure the inventory
+            // detail for the assembly item". The shape is the stock put-away build's, 164 of them posted
+            // through this queue. RAW must exist at the brand's location; the frontend's copy of the name is
+            // Shared/nsWorkOrder.MILL_BUILD_BIN (RTG's ⛏ Mill Build, the retry).
             payload: {
                 quantity: qty,
-                memo: `Mill build ${woDocId} ×${qty}${(Number(after.millScrapQty) || 0) > 0 ? ` (${after.millScrapQty} scrap)` : ''} [app push ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' })} #${obRef.id.slice(0, 6)}]`,
+                inventoryDetail: { inventoryAssignment: { items: [{ binNumber: { refName: MILL_BUILD_BIN }, quantity: qty }] }, quantity: qty },
+                memo: `Mill build ${woDocId} ×${qty}${(Number(after.millScrapQty) || 0) > 0 ? ` (${after.millScrapQty} scrap)` : ''} → ${MILL_BUILD_BIN} [app push ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' })} #${obRef.id.slice(0, 6)}]`,
             },
             writeBack: { collection: 'hq_work_orders', docId: woDocId, patch: { nsRootBuildPosted: true }, idField: 'nsRootBuildId', tranField: 'nsRootBuildTran' },
             status: 'PENDING', attempts: 0, lastError: null, nsId: null, nsTran: null,
