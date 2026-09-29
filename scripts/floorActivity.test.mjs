@@ -9,6 +9,7 @@
 import {
     woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
     sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, asksSprayStation,
+    sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS,
 } from '../src/components/Shared/floorActivity.js';
 
 let pass = 0, fail = 0;
@@ -61,6 +62,16 @@ eq('hand-applied on every coat is never asked', asksSprayStation({ recipe: 'HB',
 eq('the small-parts stream reads its own -P variant (the elbow): all hand there, not asked', asksSprayStation({ recipe: 'CP', totalParts: 4, finishStream: 'POLES' }, recipes), false);
 eq('an unresolvable recipe still asks — a choice is harmless, a missing one is not', asksSprayStation({ recipe: 'NOPE', totalParts: 4 }, recipes), true);
 eq('no document, no question', asksSprayStation(null, recipes), false);
+
+// ── the station moves only before the coat's first spin step — one rule, the floor and the WMS pick ──
+eq('nothing begun → free to move', sprayStationLockOf({ tasks: { spinSetup: { status: 'Pending' } } }), null);
+eq('no tasks at all → free to move', sprayStationLockOf({}), null);
+eq('setup running → locked, and says which', sprayStationLockOf({ tasks: { spinSetup: { status: 'Running' } } }), 'spinSetup');
+eq('spray done → locked', sprayStationLockOf({ tasks: { spinSetup: { status: 'Complete' }, spinSpray: { status: 'Complete' } } }), 'spinSetup');
+eq('a hand or pole task does not lock the small-parts station', sprayStationLockOf({ tasks: { hand: { status: 'Running' }, poleSpray: { status: 'Running' } } }), null);
+eq('to the booth: stamped, and the sled is freed', sprayStationPatch('BOOTH', 'Sandra', 5), { sprayStation: 'BOOTH', sprayStationAt: 5, sprayStationBy: 'Sandra', machineAssigned: null });
+eq('to the spin machine: stamped, the sled untouched', sprayStationPatch(SPRAY_STATIONS.SPIN, 'Sandra', 5), { sprayStation: 'SPIN', sprayStationAt: 5, sprayStationBy: 'Sandra' });
+eq('anything unknown reads as the spin machine, as sprayStationOf does', sprayStationPatch('spn', '', 5).sprayStation, 'SPIN');
 
 console.log(`floorActivity: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

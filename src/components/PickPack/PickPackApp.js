@@ -5,6 +5,7 @@ import MaterialGridCard from '../Shared/MaterialGridCard';
 import { coverArrival } from '../Shared/backorderCover';
 import { uomOf, uomLabel } from '../Shared/uom';
 import { orderStatusOf, customPartsReady, liftPatchFor, nothingToPick, stagingMatched } from '../Shared/orderStatus';
+import { asksSprayStation, sprayStationOf, sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS, WINDOW_LABEL, TASK_LABEL } from '../Shared/floorActivity';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
@@ -187,6 +188,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [showChipStats, setShowChipStats] = useState(false); // 📊 chip production statistics modal
     const [finUsers, setFinUsers] = useState([]);     // employees, for per-step assignment
     const [finRecipes, setFinRecipes] = useState([]); // paint recipes (P01, P02…) for the painting step
+    // The same recipes keyed by id — the shape the shared recipe resolver reads (Spin | Booth at the pick).
+    const finRecipeMap = useMemo(() => Object.fromEntries((finRecipes || []).map(r => [r.id, r])), [finRecipes]);
     const [chipForm, setChipForm] = useState({ customer: '', qty: 1, recipe: '', notes: '' });
     const [chipShowDone, setChipShowDone] = useState(false);
     const [batchQty, setBatchQty] = useState({}); // assign-amount per `${orderId}::${finish}` (default 200)
@@ -801,6 +804,43 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // THE ONE TEST (Shared/pickLines.isQuickShip, 2026-09-23) — this used to be a local copy.
     const isQsOrder = isQuickShip;
     const packDocOf = (j) => doc(db, isQsOrder(j) ? 'hq_sales_orders' : 'fin_workorders', j.id);
+
+    // ── SPIN OR BOOTH AT THE PICK (Stuart 2026-09-29: "the spin machine requires different set up
+    // fixtures") — the Setup Queue's Start Setup pair, here too, writing the SAME field the finishing
+    // floor reads (fin_workorders.sprayStation, Shared/floorActivity). Asked only where the small parts
+    // have a sprayed coat (asksSprayStation); it moves only before the coat's first spin step — the rule
+    // the Active Floor's ⇄ reads (sprayStationLockOf). Unchosen reads Spin, as it always has.
+    const setPickSprayStation = async (job, to) => {
+        if (!job || isQsOrder(job)) return;
+        const cur = job.sprayStation ? sprayStationOf(job) : null;
+        if (cur === to) return;
+        const begun = sprayStationLockOf(job);
+        if (begun) return alert(`${packRef(job)} — ${TASK_LABEL[begun] || begun} has already started on the finishing floor, so its small parts stay on the ${WINDOW_LABEL[sprayStationOf(job)]} until this coat is done.`);
+        if (cur && !window.confirm(`Change ${packRef(job)}'s small parts from the ${WINDOW_LABEL[cur]} to the ${WINDOW_LABEL[to]}?\n\nThe set-up fixtures change with it.`)) return;
+        try {
+            await updateDoc(doc(db, 'fin_workorders', job.id), sprayStationPatch(to, operator?.name || ''));
+            writeLog(`Pick: ${packRef(job)} small parts → ${WINDOW_LABEL[to]} (set-up fixtures) by ${operator?.name || 'Unknown'}.`, 'wms');
+        } catch (e) { alert('Could not set the spray station: ' + (e.message || e)); }
+    };
+    const renderSprayStationChoice = (job) => {
+        if (!job || isQsOrder(job) || !asksSprayStation(job, finRecipeMap)) return null;
+        const cur = job.sprayStation ? sprayStationOf(job) : null;
+        const pick = (st, label) => (
+            <button type="button" onClick={(e) => { e.stopPropagation(); setPickSprayStation(job, st); }}
+                style={{ padding: '8px 14px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer',
+                    background: cur === st ? theme.ink : 'transparent', color: cur === st ? '#fff' : theme.ink, border: `1px solid ${theme.ink}` }}>
+                {cur === st ? '✓ ' : ''}{label}
+            </button>
+        );
+        return (
+            <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px' }}>
+                <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>{t('Small parts spray on')}</span>
+                {pick(SPRAY_STATIONS.SPIN, t('Spin machine'))}
+                {pick(SPRAY_STATIONS.BOOTH, t('Large booth'))}
+                {!cur && <span style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass }}>{t('not chosen yet — reads Spin')}</span>}
+            </div>
+        );
+    };
     const packJob = finAll.find(j => j.id === packOrderId) || quickShipOrders.find(o => o.id === packOrderId) || null;
 
     const PACK_GROUP_ORDER = [
@@ -5053,6 +5093,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     <h1 title={activePickJob.id} style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {packRef(activePickJob)}<ReopenedChip job={jobs.find(j => j.id === activePickJob.id) || activePickJob} big />{pickSkips.length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '0.9rem', color: '#d9534f', marginLeft: '16px' }}>⚠ {pickSkips.length} SKIPPED</span>}</h1>
                     <button onClick={() => { releaseClaim(activePickJob, 'pick'); setActivePickJob(null); setPickSkips([]); setPickShorts([]); setValidation({ bin: '', qty: '' }); }} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
                 </div>
+                {!showNacho && (() => { const live = finAll.find(j => j.id === activePickJob.id) || activePickJob; const choice = renderSprayStationChoice(live); return choice ? <div style={{ marginTop: '-28px', marginBottom: '24px' }}>{choice}</div> : null; })()}
 
                 {showNacho ? (
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
@@ -5297,6 +5338,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     );
                                                 })()}
                                                 <OrderStatusChips wo={job} style={{ marginTop: '8px' }} />
+                                                {renderSprayStationChoice(job)}
                                                 {renderClaimLine(job, 'pick')}
                                                 <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Item{pickable.length === 1 ? '' : 's'}{grouping.changed ? ` (${grouping.from} BOM lines grouped into ${grouping.to} picks)` : ''}{rawPickable.length !== (job.partsList?.length || 0) ? ` · ${(job.partsList?.length || 0) - rawPickable.length} return/fee line(s) ride the shop order` : ''} · tap for parts</div>
                                             </div>

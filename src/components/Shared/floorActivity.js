@@ -205,3 +205,17 @@ export function asksSprayStation(wo, recipes) {
     if (!steps.length) return true;
     return steps.some(s => !isHandStep(s));
 }
+// THE STATION MOVES ONLY BEFORE THE COAT'S FIRST SPIN STEP (2026-09-23; shared 2026-09-29) — a
+// half-sprayed coat stays where it is. The Active Floor's ⇄ and the WMS pick screen's Spin | Booth
+// read this one rule (Stuart 2026-09-29: the spin machine takes different set-up fixtures, so the
+// picker chooses too). → the task already begun (Running or Complete) on this coat, or null.
+export const SPIN_TASK_KEYS = ['spinSetup', 'spinSpray', 'spinBake'];
+export function sprayStationLockOf(wo) {
+    const t = (wo && wo.tasks) || {};
+    return SPIN_TASK_KEYS.find(k => ['Running', 'Complete'].includes(t[k] && t[k].status)) || null;
+}
+// The write that moves it — the same stamps from every screen; the booth frees the job's sled.
+export function sprayStationPatch(to, by, at = Date.now()) {
+    const station = to === SPRAY_STATIONS.BOOTH ? SPRAY_STATIONS.BOOTH : SPRAY_STATIONS.SPIN;
+    return { sprayStation: station, sprayStationAt: at, sprayStationBy: by || '', ...(station === SPRAY_STATIONS.BOOTH ? { machineAssigned: null } : {}) };
+}

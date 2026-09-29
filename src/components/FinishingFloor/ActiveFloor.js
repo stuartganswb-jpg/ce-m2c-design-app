@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { isFloorSupervisor } from '../Shared/finishingRoles';
 import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
-    FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf } from '../Shared/floorActivity';
+    FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, sprayStationLockOf, sprayStationPatch } from '../Shared/floorActivity';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
@@ -666,15 +666,13 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // floor through the WMS staging match without Start Setup being pressed (it reads Spin), and a pick
   // can be wrong. It moves only before the coat's first step has started — a half-sprayed coat stays
   // where it is. Moving to the booth frees the job's sled in the same write.
-  const SPIN_KEYS = ['spinSetup', 'spinSpray', 'spinBake'];
   const switchSprayStation = async (wo, to) => {
       if (heldRefusal(wo)) return;
-      const t = wo.tasks || {};
-      const begun = SPIN_KEYS.find(k => ['Running', 'Complete'].includes(t[k]?.status));
+      // The one rule — the WMS pick screen's Spin | Booth reads it too (Shared/floorActivity).
+      const begun = sprayStationLockOf(wo);
       if (begun) return alert(`${woRef(wo)} — this coat has already started (${TASK_LABEL[begun] || begun}). It stays where it is until the coat is done.`);
       if (!window.confirm(`Move ${woRef(wo)}'s small parts to the ${WINDOW_LABEL[to]}?`)) return;
-      const updates = { sprayStation: to, sprayStationAt: Date.now(), sprayStationBy: user?.name || '' };
-      if (to === SPRAY_STATIONS.BOOTH) updates.machineAssigned = null;
+      const updates = sprayStationPatch(to, user?.name || '');
       try {
           await updateDoc(doc(db, 'fin_workorders', wo.id), updates);
           await logManual({ msg: `SPRAY STATION → ${WINDOW_LABEL[to]} · ${woRef(wo)}`, action: 'STATION', station: to, woId: wo.id, woRefNo: woRef(wo), task: 'parts', recipe: wo.recipe || '' });
@@ -1039,7 +1037,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                     : state === 'held' ? '#d9534f' : state === 'ready' ? 'var(--ink)' : 'var(--line)';
                 const gate = state === 'ready' && row.act && !row.act.advance && row.act.key !== 'spinSetup' ? pickGateOf(wo) : null;
                 const canMove = stream === 'parts' && win !== 'HAND' && !row.offCoat && (state === 'ready' || state === 'held')
-                    && !SPIN_KEYS.some(k => ['Running', 'Complete'].includes(tasks[k]?.status));
+                    && !sprayStationLockOf(wo);
                 const other = win === 'BOOTH' ? SPRAY_STATIONS.SPIN : SPRAY_STATIONS.BOOTH;
                 return (
                     <div key={`${wo.id}-${stream}-${state}-${i}`} style={{ border: '1px solid var(--line)', borderLeft: `6px solid ${tone}`, background: state === 'coming' ? '#fff' : 'var(--paper)', padding: '12px 14px', opacity: state === 'coming' ? 0.8 : 1 }}>
