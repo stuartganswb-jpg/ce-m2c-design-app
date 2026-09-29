@@ -26,6 +26,7 @@ import { isOutsourcedFinishCode } from './finishRouting.js';
 import { findClientPriceRow } from './clientPricing.js';
 import { finishedCodeOf, isUnfinishedFinish } from './subFinish.js';
 import { isPoleCategory } from './poleCut.js';
+import { PAIR_TAG_LETTER } from './stagingKey.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -386,7 +387,7 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
  * split adds one letter (N / P). The writer (Shared/rowPair.parkRowPair) steps the clock while an id is taken, so an id is
  * never reused — not even a deleted document's.
  */
-const TAG_LETTER = { '-NOW': 'N', '-PO': 'P' };
+const TAG_LETTER = PAIR_TAG_LETTER;   // one table — the long-id short form reads it too (Shared/stagingKey)
 export const pairIdsOf = (so, group, now = Date.now()) => {
     const tag = String((group && group.tag) || '');
     const clock = String(Math.floor(Math.abs(N(now)))).slice(-4).padStart(4, '0');

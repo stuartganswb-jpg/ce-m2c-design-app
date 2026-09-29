@@ -1,5 +1,6 @@
 // node scripts/stagingKey.test.mjs — the staging key is the work order (Stuart 2026-09-23).
-import { stagingKeyOf, resolveStagingScan, stagingScanMatches, resolveByExactKey, legacyStagingKeysOf } from '../src/components/Shared/stagingKey.js';
+import { stagingKeyOf, resolveStagingScan, stagingScanMatches, resolveByExactKey, legacyStagingKeysOf, shortPairKeyOf } from '../src/components/Shared/stagingKey.js';
+import { pairIdsOf } from '../src/components/Shared/rowPairShape.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 
@@ -22,5 +23,23 @@ eq('nothing matches → nothing, and not legacy', resolveStagingScan(jobs, 'NOPE
 eq('the older name returns the one document or null', [resolveByExactKey(jobs, row1.id) && resolveByExactKey(jobs, row1.id).id, resolveByExactKey(jobs, 'SO60565')], [row1.id, null]);
 eq('the pack station\'s matcher: exact on the work order, tolerant on the older key', [stagingScanMatches(row1, row1.id), stagingScanMatches(row1, 'so60565'), stagingScanMatches(row1, row2.id)], [true, true, false]);
 eq('the legacy keys a document may still be labelled with', legacyStagingKeysOf(row1), ['SO-APP-ST0918-02', 'SO-APP-ST0918-02', 'SO60565']);
+
+// ── a LONG pair id scans as its short form (Stuart 2026-09-29, SO60551 at packing: "the orders still have long string barcodes") ──
+const p14 = { id: 'WO-OE-SO60551-BACK-BASE-3-P14-1790621841166', soId: 'SO60551', orderKey: 'SO60551', currentPhase: 'Complete', hasCustomSibling: true };
+const s08 = { id: 'WO-OE-SO60551-BACK-BASE-2-S08-1790629033765', soId: 'SO60551', orderKey: 'SO60551', currentPhase: 'Complete' };
+const p14Shop = { id: 'WO-OE-SO60551-BACK-BASE-3-P14-1790621841166-C', finSiblingId: p14.id, orderKey: 'SO60551' };
+eq('P14\'s 43-character id prints as the 18-character short form, the same shape a new pair\'s id has', [stagingKeyOf(p14), stagingKeyOf(p14).length, pairIdsOf({ soId: 'SO60551' }, {}, 1790621841166).woId], ['WO-OE-SO60551-1166', 18, 'WO-OE-SO60551-1166']);
+eq('…and its shop half\'s label prints the SAME short key', stagingKeyOf(p14Shop), 'WO-OE-SO60551-1166');
+eq('a start-now / PO tag keeps its letter, as the new ids do', [shortPairKeyOf('WO-OE-SO60551-ROW-1-EP4-1790621841166-NOW'), shortPairKeyOf('WO-OE-SO60551-ROW-1-EP4-1790621841166-PO')], ['WO-OE-SO60551-1166N', 'WO-OE-SO60551-1166P']);
+eq('a new short id, and any other id, is left as it is', [shortPairKeyOf('WO-OE-SO60551-3765'), shortPairKeyOf(row1.id), stagingKeyOf(row1)], ['', '', row1.id]);
+eq('the short label resolves to its document among the order\'s rows', resolveStagingScan([p14, s08, row1], 'wo-oe-so60551-1166').job.id, p14.id);
+eq('the long label already on the parts still resolves', resolveStagingScan([p14, s08], p14.id).job.id, p14.id);
+eq('the pack station\'s matcher takes both the short and the long label, and not another row\'s', [stagingScanMatches(p14, 'WO-OE-SO60551-1166'), stagingScanMatches(p14, p14.id), stagingScanMatches(p14, 'WO-OE-SO60551-3765')], [true, true, false]);
+eq('another row\'s LONG label never passes this row\'s box (it contains the same sales order)', stagingScanMatches(p14, s08.id), false);
+eq('…while an older label naming only the sales order still does', stagingScanMatches(p14, 'SO60551'), true);
+const newPair = { id: 'WO-OE-SO60551-1166', soId: 'SO60551', currentPhase: 'Setup' };
+const clash = resolveStagingScan([p14, newPair], 'WO-OE-SO60551-1166');
+eq('a newer pair whose id equals an older one\'s short form: ambiguous, neither guessed', [clash.job, clash.ambiguous.map(j => j.id)], [null, [newPair.id, p14.id]]);
+eq('two older documents sharing a short form: ambiguous', resolveStagingScan([p14, { ...s08, id: 'WO-OE-SO60551-ROW-2-P06-1790620001166' }], 'WO-OE-SO60551-1166').job, null);
 
 console.log(`stagingKey: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
