@@ -19,7 +19,10 @@ import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { fetchAvailableById, fetchInboundById, backorderTallyOf } from '../Shared/stockPosition';
 import { flowTabsOf, flowFamilies, notCovered, enginePartsOf, partFinderOf, finishCodeOf } from '../Shared/flowItems';
 import { buildSpeciesBaseIndex } from '../Shared/partPicture';
+import { millBaseOf } from '../Shared/finishRouting';
 import FlowItemPopup from './FlowItemPopup';
+// The spec-sheet generator (three.js + the GLB) loads only when someone asks for a sheet — as in BOM Engine.
+const SpecSheetModal = React.lazy(() => import('../SpecSheet/SpecSheetModal'));
 
 const theme = {
     paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46',
@@ -59,6 +62,7 @@ const FlowStockTab = ({ activeBrand, onNavigateToLibrary }) => {
     const [search, setSearch] = useState('');
     const [onlyGaps, setOnlyGaps] = useState(false);
     const [popup, setPopup] = useState(null);                 // { row, family } — the item popup (step 3)
+    const [spec, setSpec] = useState(null);                   // { pins, focus } | { loading } | { error } — step 4
     const asked = useRef({ pins: new Set(), stock: new Set() });
 
     // ── REFERENCE DATA — one read each, on open. This is a board to read, not a live monitor; ↻ reloads.
@@ -177,6 +181,29 @@ const FlowStockTab = ({ activeBrand, onNavigateToLibrary }) => {
     // walnut show their product) — the same inputs the label printer hands partImageOf.
     const kits = useMemo(() => (brandDocs || []).filter(d => d.partClass === 'Kit'), [brandDocs]);
     const speciesBase = useMemo(() => buildSpeciesBaseIndex(brandDocs || []), [brandDocs]);
+
+    // ── SPEC SHEET (step 4) — the flow's assembly in the BOM Engine's generator, with BOM Engine's own
+    // inputs (pins where assemblyId == the assembly's itemId, the brand's library), focused on this part:
+    // its record's and its mill item's ids and codes, matched against each sheet's pins.
+    const specBlocked = !activeAssembly ? "this flow's assembly was not found"
+        : !(activeAssembly.manufacturingSpecs?.specCadUrl || activeAssembly.manufacturingSpecs?.cadUrl) ? 'the assembly has no 3D model to draw sheets from'
+        : '';
+    const openSpecSheet = useCallback(async (row) => {
+        if (!activeAssembly || specBlocked) return;
+        const idsOf = (p) => (p ? [p.id, p.itemId, p.legacyErpId] : []);
+        const millCode = millBaseOf(String(row.code || '').toUpperCase());
+        const mill = millCode && millCode !== String(row.code || '').toUpperCase() ? findPart(millCode) : null;
+        const focus = { label: row.code, keys: [...new Set([...idsOf(row.part), ...idsOf(mill), row.code, millCode].filter(Boolean))] };
+        setPopup(null);
+        setSpec({ loading: true });
+        try {
+            const snap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', activeAssembly.itemId)));
+            setSpec({ pins: snap.docs.map(d => ({ ...d.data(), id: d.id })), focus });
+        } catch (e) {
+            setSpec(null);
+            alert('Could not read the assembly pins for the spec sheet:\n\n' + (e.message || e));
+        }
+    }, [activeAssembly, specBlocked, findPart]);
 
     // ── FILTERS — they apply to the FAMILY: a family shows whole when any of its rows match (the 3-Tier
     // view's rule: half a family defeats a view whose point is reading the tiers against each other).
@@ -354,8 +381,19 @@ const FlowStockTab = ({ activeBrand, onNavigateToLibrary }) => {
                     stock={stockOf(popup.row)}
                     bo={boOf(popup.row)}
                     onOpenInLibrary={(docId) => { setPopup(null); if (typeof onNavigateToLibrary === 'function') onNavigateToLibrary(docId); }}
+                    onOpenSpecSheet={() => openSpecSheet(popup.row)}
+                    specSheetBlocked={specBlocked}
                     onClose={() => setPopup(null)}
                 />
+            )}
+
+            {spec?.loading && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.35)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: theme.mono, fontSize: '13px', color: '#fff' }}>Opening the spec sheets…</div>
+            )}
+            {spec?.pins && activeAssembly && (
+                <React.Suspense fallback={null}>
+                    <SpecSheetModal assembly={activeAssembly} pins={spec.pins} libraryParts={brandDocs || []} focus={spec.focus} onClose={() => setSpec(null)} />
+                </React.Suspense>
             )}
         </div>
     );

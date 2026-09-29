@@ -77,7 +77,11 @@ const viewBbox = (meshes, view) => {
   return { minU, maxU, minV, maxV };
 };
 
-const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, onClose }) => {
+// `focus` (optional, 4.7 Flow Stock's item popup, 2026-09-24): { label, keys } — open on the sheets that
+// CARRY one part (its arm page, or the arm pages its plate / ring / rod / rider rides on, or the finial
+// catalog). keys = the part's ids and codes (and its mill item's), matched against each page's own pins.
+// Absent → the modal behaves exactly as it always has.
+const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, onClose, focus = null }) => {
   const [status, setStatus] = useState('Loading 3D model…');
   const [error, setError] = useState('');
   const [pageIndex, setPageIndex] = useState(0);
@@ -598,10 +602,31 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   const [narrow, setNarrow] = useState({});
   useEffect(() => { setNarrow({}); }, [pages]);
 
+  // ── ONE PART'S SHEETS (the `focus` prop) ─────────────────────────────────────────────────
+  // A page names every part it draws through its own pins — the arm, its plates, rings and riders,
+  // the finials of a catalog page, and (by node) its rods. So "the sheets that carry this part" is
+  // read straight off the page list; nothing is re-derived. A part no sheet carries says so and
+  // shows everything, rather than an empty set that would read as "no sheet exists".
+  const [focusOn, setFocusOn] = useState(!!focus);
+  const focusKeys = useMemo(() => new Set((focus?.keys || []).map(k => String(k ?? '').trim().toUpperCase()).filter(Boolean)), [focus]);
+  const focusPinHit = useCallback((pin) => !!pin && (focusKeys.has(String(pin.partId ?? '').trim().toUpperCase())
+    || focusKeys.has(String(pin.partName ?? '').trim().toUpperCase())), [focusKeys]);
+  const focusRodNodes = useMemo(() => new Set((pins || []).filter(focusPinHit).map(p => p.choiceNode).filter(Boolean)), [pins, focusPinHit]);
+  const pageCarriesFocus = useCallback((page) => {
+    const one = (pg) => [pg.bracketPin, ...(pg.familyPins || []), ...(pg.ringPins || []), ...(pg.riderPins || []), ...((pg.itemPins || []).map(x => x.pin))].some(focusPinHit)
+      || (pg.rodNodes || []).some(n => focusRodNodes.has(n));
+    return one(page) || (page.combo || []).some(one);
+  }, [focusPinHit, focusRodNodes]);
+
   // The questions, with their live values — and the pages that survive every answer.
-  const { steps, shownPages } = React.useMemo(() => {
-    const drawing = pages.filter(p => p.bracketPin);
-    const extras = pages.filter(p => !p.bracketPin);   // catalog + wall mounts: always reachable
+  const { steps, shownPages, focusMatched } = React.useMemo(() => {
+    let drawing = pages.filter(p => p.bracketPin);
+    let extras = pages.filter(p => !p.bracketPin);   // catalog + wall mounts: always reachable
+    const focusing = focusOn && focusKeys.size > 0;
+    const fDrawing = focusing ? drawing.filter(pageCarriesFocus) : drawing;
+    const fExtras = focusing ? extras.filter(pageCarriesFocus) : extras;
+    const matched = focusing && (fDrawing.length + fExtras.length) > 0;
+    if (matched) { drawing = fDrawing; extras = fExtras; }
     let pool = drawing;
     const out = [];
     for (const ax of NARROW) {
@@ -614,8 +639,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         pool = pool.filter(p => String(valueOf(p, ax.key)) === String(picked));
       }
     }
-    return { steps: out, shownPages: [...pool, ...extras] };
-  }, [pages, narrow]);   // eslint-disable-line react-hooks/exhaustive-deps
+    return { steps: out, shownPages: [...pool, ...extras], focusMatched: matched };
+  }, [pages, narrow, focusOn, focusKeys, pageCarriesFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setPageIndex(0); }, [focusOn]);
 
   useEffect(() => { setPageIndex(0); }, [narrow]);
 
@@ -1734,6 +1760,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
             {shownPages.map((p, i) => <option key={p.key} value={i}>{p.title}</option>)}
           </select>
           <span style={{ fontSize: '0.72rem', color: '#666' }}>{shownPages.length} of {pages.length} sheets</span>
+          {focus && pages.length > 0 && (focusOn
+            ? <span style={{ fontSize: '0.75rem', background: focusMatched ? '#fff4e0' : '#fdecea', border: `1px solid ${focusMatched ? '#e0b060' : '#e0a0a0'}`, padding: '3px 8px', borderRadius: '3px' }}>
+                📌 {focusMatched ? `The sheets that carry ${focus.label}` : `${focus.label} is not drawn on any sheet — showing all`}
+                {focusMatched && <button style={{ ...btn, marginLeft: '8px', padding: '2px 8px' }} onClick={() => setFocusOn(false)}>Show all sheets</button>}
+              </span>
+            : <button style={btn} onClick={() => setFocusOn(true)}>📌 Only {focus.label}</button>)}
           <div style={{ display: 'flex', gap: '4px' }} title="Which hand the sheet draws — the other side is its mirror, so only one is needed">
             <button style={side === 'LEFT' ? btnOn : btn} onClick={() => setSide('LEFT')}>Left</button>
             <button style={side === 'RIGHT' ? btnOn : btn} onClick={() => setSide('RIGHT')}>Right</button>

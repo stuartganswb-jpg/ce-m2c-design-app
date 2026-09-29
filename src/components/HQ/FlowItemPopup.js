@@ -3,8 +3,9 @@
 // and ideally has a small 3d viewer engine that can open the 3d node of that part, and a link to the item in
 // the master library."
 //
-// Step 3 of the board: the Master Library link, the gallery images and the program print. (Spec sheet and
-// the 3D node are steps 4 and 5.) READ-ONLY — it opens things; it writes nothing.
+// Step 3 of the board: the Master Library link, the gallery images and the program print; step 4: the spec
+// sheet (the board opens SpecSheetModal focused on this part). The 3D node is step 5. READ-ONLY — it opens
+// things; it writes nothing.
 //
 // What it reads, and from whom:
 //   • the picture at the top      → Shared/partPicture.partImageOf (the label's picker: own → mill → species → kit)
@@ -39,7 +40,7 @@ const printNamesOf = (p) => (p ? [p.legacyErpId, p.itemName, p.itemId, p.manufac
 // and CPQ screen captures (guide books / display boards) carry a patternId but are not pictures of a part.
 const isPhoto = (a) => a && a.category !== 'PROGRAM_PRINT' && !a.guideCapture && !a.displayCapture && (a.thumbnailUrl || a.url || a.originalUrl);
 
-const FlowItemPopup = ({ row, family, findPart, kits = [], speciesBase = null, stock, bo, onOpenInLibrary, onClose }) => {
+const FlowItemPopup = ({ row, family, findPart, kits = [], speciesBase = null, stock, bo, onOpenInLibrary, onOpenSpecSheet, specSheetBlocked = '', onClose }) => {
     const part = row?.part || null;
     const code = row?.code || codeOf(part);
     const millCode = millBaseOf(U(code));
@@ -151,6 +152,13 @@ const FlowItemPopup = ({ row, family, findPart, kits = [], speciesBase = null, s
                     <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                         <button style={btn(!!part)} disabled={!part} onClick={() => part && onOpenInLibrary(part.id)} title="Open this record in 4. Master Library">📖 Open in Master Library</button>
                         {millPart && <button style={btn(true)} onClick={() => onOpenInLibrary(millPart.id)} title="Open the mill item this is a finish of">📖 Mill item {millCode}</button>}
+                        {typeof onOpenSpecSheet === 'function' && (
+                            <button style={btn(!specSheetBlocked)} disabled={!!specSheetBlocked} onClick={() => onOpenSpecSheet()}
+                                title={specSheetBlocked || "The flow's spec sheets, opened on the sheets that carry this part — print or PDF from there"}>
+                                📐 Spec sheet
+                            </button>
+                        )}
+                        {specSheetBlocked && <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{specSheetBlocked}</span>}
                     </div>
                     <div style={lbl}>Program print</div>
                     {printMap === null
