@@ -80,5 +80,19 @@ t('a word that merely CONTAINS "wood" is NOT wood', () => {
     assert.strictEqual(classifyLine(line, q, straight), DIVISION_CUSTOM, 'PLYWOOD is one word, not "wood"');
 });
 
+// ── A STRAIGHT ROD CUT TO A LENGTH IS THE SHOP'S (Stuart 2026-09-28, choice A) ──────────────────
+// SO60551 Back Base 2's oak rod, 50 × 9.25", was a straight line with a cut: routed to finishing, it
+// was picked whole and nothing cut it. The shop cuts a cut rod; finishing stains it with its row.
+t('wood rod + straight + a CUT on its line → SHOP (the CPQ breakdown line carries cutLength)', () => {
+    assert.strictEqual(classifyLine({ ...line, cutLength: 9.25 }, woodRod, straight), DIVISION_CUSTOM);
+});
+t('wood rod + straight + no cut (a stocked length sold whole) → FINISHING, unchanged', () => {
+    assert.strictEqual(classifyLine({ ...line, cutLength: 0 }, woodRod, straight), DIVISION_SMALL);
+    assert.strictEqual(classifyLine(line, woodRod, straight), DIVISION_SMALL);
+});
+t('silence still keeps the tag: no cut facts → the item tag decides (Custom), cut or not', () => {
+    assert.strictEqual(classifyLine({ ...line, cutLength: 9.25 }, woodRod, undefined), DIVISION_CUSTOM);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

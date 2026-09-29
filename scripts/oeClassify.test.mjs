@@ -27,7 +27,12 @@ eq('a steel rod plated → custom pole (the finish suffix rule for a SKU with no
 eq('…in /BS it is a small part', oeDivisionOf({ line: { cutLength: 18 }, basePart: rod, erp: 'H1-1R', finish: 'BS' }).division, DIVISION_SMALL);
 const oak = P('H1-2RCTWR-O', { productType: 'POLE', partHandling: 'Custom', material: 'WOOD' });
 eq('a wood rod in a row with miters is custom (cut)', oeDivisionOf({ line: { cutLength: 30 }, basePart: oak, erp: 'H1-2RCTWR-O', finish: 'S04', fab: { qtyMiters: 2 } }).division, DIVISION_CUSTOM);
-eq('a straight wood rod is small (finishing)', oeDivisionOf({ line: { cutLength: 30 }, basePart: oak, erp: 'H1-2RCTWR-O', finish: 'S04', fab: {} }).division, DIVISION_SMALL);
+// A STRAIGHT ROD CUT TO A LENGTH IS THE SHOP'S (Stuart 2026-09-28, choice A — SO60551 Back Base 2's oak rod, 50 × 9.25", was
+// picked whole with nothing to cut it): the shop cuts, finishing stains. Only a straight rod with no cut — a stocked length
+// sold whole — is finishing's pick.
+eq('a straight wood rod CUT to a length is custom (the shop cuts it, finishing stains it)', oeDivisionOf({ line: { cutLength: 9.25 }, basePart: oak, erp: 'H1-138WR-O', finish: 'S08', fab: {} }).division, DIVISION_CUSTOM);
+eq('…and it is a pole, not a rider', [oeDivisionOf({ line: { cutLength: 9.25 }, basePart: oak, erp: 'H1-138WR-O', finish: 'S08', fab: {} }).pole, oeDivisionOf({ line: { cutLength: 9.25 }, basePart: oak, erp: 'H1-138WR-O', finish: 'S08', fab: {} }).rider], [true, false]);
+eq('a straight wood rod with NO cut (a stocked length sold whole) is small (finishing)', oeDivisionOf({ line: {}, basePart: oak, erp: 'H1-2RCTWR-O', finish: 'S04', fab: {} }).division, DIVISION_SMALL);
 const cap = P('H1-1CP-V'), capEp4 = P('H1-1CP-V/EP4', {}, { partClass: 'Assembly' });
 eq('a plated finial with a finished record → small', oeDivisionOf({ line: {}, basePart: cap, finishedPart: capEp4, erp: 'H1-1CP-V', finish: 'EP4' }).division, DIVISION_SMALL);
 eq('the operator\'s override on the line wins', oeDivisionOf({ line: { customOverrideHandling: 'Custom' }, basePart: cap, finishedPart: capEp4, erp: 'H1-1CP-V', finish: 'EP4' }).division, DIVISION_CUSTOM);

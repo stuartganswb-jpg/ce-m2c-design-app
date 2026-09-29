@@ -69,6 +69,8 @@ export const oeDivisionOf = ({ line = {}, basePart = null, finishedPart = null, 
     const fee = !!(line.isFee || line.lineIsFee || isFeePart(basePart) || isFeePart(finishedPart));
     const cls = {
         name: line.name || '', qty: line.qty,
+        // The line's cut: a straight wood rod cut to a length is the shop's (Shared/lineClassification, 2026-09-28).
+        cutLength: line.cutLength,
         partId: line.partId || (part && part.id) || U(erp || line.erp),
         isFee: fee, lineIsFee: fee,
         partHandling: line.partHandling || '', customOverrideHandling: line.customOverrideHandling || '',

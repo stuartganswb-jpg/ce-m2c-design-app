@@ -312,7 +312,11 @@ export function classifyLine(line, part, fab) {
   //    finishing pick list starved.
   // 0b. THE WOOD ROD, decided by its cut — BEFORE the item tag, because the tag is what it
   //     overrides. Only fires when the cut facts were actually supplied (see the note above).
-  if (fab && isWoodPole(part)) return hasFabWork(fab) ? DIVISION_CUSTOM : DIVISION_SMALL;
+  //     A straight rod CUT TO A LENGTH is still the shop's (Stuart 2026-09-28, choice A — SO60551's Back Base 2 oak rod,
+  //     50 × 9.25", went to finishing as a whole-rod shelf pick and nothing cut it): the shop cuts it and the finishing
+  //     floor stains it with its row, as every cut pole travels. Only a straight rod with NO cut on its line — a stocked
+  //     length sold whole — is finishing's pick.
+  if (fab && isWoodPole(part)) return (hasFabWork(fab) || Number(line && line.cutLength) > 0) ? DIVISION_CUSTOM : DIVISION_SMALL;
 
   const specs = part && part.manufacturingSpecs;
   const partLevel = normalizeHandling(specs && specs.partHandling);
