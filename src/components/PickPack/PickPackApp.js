@@ -1461,6 +1461,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // goes shop → plater, and its pieces reach the order at plating put-away (an Order Entry order) or the
     // pack document (a CPQ order). It has no pick and no staging, so it never waits in the pick queue.
     function noPickNeeded(j) { return !!j && j.pickOnly === true && j.finishingRequired === false && pickableLines(j).length === 0; }
+    // …BUT ITS PIECES STILL HAVE TO REACH THE ORDER (Stuart 2026-09-28, SO60551). A plated pole's document leaves the
+    // packing station because the plating put-away gathers the poles into the Order Entry order — and a piece that wears
+    // nothing (UNFINISHED: the clear acrylic, cut and packed) has no put-away at all, nor does a put-away whose gather
+    // failed. Such a document comes to the packing station once its shop half is Complete and a line it carries is not
+    // yet gathered; gathering it adds only what is owed (Shared/pickLines gatherPlanOf), so a gathered plated pole never shows.
+    function oeGatherOwed(j) {
+        const order = oeOrderOfDoc(j);
+        if (!order || String(j.customFabStatus || '') !== 'Complete') return false;
+        return gatherPlanOf({ job: j, order, isFeeCode }).some(w => w.add > 0);
+    }
     // THE ORDER ENTRY ORDER A FLOOR DOCUMENT BELONGS TO, or null. An Order Entry order (tab 7, a 10.5 row)
     // packs ONCE, on its SO Pack card: its floor documents gather into it, they never pack and fulfil alone.
     function oeOrderOfDoc(j) {
@@ -1541,7 +1551,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         // Custom orders AND stock builds (Stuart 2026-07-20): a finished stock build lands here
         // too — its "packing" is binning the finished goods back to the shelf, and this is the
         // only queue that keeps a completed WO visible after it leaves the finishing floor.
-        ...finAll.filter(j => j.currentPhase === 'Complete' && j.packStatus !== 'Packed' && j.packStatus !== 'Gathered' && !(noPickNeeded(j) && oeOrderOfDoc(j)))
+        ...finAll.filter(j => j.currentPhase === 'Complete' && j.packStatus !== 'Packed' && j.packStatus !== 'Gathered' && !(noPickNeeded(j) && oeOrderOfDoc(j) && !oeGatherOwed(j)))
     ].sort((a, b) => (a.packedReadyAt || a.completedAt || a.createdAt || 0) - (b.packedReadyAt || b.completedAt || b.createdAt || 0));
     const packedRecent = [...finAll, ...quickShipOrders].filter(j => j.packStatus === 'Packed').sort((a, b) => (b.packedAt || 0) - (a.packedAt || 0)).slice(0, 6);
 
