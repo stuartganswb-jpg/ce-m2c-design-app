@@ -130,8 +130,12 @@ export const docStreamsOf = ({ parts = [], shopPoles = 0 } = {}) => {
     const paintSize = hasSize ? Object.keys(sizes).sort((a, b) => sizes[b] - sizes[a]).find(k => sizes[k] > 0) : null;
     const poles = N(shopPoles) + partPoles;
     const sled = { paintSize, paintSizes: hasSize ? sizes : null };
+    // THE POLES' OWN COAT (Stuart 2026-09-29, SO60551 Back Base 2 S08): the floor advances poles on `poleStepIndex` and, on
+    // a document that never set one, lets them BORROW the small parts' coat (FinishingFloor/ActiveFloor.poleIdxOf — the rule
+    // for documents older than the two tracks). A two-track document written without it jumped its poles to coat 2 the moment
+    // the finials finished coat 1, stranding the poles' coat-1 hand step. Every document with poles starts them at coat 1.
     const fields = poles > 0
-        ? { poles: { qty: poles, type: 'POLE' }, totalPoles: poles, ...(small.length ? sled : { paintSize: null, paintSizes: null, finishStream: 'POLES' }) }
+        ? { poles: { qty: poles, type: 'POLE' }, totalPoles: poles, poleStepIndex: 0, ...(small.length ? sled : { paintSize: null, paintSizes: null, finishStream: 'POLES' }) }
         : sled;
     return { poles, smallPcs, totalParts: smallPcs + poles, fields };
 };
@@ -178,6 +182,32 @@ export const splitGroupJobs = (group) => ({
 const partByCode = (inventory, code) => {
     const c = U(code);
     return c ? (inventory || []).find(p => U(p.legacyErpId || p.itemId) === c) || null : null;
+};
+
+/**
+ * A TWO-TRACK DOCUMENT WHOSE POLES BORROW THE SMALL PARTS' COAT (Stuart 2026-09-29) — pure. A finishing document with poles
+ * AND small parts, written before `poleStepIndex` was set at release (docStreamsOf above), has its poles read the small
+ * parts' coat on the floor until the poles finish a coat of their own — so the moment the small parts advanced, the poles
+ * jumped with them (SO60551 Back Base 2 S08: finials to coat 2, the poles' coat-1 hand step stranded). Giving the poles their
+ * own coat is safe only when no pole step has been COMPLETED: the poles are then still on coat 1 (0). A document where one
+ * has is returned for a person (`review`), never guessed.
+ * @returns { patch } | { review: string } | null — null when the document needs nothing
+ */
+export const poleTrackRepairOf = (fin) => {
+    if (!fin || fin.deleted || fin.pickOnly === true || fin.finishingRequired === false) return null;
+    if (fin.poleStepIndex !== undefined && fin.poleStepIndex !== null) return null;
+    if (['COMPLETE', 'CLOSED'].includes(U(fin.currentPhase)) || U(fin.status) === 'CLOSED' || U(fin.stepStatus) === 'CLOSED') return null;
+    const poleQty = N(fin.totalPoles) || N(fin.poles && fin.poles.qty);
+    if (!(poleQty > 0)) return null;
+    // …and small parts beside them (the floor's own reading, Shared/floorActivity.woHasSmallParts): sled sizes, or more
+    // pieces than poles. A pole-only document has no second track to borrow from.
+    const sizes = fin.paintSizes || null;
+    const small = (sizes && Object.values(sizes).some(v => N(v) > 0)) || N(fin.totalParts) > poleQty;
+    if (!small) return null;
+    const t = fin.tasks || {};
+    const done = ['poleSpray', 'poleBake', 'poleHand'].filter(k => t[k] && (U(t[k].status) === 'COMPLETE' || t[k].completedAt));
+    if (done.length) return { review: `${done.join(' + ')} already completed — the poles' own coat has to be read by a person` };
+    return { patch: { poleStepIndex: 0 } };
 };
 
 /**

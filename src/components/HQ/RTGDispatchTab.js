@@ -13,7 +13,7 @@ import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineS
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
-import { finishGroupsOf, docStreamsOf, poleCountRepairOf } from '../Shared/rowPairShape';
+import { finishGroupsOf, docStreamsOf, poleCountRepairOf, poleTrackRepairOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe } from '../Shared/floorRelease';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
@@ -2495,6 +2495,57 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         if (skipped.length) addLog(`🎨 Not counted (started on the floor, or changed since the list was drawn): ${skipped.join(' · ')}`, 'warn');
         if (!done && skipped.length) alert(`Nothing was written — ${skipped.join(' · ')}`);
     };
+    // THE POLES' OWN COAT (Stuart 2026-09-29, SO60551 Back Base 2 S08): a two-track document written before the poles were
+    // given their own coat at release reads the small parts' coat for them on the floor — the finials finished coat 1 and
+    // the poles jumped to coat 2. Listed from the same live feed; one press gives the poles coat 1 back (Shared/rowPairShape).
+    const poleTrackRepairs = useMemo(() => liveFin.map(fin => ({ fin, r: poleTrackRepairOf(fin) })).filter(x => x.r), [liveFin]);
+    const givePolesOwnCoat = async (items) => {
+        const list = (items || []).filter(x => x && x.r && x.r.patch);
+        if (!list.length) return;
+        if (!window.confirm(`🎨 Give the poles their own coat on ${list.length} finishing document${list.length === 1 ? '' : 's'}?\n\n${list.map(x => `${woRefOf(x.fin)} · ${x.fin.recipe}: small parts on coat ${(Number(x.fin.currentStepIndex) || 0) + 1} — poles back to coat 1 (no pole step completed yet)`).join('\n')}\n\nOnly the poles' coat is written; each document is read again first and skipped if a pole step has completed since.`)) return;
+        let done = 0; const skipped = [];
+        for (const x of list) {
+            try {
+                const snap = await getDoc(doc(db, 'fin_workorders', x.fin.id));
+                const fin = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+                const r = poleTrackRepairOf(fin);
+                if (!r || !r.patch) { skipped.push(woRefOf(x.fin)); continue; }
+                await updateDoc(doc(db, 'fin_workorders', fin.id), { ...r.patch, poleTrackRepairedAt: Date.now(), poleTrackRepairedBy: currentUser || '', poleTrackRepairedFrom: { currentStepIndex: Number(fin.currentStepIndex) || 0 } });
+                done++;
+                addLog(`🎨 ${woRefOf(fin)} (${fin.recipe}): the poles are back on their own coat 1 — the small parts stay on coat ${(Number(fin.currentStepIndex) || 0) + 1}.`, 'success');
+            } catch (e) { skipped.push(`${woRefOf(x.fin)} (${e.message || e})`); }
+        }
+        if (skipped.length) addLog(`🎨 Not changed (a pole step completed, or the document changed since the list was drawn): ${skipped.join(' · ')}`, 'warn');
+        if (!done && skipped.length) alert(`Nothing was written — ${skipped.join(' · ')}`);
+    };
+    const poleTrackPanel = () => {
+        if (!poleTrackRepairs.length) return null;
+        const fixable = poleTrackRepairs.filter(x => x.r.patch);
+        return (
+            <div style={{ padding: '10px 24px', borderBottom: '1px solid var(--paper-2)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>
+                        🎨 Poles borrowing the small parts' coat · {poleTrackRepairs.length}
+                    </span>
+                    {fixable.length > 1 && (
+                        <button onClick={() => givePolesOwnCoat(fixable)} style={{ ...btnStyle, padding: '4px 12px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>🎨 Fix all {fixable.length}</button>
+                    )}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--ink-soft)', margin: '4px 0 8px', lineHeight: 1.5 }}>
+                    A document with poles and small parts, written before the poles were given their own coat: on the floor its poles read the small parts' coat, so when the small parts advance the poles jump with them and their own step is stranded. The fix puts the poles back on coat 1 — only where no pole step has been completed; the others are for a person to read.
+                </div>
+                {poleTrackRepairs.map(({ fin, r }) => (
+                    <div key={fin.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 0', fontSize: '0.85rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{woRefOf(fin)}</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{fin.recipe} · small parts on coat {(Number(fin.currentStepIndex) || 0) + 1} · {Number(fin.totalPoles) || (fin.poles && fin.poles.qty) || 0} poles</span>
+                        {r.patch
+                            ? <button onClick={() => givePolesOwnCoat([{ fin, r }])} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>🎨 Poles to their own coat 1</button>
+                            : <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f' }}>{r.review}</span>}
+                    </div>
+                ))}
+            </div>
+        );
+    };
     const poleCountPanel = () => {
         if (!poleCountRepairs.length) return null;
         return (
@@ -3570,6 +3621,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                         </div>
                         {bulkReopenPanel()}
                         {poleCountPanel()}
+                        {poleTrackPanel()}
                         {reconcilePanel()}
                     </div>
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>

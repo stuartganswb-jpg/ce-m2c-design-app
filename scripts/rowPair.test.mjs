@@ -73,8 +73,23 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
         const fix = poleCountRepairOf(old, shop60676);
         const healed = { ...old, ...(fix && fix.patch) };
         eq('the repair counts the shop\'s 2 rods: poles on GL5-P, the 94 small parts stay on GL5-S', [fix && fix.poles, fix && fix.smallPcs, healed.totalParts, FA.woHasPoles(healed), FA.woHasSmallParts(healed), rOf(FA.partsStreamOf(healed)), rOf(FA.poleStreamOf(healed))], [2, 94, 96, true, true, 'GL5-S', 'GL5-P']);
-        eq('…and writes only the two-track fields and the parts total', Object.keys(fix.patch).sort(), ['paintSize', 'paintSizes', 'poles', 'totalParts', 'totalPoles']);
-        eq('a pole-only old document becomes the pole stream', (poleCountRepairOf({ ...old, partsList: [], totalParts: 1 }, shop60676) || {}).patch, { poles: { qty: 2, type: 'POLE' }, totalPoles: 2, paintSize: null, paintSizes: null, finishStream: 'POLES', totalParts: 2 });
+        eq('…and writes only the two-track fields (the poles starting on their own coat 1) and the parts total', Object.keys(fix.patch).sort(), ['paintSize', 'paintSizes', 'poleStepIndex', 'poles', 'totalParts', 'totalPoles']);
+        eq('a pole-only old document becomes the pole stream', (poleCountRepairOf({ ...old, partsList: [], totalParts: 1 }, shop60676) || {}).patch, { poles: { qty: 2, type: 'POLE' }, totalPoles: 2, poleStepIndex: 0, paintSize: null, paintSizes: null, finishStream: 'POLES', totalParts: 2 });
+
+        // THE POLES' OWN COAT (Stuart 2026-09-29, SO60551 Back Base 2 S08): the floor reads a document with no poleStepIndex as
+        // the small parts' coat — the finials finished coat 1 and the poles jumped to coat 2. Every document with poles now
+        // starts them at 0, and the floor's own reading (ActiveFloor.poleIdxOf) keeps them there when the parts advance.
+        const poleIdxOf = (wo) => (wo.poleStepIndex !== undefined && wo.poleStepIndex !== null) ? wo.poleStepIndex : (wo.currentStepIndex || 0);
+        eq('a two-track document is written with the poles on their own coat 1', [fp.poleStepIndex, poleIdxOf({ ...fp, currentStepIndex: 1 })], [0, 0]);
+        const { poleTrackRepairOf } = await import('../src/components/Shared/rowPairShape.js');
+        const s08 = { id: 'WO-OE-SO60551-BACK-BASE-2-S08-1790629033765', recipe: 'S08', currentPhase: 'Painting', stepStatus: 'Running', currentStepIndex: 1, totalParts: 100, totalPoles: 50, poles: { qty: 50, type: 'POLE' },
+            tasks: { spinSpray: { status: 'Complete', completedAt: 5 }, spinBake: { status: 'Complete', completedAt: 6 }, poleHand: { status: 'Running', startTime: 7 }, poleSpray: { status: 'Pending' }, poleBake: { status: 'Pending' } } };
+        eq('the live S08: finials at coat 2, poles borrowing it — repaired to their own coat 1 (the running hand step is not a completed one)', poleTrackRepairOf(s08), { patch: { poleStepIndex: 0 } });
+        eq('…a pole step already COMPLETED → a person reads it, never guessed', !!(poleTrackRepairOf({ ...s08, tasks: { ...s08.tasks, poleSpray: { status: 'Complete', completedAt: 9 } } }) || {}).review, true);
+        eq('nothing to repair: has its own coat · pole-only · no poles · finished · pick-only', [
+            poleTrackRepairOf({ ...s08, poleStepIndex: 0 }), poleTrackRepairOf({ ...s08, totalParts: 50 }), poleTrackRepairOf({ ...s08, totalPoles: 0, poles: null }),
+            poleTrackRepairOf({ ...s08, currentPhase: 'Complete' }), poleTrackRepairOf({ ...s08, pickOnly: true, finishingRequired: false }),
+        ], [null, null, null, null, null]);
         eq('nothing to repair: already counted · started on the floor · set up · pick-only · plated · unfinished · sent to plating · no shop half', [
             poleCountRepairOf({ ...old, totalPoles: 2, poles: { qty: 2, type: 'POLE' } }, shop60676),
             poleCountRepairOf({ ...old, tasks: { ...pending(), spinSpray: { status: 'Running', startTime: 5 } } }, shop60676),
