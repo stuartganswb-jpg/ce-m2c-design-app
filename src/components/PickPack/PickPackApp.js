@@ -816,7 +816,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // MANAGER OR HIGHER CHOOSES THE STATION (Stuart 2026-09-29: "raise the access level to manager or higher so the
     // floor operators do not see it and hit it accidentally"). The finishing floor's supervisor rule
     // (Shared/finishingRoles — …manager, supervisor, …lead, admin, owner) plus executive, read from the login's
-    // role as every WMS manager gate is. Everyone else does not see the pair at all.
+    // role as every WMS manager gate is. Everyone else sees the chosen station read-only.
     const canChooseSprayStation = isFloorSupervisor(operator) || normRole(operator?.role) === 'executive';
     const setPickSprayStation = async (job, to) => {
         if (!job || isQsOrder(job)) return;
@@ -832,8 +832,22 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { alert('Could not set the spray station: ' + (e.message || e)); }
     };
     const renderSprayStationChoice = (job) => {
-        if (!canChooseSprayStation || !job || isQsOrder(job) || !asksSprayStation(job, finRecipeMap)) return null;
+        if (!job || isQsOrder(job) || !asksSprayStation(job, finRecipeMap)) return null;
         const cur = job.sprayStation ? sprayStationOf(job) : null;
+        // READ-ONLY BELOW MANAGER (Stuart 2026-09-29: "yes read only for operators") — the picker sets up the
+        // fixtures, so they see the station; only a manager or higher gets the buttons.
+        if (!canChooseSprayStation) {
+            const eff = sprayStationOf(job);
+            return (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px' }}>
+                    <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>{t('Small parts spray on')}</span>
+                    <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.ink, fontWeight: 600 }}>
+                        {eff === SPRAY_STATIONS.BOOTH ? t('Large booth') : t('Spin machine')}
+                    </span>
+                    {!cur && <span style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass }}>{t('not chosen yet — reads Spin')}</span>}
+                </div>
+            );
+        }
         const pick = (st, label) => (
             <button type="button" onClick={(e) => { e.stopPropagation(); setPickSprayStation(job, st); }}
                 style={{ padding: '8px 14px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer',
