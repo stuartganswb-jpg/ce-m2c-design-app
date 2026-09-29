@@ -10,7 +10,7 @@ import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
-import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, soLineIsFee, unpackedSiblingsOf, soPackLineStateOf, soOrderReadyOf, gatherPlanOf } from '../Shared/pickLines';
+import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, soLineIsFee, unpackedSiblingsOf, soPackLineStateOf, soOrderReadyOf, gatherPlanOf, soCodeNeedOf } from '../Shared/pickLines';
 import { isFeePart } from '../Shared/oeClassify';
 import { fetchAvailabilityUnits, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
@@ -39,7 +39,7 @@ import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { platingLineRateOf } from '../Shared/platingRate';
-import { isKitLine } from '../Shared/itemKit';
+import { isKitLine, isOffOrderLine } from '../Shared/itemKit';
 import { printUomLabels, printSalesOrderLabels, printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, printBoxLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { partImageOf, buildSpeciesBaseIndex } from '../Shared/partPicture';
 import { encodeUomScan, uomDisplay } from '../Shared/labelScan';
@@ -922,7 +922,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const so = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || soIndex[String(job.orderKey || '')] || null);
             let ordered, packDocs, docNumber, customerName, poRef;
             if (isQsOrder(job)) {
-                ordered = (job.lines || []).map(l => ({ erp: l.erp, legacyErpId: l.erp, name: l.name, qty: l.qty, finishLabel: l.finishCode || '' }));
+                ordered = (job.lines || []).filter(l => !isOffOrderLine(l)).map(l => ({ erp: l.erp, legacyErpId: l.erp, name: l.name, qty: l.qty, finishLabel: l.finishCode || '' }));
                 packDocs = [job];
                 docNumber = job.soId || job.id;
                 customerName = job.customer || job.customerName || '';
@@ -1876,7 +1876,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 if (!line) return null;
                 return {
                     orderId: o.id, ref: o.soId || o.id,
-                    ordered: Number(line.qty) || 0, gathered: committedQtyOf(o, c),
+                    ordered: soCodeNeedOf(o, c, isFeeCode) || Number(line.qty) || 0, gathered: committedQtyOf(o, c),   // the item's whole need (Shared/pickLines)
                     needBy: o.needBy || o.needByDate || o.reqDate || '', createdAt: Number(o.createdAt) || 0,
                 };
             })
@@ -1902,7 +1902,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const order = quickShipOrders.find(o => o.id === a.orderId);
             if (!order) continue;
             const oline = (order.lines || []).find(l => soLineCodeOf(l) === c);
-            const done = await commitToOrder(order, { code: c, qty: a.qty, ordered: Number(oline && oline.qty) || 0 });
+            const done = await commitToOrder(order, { code: c, qty: a.qty, ordered: soCodeNeedOf(order, c, isFeeCode) || Number(oline && oline.qty) || 0 });
             if (done) taken += a.qty;   // a refusal or a cancelled bin prompt leaves those pieces for stock
         }
         writeLog(`Arrival alert: ${allocationSummary(plan, c)}${from ? ` (${from})` : ''} — ${taken} gathered into committed bins.`, 'wms');
@@ -2431,7 +2431,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         try {
             for (const w of want) {
                 if (!w.add) continue;
-                const plan = await commitToOrder(ord, { code: w.code, qty: w.add, ordered: w.qty, bin: bin || undefined });
+                const plan = await commitToOrder(ord, { code: w.code, qty: w.add, ordered: w.need || w.qty, bin: bin || undefined });
                 if (!plan) throw new Error(`${w.code} was not gathered — the document stays here; nothing after it was changed`);
                 bin = plan.bin;
                 ord = { ...ord, committedBin: plan.bin, committedQty: { ...(ord.committedQty || {}), [plan.code]: plan.total } };
@@ -4182,7 +4182,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 const forOrder = soId ? quickShipOrders.find(o => o.id === soId || String(o.soId || '') === String(soId)) : null;
                 if (forOrder) {
                     const oline = (forOrder.lines || []).find(l => soLineCodeOf(l) === String(target).toUpperCase());
-                    await commitToOrder(forOrder, { code: target, qty: got, ordered: Number(oline && oline.qty) || 0 });
+                    await commitToOrder(forOrder, { code: target, qty: got, ordered: soCodeNeedOf(forOrder, target, isFeeCode) || Number(oline && oline.qty) || 0 });
                 } else if (soId) {
                     writeLog(`⚠ Plating put-away (custom fab): ${target} carries sales order ${soId} but no matching order is open in this brand — left in ${bins.map(p => p.bin).join(', ')}.`, 'wms');
                 }
@@ -4285,7 +4285,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             const forOrder = soId ? quickShipOrders.find(o => o.id === soId || String(o.soId || '') === String(soId)) : null;
             if (forOrder) {
                 const oline = (forOrder.lines || []).find(l => soLineCodeOf(l) === String(target).toUpperCase());
-                await commitToOrder(forOrder, { code: target, qty: got, ordered: Number(oline && oline.qty) || 0 });
+                await commitToOrder(forOrder, { code: target, qty: got, ordered: soCodeNeedOf(forOrder, target, isFeeCode) || Number(oline && oline.qty) || 0 });
             } else if (soId) {
                 writeLog(`⚠ Plating put-away: ${target} carries sales order ${soId} but no matching order is open in this brand — left in ${bins.map(p => p.bin).join(', ')} rather than guessed into a committed bin.`, 'wms');
             } else {

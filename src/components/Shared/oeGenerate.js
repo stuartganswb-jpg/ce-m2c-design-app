@@ -36,7 +36,7 @@ import { holdSplitGroups } from './rowPairShape.js';
 import { oeDivisionOf, rowFabOf, rowFinishesOf, fabKindOf, DIVISION_CUSTOM } from './oeClassify.js';
 import { rowKeyOf, rowOfLine } from './displayRelease.js';
 import { rowRestampOf, trvRoleOfCode, isUnfinishedFinish, isStockColourCode } from './subFinish.js';
-import { isKitLine, itemKitOfCode } from './itemKit.js';
+import { isKitLine, itemKitOfCode, isOffOrderLine } from './itemKit.js';
 import { STOCK_COLOUR_SUFFIX } from './finishVariant.js';
 
 export { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig };
@@ -207,7 +207,8 @@ export const oeLinePlansOf = ({ so, inventory = [], finishes = [] }) => {
             // A FEE THAT IS NOT FABRICATION (rush, handling, a finish upcharge) is billing only: the sales
             // order carries it to NetSuite; nothing is made or picked for it. (The CPQ split lists every fee on
             // its shop cut list; a row lists only what is cut into a pole.)
-            const billingOnly = kitLine || (!!c.fee && !fabKindOf(`${(c.part && c.part.itemName) || ''} ${(c.line && c.line.name) || ''} ${c.erp}`));
+            // A line taken off the order (Shared/itemKit.isOffOrderLine) is never started either.
+            const billingOnly = kitLine || isOffOrderLine(c.line) || (!!c.fee && !fabKindOf(`${(c.part && c.part.itemName) || ''} ${(c.line && c.line.name) || ''} ${c.erp}`));
             out.push({ ...c, finish, finishWhy: f.why || noteOf(c.lineIdx), door: billingOnly ? '' : door, billingOnly, ...(kitUnexploded ? { kitUnexploded: true } : {}) });
         });
     });

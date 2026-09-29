@@ -119,3 +119,11 @@ export const itemKitOrderLinesOf = ({ line = {}, findByCode, findPart } = {}) =>
 
 /** The kit line of an order — sold and billed, never made, picked or stocked. */
 export const isKitLine = (l) => !!l && (l.isKit === true || l.itemKit === true);
+
+/**
+ * A LINE TAKEN OFF THE ORDER (Stuart 2026-09-29 — SO60551's Base Back 1 end cap, quoted 9/16 as two lines under the kit's
+ * code, the clear cap and its EP1 collar, which the kit rule then read as two whole kits). Stamped `offOrder` at quantity 0
+ * by 10.5's kit quantity edit (Shared/displayRelease.kitQtyEditOf), KEPT IN ITS PLACE so every line number the floors and
+ * the start stamps point at stays true. Nothing is started, picked, gathered or packed for it, and it needs nothing.
+ */
+export const isOffOrderLine = (l) => !!l && l.offOrder === true;

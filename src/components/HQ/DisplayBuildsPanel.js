@@ -37,7 +37,7 @@ import { hardDeleteWithLedger } from '../Shared/orderLifecycle';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, lineQtyEditOf, kitFinishEditOf, rowUndoBlockersOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
+import { ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, lineQtyEditOf, kitFinishEditOf, kitQtyEditOf, rowUndoBlockersOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 import { finishedCodeOf } from '../Shared/subFinish';
 
@@ -455,6 +455,31 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             alert(`✎ ${so.soId || so.id} line ${l.lineIdx + 1}: ${line.erp} ${r.from} → ${r.to}. Change NetSuite to match.`);
             await loadFloor(draft);
         } catch (e) { alert('Could not change the line: ' + (e?.message || e)); }
+    };
+
+    // ✎ A KIT'S QUANTITY (Shared/displayRelease.kitQtyEditOf, Stuart 2026-09-29): the kit and its parts together; 0 takes
+    // them OFF THE ORDER, kept in their places. Read fresh, stamped, a part's shelf-pick stamp dropped with it; NetSuite by hand.
+    const editKitQty = async (l) => {
+        if (!l || !l.soAppId) return;
+        try {
+            const snap = await getDoc(doc(db, 'hq_sales_orders', l.soAppId));
+            if (!snap.exists()) return alert('That sales order is gone.');
+            const so = { id: snap.id, ...snap.data() };
+            const line = (so.lines || [])[l.lineIdx];
+            if (!line) return alert('That line is no longer on the order — reload the build.');
+            const typed = window.prompt(`✎ ${so.soId || so.id} · line ${l.lineIdx + 1} · kit ${line.erp}${line.row ? ` (${line.row})` : ''}\n\nNew quantity for the kit and its parts (now ${line.qty}) — 0 takes it off the order:`, String(line.qty));
+            if (typed === null) return;
+            const why = window.prompt('Why? (recorded on the kit and its parts)', '');
+            if (why === null) return;
+            const r = kitQtyEditOf({ so, lineIdx: l.lineIdx, qty: Number(String(typed).trim()), by: String(currentUser || '10.5'), reason: why });
+            if (!r.ok) return alert(`Not changed — ${r.reason}.`);
+            if (!window.confirm(`Kit line ${l.lineIdx + 1} (${line.erp}${line.row ? `, ${line.row}` : ''}): ${r.from} → ${r.to}${r.to === 0 ? ' — OFF THE ORDER' : ''}?\n\nIts parts:\n${r.parts.map(p => `  • line ${p.idx + 1}: ${p.from} → ${p.to} × ${p.code}`).join('\n')}${r.oeGenDrop.length ? `\n\nTheir shelf-pick stamp${r.oeGenDrop.length > 1 ? 's go' : ' goes'} with them (nothing was made).` : ''}\n\n"${String(why).trim()}" is recorded on each line.\n\n⚠ NetSuite: change the same lines on the sales order by hand — the app does not send it.`)) return;
+            const patch = { lines: r.lines };
+            r.oeGenDrop.forEach(i => { patch[`oeGen.${i}`] = deleteField(); });
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), patch);
+            alert(`✎ ${so.soId || so.id} kit line ${l.lineIdx + 1}: ${line.erp} ${r.from} → ${r.to}${r.to === 0 ? ' (off the order)' : ''}. Change NetSuite to match.`);
+            await loadFloor(draft);
+        } catch (e) { alert('Could not change the kit: ' + (e?.message || e)); }
     };
 
     // ✎ A KIT'S FINISH (Shared/displayRelease.kitFinishEditOf, Stuart 2026-09-29: "table top base back1 is ep1"): the kit and
@@ -938,7 +963,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                     {state.lines.length > 0 && (
                                         <tr><td style={{ ...td, borderBottom: '1px solid var(--line)' }} /><td colSpan={4} style={{ ...td, paddingTop: 0 }}>
                                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', fontFamily: 'var(--mono)', fontSize: '10px' }}>
-                                                {state.lines.map(l => <span key={`${l.soAppId}|${l.lineIdx}`} title={`${l.soId} · ${l.text}`} style={{ color: TONE[l.tone] || 'var(--ink-soft)' }}>{(floor.sos || []).length > 1 ? `${l.soId} · ` : ''}{l.qty} × {finishedCodeOf(l.erp, l.finish)} — {l.text}{/^kit —/.test(String(l.text || '')) && <button onClick={() => editKitFinish(l)} disabled={!!busy || !!starting} title="Change the kit's finish — the kit and its parts change together, only while nothing is raised or gathered for its parts" style={{ marginLeft: '4px', padding: '0 4px', fontSize: '9px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer' }}>✎ finish</button>}{['STOCKED', 'NONE'].includes(l.key) && !/^kit —/.test(String(l.text || '')) && <button onClick={() => editLineQty(l)} disabled={!!busy || !!starting} title="Change this line's quantity — only while nothing is raised or gathered for it" style={{ marginLeft: '4px', padding: '0 4px', fontSize: '9px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer' }}>✎</button>}</span>)}
+                                                {state.lines.map(l => <span key={`${l.soAppId}|${l.lineIdx}`} title={`${l.soId} · ${l.text}`} style={{ color: TONE[l.tone] || 'var(--ink-soft)' }}>{(floor.sos || []).length > 1 ? `${l.soId} · ` : ''}{l.qty} × {finishedCodeOf(l.erp, l.finish)} — {l.text}{/^kit —/.test(String(l.text || '')) && <button onClick={() => editKitQty(l)} disabled={!!busy || !!starting} title="Change the kit's quantity — the kit and its parts together; 0 takes them off the order" style={{ marginLeft: '4px', padding: '0 4px', fontSize: '9px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer' }}>✎ qty</button>}{/^kit —/.test(String(l.text || '')) && <button onClick={() => editKitFinish(l)} disabled={!!busy || !!starting} title="Change the kit's finish — the kit and its parts change together, only while nothing is raised or gathered for its parts" style={{ marginLeft: '4px', padding: '0 4px', fontSize: '9px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer' }}>✎ finish</button>}{['STOCKED', 'NONE'].includes(l.key) && !/^(kit —|off the order)/.test(String(l.text || '')) && <button onClick={() => editLineQty(l)} disabled={!!busy || !!starting} title="Change this line's quantity — only while nothing is raised or gathered for it" style={{ marginLeft: '4px', padding: '0 4px', fontSize: '9px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer' }}>✎</button>}</span>)}
                                             </div>
                                         </td></tr>
                                     )}

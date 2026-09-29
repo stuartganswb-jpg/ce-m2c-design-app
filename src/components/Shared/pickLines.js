@@ -1,5 +1,5 @@
 import { committedQtyOf } from './committedBins.js';
-import { isKitLine } from './itemKit.js';
+import { isKitLine, isOffOrderLine } from './itemKit.js';
 import { finishedCodeOf } from './subFinish.js';
 // ══ ONE READER FOR AN ORDER'S LINES ═══════════════════════════════════════════════════════════
 //
@@ -129,7 +129,7 @@ export const soLineCodeOf = (l) => {
 // miter) rides the pole's shop cut list — the start stamps it `rider`; a billing-only fee is just money. Tab 7
 // stores a fee with no flag, so the library's word counts too: `isFeeCode(code)` → is the item a Fee record.
 // A KIT LINE is sold and billed, never picked or gathered (Shared/itemKit, 2026-09-28): its PARTS, beneath it, are.
-export const soLineIsFee = (so, l, idx, isFeeCode = null) => !!l && (lineIsFeeish(l) || !!l.isFee || isKitLine(l)
+export const soLineIsFee = (so, l, idx, isFeeCode = null) => !!l && (lineIsFeeish(l) || !!l.isFee || isKitLine(l) || isOffOrderLine(l)
     || !!(so && so.oeGen && so.oeGen[idx] && so.oeGen[idx].rider)
     || (typeof isFeeCode === 'function' && !!isFeeCode(up(l.erp))));
 // A line the warehouse PICKS OFF THE SHELF for the order: a stocked line, or a plated to-be-finished line the
@@ -164,24 +164,37 @@ export const unpackedSiblingsOf = (job, docs = []) => {
 // are gathered into the order; a shelf pick is ready when the order's own stock (free + what NetSuite holds for it,
 // or what is already gathered — never both) covers it.
 // @param stat { avail (free), held (NetSuite's hold for the order), prod } for the line's code, or null (unread)
+// ── ONE ITEM, ONE NEED (Stuart 2026-09-29, SO60551: "H1-1CP-V/EP4 100 required") ────────────────────────────────────
+// An item on several lines of an order (two full-pole rows → two cover-plate lines of 50) is ONE need: the sum of those
+// lines. What is gathered for it is counted once, per code (committedQty) — so every line of the item compares that count
+// with the WHOLE need, and every gather caps at it. Compared line by line, the first 50 read both lines GATHERED and the
+// gather refused the second 50: the order packed short on every repeated item. Fees, kit lines and lines taken off the
+// order need nothing.
+export const soCodeNeedOf = (so, code, isFeeCode = null) => {
+    const c = up(code);
+    if (!c) return 0;
+    return ((so && so.lines) || []).reduce((a, l, i) => a + ((soLineCodeOf(l) === c && !soLineIsFee(so, l, i, isFeeCode)) ? (Number(l.qty) || 0) : 0), 0);
+};
 export const soPackLineStateOf = ({ so, line, idx, stat = null, isFeeCode = null }) => {
     const c = soLineCodeOf(line);
     const ordered = Number(line && line.qty) || 0;
     const committed = committedQtyOf(so, c);
+    if (isOffOrderLine(line)) return { code: c, ordered: 0, need: 0, committed, avail: null, held: 0, prod: 0, covered: 0, state: 'OFF THE ORDER', fee: true };
     if (soLineIsFee(so, line, idx, isFeeCode)) return { code: c, ordered, committed, avail: null, held: 0, prod: 0, covered: 0, state: 'FEE', fee: true };
+    const need = Math.max(ordered, soCodeNeedOf(so, c, isFeeCode));
     if (!soLineIsShelfPick(so, line, idx)) {
-        return { code: c, ordered, committed, avail: null, held: 0, prod: 0, covered: committed, state: committed >= ordered && ordered > 0 ? 'GATHERED' : 'FROM THE FLOOR', fromFloor: true };
+        return { code: c, ordered, need, committed, avail: null, held: 0, prod: 0, covered: committed, state: committed >= need && need > 0 ? 'GATHERED' : 'FROM THE FLOOR', fromFloor: true };
     }
     const free = stat && stat.avail != null ? stat.avail : null;
     const held = stat ? (Number(stat.held) || 0) : 0;
     const avail = free != null ? Math.max(0, free) + held : null;     // the order's view: free + held for it
     const prod = stat ? (Number(stat.prod) || 0) : 0;
     const covered = Math.max(committed, held) + (free != null ? Math.max(0, free) : 0);
-    const state = committed >= ordered && ordered > 0 ? 'GATHERED'
-        : covered >= ordered && ordered > 0 ? 'READY'
-            : (covered + prod) >= ordered && ordered > 0 ? 'IN PRODUCTION'
+    const state = committed >= need && need > 0 ? 'GATHERED'
+        : covered >= need && need > 0 ? 'READY'
+            : (covered + prod) >= need && need > 0 ? 'IN PRODUCTION'
                 : avail == null ? 'UNKNOWN' : 'SHORT';
-    return { code: c, ordered, committed, avail, held, prod, covered, state };
+    return { code: c, ordered, need, committed, avail, held, prod, covered, state };
 };
 /** The order is ready when every line that is not a fee is GATHERED or READY. */
 export const soOrderReadyOf = ({ so, statOf = () => null, isFeeCode = null }) => {
@@ -200,7 +213,16 @@ export const gatherPlanOf = ({ job, order, lineIdxs = null, isFeeCode = null }) 
     return idxs.filter(i => Number.isInteger(i) && i >= 0)
         .map(i => ({ i, l: ((order && order.lines) || [])[i] }))
         .filter(x => x.l && soLineCodeOf(x.l) && !soLineIsFee(order, x.l, x.i, isFeeCode))
-        .map(x => { const code = soLineCodeOf(x.l); const qty = Number(x.l.qty) || 0; return { idx: x.i, code, qty, add: Math.max(0, qty - committedQtyOf(order, code)) }; });
+        .reduce((acc, x) => {
+            // Each line adds its own pieces, up to what the ORDER still needs of the item (two lines of one item on this
+            // document add both; a line another document already filled adds nothing).
+            const code = soLineCodeOf(x.l), qty = Number(x.l.qty) || 0, need = soCodeNeedOf(order, code, isFeeCode) || qty;
+            if (acc.have[code] == null) acc.have[code] = committedQtyOf(order, code);
+            const add = Math.max(0, Math.min(qty, need - acc.have[code]));
+            acc.have[code] += add;
+            acc.out.push({ idx: x.i, code, qty, need, add });
+            return acc;
+        }, { have: {}, out: [] }).out;
 };
 
 /**

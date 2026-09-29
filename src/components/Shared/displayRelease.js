@@ -27,7 +27,7 @@ import { isDisplayOnlyLine, isParkedGeometryLine, headerSidemarkOf } from './lin
 import { oeIsFloorLine, oeLineFinish, oeCoverageOf, oeLineStateOf } from './oeLines.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
 import { rowRestampOf, isStockColourCode } from './subFinish.js';
-import { isKitLine, itemKitOrderLinesOf } from './itemKit.js';
+import { isKitLine, itemKitOrderLinesOf, isOffOrderLine } from './itemKit.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -287,6 +287,8 @@ export const lineStateOf = ({ so, line, lineIdx, links, shipments = [], review =
     }
     // A shelf pick — unless it is made (cut, a fee on a pole, custom handling: oeIsFloorLine) or a start has
     // already raised something for it (a custom line quoted with no finish, 2026-09-27).
+    // A LINE TAKEN OFF THE ORDER keeps its place and needs nothing (Shared/itemKit.isOffOrderLine, 2026-09-29).
+    if (isOffOrderLine(line)) return { key: LINE_STATE.STOCKED, text: `off the order${line.qtyChangedReason ? ` — ${line.qtyChangedReason}` : ''}`, tone: 'grey' };
     // A KIT LINE is sold as one — its parts, below it, are what is made and picked (Shared/itemKit, 2026-09-28).
     if (isKitLine(line)) return { key: LINE_STATE.STOCKED, text: 'kit — sold as one; its parts are the lines below', tone: 'grey' };
     // A STOCK COLOUR is the start's to decide — the shelf, or painted from its /P (Shared/oeGenerate STOCK_FIRST).
@@ -639,6 +641,50 @@ export const kitFinishEditOf = ({ so, lineIdx, finishCode, inventory = [], by = 
     const from = U(kit.finishCode) || '—';
     next[lineIdx] = { ...next[lineIdx], finishCode: f, subFinishCode: '', finishOutsourced: isOutsourcedFinishCode(f), kitFinishChangedFrom: from, kitFinishChangedBy: by, kitFinishChangedAt: now, kitFinishChangedReason: String(reason).trim() };
     return { ok: true, lines: next, from, to: f, parts };
+};
+
+// ── ✎ A KIT'S QUANTITY — 0 TAKES IT OFF THE ORDER (Stuart 2026-09-29: "this is base so it is a single pole with one
+// endcap, it needs just 50") ────────────────────────────────────────────────────────────────────────────────────
+// SO60551's Base Back 1 end cap was quoted 9/16 as two lines under the kit's code (the clear cap, and its EP1 collar);
+// the kit rule read each as a whole kit, so the order carried two. The kit and its parts change together: each part
+// keeps its per-kit count. At 0 they are taken OFF THE ORDER (Shared/itemKit.isOffOrderLine) — kept in their places so
+// every line number the floors and start stamps point at stays true; a part's STOCK stamp (a shelf pick, nothing made)
+// goes with it. Refused once a part has floor work, or once the item is gathered past what the order would still need.
+// NetSuite is changed by hand (the confirm says so). Pure.
+// @returns { ok, reason?, lines?, from?, to?, parts?: [{ idx, code, from, to }], oeGenDrop?: [idx] }
+export const kitQtyEditOf = ({ so, lineIdx, qty, by = '', reason = '', now = Date.now() } = {}) => {
+    const lines = Array.isArray(so && so.lines) ? so.lines : [];
+    const kit = lines[lineIdx];
+    const n = Number(qty);
+    if (!kit) return { ok: false, reason: 'no such line on the order' };
+    if (!isKitLine(kit)) return { ok: false, reason: 'that line is not a kit' };
+    if (!(Number.isInteger(n) && n >= 0)) return { ok: false, reason: 'the quantity must be a whole number — 0 takes the kit off the order' };
+    const from = N(kit.qty);
+    if (n === from) return { ok: false, reason: 'the quantity is unchanged' };
+    if (from <= 0) return { ok: false, reason: 'the kit is off the order — put it back on the quote' };
+    if (!String(reason || '').trim()) return { ok: false, reason: 'say why — it is recorded on the kit' };
+    const partIdxs = lines.map((l, i) => (l && l.inKit && l.kitLineIdx === lineIdx ? i : -1)).filter(i => i >= 0);
+    const stamp = { qtyChangedFrom: from, qtyChangedBy: by, qtyChangedAt: now, qtyChangedReason: String(reason).trim() };
+    const off = n === 0 ? { offOrder: true } : {};
+    const next = lines.map(l => ({ ...l }));
+    next[lineIdx] = { ...next[lineIdx], qty: n, ...stamp, ...off };
+    const parts = [], oeGenDrop = [];
+    for (const i of partIdxs) {
+        const g = so.oeGen && so.oeGen[i];
+        if (g && g.kind !== 'STOCK') return { ok: false, reason: `work has already been raised for line ${i + 1} (${lines[i].erp}) — undo the row start first` };
+        const was = N(lines[i].qty);
+        const to = Math.round((was / from) * n * 1000) / 1000;
+        next[i] = { ...next[i], qty: to, ...stamp, qtyChangedFrom: was, ...off };
+        if (g && n === 0) oeGenDrop.push(i);
+        parts.push({ idx: i, code: soLineCodeOf(lines[i]), from: was, to });
+    }
+    // Nothing gathered may be left without an order line to belong to.
+    const after = { ...so, lines: next };
+    for (const p of parts) {
+        const need = next.reduce((a, l, i) => a + ((soLineCodeOf(l) === p.code && !isOffOrderLine(l) && !isKitLine(l) && !(l && l.isFee)) ? N(l.qty) : 0), 0);
+        if (committedQtyOf(after, p.code) > need) return { ok: false, reason: `${committedQtyOf(after, p.code)} × ${p.code} are already gathered — more than the order would still need (${need}); release them at SO Pack first` };
+    }
+    return { ok: true, lines: next, from, to: n, parts, oeGenDrop };
 };
 
 // ── ↩ UNDO A ROW START — only while nothing on its documents has moved (Stuart 2026-09-27) ─────────────────

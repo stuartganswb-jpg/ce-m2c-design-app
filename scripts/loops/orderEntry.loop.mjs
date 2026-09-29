@@ -156,6 +156,18 @@ eq('the pack bench names the finished pieces', packLinesOf(so, { isFeeCode: libF
     if (!sh3) console.log(logs3.join('\n'));
 }
 
+// ── A LINE TAKEN OFF THE ORDER IS NEVER STARTED (2026-09-29, SO60551's second Base Back 1 end cap) ──
+{
+    const { oeLinePlansOf, oeStartsLine } = await import('../../src/components/Shared/oeGenerate.js');
+    const offSo = { id: 'SO-OFF', soId: 'SO-OFF', lines: [
+        { erp: 'H1-1BF', finishCode: 'EP2', toBeFinished: true, finishOutsourced: true, qty: 10 },
+        { erp: 'H1-1BF', finishCode: 'EP2', toBeFinished: true, finishOutsourced: true, qty: 0, offOrder: true },
+    ] };
+    const plans = oeLinePlansOf({ so: offSo, inventory: library, finishes: [] });
+    const byIdx = (i) => plans.find(p => p.lineIdx === i);
+    eq('off the order: billing only, never started — its twin on the order still is', [!!(byIdx(1) && byIdx(1).billingOnly), oeStartsLine(byIdx(1)), oeStartsLine(byIdx(0))], [true, false, true]);
+}
+
 if (globalThis.__NS_UNANSWERED) console.log('⚠ unanswered NetSuite calls:', globalThis.__NS_UNANSWERED.map(b => String(b.payload?.q || b.targetUrl).slice(0, 80)));
 if (fail) console.log('\n--- route log ---\n' + logs.join('\n'));
 console.log(`orderEntry loop: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

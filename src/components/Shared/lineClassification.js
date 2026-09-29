@@ -210,7 +210,8 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
     // AN ITEM KIT IS WHAT THE CUSTOMER BOUGHT (Stuart 2026-09-28, Shared/itemKit): its line — their number, its price — is
     // on their paper; its parts (hidden) are not, on a money document. The floors never read this (isDisplayOnlyLine still
     // keeps the kit line off every pick and floor list).
-    const real = (lines || []).filter(l => !isDisplayOnlyLine(l) || (l && l.itemKit === true) || (money && l && (l.isDiscount || l.isNetLine)))
+    // A line taken off the order (offOrder — Shared/itemKit.isOffOrderLine; kept in its place at 0) is on no paper.
+    const real = (lines || []).filter(l => !(l && l.offOrder === true)).filter(l => !isDisplayOnlyLine(l) || (l && l.itemKit === true) || (money && l && (l.isDiscount || l.isNetLine)))
         .map(l => withLineFinish(reResolve(l, findPart, custKeys), finishFallback));
     if (!money) return real;
     // ── A POLE IS SOLD BY THE FOOT AND SHIPPED AS ONE PIECE (Stuart 2026-08-25) ──────────────
