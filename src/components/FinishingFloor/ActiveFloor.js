@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { isFloorSupervisor } from '../Shared/finishingRoles';
 import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
     FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, sprayStationLockOf, sprayStationPatch } from '../Shared/floorActivity';
+import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
@@ -138,6 +139,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const floorOps = users?.filter(u => ['painter', 'hand_painter', 'paint_manager'].includes(u.role)) || [];
   const [viewWo, setViewWo] = useState(null); // read-only order details popup (tap any job window)
   const [recipeView, setRecipeView] = useState(null); // 📖 finish-recipe dialog (Grace 2026-08-12)
+  const [loadDraft, setLoadDraft] = useState({});      // 🌀 pieces typed for a spin load, by job (Shared/spinLoads)
 
   const cfg = {
     potLifeMins: sysConfig?.potLifeMins || 189, recoatMins: sysConfig?.recoatMins || 90,
@@ -243,6 +245,19 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           "tasks.hand.status": "Pending",
       };
       if (nextParts >= len) {
+          // 🌀 THE SPIN MACHINE RUNS IN LOADS (Stuart 2026-09-29, Shared/spinLoads): the last coat of a
+          // load that is not the last LOOPS the recipe — this load is recorded, the next one starts at
+          // coat 1 on the same sled. No QC, no completion, nothing told to RTG until the last load.
+          const roll = spinLoadRollover(wo, { by: user?.name || '' });
+          if (roll) {
+              await updateDoc(doc(db, "fin_workorders", wo.id), { ...updates, currentStepIndex: 0, spinLoads: roll.loads, spinLoadQty: roll.nextQty });
+              const doneNow = roll.loads.reduce((a, l) => a + (Number(l.qty) || 0), 0);
+              await logManual({ msg: `SPIN LOAD ${roll.n} DONE · ${roll.record.qty} pcs · ${woRef(wo)} — ${doneNow} of ${doneNow + roll.after} done; load ${roll.n + 1} (${roll.nextQty} pcs) starts at coat 1`,
+                  action: 'LOAD', station: 'SPIN', woId: wo.id, woRefNo: woRef(wo), task: 'parts', recipe: wo.recipe || '' });
+              return;
+          }
+          const lastLoad = spinFinalLoadRecord(wo, { by: user?.name || '' });
+          if (lastLoad) updates.spinLoads = lastLoad.loads;
           updates.machineAssigned = null; // parts are off the sled — free it for the next order
           if (polesFinished) { updates.currentPhase = 'Complete'; updates.stepStatus = 'Complete'; updates.completedAt = Date.now(); }
       }
@@ -270,11 +285,25 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       if (recipeMissing(wo, len)) return;
       const nextParts = (wo.currentStepIndex || 0) + 1;
       const polesFinished = !woHasPoles(wo) || poleIdxOf(wo) >= poleRecipeLen(wo);
-      if (nextParts >= len && polesFinished && setQcModal) {
+      // The QC count comes after the LAST spin load — a load with pieces still to run loops instead.
+      if (nextParts >= len && polesFinished && setQcModal && !spinLoadRollover(wo)) {
           setQcModal({ id: wo.id, parts: wo.totalParts || 0, taskType: null, onPassed: () => finalizePartsAdvance(wo) });
           return;
       }
       await finalizePartsAdvance(wo);
+  };
+  // 🌀 THE SIZE OF THIS SPIN LOAD — typed by the crew any time during the load ("expected to fit 70 but
+  // only 35 fit"); it carries to the next load until changed. Checked by Shared/spinLoads.
+  const setSpinLoadQty = async (wo, value) => {
+      const err = spinLoadQtyError(wo, value);
+      if (err) return alert(`${woRef(wo)} — ${err}`);
+      const qty = Number(String(value).trim());
+      const s = spinLoadsOf(wo);
+      try {
+          await updateDoc(doc(db, 'fin_workorders', wo.id), { spinLoadQty: qty, spinLoadQtyAt: Date.now(), spinLoadQtyBy: user?.name || '' });
+          await logManual({ msg: `SPIN LOAD ${s.n} → ${qty} pcs · ${woRef(wo)} (${s.done} of ${s.total} done)`, action: 'LOAD', station: 'SPIN', woId: wo.id, woRefNo: woRef(wo), task: 'parts', recipe: wo.recipe || '' });
+          setLoadDraft(d => { const n = { ...d }; delete n[wo.id]; return n; });
+      } catch (e) { alert('Could not set the load: ' + (e.message || e)); }
   };
 
   // Advance the POLE stream one coat (its own pointer). Completes the order when parts are
@@ -438,14 +467,18 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const len = stream === 'poles' ? poleRecipeLen(wo) : recipeLen(wo);
       const idx = stream === 'poles' ? poleIdxOf(wo) : (wo.currentStepIndex || 0);
       const isFinal = idx + 1 >= len;
+      // 🌀 The last coat of a spin LOAD that is not the last load: the recipe loops, the order stays.
+      const roll = stream === 'parts' && isFinal ? spinLoadRollover(wo) : null;
       const otherDone = stream === 'poles'
           ? (wo.currentStepIndex || 0) >= recipeLen(wo)
           : (!woHasPoles(wo) || poleIdxOf(wo) >= poleRecipeLen(wo));
       setAdvancePrompt({
           woId: wo.id, ref: woRef(wo), stream, label: act.label, isFinal, otherDone,
-          coat: idx + 1, len,
+          coat: idx + 1, len, loadDone: roll ? roll.n : null,
           // What actually happens next, said plainly — the reason the order is or is not leaving.
-          consequence: !isFinal
+          consequence: roll
+              ? `Load ${roll.n} (${roll.record.qty} pcs) has been through all ${len} coats — ${roll.loads.reduce((a, l) => a + (Number(l.qty) || 0), 0)} of ${roll.loads.reduce((a, l) => a + (Number(l.qty) || 0), 0) + roll.after} done. The small parts go back to coat 1 for load ${roll.n + 1} (${roll.nextQty} pcs — change it on the Spin Machine window) on the same sled, and every step resets to Pending. The order stays on the floor.`
+              : !isFinal
               ? `The ${stream === 'poles' ? 'poles' : 'small parts'} move to coat ${idx + 2} of ${len} and every step resets to Pending.`
               : otherDone
                   ? 'This is the last coat and the other stream is already finished — QC runs, then the order LEAVES the floor for the WMS packing queue.'
@@ -616,7 +649,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       if (isHandStep(step)) {
           if (t.hand?.status === 'Running') return { key: 'hand', action: 'COMPLETE', label: '✓ Complete Hand Finish', running: t.hand };
           if (t.hand?.status !== 'Complete') return { key: 'hand', action: 'START', label: '▶ Start Hand Finish' };
-          return { advance: true, label: idx + 1 >= len ? '✓ Final Coat Done — QC & Complete' : `→ Coat Done — Advance to Coat ${idx + 2}` };
+          return { advance: true, label: idx + 1 >= len ? finalCoatLabel(wo) : `→ Coat Done — Advance to Coat ${idx + 2}` };
       }
       const seq = [['spinSetup', 'Sled Setup'], ['spinSpray', 'Spray Coat'], ['spinBake', 'Bake (oven)']];
       for (const [key, label] of seq) {
@@ -624,7 +657,12 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           if (st === 'Running') return { key, action: 'COMPLETE', label: `✓ Complete ${label}`, running: t[key] };
           if (st !== 'Complete') return { key, action: 'START', label: `▶ Start ${label}` };
       }
-      return { advance: true, label: idx + 1 >= len ? '✓ Final Coat Done — QC & Complete' : `→ Unload — Advance to Coat ${idx + 2}` };
+      return { advance: true, label: idx + 1 >= len ? finalCoatLabel(wo) : `→ Unload — Advance to Coat ${idx + 2}` };
+  };
+  // The last coat's button: the end of the job — or, on the spin machine with pieces left, of a LOAD.
+  const finalCoatLabel = (wo) => {
+      const roll = spinLoadRollover(wo);
+      return roll ? `✓ Load ${roll.n} Done — Load ${roll.n + 1} (${roll.nextQty} pcs) from Coat 1` : '✓ Final Coat Done — QC & Complete';
   };
   const nextPoleAction = (wo) => {
       if (!woHasPoles(wo)) return null;
@@ -1049,6 +1087,28 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                         <div style={{ ...mono, color: 'var(--ink-soft)', marginTop: '4px' }}>
                             {stream === 'poles' ? 'Poles' : 'Small parts'} · {piecesOf(wo, stream)} pcs{wo.recipe ? ` · ${wo.recipe}` : ''}{wo.customerName ? ` · ${wo.customerName}` : ''}
                         </div>
+                        {/* 🌀 THE LOAD (Stuart 2026-09-29): every coat of the recipe runs per load; the crew types how
+                            many are on the machine — it carries to the next load until changed (Shared/spinLoads). */}
+                        {stream === 'parts' && state !== 'coming' && !row.offCoat && runsInLoads(wo) && (() => {
+                            const L = spinLoadsOf(wo);
+                            return (
+                                <div style={{ marginTop: '6px', padding: '6px 8px', background: '#fff', border: '1px dashed var(--line)' }}>
+                                    <div style={{ ...mono, color: 'var(--ink)' }}>
+                                        🌀 Load {L.n} · <b>{L.qty} pcs</b>{L.typed ? '' : ' (all that is left)'} · {L.done} of {L.total} done · {L.last ? 'last load' : `${L.remaining - L.qty} after this load`}
+                                    </div>
+                                    {win === 'SPIN' && (
+                                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap' }}>
+                                            <span style={{ ...mono, fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>pcs this load</span>
+                                            <input type="number" min="1" max={L.remaining} inputMode="numeric" value={loadDraft[wo.id] ?? ''} placeholder={String(L.qty)}
+                                                onChange={e => setLoadDraft(d => ({ ...d, [wo.id]: e.target.value }))}
+                                                style={{ ...mono, width: '72px', padding: '6px 8px', border: '1px solid var(--line)', background: '#fff' }} />
+                                            <button onClick={() => setSpinLoadQty(wo, loadDraft[wo.id])} disabled={!String(loadDraft[wo.id] ?? '').trim()}
+                                                style={{ ...mono, fontSize: '9px', textTransform: 'uppercase', padding: '7px 10px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', opacity: String(loadDraft[wo.id] ?? '').trim() ? 1 : 0.4 }}>Set load</button>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
                         {step && (
                             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)', marginTop: '6px' }}>
                                 Coat {row.coat}/{row.of}{step.color ? ` — ${step.color}` : ''} <span style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>({step.app || '—'})</span>
@@ -1675,7 +1735,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                   <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '560px', maxWidth: '95vw', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,.28)' }}>
                       <div style={{ padding: '20px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
                           <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>
-                              {advancePrompt.isFinal ? 'Last coat finished' : `Coat ${advancePrompt.coat} of ${advancePrompt.len} finished`}
+                              {advancePrompt.loadDone ? `Load ${advancePrompt.loadDone} finished — all ${advancePrompt.len} coats` : advancePrompt.isFinal ? 'Last coat finished' : `Coat ${advancePrompt.coat} of ${advancePrompt.len} finished`}
                           </div>
                           <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '4px', letterSpacing: '.06em' }}>
                               {advancePrompt.ref} · {advancePrompt.stream === 'poles' ? 'POLES' : 'SMALL PARTS'} · every step of this coat is done
