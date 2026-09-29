@@ -5621,8 +5621,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         // or gathered document never reads Complete, so this warned on every order.
                         const waiting = (o.lines || []).map((l, i) => ({ l, i }))
                             .filter(x => lineCodeOf(x.l) && !soLineIsShelfPick(o, x.l, x.i) && !feeLine(o, x.l, x.i))
-                            .map(x => ({ code: lineCodeOf(x.l), qty: Number(x.l.qty) || 0, have: committedQtyOf(o, lineCodeOf(x.l)) }))
-                            .filter(x => x.have < x.qty);
+                            // One item, one need (Shared/pickLines.soCodeNeedOf): two lines of one item wait for BOTH.
+                            .map(x => ({ code: lineCodeOf(x.l), qty: soCodeNeedOf(o, lineCodeOf(x.l), isFeeCode) || Number(x.l.qty) || 0, have: committedQtyOf(o, lineCodeOf(x.l)) }))
+                            .filter((x, k, arr) => x.have < x.qty && arr.findIndex(y => y.code === x.code) === k);
                         if (waiting.length && !window.confirm(`⏳ SO ${o.soId || o.id} has ${waiting.length} to-be-finished line(s) NOT YET GATHERED into the order:\n\n${waiting.slice(0, 8).map(w => `• ${w.code} — ${w.have} of ${w.qty} gathered`).join('\n')}${waiting.length > 8 ? `\n…and ${waiting.length - 8} more` : ''}\n\nPACK & HOLD until every part arrives is the model. Mark it ${status} anyway?`)) return;
                         if (status === 'Shipped' && o.packStatus !== 'Packed' && !window.confirm(`SO ${o.soId || o.id} has NOT been packed on the PACKING tab (piece-by-piece confirm + photo).\n\nShip anyway?`)) return;
                         try {
