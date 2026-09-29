@@ -354,5 +354,42 @@ eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }]
     ], [false, false, false, false, false, false]);
 }
 
+// ── ✎ A KIT'S FINISH (Stuart 2026-09-29: "table top base back1 is ep1") — SO60551's Base Back 1: two H1-2RCTAEC kits,
+// one EP1 and one with no finish, so 50 collars read as raw ──
+{
+    const { kitFinishEditOf } = await import('../src/components/Shared/displayRelease.js');
+    const inv = [
+        { id: 'CE-INV-55963', legacyErpId: 'H1-2RCTAEC', itemName: 'Acrylic End Cap', partClass: 'Kit', manufacturingSpecs: { kitComponents: [{ qty: 1, partId: 'CE-INV-59098' }, { partId: 'CE-ASM-64652', qty: 1 }] } },
+        { id: 'CE-INV-59098', legacyErpId: 'H1-2RCTAECC', itemName: 'Collar', manufacturingSpecs: {} },
+        { id: 'CE-ASM-64652', legacyErpId: 'H1-2RCTACEC', itemName: 'Clear acrylic', manufacturingSpecs: { customData: { unfinished: true } } },
+    ];
+    const lines = [];
+    lines[29] = { erp: 'H1-2RCTAEC', qty: 50, row: 'Base Back 1', isKit: true, itemKit: true, kitCode: 'H1-2RCTAEC', toBeFinished: false };
+    lines[30] = { erp: 'H1-2RCTAEC', qty: 50, row: 'Base Back 1', isKit: true, itemKit: true, finishCode: 'EP1', finishOutsourced: true };
+    lines[43] = { erp: 'H1-2RCTAECC', qty: 50, row: 'Base Back 1', partId: 'CE-INV-59098', inKit: true, kitOf: 'H1-2RCTAEC', hidden: true, price: 0, noFinish: true, toBeFinished: false, kitLineIdx: 29 };
+    lines[44] = { erp: 'H1-2RCTACEC', qty: 50, row: 'Base Back 1', partId: 'CE-ASM-64652', inKit: true, kitOf: 'H1-2RCTAEC', hidden: true, price: 0, noFinish: true, toBeFinished: false, kitLineIdx: 29 };
+    lines[45] = { erp: 'H1-2RCTAECC', qty: 50, row: 'Base Back 1', partId: 'CE-INV-59098', inKit: true, kitOf: 'H1-2RCTAEC', hidden: true, price: 0, finishCode: 'EP1', toBeFinished: true, finishOutsourced: true, kitLineIdx: 30 };
+    for (let i = 0; i < 43; i++) if (!lines[i]) lines[i] = { erp: `X${i}`, qty: 1 };
+    const so = { id: 'SO-APP-QUOTE-1789660306300', soId: 'SO60551', lines, oeGen: { 30: { kind: 'STOCK' }, 45: { kind: 'STOCK', code: 'H1-2RCTAECC/EP1' } } };
+    const r = kitFinishEditOf({ so, lineIdx: 29, finishCode: 'ep1', inventory: inv, by: 'stuart', reason: 'Base Back 1 is EP1', now: 9 });
+    eq('the no-finish kit becomes EP1, stamped with what it was, who, when and why', [r.ok, r.from, r.to, r.lines[29].finishCode, r.lines[29].finishOutsourced, r.lines[29].kitFinishChangedFrom, r.lines[29].kitFinishChangedBy, r.lines[29].kitFinishChangedAt, r.lines[29].kitFinishChangedReason],
+        [true, '—', 'EP1', 'EP1', true, '—', 'stuart', 9, 'Base Back 1 is EP1']);
+    eq('…its collar now reads exactly like the EP1 kit\'s collar (line 45); its clear acrylic still wears nothing', [
+        ['erp', 'finishCode', 'toBeFinished', 'finishOutsourced', 'noFinish', 'inKit', 'kitOf', 'kitLineIdx', 'qty', 'price', 'row'].map(k => r.lines[43][k]),
+        [r.lines[44].erp, r.lines[44].noFinish, r.lines[44].finishCode, r.lines[44].kitLineIdx],
+    ], [['H1-2RCTAECC', 'EP1', true, true, undefined, true, 'H1-2RCTAEC', 29, 50, 0, 'Base Back 1'], ['H1-2RCTACEC', true, undefined, 29]]);
+    eq('the confirm names every part it changes', r.parts, [{ idx: 43, from: 'H1-2RCTAECC · no finish', to: 'H1-2RCTAECC/EP1' }, { idx: 44, from: 'H1-2RCTACEC · no finish', to: 'H1-2RCTACEC · no finish' }]);
+    eq('nothing else on the order moves', [r.lines[30], r.lines[45], r.lines[5]], [lines[30], lines[45], lines[5]]);
+    eq('refused: not a kit · same finish · no reason · a bad code · work raised on a part · a part gathered', [
+        kitFinishEditOf({ so, lineIdx: 43, finishCode: 'EP1', inventory: inv, reason: 'x' }).ok,
+        kitFinishEditOf({ so, lineIdx: 30, finishCode: 'EP1', inventory: inv, reason: 'x' }).ok,
+        kitFinishEditOf({ so, lineIdx: 29, finishCode: 'EP1', inventory: inv, reason: ' ' }).ok,
+        kitFinishEditOf({ so, lineIdx: 29, finishCode: 'E P 1', inventory: inv, reason: 'x' }).ok,
+        kitFinishEditOf({ so: { ...so, oeGen: { 43: { kind: 'STOCK' } } }, lineIdx: 29, finishCode: 'EP1', inventory: inv, reason: 'x' }).ok,
+        kitFinishEditOf({ so: { ...so, committedQty: { 'H1-2RCTAECC': 50 } }, lineIdx: 29, finishCode: 'EP1', inventory: inv, reason: 'x' }).ok,
+    ], [false, false, false, false, false, false]);
+    eq('…and a kit missing from the library is refused, not guessed', kitFinishEditOf({ so, lineIdx: 29, finishCode: 'EP1', inventory: [], reason: 'x' }).ok, false);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

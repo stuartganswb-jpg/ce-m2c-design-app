@@ -591,6 +591,56 @@ export const lineQtyEditOf = ({ so, lineIdx, qty, by = '', reason = '', now = Da
     return { ok: true, lines: next, from, to: n };
 };
 
+// ── ✎ A KIT'S FINISH (Stuart 2026-09-29: "table top base back1 is ep1") ──────────────────────────────────────────────
+// A kit and its parts change together (the qty edit above refuses them): the kit line takes the new finish and its parts
+// are worked out again by the ONE kit rule (Shared/itemKit.itemKitOrderLinesOf) — each part the kit's finish, stock
+// colour, or nothing when it is tagged Unfinished. SO60551's Base Back 1 carried two H1-2RCTAEC kits, one EP1 and one
+// with no finish, so 50 of its collars read as raw aluminium. Only while nothing has been raised or gathered for the
+// parts; the parts keep their place, row and link, a part that must now be made reads NOT STARTED, and ▶ Start row
+// plans it by today's rules. NetSuite is changed by hand (the confirm says so). Pure.
+// @returns { ok, reason?, lines?, from?, to?, parts?: [{ idx, from, to }] }
+const KIT_PART_FINISH_FIELDS = ['finishCode', 'subFinishCode', 'toBeFinished', 'finishOutsourced', 'noFinish', 'stockColour'];
+export const kitFinishEditOf = ({ so, lineIdx, finishCode, inventory = [], by = '', reason = '', now = Date.now() } = {}) => {
+    const lines = Array.isArray(so && so.lines) ? so.lines : [];
+    const kit = lines[lineIdx];
+    const f = U(finishCode);
+    if (!kit) return { ok: false, reason: 'no such line on the order' };
+    if (!isKitLine(kit)) return { ok: false, reason: 'that line is not a kit' };
+    if (!/^[A-Z0-9-]{1,8}$/.test(f)) return { ok: false, reason: 'give the finish code (EP1, P06, S04 …)' };
+    if (f === U(kit.finishCode)) return { ok: false, reason: 'the kit already carries that finish' };
+    if (!String(reason || '').trim()) return { ok: false, reason: 'say why — it is recorded on the kit' };
+    const partIdxs = lines.map((l, i) => (l && l.inKit && l.kitLineIdx === lineIdx ? i : -1)).filter(i => i >= 0);
+    if (!partIdxs.length) return { ok: false, reason: 'the kit has no parts on the order yet — ↻ Re-read lines first' };
+    for (const i of partIdxs) {
+        if (so.oeGen && so.oeGen[i]) return { ok: false, reason: `work has already been raised for line ${i + 1} (${lines[i].erp}) — undo the row start first` };
+        if (committedQtyOf(so, soLineCodeOf(lines[i])) > 0) return { ok: false, reason: `${soLineCodeOf(lines[i])} is already gathered into the order — release it at SO Pack first` };
+    }
+    const byId = new Map((inventory || []).map(p => [String(p.id), p]));
+    const byCode = new Map((inventory || []).map(p => [U(p.legacyErpId || p.itemId), p]));
+    const k = itemKitOrderLinesOf({ line: { ...kit, finishCode: f, subFinishCode: '' }, findByCode: (c) => byCode.get(U(c)) || null, findPart: (id) => byId.get(String(id)) || null });
+    if (!k) return { ok: false, reason: `${kit.erp} is not a kit in the library` };
+    if (k.missing.length) return { ok: false, reason: `${k.missing.join(', ')} not in the library — the kit's parts cannot be worked out` };
+    // Each part line is matched to its component by part id, else by its place among the kit's parts.
+    const byPartId = new Map(k.parts.map(p => [String(p.partId), p]));
+    const unmatched = [...k.parts];
+    const next = lines.map(l => ({ ...l }));
+    const parts = [];
+    for (const [n, i] of partIdxs.entries()) {
+        const old = lines[i];
+        const fresh = byPartId.get(String(old.partId || '')) || unmatched[n];
+        if (!fresh) return { ok: false, reason: `line ${i + 1} (${old.erp}) is not one of ${kit.erp}'s parts in the library — ↻ Re-read lines` };
+        unmatched.splice(unmatched.indexOf(fresh), 1);
+        const keep = { ...old };
+        KIT_PART_FINISH_FIELDS.forEach(key => { delete keep[key]; });
+        next[i] = { ...keep, ...fresh, qty: old.qty, kitLineIdx: lineIdx };
+        const label = (l) => `${soLineCodeOf(l)}${l.subFinishCode ? ` (shelf, else ${U(l.subFinishCode)})` : (l.noFinish ? ' · no finish' : '')}`;   // the code carries its finish
+        parts.push({ idx: i, from: label(old), to: label(next[i]) });
+    }
+    const from = U(kit.finishCode) || '—';
+    next[lineIdx] = { ...next[lineIdx], finishCode: f, subFinishCode: '', finishOutsourced: isOutsourcedFinishCode(f), kitFinishChangedFrom: from, kitFinishChangedBy: by, kitFinishChangedAt: now, kitFinishChangedReason: String(reason).trim() };
+    return { ok: true, lines: next, from, to: f, parts };
+};
+
 // ── ↩ UNDO A ROW START — only while nothing on its documents has moved (Stuart 2026-09-27) ─────────────────
 // A row started under an older rule (SO60551's ROW 1 without its French returns; Row 2's stained fascia sent to
 // finishing as a small part) is put back: its pair's documents are removed through the ledger and its lines read
