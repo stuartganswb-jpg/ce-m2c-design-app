@@ -20,8 +20,8 @@
 export const poLinesSql = (nsPoId) => {
     const id = String(nsPoId || '').trim();
     if (!/^\d+$/.test(id)) throw new Error(`Not a NetSuite purchase order id: "${nsPoId}"`);
-    return `SELECT tl.id AS line, tl.item AS item_internal, UPPER(i.itemid) AS itemid, tl.location AS location, `
-        + `ABS(NVL(tl.quantity, 0)) AS ordered, NVL(tl.quantityshiprecv, 0) AS done, NVL(tl.isclosed, 'F') AS isclosed `
+    return `SELECT tl.id AS line, tl.item AS item_internal, UPPER(i.itemid) AS itemid, i.displayname AS itemname, tl.location AS location, `
+        + `ABS(NVL(tl.quantity, 0)) AS ordered, NVL(tl.quantityshiprecv, 0) AS done, NVL(tl.isclosed, 'F') AS isclosed, NVL(tl.rate, 0) AS rate `
         + `FROM transactionline tl JOIN item i ON i.id = tl.item `
         + `WHERE tl.transaction = ${id} AND tl.mainline = 'F' AND NVL(tl.taxline, 'F') = 'F' ORDER BY tl.id`;
 };
@@ -35,6 +35,7 @@ const N = (v) => Number(v) || 0;
 export const nsPoLinesOf = (rows) => (Array.isArray(rows) ? rows : []).map(r => ({
     lineId: S(r.line), nsItemId: S(r.item_internal), itemId: U(r.itemid),
     ordered: N(r.ordered), done: N(r.done), closed: truthy(r.isclosed), location: S(r.location),
+    description: S(r.itemname), rate: N(r.rate),
 })).filter(l => l.lineId);
 
 // app PO items[] (index = the cart's index) → { [index]: nsLine }. Stored line id first; then the
@@ -56,6 +57,60 @@ export function matchPoLines(poItems, nsLines) {
         if (hit) { out[i] = hit; taken.add(hit.lineId); }
     });
     return out;
+}
+
+// ── A PURCHASE ORDER REVISED IN NETSUITE (Chris, App Imp 2026-09-28 — PO2296) ────────────────────
+// Once a PO has a NetSuite number our copy must not drift from it (Shared/poLock), and NetSuite is
+// where purchasing revises it. PO2296 was rewritten there on 9/28 — every mill line swapped for its
+// /P, two rings split, the traverse arms added — while the dock kept offering the app's 37 old lines,
+// none of them on the PO any more, and could not find the 45 real ones ("Nothing outstanding on
+// PO2296 matches H1-2TRVDRA"). So a numbered PO's lines follow NetSuite's:
+//   • a line on both (the receipt's own pairing: stored line id, then the nth of an item) takes
+//     NetSuite's code, quantity and rate and keeps what the app knows of it — what the dock received,
+//     its bin, its sales-order link. An item renamed in NetSuite lands here, under its new code.
+//   • a line only NetSuite has is added, with NetSuite's own received figure (as an import does).
+//   • a line only the app has is dropped when nothing was received against it and no order is linked;
+//     otherwise it STAYS, marked notOnNsPo — pieces the dock counted, or an order's claim, never
+//     vanish. The receipt already refuses such a line (LINE_NOT_ON_NETSUITE_PO).
+// No NetSuite lines read = nothing known, nothing changed. Pure: returns { items, changed, material,
+// added, removed, kept, updated } — items in NetSuite's line order, then the kept app-only lines.
+export function followNsPoLines(poItems, nsLines) {
+    const items = Array.isArray(poItems) ? poItems : [];
+    const ns = Array.isArray(nsLines) ? nsLines : [];
+    const none = { items, changed: false, material: false, added: [], removed: [], kept: [], updated: [] };
+    if (!ns.length) return none;
+    const match = matchPoLines(items, ns);
+    const appIndexOf = {};
+    Object.entries(match).forEach(([i, n]) => { appIndexOf[n.lineId] = Number(i); });
+    const added = [], updated = [], removed = [], kept = [];
+    const followed = ns.map(n => {
+        const i = appIndexOf[n.lineId];
+        if (i == null) {
+            added.push({ itemId: n.itemId, qty: n.ordered });
+            return { itemId: n.itemId, nsItemId: n.nsItemId, nsLineId: n.lineId, description: n.description, quantity: n.ordered, received: n.done, rate: n.rate };
+        }
+        const { notOnNsPo, ...l } = items[i];
+        const renamed = U(l.itemId) !== n.itemId;
+        if (renamed || N(l.quantity) !== n.ordered || N(l.rate) !== n.rate) {
+            updated.push({ itemId: n.itemId, was: U(l.itemId), qty: n.ordered, wasQty: N(l.quantity) });
+        }
+        return {
+            ...l, itemId: n.itemId, nsItemId: n.nsItemId, nsLineId: n.lineId, quantity: n.ordered, rate: n.rate,
+            ...(renamed && n.description ? { description: n.description } : {}),
+        };
+    });
+    const leftovers = [];
+    items.forEach((l, i) => {
+        if (!l || match[i]) return;
+        const claim = N(l.received) > 0 || S(l.soAppId) || S(l.soRef);
+        if (!claim) { removed.push({ itemId: U(l.itemId), qty: N(l.quantity) }); return; }
+        if (!l.notOnNsPo) kept.push({ itemId: U(l.itemId), qty: N(l.quantity), received: N(l.received), soRef: S(l.soRef) });
+        leftovers.push({ ...l, notOnNsPo: true });
+    });
+    const next = [...followed, ...leftovers];
+    const changed = JSON.stringify(next) !== JSON.stringify(items);
+    const material = !!(added.length || removed.length || kept.length || updated.length);
+    return { items: next, changed, material, added, removed, kept, updated };
 }
 
 // ── AN ITEM WITH A PREFERRED BIN ARRIVES PRE-BINNED (Eric, App Imp 2026-09-18 — PO2128) ──────────────

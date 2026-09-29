@@ -65,7 +65,7 @@ import { soLinesSql, fulfilmentItemsOf, refusalText } from "../Shared/fulfilment
 import FulfilmentPanel from "../Shared/fulfilmentPanel";
 import { boxSizeLabel } from "../Shared/fulfilment";
 import { fetchNsPurchaseOrder, importNsPurchaseOrder, fetchNsPoLines, fetchPreferredBins, recordPoReceipt, openQtyOf, overRoomOf, maxReceivableOf, poRef } from "../Shared/purchaseOrders";
-import { itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText, binTransferLineOf } from "../Shared/poReceiptLines";
+import { itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText, binTransferLineOf, followNsPoLines } from "../Shared/poReceiptLines";
 import { onceAtATime } from "../Shared/onceAtATime";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
 
@@ -314,6 +314,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const rcvLatchRef = useRef(false);   // set synchronously — state is too late to stop a second submit
     // What NetSuite never got (Eric 2026-09-17): { lines: [{index,itemId,qty,bin,…}], inFlight } for the open PO, or null.
     const [rcvNsGap, setRcvNsGap] = useState(null);
+    // The PO was revised in NetSuite (Chris 2026-09-28): { poId, added, removed, kept, updated } once the dock
+    // follows it, { poId, cartOpen } when an open cart holds it back, { poId, error } when the read failed.
+    const [rcvNsRevised, setRcvNsRevised] = useState(null);
     const [rcvScan, setRcvScan] = useState('');          // the find box
     const [rcvFocusIdx, setRcvFocusIdx] = useState(null); // the line the scan found
     const [rcvQty, setRcvQty] = useState({});            // line index → how many arrived
@@ -1060,11 +1063,46 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return `\n\n🔀 ${transfers.length} item(s) have a preferred bin in NetSuite: the receipt lands them there, and a bin move to where you put them follows once it has posted —\n${transfers.map(tr => `   ${tr.quantity} × ${tr.itemId}: ${tr.fromBin} → ${tr.toBin}`).join('\n')}`;
     };
 
-    const rcvCheckNs = async (po) => {
+    // ── THE PO AS NETSUITE HOLDS IT NOW (Chris, App Imp 2026-09-28 — PO2296) ─────────────────────
+    // A numbered PO is revised in NetSuite, not here, so opening it at the dock first brings our copy
+    // to NetSuite's lines (Shared/poReceiptLines.followNsPoLines). The cart points at lines by
+    // position, so a PO with goods on the cart is NOT reshaped under it — the dock says so, and the PO
+    // follows the next time it is opened with the cart put away. A failed read or write changes
+    // nothing and is said. Returns { po, nsLines }; nsLines goes on to rcvCheckNs so NetSuite is read once.
+    const rcvFollowNs = async (po) => {
+        setRcvNsRevised(null);
+        if (!po || !po.nsPoId) return { po, nsLines: null };
+        let nsLines;
+        try { nsLines = await fetchNsPoLines(po.nsPoId); }
+        catch (e) {
+            setRcvNsRevised({ poId: po.id, error: String(e.message || e).slice(0, 160) });
+            return { po, nsLines: null };
+        }
+        const f = followNsPoLines(po.items || [], nsLines);
+        if (!f.changed) return { po, nsLines };
+        if (Array.isArray(po.receivingCart) && po.receivingCart.length) {
+            if (f.material) setRcvNsRevised({ poId: po.id, cartOpen: true });
+            return { po, nsLines };
+        }
+        const revision = { at: Date.now(), by: operator?.name || '', added: f.added, removed: f.removed, kept: f.kept, updated: f.updated };
+        try {
+            await updateDoc(doc(db, 'hq_purchase_orders', po.id), { items: f.items, ...(f.material ? { nsRevisionFollowed: revision } : {}) });
+        } catch (e) {
+            if (f.material) setRcvNsRevised({ poId: po.id, error: `could not save NetSuite's lines here (${String(e.message || e).slice(0, 120)})` });
+            return { po, nsLines };
+        }
+        if (f.material) {
+            writeLog(`Receiving ${poRef(po)}: revised in NetSuite — the dock now follows its ${nsLines.length} line(s): ${f.added.length} added, ${f.removed.length} removed, ${f.updated.length} changed${f.kept.length ? `; kept, no longer on NetSuite's PO: ${f.kept.map(k => k.itemId).join(', ')}` : ''}.`, 'wms');
+            setRcvNsRevised({ poId: po.id, lineCount: nsLines.length, ...revision });
+        }
+        return { po: { ...po, items: f.items }, nsLines };
+    };
+
+    const rcvCheckNs = async (po, nsLinesRead = null) => {
         setRcvNsGap(null);
         if (!po || !po.nsPoId) return;
         try {
-            const nsLines = await fetchNsPoLines(po.nsPoId);
+            const nsLines = nsLinesRead || await fetchNsPoLines(po.nsPoId);
             const lines = receiptShortfallOf(po.items || [], nsLines);
             if (!lines.length) return;
             const pre = `porcv-${String(po.id)}-`;
@@ -1130,15 +1168,25 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 }
                 found = await importNsPurchaseOrder({ nsPo, brand: activeBrand, createdBy: operator?.name || '' });
                 writeLog(`Receiving: ${tran} was raised in NetSuite — imported so the receipt has a record and the PO shows in RTG.`, 'wms');
+                setRcvNsRevised(null);
+                setRcvPo(found); setRcvScan(''); setRcvFocusIdx(null); setRcvQty({}); setRcvBin('');
+                rcvCheckNs(found);
+                return;
             }
+            // Our copy of a numbered PO follows NetSuite's lines before the dock works from it.
+            const followed = await rcvFollowNs(found);
+            found = followed.po;
             setRcvPo(found); setRcvScan(''); setRcvFocusIdx(null); setRcvQty({}); setRcvBin('');
-            rcvCheckNs(found);
+            rcvCheckNs(found, followed.nsLines);
         } catch (e) {
             console.error('Receiving: PO lookup failed', e);
             alert(`Could not read ${tran}:\n\n${e.message || e}\n\nNothing was changed.`);
         } finally { setRcvBusy(false); }
     };
 
+    // A line NetSuite no longer carries (kept only for what was counted or ordered against it) cannot be
+    // received — NetSuite would refuse the receipt (Shared/poReceiptLines, notOnNsPo).
+    const rcvReceivable = (l) => !!l && !l.notOnNsPo && overRoomOf(l) > 0;
     // Scan to find — exact code first, then a prefix, the same rule the plating station uses.
     const rcvFindIdx = (code, po) => {
         const c = String(code || '').trim().toUpperCase();
@@ -1146,9 +1194,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const lines = po.items || [];
         // A line that owes nothing may still take its overage while the PO is open (Stuart
         // 2026-09-16), so the lookup asks for TOLERANCE room, not what is owed.
-        const exact = lines.findIndex(l => String(l.itemId || '').toUpperCase() === c && overRoomOf(l) > 0);
+        const exact = lines.findIndex(l => String(l.itemId || '').toUpperCase() === c && rcvReceivable(l));
         if (exact >= 0) return exact;
-        return lines.findIndex(l => String(l.itemId || '').toUpperCase().startsWith(c) && overRoomOf(l) > 0);
+        return lines.findIndex(l => String(l.itemId || '').toUpperCase().startsWith(c) && rcvReceivable(l));
     };
 
     // The cart lives ON the purchase order, not in this component: a dock tablet that reloads
@@ -5071,7 +5119,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: theme.paper, fontFamily: theme.sans }}>
-            
+
             {/* TABLET-FIRST HEADER (Stuart 2026-08-20: "the warehouse app is not filling the android
                 tablet screen well and she often zooms in and out"). The title and a dozen tabs on one
                 un-wrapping row are wider than a 1024 px tablet, so the PAGE scrolled sideways — which
@@ -7226,7 +7274,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     const po = rcvPo;
                     const lines = (po && po.items) || [];
                     // Lines that owe nothing but can still take an overage stay on the list.
-                    const owed = lines.map((l, i) => ({ l, i })).filter(x => overRoomOf(x.l) > 0);
+                    const owed = lines.map((l, i) => ({ l, i })).filter(x => rcvReceivable(x.l));
+                    const offNsPo = lines.filter(l => l && l.notOnNsPo);
+                    const rev = rcvNsRevised && po && rcvNsRevised.poId === po.id ? rcvNsRevised : null;
                     const inCart = new Set(rcvCart.map(c => c.index));
                     const pcs = rcvCart.reduce((a, c) => a + (Number(c.qty) || 0), 0);
                     const inp = { padding: '9px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '12px', background: '#fff', color: theme.ink };
@@ -7255,6 +7305,27 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         {lines.length} {t('line(s)')} · {owed.length} {t('still outstanding')} · {String(po.status || '')}
                                     </div>
 
+                                    {/* REVISED IN NETSUITE (Chris 2026-09-28) — the dock follows NetSuite's lines, and says so. */}
+                                    {rev && (
+                                        <div style={{ border: `1px solid ${rev.error || rev.cartOpen ? '#d9534f' : theme.brass}`, background: rev.error || rev.cartOpen ? '#fdf3f2' : '#fdf6e3', padding: '12px 14px', marginBottom: '16px', fontSize: '0.85rem', color: theme.ink }}>
+                                            {rev.error
+                                                ? <>⚠ {t('Could not compare this PO with NetSuite')} ({rev.error}). {t('The lines below are the app\'s copy — if a label will not scan, the PO may have been revised in NetSuite: tell purchasing.')}</>
+                                                : rev.cartOpen
+                                                    ? <>⚠ {t('This PO was revised in NetSuite, but goods are on the cart. Put the cart away (or take them off), then open the PO again — the lines will follow NetSuite.')}</>
+                                                    : <>🔄 <b>{t('Revised in NetSuite')}</b> — {t('the dock now follows NetSuite\'s')} {rev.lineCount} {t('line(s)')}: {rev.added.length} {t('added')} · {rev.removed.length} {t('removed')} · {rev.updated.length} {t('changed')}.</>}
+                                        </div>
+                                    )}
+                                    {offNsPo.length > 0 && (
+                                        <div style={{ border: '1px solid #d9534f', background: '#fdf3f2', padding: '12px 14px', marginBottom: '16px' }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: '#b3362f', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '6px' }}>⚠ {t('No longer on the PO in NetSuite — cannot be received')}</div>
+                                            {offNsPo.map((l, k) => (
+                                                <div key={k} style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
+                                                    {l.itemId} · {t('ordered')} {l.quantity} · {t('received')} {Number(l.received) || 0}{l.soRef ? ` · SO ${l.soRef}` : ''}
+                                                </div>
+                                            ))}
+                                            <div style={{ fontSize: '0.8rem', color: theme.inkSoft, marginTop: '6px' }}>{t('Kept because pieces were counted or an order is linked. Purchasing must put the item back on the PO in NetSuite, or settle it there.')}</div>
+                                        </div>
+                                    )}
                                     {/* NETSUITE IS BEHIND (Eric 2026-09-17) — a receipt that failed in the queue is said HERE, where the dock works. */}
                                     {rcvNsGap && rcvNsGap.poId === po.id && (
                                         <div style={{ border: '1px solid #d9534f', background: '#fdf3f2', padding: '12px 14px', marginBottom: '16px' }}>

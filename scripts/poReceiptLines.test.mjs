@@ -1,5 +1,5 @@
 // The NetSuite item receipt is addressed by PO line (Eric, App Imp 2026-09-17 — PO2205).   node scripts/poReceiptLines.test.mjs
-import { poLinesSql, nsPoLinesOf, matchPoLines, itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText, preferredBinsSql, preferredBinsOf, preferredBinFor, binTransferLineOf } from '../src/components/Shared/poReceiptLines.js';
+import { poLinesSql, nsPoLinesOf, matchPoLines, itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText, preferredBinsSql, preferredBinsOf, preferredBinFor, binTransferLineOf, followNsPoLines } from '../src/components/Shared/poReceiptLines.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 const eq = (n, a, b) => ok(`${n} — got ${JSON.stringify(a)}`, JSON.stringify(a) === JSON.stringify(b));
@@ -18,7 +18,7 @@ const rows = [
     { line: 5, item_internal: 903, itemid: 'CHIP-D', ordered: 10, done: 0, isclosed: 'T' },
 ];
 const ns = nsPoLinesOf(rows);
-eq('rows normalised', ns[0], { lineId: '1', nsItemId: '900', itemId: 'CHIP-A', ordered: 30000, done: 0, closed: false, location: '' });   // + the line's location (2026-09-18)
+eq('rows normalised', ns[0], { lineId: '1', nsItemId: '900', itemId: 'CHIP-A', ordered: 30000, done: 0, closed: false, location: '', description: '', rate: 0 });   // + the line's location (2026-09-18); + description, rate (2026-09-29)
 ok('closed flag read', ns[4].closed === true);
 
 // ── matching ────────────────────────────────────────────────────────────────────────────────
@@ -113,6 +113,42 @@ ok('NetSuite ahead of the app is not a shortfall', receiptShortfallOf([{ itemId:
     // the catch-up: split across two bins, one of them the preferred
     r = itemReceiptItemsOf({ poItems: po28, nsLines: ns28, applied: [{ index: 0, itemId: 'COMPA', qty: 200, bin: 'COMP-001' }, { index: 0, itemId: 'COMPA', qty: 55, bin: 'TOP-SHELF' }], preferred: pref });
     eq('only what sits outside the preferred bin is moved', [r.items[0].quantity, r.transfers.map(x => [x.toBin, x.quantity])], [255, [['TOP-SHELF', 55]]]);
+}
+
+// ── a PO revised in NetSuite — the dock follows it (Chris, App Imp 2026-09-28: PO2296) ────────────
+{
+    const nsRev = nsPoLinesOf([
+        { line: 11, item_internal: 56674, itemid: 'h1-1bpr/p', itemname: 'Passing Ring /P', ordered: 500, done: 0, rate: 1.2 },
+        { line: 12, item_internal: 64479, itemid: 'H1-2TRVDRA/P', itemname: 'Drapery Return Arm /P', ordered: 50, done: 0, rate: 4 },
+        { line: 13, item_internal: 900, itemid: 'CHIP-A2', itemname: 'Chip A (renamed)', ordered: 300, done: 0, rate: 0.5 },
+    ]);
+    const stale = [
+        { itemId: 'H1-1BPR', nsItemId: '56673', quantity: 1000, rate: 1, description: 'Passing Ring mill' },            // swapped for its /P — nothing received
+        { itemId: 'CHIP-A', nsItemId: '900', quantity: 250, rate: 0.5, received: 40, receivedBin: 'M E5L', soRef: '' },  // renamed in NetSuite, qty raised
+        { itemId: 'H1-1BR', nsItemId: '56684', quantity: 1500, received: 20, receivedBin: 'COMP-1' },                     // gone from NetSuite, but 20 counted here
+        { itemId: 'H1-1D', nsItemId: '56707', quantity: 100, soAppId: 'SO-APP-9', soRef: 'SO60999' },                      // gone, but an order is linked
+    ];
+    const f = followNsPoLines(stale, nsRev);
+    ok('a revision is a change, and a material one', f.changed && f.material);
+    eq('NetSuite\'s lines first, in its order, then what could not be let go', f.items.map(l => l.itemId), ['H1-1BPR/P', 'H1-2TRVDRA/P', 'CHIP-A2', 'H1-1BR', 'H1-1D']);
+    eq('a line only NetSuite has is added with its line id, quantity, rate and NetSuite\'s received', f.items[1], { itemId: 'H1-2TRVDRA/P', nsItemId: '64479', nsLineId: '12', description: 'Drapery Return Arm /P', quantity: 50, received: 0, rate: 4 });
+    eq('a renamed line (same internal id) takes the new code and quantity and keeps what the dock counted', [f.items[2].itemId, f.items[2].quantity, f.items[2].received, f.items[2].receivedBin, f.items[2].nsLineId, f.items[2].description], ['CHIP-A2', 300, 40, 'M E5L', '13', 'Chip A (renamed)']);
+    eq('the untouched stale line is dropped', f.removed, [{ itemId: 'H1-1BPR', qty: 1000 }]);
+    eq('a gone line with pieces counted, or an order linked, stays — marked', f.items.slice(3).map(l => [l.itemId, l.notOnNsPo, l.received || 0, l.soRef || '']), [['H1-1BR', true, 20, ''], ['H1-1D', true, 0, 'SO60999']]);
+    eq('…and is named once', f.kept.map(k => k.itemId), ['H1-1BR', 'H1-1D']);
+    eq('added / updated are named', [f.added.map(a => a.itemId), f.updated.map(u => [u.was, u.itemId, u.wasQty, u.qty])], [['H1-1BPR/P', 'H1-2TRVDRA/P'], [['CHIP-A', 'CHIP-A2', 250, 300]]]);
+    // following it again changes nothing — the second open of the PO writes nothing
+    const again = followNsPoLines(f.items, nsRev);
+    ok('a PO that already follows NetSuite is left alone', !again.changed && !again.material);
+    // a line that comes BACK onto the PO loses its mark
+    const back = followNsPoLines(f.items, [...nsRev, ...nsPoLinesOf([{ line: 14, item_internal: 56684, itemid: 'H1-1BR', ordered: 1500, done: 20, rate: 0 }])]);
+    eq('a line re-added in NetSuite is paired again, unmarked, its count kept', back.items.filter(l => l.itemId === 'H1-1BR').map(l => [l.notOnNsPo === undefined, l.received, l.nsLineId]), [[true, 20, '14']]);
+    // nothing read from NetSuite is not knowledge — never wipe the app's lines on an empty read
+    const blind = followNsPoLines(stale, []);
+    ok('no NetSuite lines read → nothing changed', !blind.changed && blind.items === stale);
+    // the app raised it, NetSuite never changed it: the only change is the line id, stamped once
+    const same = followNsPoLines([{ itemId: 'H1-2TRVDRA/P', nsItemId: '64479', quantity: 50, rate: 4, description: 'mine' }], nsPoLinesOf([{ line: 12, item_internal: 64479, itemid: 'H1-2TRVDRA/P', itemname: 'theirs', ordered: 50, done: 0, rate: 4 }]));
+    eq('unchanged PO: the line id is stamped, the app\'s own description kept, nothing to tell the dock', [same.changed, same.material, same.items[0].nsLineId, same.items[0].description], [true, false, '12', 'mine']);
 }
 
 console.log(`poReceiptLines: ${pass} passed, ${fail} failed`);
