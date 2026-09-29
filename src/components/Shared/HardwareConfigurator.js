@@ -11,6 +11,7 @@ import { seedFromVision } from './visionBridge';
 import { seedFromKit, applyKitPricing } from './kitSeed';
 import { explodeTraverse, usageAt } from './traverseExplode';
 import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
+import { autoPicksOf } from './hardwareAutoPicks';
 import { normalizeExtras } from './extrasRestore';
 import { parseKitCode } from './kitCode';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
@@ -357,55 +358,13 @@ function HardwareConfiguratorInner({
     // that deadlocked twice), the picks are simply FILTERED THROUGH the live options at render
     // time: a pick that is no longer offered is not shown as chosen and contributes no geometry.
     // Nothing to clear, nothing to re-seed, no order of operations to get wrong.
-    // ── A DECISION ALREADY MADE IS NOT A STEP (Stuart 2026-08-21) ────────────────────────────
-    // "when selecting the h1-2trv … the drive on step 1 manual or motorized, that can be set to
-    // ahead and make the decision for the traverse end which is being presented as steps 12 + 13 …
-    // it just only presents one choice since there is only one end for manual and one end for
-    // motorized so this just really needs to be put in the bom and not presented as another
-    // decision that has already been made by selecting the drive choice."
-    //
-    // Exactly so. The traverse end is a REAL part that differs by drive — which is why it has its
-    // own role rather than sitting in the track picker — and the drive answer at step 1 already
-    // names it. Asking again is asking the same question twice and calling the second one step 12.
-    //
-    // ⚠ THE TAGS ALREADY DID THE WORK. This adds no rule about drives: the end that survives is the
-    // one whose tag admits the answer given, which is the same filtering every other slot gets. All
-    // that changes is that a slot left holding ONE end stops being a question and becomes a pick
-    // the engine makes — so it prices, renders, reaches the BOM and pushes exactly as if it had
-    // been clicked. Tag a second manual end tomorrow and the question comes back on its own.
-    // ⚠ NOTHING SETTLES BEFORE ITS WORLD EXISTS (Stuart 2026-08-29, H1-2TRV: an end plug AND a
-    // Somfy pulley rendered and billed on an untouched screen). The settle rule fired the moment a
-    // TRV_END slot held one option — including before the rod type was even answered, when the 1.6
-    // rework left each end in its own single-option slot. Same restraint the ring and return rules
-    // state: only judged once a rod is CHOSEN. The ends still auto-pick the instant a traverse rod
-    // is selected and the drive answer has filtered them — that behavior is unchanged.
-    // ── STEP 1 DECIDES THE TRACKS (Stuart 2026-08-31) ────────────────────────────────────────
-    // "if single, then show one track … if double then show 2 tracks, if double with front
-    //  stationary fascia rings then one track." Which tracks are on the order falls out of the
-    //  setup + frontLayer answers, so a track slot left holding ONE admissible option is not a
-    //  question — it picks itself. The STEP stays on screen (unlike a settled end) because it
-    //  still carries a real decision: the custom-finish upcharge. Gated on setup being ANSWERED —
-    //  the same restraint as the ends, so an untouched screen never bills a track.
-    const trackAuto = useMemo(() => {
-        const auto = {};
-        if (!answers.setup) return auto;
-        model.slots.forEach(s => {
-            if (s.kind === 'TRACK' && !s.suppressedBy && s.options.length === 1) auto[s.key] = s.options[0].id;
-        });
-        return auto;
-    }, [model, answers.setup]);
-    const settledKeys = useMemo(() => {
-        const chosenIds = new Set([...Object.values(resolvePicks(model, picks)), ...Object.values(trackAuto)]);
-        const trvChosen = model.choices.some(c => chosenIds.has(c.id) && ROD_ROLES.includes(c.role) && c.rodKind === TRAVERSE);
-        if (!trvChosen) return new Set();
-        return new Set(model.slots.filter(s => s.kind === 'TRV_END' && s.options.length === 1).map(s => s.key));
-    }, [model, picks, resolvePicks, trackAuto]);
-    const livePicks = useMemo(() => {
-        const auto = { ...trackAuto };
-        model.slots.forEach(s => { if (settledKeys.has(s.key)) auto[s.key] = s.options[0].id; });
-        // An operator's own pick still wins, so nothing here can overwrite an answer.
-        return { ...auto, ...resolvePicks(model, picks) };
-    }, [model, picks, resolvePicks, settledKeys, trackAuto]);
+    // ── THE PICKS MADE ON THE OPERATOR'S BEHALF — Shared/hardwareAutoPicks (2026-09-29) ──────────
+    // The tracks STEP 1 decided (Stuart 2026-08-31) and the traverse ends the drive answer named
+    // (2026-08-21, never before a traverse rod is chosen: 2026-08-29). The rules and his words live
+    // in that module now, so the spec sheets settle a set-up exactly as this screen does.
+    const { settledKeys, livePicks } = useMemo(
+        () => autoPicksOf({ model, answers, operatorPicks: resolvePicks(model, picks) }),
+        [model, answers, picks, resolvePicks]);
     useEffect(() => {
         const now = droppedPicks(model, picks, livePicks, { labelOf: slotLabel });
         setDrops(prev => {
