@@ -66,6 +66,7 @@ import FulfilmentPanel from "../Shared/fulfilmentPanel";
 import { boxSizeLabel } from "../Shared/fulfilment";
 import { fetchNsPurchaseOrder, importNsPurchaseOrder, fetchNsPoLines, fetchPreferredBins, recordPoReceipt, openQtyOf, overRoomOf, maxReceivableOf, poRef } from "../Shared/purchaseOrders";
 import { itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText, binTransferLineOf, followNsPoLines } from "../Shared/poReceiptLines";
+import { platingBalancesSql, assemblyBomSql, balancesOf, bomOf, platingPutAwayCheck } from "../Shared/platingPutAway";
 import { onceAtATime } from "../Shared/onceAtATime";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
 
@@ -3968,6 +3969,29 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const lock = await lockBin(bin);
         return lock.ok ? { ok: true, bin: lock.bin } : { ok: false, hard: true, msg: lock.msg };
     };
+    // BEFORE THE PUT-AWAY POSTS (Mark, App Imp 2026-09-28): what NetSuite holds of the raw part at this
+    // location, and what the plated assembly's BOM consumes — read live, judged by Shared/platingPutAway,
+    // refused in plain words when a step would fail. A read that fails is unknown: the put-away goes on
+    // and NetSuite answers, as it always did.
+    const platingPutAwayPreflight = async (line, got, scrap, target, nsConfig) => {
+        const read = async (q) => {
+            const r = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q } });
+            const b = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(JSON.stringify(b).slice(0, 200));
+            return b.items || [];
+        };
+        const assembly = await resolveItemDetail(target);
+        let balances = null, bom = null;
+        try { balances = balancesOf(await read(platingBalancesSql(line.netSuiteInternalId, nsConfig.location))); }
+        catch (e) { console.warn('Plating put-away: balance read failed — not checked:', e); }
+        if (assembly) {
+            try { bom = bomOf(await read(assemblyBomSql(assembly.id))); }
+            catch (e) { console.warn('Plating put-away: BOM read failed — not checked:', e); }
+        }
+        const at = line.createdAt && line.createdAt.toDate ? line.createdAt.toDate() : (line.createdAt ? new Date(line.createdAt) : null);
+        const pulledOn = at && !isNaN(at) ? `${at.getMonth() + 1}/${at.getDate()}` : '';
+        return { assembly, check: platingPutAwayCheck({ line, got, scrap, target, assembly, balances, bom, pulledOn }) };
+    };
     // PUT AWAY = the whole NetSuite close for one line, in order, each step guarded:
     //   1 reversal  WIP-Plating → Good, for the pieces that came back
     //   2 scrap     the pieces that did not come back, out of WIP-Plating   (only when short)
@@ -4042,6 +4066,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             } finally { setIsSyncing(false); }
             return;
         }
+        // BEFORE ANYTHING POSTS — does NetSuite hold what this put-away posts against?
+        let pre;
+        try { setIsSyncing(true); pre = await platingPutAwayPreflight(line, got, scrap, target, nsConfig); }
+        catch (e) { return alert('❌ Put-away problem:\n\n' + (e.message || e) + '\n\nNothing was posted.'); }
+        finally { setIsSyncing(false); }
+        if (!pre.check.ok) {
+            writeLog(`Plating put-away refused before posting (${pre.check.reason}): ${got} × ${line.erpId} → ${target} (${line.cartLabel || 'cart'}, ${line.shipmentId || line.id}).`, 'wms');
+            return alert(pre.check.msg);
+        }
         if (!window.confirm(`Put away ${got} × ${target}?\n\n${bins.map(p => `   ${p.qty} → ${p.bin}`).join('\n')}${scrap > 0 ? `\n\n⚠ ${scrap} pc(s) did NOT come back and will be SCRAPPED out of WIP-Plating.` : ''}\n\nThis posts to NetSuite: the plated raw returns to Good${scrap > 0 ? ', the short pieces are adjusted out' : ''}, and the finished assembly is built into the bin(s) above.`)) return;
         try {
             setIsSyncing(true);
@@ -4079,9 +4112,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             // componentinventorydetail on every bin-tracked component. The plated build-back is the
             // same shape: consume the raw from `fromBin` (where step 1 just returned it to Good),
             // receive the finished assembly into the bin that was SCANNED.
-            const assembly = await resolveItemDetail(target);
-            if (!assembly) throw new Error(`Couldn't find ${target} in NetSuite by item id. Confirm the plated assembly exists with ${line.erpId} as a BOM component.`);
-            if (assembly.type && !/assembl/i.test(assembly.type)) throw new Error(`${target} is type "${assembly.type}" in NetSuite, not an Assembly.`);
+            const assembly = pre.assembly;   // resolved and checked before anything posted (Shared/platingPutAway)
             // The RESTlet receives into ONE bin, so a split posts one build per bin. Each build is
             // recorded the moment it lands, so a failure part-way through can never rebuild a bin
             // that already went in.
