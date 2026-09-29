@@ -25,6 +25,17 @@ export const pickNsWoItem = ({ base, target, baseErp = '', targetErp = '' }) => 
     return null;
 };
 
+// WHERE A MILL BUILD RECEIVES (Stuart 2026-09-29): "have it default and build to the RAW bin and from
+// there it gets either converted for phosphate, sent to plater, or put in a storage bin depending on
+// the demand". RTG's ⛏ Mill Build and the automatic build (functions onMillComplete, its own copy of
+// the name) both receive into it. It must exist at the brand's location — never created by a build.
+export const MILL_BUILD_BIN = 'RAW';
+export const millBuildBinSql = (locationId) => {
+    const loc = String(locationId || '').trim();
+    if (!/^\d+$/.test(loc)) throw new Error(`Not a NetSuite location id: "${locationId}"`);
+    return `SELECT id, binnumber FROM bin WHERE UPPER(binnumber) = '${MILL_BUILD_BIN}' AND location = ${loc} AND NVL(isinactive, 'F') = 'F'`;
+};
+
 // Post an assembly build via the CE Convert RESTlet (script 2848 — same vehicle the WMS /P
 // convert uses). With workOrderId it transforms the WO into the build (createdfrom → NetSuite
 // closes the WO itself); the RESTlet verifies the WO's item matches and refuses a mismatch.

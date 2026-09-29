@@ -41,7 +41,7 @@ import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
-import { queueNsAssemblyWorkOrder, pickNsWoItem, postNsAssemblyBuild } from "../Shared/nsWorkOrder";
+import { queueNsAssemblyWorkOrder, pickNsWoItem, postNsAssemblyBuild, MILL_BUILD_BIN, millBuildBinSql } from "../Shared/nsWorkOrder";
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers and
 // the trade-discount / net-total display rows).
@@ -2298,16 +2298,27 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // wrong build moves real inventory); automate at mill-complete once a live post is verified.
     const postRootMillBuild = async (o) => {
         const code = String(o.partErpId || o.rootItem || o.erpId || '').toUpperCase();
-        const qty = Number(o.totalParts || o.qty || 0);
+        // The GOOD count the mill made — what the automatic build posts (functions onMillComplete) and the
+        // close-short rule builds; the ordered quantity only when no mill count is on the record.
+        const qty = Number(o.millGoodQty) > 0 ? Number(o.millGoodQty) : Number(o.totalParts || o.qty || 0);
         if (!code || !qty || !o.nsWoId) return;
         try {
             const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', code)));
             const lib = snap.docs.map(x => x.data()).find(x => x.netSuiteInternalId);
             if (!lib) return alert(`${code} has no NetSuite internal id in the library — sync it (11.1) first.`);
-            const toBin = (lib.manufacturingSpecs && lib.manufacturingSpecs.binLocation) || '';
+            // INTO RAW (Stuart 2026-09-29) — the bin the automatic build receives into; from there the demand
+            // decides (convert to /P, plater, storage). It must already exist at this brand's location.
+            const toBin = MILL_BUILD_BIN;
+            const loc = (BRAND_NETSUITE_MAP[activeBrand] || {}).location;
+            try {
+                const br = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: millBuildBinSql(loc) } });
+                const bj = await br.json().catch(() => ({}));
+                // Refused only on a clean read that finds none; a failed read goes on and NetSuite answers.
+                if (br.ok && Array.isArray(bj.items) && !bj.items.length) return alert(`⛔ There is no "${toBin}" bin at this brand's NetSuite location (${loc}) — nothing was posted.\n\nA mill build receives into ${toBin}. Create the bin in NetSuite (or WMS → Transfer), then press ⛏ again.`);
+            } catch (binErr) { console.warn('mill build: RAW bin check failed — going on:', binErr); }
             if (!window.confirm(`⛏ Post the mill build to NetSuite?\n\nBuild ${qty} × ${code} AGAINST ${o.nsWoTran || `WO id ${o.nsWoId}`} (createdfrom — NetSuite closes the work order itself).\nReceive into bin: ${toBin || '(item not bin-tracked / none set)'}\nComponents consume per the item's NetSuite BOM.\n\nThis moves real inventory. Continue?`)) return;
             const b = await postNsAssemblyBuild({ nsProxyFetch, brandId: activeBrand, internalId: lib.netSuiteInternalId, qty, toBin, memo: `Mill build ${code} · ${woRefOf(o)}`, workOrderId: o.nsWoId });
-            await updateDoc(doc(db, 'hq_work_orders', o.id), { nsRootBuildPosted: true, nsRootBuildId: b.id || null, nsRootBuildAt: Date.now(), nsRootBuildBy: currentUser?.name || '' });
+            await updateDoc(doc(db, 'hq_work_orders', o.id), { nsRootBuildPosted: true, nsRootBuildId: b.id || null, nsRootBuildAt: Date.now(), nsRootBuildBy: currentUser?.name || '', nsRootBuildBin: toBin, nsRootBuildQty: qty });
             addLog(`⛏ mill build #${b.id || ''} posted: +${qty} × ${code} against ${o.nsWoTran || o.nsWoId} — NetSuite closes that work order itself.`, 'success');
             alert(`✅ Mill build #${b.id || ''} posted — ${o.nsWoTran || 'the work order'} closes in NetSuite (createdfrom).`);
         } catch (e) {
