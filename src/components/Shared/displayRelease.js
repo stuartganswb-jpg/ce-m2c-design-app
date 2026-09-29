@@ -21,11 +21,12 @@
 //
 // Pure. The panel loads and writes; RTG's guards read `displayRelease` on the sales order.
 
-import { isQuickShip, ORDER_ENTRY_CLASS } from './pickLines.js';
+import { isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf } from './pickLines.js';
+import { committedQtyOf } from './committedBins.js';
 import { isDisplayOnlyLine, isParkedGeometryLine, headerSidemarkOf } from './lineClassification.js';
 import { oeIsFloorLine, oeLineFinish, oeCoverageOf, oeLineStateOf } from './oeLines.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
-import { rowRestampOf } from './subFinish.js';
+import { rowRestampOf, isStockColourCode } from './subFinish.js';
 import { isKitLine, itemKitOrderLinesOf } from './itemKit.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -286,7 +287,11 @@ export const lineStateOf = ({ so, line, lineIdx, links, shipments = [], review =
     }
     // A shelf pick — unless it is made (cut, a fee on a pole, custom handling: oeIsFloorLine) or a start has
     // already raised something for it (a custom line quoted with no finish, 2026-09-27).
-    if (!oeIsFloorLine(line) && !(so && so.oeGen && so.oeGen[lineIdx])) return { key: LINE_STATE.STOCKED, text: 'stocked — picked by the warehouse, not started here', tone: 'grey' };
+    // A KIT LINE is sold as one — its parts, below it, are what is made and picked (Shared/itemKit, 2026-09-28).
+    if (isKitLine(line)) return { key: LINE_STATE.STOCKED, text: 'kit — sold as one; its parts are the lines below', tone: 'grey' };
+    // A STOCK COLOUR is the start's to decide — the shelf, or painted from its /P (Shared/oeGenerate STOCK_FIRST).
+    const stockColour = !line.noFinish && line.finishOutsourced !== true && (line.stockColour === true || isStockColourCode(U(line.erp)));
+    if (!oeIsFloorLine(line) && !stockColour && !(so && so.oeGen && so.oeGen[lineIdx])) return { key: LINE_STATE.STOCKED, text: 'stocked — picked by the warehouse, not started here', tone: 'grey' };
     const coverage = oeCoverageOf({ so, line, lineIdx, ...(links || {}), any: true });
     const base = oeLineStateOf({ coverage, review });
     // A plated line, once pulled: follow its shipment.
@@ -563,6 +568,28 @@ export const rereadLinesText = (so, p) => [
     (p.kitsExploded || []).length ? '\n⚠ NetSuite: the sales order must carry the kit\'s PARTS (at $0, the kit\'s price on the rollup) in place of the kit line before the order is fulfilled.' : '',
     '\nNothing is started, ordered or sent to NetSuite.',
 ].filter(Boolean).join('\n');
+
+// ── ✎ A LINE'S QUANTITY (Stuart 2026-09-28, SO60551's nuts: 50 on the 9/16 quote, 100 by CPQ's rule — one nut rides each
+// bracket) ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Only a line nothing has been raised or gathered for — no start stamp, nothing of it in the order's committed bin — and
+// never a kit or a kit's part (they change together, on the quote). The line keeps what it was, who changed it, when and
+// why; NetSuite's sales order is changed by hand to match (the confirm says so). Pure.
+// @returns { ok, reason?, lines?, from?, to? }
+export const lineQtyEditOf = ({ so, lineIdx, qty, by = '', reason = '', now = Date.now() } = {}) => {
+    const lines = Array.isArray(so && so.lines) ? so.lines : [];
+    const l = lines[lineIdx];
+    const n = Number(qty);
+    if (!l) return { ok: false, reason: 'no such line on the order' };
+    if (!(Number.isInteger(n) && n > 0)) return { ok: false, reason: 'the quantity must be a whole number above 0' };
+    if (n === Number(l.qty)) return { ok: false, reason: 'the quantity is unchanged' };
+    if (!String(reason || '').trim()) return { ok: false, reason: 'say why — it is recorded on the line' };
+    if (isKitLine(l) || l.inKit) return { ok: false, reason: 'a kit and its parts change together — change the kit on the quote' };
+    if (so.oeGen && so.oeGen[lineIdx]) return { ok: false, reason: 'work has already been raised for this line — undo the row start first' };
+    if (committedQtyOf(so, soLineCodeOf(l)) > 0) return { ok: false, reason: `${soLineCodeOf(l)} is already gathered into the order — release it at SO Pack first` };
+    const from = Number(l.qty) || 0;
+    const next = lines.map((x, i) => (i === lineIdx ? { ...x, qty: n, qtyChangedFrom: from, qtyChangedBy: by, qtyChangedAt: now, qtyChangedReason: String(reason).trim() } : x));
+    return { ok: true, lines: next, from, to: n };
+};
 
 // ── ↩ UNDO A ROW START — only while nothing on its documents has moved (Stuart 2026-09-27) ─────────────────
 // A row started under an older rule (SO60551's ROW 1 without its French returns; Row 2's stained fascia sent to

@@ -341,5 +341,18 @@ eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }]
     eq('a second re-read adds nothing', rereadLinesPatchOf({ so: { ...so, lines: p.lines, backorderLines: p.backorderLines }, breakdown: [], inventory: inv }), null);
 }
 
+// ── ✎ A LINE'S QUANTITY (Stuart 2026-09-28: SO60551's nuts, 50 → 100 — one rides each bracket) ──
+{
+    const { lineQtyEditOf } = await import('../src/components/Shared/displayRelease.js');
+    const so = { id: 'S', lines: [{ erp: 'H1-2TRVNUT', qty: 50, row: 'Row 2' }, { erp: 'H1-2TRV', qty: 50, row: 'Row 2', toBeFinished: true, finishCode: 'TCP' }, { erp: 'H1-2TRV-WB/C', qty: 50, isKit: true }, { erp: 'H1-2TRVBP/C', qty: 50, inKit: true }, { erp: 'H1-1BR', qty: 50, toBeFinished: true, finishCode: 'EP4' }],
+        oeGen: { 1: { kind: 'WO' } }, committedQty: { 'H1-1BR/EP4': 50 } };
+    const r = lineQtyEditOf({ so, lineIdx: 0, qty: 100, by: 'stuart', reason: 'one nut rides each bracket (CPQ rule)', now: 7 });
+    eq('the nut line goes 50 → 100, keeping what it was, who, when and why', [r.ok, r.lines[0].qty, r.lines[0].qtyChangedFrom, r.lines[0].qtyChangedBy, r.lines[0].qtyChangedAt, r.lines[0].qtyChangedReason, r.lines[1].qty], [true, 100, 50, 'stuart', 7, 'one nut rides each bracket (CPQ rule)', 50]);
+    eq('refused: work raised · a kit · a kit part · already gathered · no reason · not a whole number', [
+        lineQtyEditOf({ so, lineIdx: 1, qty: 60, reason: 'x' }).ok, lineQtyEditOf({ so, lineIdx: 2, qty: 60, reason: 'x' }).ok, lineQtyEditOf({ so, lineIdx: 3, qty: 60, reason: 'x' }).ok,
+        lineQtyEditOf({ so, lineIdx: 4, qty: 60, reason: 'x' }).ok, lineQtyEditOf({ so, lineIdx: 0, qty: 100, reason: ' ' }).ok, lineQtyEditOf({ so, lineIdx: 0, qty: 2.5, reason: 'x' }).ok,
+    ], [false, false, false, false, false, false]);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

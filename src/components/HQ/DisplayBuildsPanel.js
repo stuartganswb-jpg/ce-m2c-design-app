@@ -37,7 +37,7 @@ import { hardDeleteWithLedger } from '../Shared/orderLifecycle';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, rowUndoBlockersOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
+import { ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, lineQtyEditOf, rowUndoBlockersOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 import { finishedCodeOf } from '../Shared/subFinish';
 
@@ -428,10 +428,33 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             if (!window.confirm(rereadLinesText(so, patch))) return;
             setBusy('Re-reading lines…');
             await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: patch.lines, backorderLines: patch.backorderLines, linesRereadAt: Date.now(), linesRereadBy: String(currentUser || '10.5') });
-            alert(`↻ ${so.soId || so.id}: ${patch.enriched} line(s) completed, ${patch.added.length} added${(patch.restamped || []).length ? `, ${patch.restamped.length} brought to CPQ's rules` : ''}${patch.droppedBackorders ? `, ${patch.droppedBackorders} stale backorder record(s) removed` : ''}.${(patch.restamped || []).some(c => c.netsuite) ? `\n\n⚠ Change in NetSuite before packing:\n${patch.restamped.filter(c => c.netsuite).map(c => `  • line ${c.idx + 1}: ${c.text.split(':')[0]}`).join('\n')}` : ''}`);
+            alert(`↻ ${so.soId || so.id}: ${patch.enriched} line(s) completed, ${patch.added.length} added${(patch.kitsExploded || []).length ? `, ${patch.kitsExploded.length} kit(s) became their parts (added at the end — start them on their rows)` : ''}${(patch.restamped || []).length ? `, ${patch.restamped.length} brought to CPQ's rules` : ''}${patch.droppedBackorders ? `, ${patch.droppedBackorders} stale backorder record(s) removed` : ''}.${(patch.restamped || []).some(c => c.netsuite) ? `\n\n⚠ Change in NetSuite before packing:\n${patch.restamped.filter(c => c.netsuite).map(c => `  • line ${c.idx + 1}: ${c.text.split(':')[0]}`).join('\n')}` : ''}`);
             await loadFloor(draft);
         } catch (e) { alert('Could not re-read the lines: ' + (e?.message || e)); }
         setBusy('');
+    };
+
+    // ✎ A LINE'S QUANTITY (Shared/displayRelease.lineQtyEditOf, Stuart 2026-09-28 — SO60551's nuts: one rides each bracket):
+    // only a line nothing has been raised or gathered for; read fresh, stamped, NetSuite changed by hand to match.
+    const editLineQty = async (l) => {
+        if (!l || !l.soAppId) return;
+        try {
+            const snap = await getDoc(doc(db, 'hq_sales_orders', l.soAppId));
+            if (!snap.exists()) return alert('That sales order is gone.');
+            const so = { id: snap.id, ...snap.data() };
+            const line = (so.lines || [])[l.lineIdx];
+            if (!line) return alert('That line is no longer on the order — reload the build.');
+            const typed = window.prompt(`✎ ${so.soId || so.id} · line ${l.lineIdx + 1} · ${line.erp}${line.row ? ` (${line.row})` : ''}\n\nNew quantity (now ${line.qty}):`, String(line.qty));
+            if (typed === null) return;
+            const why = window.prompt('Why? (recorded on the line)', '');
+            if (why === null) return;
+            const r = lineQtyEditOf({ so, lineIdx: l.lineIdx, qty: Number(String(typed).trim()), by: String(currentUser || '10.5'), reason: why });
+            if (!r.ok) return alert(`Not changed — ${r.reason}.`);
+            if (!window.confirm(`Change line ${l.lineIdx + 1} (${line.erp}) from ${r.from} to ${r.to}?\n\n"${String(why).trim()}" is recorded on the line.\n\n⚠ NetSuite: change the same line on the sales order by hand — the app does not send it.`)) return;
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: r.lines });
+            alert(`✎ ${so.soId || so.id} line ${l.lineIdx + 1}: ${line.erp} ${r.from} → ${r.to}. Change NetSuite to match.`);
+            await loadFloor(draft);
+        } catch (e) { alert('Could not change the line: ' + (e?.message || e)); }
     };
 
     // ↩ UNDO A ROW START (Shared/displayRelease.rowUndoBlockersOf, 2026-09-27): a row started under an older rule is put
@@ -887,7 +910,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                     {state.lines.length > 0 && (
                                         <tr><td style={{ ...td, borderBottom: '1px solid var(--line)' }} /><td colSpan={4} style={{ ...td, paddingTop: 0 }}>
                                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', fontFamily: 'var(--mono)', fontSize: '10px' }}>
-                                                {state.lines.map(l => <span key={`${l.soAppId}|${l.lineIdx}`} title={`${l.soId} · ${l.text}`} style={{ color: TONE[l.tone] || 'var(--ink-soft)' }}>{(floor.sos || []).length > 1 ? `${l.soId} · ` : ''}{l.qty} × {finishedCodeOf(l.erp, l.finish)} — {l.text}</span>)}
+                                                {state.lines.map(l => <span key={`${l.soAppId}|${l.lineIdx}`} title={`${l.soId} · ${l.text}`} style={{ color: TONE[l.tone] || 'var(--ink-soft)' }}>{(floor.sos || []).length > 1 ? `${l.soId} · ` : ''}{l.qty} × {finishedCodeOf(l.erp, l.finish)} — {l.text}{['STOCKED', 'NONE'].includes(l.key) && !/^kit —/.test(String(l.text || '')) && <button onClick={() => editLineQty(l)} disabled={!!busy || !!starting} title="Change this line's quantity — only while nothing is raised or gathered for it" style={{ marginLeft: '4px', padding: '0 4px', fontSize: '9px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer' }}>✎</button>}</span>)}
                                             </div>
                                         </td></tr>
                                     )}
