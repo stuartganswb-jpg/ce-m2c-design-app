@@ -13,6 +13,7 @@ import { explodeTraverse, usageAt } from './traverseExplode';
 import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
 import { autoPicksOf } from './hardwareAutoPicks';
 import { normalizeExtras } from './extrasRestore';
+import { rodMaterialsOf, extrasForRod, liveExtrasOf } from './flowExtras';
 import { workIsPristine } from './cpqWorkspace';
 import { parseKitCode } from './kitCode';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
@@ -182,7 +183,9 @@ function HardwareConfiguratorInner({
     // undefined — which React answers by unmounting the whole tree. That is the white screen from
     // 2026-08-17: "once i hit new engine … goes full blank on me". Every hook lives in this block.
     const [stepNotes, setStepNotes] = useState({});   // step key → note, stamped with the step
-    const [extras, setExtras] = useState([]);         // [{ code, qty, note }] — added by hand
+    // [{ code, qty, note }] — added by hand, AS TYPED. What bills is `extras` below: these, less any
+    // item that does not fit the chosen rod (Shared/flowExtras).
+    const [typedExtras, setExtras] = useState([]);
     const [drawnSplices, setDrawnSplices] = useState([]);   // [{ distInches, ref }] — where Vision drew them, for the pencil line
     // How many, per decision. Empty means "use the recommendation"; a typed number always wins.
     const [stepQty, setStepQty] = useState({});       // slot key → count
@@ -226,46 +229,6 @@ function HardwareConfiguratorInner({
     }, [parts]);
     const findPart = useCallback((id) => partIndex.get(String(id || '').trim().toUpperCase()) || null, [partIndex]);
 
-    // ── IS A SPLICE NECESSARY? (Stuart 2026-08-24) ───────────────────────────────────────────
-    // "add the splice ability [to] the rod length step on the cpq — is splice necessary and
-    //  default is center, explain if otherwise. this should help align it with the vision tool
-    //  which is where we actually draw the splice location."
-    // The splice among this flow's add-by-hand items is found the way tab 7 finds its splice
-    // slot — by what the ITEM says it is (splice/joiner in its name, product type or fee type).
-    // ⚠ AVAILABLE AT ANY LENGTH, MANDATORY OVER THE LIMIT (Stuart 2026-08-24: "a lot of times
-    // customers order one before it is needed to save on shipping or for convenience. so it
-    // needs to be mandatory over 120\" but can be available at any length"). The extras list
-    // offers the splice at every length; over the flow's `spliceOverInches` (tab 11, blank =
-    // 120") it is REQUIRED — added automatically at the default, CENTER of the run, and re-added
-    // if removed, because a pole that long does not ship in one piece. The note carries the
-    // exact location only when it differs, which is precisely what Vision reads to draw it.
-    // Joiners are DIAMETER-SPECIFIC, and a multi-size flow derives several candidates — the
-    // step must never guess a diameter, so with ONE candidate it adds it itself and with more
-    // it requires the operator to add the right one (the banner says so).
-    const spliceCodes = useMemo(() => {
-        const out = [];
-        for (const it of (extraItems || [])) {
-            const part = findPart(it.code);
-            const hay = `${it.code || ''} ${it.label || ''} ${part?.itemName || ''} ${part?.manufacturingSpecs?.productType || ''} ${part?.customData?.feeType || ''}`.toUpperCase();
-            if (/SPLICE|JOINER|JNR|SPLC/.test(hay)) out.push(it.code);
-        }
-        return out;
-    }, [extraItems, findPart]);
-    const spliceCode = spliceCodes.length === 1 ? spliceCodes[0] : null;
-    const spliceOverIn = Number(flow?.spliceOverInches) > 0 ? Number(flow.spliceOverInches) : 120;
-    const spliceNeeded = spliceCodes.length > 0 && !!lengthInches && lengthInches > spliceOverIn;
-    // The same ITEM under any of its names (our number, the doc id) — never a string compare alone,
-    // which is what let a doc-id row and a code row both stand for one joiner (QUO147).
-    const sameItemCode = useCallback((a, b) => {
-        if (String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase()) return true;
-        const pa = findPart(a), pb = findPart(b);
-        return !!(pa && pb && pa.id && pa.id === pb.id);
-    }, [findPart]);
-    const spliceSatisfied = spliceCodes.some(c => extras.some(x => sameItemCode(x.code, c) && Number(x.qty) > 0));
-    useEffect(() => {
-        if (!spliceNeeded || !spliceCode) return;   // several candidates → the operator picks
-        setExtras(a => (a.some(x => sameItemCode(x.code, spliceCode) && Number(x.qty) > 0) ? a : [...a.filter(x => !sameItemCode(x.code, spliceCode)), { code: spliceCode, qty: '1', note: '' }]));
-    }, [spliceNeeded, spliceCode, extras, sameItemCode]);
     // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
     // id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
     // the app's own record id and means nothing off this screen. A pin can be tagged with either, so
@@ -380,6 +343,58 @@ function HardwareConfiguratorInner({
     }, [model, picks, livePicks]);
     const pendingDrops = useMemo(() => unacknowledged(drops), [drops]);
     const ackDrop = (key) => setDrops(prev => prev.map(d => d.key === key ? { ...d, acked: true } : d));
+    // ── THE ADD-BY-HAND ITEMS FOR THE ROD CHOSEN (Stuart 2026-09-30 · Shared/flowExtras) ────────
+    // "we do need the ability to add a different splice/joiner for each rod type". A tab-11 item
+    // may name the rod materials it is for; one that does not fit the chosen rod is not offered,
+    // not auto-added and not billed — filtered here, never deleted, like a pick that is no longer
+    // offered, so the row the operator typed comes back with the rod it belongs to. Blank = any
+    // rod. Declared here, below livePicks and above the splice block that reads it (TDZ).
+    const rodMats = useMemo(() => rodMaterialsOf(model.choices, Object.values(livePicks)), [model, livePicks]);
+    const offeredExtraItems = useMemo(() => extrasForRod(extraItems, rodMats), [extraItems, rodMats]);
+    const extras = useMemo(() => liveExtrasOf(typedExtras, extraItems, rodMats), [typedExtras, extraItems, rodMats]);
+    // ── IS A SPLICE NECESSARY? (Stuart 2026-08-24) ───────────────────────────────────────────
+    // "add the splice ability [to] the rod length step on the cpq — is splice necessary and
+    //  default is center, explain if otherwise. this should help align it with the vision tool
+    //  which is where we actually draw the splice location."
+    // The splice among this flow's add-by-hand items is found the way tab 7 finds its splice
+    // slot — by what the ITEM says it is (splice/joiner in its name, product type or fee type).
+    // ⚠ AVAILABLE AT ANY LENGTH, MANDATORY OVER THE LIMIT (Stuart 2026-08-24: "a lot of times
+    // customers order one before it is needed to save on shipping or for convenience. so it
+    // needs to be mandatory over 120\" but can be available at any length"). The extras list
+    // offers the splice at every length; over the flow's `spliceOverInches` (tab 11, blank =
+    // 120") it is REQUIRED — added automatically at the default, CENTER of the run, and re-added
+    // if removed, because a pole that long does not ship in one piece. The note carries the
+    // exact location only when it differs, which is precisely what Vision reads to draw it.
+    // Joiners are DIAMETER-SPECIFIC, and a multi-size flow derives several candidates — the
+    // step must never guess a diameter, so with ONE candidate it adds it itself and with more
+    // it requires the operator to add the right one (the banner says so).
+    // Only the items offered with the chosen rod are candidates — a wood rod's joiner is not a
+    // steel rod's candidate — so H1-138 with one joiner per material still has ONE to auto-add.
+    const spliceCodesIn = useCallback((items) => {
+        const out = [];
+        for (const it of (items || [])) {
+            const part = findPart(it.code);
+            const hay = `${it.code || ''} ${it.label || ''} ${part?.itemName || ''} ${part?.manufacturingSpecs?.productType || ''} ${part?.customData?.feeType || ''}`.toUpperCase();
+            if (/SPLICE|JOINER|JNR|SPLC/.test(hay)) out.push(it.code);
+        }
+        return out;
+    }, [findPart]);
+    const spliceCodes = useMemo(() => spliceCodesIn(offeredExtraItems), [spliceCodesIn, offeredExtraItems]);
+    const spliceCode = spliceCodes.length === 1 ? spliceCodes[0] : null;
+    const spliceOverIn = Number(flow?.spliceOverInches) > 0 ? Number(flow.spliceOverInches) : 120;
+    const spliceNeeded = spliceCodes.length > 0 && !!lengthInches && lengthInches > spliceOverIn;
+    // The same ITEM under any of its names (our number, the doc id) — never a string compare alone,
+    // which is what let a doc-id row and a code row both stand for one joiner (QUO147).
+    const sameItemCode = useCallback((a, b) => {
+        if (String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase()) return true;
+        const pa = findPart(a), pb = findPart(b);
+        return !!(pa && pb && pa.id && pa.id === pb.id);
+    }, [findPart]);
+    const spliceSatisfied = spliceCodes.some(c => extras.some(x => sameItemCode(x.code, c) && Number(x.qty) > 0));
+    useEffect(() => {
+        if (!spliceNeeded || !spliceCode) return;   // several candidates → the operator picks
+        setExtras(a => (a.some(x => sameItemCode(x.code, spliceCode) && Number(x.qty) > 0) ? a : [...a.filter(x => !sameItemCode(x.code, spliceCode)), { code: spliceCode, qty: '1', note: '' }]));
+    }, [spliceNeeded, spliceCode, extras, sameItemCode]);
     // The one sentence every refusal says — the same words on the button and in the strip.
     const dropRefusal = pendingDrops.length
         ? `${pendingDrops.length} selection${pendingDrops.length === 1 ? ' was' : 's were'} removed by a later choice — read the strip under the rail and press Understood on each before adding.`
@@ -478,8 +493,12 @@ function HardwareConfiguratorInner({
         // states ("Vision draws the splice where the note says"), read in the other direction.
         if ((seed.splices || []).length) {
             setDrawnSplices(seed.splices.map(sp => ({ distInches: sp.distInches, ref: sp.ref || '' })));
-            if (spliceCodes.length === 1) {
-                const code = spliceCodes[0];
+            // The joiner for the rod THE DRAWING chose — its picks land in state only after this
+            // pass, so the rod is read from them here, not from the screen (Shared/flowExtras).
+            const seedRodMats = rodMaterialsOf(model.choices, Object.values({ ...picks, ...seed.picks }));
+            const seedSpliceCodes = spliceCodesIn(extrasForRod(extraItems, seedRodMats));
+            if (seedSpliceCodes.length === 1) {
+                const code = seedSpliceCodes[0];
                 const posTxt = seed.splices.map(sp => sp.note
                     || (sp.distInches != null ? `${sp.distInches}" from ${sp.ref === 'END' ? 'right edge' : 'left edge'}` : 'center')).join(' · ');
                 setExtras(prev => (prev.some(x => x.code === code && Number(x.qty) > 0) ? prev
@@ -488,7 +507,7 @@ function HardwareConfiguratorInner({
             } else {
                 seed.missed.push({
                     what: `${seed.splices.length} drawn splice${seed.splices.length > 1 ? 's' : ''}`,
-                    why: spliceCodes.length
+                    why: seedSpliceCodes.length
                         ? 'several joiners fit this flow — add the right size below, with the drawn locations in the note'
                         : 'no splice/joiner item is offered on this flow — curate one in tab 11 or tag the joiner item',
                 });
@@ -504,7 +523,7 @@ function HardwareConfiguratorInner({
         setVisionReport({ carried: seed.carried, missed: seed.missed, name: visionDraft.sidemark || 'the drawing' });
         // seededRef guards re-entry; the extra deps only matter on the first fire for a draft.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [visionDraft, model, flow, findPart, choices, effAnswers, modelNodes, spliceCodes]);
+    }, [visionDraft, model, flow, findPart, choices, effAnswers, modelNodes, spliceCodesIn, extraItems]);
 
     // ── STARTING FROM A KIT (Stuart 2026-08-22) ──────────────────────────────────────────────
     // "if a customer orders a standard kit in a standard finish we will use tab 7 … but if they
@@ -1390,7 +1409,7 @@ function HardwareConfiguratorInner({
     // MASTER CONTROL (Stuart 2026-08-26): tab 11's item list IS what CPQ presents, and each item
     // names the STEP it belongs on (free-text match against the step label). Blank keeps the item
     // on the pole-length step, where these have always lived — so existing flows are unchanged.
-    const extrasOnStep = (st) => (extraItems || []).filter(it => {
+    const extrasOnStep = (st) => (offeredExtraItems || []).filter(it => {
         const m = String(it.step || '').trim().toUpperCase();
         if (!m) return st?.kind === 'LENGTH';
         if (st?.kind === 'LENGTH' && /LENGTH|POLE/.test(m)) return true;
@@ -1461,7 +1480,7 @@ function HardwareConfiguratorInner({
         if (typeof onWorkState !== 'function') return;
         const work = {
             assemblyId: assembly?.id || '',
-            answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, extras,
+            answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, extras: typedExtras,
             lengthInches, memo: configMemo, qty: cfgQty,
             // The kit exactly as the handoff saves it: named only while it bills.
             kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
@@ -1470,7 +1489,7 @@ function HardwareConfiguratorInner({
         if (!workPublishedRef.current && workIsPristine(work)) return;
         workPublishedRef.current = true;
         onWorkState(work);
-    }, [onWorkState, assembly, answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, extras,
+    }, [onWorkState, assembly, answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, typedExtras,
         lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices]);
     const addConfiguration = () => {
         if (!priced.lines.length) return;

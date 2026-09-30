@@ -21,6 +21,7 @@ import { isSheet2dAssembly } from '../Shared/sheet2d';
 import { buildSheet2dFlow } from '../Shared/sheet2dFlow';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { SHOP_TABS } from '../ShopFloor/shopShared';
+import { ROD_MATERIALS, itemRodMaterials } from '../Shared/flowExtras';
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -2677,8 +2678,13 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                         {[...new Set([...(af.steps || []).map(st => String(st.title || '').trim()).filter(Boolean),
                                                             'Pole length', 'Rings', 'Left Bracket', 'Right Bracket', 'Center Bracket', 'End Treatment', 'Fascia', 'Track', 'Carriers'])].map(t => <option key={t} value={t} />)}
                                                     </datalist>
+                                                    {/* FOR WHICH ROD (Stuart 2026-09-30: "we do need the ability to add a different
+                                                        splice/joiner for each rod type"). Tick the rod materials an item is for —
+                                                        H1-138: its steel joiner METAL, HSCPC1 WOOD. None ticked = every rod, which
+                                                        is how every item behaved before. CPQ offers, auto-adds and bills only the
+                                                        items that fit the rod chosen (Shared/flowExtras). */}
                                                     {extras.map((x, i) => (
-                                                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '130px 1fr 1fr 130px auto', gap: '5px', marginBottom: '5px' }}>
+                                                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '130px 1fr 1fr 130px auto auto', gap: '5px', marginBottom: '5px' }}>
                                                             <BufferedInput value={x.code || ''} placeholder="Item code" onCommit={v => setExtras(extras.map((y, j) => j === i ? { ...y, code: v } : y))}
                                                                 style={{ padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px' }} />
                                                             <BufferedInput value={x.label || ''} placeholder="What the operator sees" onCommit={v => setExtras(extras.map((y, j) => j === i ? { ...y, label: v } : y))}
@@ -2689,6 +2695,19 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                                 title="Which configurator step offers this item — matched against the step's label (e.g. Pole length, Rings, Center Bracket). Blank = the pole-length step."
                                                                 onCommit={v => setExtras(extras.map((y, j) => j === i ? { ...y, step: v } : y))}
                                                                 style={{ padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10.5px' }} />
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}
+                                                                title={itemRodMaterials(x).length ? `Offered only with a ${itemRodMaterials(x).join(' / ').toLowerCase()} rod` : 'Offered with every rod — tick a material to offer it only for that rod'}>
+                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-faint)', textTransform: 'uppercase' }}>rod</span>
+                                                                {ROD_MATERIALS.map(m => {
+                                                                    const mine = itemRodMaterials(x);
+                                                                    const on = mine.includes(m.key);
+                                                                    return (
+                                                                        <button key={m.key} title={m.label}
+                                                                            onClick={() => setExtras(extras.map((y, j) => j === i ? { ...y, rodMaterials: on ? mine.filter(k => k !== m.key) : [...mine, m.key] } : y))}
+                                                                            style={{ ...chip(on), padding: '6px 6px' }}>{m.key}</button>
+                                                                    );
+                                                                })}
+                                                            </div>
                                                             <button onClick={() => setExtras(extras.filter((_, j) => j !== i))} style={{ ...chip(false), padding: '6px 9px' }}>×</button>
                                                         </div>
                                                     ))}
