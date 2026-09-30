@@ -7,7 +7,7 @@ import { assertFreshBundle } from '../Shared/UpdateBanner';
 import HardwareConfigurator from '../Shared/HardwareConfigurator';
 import { kitsForSeeding } from '../Shared/kitSeed';
 import { finishVariantOf as sharedFinishVariantOf } from '../Shared/finishVariant';
-import { resolve as resolveHardware, diagnose as diagnoseHardware } from '../Shared/hardwareModel';
+import { resolve as resolveHardware, diagnose as diagnoseHardware, normalizeChoice } from '../Shared/hardwareModel';
 import { normalizeLocation } from '../Shared/assemblyTags';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { configuratorTotal } from '../Shared/traverseConfigurator';
@@ -1070,6 +1070,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   // Pins load ONLY while the Doctor is open — the same rule that stopped the Doctor being a tax on
   // every click, applied before it can become one again.
   const [shadowPins, setShadowPins] = useState([]);
+  const [shadowPinsFor, setShadowPinsFor] = useState('');   // the assembly those pins were read for
   // Production packet — captured Front/Back images of the configured model. captureFnRef is filled by
   // the in-Canvas <ViewCapturer/>; registerCapture is stable so its effect doesn't re-fire each render.
   const [capturedViews, setCapturedViews] = useState(null);
@@ -4113,13 +4114,37 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       // while nothing about it actually changed. Depending on the object tore this subscription
       // down every time, cleared the pins, and swapped the configurator out for its loading state,
       // which UNMOUNTED it and wiped every pick within a moment of clicking. The id is stable.
-      if ((!showDoctor && !newEngine) || !asmId) { setShadowPins([]); return; }
+      // Outside Classical the pins are read whichever engine is showing: they are how the flow's engine is
+      // chosen (below).
+      if ((!showDoctor && !newEngine && activeBrand === 'ce') || !asmId) { setShadowPins([]); setShadowPinsFor(''); return; }
       const unsub = onSnapshot(
           query(collection(db, 'assembly_pins'), where('assemblyId', '==', asmId)),
-          (snap) => setShadowPins(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
-          () => setShadowPins([]));
+          (snap) => { setShadowPins(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setShadowPinsFor(asmId); },
+          () => { setShadowPins([]); setShadowPinsFor(asmId); });
       return () => unsub();
-  }, [showDoctor, newEngine, asmId]);
+  }, [showDoctor, newEngine, asmId, activeBrand]);
+
+  // ── THE ENGINE FOLLOWS THE FLOW (Stuart 2026-09-30: "i just tagged and added a new flow Flat Iron New under the
+  // M2C brand … in cpq … our csr was still using the old engine? also vision was not aligning well"). Classical
+  // opens every flow on the new engine (2026-08-21); every other brand opened the OLD one whatever the flow was
+  // built for — while Vision draws any flow whose assembly carries pins with the engine (Shared/visionEngine). So
+  // an M2C flow tagged in 1.6 was drawn by the engine in Vision and landed in CPQ's old configurator, which never
+  // reads the engine's picks. Now a flow opens on the engine that can read it: pins the adapter makes choices
+  // from → the new engine, for any brand, by the same test Vision uses; none → the old one. Decided once the
+  // flow's own pins are in (so a restored workspace never flickers), once per flow; ▶ NEW ENGINE still overrides.
+  const flowIsTagged = useMemo(() => {
+      if (!activeAssembly || !shadowPins.length) return false;
+      try { return choicesFromAssembly(activeAssembly, shadowPins).map(c => normalizeChoice(c)).filter(c => c && c.role).length > 0; }
+      catch { return false; }
+  }, [activeAssembly, shadowPins]);
+  const engineDefaultRef = useRef('');
+  useEffect(() => {
+      if (activeBrand === 'ce' || !activeFlowId || !asmId || shadowPinsFor !== asmId) return;
+      const key = `${activeFlowId}|${asmId}|${flowIsTagged}`;
+      if (engineDefaultRef.current === key) return;
+      engineDefaultRef.current = key;
+      setNewEngine(flowIsTagged);
+  }, [activeBrand, activeFlowId, asmId, shadowPinsFor, flowIsTagged]);
 
   // What the NEW engine makes of this same configuration, and where it differs from the old one.
   // Never touches state, never renders geometry — it only has an opinion.
