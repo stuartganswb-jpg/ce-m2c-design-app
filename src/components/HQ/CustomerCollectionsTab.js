@@ -29,6 +29,7 @@ import { parseTraverseKitSheets, diffTraverseKits, kitPricingRow, BILLABLE_ACCES
 import { fabricutCodeOf, isPlatedSuffix, PRICE_LEVELS, customerPriceLevel } from '../Shared/priceLevels';
 import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable, isCheckoutForCustomer, checkoutCustomerIds } from '../Shared/feeRules';
 import { PLATE_ROLES, plateRoleOf, pairedBackplateCode, includesPlate } from '../Shared/plateRules';
+import { canonicalCollection, canonicalCollections, collectionMergesOf, collectionMergeSummary } from '../Shared/collectionName';
 
 const theme = {
     paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46',
@@ -132,15 +133,17 @@ const isFeeItem = (p) => {
 // isFeeItem, with the KIT- code convention as the legacy fallback.
 const isKitItem = (p) => p?.partClass === 'Kit' || /(^|-)KIT-/.test(upper(p?.legacyErpId || p?.itemId));
 
-// Every collection an item claims — explicit list first, else the NetSuite-synced single value.
+// Every collection an item claims — explicit list first, else the NetSuite-synced single value — in its ONE
+// name (Shared/collectionName): H1 FABRICUT reads as FABRICUT H1, so the picker never offers the other spelling
+// and a part tagged either way is in the same grid.
 const collectionsOf = (specs) => {
     const s = specs || {};
-    if (Array.isArray(s.collections) && s.collections.length) return s.collections.map(c => upper(c));
+    if (Array.isArray(s.collections) && s.collections.length) return canonicalCollections(s.collections);
     const c = s.customData?.collection;
-    return c && c !== 'N/A' ? [upper(c)] : [];
+    return c && c !== 'N/A' ? [canonicalCollection(c)] : [];
 };
 
-const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
+const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false }) => {
     const [inventory, setInventory] = useState([]);
     const [customers, setCustomers] = useState([]);
     const [custId, setCustId] = useState('');
@@ -268,6 +271,38 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         inventory.flatMap(p => collectionsOf(p.manufacturingSpecs))
     )).sort(), [inventory]);
 
+    // ── ⇄ ONE NAME PER COLLECTION (Eric 2026-09-29 · Stuart 2026-09-30 · Shared/collectionName) ──────
+    // Records still carrying another spelling of a collection (H1 FABRICUT for FABRICUT H1) sit outside it
+    // wherever a collection is matched by name — CPQ checkout's fee scope, the portal and Quick Ship catalogs.
+    // The merge moves them to the one name: only that entry changes, every other tag stays exactly as written.
+    // The ids and what each carried before are saved first (system/collection_merge_<time>), so it can be read
+    // back or undone. Super admin; the banner goes when nothing is left to merge.
+    const collectionMerges = useMemo(() => collectionMergesOf(inventory), [inventory]);
+    const mergeCollectionNames = async () => {
+        const merges = collectionMerges;
+        if (!merges.length || busy) return;
+        const words = collectionMergeSummary(merges).join('\n');
+        if (!window.confirm(`Merge collection spellings on ${merges.length} record${merges.length === 1 ? '' : 's'}?\n\n${words}\n\nOnly that tag changes on each record — every other tag, price and field stays. The records and what each carried before are saved first (system/collection_merge_…).`)) return;
+        setBusy(`Merging ${merges.length} records…`);
+        const at = Date.now();
+        try {
+            await setDoc(doc(db, 'system', `collection_merge_${at}`), {
+                at, by: String(currentUser || ''), brand: activeBrand, summary: collectionMergeSummary(merges),
+                records: merges.map(m => ({ id: m.id, code: m.code, before: m.before, after: m.after })),
+            });
+            let batch = writeBatch(db), n = 0, done = 0;
+            for (const m of merges) {
+                batch.update(doc(db, 'Approved_Designs', m.id), { 'manufacturingSpecs.collections': m.after });
+                if (++n >= 400) { await batch.commit(); done += n; batch = writeBatch(db); n = 0; }
+            }
+            if (n) { await batch.commit(); done += n; }
+            alert(`✓ ${done} record${done === 1 ? '' : 's'} now carry the one name.\n\n${words}`);
+        } catch (e) {
+            alert(`The merge stopped: ${e.message || e}\n\nWhat was written stays. Press the button again to finish the rest.`);
+        }
+        setBusy('');
+    };
+
     // The customer's existing row on an item. Matched the same way CPQ/Quick Ship match — by CRM id
     // OR by the customer's NAME, because rows have been hand-entered both ways over time.
     const custKeys = useMemo(() => new Set([custId, customer?.name, customer?.companyName]
@@ -311,7 +346,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         // rule as PLATES — a list that quietly ignores the visible selector reads as a bug).
         if (mode === 'KITS') return fold(inventory.filter(p => isKitItem(p)
             && p.manufacturingSpecs?.isRetired !== true
-            && (!coll || collectionsOf(p.manufacturingSpecs).includes(upper(coll)))));
+            && (!coll || collectionsOf(p.manufacturingSpecs).includes(canonicalCollection(coll)))));
         // CHECKOUT ITEMS (Stuart 2026-07-31): what the CPQ checkout screen offers. By default the
         // list IS the curated set, so you see exactly what a customer sees. Type in the search box
         // and it searches the WHOLE library instead — that is how you find something new to tick.
@@ -325,12 +360,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         // genuinely dangerous. Scope to the chosen collection; no collection = the whole brand.
         if (mode === 'PLATES') return fold(inventory.filter(p => /PLATE/i.test(String(p.manufacturingSpecs?.productType || ''))
             && p.manufacturingSpecs?.isRetired !== true
-            && (!coll || collectionsOf(p.manufacturingSpecs).includes(upper(coll)))));
+            && (!coll || collectionsOf(p.manufacturingSpecs).includes(canonicalCollection(coll)))));
         // ARMS: everything that can CARRY a plate — bracket arms and the return fees that replace
         // them. This is where "which parts include a backplate" is answered.
         if (mode === 'ARMS') return fold(inventory.filter(p => {
             if (p.manufacturingSpecs?.isRetired === true) return false;
-            if (coll && !collectionsOf(p.manufacturingSpecs).includes(upper(coll)) && !isFeeItem(p)) return false;
+            if (coll && !collectionsOf(p.manufacturingSpecs).includes(canonicalCollection(coll)) && !isFeeItem(p)) return false;
             const pt = String(p.manufacturingSpecs?.productType || '').toUpperCase();
             return /BRACKET|ARM/.test(pt) || isFeeItem(p);
         }));
@@ -341,7 +376,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             ? inventory.filter(p => p?.manufacturingSpecs?.isRetired !== true)
             : inventory.filter(p => isCheckoutSelectable(p) || isCheckoutForCustomer(p, custId)));
         if (!coll) return [];
-        return fold(inventory.filter(p => collectionsOf(p.manufacturingSpecs).includes(upper(coll))));
+        return fold(inventory.filter(p => collectionsOf(p.manufacturingSpecs).includes(canonicalCollection(coll))));
     }, [inventory, coll, mode, search, aliasLinks, custId]);
 
     // Legacy-struct suggestions for THIS customer, keyed by doc id. Built once per customer/library
@@ -689,7 +724,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 manufacturingSpecs: {
                     aliasOf: base,
                     productType: p.manufacturingSpecs?.productType || '',
-                    collections: coll ? [coll] : [],
+                    collections: coll ? [canonicalCollection(coll)] : [],
                 },
                 createdAt: new Date().toISOString(), author: String(currentUser || ''),
             }, { merge: false });
@@ -731,7 +766,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     productType: 'FEE',
                     basePrice: money(f.basePrice),
                     feeRule: rule,
-                    ...(coll ? { collections: [upper(coll)] } : {}),
+                    ...(coll ? { collections: [canonicalCollection(coll)] } : {}),
                     status: 'APP_ONLY', createdAt: Date.now(), createdBy: String(currentUser || ''),
                 },
             });
@@ -773,7 +808,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     // so the CPQ "Start from a kit" picker matches by tag automatically.
                     ...(code.includes('-') ? { kitFamily: code.split('-').slice(0, -1).join('-') } : {}),
                     kitComponents: comps.map(r => ({ partId: r.partId, qty: parseInt(r.qty) || 1 })),
-                    ...(coll ? { collections: [upper(coll)] } : {}),
+                    ...(coll ? { collections: [canonicalCollection(coll)] } : {}),
                     status: 'APP_ONLY', createdAt: Date.now(), createdBy: String(currentUser || ''),
                 },
             });
@@ -882,7 +917,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         clientPricing: [row],
                         manufacturingSpecs: {
                             kitFamily: fam, kitAlign: k.align, kitMotorCodes: k.motorCodes,
-                            ...(coll ? { collections: [upper(coll)] } : {}),
+                            ...(coll ? { collections: [canonicalCollection(coll)] } : {}),
                             status: 'APP_ONLY', createdAt: Date.now(), createdBy: String(currentUser || ''),
                         },
                     });
@@ -946,7 +981,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     const addCandidates = useMemo(() => {
         const term = upper(addSearch);
         if (!coll || term.length < 2) return [];
-        return inventory.filter(p => !collectionsOf(p.manufacturingSpecs).includes(upper(coll)))
+        return inventory.filter(p => !collectionsOf(p.manufacturingSpecs).includes(canonicalCollection(coll)))
             .filter(p => codeOf(p).includes(term) || upper(p.itemName).includes(term))
             .slice(0, 12);
     }, [inventory, addSearch, coll]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -959,22 +994,22 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     const searchMisses = useMemo(() => {
         const term = upper(search);
         if (!coll || term.length < 2 || rows.length) return [];
-        return inventory.filter(p => !collectionsOf(p.manufacturingSpecs).includes(upper(coll)))
+        return inventory.filter(p => !collectionsOf(p.manufacturingSpecs).includes(canonicalCollection(coll)))
             .filter(p => codeOf(p).includes(term) || upper(p.itemName).includes(term))
             .slice(0, 12);
     }, [inventory, search, coll, rows.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const addToCollection = async (p) => {
-        const cur = Array.isArray(p.manufacturingSpecs?.collections) ? p.manufacturingSpecs.collections.map(c => upper(c)) : collectionsOf(p.manufacturingSpecs);
-        if (cur.includes(upper(coll))) return;
+        const cur = Array.isArray(p.manufacturingSpecs?.collections) ? canonicalCollections(p.manufacturingSpecs.collections) : collectionsOf(p.manufacturingSpecs);
+        if (cur.includes(canonicalCollection(coll))) return;
         try {
-            await setDoc(doc(db, 'Approved_Designs', p.id), { manufacturingSpecs: { collections: [...cur, upper(coll)] } }, { merge: true });
+            await setDoc(doc(db, 'Approved_Designs', p.id), { manufacturingSpecs: { collections: [...cur, canonicalCollection(coll)] } }, { merge: true });
             setAddSearch('');
         } catch (e) { alert('Could not add it: ' + (e.message || e)); }
     };
     const removeFromCollection = async (p) => {
         if (!window.confirm(`Remove ${codeOf(p)} from ${coll}?\n\nIts pricing rows are kept — only the collection tag is removed.`)) return;
-        const cur = collectionsOf(p.manufacturingSpecs).filter(c => c !== upper(coll));
+        const cur = collectionsOf(p.manufacturingSpecs).filter(c => c !== canonicalCollection(coll));
         await setDoc(doc(db, 'Approved_Designs', p.id), { manufacturingSpecs: { collections: cur } }, { merge: true }).catch(e => alert('Failed: ' + e.message));
     };
 
@@ -1097,6 +1132,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 </div>
             </div>
             {busy && <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass }}>{busy}</div>}
+            {isSuperAdmin && collectionMerges.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', border: `1px solid ${theme.brass}`, background: theme.paper2, fontSize: '12px' }}>
+                    <span>⇄ <b>{collectionMerges.length}</b> record{collectionMerges.length === 1 ? '' : 's'} carry another spelling of a collection — {collectionMergeSummary(collectionMerges).join(' · ')}. Checkout, the portal and Quick Ship match a collection by its name, so these sit outside it.</span>
+                    <button onClick={mergeCollectionNames} disabled={!!busy} style={btn(true, { marginLeft: 'auto', whiteSpace: 'nowrap' })}>⇄ Merge into the one name</button>
+                </div>
+            )}
 
             {!custId || (mode === 'COLLECTION' && !coll) ? (
                 <div style={{ padding: '48px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft, fontSize: '1.1rem', border: `1px solid ${theme.line}`, background: '#fff' }}>

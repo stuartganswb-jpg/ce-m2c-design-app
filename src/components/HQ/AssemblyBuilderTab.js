@@ -17,6 +17,7 @@ import { TAG_CATEGORIES, TAG_LOCATIONS, END_TREATMENTS, normalizeLocation, norma
 import { slotIdentityOf, slotChipText } from '../Shared/slotGroups';
 import { sheet2dChoiceNode } from '../Shared/sheet2d';
 import { planTagImport, applyTagPlan, slotsFromSheet, matchSlotFiles, planSinglesFill, applySinglesFill, parseTagRows, fillReturnFees } from '../Shared/tagSheetImport';
+import { canonicalCollection } from '../Shared/collectionName';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
 // stacked inside the file). We KNOW each slot's position/category/location, so there's nothing to
@@ -2412,7 +2413,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         uom: r.uom || 'EA',
                         ...(r.partHandling ? { partHandling: r.partHandling } : {}),
                         ...(r.watchList ? { watchList: r.watchList.toUpperCase() } : {}),
-                        ...(r.collection ? { collections: [r.collection.toUpperCase()] } : {}),
+                        ...(r.collection ? { collections: [canonicalCollection(r.collection)] } : {}),   // one name per collection (Shared/collectionName)
                         ...(r.paintSize ? { paintSize: r.paintSize.toUpperCase() } : {}),
                         ...(r.vendorName ? { vendorName: r.vendorName } : {}),
                         ...(r.vendorSku ? { vendorId: r.vendorSku } : {}),

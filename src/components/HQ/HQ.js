@@ -454,7 +454,7 @@ function HQ() {
             )}
             
             {activeTab === '4.5 Mass Update' && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === '4.6 Customer Collections' && <CustomerCollectionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '4.6 Customer Collections' && <CustomerCollectionsTab currentUser={user.name} activeBrand={activeBrand.id} isSuperAdmin={user?.superAdmin === true || safeUserRole === 'superadmin'} />}
             {activeTab === '4.7 Flow Stock' && (
                 <FlowStockTab
                     currentUser={user.name}

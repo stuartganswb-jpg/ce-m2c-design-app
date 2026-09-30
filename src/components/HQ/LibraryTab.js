@@ -23,6 +23,7 @@ import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPri
 import { fabricutCodeOf } from '../Shared/priceLevels';
 import { SOURCING, SOURCING_LABEL, sourcingOf, sourcingPatch } from '../Shared/sourcing';
 import { nsProxyFetch } from "../Shared/nsProxy";
+import { canonicalCollection } from '../Shared/collectionName';
 
 
 const AVAILABLE_BRANDS = [
@@ -629,7 +630,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                   basePrice: aliasForm.price === '' ? '' : (parseFloat(aliasForm.price) || 0),
                   productType: specs.productType || '', partHandling: specs.partHandling || '',
                   uom: specs.uom || 'EA', paintSize: specs.paintSize || '',
-                  collections: aliasForm.collection ? [aliasForm.collection] : [],
+                  collections: aliasForm.collection ? [canonicalCollection(aliasForm.collection)] : [],   // one name per collection (Shared/collectionName)
                   customData: { ...(specs.customData?.bpOrientation ? { bpOrientation: specs.customData.bpOrientation } : {}) },
               },
               createdAt: new Date().toISOString(), createdBy: currentUser || 'ALIAS_TOOL'

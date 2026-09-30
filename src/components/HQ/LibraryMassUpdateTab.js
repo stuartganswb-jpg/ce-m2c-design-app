@@ -19,6 +19,7 @@ import { planNodeThumbs, planModelThumbs, slotReportText, modelReportText, NODE_
 // ("MMC92311A189_or_MMC91375A189_8-32,_316_L_v4004"), which a raw split shreds into fragments that
 // match nothing. That module exists for exactly this, and the sweep below still does it by hand.
 import { splitNodes } from '../Shared/nodeList';
+import { canonicalCollection, canonicalCollections } from '../Shared/collectionName';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -1252,8 +1253,10 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             payload[fieldKey] = val;
                             payload[`manufacturingSpecs.${fieldKey}`] = val;
                         } else if (fieldKey === 'collection') {
+                            // One name per collection (Shared/collectionName) — a tag never adds a second spelling.
                             const currentCols = targetPart?.manufacturingSpecs?.collections || [];
-                            if (!currentCols.includes(val)) payload['manufacturingSpecs.collections'] = [...currentCols, val];
+                            const name = canonicalCollection(val);
+                            if (name && !canonicalCollections(currentCols).includes(name)) payload['manufacturingSpecs.collections'] = [...currentCols, name];
                         } else if (fieldKey === 'sourcing') {
                             // Writes the legacy boolean AND the app-owned mode together, so the two
                             // can never drift (Shared/sourcing.js owns that pairing).

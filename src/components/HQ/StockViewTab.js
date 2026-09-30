@@ -32,6 +32,7 @@ import { holdSplitGroups } from '../Shared/rowPairShape';
 import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf, oeLinePlansOf, oeStartsLine } from '../Shared/oeGenerate';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import { runChunked, fetchAvailableById, fetchInboundById, backorderTallyOf } from '../Shared/stockPosition';
+import { canonicalCollection } from '../Shared/collectionName';
 
 const NS_SUITEQL_URL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
 
@@ -615,7 +616,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     parsedCollection = 'Fabricut H1';
                     collectionsArray = ['FABRICUT H1'];
                 } else if (item.collection) {
-                    collectionsArray = [item.collection.toUpperCase()];
+                    // One name per collection (Shared/collectionName): NetSuite's "H1 Fabricut" on some
+                    // screws is Fabricut H1, and it is written as FABRICUT H1 — never as a second collection.
+                    collectionsArray = [canonicalCollection(item.collection)];
                 }
 
                 const payload = {
