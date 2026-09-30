@@ -62,6 +62,13 @@ export const resolveStagingScan = (finWOs = [], scan) => {
     if (exact) return { job: exact, ambiguous: [], legacy: false };
     if (short.length === 1) return { job: short[0], ambiguous: [], legacy: false };
     if (short.length > 1) return { job: null, ambiguous: short, legacy: false };
+    // ── THE NETSUITE WORK-ORDER NUMBER THE CARD SHOWS (Stuart 2026-09-30, WO11578: "when i do as above it does not
+    // accept"). A stock or Order Entry document's card leads with its NetSuite number — "WO: WO11578" — while its id
+    // is WO-OE-HRW-138TRAVLB-1788201851904-0, thirty-five characters no 4" label scans well. The number names ONE
+    // work order, so it resolves exactly like the id: one open document, or refused as ambiguous.
+    const byNsWo = open.filter(w => norm(w.nsWoTran) === s);
+    if (byNsWo.length === 1) return { job: byNsWo[0], ambiguous: [], legacy: false };
+    if (byNsWo.length > 1) return { job: null, ambiguous: byNsWo, legacy: false };
     const cands = open.filter(w => legacyStagingKeysOf(w).includes(s));
     if (cands.length === 1) return { job: cands[0], ambiguous: [], legacy: true };
     return { job: null, ambiguous: cands, legacy: cands.length > 0 };
@@ -73,6 +80,7 @@ export const stagingScanMatches = (finWO, scan) => {
     if (!s || !finWO) return false;
     if (norm(finWO.id) === s || norm(finWO.woNum) === s) return true;
     if (shortPairKeyOf(finWO.id) === s) return true;
+    if (norm(finWO.nsWoTran) && norm(finWO.nsWoTran) === s) return true;   // the NetSuite number its card shows
     // A label that names A WORK ORDER must name this one (2026-09-29): every row of SO60551 carries
     // "SO60551" inside its id, so the tolerant test below let another row's poles pass this row's box.
     // The tolerance is for the older labels that barcode the sales order alone.

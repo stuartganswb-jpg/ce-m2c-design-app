@@ -42,4 +42,19 @@ const clash = resolveStagingScan([p14, newPair], 'WO-OE-SO60551-1166');
 eq('a newer pair whose id equals an older one\'s short form: ambiguous, neither guessed', [clash.job, clash.ambiguous.map(j => j.id)], [null, [newPair.id, p14.id]]);
 eq('two older documents sharing a short form: ambiguous', resolveStagingScan([p14, { ...s08, id: 'WO-OE-SO60551-ROW-2-P06-1790620001166' }], 'WO-OE-SO60551-1166').job, null);
 
+// ── THE NETSUITE NUMBER ON THE CARD (2026-09-30, WO11578) ───────────────────────────────────
+{
+    const read = { id: 'WO-OE-HRW-138TRAVLB-1788201851904-0', nsWoTran: 'WO11578', nsWoId: '903546', orderKey: 'QS-1788201702363', salesOrderId: 'QS-1788201702363', soNum: 'SO60156', pickStatus: 'Picked_Awaiting_Staging', currentPhase: 'Setup' };
+    const other = { id: 'WO-STK-62069-1790620067694', nsWoTran: 'WO11657', currentPhase: 'Setup' };
+    eq('typing the NetSuite number the card shows finds the document', resolveStagingScan([read, other, ...jobs], 'wo11578').job.id, read.id);
+    eq('…and it is an exact match, not a legacy guess', resolveStagingScan([read], 'WO11578').legacy, false);
+    eq('the long id still resolves', resolveStagingScan([read], read.id).job.id, read.id);
+    eq('the packing match accepts it too', [stagingScanMatches(read, 'WO11578'), stagingScanMatches(read, 'WO11657')], [true, false]);
+    eq('another work order\'s number never passes this one', stagingScanMatches(other, 'WO11578'), false);
+    const dup = resolveStagingScan([read, { ...other, nsWoTran: 'WO11578' }], 'WO11578');
+    eq('two open documents on one NetSuite number: refused, neither guessed', [dup.job, dup.ambiguous.length], [null, 2]);
+    eq('a closed document is not found by its number', resolveStagingScan([{ ...read, currentPhase: 'Closed' }], 'WO11578').job, null);
+    eq('a document with no NetSuite number is unaffected', resolveStagingScan(jobs, 'WO11578').job, null);
+}
+
 console.log(`stagingKey: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
