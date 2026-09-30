@@ -21,6 +21,7 @@ import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from '.
 import { rodForArm, visibleNodesForRow } from './specSheetRows';
 import { specPages, auditPages } from './specSheetPages';
 import { composeTraverseSheet } from './specSheetTraverseDraw';
+import { NARROW, narrowPages, pageFacts, traverseFacts } from './specSheetNarrow';
 import { choicesFromAssembly } from '../Shared/hardwareAdapter';
 import { resolve as resolveHardware, parseProjTiers, companionsFor } from '../Shared/hardwareModel';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
@@ -474,9 +475,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           ...Object.values(d.groups || {}).flatMap(g => g.choices || []), ...(d.rings || []).map(r => r.choice), ...(d.end ? [d.end] : []),
         ]);
         const itemPins = [...new Map(drawnChoices.map(c => [c.id, c])).values()].map(c => ({ choice: c, pin: pinForChoice(c) })).filter(x => x.pin);
-        const heads = [...new Set((p.drawings || []).map(d => pinForChoice(d.kind === 'RETURN' ? d.end : d.bracket)?.partName).filter(Boolean))];
+        const armOf = (d) => pinForChoice(d.kind === 'RETURN' ? d.end : d.bracket)?.partName;
+        const heads = [...new Set((p.drawings || []).map(armOf).filter(Boolean))];
         pageList.push({
           key: p.key, kind: p.kind, traverse: p, answers: p.answers, bracketPin: lead, itemPins,
+          facts: traverseFacts(p.drawings, armOf),   // each drawing answers the pickers for itself
           title: `${p.kind === 'TRAVERSE_ENDS' ? '⇥ Track ends — manual & motorized' : heads.join(' + ')}${p.label && p.kind === 'TRAVERSE' ? ` · ${p.label}` : ''}`,
           family: p.label, isTraverse: true,
         });
@@ -500,6 +503,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       pageList.push({
         key: p.key,
         kind: p.kind,
+        facts: pageFacts(p.answers, bracketPin.partName),   // its CPQ leaf, for the pickers (2026-09-30)
         title: `${bracketPin.partName}${p.plateFamily ? ` + ${p.plateFamily}` : ''}${p.label ? ` · ${p.label}` : ''}${p.part ? ` · sheet ${p.part}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
         bracketPin, familyPins, ringPins, riderPins, plateFamily: p.plateFamily || '',
         // Every pole this configuration stands up, each taken on the drawn side — one on a
@@ -565,6 +569,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
             key: `${a.key}+${b.key}`,
             title: `${a.bracketPin.partName} + ${b.bracketPin.partName} · basics, 2 per sheet`,
             combo: [a, b],
+            facts: [...(a.facts || []), ...(b.facts || [])],   // either arm answers the pickers
           });
           drop.add(b.key);
         }
@@ -608,16 +613,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // already carries the leaf it belongs to — so the controls are read back off the page list
   // rather than asked of the engine a second time. Cascading: each answer is measured among the
   // pages that survive the answers above it, so a question with one answer is not asked.
-  const NARROW = [
-    { key: 'rodKind', label: 'Rod' },
-    { key: 'setup', label: 'Setup' },
-    { key: 'frontLayer', label: 'Front' },
-    { key: 'drive', label: 'Drive' },
-    { key: 'mount', label: 'Mount' },
-    { key: 'proj', label: 'Projection', fmt: (v) => `${v}"` },
-    { key: '__arm', label: 'Bracket arm' },
-  ];
-  const valueOf = (page, key) => (key === '__arm' ? (page.bracketPin?.partName || '') : page.answers?.[key]);
+  // 2026-09-30: asked in the CPQ's order, each once the one above is answered, and a two-drawing
+  // sheet answers per drawing — the rules live in specSheetNarrow (tested on every path).
   const [narrow, setNarrow] = useState({});
   useEffect(() => { setNarrow({}); }, [pages]);
 
@@ -646,20 +643,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const fExtras = focusing ? extras.filter(pageCarriesFocus) : extras;
     const matched = focusing && (fDrawing.length + fExtras.length) > 0;
     if (matched) { drawing = fDrawing; extras = fExtras; }
-    let pool = drawing;
-    const out = [];
-    for (const ax of NARROW) {
-      const values = [...new Set(pool.map(p => valueOf(p, ax.key)).filter(v => v !== undefined && v !== null && v !== ''))]
-        .sort((a, b) => (typeof a === 'number' && typeof b === 'number') ? a - b : String(a).localeCompare(String(b)));
-      if (values.length > 1) out.push({ ...ax, values });
-      const picked = narrow[ax.key];
-      // eslint-disable-next-line eqeqeq
-      if (picked !== undefined && picked !== '' && values.some(v => String(v) === String(picked))) {
-        pool = pool.filter(p => String(valueOf(p, ax.key)) === String(picked));
-      }
-    }
+    const { steps: out, pages: pool } = narrowPages(drawing, narrow);
     return { steps: out, shownPages: [...pool, ...extras], focusMatched: matched };
-  }, [pages, narrow, focusOn, focusKeys, pageCarriesFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pages, narrow, focusOn, focusKeys, pageCarriesFocus]);
   useEffect(() => { setPageIndex(0); }, [focusOn]);
 
   useEffect(() => { setPageIndex(0); }, [narrow]);
