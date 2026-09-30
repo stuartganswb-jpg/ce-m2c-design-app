@@ -47,16 +47,28 @@ export const setUpWords = (a = {}) => [
     a.mount ? String(a.mount).toLowerCase() : '',
     has(a.proj) ? `${a.proj}"` : '',
 ].filter(Boolean).join(' · ');
-export const traverseNameParts = (drawings, armOf) => ({
-    drawings: (drawings || []).map(d => ({ code: armOf(d) || '', setUp: setUpWords(d.answers) })),
+// kitWant(d) → the kit a drawing belongs to (specSheetKits.kitWantOf), or nothing for a drawing that is
+// not a kit (an end arm, a miter). Spoken only in the Fabricut edition (sheetName's kitOf).
+export const traverseNameParts = (drawings, armOf, kitWant) => ({
+    drawings: (drawings || []).map(d => {
+        const kit = kitWant ? kitWant(d) : null;
+        // Named by its kit, the projection is in the kit's name (" - 3 5/8"P") — the words leave it out.
+        return { code: armOf(d) || '', setUp: setUpWords(d.answers), ...(kit ? { kit, kitSetUp: setUpWords({ ...d.answers, proj: undefined }) } : {}) };
+    }),
 });
 // codeOf(ourCode) → the edition's code, or nothing (then ours stands). Words are never translated —
 // a plate family (H1-138BP) is not a part, and prints the same way on the sheet itself.
-export function sheetName(page, codeOf = (c) => c) {
+// kitOf(want) → the kit's name (specSheetKits.kitName) — passed in the Fabricut edition only: a drawing
+// or sheet that belongs to a kit is then named by it ("HTS7504F - 3 5/8"P"), everything else by its code.
+export function sheetName(page, codeOf = (c) => c, kitOf = null) {
     const n = page?.nameParts;
     const say = (c) => (c ? (codeOf(c) || c) : '');
     if (!n) return page?.title || '';
-    if (n.drawings) return n.drawings.map(d => `${say(d.code)}${d.setUp ? ` (${d.setUp})` : ''}`).join(' + ');
+    if (n.drawings) return n.drawings.map(d => {
+        const byKit = !!(d.kit && kitOf), words = byKit ? d.kitSetUp : d.setUp;
+        return `${byKit ? kitOf(d.kit) : say(d.code)}${words ? ` (${words})` : ''}`;
+    }).join(' + ');
+    if (n.kit && kitOf) return `${kitOf(n.kit)}${n.kitTail || ''}`;
     return `${(n.codes || []).map(say).join(' + ')}${n.tail || ''}`;
 }
 
@@ -73,8 +85,8 @@ export function distinctLabels(entries) {
     return entries.map(e => (count.get(e.label) > 1 && e.ours && e.ours !== e.label ? `${e.label} (${e.ours})` : e.label));
 }
 // The sheet dropdown, in the edition. H1 is spoken exactly as the names were built.
-export function sheetLabels(pages, codeOf, edition = 'H1') {
-    const names = (pages || []).map(p => sheetName(p, codeOf));
+export function sheetLabels(pages, codeOf, edition = 'H1', kitOf = null) {
+    const names = (pages || []).map(p => sheetName(p, codeOf, kitOf));
     return edition === 'H1' ? names : distinctLabels((pages || []).map((p, i) => ({ label: names[i], ours: ourCodes(p) })));
 }
 // The Bracket arm picker, in the edition: the VALUE stays our code (a pick survives an edition switch),

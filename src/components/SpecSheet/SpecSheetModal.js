@@ -21,7 +21,9 @@ import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from '.
 import { rodForArm, visibleNodesForRow } from './specSheetRows';
 import { specPages, auditPages } from './specSheetPages';
 import { composeTraverseSheet } from './specSheetTraverseDraw';
-import { NARROW, narrowPages, pageFacts, traverseFacts, traverseNameParts, sheetName, sheetLabels, armOptions } from './specSheetNarrow';
+import { NARROW, narrowPages, pageFacts, traverseFacts, traverseNameParts, sheetName, sheetLabels, armOptions, setUpWords } from './specSheetNarrow';
+import { kitWantOf, kitName, kitLine } from './specSheetKits';
+import { H1_138TRV_PARTS } from '../Shared/traverseKitImport';
 import { choicesFromAssembly } from '../Shared/hardwareAdapter';
 import { resolve as resolveHardware, parseProjTiers, companionsFor } from '../Shared/hardwareModel';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
@@ -454,6 +456,26 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return pin ? named(pin) : null;
   }, [pins, clusterById, side]);
 
+  // ── THE FABRICUT KIT A DRAWING BELONGS TO (Stuart 2026-09-30) — the rules in specSheetKits ────────
+  // A traverse wall / ceiling bracket drawing belongs to its family's kit (the family is the rod it carries:
+  // H1-2TRV, H1-138TRV); an end arm or miter is sold as itself. H1-138TRV kits also differ by bracket style,
+  // read off the plates the sheet draws through that family's own style → plate table.
+  const kitParts = useMemo(() => (libraryParts || []).filter(p => p?.partClass === 'Kit' && p.manufacturingSpecs?.kitAlign), [libraryParts]);
+  const traverseKitWant = useCallback((d) => {
+    if (d?.kind !== 'BRACKET' && d?.kind !== 'CEILING') return null;
+    const track = d.groups?.['TRACK/FRONT'] || d.groups?.['TRACK/BACK'];
+    const family = track?.choices?.[0] ? pinForChoice(track.choices[0])?.partName : '';
+    return family ? kitWantOf({ family, answers: d.answers }) : null;
+  }, [pinForChoice]);
+  const solidKitWant = useCallback((p, rodCode, plateCodes) => {
+    if (p.kind !== 'BRACKET' || String(p.answers?.rodKind || '').toUpperCase() !== 'TRAVERSE' || !rodCode) return null;
+    const table = String(rodCode).toUpperCase() === H1_138TRV_PARTS.rod ? H1_138TRV_PARTS.plates : null;
+    const styles = table ? Object.entries(table).filter(([st, code]) => st !== 'CEILING' && plateCodes.includes(code)).map(([st]) => st) : [];
+    return kitWantOf({ family: rodCode, answers: p.answers, styles });
+  }, []);
+  // Spoken in the Fabricut edition only; H1 codes and Customer #s name the parts as before.
+  const kitOf = useMemo(() => (edition === 'FAB' ? (want) => kitName(kitParts, want) : null), [edition, kitParts]);
+
   useEffect(() => {
     if (!sceneReady) return;
     // An untagged assembly has no engine answer, and the old machine that stood in for one — the
@@ -477,7 +499,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         const itemPins = [...new Map(drawnChoices.map(c => [c.id, c])).values()].map(c => ({ choice: c, pin: pinForChoice(c) })).filter(x => x.pin);
         const armOf = (d) => pinForChoice(d.kind === 'RETURN' ? d.end : d.bracket)?.partName;
         // Named per drawing, each with its own set-up, in the sheet's edition (see sheetName).
-        const nameParts = p.kind === 'TRAVERSE' ? traverseNameParts(p.drawings, armOf) : null;
+        const nameParts = p.kind === 'TRAVERSE' ? traverseNameParts(p.drawings, armOf, traverseKitWant) : null;
         pageList.push({
           key: p.key, kind: p.kind, traverse: p, answers: p.answers, bracketPin: lead, itemPins,
           facts: traverseFacts(p.drawings, armOf),   // each drawing answers the pickers for itself
@@ -504,6 +526,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const riderPins = (p.riders || []).map(pinForChoice).filter(Boolean);
       // The arm's code follows the edition in the dropdown; the words around it (plate family, leaf) stay.
       const nameParts = { codes: [bracketPin.partName], tail: `${p.plateFamily ? ` + ${p.plateFamily}` : ''}${p.label ? ` · ${p.label}` : ''}${p.part ? ` · sheet ${p.part}` : ''}${p.plates.length ? '' : ' (draws alone)'}` };
+      // A traverse bracket (H1-138TRV) is a kit's: in the Fabricut edition the sheet is named by it.
+      const kit = solidKitWant(p, pinForChoice(p.rod)?.partName, familyPins.map(x => x.partName));
+      if (kit) {
+        const words = setUpWords({ ...p.answers, proj: undefined });
+        Object.assign(nameParts, { kit, kitTail: `${words ? ` (${words})` : ''}${p.part ? ` · sheet ${p.part}` : ''}` });
+      }
       pageList.push({
         key: p.key,
         kind: p.kind,
@@ -601,7 +629,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     pageList.push({ key: '__WM__', kind: 'WALLMOUNTS', title: '⊞ Wall mounts (1:1)', family: '' });
     setPages(pageList);
     setPageIndex(0);
-  }, [sceneReady, engineChoices, pinForChoice]);
+  }, [sceneReady, engineChoices, pinForChoice, traverseKitWant, solidKitWant]);
 
   // Smallest box containing both — the MOUNTING is plate + arm together.
   const unionBox = (a, b) => {
@@ -1588,7 +1616,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const code = pinForChoice(c)?.partName || c?.partId || '';
       return edition === 'FAB' ? (fabCodeFor(code) || code) : edition === 'CUST' ? (custCodeFor(code) || code) : code;
     },
-  }), [pinForChoice, edition, fabCodeFor, custCodeFor, baseAssembly?.itemName, baseAssembly?.itemId]);
+    kitOf: kitOf ? (d) => { const w = traverseKitWant(d); return w ? { name: kitOf(w), line: kitLine(kitParts, w) } : null; } : null,
+  }), [pinForChoice, edition, fabCodeFor, custCodeFor, baseAssembly?.itemName, baseAssembly?.itemId, kitOf, traverseKitWant, kitParts]);
 
   // ---- compose current page ----
   useEffect(() => {
@@ -1607,7 +1636,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // the most likely silent failure of the H1 mass load (a ¾" file registered under 1-3/8").
                 const rows = editionRows(built.rows, page.bracketPin.partName);
         const anyAsMounted = rows.some(r => r.hasAsMounted);
-        const titleCode = (page.combo || [page])
+        const titleCode = (kitOf && page.nameParts?.kit) ? kitOf(page.nameParts.kit) : (page.combo || [page])
           .map(s => (edition === 'FAB' ? (fabCodeFor(s.bracketPin.partName) || s.bracketPin.partName)
             : edition === 'CUST' ? (custCodeFor(s.bracketPin.partName) || s.bracketPin.partName)
             : s.bracketPin.partName))
@@ -1642,7 +1671,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, custCodeFor, editionLabel, editionRows, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, composeTraversePage, baseAssembly]);
+  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, custCodeFor, editionLabel, editionRows, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, composeTraversePage, baseAssembly, kitOf]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; finialsRef.current = null; }, [wallCfg, side]);
@@ -1708,7 +1737,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (page.kind === 'TRAVERSE' || page.kind === 'TRAVERSE_ENDS') return { svg: composeTraversePage(page).svg, paper: 'letter' };
     const built = builtRowsFor(page);
     const rows = editionRows(built.rows, page.bracketPin.partName);
-    const titleCode = (page.combo || [page])
+    const titleCode = (kitOf && page.nameParts?.kit) ? kitOf(page.nameParts.kit) : (page.combo || [page])
       .map(s => (edition === 'FAB' ? (fabCodeFor(s.bracketPin.partName) || s.bracketPin.partName)
         : edition === 'CUST' ? (custCodeFor(s.bracketPin.partName) || s.bracketPin.partName)
         : s.bracketPin.partName))
@@ -1785,7 +1814,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           ))}
           {/* Names follow the edition buttons (Stuart 2026-09-30) — the codes as the sheet prints them. */}
           <select value={pageIndex} onChange={e => setPageIndex(+e.target.value)} style={{ padding: '5px', fontSize: '0.8rem', maxWidth: '360px' }}>
-            {sheetLabels(shownPages, rowCode, edition).map((label, i) => <option key={shownPages[i].key} value={i}>{label}</option>)}
+            {sheetLabels(shownPages, rowCode, edition, kitOf).map((label, i) => <option key={shownPages[i].key} value={i}>{label}</option>)}
           </select>
           <span style={{ fontSize: '0.72rem', color: '#666' }}>{shownPages.length} of {pages.length} sheets</span>
           {focus && pages.length > 0 && (focusOn

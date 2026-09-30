@@ -204,7 +204,7 @@ function bracketParts(geo, d, nameOf) {
     }).filter(Boolean);
     return { mesh, bb, brAll, wall0, backShift, ringsDrawn };
 }
-function bracketUnit(geo, d, x0, y0, s, fxAt, nameOf, heading) {
+function bracketUnit(geo, d, x0, y0, s, fxAt, nameOf, heading, kitText = '') {
     const { mesh, bb, brAll, wall0, ringsDrawn } = bracketParts(geo, d, nameOf);
     const prof = renderHiddenLine(mesh(k => !k.startsWith('TRV_END')), VIEW.end, 1400).vis;
     const rodFront = d.rodFront;
@@ -222,7 +222,7 @@ function bracketUnit(geo, d, x0, y0, s, fxAt, nameOf, heading) {
     const nDims = tracks.length + (fascia ? 1 : 0);
     const oy = y0 + 0.50 + nDims * 0.2 + 0.12 + vMax * s;
     const ox = x0 + 0.62 - wallX * s;
-    let g = text('t1', x0, y0 + 0.16, heading) + text('t2', x0, y0 + 0.34, subtitleOf(d));
+    let g = text('t1', x0, y0 + 0.16, heading) + text('t2', x0, y0 + 0.34, [subtitleOf(d), kitText].filter(Boolean).join(' · '));
     const wx = ox + wallX * s, wy0 = oy - (vMax + 0.3) * s, wy1 = oy - (vMin - 0.3) * s;
     g += wallHatch(wx, wy0, wy1);
     g += `<path class="ln" d="${segPath(prof, ox, oy, s)}"/>`;
@@ -289,7 +289,7 @@ const subtitleOf = (d) => {
 
 // ═════ the ceiling bracket: END VIEW (flush with the ceiling, drops up to 3/8") + the plate from above ═════
 const CEILING_DROP = 0.375;   // Stuart 2026-09-29: flush with the ceiling is the top; it "can drop up to 3/8" for leveling"
-function ceilingUnit(geo, d, x0, y0, s, nameOf, heading) {
+function ceilingUnit(geo, d, x0, y0, s, nameOf, heading, kitText = '') {
     const cbM = geo.groupMeshes(d, k => k.startsWith('BRACKET')).filter(m => Math.abs(groupBbox([m]).center[2]) < 3);
     const cb = groupBbox(cbM), ceilY = cb.max[1];
     const ringMs = (d.rings || []).flatMap(r => geo.meshes(r.nodes));
@@ -303,7 +303,7 @@ function ceilingUnit(geo, d, x0, y0, s, nameOf, heading) {
     const carr = Object.keys(d.groups).filter(k => k.startsWith('CARRIER')).map(k => groupBbox(geo.meshes(d.groups[k].nodes)));
     const ox = x0 + 1.0 - cb.min[0] * s, oy = y0 + 0.62 + 0.55 + ceilY * s;
     const word = d.rodFront ? 'rod' : 'fascia';
-    let g = text('t1', x0, y0 + 0.16, heading) + text('t2', x0, y0 + 0.34, setupText(d.answers));
+    let g = text('t1', x0, y0 + 0.16, heading) + text('t2', x0, y0 + 0.34, [setupText(d.answers), kitText].filter(Boolean).join(' · '));
     g += hHatch(ox + (cb.min[0] - 0.4) * s, ox + ((face?.max[0] ?? 0) + 0.5) * s, oy - ceilY * s);
     g += `<path class="ln" d="${segPath(endV, ox, oy, s)}"/>`;
     if (ghost.length) {
@@ -430,9 +430,11 @@ function endsUnit(geo, d, x0, y0, s, nameOf, heading) {
     return g;
 }
 
+// A bracket or ceiling drawing that belongs to a kit is titled by the kit in the Fabricut edition (k = kitOf(d));
+// every part inside keeps its own id on the drawing (Stuart 2026-09-30: "drop down and title").
 const HEADINGS = {
-    BRACKET: (d, n) => `${U(d.answers.setup) === 'DOUBLE' ? (U(d.answers.frontLayer) === 'FASCIA' ? 'Double — rod front (rings) · rear track' : 'Double traverse — track front') : 'Single traverse'} · ${n(d.bracket)}`,
-    CEILING: (d, n) => `Ceiling mount — ${U(d.answers.setup) === 'DOUBLE' ? (U(d.answers.frontLayer) === 'FASCIA' ? 'double, rod front (rings) · rear track' : 'double, track front') : 'single traverse'} · ${n(d.bracket)}`,
+    BRACKET: (d, n, k) => `${U(d.answers.setup) === 'DOUBLE' ? (U(d.answers.frontLayer) === 'FASCIA' ? 'Double — rod front (rings) · rear track' : 'Double traverse — track front') : 'Single traverse'} · ${k ? k.name : n(d.bracket)}`,
+    CEILING: (d, n, k) => `Ceiling mount — ${U(d.answers.setup) === 'DOUBLE' ? (U(d.answers.frontLayer) === 'FASCIA' ? 'double, rod front (rings) · rear track' : 'double, track front') : 'single traverse'} · ${k ? k.name : n(d.bracket)}`,
     RETURN: (d, n) => `Traverse ${d.isMiter ? 'miter' : 'end arm'} — ${U(d.answers.setup) === 'DOUBLE' ? 'double' : `single ${fracText(Number(d.answers.proj || 0))}`} · ${n(d.end)}`,
     ENDS: (d) => `Track end — ${U(d.drive) === 'MOTORIZED' ? 'Motorized' : 'Manual'}`,
 };
@@ -445,8 +447,10 @@ const HEADINGS = {
  * @param {Function} p.nameOf  choice → the code to print (the modal's edition naming)
  * @param {string} p.title     the sheet title (assembly name)
  * @param {number} [p.toInches] scene units → inches (the modal's scene is metres)
+ * @param {Function} [p.kitOf] drawing → { name, line } of its kit, or null — the Fabricut edition only
  */
-export function composeTraverseSheet({ page, scene, nameOf, title = '', toInches = M2IN }) {
+export function composeTraverseSheet({ page, scene, nameOf, title = '', toInches = M2IN, kitOf = null }) {
+    const kit = (d) => (kitOf ? kitOf(d) : null);
     const geo = makeGeo(scene, toInches);
     const ds = page.drawings || [];
     ds.forEach(d => checkLayout(geo, d));
@@ -459,13 +463,13 @@ export function composeTraverseSheet({ page, scene, nameOf, title = '', toInches
         units = ds.map((d, i) => endArmUnit(geo, d, M, M + i * UH, scale, nameOf, HEADINGS.RETURN(d, nameOf)));
     } else if (page.group === 'CEILING') {
         scale = 0.54;
-        units = ds.map((d, i) => ceilingUnit(geo, d, M, M + i * UH, scale, nameOf, HEADINGS.CEILING(d, nameOf)));
+        units = ds.map((d, i) => ceilingUnit(geo, d, M, M + i * UH, scale, nameOf, HEADINGS.CEILING(d, nameOf, kit(d)), kit(d)?.line));
     } else {
         const GUT = 1.6, frontW = 3.2 + (ds.some(d => d.rodFront) ? 1.8 * Math.max(...ds.map(d => (d.rings || []).length)) : 0) - (ds.some(d => d.rodFront) ? 0.2 : 0);
         const need = Math.max(...ds.map(d => bracketNeed(geo, d, nameOf)));
         scale = Math.min(0.54, (UW - 0.62 - GUT) / (need + frontW));
         const fxAt = M + 0.62 + need * scale + GUT;
-        units = ds.map((d, i) => bracketUnit(geo, d, M, M + i * UH, scale, fxAt, nameOf, HEADINGS.BRACKET(d, nameOf)));
+        units = ds.map((d, i) => bracketUnit(geo, d, M, M + i * UH, scale, fxAt, nameOf, HEADINGS.BRACKET(d, nameOf, kit(d)), kit(d)?.line));
     }
     const body = units.join(`<line class="sep" x1="${M}" x2="${PAGE_W - M}" y1="${f3(M + UH - 0.02)}" y2="${f3(M + UH - 0.02)}"/>`);
     const foot = text('t4', M, PAGE_H - 0.18, `${title ? title + ' · ' : ''}TRAVERSE · drawn from the model as the configurator settles each set-up · scale ${Math.round(scale * 100)}% (one scale per sheet)`);
