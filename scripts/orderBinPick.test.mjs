@@ -1,6 +1,6 @@
 // node scripts/orderBinPick.test.mjs — every piece into the order's bin before it packs (Stuart 2026-09-30: "this order at
 // this point should be showing 100% ready to pack … once it is all picked to the Orders-Com1 bin you do a bin transfer").
-import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, pieceLinesOf } from '../src/components/Shared/orderBinPick.js';
+import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, pieceLinesOf, nsItemOf, nsQtyOf, nsBinPlanOf, binSourcesOf, displayShareOf } from '../src/components/Shared/orderBinPick.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 
@@ -42,6 +42,39 @@ eq('a floor line is never picked from the shelf', shelfPickPlanOf({ so: { ...so,
 // THE PACK VIEW: what each line holds in the bin — the item's count handed to its lines in order.
 eq('100 cover plates in the bin: 50 on each line; 70 → 50 and 20', [lineBinShareOf(all, 1), lineBinShareOf(all, 2), lineBinShareOf({ ...all, committedQty: { 'H1-1CP-V/EP4': 70 } }, 1), lineBinShareOf({ ...all, committedQty: { 'H1-1CP-V/EP4': 70 } }, 2)], [50, 50, 50, 20]);
 eq('a fee or an off-order line holds nothing', [lineBinShareOf(all, 4), lineBinShareOf(all, 6)], [0, 0]);
+
+// ── THE ORDER'S BIN IN NETSUITE: each piece as the item NetSuite knows (Stuart 2026-09-30: "no assemblies for the /P09
+// finished items … you are committing the /P stock item and the app is handling the finish") ──
+const t = {
+    id: 'T', soId: 'SO60551', committedBin: 'ORDERS-COM1',
+    lines: [
+        { erp: 'H1-1R', finishCode: 'EP4', toBeFinished: true, qty: 50, perFoot: true, feetPer: 2 },          // 0 plated pole, 2 ft, billed by the foot
+        { erp: 'H1-138CC', finishCode: 'P06', toBeFinished: true, qty: 50, billedErp: 'H1-138CC/P' },         // 1 painted cap, bills the shared /P
+        { erp: 'H1-1CP-V', finishCode: 'EP4', toBeFinished: true, qty: 50, billedErp: 'H1-1CP-V/EP4' },       // 2 shelf pick (STOCK)
+        { erp: 'H1-1CP-V', finishCode: 'EP4', toBeFinished: true, qty: 50, billedErp: 'H1-1CP-V/EP4' },       // 3 shelf pick (STOCK)
+        { erp: 'H1-2RCTAECC', finishCode: 'EP1', toBeFinished: true, qty: 50, inKit: true, kitLineIdx: 5 },   // 4 kit part, shelf pick (STOCK)
+        { erp: 'H1-2RCTAEC', finishCode: 'EP1', qty: 50, isKit: true, itemKit: true },                        // 5 kit line
+        { erp: 'HTSLNTCAR', qty: 500 },                                                                        // 6 stocked
+        { erp: 'H1-FRPF', finishCode: 'EP4', toBeFinished: true, qty: 50, isFee: true },                       // 7 fee
+    ],
+    oeGen: { 0: { kind: 'WO' }, 1: { kind: 'WO' }, 2: { kind: 'STOCK' }, 3: { kind: 'STOCK' }, 4: { kind: 'STOCK' } },
+    committedQty: { 'H1-1R/EP4': 50, 'H1-138CC/P06': 50, 'H1-1CP-V/EP4': 100, 'H1-2RCTAECC/EP1': 50, HTSLNTCAR: 500 },
+    nsBinQty: { 'H1-1CP-V/EP4': 100, 'H1-2RCTAECC/EP1': 50, HTSLNTCAR: 500 },
+};
+eq('the NetSuite item: a floor line bills its item (the rod, the shared /P); a shelf pick is the stock item it moved', [0, 1, 2, 4, 6].map(i => nsItemOf(t, t.lines[i], i)), ['H1-1R', 'H1-138CC/P', 'H1-1CP-V/EP4', 'H1-2RCTAECC/EP1', 'HTSLNTCAR']);
+eq('a rod sold by the foot moves in feet: 50 poles × 2 ft = 100 ft; pieces are pieces', [nsQtyOf(t.lines[0], 50), nsQtyOf(t.lines[1], 50)], [100, 50]);
+eq('what ORDERS-COM1 must still take in NetSuite: the floor pieces (100 ft of H1-1R, 50 × H1-138CC/P); the shelf picks are already there', nsBinPlanOf({ so: t }).map(r => [r.code, r.want, r.have, r.qty]),
+    [['H1-1R', 100, 0, 100], ['H1-138CC/P', 50, 0, 50], ['H1-1CP-V/EP4', 100, 100, 0], ['H1-2RCTAECC/EP1', 50, 50, 0], ['HTSLNTCAR', 500, 500, 0]]);
+eq('sources: largest bins first, never the order\'s bin; a shortfall is said', [binSourcesOf([{ bin: 'RAW', qty: 80 }, { bin: 'R2', qty: 500 }, { bin: 'ORDERS-COM1', qty: 9 }], 100, 'ORDERS-COM1'), binSourcesOf([{ bin: 'RAW', qty: 30 }], 50, 'ORDERS-COM1')],
+    [{ from: [{ bin: 'R2', qty: 100 }], short: 0 }, { from: [{ bin: 'RAW', qty: 30 }], short: 20 }]);
+
+// ONE DISPLAY: every line ÷ 50 — the pieces in the box, and the NetSuite item and quantity the showroom's order carries.
+const d1 = displayShareOf({ so: t, boards: 50 });
+eq('one display of fifty: a pole (2 ft of H1-1R), a painted cap, two cover plates (one per line), a collar, ten carriers', [d1.ok, d1.lines.map(l => [l.code, l.pieces, l.nsCode, l.nsQty])], [true, [
+    ['H1-1R/EP4', 1, 'H1-1R', 2], ['H1-138CC/P06', 1, 'H1-138CC/P', 1], ['H1-1CP-V/EP4', 1, 'H1-1CP-V/EP4', 1], ['H1-1CP-V/EP4', 1, 'H1-1CP-V/EP4', 1], ['H1-2RCTAECC/EP1', 1, 'H1-2RCTAECC/EP1', 1], ['HTSLNTCAR', 10, 'HTSLNTCAR', 10],
+]]);
+eq('refused: a line that does not divide, or a bin short of one display', [displayShareOf({ so: t, boards: 7 }).ok, displayShareOf({ so: { ...t, committedQty: { ...t.committedQty, HTSLNTCAR: 5 } }, boards: 50 }).why, displayShareOf({ so: t, boards: 0 }).ok],
+    [false, 'HTSLNTCAR: the bin holds 5, a display needs 10', false]);
 
 console.log(`orderBinPick: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

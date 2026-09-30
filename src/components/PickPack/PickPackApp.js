@@ -18,7 +18,7 @@ import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shar
 import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, closeShortNext, shortBuildStamps, scrapRawOf, scrapBinOf, adjustmentPayload } from '../Shared/scrapClose';
 import { isFloorSupervisor, normRole } from '../Shared/finishingRoles';
 import AssemblyBuildTab from './AssemblyBuildTab';
-import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf } from '../Shared/orderBinPick';
+import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, nsBinPlanOf, binSourcesOf } from '../Shared/orderBinPick';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { activeItemByNameQuery, activeItemByNameQueryLite, cutRecordOf, isStockItemType } from '../Shared/nsItemLookup.js';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction, FieldPath, increment } from "firebase/firestore";
@@ -1893,6 +1893,44 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { alert('Could not release: ' + (e.message || e)); }
     };
 
+    // ⇄ THE ORDER'S BIN IN NETSUITE (Stuart 2026-09-30: "once all 50 are shipped there should be 0 of anything on hand in the
+    // orders-com1 bin"). Every gathered piece — off the floor, back from the plater, an arrival — moved into the order's
+    // bin in NetSuite as the item NetSuite knows (Shared/orderBinPick.nsBinPlanOf: the billed /P, the rod in feet, the
+    // stock item), from its live bins; only what NetSuite moved is counted (nsBinQty). Runs after a gather and from the card.
+    const syncOrderBinToNetSuite = async (o, { auto = false } = {}) => {
+        const cb = committedBinOf(o);
+        if (!cb) return;
+        const plan = nsBinPlanOf({ so: o, isFeeCode }).filter(r => r.qty > 0);
+        if (!plan.length) { if (!auto) alert(`${cb} already holds every gathered piece of ${packRef(o)} in NetSuite.`); return; }
+        const lock = await lockBin(cb);
+        if (!lock.ok) return alert(lock.msg);
+        let live = {};
+        setIsSyncing(true);
+        try { live = (await fetchLiveBins(plan.map(r => r.code))) || {}; } finally { setIsSyncing(false); }
+        const moves = plan.map(r => ({ ...r, ...binSourcesOf((live[r.code] && live[r.code].bins) || [], r.qty, lock.bin), part: findPartByErpCode(r.code) }));
+        const go = moves.filter(m => m.part && m.part.netSuiteInternalId && m.from.length);
+        const note = moves.filter(m => !(m.part && m.part.netSuiteInternalId) || m.short > 0)
+            .map(m => `  • ${m.code}: ${!(m.part && m.part.netSuiteInternalId) ? 'no NetSuite id — sync the item' : `NetSuite holds only ${m.qty - m.short} of ${m.qty}`}`);
+        if (!go.length) return alert(`Nothing of ${packRef(o)} can be moved into ${lock.bin} in NetSuite as it stands:\n\n${note.join('\n')}\n\nAdjust them in NetSuite, then press ⇄ on the SO Pack card.`);
+        if (!window.confirm(`⇄ Put ${packRef(o)}'s gathered pieces into ${lock.bin} in NetSuite?\n\nNetSuite holds them as the items the order bills (the app carries the finish):\n${go.map(m => `  • ${m.qty - m.short} × ${m.code} from ${m.from.map(f => `${f.bin} (${f.qty})`).join(' + ')}`).join('\n')}${note.length ? `\n\n⛔ Not moved:\n${note.join('\n')}` : ''}\n\nEach is a NetSuite bin transfer into ${lock.bin}.`)) return;
+        const done = [], failed = [];
+        setIsSyncing(true);
+        try {
+            for (const m of go) {
+                let moved = 0;
+                for (const f of m.from) {
+                    try { await runBinTransfer({ netSuiteInternalId: m.part.netSuiteInternalId }, f.qty, f.bin, lock.bin, nsMemo(`${packRef(o)} to ${lock.bin}`)); moved = Math.round((moved + f.qty) * 1000) / 1000; }
+                    catch (e) { failed.push(`${m.code} from ${f.bin}: ${String(e.message || e).slice(0, 160)}`); break; }
+                }
+                if (!moved) continue;
+                await updateDoc(doc(db, 'hq_sales_orders', o.id), new FieldPath('nsBinQty', m.code), increment(moved)).catch(e => failed.push(`${m.code}: moved ${moved} in NetSuite but not recorded — ${e.message || e}`));
+                done.push(`${moved} × ${m.code}`);
+            }
+        } finally { setIsSyncing(false); }
+        writeLog(`${packRef(o)} into ${lock.bin} in NetSuite: ${done.join(', ') || 'nothing'}${failed.length ? ` — ⚠ ${failed.join('; ')}` : ''}`, failed.length ? 'alert' : 'wms');
+        alert(`${done.length ? `✅ In ${lock.bin} in NetSuite:\n${done.map(x => `  • ${x}`).join('\n')}` : ''}${failed.length || note.length ? `\n\n⛔ Not moved:\n${[...failed.map(x => `  • ${x}`), ...note].join('\n')}` : ''}`);
+    };
+
     // ⤓ PICK THE SHELF LINES INTO THE ORDER'S BIN (Stuart 2026-09-30: "once it is all picked to the Orders-Com1 bin you do
     // a bin transfer and put it there even in netsuite, otherwise Bin count and stock view will fail"). Each item's remaining
     // need, from its live bins (Shared/orderBinPick.shelfPickPlanOf): a NetSuite bin transfer shelf → the order's bin, and
@@ -2542,6 +2580,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             writeLog(`Gathered ${packRef(job)} into ${packRef(order)}${bin ? ` (bin ${bin})` : ''}: ${want.map(w => `${w.add}×${w.code}`).join(', ')} — packs and ships from SO Pack.`, 'packing');
             setPackOrderId(null);
             alert(`📦 ${packRef(job)} gathered into ${packRef(order)}${bin ? ` — bin ${bin}` : ''}.\n\nPack and ship it from SO Pack when the order is complete.`);
+            // …and into the bin in NetSuite, as the items the order bills (read fresh: the counts just changed).
+            try { const fresh = await getDoc(doc(db, 'hq_sales_orders', order.id)); if (fresh.exists()) await syncOrderBinToNetSuite({ id: fresh.id, ...fresh.data() }, { auto: true }); }
+            catch (e) { console.warn('bin → NetSuite after the gather failed (the gather stands):', e); }
         } catch (e) { alert('Gather stopped: ' + (e.message || e)); }
         finally { packCompletingRef.current = false; }
     };
@@ -4329,6 +4370,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 if (forOrder) {
                     const oline = (forOrder.lines || []).find(l => soLineCodeOf(l) === String(target).toUpperCase());
                     await commitToOrder(forOrder, { code: target, qty: got, ordered: soCodeNeedOf(forOrder, target, isFeeCode) || Number(oline && oline.qty) || 0 });
+                    try { const fresh = await getDoc(doc(db, 'hq_sales_orders', forOrder.id)); if (fresh.exists()) await syncOrderBinToNetSuite({ id: fresh.id, ...fresh.data() }, { auto: true }); } catch (e) { console.warn('bin → NetSuite after the put-away failed (the put-away stands):', e); }
                 } else if (soId) {
                     writeLog(`⚠ Plating put-away (custom fab): ${target} carries sales order ${soId} but no matching order is open in this brand — left in ${bins.map(p => p.bin).join(', ')}.`, 'wms');
                 }
@@ -4432,6 +4474,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             if (forOrder) {
                 const oline = (forOrder.lines || []).find(l => soLineCodeOf(l) === String(target).toUpperCase());
                 await commitToOrder(forOrder, { code: target, qty: got, ordered: soCodeNeedOf(forOrder, target, isFeeCode) || Number(oline && oline.qty) || 0 });
+                try { const fresh = await getDoc(doc(db, 'hq_sales_orders', forOrder.id)); if (fresh.exists()) await syncOrderBinToNetSuite({ id: fresh.id, ...fresh.data() }, { auto: true }); } catch (e) { console.warn('bin → NetSuite after the put-away failed (the put-away stands):', e); }
             } else if (soId) {
                 writeLog(`⚠ Plating put-away: ${target} carries sales order ${soId} but no matching order is open in this brand — left in ${bins.map(p => p.bin).join(', ')} rather than guessed into a committed bin.`, 'wms');
             } else {
@@ -5964,6 +6007,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {o.packStatus === 'Packed'
                                         ? <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44' }}>📦 Packed · {(o.packPhotos || []).length} photo{(o.packPhotos || []).length === 1 ? '' : 's'} · {o.packedBy || ''}{o.nsIfTran ? ` · IF ${o.nsIfTran}${o.nsFulfillStatus ? ` (${o.nsFulfillStatus})` : ''}` : (o.nsFulfillQueued ? ' · IF queued…' : '')}{(o.trackingNumbers || []).length ? ` · 🚚 ${o.trackingNumbers.join(', ')}` : ''}</span>
                                         : (o.status === 'Picked' && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: theme.brass }}>→ in the PACKING tab queue</span>)}
+                                    {committedBinOf(o) && nsBinPlanOf({ so: o, isFeeCode }).some(r => r.qty > 0) && <button onClick={() => syncOrderBinToNetSuite(o)} disabled={isSyncing} title={`Gathered pieces not yet in ${cBin} in NetSuite — move them there as the items the order bills`} style={{ padding: '9px 14px', background: 'transparent', color: '#2e7d32', border: '1px solid #2e7d32', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⇄ {t('Into')} {cBin} {t('in NetSuite')} ({nsBinPlanOf({ so: o, isFeeCode }).filter(r => r.qty > 0).length})</button>}
                                     {gs.toPick.length > 0 && <button onClick={() => pickShelfIntoOrder(o)} disabled={isSyncing} title={`Pick every shelf line still missing from ${cBin} — NetSuite bin transfers into it`} style={{ padding: '9px 18px', background: '#2e7d32', color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⤓ {t('Pick all into')} {cBin} ({gs.toPick.length})</button>}
                                     <button onClick={() => toggleFinishAsAvailable(o)} title={finishAsAvailable(o) ? 'Parts are going to finishing as they arrive — switch back to waiting for the whole order' : 'The exception: send parts to finishing as they arrive, rather than waiting for the whole order'} style={{ padding: '9px 14px', background: 'transparent', color: finishAsAvailable(o) ? theme.brass : theme.inkSoft, border: `1px solid ${finishAsAvailable(o) ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⚡ {t(finishAsAvailable(o) ? 'Waiting off' : 'Finish as available')}</button>
                                     <button onClick={() => printWmsPackingList(o)} disabled={isSyncing} title="The packing list — ordered beside packed, by item code" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: isSyncing ? 'wait' : 'pointer' }}>🖨 {t('Packing list')}</button>

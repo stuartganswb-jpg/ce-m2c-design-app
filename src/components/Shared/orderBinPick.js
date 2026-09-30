@@ -88,3 +88,69 @@ export const shelfPickPlanOf = ({ so, binsOf = () => [], toBin = '', only = null
     });
     return out;
 };
+
+// ── THE ORDER'S BIN IN NETSUITE (Stuart 2026-09-30: "once all 50 are shipped there should be 0 of anything on hand in
+// the orders-com1 bin") ─────────────────────────────────────────────────────────────────────────────────────────────
+// NetSuite never holds an in-house finish: "there are no assemblies for the /P09 finished items … you are committing the
+// /P stock item and the app is handling the finish." So each piece line stands in NetSuite for ONE item:
+//   · a shelf pick — the stock item the pick moved (the plated /EPn, the stock colour /C, the stocked part);
+//   · a floor line — the item the order BILLS (billedErp: the shared /P of a painted part), else its base item;
+//     a rod sold by the foot moves in FEET (pieces × feet per piece), as NetSuite stocks it.
+// ORDERS-COM1 must hold, in NetSuite, every gathered piece as that item — each showroom shipment then fulfils 1/boards
+// of every line from it, and the bin ends at 0.
+
+/** The NetSuite item a piece line stands for. */
+export const nsItemOf = (so, line, idx) => U(soLineIsShelfPick(so, line, idx) ? soLineCodeOf(line) : (line && (line.billedErp || line.erp)));
+/** Pieces of a line → NetSuite's quantity of its item (feet for a rod sold by the foot). */
+export const nsQtyOf = (line, pieces) => (line && line.perFoot && N(line.feetPer) > 0) ? Math.round(N(pieces) * N(line.feetPer) * 1000) / 1000 : N(pieces);
+
+/**
+ * WHAT THE ORDER'S BIN SHOULD HOLD IN NETSUITE, against what has been moved there (so.nsBinQty, per NetSuite item):
+ * every piece line's gathered share, as its NetSuite item and quantity. `qty` > 0 is still to move in.
+ * @returns [{ code, want, have, qty, lines: [idx] }]
+ */
+export const nsBinPlanOf = ({ so, isFeeCode = null } = {}) => {
+    const by = new Map();
+    pieceLinesOf(so, isFeeCode).forEach(({ l, idx }) => {
+        const code = nsItemOf(so, l, idx);
+        if (!code) return;
+        const cur = by.get(code) || { code, want: 0, lines: [] };
+        cur.want = Math.round((cur.want + nsQtyOf(l, lineBinShareOf(so, idx, isFeeCode))) * 1000) / 1000;
+        cur.lines.push(idx);
+        by.set(code, cur);
+    });
+    const held = (so && so.nsBinQty) || {};
+    return [...by.values()].map(r => {
+        const have = N(held[r.code]);
+        return { ...r, have, qty: Math.max(0, Math.round((r.want - have) * 1000) / 1000) };
+    });
+};
+
+/** Sources for moving `qty` of an item into the order's bin: its live bins, largest first, never the order's own bin. */
+export const binSourcesOf = (bins = [], qty, toBin = '') => {
+    const from = [];
+    let left = N(qty);
+    [...(bins || [])].filter(b => b && (b.name || b.bin) && N(b.qty) > 0 && U(b.name || b.bin) !== U(toBin))
+        .sort((a, b) => N(b.qty) - N(a.qty))
+        .forEach(b => { if (left <= 0) return; const take = Math.min(left, N(b.qty)); from.push({ bin: b.name || b.bin, qty: Math.round(take * 1000) / 1000 }); left = Math.round((left - take) * 1000) / 1000; });
+    return { from, short: Math.max(0, left) };
+};
+
+/**
+ * ONE DISPLAY OF AN ORDER (Stuart 2026-09-30: "we fulfill one at a time (1/50 logic works) at $0.00 on new sales orders
+ * to the showrooms"): every piece line's quantity ÷ boards, as the pieces the box gets and the NetSuite item and quantity
+ * the showroom's order carries. Refused when a line does not divide evenly or its bin does not hold a display's worth.
+ * @returns { ok, why, lines: [{ idx, code, name, row, pieces, nsCode, nsQty }] }
+ */
+export const displayShareOf = ({ so, boards, isFeeCode = null } = {}) => {
+    const b = Math.floor(N(boards));
+    if (!(b > 0)) return { ok: false, why: 'the order does not say how many displays it is', lines: [] };
+    const lines = [], bad = [];
+    pieceLinesOf(so, isFeeCode).forEach(({ l, idx }) => {
+        const q = N(l.qty), per = q / b;
+        if (!Number.isInteger(per)) { bad.push(`${soLineCodeOf(l)}: ${q} does not divide into ${b} displays`); return; }
+        if (lineBinShareOf(so, idx, isFeeCode) < per) bad.push(`${soLineCodeOf(l)}: the bin holds ${lineBinShareOf(so, idx, isFeeCode)}, a display needs ${per}`);
+        lines.push({ idx, code: soLineCodeOf(l), name: String(l.name || ''), row: String(l.row || ''), pieces: per, nsCode: nsItemOf(so, l, idx), nsQty: nsQtyOf(l, per) });
+    });
+    return { ok: !bad.length, why: bad.join('; '), lines };
+};
