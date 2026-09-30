@@ -391,5 +391,19 @@ eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }]
     eq('…and a kit missing from the library is refused, not guessed', kitFinishEditOf({ so, lineIdx: 29, finishCode: 'EP1', inventory: [], reason: 'x' }).ok, false);
 }
 
+// ── 0 TAKES A PLAIN LINE OFF THE ORDER; a job with no row labels matches the rows 10.5 gave its lines (2026-09-30) ──
+{
+    const { lineQtyEditOf, rereadLinesPatchOf } = await import('../src/components/Shared/displayRelease.js');
+    const so = { id: 'W', lines: [{ erp: 'H1-2RCTAECC', finishCode: 'EP4', toBeFinished: true, finishOutsourced: true, qty: 35, row: 'Row 5' }] };
+    const r = lineQtyEditOf({ so, lineIdx: 0, qty: 0, by: 'stuart', reason: 'the kit carries its collar', now: 4 });
+    eq('the wall\'s separate Row 5 collar: 35 → 0, off the order, in its place', [r.ok, r.lines.length, r.lines[0].qty, r.lines[0].offOrder, r.lines[0].qtyChangedFrom, r.lines[0].qtyChangedReason], [true, 1, 0, true, 35, 'the kit carries its collar']);
+    eq('…and an off-order line is not changed again here', lineQtyEditOf({ so: { ...so, lines: r.lines }, lineIdx: 0, qty: 35, reason: 'x' }).ok, false);
+    // SO60586: a Quick Ship quote's job carries no rows; on 10.5 its five lines sit in Row 1.
+    const qs = { id: 'Q', lines: [{ erp: 'H1-75SR', finishCode: 'P06', toBeFinished: true, qty: 70, row: 'Row 1' }, { erp: 'H1-75SPF', finishCode: 'P06', toBeFinished: true, qty: 70, row: 'Row 1' }] };
+    const bd = [{ legacyErpId: 'H1-75SR', name: 'Square Rod', qty: 70, finishLabel: 'P06' }, { legacyErpId: 'H1-75SPF', name: 'Square Finial', qty: 70, finishLabel: 'P06' }];
+    const p2 = rereadLinesPatchOf({ so: qs, breakdown: bd, inventory: [] });
+    eq('a job with no row labels re-reads onto the lines in their rows — nothing added twice', p2 ? [p2.added.length, p2.lines.length] : 'no patch', [0, 2]);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

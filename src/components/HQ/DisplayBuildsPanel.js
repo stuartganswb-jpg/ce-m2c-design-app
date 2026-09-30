@@ -444,13 +444,13 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             const so = { id: snap.id, ...snap.data() };
             const line = (so.lines || [])[l.lineIdx];
             if (!line) return alert('That line is no longer on the order — reload the build.');
-            const typed = window.prompt(`✎ ${so.soId || so.id} · line ${l.lineIdx + 1} · ${line.erp}${line.row ? ` (${line.row})` : ''}\n\nNew quantity (now ${line.qty}):`, String(line.qty));
+            const typed = window.prompt(`✎ ${so.soId || so.id} · line ${l.lineIdx + 1} · ${line.erp}${line.row ? ` (${line.row})` : ''}\n\nNew quantity (now ${line.qty}) — 0 takes it off the order:`, String(line.qty));
             if (typed === null) return;
             const why = window.prompt('Why? (recorded on the line)', '');
             if (why === null) return;
             const r = lineQtyEditOf({ so, lineIdx: l.lineIdx, qty: Number(String(typed).trim()), by: String(currentUser || '10.5'), reason: why });
             if (!r.ok) return alert(`Not changed — ${r.reason}.`);
-            if (!window.confirm(`Change line ${l.lineIdx + 1} (${line.erp}) from ${r.from} to ${r.to}?\n\n"${String(why).trim()}" is recorded on the line.\n\n⚠ NetSuite: change the same line on the sales order by hand — the app does not send it.`)) return;
+            if (!window.confirm(`Change line ${l.lineIdx + 1} (${line.erp}) from ${r.from} to ${r.to}${r.to === 0 ? ' — OFF THE ORDER' : ''}?\n\n"${String(why).trim()}" is recorded on the line.\n\n⚠ NetSuite: change the same line on the sales order by hand — the app does not send it.`)) return;
             await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: r.lines });
             alert(`✎ ${so.soId || so.id} line ${l.lineIdx + 1}: ${line.erp} ${r.from} → ${r.to}. Change NetSuite to match.`);
             await loadFloor(draft);

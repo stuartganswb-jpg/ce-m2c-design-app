@@ -515,7 +515,11 @@ export const rereadLinesPatchOf = ({ so, breakdown = [], finishes = [], inventor
         // A line CPQ's rules made another item (the stock colour — `identityFrom` names what it was quoted as) is still
         // the quote's line: matched by the code it came from, never re-added.
         const sameItem = (e) => U(e.erp) === U(f.erp) || (!!e.identityFrom && [U(f.billedErp), U(f.erp)].includes(U(e.identityFrom)));
-        const i = lines.findIndex((e, k) => !used.has(k) && sameItem(e) && rowKeyOf(rowOfLine(e)) === rowKeyOf(rowOfLine(f)) && N(e.qty) === N(f.qty));
+        // A CPQ job with NO row labels (a Quick Ship quote anchored to a build — SO60586, 2026-09-30) is laid into rows on
+        // 10.5, so its line matches the same item and quantity in whatever row it was given; compared by row it read as
+        // "dropped" and the re-read added all five a second time.
+        const rf = rowKeyOf(rowOfLine(f));
+        const i = lines.findIndex((e, k) => !used.has(k) && sameItem(e) && (!rf || rowKeyOf(rowOfLine(e)) === rf) && N(e.qty) === N(f.qty));
         if (i < 0) { lines.push(f); used.add(lines.length - 1); added.push({ erp: f.erp, row: f.row, qty: f.qty }); return; }
         used.add(i);
         let changed = false;
@@ -582,14 +586,17 @@ export const lineQtyEditOf = ({ so, lineIdx, qty, by = '', reason = '', now = Da
     const l = lines[lineIdx];
     const n = Number(qty);
     if (!l) return { ok: false, reason: 'no such line on the order' };
-    if (!(Number.isInteger(n) && n > 0)) return { ok: false, reason: 'the quantity must be a whole number above 0' };
+    // 0 TAKES THE LINE OFF THE ORDER (Stuart 2026-09-30, the wall's Row 5: the kit carries its collar, so the import's
+    // separate collar line is a second one) — kept in its place, stamped offOrder (Shared/itemKit.isOffOrderLine).
+    if (!(Number.isInteger(n) && n >= 0)) return { ok: false, reason: 'the quantity must be a whole number — 0 takes the line off the order' };
+    if (isOffOrderLine(l)) return { ok: false, reason: 'the line is off the order — put it back on the quote' };
     if (n === Number(l.qty)) return { ok: false, reason: 'the quantity is unchanged' };
     if (!String(reason || '').trim()) return { ok: false, reason: 'say why — it is recorded on the line' };
     if (isKitLine(l) || l.inKit) return { ok: false, reason: 'a kit and its parts change together — change the kit on the quote' };
     if (so.oeGen && so.oeGen[lineIdx]) return { ok: false, reason: 'work has already been raised for this line — undo the row start first' };
     if (committedQtyOf(so, soLineCodeOf(l)) > 0) return { ok: false, reason: `${soLineCodeOf(l)} is already gathered into the order — release it at SO Pack first` };
     const from = Number(l.qty) || 0;
-    const next = lines.map((x, i) => (i === lineIdx ? { ...x, qty: n, qtyChangedFrom: from, qtyChangedBy: by, qtyChangedAt: now, qtyChangedReason: String(reason).trim() } : x));
+    const next = lines.map((x, i) => (i === lineIdx ? { ...x, qty: n, qtyChangedFrom: from, qtyChangedBy: by, qtyChangedAt: now, qtyChangedReason: String(reason).trim(), ...(n === 0 ? { offOrder: true } : {}) } : x));
     return { ok: true, lines: next, from, to: n };
 };
 
