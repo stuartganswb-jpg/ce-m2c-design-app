@@ -20,6 +20,7 @@ import { renderHiddenLine } from './hiddenLine';
 import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from './specSheetPage';
 import { rodForArm, visibleNodesForRow } from './specSheetRows';
 import { specPages, auditPages } from './specSheetPages';
+import { composeTraverseSheet } from './specSheetTraverseDraw';
 import { choicesFromAssembly } from '../Shared/hardwareAdapter';
 import { resolve as resolveHardware, parseProjTiers, companionsFor } from '../Shared/hardwareModel';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
@@ -464,6 +465,23 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const built = specPages({ choices: engineChoices });
     const pageList = [];
     for (const p of built) {
+      // ── TRAVERSE SHEETS (2026-09-29): drawn whole by specSheetTraverseDraw from the engine's own
+      // settle — they carry no plate family or row, so they skip the row machinery below. Every part a
+      // sheet draws rides along as itemPins, so Flow Stock's focus finds tracks, carriers and ends too.
+      if (p.kind === 'TRAVERSE' || p.kind === 'TRAVERSE_ENDS') {
+        const lead = p.kind === 'TRAVERSE' && p.subject ? pinForChoice(p.subject) : null;
+        const drawnChoices = (p.drawings || []).flatMap(d => [
+          ...Object.values(d.groups || {}).flatMap(g => g.choices || []), ...(d.rings || []).map(r => r.choice), ...(d.end ? [d.end] : []),
+        ]);
+        const itemPins = [...new Map(drawnChoices.map(c => [c.id, c])).values()].map(c => ({ choice: c, pin: pinForChoice(c) })).filter(x => x.pin);
+        const heads = [...new Set((p.drawings || []).map(d => pinForChoice(d.kind === 'RETURN' ? d.end : d.bracket)?.partName).filter(Boolean))];
+        pageList.push({
+          key: p.key, kind: p.kind, traverse: p, answers: p.answers, bracketPin: lead, itemPins,
+          title: `${p.kind === 'TRAVERSE_ENDS' ? '⇥ Track ends — manual & motorized' : heads.join(' + ')}${p.label && p.kind === 'TRAVERSE' ? ` · ${p.label}` : ''}`,
+          family: p.label, isTraverse: true,
+        });
+        continue;
+      }
       if (p.kind === 'CATALOG') {
         // The CHOICE rides along with its pin: the collar pairing (requiresCollar) is a fact on
         // the choice, and the catalog needs it to draw a two-part acrylic finial whole.
@@ -593,6 +611,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   const NARROW = [
     { key: 'rodKind', label: 'Rod' },
     { key: 'setup', label: 'Setup' },
+    { key: 'frontLayer', label: 'Front' },
     { key: 'drive', label: 'Drive' },
     { key: 'mount', label: 'Mount' },
     { key: 'proj', label: 'Projection', fmt: (v) => `${v}"` },
@@ -648,7 +667,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // A WIDE page is one that stands up two rods (a double) — its section is the projection deep,
   // so landscape is its natural orientation. Everything else prints portrait. The same rule keys
   // the bulk print/PDF below, so what you see per page is what the binder set contains.
-  const paperFor = useCallback((page) => ((((page?.rodNodes || []).length > 1) || page?.projTiers) ? 'letter' : 'letterP'), []);
+  const paperFor = useCallback((page) => ((page?.kind === 'TRAVERSE' || page?.kind === 'TRAVERSE_ENDS' || ((page?.rodNodes || []).length > 1) || page?.projTiers) ? 'letter' : 'letterP'), []);
   const curPage = shownPages[Math.min(pageIndex, Math.max(0, shownPages.length - 1))] || null;
   const layoutPaper = paperMode === 'P' ? 'letterP' : paperMode === 'L' ? 'letter' : paperFor(curPage);
   useEffect(() => { setPaperMode('auto'); }, [pageIndex]);
@@ -1567,6 +1586,18 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     footerNote: reducedNote,
   }), [buildWallMounts, layoutPaper, reducedNote, baseAssembly?.itemName, baseAssembly?.itemId]);
 
+  // A traverse sheet names each part the way every other sheet does: its code, in the chosen edition.
+  const composeTraversePage = useCallback((page) => composeTraverseSheet({
+    page: page.traverse,
+    scene: sceneRef.current,
+    title: baseAssembly?.itemName || baseAssembly?.itemId || '',
+    toInches: M2IN,   // the scene is metres here (see UNIT AUTO-NORMALIZE)
+    nameOf: (c) => {
+      const code = pinForChoice(c)?.partName || c?.partId || '';
+      return edition === 'FAB' ? (fabCodeFor(code) || code) : edition === 'CUST' ? (custCodeFor(code) || code) : code;
+    },
+  }), [pinForChoice, edition, fabCodeFor, custCodeFor, baseAssembly?.itemName, baseAssembly?.itemId]);
+
   // ---- compose current page ----
   useEffect(() => {
     if (!shownPages.length || error) return;
@@ -1576,6 +1607,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       try {
         if (page.kind === 'WALLMOUNTS') { setPageData(composeWallMountsPage()); setStatus(''); return; }
         if (page.kind === 'CATALOG') { setPageData(composeCatalogPage(page)); setStatus(''); return; }
+        if (page.kind === 'TRAVERSE' || page.kind === 'TRAVERSE_ENDS') { setPageData(composeTraversePage(page)); setStatus(''); return; }
         const built = builtRowsFor(page);
         // GEOMETRY vs CELL (playbook 4.2, warn-only): the measured pole Ø / projection must agree
         // with what the selected dia×proj cell CLAIMS (sizeMatrix inches). The sheet still renders
@@ -1618,7 +1650,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, custCodeFor, editionLabel, editionRows, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
+  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, custCodeFor, editionLabel, editionRows, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, composeTraversePage, baseAssembly]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; finialsRef.current = null; }, [wallCfg, side]);
@@ -1681,6 +1713,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     try {
     if (page.kind === 'WALLMOUNTS') return { svg: composeWallMountsPage('letterP').svg, paper: 'letterP' };
     if (page.kind === 'CATALOG') return { svg: composeCatalogPage(page, 'letterP').svg, paper: 'letterP' };
+    if (page.kind === 'TRAVERSE' || page.kind === 'TRAVERSE_ENDS') return { svg: composeTraversePage(page).svg, paper: 'letter' };
     const built = builtRowsFor(page);
     const rows = editionRows(built.rows, page.bracketPin.partName);
     const titleCode = (page.combo || [page])

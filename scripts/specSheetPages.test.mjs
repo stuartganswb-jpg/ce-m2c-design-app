@@ -56,7 +56,8 @@ const CHOICES = [
 ];
 
 const pages = specPages({ choices: CHOICES });
-const drawings = pages.filter(p => p.kind !== 'CATALOG');
+// The track-ends sheet draws no bracket, so it is not one of the per-arm drawings (2026-09-29).
+const drawings = pages.filter(p => p.kind !== 'CATALOG' && p.kind !== 'TRAVERSE_ENDS');
 const of = (partId, proj, fam) => drawings.find(p =>
     p.subject?.partId === partId && (proj === undefined || p.answers.proj === proj)
     && (fam === undefined || p.plateFamily === fam));
@@ -126,7 +127,9 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     // Stuart 2026-08-23b: "on the traverse poles remove the rings, only show the carriers" —
     // even a ring tagged for both worlds stays off a track's page; carriers do that job there.
     eq('a track carries no rings — carriers do that job', ringIds(trv), []);
-    ok('and the carriers ride with it', (trv.riders || []).some(r => r.partId === 'H1-2TRVC'));
+    // A traverse leaf with a track is drawn by specSheetTraverse (2026-09-29): the carriers are drawn on
+    // the drawing itself — they ride its track exactly as the configurator puts them there.
+    ok('and the carriers ride with it', (trv.drawings || []).some(d => (d.groups?.CARRIER?.choices || []).some(c => c.partId === 'H1-2TRVC')));
     ok('the traverse page knows it is one', trv.isTraverse === true);
 }
 
@@ -203,11 +206,18 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     ok('a basic arm carrying plates is caught',
         auditPages(basicWithPlate, CHOICES).some(v => /one piece/.test(v.why)));
 
-    // rings hung on a track
-    const trv = drawings.find(p => p.isTraverse);
-    const ringsOnTrack = [{ ...trv, rings: [{ id: 'RING-BR', partId: 'H1-138BR' }] }];
+    // rings hung on a track — the rule for a page whose rod IS a track (a traverse world with no
+    // separate track keeps that page)…
+    const solidOne = drawings.find(p => p.answers.rodKind === 'SOLID');
+    const ringsOnTrack = [{ ...solidOne, rod: { id: 'TRK', partId: 'H1-2TRV', role: 'TRACK' }, plates: [], rings: [{ id: 'RING-BR', partId: 'H1-138BR' }] }];
     ok('rings hung on a track are caught',
         auditPages(ringsOnTrack, CHOICES).some(v => /carriers/.test(v.why)));
+    // …and on a traverse drawing whose front is a track, not the stationary rod (2026-09-29)
+    const trv = drawings.find(p => p.kind === 'TRAVERSE');
+    const d0 = trv.drawings[0];
+    const ringsOnTrv = [{ ...trv, drawings: [{ ...d0, rings: [{ choice: { id: 'RING-BR', partId: 'H1-138BR' }, nodes: [] }] }] }];
+    ok('rings on a traverse drawing with a track front are caught',
+        auditPages(ringsOnTrv, CHOICES).some(v => /stationary rod/.test(v.why)));
 
     // and the violation names the page and the part, or it is not actionable
     const v = auditPages(wrongPool, CHOICES)[0];
@@ -223,7 +233,7 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     const REAL = CHOICES.map((c, i) => (c.role === 'BACKPLATE'
         ? { ...c, name: c.partId, partId: `CE-INV-${1000 + i}` }
         : c));
-    const rp = specPages({ choices: REAL }).filter(p => p.kind !== 'CATALOG');
+    const rp = specPages({ choices: REAL }).filter(p => p.kind !== 'CATALOG' && p.kind !== 'TRAVERSE_ENDS');
     const ds = rp.filter(p => p.subject.partId === 'H1-138DS' && p.answers.proj === 3.625);
     eq('doc-id pins still make exactly two plate families', ds.length, 2);
     eq('and the family is named by the CODE, not the id', ds[0].plateFamily, 'H1-138BP');

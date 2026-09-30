@@ -32,6 +32,7 @@
 
 import { resolve, slots, activeAxes, ridersFor, judge, AXES, ROD_ROLES } from '../Shared/hardwareModel.js';
 import { armsOf, platesForArm, rodForArm, backRodForArm } from './specSheetRows.js';
+import { isTrackLeaf, traverseSheets, auditTraverse } from './specSheetTraverse.js';
 
 const U = (v) => String(v ?? '').trim().toUpperCase();
 
@@ -214,6 +215,11 @@ export function specPages({ choices, answers = {} }) {
     // world and per bracket family, so the per-leaf catalogs listed the same parts again and
     // again. They are unioned by part across every leaf and printed once, at the end.
     const catFinials = new Map();
+    // ── A TRAVERSE BAY THAT CARRIES A TRACK IS ITS OWN DRAWING (Stuart 2026-09-29) ─────────────
+    // Those leaves are collected here and drawn by specSheetTraverse (fascia or rod, tracks, carriers,
+    // ends — two per sheet). Only their bracket pages move there: inside mounts and the finial catalog
+    // are gathered for every leaf exactly as before, and every other leaf keeps the page it had.
+    const traverseLeaves = [];
     // ⚠ THE WALK NEEDS NORMALIZED CHOICES, AND ONLY ONCE. `admits` reads `fits`, which
     // `applyFitsDefaults` puts there — raw pins have none, so walking them throws. resolve() does
     // that normalization, so the walk is handed its output; the RAW list still goes to every
@@ -229,7 +235,9 @@ export function specPages({ choices, answers = {} }) {
         // handed the SOLID rod, which then dressed it with rings a track cannot take. Judging the
         // pool first is the same gate the configurator applies before it offers anything.
         const offered = { choices: judge(norm, leaf).in };
-        for (const { choice: subject, kind } of subjectsOf(model)) {
+        const trackLeaf = isTrackLeaf(model, leaf);
+        if (trackLeaf) traverseLeaves.push(leaf);
+        for (const { choice: subject, kind } of (trackLeaf ? [] : subjectsOf(model))) {
             // ── A RETURN MEETS THE WALL (Stuart 2026-08-23b) ────────────────────────────────
             // The ceiling leaf offered the returns too (an END option votes on no mount), so
             // every return got a SECOND page whose plates deduped to the CEILING pins — which is
@@ -371,6 +379,7 @@ export function specPages({ choices, answers = {} }) {
         // strip was the widest thing on the metal page, and the whole grid shrank to hold it.
         cat.finials.forEach(f => { const k = U(f.partId || f.id); if (k && !catFinials.has(k)) catFinials.set(k, f); });
     }
+    if (traverseLeaves.length) pages.push(...traverseSheets({ choices, leaves: traverseLeaves }));
     // ── ONE CATALOG PAGE PER MATERIAL (Stuart 2026-08-23b) ───────────────────────────────────
     // "finials are all overlapping, put metal on one page, wood on one page and acrylic all on
     //  one page, probably fit that way at 1:1." The bucket is the TAG: no-finish/clear parts are
@@ -473,5 +482,7 @@ export function auditPages(pages, choices) {
             say(page, page.rings[0], 'a track carries its drapery on carriers — a ring cannot ride it');
         }
     }
+    // 4 · the traverse sheets' own unconditional rules (specSheetTraverse)
+    out.push(...auditTraverse(pages, admissible));
     return out;
 }
