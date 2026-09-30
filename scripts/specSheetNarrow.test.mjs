@@ -15,7 +15,7 @@ import { specPages } from '../src/components/SpecSheet/specSheetPages.js';
 import { ASSEMBLY, PINS } from './specSheetTraverse.fixture.mjs';
 
 const N = await import(process.env.SPECNARROW_MODULE || new URL('../src/components/SpecSheet/specSheetNarrow.js', import.meta.url).href);
-const { NARROW, narrowPages, pageFacts, traverseFacts } = N;
+const { NARROW, narrowPages, pageFacts, traverseFacts, traverseNameParts, sheetName, sheetLabels, armOptions } = N;
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => {
@@ -113,6 +113,58 @@ const H75 = [
 eq('H1-75: setup first (no rod question), then mount for doubles, projection for singles',
     [asked(H75, {}), asked(H75, { setup: 'DOUBLE' }), asked(H75, { setup: 'SINGLE' })],
     [['setup', '__arm'], ['setup', 'mount', '__arm'], ['setup', 'proj', '__arm']]);
+
+// ── THE SHEET DROPDOWN'S NAMES, IN THE EDITION (Stuart 2026-09-30) ───────────────────────────
+{
+    const CODE = { 'CE-ASM-64480': 'H1-2TRV-WB', 'CE-ASM-64482': 'H1-2TRV-EWB', 'CE-ASM-64484': 'H1-2TRV-6WB', 'CE-ASM-64486': 'H1-2TRV-DWB', 'CE-ASM-64669': 'H1-2TRV-DRTWB',
+        'CE-ASM-64472': 'H1-2TRVSRA', 'CE-ASM-64474': 'H1-2TRVERA', 'CE-ASM-64476': 'H1-2TRV6RA', 'CE-ASM-64478': 'H1-2TRVDRA' };
+    const armOf = (d) => { const c = d.kind === 'RETURN' ? d.end : d.bracket; return CODE[c?.partId] || c?.partId; };
+    const sheets = specPages({ choices: choicesFromAssembly(ASSEMBLY, PINS) }).filter(p => p.kind === 'TRAVERSE')
+        .map(p => ({ key: p.key, title: 'old', nameParts: traverseNameParts(p.drawings, armOf) }));
+    eq('every traverse sheet names each drawing with its own set-up', sheets.map(p => sheetName(p)), [
+        'H1-2TRV-WB (single · wall · 3.625") + H1-2TRV-EWB (single · wall · 4.625")',
+        'H1-2TRV-6WB (single · wall · 6") + H1-2TRV-DWB (double · track front · wall)',
+        'H1-2TRV-DRTWB (double · rod front · wall)',
+        'H1-2TRV-CB (single · ceiling) + H1-2TRV-CB (double · track front · ceiling)',
+        'H1-2TRV-CB (double · rod front · ceiling)',
+        'H1-2TRVSRA (single · wall · 3.625") + H1-2TRVERA (single · wall · 4.625")',
+        'H1-2TRV6RA (single · wall · 6") + H1-2TRVDRA (double · track front · wall)',
+        'H1-2TRVMTR (single · wall · 3.625") + H1-2TRVMTR (single · wall · 4.625")',
+        'H1-2TRVMTR (single · wall · 6") + H1-2TRVMTR (double · track front · wall)',
+    ]);
+    eq('no two traverse sheets share a name', new Set(sheets.map(p => sheetName(p))).size, sheets.length);
+
+    // Fabricut numbers as read off the live Fabricut edition 2026-09-30; a code with none → ours stands here
+    // (the screen's own resolver falls back to the description, as the printed sheet does).
+    const FAB = { 'H1-2TRV-WB': 'H3642F', 'H1-2TRV-6WB': 'H3644F', 'H1-2TRVSRA': 'H3634F', 'H1-2RCTSPA': 'H3619F', 'H1-138BP': 'NOT-A-PART' };
+    const fab = (c) => FAB[c] || null;
+    eq('Fabricut: each drawing\'s code is spoken as Fabricut, the set-up words stay', sheetName(sheets[1], fab),
+        'H3644F (single · wall · 6") + H1-2TRV-DWB (double · track front · wall)');
+    const solidSheet = { key: 'S', title: 'H1-2RCTSPA + H1-138BP · SOLID · 3.625" · sheet 1/2', nameParts: { codes: ['H1-2RCTSPA'], tail: ' + H1-138BP · SOLID · 3.625" · sheet 1/2' } };
+    eq('H1: a solid sheet reads exactly as it always did', sheetName(solidSheet), solidSheet.title);
+    eq('Fabricut: the arm is translated, the plate family (not a part) is not', sheetName(solidSheet, fab), 'H3619F + H1-138BP · SOLID · 3.625" · sheet 1/2');
+    const twoBasics = { key: 'B', nameParts: { codes: ['H1-2TRV-WB', 'H1-2TRV-6WB'], tail: ' · basics, 2 per sheet' } };
+    eq('Fabricut: both arms of a two-basics sheet', sheetName(twoBasics, fab), 'H3642F + H3644F · basics, 2 per sheet');
+    eq('a sheet with no codes (catalog, wall mounts, track ends) keeps its title', sheetName({ title: '⊞ Wall mounts (1:1)' }, fab), '⊞ Wall mounts (1:1)');
+
+    // Two parts the edition speaks alike (no Fabricut number, one shared description) never make two identical lines.
+    const DESC = (c) => ({ 'H1-A': 'Round Backplate', 'H1-B': 'Round Backplate', 'H1-C': 'H9999F' }[c] || null);
+    const alike = [{ key: 'a', nameParts: { codes: ['H1-A'], tail: ' · SOLID' } }, { key: 'b', nameParts: { codes: ['H1-B'], tail: ' · SOLID' } }, { key: 'c', nameParts: { codes: ['H1-C'], tail: ' · SOLID' } }];
+    eq('Fabricut: alike lines carry our code, the rest read clean', sheetLabels(alike, DESC, 'FAB'),
+        ['Round Backplate · SOLID (H1-A)', 'Round Backplate · SOLID (H1-B)', 'H9999F · SOLID']);
+    eq('H1: the dropdown is spoken exactly as built', sheetLabels(alike, (c) => c, 'H1'), ['H1-A · SOLID', 'H1-B · SOLID', 'H1-C · SOLID']);
+    const twins = [{ key: 't1', nameParts: { codes: ['H1-A'], tail: ' · SOLID' } }, { key: 't2', nameParts: { codes: ['H1-A'], tail: ' · SOLID' } }];
+    eq('H1: nothing is added, even to two lines that read alike (the names as they always were)', sheetLabels(twins, (c) => c, 'H1'), ['H1-A · SOLID', 'H1-A · SOLID']);
+
+    eq('Bracket arm, H1: today\'s list, today\'s order', armOptions(['H1-2RCTSPA', 'H1-2TRV-6WB', 'H1-2TRV-WB'], (c) => c, 'H1'),
+        [{ value: 'H1-2RCTSPA', label: 'H1-2RCTSPA' }, { value: 'H1-2TRV-6WB', label: 'H1-2TRV-6WB' }, { value: 'H1-2TRV-WB', label: 'H1-2TRV-WB' }]);
+    eq('Bracket arm, Fabricut: reads the Fabricut code, sorted as it reads, the value stays ours', armOptions(['H1-2RCTSPA', 'H1-2TRV-6WB', 'H1-2TRV-WB', 'H1-2TRV-DWB'], fab, 'FAB'),
+        [{ value: 'H1-2TRV-DWB', label: 'H1-2TRV-DWB' }, { value: 'H1-2RCTSPA', label: 'H3619F' }, { value: 'H1-2TRV-WB', label: 'H3642F' }, { value: 'H1-2TRV-6WB', label: 'H3644F' }]);
+    eq('Bracket arm, Fabricut: two alike arms are told apart', armOptions(['H1-A', 'H1-B'], DESC, 'FAB').map(o => o.label), ['Round Backplate (H1-A)', 'Round Backplate (H1-B)']);
+    // A pick made in one edition still finds its sheets in another — the pickers only ever see our codes.
+    const both = [{ key: 'x', facts: pageFacts({}, 'H1-2TRV-6WB') }, { key: 'y', facts: pageFacts({}, 'H1-2TRV-WB') }];
+    eq('a Bracket arm pick is our code, whatever the edition shows', keysOf(both, { __arm: armOptions(['H1-2TRV-6WB', 'H1-2TRV-WB'], fab, 'FAB').find(o => o.label === 'H3644F').value }), ['x']);
+}
 
 // ── EVERY PATH: every sheet reachable, and nothing asked of a sheet that never had the question ─
 function walk(pages) {

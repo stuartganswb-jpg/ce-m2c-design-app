@@ -21,7 +21,7 @@ import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from '.
 import { rodForArm, visibleNodesForRow } from './specSheetRows';
 import { specPages, auditPages } from './specSheetPages';
 import { composeTraverseSheet } from './specSheetTraverseDraw';
-import { NARROW, narrowPages, pageFacts, traverseFacts } from './specSheetNarrow';
+import { NARROW, narrowPages, pageFacts, traverseFacts, traverseNameParts, sheetName, sheetLabels, armOptions } from './specSheetNarrow';
 import { choicesFromAssembly } from '../Shared/hardwareAdapter';
 import { resolve as resolveHardware, parseProjTiers, companionsFor } from '../Shared/hardwareModel';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
@@ -476,11 +476,13 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         ]);
         const itemPins = [...new Map(drawnChoices.map(c => [c.id, c])).values()].map(c => ({ choice: c, pin: pinForChoice(c) })).filter(x => x.pin);
         const armOf = (d) => pinForChoice(d.kind === 'RETURN' ? d.end : d.bracket)?.partName;
-        const heads = [...new Set((p.drawings || []).map(armOf).filter(Boolean))];
+        // Named per drawing, each with its own set-up, in the sheet's edition (see sheetName).
+        const nameParts = p.kind === 'TRAVERSE' ? traverseNameParts(p.drawings, armOf) : null;
         pageList.push({
           key: p.key, kind: p.kind, traverse: p, answers: p.answers, bracketPin: lead, itemPins,
           facts: traverseFacts(p.drawings, armOf),   // each drawing answers the pickers for itself
-          title: `${p.kind === 'TRAVERSE_ENDS' ? '⇥ Track ends — manual & motorized' : heads.join(' + ')}${p.label && p.kind === 'TRAVERSE' ? ` · ${p.label}` : ''}`,
+          nameParts,
+          title: nameParts ? sheetName({ nameParts }) : '⇥ Track ends — manual & motorized',
           family: p.label, isTraverse: true,
         });
         continue;
@@ -500,11 +502,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const familyPins = (p.plates || []).map(pinForChoice).filter(Boolean);
       const ringPins = (p.rings || []).map(pinForChoice).filter(Boolean);
       const riderPins = (p.riders || []).map(pinForChoice).filter(Boolean);
+      // The arm's code follows the edition in the dropdown; the words around it (plate family, leaf) stay.
+      const nameParts = { codes: [bracketPin.partName], tail: `${p.plateFamily ? ` + ${p.plateFamily}` : ''}${p.label ? ` · ${p.label}` : ''}${p.part ? ` · sheet ${p.part}` : ''}${p.plates.length ? '' : ' (draws alone)'}` };
       pageList.push({
         key: p.key,
         kind: p.kind,
         facts: pageFacts(p.answers, bracketPin.partName),   // its CPQ leaf, for the pickers (2026-09-30)
-        title: `${bracketPin.partName}${p.plateFamily ? ` + ${p.plateFamily}` : ''}${p.label ? ` · ${p.label}` : ''}${p.part ? ` · sheet ${p.part}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
+        nameParts,
+        title: sheetName({ nameParts }),
         bracketPin, familyPins, ringPins, riderPins, plateFamily: p.plateFamily || '',
         // Every pole this configuration stands up, each taken on the drawn side — one on a
         // single, front and back on a double.
@@ -568,6 +573,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
             ...a,
             key: `${a.key}+${b.key}`,
             title: `${a.bracketPin.partName} + ${b.bracketPin.partName} · basics, 2 per sheet`,
+            nameParts: { codes: [a.bracketPin.partName, b.bracketPin.partName], tail: ' · basics, 2 per sheet' },
             combo: [a, b],
             facts: [...(a.facts || []), ...(b.facts || [])],   // either arm answers the pickers
           });
@@ -1772,11 +1778,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
               })}
               style={{ padding: '5px', fontSize: '0.8rem', maxWidth: '170px' }}>
               <option value="">{ax.label}: all</option>
-              {ax.values.map(v => <option key={String(v)} value={String(v)}>{ax.fmt ? ax.fmt(v) : String(v)}</option>)}
+              {ax.key === '__arm'
+                ? armOptions(ax.values, rowCode, edition).map(o => <option key={o.value} value={o.value}>{o.label}</option>)
+                : ax.values.map(v => <option key={String(v)} value={String(v)}>{ax.fmt ? ax.fmt(v) : String(v)}</option>)}
             </select>
           ))}
+          {/* Names follow the edition buttons (Stuart 2026-09-30) — the codes as the sheet prints them. */}
           <select value={pageIndex} onChange={e => setPageIndex(+e.target.value)} style={{ padding: '5px', fontSize: '0.8rem', maxWidth: '360px' }}>
-            {shownPages.map((p, i) => <option key={p.key} value={i}>{p.title}</option>)}
+            {sheetLabels(shownPages, rowCode, edition).map((label, i) => <option key={shownPages[i].key} value={i}>{label}</option>)}
           </select>
           <span style={{ fontSize: '0.72rem', color: '#666' }}>{shownPages.length} of {pages.length} sheets</span>
           {focus && pages.length > 0 && (focusOn
