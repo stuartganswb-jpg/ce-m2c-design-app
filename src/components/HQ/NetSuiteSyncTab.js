@@ -10,6 +10,7 @@ import { handlingForErp, finishSuffixOf, isOutsourcedErp, millBaseOf } from "../
 import { usablePin, pinErpOf, isAssemblyPart } from "../Shared/finishedGoodsRun";
 import { woItemCodeOf } from "../Shared/workOrderContract";
 import { SOURCING, sourcingOf } from "../Shared/sourcing";
+import { guardImportSpecs, diffRecordOf } from "../Shared/nsImportGuard";
 
 // ONE copy now — Shared/brandNetsuite.js (2026-08-25).
 
@@ -53,15 +54,17 @@ const healOutboxPayload = (o) => {
 // PUSH = "write the app's value onto the NetSuite item".
 const PULL_FIELDS = [
     { key: 'cost', label: 'Base Cost' },
-    { key: 'basePrice', label: 'Base Price (custitem9)' },
+    // 🔒 APP-OWNED (Stuart 2026-09-30, Shared/nsImportGuard): NetSuite fills these only where the app has none; a
+    // NetSuite value that differs is listed in 4.5 → "NetSuite differs" to take or keep — never written here.
+    { key: 'basePrice', label: 'Base Price (custitem9)', locked: true },
     { key: 'weight', label: 'Weight' },
     { key: 'isInHouse', label: 'In-House · custitem26' },
     { key: 'isStocked', label: 'Stocked · custitem27' },
     { key: 'isRetired', label: 'Old / retired · custitem28' },
     { key: 'sourcingMode', label: 'Sourced BOTH ways · custitem_sourcing_both' },
-    { key: 'outsourceAction', label: 'Outsource action' },
-    { key: 'partHandling', label: 'Part handling' },
-    { key: 'uom', label: 'UOM' },
+    { key: 'outsourceAction', label: 'Outsource action', locked: true },
+    { key: 'partHandling', label: 'Part handling', locked: true },
+    { key: 'uom', label: 'UOM', locked: true },
     { key: 'bomRevision', label: 'BOM revision' },
     { key: 'binLocation', label: 'Bin location' },
     { key: 'vendorName', label: 'Vendor name' },
@@ -977,6 +980,13 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             let successCount = 0;
             let stockedCount = 0, inHouseCount = 0, oldCount = 0, tempCount = 0;
             let prunedPins = 0; const prunedDetail = [];   // BOM lines NetSuite no longer has
+            // 🔒 THE SALES SIDE IS THE APP'S (Stuart 2026-09-30, Shared/nsImportGuard). On an item the app already has,
+            // price, unit, category, part handling and outsource action keep the app's value; where NetSuite's real
+            // value differs (price, unit, category) it is recorded for 4.5 → "NetSuite differs" — never written.
+            const priorDiffs = {};
+            try { (await getDocs(collection(db, 'system', 'ns_import_diffs', 'items'))).forEach(d => { priorDiffs[d.id] = d.data(); }); }
+            catch (e) { addLog(`⚠ Could not read the NetSuite differences list (${e.message || e}) — this run still records its own.`, 'warn'); }
+            let diffItems = 0, diffFields = 0;
 
             // 2. Process and Push to Firebase
             for (const item of records) {
@@ -1199,11 +1209,22 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     // 🎚 PER-FIELD DIRECTION CONTROL: drop any field the operator unchecked on the
                     // pull card, so the app's curated value survives this import untouched. Only
                     // EXISTING items are protected — a first import has nothing to overwrite.
+                    const guarded = guardImportSpecs(existingSpecs, newSpecs, { nsProductType: item.product_type || '' });
                     const allowedSpecs = {};
-                    Object.entries(newSpecs).forEach(([k, v]) => {
+                    Object.entries(guarded.specs).forEach(([k, v]) => {
                         const gate = NS_MIRROR_KEYS.includes(k) ? 'nsMirror' : k;
                         if (pullFlags[gate] !== false) allowedSpecs[k] = v;
                     });
+                    const diffRec = diffRecordOf({ docId, code: item.itemid || '', name: existingAppRecord.itemName || item.displayname || '', differences: guarded.differences, prior: priorDiffs[docId] || null });
+                    try {
+                        if (diffRec) {
+                            await setDoc(doc(db, 'system', 'ns_import_diffs', 'items', docId), diffRec);
+                            const n = Object.keys(diffRec.fields).length;
+                            if (n) { diffItems++; diffFields += n; }
+                        } else if (priorDiffs[docId]) {
+                            await deleteDoc(doc(db, 'system', 'ns_import_diffs', 'items', docId));
+                        }
+                    } catch (e) { addLog(`⚠ ${item.itemid}: could not record its NetSuite differences (${e.message || e}).`, 'warn'); }
                     // An EXPLICIT stream chosen in the app is a deliberate exception (the elbow,
                     // the bent returns — small parts finished like poles) and outranks anything
                     // derived from the category. The sync only fills the blank.
@@ -1296,6 +1317,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             }
 
             addLog(`✅ Successfully synced and mapped ${successCount} library items. App structure preserved.`, 'success');
+            if (diffItems > 0) addLog(`🔒 ${diffItems} item(s) differ from NetSuite on ${diffFields} sales field(s) — price, unit or category. Nothing was changed on them: take or keep each in 4.5 → "NetSuite differs".`, 'warn');
             if (prunedPins > 0) {
                 addLog(`🧹 Removed ${prunedPins} BOM line(s) NetSuite no longer carries: ${prunedDetail.slice(0, 12).join(' · ')}${prunedDetail.length > 12 ? ` …+${prunedDetail.length - 12} more` : ''}. Hand-added lines were left untouched.`, 'success');
             }
@@ -1768,7 +1790,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                             note="Ticked = NetSuite wins on items the app already has. Un-tick a field to freeze the app's value through this import. New items always take everything — there's nothing to overwrite on a first import. Item name, category and routing type are always app-master."
                             fields={PULL_FIELDS} flags={pullFlags} disabled={isSyncing}
                             onToggle={(k, v) => saveSyncFlags({ ...pullFlags, [k]: v }, pushFlags)}
-                            onAll={(v) => saveSyncFlags(PULL_FIELDS.reduce((a, f) => ({ ...a, [f.key]: v }), {}), pushFlags)}
+                            onAll={(v) => saveSyncFlags(PULL_FIELDS.filter(f => !f.locked).reduce((a, f) => ({ ...a, [f.key]: v }), { ...pullFlags }), pushFlags)}
                         />
                         <div style={{ borderTop: '1px dashed var(--line)', margin: '6px 0', paddingTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)' }}>App → NetSuite (write-back)</div>
                         <SyncButton onClick={handlePushItemsToNetSuite} disabled={isSyncing} label="⬆ Push Items → NetSuite (App is master)" sub="REST PATCH: writes the ticked fields onto matched NetSuite items (by Internal ID). Tolerant — record-type + field-drop retries; one row can't halt the run. The custitem flags are counted against NetSuite's current values and shown before anything is written." />
@@ -1820,7 +1842,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 // Per-field direction control sitting directly under the button it governs, so what a sync will
 // overwrite is readable before you press it rather than discovered afterwards. A flag with a
 // custitem number is a NetSuite checkbox field; the rest are plain values.
-const FieldFlags = ({ title, note, fields, flags, onToggle, onAll, disabled }) => {
+const FieldFlags = ({ title, note, fields: allFields, flags, onToggle, onAll, disabled }) => {
+    // 🔒 A locked field is not the operator's to switch on (Shared/nsImportGuard) — shown, never ticked.
+    const locked = allFields.filter(f => f.locked);
+    const fields = allFields.filter(f => !f.locked);
     const on = fields.filter(f => flags[f.key]).length;
     return (
         <div style={{ border: '1px solid var(--line)', borderTop: 'none', background: 'var(--paper-2)', padding: '14px 18px', marginTop: '-12px' }}>
@@ -1837,6 +1862,12 @@ const FieldFlags = ({ title, note, fields, flags, onToggle, onAll, disabled }) =
                         <input type="checkbox" checked={!!flags[f.key]} disabled={disabled} onChange={e => onToggle(f.key, e.target.checked)} style={{ cursor: disabled ? 'wait' : 'pointer', flexShrink: 0 }} />
                         <span style={{ borderBottom: f.flag ? '1px dotted var(--brass)' : 'none' }}>{f.label}</span>
                     </label>
+                ))}
+                {locked.map(f => (
+                    <span key={f.key} title="App-owned — NetSuite fills it only where the app has none; a different NetSuite value is listed in 4.5 → NetSuite differs, to take or keep" style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
+                        <span style={{ width: '13px', textAlign: 'center', flexShrink: 0 }}>🔒</span>
+                        <span>{f.label} — app-owned</span>
+                    </span>
                 ))}
             </div>
             <div style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: '0.82rem', color: 'var(--ink-soft)', marginTop: '10px', lineHeight: 1.5 }}>{note}</div>

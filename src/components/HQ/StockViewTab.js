@@ -24,7 +24,7 @@ import { splitFinish, siblingsQuery, oneItemQuery, activeItemOf, shapeSources, v
 import { raisePaintRun, repaintWoId } from '../Shared/repaintRun';
 import { askRunHandling, runHandlingLabel } from '../Shared/RunHandlingPrompt';
 import { runBatchPrecheck } from '../Shared/finishedRunPrecheck';
-import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
+import { isOutsourcedFinishCode, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
@@ -32,7 +32,6 @@ import { holdSplitGroups } from '../Shared/rowPairShape';
 import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf, oeLinePlansOf, oeStartsLine } from '../Shared/oeGenerate';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import { runChunked, fetchAvailableById, fetchInboundById, backorderTallyOf } from '../Shared/stockPosition';
-import { canonicalCollection } from '../Shared/collectionName';
 
 const NS_SUITEQL_URL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
 
@@ -494,161 +493,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 addLog("No ERP IDs found in HQ catalog to sync quantities.", "warn");
             }
 
-            // STEP 2: SYNC ITEM METADATA
-            addLog("Initiating SuiteQL pull for Item Metadata...", "info");
-            
-            const typeFilter = "item.itemtype IN ('InvtPart', 'Assembly')";
-            let allRawRecords = [];
-            let lastId = 0;
-            let hasMore = true;
-            let pageCount = 1;
-
-            while (hasMore) {
-                addLog(`Fetching metadata batch ${pageCount} (Items with ID > ${lastId})...`, 'info');
-                
-                const q = `
-                    SELECT 
-                        item.id, 
-                        item.itemid, 
-                        item.displayname,
-                        BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
-                        BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
-                        BUILTIN.DF(item.custitem_bit_watchlist) AS watchlist,
-                        BUILTIN.DF(item.stockunit) AS uom,
-                        item.custitem9 AS baseprice,
-                        Vendor.companyname AS vendor_name,
-                        ItemVendor.vendorcode AS vendor_part_number,
-                        ItemVendor.purchaseprice AS lastpurchaseprice,
-                        ItemVendor.preferredvendor,
-                        Bin.binnumber
-                    FROM item
-                    LEFT JOIN ItemVendor ON ItemVendor.item = item.id
-                    LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id
-                    LEFT JOIN InventoryBalance ON InventoryBalance.item = item.id
-                    LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id
-                    WHERE item.custitem_sync_to_cpq = 'T' 
-                    AND item.isinactive = 'F' 
-                    AND ${typeFilter}
-                    AND item.id > ${lastId}
-                    ORDER BY item.id ASC
-                `;
-                
-                const response = await nsProxyFetch({
-                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                    method: 'POST',
-                    payload: { q }
-                });
-                
-                const result = await response.json();
-                if (!response.ok) throw new Error(JSON.stringify(result));
-
-                const batch = result.items || [];
-                allRawRecords = allRawRecords.concat(batch);
-                
-                if (batch.length > 0) {
-                    lastId = batch[batch.length - 1].id;
-                    if (batch.length < 1000) {
-                        hasMore = false; 
-                    } else {
-                        pageCount++;
-                    }
-                } else {
-                    hasMore = false;
-                }
-            }
-            
-            addLog(`Downloaded ${allRawRecords.length} total items. Processing deduplication and bins...`, 'success');
-
-            const uniqueRecordsMap = {};
-            for (const row of allRawRecords) {
-                const itemId = row.id;
-                
-                if (!uniqueRecordsMap[itemId]) {
-                    uniqueRecordsMap[itemId] = { ...row, all_bins: new Set() };
-                } 
-
-                if (row.binnumber) {
-                    uniqueRecordsMap[itemId].all_bins.add(row.binnumber);
-                }
-
-                const isNewPreferred = row.preferredvendor === 'T';
-                const isOldPreferred = uniqueRecordsMap[itemId].preferredvendor === 'T';
-                const oldHasVendor = !!uniqueRecordsMap[itemId].vendor_name;
-                const newHasVendor = !!row.vendor_name;
-
-                if (isNewPreferred && !isOldPreferred) {
-                    uniqueRecordsMap[itemId] = { ...row, all_bins: uniqueRecordsMap[itemId].all_bins };
-                } else if (!oldHasVendor && newHasVendor && !isOldPreferred) {
-                    uniqueRecordsMap[itemId] = { ...row, all_bins: uniqueRecordsMap[itemId].all_bins };
-                }
-            }
-            const records = Object.values(uniqueRecordsMap);
-            
-            let successCount = 0;
-            for (const item of records) {
-                const existingMatch = hqParts.find(d => d.legacyErpId === item.itemid);
-                if (!existingMatch) continue; 
-
-                const mergedBins = Array.from(item.all_bins || []).join(', ');
-
-                const uomClean = (item.uom || '').toLowerCase().trim();
-                
-                // ONE POLE TEST, ONE HANDLING RULE (Stuart 2026-09-01). This NetSuite pull carried
-                // its own copy of both: the test matched 'pole'/'poles' and so could not see a ROD,
-                // and it stamped every pole Custom — which is how a STOCKED finished assembly
-                // (HCUMP810/BS) arrived from NetSuite already routed to the shop floor. The suffix
-                // decides now, exactly as in the Master Library sync; see Shared/finishRouting.
-                const isPoleOrLinear = isPoleCategory(item.product_type) || uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
-                const autoPartHandling = isPoleCategory(item.product_type)
-                    ? handlingForErp(item.itemid)
-                    : (isPoleOrLinear ? 'Custom' : 'Small Parts');
-                
-                const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
-
-                let parsedOutsourceAction = '';
-                if (/EP\d{2}/i.test(item.itemid) || /EP\d{2}/i.test(item.displayname)) {
-                    parsedOutsourceAction = 'PLATING';
-                }
-
-                let parsedCollection = item.collection || '';
-                let collectionsArray = [];
-                if (/^H1/i.test(item.itemid) || /^H1/i.test(item.displayname)) {
-                    parsedCollection = 'Fabricut H1';
-                    collectionsArray = ['FABRICUT H1'];
-                } else if (item.collection) {
-                    // One name per collection (Shared/collectionName): NetSuite's "H1 Fabricut" on some
-                    // screws is Fabricut H1, and it is written as FABRICUT H1 — never as a second collection.
-                    collectionsArray = [canonicalCollection(item.collection)];
-                }
-
-                const payload = {
-                    manufacturingSpecs: {
-                        ...existingMatch.manufacturingSpecs,
-                        basePrice: parseFloat(item.baseprice) || existingMatch.manufacturingSpecs?.basePrice || 0,
-                        cost: parseFloat(item.lastpurchaseprice) || existingMatch.manufacturingSpecs?.cost || 0,
-                        isInHouse: hasVendor ? false : (existingMatch.manufacturingSpecs?.isInHouse !== undefined ? existingMatch.manufacturingSpecs.isInHouse : true),
-                        productType: item.product_type || existingMatch.manufacturingSpecs?.productType || 'Uncategorized',
-                        uom: item.uom || existingMatch.manufacturingSpecs?.uom || 'EA',
-                        binLocation: mergedBins || existingMatch.manufacturingSpecs?.binLocation || '', 
-                        partHandling: existingMatch.manufacturingSpecs?.partHandling || autoPartHandling,
-                        outsourceAction: parsedOutsourceAction || existingMatch.manufacturingSpecs?.outsourceAction || '', 
-                        collections: collectionsArray.length > 0 ? collectionsArray : (existingMatch.manufacturingSpecs?.collections || []), 
-                        vendorName: item.vendor_name || existingMatch.manufacturingSpecs?.vendorName || '',
-                        vendorId: item.vendor_part_number || existingMatch.manufacturingSpecs?.vendorId || '',
-                        customData: {
-                            ...(existingMatch.manufacturingSpecs?.customData || {}),
-                            collection: parsedCollection || existingMatch.manufacturingSpecs?.customData?.collection || '',
-                            watchlist: item.watchlist || existingMatch.manufacturingSpecs?.customData?.watchlist || ''
-                        }
-                    },
-                    updatedAt: new Date().toISOString()
-                };
-
-                await setDoc(doc(db, "Approved_Designs", existingMatch.id), payload, { merge: true });
-                successCount++;
-            }
-
-            addLog(`✅ Sync Complete. Quantities matched and metadata updated.`, "success");
+            // ── 12.5 READS; 11.1 IMPORTS (Stuart 2026-09-30: "lock 12.5 that is def the source of our problems as
+            // i had no idea it was doing that … that work should only be done at 11.1 … 12.5 should only be a read
+            // screen"). This pull used to go on to download every item's NetSuite details and write them over the
+            // Master Library on EVERY stock pull — base price, category, UOM, collections, vendor, bins, the in-house
+            // flag — with no switch and no word. It reads the stock levels above and stops. Item details come in
+            // through 11.1 alone, where the app-owned fields are locked (Shared/nsImportGuard).
+            addLog(`✅ Stock levels read. Item details are not touched here — they come in through 11.1.`, "success");
         } catch (error) {
             console.error("NetSuite Sync Error:", error);
             addLog(`❌ FAILED: ${error.message}`, "error");
@@ -1261,21 +1112,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
     // Lock the OLD counterparts (custitem28 "STD-" items paired to a stocked row) by internal ID →
     // system/retired_items, so the app-wide hide works even before the next NetSuite sync.
-    const lockRetiredByInternalId = async () => {
-        const olds = (salesHist?.rows || []).filter(r => r.hasOld).map(r => ({ internalId: String(r.oldInternalId), itemid: r.oldItemId || r.base, base: r.base }));
-        if (!olds.length) return alert('No OLD counterparts found to lock.');
-        if (!window.confirm(`Lock ${olds.length} OLD item(s) by NetSuite internal ID?\n\nThey'll be hidden from the app's browse/select screens (kept only here). Re-syncing the Master Library also hides them automatically via the custitem28 flag.`)) return;
-        try {
-            const ref = doc(db, 'system', 'retired_items');
-            const snap = await getDoc(ref);
-            const map = {};
-            (snap.exists() ? (snap.data().items || []) : []).forEach(it => { if (it && it.internalId) map[String(it.internalId)] = it; });
-            olds.forEach(o => { map[String(o.internalId)] = o; });
-            const items = Object.values(map);
-            await setDoc(ref, { internalIds: items.map(i => i.internalId), items, updatedAt: new Date().toISOString(), updatedBy: currentUser || '' }, { merge: true });
-            addLog(`🔒 Locked ${olds.length} OLD counterpart(s) by internal ID (${items.length} total retired).`, 'success');
-        } catch (e) { addLog(`Lock failed: ${e.message}`, 'error'); alert('Lock failed: ' + e.message); }
-    };
+    // (The "🔒 Lock OLD by internal ID" button that wrote system/retired_items from here is gone — Stuart
+    // 2026-09-30: the NetSuite flags are set through 11.1 only; 12.5 is a read screen.)
 
     // Urgent-core lookups for this brand: by the CORE code (Raw Cores view) and by the PLATED code
     // the backorder is actually for (Finished view), so the flag is visible on whichever view is up.
@@ -3057,8 +2895,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 {Object.keys(ropEdits).length > 0 && (
                                     <button onClick={saveRops} disabled={ropSaving} title="Write the edited re-order points to the Master Library (manufacturingSpecs.reorderPoint)" style={{ padding: '9px 16px', background: ropSaving ? 'var(--paper-2)' : 'var(--brass)', color: ropSaving ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: ropSaving ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{ropSaving ? 'Saving…' : `⬆ Save ${Object.keys(ropEdits).length} ROP(s)`}</button>
                                 )}
-                                <button onClick={lockRetiredByInternalId} disabled={!salesHist.withOld} title="Notate the OLD counterparts by NetSuite internal ID and hide them app-wide" style={{ marginLeft: 'auto', padding: '9px 16px', background: salesHist.withOld ? 'var(--brass)' : 'var(--paper-2)', color: salesHist.withOld ? '#fff' : 'var(--ink-soft)', border: salesHist.withOld ? 'none' : '1px solid var(--line)', cursor: salesHist.withOld ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🔒 Lock {salesHist.withOld || ''} OLD</button>
-                                <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
+                                <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ marginLeft: 'auto', padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
                                 {/* ⚡ Applies to the work orders the NEXT Generate press creates. Run-level, not
                                     per row: you tick it, generate the rush, then untick. */}
                                 <label title="Mark the work orders this Generate press creates as URGENT — they arrive pinned to the top of the Finishing Setup Queue until an operator acknowledges them" style={{ display: 'flex', alignItems: 'center', gap: '7px', padding: '7px 12px', border: `1px solid ${woUrgent ? '#d9534f' : 'var(--line)'}`, background: woUrgent ? '#fdf3f3' : '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: woUrgent ? '#d9534f' : 'var(--ink-soft)', fontWeight: woUrgent ? 700 : 400 }}>

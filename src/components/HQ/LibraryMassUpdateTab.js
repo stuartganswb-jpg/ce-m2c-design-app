@@ -11,6 +11,7 @@ import { fixMojibake } from '../Shared/textRepair';
 import { isStreamVariantCode } from '../Shared/finishingTime';
 import { packSizeOf, rushFeeAmountOf, rushFeeLabelOf } from '../Shared/quickShipUom';
 import { SOURCING, sourcingPatch } from '../Shared/sourcing';
+import NetSuiteDiffsPanel from './NetSuiteDiffsPanel';
 import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
 import { sceneNodeNames, renderThumbnails, sceneSubtree, releaseScene } from '../Shared/hardwareThumbs';
@@ -1671,6 +1672,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     <div style={{ fontFamily: 'var(--mono)', fontSize: '14px', color: theme.brass, fontWeight: 'bold' }}>{selectedIds.size} Records Selected</div>
                 </div>
             </div>
+
+            {/* ⚠ NETSUITE DIFFERS (Stuart 2026-09-30): the sales-side values 11.1 refused to overwrite, to take or keep here. */}
+            <NetSuiteDiffsPanel activeBrand={activeBrand} inventory={inventory} />
 
             {/* ── ONE-CLICK BULK TOOLS (Stuart 2026-08-27) ────────────────────────────────── */}
             <div style={{ background: '#fff', border: `1px solid var(--brass)`, padding: '20px 24px', borderRadius: '2px', display: 'flex', gap: '18px', alignItems: 'center', flexWrap: 'wrap' }}>
