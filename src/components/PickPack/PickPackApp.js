@@ -17,6 +17,7 @@ import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered,
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, closeShortNext, shortBuildStamps, scrapRawOf, scrapBinOf, adjustmentPayload } from '../Shared/scrapClose';
 import { isFloorSupervisor, normRole } from '../Shared/finishingRoles';
+import AssemblyBuildTab from './AssemblyBuildTab';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { activeItemByNameQuery, activeItemByNameQueryLite, cutRecordOf, isStockItemType } from '../Shared/nsItemLookup.js';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction, FieldPath } from "firebase/firestore";
@@ -6279,6 +6280,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 })()}
 
                 {/* 📋 TAB: BIN COUNT */}
+                {/* ASSEMBLY BUILD (Stuart 2026-09-30): the Bin Count's shape, posting an assembly build (./AssemblyBuildTab). */}
+                {activeTab === 'BUILD' && (
+                    <AssemblyBuildTab theme={theme} t={t} hqParts={hqParts} nsStock={nsStock} activeBrand={activeBrand} nsConfig={BRAND_NETSUITE_MAP[activeBrand]}
+                        operator={operator} isSyncing={isSyncing} pullStock={() => pullNetSuiteStock()} fetchLiveBins={fetchLiveBins} lockBin={lockBin}
+                        postBuild={postConvertBuild} nsMemo={nsMemo} writeLog={writeLog} offerAllocation={offerAllocation} coverBackordersOn={coverBackordersOn} coverNoteOf={coverNoteOf} />
+                )}
                 {activeTab === 'COUNT' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
                         
