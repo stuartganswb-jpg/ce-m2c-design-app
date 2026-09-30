@@ -11,6 +11,7 @@ import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { takesNoFinish } from './finishLabel';
+import { isKitHolderLine } from './pickLines';
 
 // THE PART RECORDS BEHIND THE PULL CODES (Stuart 2026-09-03, the "Unfinished" tag): a joiner,
 // splice or connector NEVER takes a finish, and the engine had stamped the configuration finish
@@ -69,7 +70,9 @@ const pullLinesOf = (wo) => {
     const fromList = (wo && wo.partsList) || [];
     // Two partsList dialects (2026-08-30, WO-SO59752 showed every pull ×0): the OE planner's
     // lines say `quantity`, the CPQ split's say `qty`. Read both; name fields differ the same way.
+    // A KIT IS SOLD, NEVER PULLED (2026-09-30, Shared/pickLines.isKitHolderLine) — its parts are the pull lines.
     if (fromList.length) return fromList
+        .filter(l => !isKitHolderLine(l))
         .map(l => ({
             code: String(l.legacyErpId || l.partId || '').toUpperCase(),
             name: l.partName || l.name || '',

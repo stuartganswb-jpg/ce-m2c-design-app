@@ -11,7 +11,7 @@ import {
     poleDetailsOf, stockedPoleDetail, formatPoleLength, isOwnCustomPole, ownPoleCodesOf,
 } from '../src/components/Shared/pickLines.js';
 import { poleLengthOf } from '../src/components/Shared/poleCut.js';
-import { soLineCodeOf, soLineIsShelfPick, unpackedSiblingsOf } from '../src/components/Shared/pickLines.js';
+import { soLineCodeOf, soLineIsShelfPick, unpackedSiblingsOf, isKitHolderLine } from '../src/components/Shared/pickLines.js';
 
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -192,5 +192,23 @@ ok('…unless the row start found it in stock (oeGen STOCK)', soLineIsShelfPick(
     eq('a single-finish order has no siblings', unpackedSiblingsOf(other, [other]).length, 0);
     eq('a retired or deleted document is never waited for', unpackedSiblingsOf(a, [a, old, { ...b, deleted: true }]).length, 0);
 }
+// ── a kit is sold, never picked — whichever door wrote the document (Stuart 2026-09-30, WO-SO60432) ────
+{
+    const wo = { id: 'WO-SO60432', orderType: 'sales', partsList: [
+        { legacyErpId: 'H1-2TRV-4M/P-45W', quantity: 1 },                     // the traverse SYSTEM kit, unflagged (CPQ split 09-14)
+        { legacyErpId: 'H1-2TRVSRA/P', quantity: 1 },
+        { legacyErpId: 'H1-2TRV-WB/P', quantity: 1, isKit: true, itemKit: true, kitCode: 'H1-2TRV-WB' },   // an item kit, flagged by the repair
+        { legacyErpId: 'H1-2TRVBP/P', quantity: 6, inKit: true, kitOf: 'H1-2TRV-WB/P' },                  // its parts — picked
+        { legacyErpId: 'HTSLNTCAR', quantity: 22 },
+        { partId: 'H1-138TRV-4H/P', quantity: 1 },                            // the H1-138TRV family is a system kit too
+        { legacyErpId: 'H1-2TRV-4', quantity: 1 },                            // not a kit code — stays
+    ] };
+    eq('kit holders are never pull lines; their parts and everything else are', pickableLinesOf(wo).map(l => l.legacyErpId || l.partId), ['H1-2TRVSRA/P', 'H1-2TRVBP/P', 'HTSLNTCAR', 'H1-2TRV-4']);
+    ok('a flagged kit line is a holder', isKitHolderLine({ legacyErpId: 'ANYTHING', isKit: true }));
+    ok('a system kit code is a holder, flagged or not', isKitHolderLine({ legacyErpId: 'H1-2TRV-4MD/EP-45C' }));
+    ok('a kit PART is not a holder', !isKitHolderLine({ legacyErpId: 'H1-2TRVLA/P', inKit: true }));
+    eq('a document whose only line is a kit holder has nothing to pick', pickableLinesOf({ partsList: [{ legacyErpId: 'H1-2TRV-4M/P-45W', quantity: 1 }] }).length, 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

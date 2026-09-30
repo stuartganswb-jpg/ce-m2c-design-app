@@ -1,5 +1,6 @@
 import { committedQtyOf } from './committedBins.js';
 import { isKitLine, isOffOrderLine } from './itemKit.js';
+import { parseKitCode } from './kitCode.js';
 import { finishedCodeOf } from './subFinish.js';
 // ══ ONE READER FOR AN ORDER'S LINES ═══════════════════════════════════════════════════════════
 //
@@ -82,8 +83,19 @@ export const isQuickShip = (job) => !!job && String(job.orderClass || '').trim()
 export function pickableLinesOf(job, { isFeeCode = null } = {}) {
     if (!job) return [];
     if (isQuickShip(job)) return (job.lines || []).filter((l, i) => !soLineIsFee(job, l, i, isFeeCode));
-    return (job.partsList || []).filter(l => !lineIsFeeish(l) && !isOwnCustomPole(job, l));
+    return (job.partsList || []).filter(l => !lineIsFeeish(l) && !isOwnCustomPole(job, l) && !isKitHolderLine(l));
 }
+
+// ── A KIT IS SOLD, NEVER PICKED — whichever door wrote the document (Stuart 2026-09-30, SO60432: "this is the kit
+// code from the sale, it should not be looking to pick this … make sure this is locked down so it works in future no
+// matter if order comes from cpq or sales order entry") ──────────────────────────────────────────────────────────
+// WO-SO60432 (CPQ split, 09-14) carried its traverse SYSTEM kit H1-2TRV-4M/P-45W as a pull line, so the WMS showed
+// "SHORT 2 · H1-2TRV-4M/P-45W". The writers keep kits off now — the CPQ split since 09-18 (lineClassification.
+// isDisplayOnlyLine), tab 7 / 10.5 / Order Entry since 09-28 (Shared/itemKit, oeGenerate) — and this is the belt
+// for every document written before them and any writer that forgets: a line FLAGGED a kit (isKit / itemKit), or
+// whose code IS a traverse system kit code (Shared/kitCode.parseKitCode), is never a pull line. Its parts are.
+// The one reader — the WMS pick, the Setup Queue count, the pick gate and staging's nothing-to-pick all read it.
+export const isKitHolderLine = (l) => !!l && (isKitLine(l) || !!parseKitCode(up(l.legacyErpId || l.partId || l.erp || '')));
 
 // ── ON A CUSTOM PAIR THE POLE IS THE SHOP'S (Stuart 2026-09-23, SO60565 Base Front 1) ────────
 // "poles route to the shop floor, but need to stay there until fabricated and completed and then

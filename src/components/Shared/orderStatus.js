@@ -1,4 +1,4 @@
-import { isQuickShip, pickableLinesOf } from './pickLines.js';
+import { isQuickShip, pickableLinesOf, isKitHolderLine } from './pickLines.js';
 import { poleCoatIndexOf } from './floorActivity.js';
 // WHERE IS IT? — the one answer, derived (Stuart 2026-08-03: "of utmost importance is the clarity
 // on the status of an item, my team is confused and i want them to see clearly each stage exactly
@@ -181,7 +181,8 @@ export function pickGateOf(wo) {
     if (wo.sentToPickPack && ps === 'Pending') {
         return { blocked: true, reason: 'the parts pick is still OPEN in the WMS pick queue — pick it there (or clear it) before this step starts' };
     }
-    const pickable = Array.isArray(wo.partsList) && wo.partsList.some(l => l && !l.isFee && !l.lineIsFee && String(l.legacyErpId || l.partId || ''));
+    // A kit holder is never a pull line (Shared/pickLines.isKitHolderLine, 2026-09-30).
+    const pickable = Array.isArray(wo.partsList) && wo.partsList.some(l => l && !l.isFee && !l.lineIsFee && !isKitHolderLine(l) && String(l.legacyErpId || l.partId || ''));
     if (pickable && !wo.sentToPickPack) {
         return { blocked: true, reason: 'the parts pull has not been released to the WMS pick queue yet — Start Setup releases it' };
     }
