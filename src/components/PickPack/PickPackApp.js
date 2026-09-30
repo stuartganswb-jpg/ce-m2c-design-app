@@ -8,6 +8,7 @@ import { orderStatusOf, customPartsReady, liftPatchFor, nothingToPick, stagingMa
 import { asksSprayStation, sprayStationOf, sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS, WINDOW_LABEL, TASK_LABEL } from '../Shared/floorActivity';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
+import { pairWaitsOf, waitedText } from '../Shared/stagingPairs';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
 import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, soLineIsFee, unpackedSiblingsOf, soPackLineStateOf, gatherPlanOf, soCodeNeedOf } from '../Shared/pickLines';
@@ -5897,6 +5898,38 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     )}
                                 </div>
                             </div>
+                            {/* 🧩 WAITING ON ITS OTHER HALF (Stuart 2026-09-30, after SO60676 sat picked and complete with nobody
+                                scanning it: "so we can be sure nothing is getting lost in the cracks"). Every open sales document
+                                with one half ready and the other not — or both ready and never matched — oldest first
+                                (Shared/stagingPairs). Read-only: a row leaves by itself when the match above is scanned. */}
+                            {(() => {
+                                const waits = pairWaitsOf(finAll);
+                                const tone = { SMALL_READY: theme.brass, SHOP_READY: theme.brass, BOTH_READY: '#d9534f' };
+                                const head = { SMALL_READY: 'small parts ready · shop half missing', SHOP_READY: 'shop half ready · small parts missing', BOTH_READY: 'both ready · never scanned' };
+                                const custOf = (d) => { const c = d.customerName || d.clientName || d.customer; return typeof c === 'string' ? c : (c && c.name) || ''; };
+                                return (
+                                    <div style={{ borderTop: `1px solid ${theme.line}`, padding: '20px' }}>
+                                        <div style={{ fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.2rem', marginBottom: '4px' }}>
+                                            Waiting on its other half <span style={{ fontFamily: theme.mono, fontSize: '0.8rem', color: waits.length ? '#d9534f' : theme.inkSoft }}>({waits.length})</span>
+                                        </div>
+                                        <p style={{ color: theme.inkSoft, fontFamily: theme.sans, fontSize: '0.82rem', margin: '0 0 12px' }}>Open orders with one half ready and the other not — or both ready and nobody has scanned the match. Oldest first, so nothing sits unseen.</p>
+                                        {waits.length === 0 ? (
+                                            <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif, fontSize: '0.95rem' }}>Nothing waiting — every ready half has its partner.</div>
+                                        ) : waits.map(w => (
+                                            <div key={w.id} style={{ borderLeft: `3px solid ${tone[w.kind]}`, background: theme.paper, padding: '8px 10px', marginBottom: '6px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontFamily: theme.mono, fontSize: '0.8rem', flexWrap: 'wrap' }}>
+                                                    <span title={w.id} style={{ color: theme.ink, fontWeight: 600 }}>{packRef(w.doc)}</span>
+                                                    <span style={{ color: tone[w.kind], fontSize: '0.7rem', whiteSpace: 'nowrap', textTransform: 'uppercase', letterSpacing: '.05em' }}>{head[w.kind]}{w.since ? ` · ${waitedText(w.since)}` : ''}</span>
+                                                </div>
+                                                <div style={{ fontSize: '0.8rem', fontFamily: theme.sans, color: theme.inkSoft, marginTop: '3px' }}>
+                                                    <span style={{ color: '#3a7d44' }}>✔ {w.ready}</span> · <span style={{ color: theme.ink }}>✗ {w.missing}</span>
+                                                </div>
+                                                {custOf(w.doc) ? <div style={{ fontSize: '0.72rem', fontFamily: theme.mono, color: theme.inkSoft, marginTop: '2px' }}>{custOf(w.doc)}</div> : null}
+                                            </div>
+                                        ))}
+                                    </div>
+                                );
+                            })()}
                         </div>
                     </div>
                     </div>
