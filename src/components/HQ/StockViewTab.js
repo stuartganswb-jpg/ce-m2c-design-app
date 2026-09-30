@@ -17,6 +17,7 @@ import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { activeItemByNameQuery, activeItemByNameQueryLite, cutRecordOf, isStockItemType } from "../Shared/nsItemLookup.js";
 import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
+import { shelfClaimsOf, freeAfterClaims, claimText } from '../Shared/shelfClaims';
 import { issuePlatedDemand } from '../Shared/platingDemand';
 import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf, fetchOpenPoLines, addToOpenPurchaseOrder, isOpenPo, discardDraftPurchaseOrder } from '../Shared/purchaseOrders';
 import { coverCodesOf, rowsFor, uncoveredCount, STATE_STYLE } from '../Shared/backorderBoard';
@@ -111,8 +112,13 @@ const PoleShortPanel = ({ choice, name, onChoose, waitMeans }) => {
                 ✂ {choice.pullFt} FT POLE SHORT — {choice.pullErp}{name ? ` · ${name}` : ''}
             </div>
             <div style={{ fontSize: '0.84rem', color: 'var(--ink)', marginBottom: '6px' }}>
-                <b>{choice.have} on hand</b> of {choice.need} needed · <b style={{ color: 'var(--brass)' }}>short {choice.short}</b>
+                <b>{choice.have} free</b> of {choice.need} needed · <b style={{ color: 'var(--brass)' }}>short {choice.short}</b>
             </div>
+            {choice.claimed > 0 && (
+                <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', margin: '-2px 0 6px' }}>
+                    NetSuite shows {choice.nsAvail} available · {choice.claimNote} — so that is not free for this order.
+                </div>
+            )}
             {/* WHAT IS ALREADY COMING. A quantity alone cannot answer "should I wait?" — the PO and
                 the date can, which is why the lines are shown rather than a total. */}
             <div style={{ margin: '0 0 8px', padding: '6px 8px', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>
@@ -656,8 +662,22 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             addLog(`⚠ Pole stock read failed (${e.message || e}) — the 8 ft cut rule decides these rows, as it did before. Verify against stock before releasing.`, 'warn');
             return out;                       // no entries = no assertions
         }
+        // 🪵 WHAT THE APP HAS ALREADY TAKEN (Eric 2026-09-30, HCUMP410/CP + /N25 — Shared/shelfClaims). NetSuite's
+        // "available" cannot see an order the app raised earlier and has not given a NetSuite work order yet — the
+        // 9/28 N25 × 10 parked in RTG had taken the last 8 rods, and the 9/30 CP × 10 read them as free: "cut 1"
+        // where five were needed. Those claims come off first; a failed read says so and decides on NetSuite alone.
+        let claims = {};
+        try {
+            const [finSnap, rtgSnap, cutSnap] = await Promise.all([
+                getDocs(collection(db, 'fin_workorders')), getDocs(collection(db, 'hq_work_orders')), getDocs(collection(db, 'rod_cut_orders')),
+            ]);
+            const rows = (snap) => snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            claims = shelfClaimsOf({ finDocs: rows(finSnap), rtgDocs: rows(rtgSnap), cutOrders: rows(cutSnap), codes: [...codes] });
+        } catch (e) {
+            addLog(`⚠ Could not read what open orders have already taken (${e.message || e}) — the rack is judged on NetSuite's available alone. Check before cutting.`, 'warn');
+        }
         // A running remainder, so two rows shorting the same rack do not both claim it.
-        const remaining = { ...avail };
+        const remaining = freeAfterClaims(avail, claims);
         poles.forEach(x => {
             const need = Math.max(0, Number(x.qty) || 0);
             const have = Math.max(0, Number(remaining[x.pullErp]) || 0);
@@ -665,6 +685,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             remaining[x.pullErp] = Math.max(0, have - need);
             out.set(x.key, {
                 pullErp: x.pullErp, pullFt: x.pullFt, need, have, short,
+                nsAvail: Math.max(0, Number(avail[x.pullErp]) || 0),
+                claimed: (claims[x.pullErp] && claims[x.pullErp].claimed) || 0,
+                claimNote: claimText(claims[x.pullErp]),
                 name: x.part?.itemName || '',
                 options: short > 0
                     ? poleOptionsWithStock({ pullErp: x.pullErp, pullFt: x.pullFt, short, availOf: (c) => remaining[String(c).toUpperCase()] })
