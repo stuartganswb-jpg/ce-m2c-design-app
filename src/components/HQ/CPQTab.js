@@ -29,6 +29,7 @@ import { priceChoice, isItemKit } from '../Shared/hardwarePricing';
 import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, checkoutAssignmentOf } from '../Shared/feeRules';
 import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
 import { extrasFromSavedItem } from '../Shared/extrasRestore';
+import { readWorkspace, writeWorkspace, restorableWorkspace, workspaceSeedOf, workHasProgress } from '../Shared/cpqWorkspace';
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
@@ -892,6 +893,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   const resetWorkspace = () => {
       setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setLineTag(''); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', sidemark: '', needBy: '', productionNotes: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
       setEditingCartId(null); setAddOnSel({});
+      workRef.current = null;   // the configuration in progress goes with it (Shared/cpqWorkspace)
   };
   // Checkout with a line open in the configurator: the cart still holds that line AS IT WAS, so
   // say so before the operator saves changes that are not in it.
@@ -1104,6 +1106,69 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
               }
           } catch (e) { /* corrupt reopen payload — ignore */ }
       }
+  }, []);
+
+  // ── 🧷 THE WORKSPACE SURVIVES A TAB SWITCH AND A RELOAD (Eric 2026-09-29, App Imp · Shared/cpqWorkspace) ──
+  // HQ mounts this tab only while it is on screen, and the "new version is live" banner reloads the page.
+  // The cart already lived above us (HQ, hq_global_cart); the customer and header, the price level, the
+  // open flow, the line being edited and the configuration being built lived here alone — so leaving for
+  // tab 7 and coming back found an empty screen and the line re-priced at base. They are saved beside the
+  // cart, per division, and put back when the tab opens: the configuration through the same reopenSeed
+  // door Edit uses. Put back ONCE, before anything is saved (wsReady), so a mount never writes its empty
+  // state over the work it is about to restore. Another quote session's work never comes back.
+  const workRef = useRef(null);             // the new engine's work in progress, as it last published it
+  const saveWorkspaceRef = useRef(null);    // rebuilt every render below; the configurator's publish calls it
+  const [wsReady, setWsReady] = useState(false);
+  const quoteSessionNow = () => { try { return localStorage.getItem('hq_active_quote_session') || null; } catch { return null; } };
+  useEffect(() => {
+      const r = restorableWorkspace(readWorkspace(localStorage, activeBrand), { sessionId: quoteSessionNow(), cart });
+      if (r) {
+          const h = r.header, e = r.engine, o = r.oldEngine;
+          if (h.jobData && typeof h.jobData === 'object') setJobData(prev => ({ ...prev, ...h.jobData, customShippingAddress: { ...prev.customShippingAddress, ...(h.jobData.customShippingAddress || {}) } }));
+          if (h.priceLevel) setPriceLevel(h.priceLevel);
+          if (h.addOnSel && typeof h.addOnSel === 'object') setAddOnSel(h.addOnSel);
+          if (typeof e.newEngine === 'boolean') setNewEngine(e.newEngine);
+          if (e.pendingGroup) setPendingGroup(e.pendingGroup);
+          if (e.activeFlowId) setActiveFlowId(e.activeFlowId);
+          if (e.activeAssemblyId) setActiveAssemblyId(e.activeAssemblyId);
+          if (e.activeDraftId) setActiveDraftId(e.activeDraftId);
+          if (e.activeDraftSvg) setActiveDraftSvg(e.activeDraftSvg);
+          if (e.editingCartId) setEditingCartId(e.editingCartId);
+          // The old configurator: the fields its own Edit restores, as it restores them.
+          if (o.dynamicConfigParams) setDynamicConfigParams({ ...o.dynamicConfigParams });
+          if (o.stepQuantities) setStepQuantities({ ...o.stepQuantities });
+          if (o.dimensionInputs) setDimensionInputs({ ...o.dimensionInputs });
+          if (o.customOverrides) setCustomOverrides({ ...o.customOverrides });
+          if (Number.isInteger(o.currentStepIndex)) setCurrentStepIndex(o.currentStepIndex);
+          if (typeof o.lineTag === 'string') setLineTag(o.lineTag);
+          if (Number(o.assemblyQty) > 0) setAssemblyQty(Number(o.assemblyQty));
+          if (typeof o.productType === 'string') setProductType(o.productType);
+          if (r.config) { workRef.current = r.config; setEngineSeed(workspaceSeedOf(r.config, Date.now())); }
+      }
+      setWsReady(true);
+      // Once, on open: read before anything below may write it.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const buildWorkspace = () => ({
+      sessionId: quoteSessionNow(),
+      savedAt: Date.now(),
+      header: { jobData, priceLevel, addOnSel },
+      engine: { newEngine, activeFlowId, activeAssemblyId, pendingGroup, editingCartId, activeDraftId, activeDraftSvg },
+      oldEngine: { dynamicConfigParams, stepQuantities, dimensionInputs, customOverrides, currentStepIndex, lineTag, assemblyQty, productType },
+      config: workRef.current,
+  });
+  saveWorkspaceRef.current = () => { if (wsReady) writeWorkspace(localStorage, activeBrand, buildWorkspace()); };
+  useEffect(() => {
+      if (saveWorkspaceRef.current) saveWorkspaceRef.current();
+      // buildWorkspace reads exactly these.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsReady, activeBrand, jobData, priceLevel, addOnSel, newEngine, activeFlowId, activeAssemblyId, pendingGroup, editingCartId, activeDraftId, activeDraftSvg,
+      dynamicConfigParams, stepQuantities, dimensionInputs, customOverrides, currentStepIndex, lineTag, assemblyQty, productType]);
+  // The configurator's publish: kept in a ref, never in state — a state write on every pick would
+  // re-render this whole tab for nothing the screen shows.
+  const handleWorkState = useCallback((work) => {
+      workRef.current = work;
+      if (saveWorkspaceRef.current) saveWorkspaceRef.current();
   }, []);
 
   useEffect(() => {
@@ -1993,8 +2058,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   const handleEditCartItem = (itemId) => {
       const item = cart.find(c => c.id === itemId);
       if (!item) return;
-      if (activeFlowId && (Object.keys(dynamicConfigParams).length || currentStepIndex > 0) &&
-          !window.confirm("You have a configuration in progress. Editing this cart line will replace it. Continue?")) return;
+      // ⚠ ASK THE ENGINE THAT IS SHOWING (Eric 2026-09-29). The old configurator's answers are seeded
+      // with defaults the moment a flow opens, so on the new engine this asked "a configuration in
+      // progress?" over an empty builder, every time. The new engine is asked about its own work —
+      // on this assembly — and the old one keeps its own test.
+      const engineWork = workRef.current;
+      const inProgress = engineOn
+          ? !!(activeAssembly && engineWork && engineWork.assemblyId === activeAssembly.id && workHasProgress(engineWork))
+          : !!(activeFlowId && (Object.keys(dynamicConfigParams).length || currentStepIndex > 0));
+      if (inProgress && !window.confirm("You have a configuration in progress. Editing this cart line will replace it. Continue?")) return;
       // ── A TAGS LINE REOPENS INTO THE TAGS ENGINE (Stuart 2026-08-28: "once we hit reopen
       // there is no data, all the selections are lost") ─────────────────────────────────────
       // Edit restored ONLY the old engine's fields (dynamicConfigParams/stepQuantities), so a
@@ -5247,6 +5319,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                                   priceLevel={priceLevel}
                                   outsourceCodes={outsourceFinishes}
                                   onEngineState={setEngineLookup}
+                                  onWorkState={handleWorkState}
                                   flow={activeFlow}
                                   /* The engine's finished configuration lands in the SAME cart the
                                      old one fills, in the same shape — so checkout, the floors, RTG

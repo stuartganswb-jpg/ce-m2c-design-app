@@ -13,6 +13,7 @@ import { explodeTraverse, usageAt } from './traverseExplode';
 import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
 import { autoPicksOf } from './hardwareAutoPicks';
 import { normalizeExtras } from './extrasRestore';
+import { workIsPristine } from './cpqWorkspace';
 import { parseKitCode } from './kitCode';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
@@ -134,6 +135,10 @@ function HardwareConfiguratorInner({
     // Publishes { choices, answers, index } so the part-lookup box ABOVE this component can judge a
     // part against the live configuration. Read-only: the engine tells, it is never told.
     onEngineState = null,
+    // Publishes the configuration IN PROGRESS so CPQ can keep it across a tab switch or a reload
+    // (Shared/cpqWorkspace) — the operator's own picks, in the shape a cart line's engineConfig keeps,
+    // so it comes back through reopenSeed like an Edit. Read-only too: nothing here listens back.
+    onWorkState = null,
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -1338,7 +1343,16 @@ function HardwareConfiguratorInner({
         setTrvSel(s.trvSel && typeof s.trvSel === 'object' ? { ...s.trvSel } : null);
         setConfigMemo(s.memo || s.sidemark || '');
         setCfgQty(String(parseInt(s.qty, 10) > 0 ? parseInt(s.qty, 10) : 1));
-        setStepIx(0);
+        // A WORKSPACE HANDED BACK AFTER A TAB SWITCH OR A RELOAD (Shared/cpqWorkspace) carries what an
+        // in-progress walk holds beyond a cart line: the step it was on, the fabric weight, the size
+        // picks, the splices a Vision drawing placed — and that its Vision draft was already seeded, so
+        // the drawing is not laid over the operator's changes a second time. An Edit seed carries none
+        // of these and opens exactly as it always has.
+        setStepIx(Number.isInteger(s.stepIx) && s.stepIx > 0 ? s.stepIx : 0);
+        if (s.fabricId) setFabricId(String(s.fabricId));
+        if (s.sizePick && typeof s.sizePick === 'object') setSizePick({ ...s.sizePick });
+        if (Array.isArray(s.drawnSplices)) setDrawnSplices(s.drawnSplices.map(sp => ({ distInches: sp.distInches, ref: sp.ref || '' })));
+        if (s.visionSeededId) seededRef.current = String(s.visionSeededId);
     }, [reopenSeed]);
     // ── …AND THE KIT IT WAS BILLED FROM (Stuart 2026-09-19, QUO154 row 6) ────────────────────────
     // The kit was a dropdown pick that lived only in this component, so Edit → re-add brought back
@@ -1435,6 +1449,29 @@ function HardwareConfiguratorInner({
     // decision they were about, which is the only thing that makes them useful downstream.
     // EXTRAS — basic items added by hand: a splice, an extra ring, whatever the flow does not model.
     const [saved, setSaved] = useState([]);
+    // ── THE WORK IN PROGRESS, PUBLISHED (Eric 2026-09-29 · Shared/cpqWorkspace) ──────────────
+    // CPQ keeps it across a tab switch or a reload and hands it back through reopenSeed. Declared
+    // HERE, below configMemo and cfgQty: a dependency read above its const is a TDZ ReferenceError —
+    // the white screen this file has had twice. The operator's `picks`, never `livePicks`: an
+    // auto-settled track or end restored as an operator pick would always win after the restore
+    // (Shared/hardwareAutoPicks). Nothing is published while the work is still what a freshly opened
+    // configurator holds, so a mount never overwrites the saved work it is about to be handed.
+    const workPublishedRef = useRef(false);
+    useEffect(() => {
+        if (typeof onWorkState !== 'function') return;
+        const work = {
+            assemblyId: assembly?.id || '',
+            answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, extras,
+            lengthInches, memo: configMemo, qty: cfgQty,
+            // The kit exactly as the handoff saves it: named only while it bills.
+            kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
+            trvSel, fabricId, sizePick, stepIx, drawnSplices, visionSeededId: seededRef.current || '',
+        };
+        if (!workPublishedRef.current && workIsPristine(work)) return;
+        workPublishedRef.current = true;
+        onWorkState(work);
+    }, [onWorkState, assembly, answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, extras,
+        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices]);
     const addConfiguration = () => {
         if (!priced.lines.length) return;
         // ⚠ NEVER ADD SHORT (Stuart 2026-09-10). A removal nobody has acknowledged is an order that

@@ -5,6 +5,7 @@ import { collection, query, where, getDocs, doc, getDoc, addDoc, serverTimestamp
 import { signInWithCustomToken } from 'firebase/auth'; 
 import { httpsCallable } from 'firebase/functions'; 
 import '../../App.css';
+import { clearAllWorkspaces } from '../Shared/cpqWorkspace';
 
 const InceptionTab = lazy(() => import('./InceptionTab'));
 const VisualAssemblyTab = lazy(() => import('./VisualAssemblyTab')); 
@@ -188,6 +189,8 @@ function HQ() {
       const { cartItems, session } = e.detail || {};
       if (!Array.isArray(cartItems) || !cartItems.length || !session?.jobId) return;
       setGlobalCart(cartItems);
+      // The reopened quote owns the screen: no saved CPQ workspace comes back over it (Shared/cpqWorkspace).
+      clearAllWorkspaces(localStorage);
       localStorage.setItem('hq_active_quote_session', session.jobId);
       localStorage.setItem('hq_reopen_quote', JSON.stringify(session));
       setActiveTab('8. CPQ Configurator');
