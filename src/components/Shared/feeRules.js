@@ -17,6 +17,8 @@
 // order total: two percentage fees on one order must never compound, and adding shipping must never
 // inflate a rush fee. Callers pass that figure in; this module never guesses it.
 
+import { isShippingItem } from './flatRateShipping.js';
+
 export const FEE_MODES = [
     { id: 'FLAT', label: 'Flat amount × quantity', hint: 'The price is per unit. Quantity is whatever the unit says.' },
     { id: 'PERCENT', label: 'Percentage of the configuration', hint: 'Percent of parts + labour, before other fees and shipping. A minimum can hold the floor.' },
@@ -121,6 +123,8 @@ export function buildFeeCatalog(parts, { priceFor, portalOnly = false } = {}) {
     return (parts || [])
         .filter(isFeeItemRecord)
         .filter(p => p?.manufacturingSpecs?.isRetired !== true)
+        // A flat-rate shipping box is the shipping charge, never a fee line (Shared/flatRateShipping).
+        .filter(p => !isShippingItem(p))
         .map(p => {
             const rule = feeRuleOf(p.manufacturingSpecs);
             const unitPrice = typeof priceFor === 'function'
@@ -183,6 +187,9 @@ export function buildCheckoutCatalog(parts, { priceFor, skuFor, customerId = nul
     return (parts || [])
         .filter(p => checkoutAssignmentOf(p, { customerId, flowCodes }) !== null)
         .filter(p => p?.manufacturingSpecs?.isRetired !== true)
+        // Assigned to a customer's checkout, a flat-rate box means "this customer ships flat rate" — it is
+        // counted into the shipping charge, never offered as a line (Shared/flatRateShipping).
+        .filter(p => !isShippingItem(p))
         .map(p => {
             const rule = feeRuleOf(p.manufacturingSpecs);   // a plain item defaults to FLAT × EACH
             const unitPrice = typeof priceFor === 'function' ? priceFor(p) : num(p?.manufacturingSpecs?.basePrice);

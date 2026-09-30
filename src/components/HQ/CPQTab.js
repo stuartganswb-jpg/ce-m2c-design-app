@@ -30,6 +30,7 @@ import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, ch
 import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
 import { extrasFromSavedItem } from '../Shared/extrasRestore';
 import { readWorkspace, writeWorkspace, restorableWorkspace, workspaceSeedOf, workHasProgress } from '../Shared/cpqWorkspace';
+import { shippingPlanOf, shippingChargeOf, FLAT_RATE_BOXES, TRAVERSE_PACK_FEE_CODE } from '../Shared/flatRateShipping';
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
@@ -1346,6 +1347,43 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       const seen = new Set(checkout.map(e => e.id));
       return [...checkout, ...fees.filter(e => !seen.has(e.id))];
   }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections, cpqFlows, activeFlowId, cart, liveAssemblies]);
+
+  // ── 📦 FLAT-RATE SHIPPING, COUNTED IN BOXES (Eric 2026-09-29 · Stuart 2026-09-30 · Shared/flatRateShipping) ──
+  // A customer whose checkout carries the flat-rate box items (assigned in 4.6) ships by the box: the cart is
+  // counted into small and pole boxes by Stuart's rule, each box priced for this customer by the one chain,
+  // and the total is offered as the quote's SHIPPING CHARGE — which the push writes to NetSuite's
+  // shippingcost. Never a line, never a fee. null = this customer has no flat-rate boxes.
+  const flatRate = useMemo(() => {
+      const universe = [...(libraryParts || []), ...(liveAssemblies || [])];
+      const up = (v) => String(v || '').trim().toUpperCase();
+      const boxParts = {};
+      FLAT_RATE_BOXES.forEach(b => {
+          const part = universe.find(p => up(p.legacyErpId) === b.code || up(p.itemId) === b.code);
+          if (part && part.manufacturingSpecs?.isRetired !== true && checkoutAssignmentOf(part, { customerId: jobData.customerId })) boxParts[b.code] = part;
+      });
+      if (!Object.keys(boxParts).length) return null;
+      // The same price context the add-on catalog above prices with.
+      const lvl = customerPriceLevel(addOnCustomer, priceLevel);
+      const findByCode = (c) => { const k = up(c); return k ? universe.find(p => [p.id, p.itemId, p.legacyErpId].some(x => up(x) === k)) || null : null; };
+      const ctx = { customerId: jobData.customerId, customer: addOnCustomer, priceLevel: lvl.level, levelIsDefault: lvl.isDefault, outsourceCodes: outsourceFinishes, findByCode };
+      const plan = shippingPlanOf(cart);
+      const charge = shippingChargeOf(plan, (code) => (boxParts[code] ? (priceChoice({ partId: boxParts[code].id }, boxParts[code], ctx).price || 0) : null));
+      return { plan, ...charge };
+  }, [libraryParts, liveAssemblies, jobData.customerId, addOnCustomer, priceLevel, outsourceFinishes, cart]);
+  // Opening checkout: a blank shipping charge takes the flat-rate total (the operator can change it — a typed
+  // figure is never overwritten), and each traverse configuration ticks the larger-systems packaging fee
+  // (Stuart 2026-09-30: "traverse poles automatically select the H1-PCKF2 fee") unless it has been set by hand.
+  useEffect(() => {
+      if (!showCheckoutModal) return;
+      if (flatRate && flatRate.total > 0) {
+          setJobData(prev => (String(prev.shippingAmount ?? '').trim() === '' ? { ...prev, shippingAmount: flatRate.total.toFixed(2) } : prev));
+      }
+      const traverseConfigs = shippingPlanOf(cart).traverseConfigs;
+      const packFee = traverseConfigs > 0 ? addOnCatalog.find(e => e.code === TRAVERSE_PACK_FEE_CODE) : null;
+      if (packFee) setAddOnSel(prev => (prev[packFee.id] === undefined ? { ...prev, [packFee.id]: traverseConfigs } : prev));
+      // Once per opening — what the operator does inside the window is theirs.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCheckoutModal]);
 
   // ── THE READY DATE (Stuart 2026-09-03) ───────────────────────────────────────────────────
   // What the finish class promises: painted 4 weeks, plated 6; the Rush fee at checkout shortens
@@ -5815,6 +5853,42 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                                 <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Shipping Charge ($, Optional)</label>
                                 <input type="number" min="0" step="0.01" placeholder="0.00" value={jobData.shippingAmount ?? ''} onChange={e => setJobData({...jobData, shippingAmount: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' }} />
                                 <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px', fontStyle: 'italic' }}>Charged on top of the quote total — lands in the NetSuite estimate's shipping cost field on push.</div>
+                                {/* 📦 THE BOXES THE CART SHIPS IN (Shared/flatRateShipping) — only for a customer on flat rate. */}
+                                {flatRate && (flatRate.rows.length > 0 || flatRate.missing.length > 0) && (() => {
+                                    const pl = flatRate.plan;
+                                    const poles = pl.boxes.reduce((n, b) => n + b.pieces.length, 0);
+                                    const typed = parseFloat(jobData.shippingAmount);
+                                    return (
+                                        <div style={{ marginTop: '10px', padding: '10px 12px', border: '1px solid var(--line)', background: 'var(--paper-2)', fontSize: '0.8rem' }}>
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', marginBottom: '6px' }}>
+                                                📦 Flat-rate boxes — {pl.windows} window{pl.windows === 1 ? '' : 's'} · {poles} pole{poles === 1 ? '' : 's'} in pole boxes
+                                            </div>
+                                            {flatRate.rows.map(r => (
+                                                <div key={r.code} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                                                    <span>{r.qty} × {r.label} <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{r.code} · ${r.unit.toFixed(2)}</span></span>
+                                                    <span>${r.total.toFixed(2)}</span>
+                                                </div>
+                                            ))}
+                                            {pl.boxes.length > 0 && (
+                                                <div style={{ color: 'var(--ink-soft)', marginTop: '4px', fontSize: '0.75rem' }}>
+                                                    {pl.boxes.map((b, i) => `${b.key}: ${b.pieces.map(x => `${x}"`).join(', ')}`).join(' · ')} — a box bills as its longest pole
+                                                </div>
+                                            )}
+                                            {pl.shortPoles > 0 && <div style={{ color: 'var(--ink-soft)', fontSize: '0.75rem' }}>{pl.shortPoles} pole{pl.shortPoles === 1 ? '' : 's'} under 48" ride in the small boxes.</div>}
+                                            {pl.tooLong > 0 && <div style={{ color: '#b02d20', fontSize: '0.75rem' }}>⚠ {pl.tooLong} pole{pl.tooLong === 1 ? ' is' : 's are'} over 120" — no box takes {pl.tooLong === 1 ? 'it' : 'them'}; splice on the length step.</div>}
+                                            {flatRate.missing.length > 0 && <div style={{ color: '#b02d20', fontSize: '0.75rem' }}>⚠ No {flatRate.missing.join(', ')} for this customer — assign it to their checkout in 4.6; it is not in the total.</div>}
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', fontWeight: 600 }}>
+                                                <span>Total ${flatRate.total.toFixed(2)}</span>
+                                                {!(Math.abs((Number.isFinite(typed) ? typed : -1) - flatRate.total) < 0.005) && (
+                                                    <button type="button" onClick={() => setJobData(prev => ({ ...prev, shippingAmount: flatRate.total.toFixed(2) }))}
+                                                        style={{ padding: '6px 10px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+                                                        Use ${flatRate.total.toFixed(2)}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         </div>
                     )}

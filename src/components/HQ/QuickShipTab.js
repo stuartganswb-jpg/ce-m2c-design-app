@@ -16,6 +16,7 @@ import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
 import { traverseOrderLinesOf } from '../Shared/subFinish';
 import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary, isCheckoutForCustomer } from '../Shared/feeRules';
+import { isShippingItem } from '../Shared/flatRateShipping';
 import { priceChoice } from '../Shared/hardwarePricing';
 import { customerPriceLevel } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
@@ -914,7 +915,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // reads as a fee there reads as one here. (`feeItems(kw)` above is a different thing: the
     // kit builder's keyword pick of cut / splice / rush.)
     const allFeeItems = useMemo(() => allItems.filter(it =>
-        isFeeItemRecord(it) && it.manufacturingSpecs?.isRetired !== true), [allItems]);
+        isFeeItemRecord(it) && it.manufacturingSpecs?.isRetired !== true && !isShippingItem(it)), [allItems]);
 
     // ── THIS CUSTOMER'S CHECKOUT ITEMS (Stuart 2026-08-25) ───────────────────────────────────
     // The items assigned to the picked customer in 4.6 (manufacturingSpecs.checkoutCustomers) —
@@ -922,7 +923,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // configured there see one list, priced by the one chain (rateFor → priceChoice → their row).
     // Fees and real items both: a fee rides its rule; a real item rides as a normal line.
     const custCheckoutItems = useMemo(() => (customerId
-        ? allItems.filter(it => it.manufacturingSpecs?.isRetired !== true && isCheckoutForCustomer(it, customerId))
+        // A flat-rate shipping box assigned to the customer is their shipping program, never a line
+        // (Shared/flatRateShipping) — the order's shipping charge carries shipping.
+        ? allItems.filter(it => it.manufacturingSpecs?.isRetired !== true && isCheckoutForCustomer(it, customerId) && !isShippingItem(it))
         : []), [allItems, customerId]);
     const addCustCheckout = (it) => {
         const isFee = isFeeItemRecord(it);
