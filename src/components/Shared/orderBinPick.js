@@ -159,3 +159,20 @@ export const displayShareOf = ({ so, boards, isFeeCode = null } = {}) => {
     perCode.forEach((need, code) => { const have = committedQtyOf(so, code); if (have < need) bad.push(`${code}: the bin holds ${have}, a display needs ${need}`); });
     return { ok: !bad.length, why: bad.join('; '), lines };
 };
+
+/**
+ * THE MOVES THAT PUT AN ORDER'S BIN RIGHT IN NETSUITE: per item still to go in (nsBinPlanOf), first what NetSuite ALREADY
+ * shows in the order's bin beyond what the app moved there — stock put straight into that bin by hand (an adjustment of
+ * pieces NetSuite never held); a committed bin belongs to one order, so it is this order's — counted, not moved; then the
+ * rest from the item's live bins. What neither covers is `short`.
+ * @param plan    nsBinPlanOf(...) rows with qty > 0
+ * @param binsOf  code → [{ bin, name, qty }] (the WMS live read, the order's bin included)
+ * @returns [{ code, qty, credit, from: [{ bin, qty }], short }]
+ */
+export const nsBinMovesOf = ({ plan = [], binsOf = () => [], toBin = '' } = {}) => plan.map(r => {
+    const bins = binsOf(r.code) || [];
+    const inBin = bins.filter(b => U((b && (b.name || b.bin)) || '') === U(toBin)).reduce((a, b) => a + N(b.qty), 0);
+    const credit = Math.round(Math.min(N(r.qty), Math.max(0, inBin - N(r.have))) * 1000) / 1000;
+    const src = binSourcesOf(bins, Math.round((N(r.qty) - credit) * 1000) / 1000, toBin);
+    return { code: r.code, qty: N(r.qty), credit, from: src.from, short: src.short };
+});

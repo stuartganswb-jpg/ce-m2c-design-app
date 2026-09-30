@@ -19,7 +19,7 @@ import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shar
 import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, closeShortNext, shortBuildStamps, scrapRawOf, scrapBinOf, adjustmentPayload } from '../Shared/scrapClose';
 import { isFloorSupervisor, normRole } from '../Shared/finishingRoles';
 import AssemblyBuildTab from './AssemblyBuildTab';
-import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, nsBinPlanOf, binSourcesOf, displayShareOf } from '../Shared/orderBinPick';
+import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, nsBinPlanOf, nsBinMovesOf, displayShareOf } from '../Shared/orderBinPick';
 import { displayShipmentOf, fulfilFromBinItems } from '../Shared/displayShipment';
 import DisplayShipModal from './DisplayShipModal';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
@@ -2015,15 +2015,20 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         let live = {};
         setIsSyncing(true);
         try { live = (await fetchLiveBins(plan.map(r => r.code))) || {}; } finally { setIsSyncing(false); }
-        const moves = plan.map(r => ({ ...r, ...binSourcesOf((live[r.code] && live[r.code].bins) || [], r.qty, lock.bin), part: findPartByErpCode(r.code) }));
+        // Already in the order's bin in NetSuite (put there by hand) is COUNTED; the rest moves from the live bins.
+        const moves = nsBinMovesOf({ plan, binsOf: (c) => (live[c] && live[c].bins) || [], toBin: lock.bin }).map(m => ({ ...m, part: findPartByErpCode(m.code) }));
+        const counted = moves.filter(m => m.credit > 0);
         const go = moves.filter(m => m.part && m.part.netSuiteInternalId && m.from.length);
-        const note = moves.filter(m => !(m.part && m.part.netSuiteInternalId) || m.short > 0)
-            .map(m => `  • ${m.code}: ${!(m.part && m.part.netSuiteInternalId) ? 'no NetSuite id — sync the item' : `NetSuite holds only ${m.qty - m.short} of ${m.qty}`}`);
-        if (!go.length) return alert(`Nothing of ${packRef(o)} can be moved into ${lock.bin} in NetSuite as it stands:\n\n${note.join('\n')}\n\nAdjust them in NetSuite, then press ⇄ on the SO Pack card.`);
-        if (!window.confirm(`⇄ Put ${packRef(o)}'s gathered pieces into ${lock.bin} in NetSuite?\n\nNetSuite holds them as the items the order bills (the app carries the finish):\n${go.map(m => `  • ${m.qty - m.short} × ${m.code} from ${m.from.map(f => `${f.bin} (${f.qty})`).join(' + ')}`).join('\n')}${note.length ? `\n\n⛔ Not moved:\n${note.join('\n')}` : ''}\n\nEach is a NetSuite bin transfer into ${lock.bin}.`)) return;
+        const note = moves.filter(m => (!(m.part && m.part.netSuiteInternalId) && m.from.length) || m.short > 0)
+            .map(m => `  • ${m.code}: ${!(m.part && m.part.netSuiteInternalId) ? 'no NetSuite id — sync the item' : `NetSuite holds none of the other ${m.short} at this location — adjust them into ${lock.bin} in NetSuite, then ⇄ again`}`);
+        if (!go.length && !counted.length) return alert(`Nothing of ${packRef(o)} can be moved into ${lock.bin} in NetSuite as it stands:\n\n${note.join('\n')}`);
+        if (!window.confirm(`⇄ Put ${packRef(o)}'s gathered pieces into ${lock.bin} in NetSuite?\n\nNetSuite holds them as the items the order bills (the app carries the finish):${counted.length ? `\n\nAlready in ${lock.bin} in NetSuite — counted, nothing moved:\n${counted.map(m => `  • ${m.credit} × ${m.code}`).join('\n')}` : ''}${go.length ? `\n\nMoved in by bin transfer:\n${go.map(m => `  • ${Math.round((m.qty - m.credit - m.short) * 1000) / 1000} × ${m.code} from ${m.from.map(f => `${f.bin} (${f.qty})`).join(' + ')}`).join('\n')}` : ''}${note.length ? `\n\n⛔ Not moved:\n${note.join('\n')}` : ''}`)) return;
         const done = [], failed = [];
         setIsSyncing(true);
         try {
+            for (const m of counted) {
+                await updateDoc(doc(db, 'hq_sales_orders', o.id), new FieldPath('nsBinQty', m.code), increment(m.credit)).then(() => done.push(`${m.credit} × ${m.code} (already there)`)).catch(e => failed.push(`${m.code}: ${e.message || e}`));
+            }
             for (const m of go) {
                 let moved = 0;
                 for (const f of m.from) {

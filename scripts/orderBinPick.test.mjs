@@ -1,6 +1,6 @@
 // node scripts/orderBinPick.test.mjs — every piece into the order's bin before it packs (Stuart 2026-09-30: "this order at
 // this point should be showing 100% ready to pack … once it is all picked to the Orders-Com1 bin you do a bin transfer").
-import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, pieceLinesOf, nsItemOf, nsQtyOf, nsBinPlanOf, binSourcesOf, displayShareOf } from '../src/components/Shared/orderBinPick.js';
+import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, pieceLinesOf, nsItemOf, nsQtyOf, nsBinPlanOf, binSourcesOf, displayShareOf, nsBinMovesOf } from '../src/components/Shared/orderBinPick.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 
@@ -84,5 +84,12 @@ eq('refused: a line that does not divide, or a bin short of one display', [displ
 
 eq('the last display: 2 cover plates left across two lines still ship (counted per item, not per line)', displayShareOf({ so: { ...t, committedQty: { 'H1-1R/EP4': 1, 'H1-138CC/P06': 1, 'H1-1CP-V/EP4': 2, 'H1-2RCTAECC/EP1': 1, HTSLNTCAR: 10 } }, boards: 50 }).ok, true);
 eq('…one cover plate short is refused, per item', displayShareOf({ so: { ...t, committedQty: { 'H1-1R/EP4': 1, 'H1-138CC/P06': 1, 'H1-1CP-V/EP4': 1, 'H1-2RCTAECC/EP1': 1, HTSLNTCAR: 10 } }, boards: 50 }).why, 'H1-1CP-V/EP4: the bin holds 1, a display needs 2');
+
+// ── STOCK PUT STRAIGHT INTO THE ORDER'S BIN IN NETSUITE (an adjustment of pieces NetSuite never held) IS COUNTED, NOT MOVED ──
+const mv = nsBinMovesOf({ plan: [{ code: 'H1-2TRV', qty: 100, have: 0 }, { code: 'H1-1R', qty: 150, have: 0 }, { code: 'H1-2RCTAR', qty: 50, have: 0 }],
+    binsOf: (c) => ({ 'H1-2TRV': [{ bin: 'ORDERS-COM1', name: 'ORDERS-COM1', qty: 100 }], 'H1-1R': [{ bin: 'PRODUCTION STOCK', name: 'Production Stock', qty: 300 }], 'H1-2RCTAR': [] })[c], toBin: 'ORDERS-COM1' });
+eq('H1-2TRV adjusted into ORDERS-COM1 by hand: counted (100), nothing moved; H1-1R moved from Production Stock; H1-2RCTAR held nowhere: short',
+    mv, [{ code: 'H1-2TRV', qty: 100, credit: 100, from: [], short: 0 }, { code: 'H1-1R', qty: 150, credit: 0, from: [{ bin: 'Production Stock', qty: 150 }], short: 0 }, { code: 'H1-2RCTAR', qty: 50, credit: 0, from: [], short: 50 }]);
+eq('only what is beyond what the app already moved there is counted', nsBinMovesOf({ plan: [{ code: 'X', qty: 20, have: 30 }], binsOf: () => [{ bin: 'ORDERS-COM1', qty: 40 }, { bin: 'R', qty: 99 }], toBin: 'ORDERS-COM1' }), [{ code: 'X', qty: 20, credit: 10, from: [{ bin: 'R', qty: 10 }], short: 0 }]);
 console.log(`orderBinPick: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
