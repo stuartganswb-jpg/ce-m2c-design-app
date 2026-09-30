@@ -44,6 +44,8 @@ export const lineBinShareOf = (so, idx, isFeeCode = null) => {
 export const soGatherStageOf = ({ so, statOf = () => null, isFeeCode = null } = {}) => {
     const lines = pieceLinesOf(so, isFeeCode);
     if (!lines.length) return { stage: 'WAITING', waiting: [], toPick: [] };
+    // EVERYTHING HAS SHIPPED (a display order's last display gone): nothing is needed in the bin any more.
+    if (lines.every(({ l }) => soCodeNeedOf(so, soLineCodeOf(l), isFeeCode) === 0) && Object.keys((so && so.shippedQty) || {}).length) return { stage: 'SHIPPED', waiting: [], toPick: [] };
     const waiting = new Set(), toPick = new Set();
     lines.forEach(({ l, idx }) => {
         const code = soLineCodeOf(l);
@@ -149,8 +151,11 @@ export const displayShareOf = ({ so, boards, isFeeCode = null } = {}) => {
     pieceLinesOf(so, isFeeCode).forEach(({ l, idx }) => {
         const q = N(l.qty), per = q / b;
         if (!Number.isInteger(per)) { bad.push(`${soLineCodeOf(l)}: ${q} does not divide into ${b} displays`); return; }
-        if (lineBinShareOf(so, idx, isFeeCode) < per) bad.push(`${soLineCodeOf(l)}: the bin holds ${lineBinShareOf(so, idx, isFeeCode)}, a display needs ${per}`);
         lines.push({ idx, code: soLineCodeOf(l), name: String(l.name || ''), row: String(l.row || ''), pieces: per, nsCode: nsItemOf(so, l, idx), nsQty: nsQtyOf(l, per) });
     });
+    // The bin is counted per ITEM (an item on two lines shares one count), so a display is checked per item too.
+    const perCode = new Map();
+    lines.forEach(x => perCode.set(x.code, (perCode.get(x.code) || 0) + x.pieces));
+    perCode.forEach((need, code) => { const have = committedQtyOf(so, code); if (have < need) bad.push(`${code}: the bin holds ${have}, a display needs ${need}`); });
     return { ok: !bad.length, why: bad.join('; '), lines };
 };

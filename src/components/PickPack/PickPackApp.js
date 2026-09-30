@@ -18,7 +18,9 @@ import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shar
 import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, closeShortNext, shortBuildStamps, scrapRawOf, scrapBinOf, adjustmentPayload } from '../Shared/scrapClose';
 import { isFloorSupervisor, normRole } from '../Shared/finishingRoles';
 import AssemblyBuildTab from './AssemblyBuildTab';
-import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, nsBinPlanOf, binSourcesOf } from '../Shared/orderBinPick';
+import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, nsBinPlanOf, binSourcesOf, displayShareOf } from '../Shared/orderBinPick';
+import { displayShipmentOf, fulfilFromBinItems } from '../Shared/displayShipment';
+import DisplayShipModal from './DisplayShipModal';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { activeItemByNameQuery, activeItemByNameQueryLite, cutRecordOf, isStockItemType } from '../Shared/nsItemLookup.js';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction, FieldPath, increment } from "firebase/firestore";
@@ -1892,6 +1894,111 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             writeLog(`Released ${plan.qty} × ${plan.code} from ${packRef(order)}: ${reason}${plan.emptyAfter ? ' — bin now free' : ` (${plan.left} still gathered)`}`, 'wms');
         } catch (e) { alert('Could not release: ' + (e.message || e)); }
     };
+
+    // 📦 SHIP ONE DISPLAY (Stuart 2026-09-30: "fulfill one at a time (1/50 logic works) at $0.00 on new sales orders to the
+    // showrooms with custom shipping addresses"). The display order and its build are read fresh; the pieces of ONE display
+    // (Shared/orderBinPick.displayShareOf) must already be in the order's bin in NetSuite (⇄ first), so the showroom's
+    // fulfilment can take them from it. The showroom order is Shared/displayShipment's: its own Quick Ship order, born
+    // packed, a $0 NetSuite sales order to Fabricut with the custom ship-to; the fulfilment from the bin queues itself when
+    // NetSuite accepts the order (the effect below), and the Fulfilment tab ships it.
+    const [shipDisplay, setShipDisplay] = useState(null);
+    const [shipBusy, setShipBusy] = useState(false);
+    const openShipDisplay = async (o) => {
+        try {
+            const snap = await getDoc(doc(db, 'hq_sales_orders', o.id));
+            if (!snap.exists()) return alert('That order is gone.');
+            const so = { id: snap.id, ...snap.data() };
+            if (!so.displayBuildId) return alert(`${packRef(so)} is not a display order — it packs and ships whole.`);
+            const b = await getDoc(doc(db, 'system', 'displays', 'builds', so.displayBuildId));
+            const boards = b.exists() ? Number(b.data().qty) || 0 : 0;
+            const n = (so.displayShipments || []).length + 1;
+            if (!boards) return alert(`The build ${so.displayBuildId} does not say how many displays it is.`);
+            if (n > boards) return alert(`All ${boards} displays of ${packRef(so)} have shipped.`);
+            const pending = nsBinPlanOf({ so, isFeeCode }).filter(r => r.qty > 0);
+            if (pending.length) return alert(`${pending.length} item${pending.length === 1 ? ' is' : 's are'} not yet in ${so.committedBin} in NetSuite (${pending.slice(0, 4).map(r => r.code).join(', ')}${pending.length > 4 ? '…' : ''}).\n\nPress ⇄ Into ${so.committedBin} in NetSuite first — the showroom's fulfilment takes the pieces from that bin.`);
+            const share = displayShareOf({ so, boards, isFeeCode });
+            // The ship-to: the customer's NetSuite addresses and the app's book for that customer.
+            const saved = [];
+            try { const c = await getDoc(doc(db, 'crm_records', String(so.customerId || ''))); if (c.exists()) (c.data().shippingAddresses || []).forEach(a => saved.push({ ...a, from: 'netsuite' })); } catch (e) { /* none */ }
+            try { const bk = await getDoc(doc(db, 'system', `ship_to_book_${so.customerId || 'none'}`)); if (bk.exists()) (bk.data().addresses || []).forEach(a => saved.push({ ...a, from: 'book' })); } catch (e) { /* none */ }
+            setShipDisplay({ so, buildId: so.displayBuildId, boards, n, share: share.lines, why: share.ok ? '' : share.why, saved });
+        } catch (e) { alert('Could not open the display: ' + (e.message || e)); }
+    };
+    const shipOneDisplay = async ({ shipTo, isNew, boxes, files }) => {
+        if (!shipDisplay || shipBusy) return;
+        setShipBusy(true);
+        try {
+            const snap = await getDoc(doc(db, 'hq_sales_orders', shipDisplay.so.id));
+            const so = { id: snap.id, ...snap.data() };
+            const n = (so.displayShipments || []).length + 1;
+            if (n !== shipDisplay.n) return alert(`Display ${shipDisplay.n} was shipped from another screen — reopen to ship display ${n}.`);
+            const share = displayShareOf({ so, boards: shipDisplay.boards, isFeeCode });
+            if (!share.ok) return alert(`Not shipped — ${share.why}`);
+            const photos = [];
+            for (let i = 0; i < files.length; i++) {
+                let blob = files[i];
+                try { blob = await downscalePackImage(files[i]); } catch (e) { /* undecodable — upload raw */ }
+                const fRef = ref(storage, `packing_photos/${so.id}/display-${n}/${Date.now()}_${i}.jpg`);
+                await uploadBytesResumable(fRef, blob);
+                photos.push(await getDownloadURL(fRef));
+            }
+            const built = displayShipmentOf({ parent: so, n, boards: shipDisplay.boards, share: share.lines, shipTo, brand: activeBrand, by: operator?.name || '', findByCode: (c) => findPartByErpCode(c), boxes, photos });
+            if (!built.ok) return alert(`Not shipped — ${built.why}`);
+            const exists = await getDoc(doc(db, 'hq_sales_orders', built.id));
+            if (exists.exists()) return alert(`${built.id} already exists — display ${n} was shipped. Nothing was written.`);
+            await setDoc(doc(db, 'hq_sales_orders', built.id), built.doc);
+            await enqueueNsWrite({
+                kind: 'salesorder', dedupeKey: `so:${built.id}`,
+                label: `Display ${n}/${shipDisplay.boards} of ${so.soId} → ${shipTo.addressee} ($0)`,
+                sourceApp: 'WMS', createdBy: operator?.name || '',
+                targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesorder',
+                method: 'POST', payload: built.payload,
+                writeBack: [{ collection: 'hq_sales_orders', docId: built.id, idField: 'nsInternalId', tranField: 'soId', patch: { status: 'Pending' } }],
+            });
+            // The display order gives up one display: its bin count, its NetSuite bin record; the shipped count grows.
+            const args = [];
+            Object.entries(built.give.committed).forEach(([c, q]) => { args.push(new FieldPath('committedQty', c), increment(-q), new FieldPath('shippedQty', c), increment(q)); });
+            Object.entries(built.give.nsBin).forEach(([c, q]) => { args.push(new FieldPath('nsBinQty', c), increment(-q)); });
+            args.push('displayShipments', arrayUnion({ n, id: built.id, addressee: shipTo.addressee || '', city: shipTo.city || '', state: shipTo.state || '', at: Date.now(), by: operator?.name || '' }));
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), ...args);
+            await updateDoc(doc(db, 'system', 'displays', 'builds', shipDisplay.buildId), { built: increment(1), shipPlan: arrayUnion(built.row), updatedAt: Date.now(), updatedBy: operator?.name || '' }).catch(e => console.warn('build ship plan write failed:', e));
+            if (isNew) await setDoc(doc(db, 'system', `ship_to_book_${so.customerId || 'none'}`), { addresses: arrayUnion({ ...shipTo }), updatedAt: Date.now() }, { merge: true }).catch(e => console.warn('ship-to book write failed:', e));
+            writeLog(`📦 Display ${n}/${shipDisplay.boards} of ${packRef(so)} packed → ${shipTo.addressee}, ${shipTo.city} ${shipTo.state}: $0 NetSuite sales order queued (${built.id}).`, 'packing');
+            setShipDisplay(null);
+            alert(`📦 Display ${n} of ${shipDisplay.boards} packed for ${shipTo.addressee}.\n\n• Its $0 NetSuite sales order (Fabricut, ship to ${shipTo.city} ${shipTo.state}) is queued — watch 11.1 (~1 min).\n• Once NetSuite takes it, the fulfilment from ${so.committedBin} queues itself.\n• Make the UPS label on the FULFILLMENT tab (${built.id}).`);
+        } catch (e) { alert('Ship stopped: ' + (e.message || e)); }
+        finally { setShipBusy(false); }
+    };
+    // THE SHOWROOM'S FULFILMENT, FROM THE ORDER'S BIN — once NetSuite has created its sales order.
+    const dspFulfilTried = useRef({});
+    const queueDisplayFulfilment = async (d) => {
+        try {
+            const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: soLinesSql(d.nsInternalId) } });
+            const jq = await rq.json();
+            if (!rq.ok) throw new Error(`could not read the sales order lines — ${JSON.stringify(jq).slice(0, 200)}`);
+            const ifItems = fulfilmentItemsOf(jq.items || []);
+            if (!ifItems.ok) {
+                await updateDoc(doc(db, 'hq_sales_orders', d.id), { nsFulfillRefused: ifItems.reason });
+                return writeLog(`⚠ Display fulfilment NOT queued for ${packRef(d)} — ${refusalText(ifItems)}`, 'alert');
+            }
+            await enqueueNsWrite({
+                kind: 'itemfulfillment', dedupeKey: `if:${d.nsInternalId}`,
+                label: `NS Fulfillment — ${packRef(d)} (display ${d.displayNo || '?'} of ${d.displayOfSoId || ''}) from ${d.fulfilFromBin || '—'}`,
+                sourceApp: 'WMS', createdBy: operator?.name || '',
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${d.nsInternalId}/!transform/itemFulfillment`,
+                method: 'POST',
+                payload: { shipStatus: { id: 'B' }, memo: nsMemo(`Display ${d.displayNo || ''} ${d.displayOfSoId || ''}`), item: { items: fulfilFromBinItems(ifItems.items, jq.items || [], d.fulfilFromBin) } },
+                writeBack: [{ collection: 'hq_sales_orders', docId: d.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }],
+            });
+            await updateDoc(doc(db, 'hq_sales_orders', d.id), { nsFulfillQueued: true });
+            writeLog(`📤 Display fulfilment queued for ${packRef(d)} from ${d.fulfilFromBin}.`, 'packing');
+        } catch (e) { writeLog(`⚠ Display fulfilment for ${packRef(d)} failed to queue: ${e.message || e} — it retries on the next load.`, 'alert'); dspFulfilTried.current[d.id] = false; }
+    };
+    useEffect(() => {
+        if (!operator) return;
+        quickShipOrders.filter(d => d.packMode === 'DISPLAY' && d.nsInternalId && !d.nsFulfillQueued && !d.nsFulfillRefused && !dspFulfilTried.current[d.id])
+            .forEach(d => { dspFulfilTried.current[d.id] = true; queueDisplayFulfilment(d); });
+    }, [quickShipOrders, operator]);   // eslint-disable-line react-hooks/exhaustive-deps
 
     // ⇄ THE ORDER'S BIN IN NETSUITE (Stuart 2026-09-30: "once all 50 are shipped there should be 0 of anything on hand in the
     // orders-com1 bin"). Every gathered piece — off the floor, back from the plater, an arrival — moved into the order's
@@ -5882,7 +5989,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         .sort((a, b) => String(a.so.needBy || a.so.needByDate || '￿').localeCompare(String(b.so.needBy || b.so.needByDate || '￿')));
                     // A closed order is not open work: the closer stamps `closed`, or the status says so.
                     const isClosedSo = (o) => o.closed === true || ['Closed', 'CANCELLED', 'Cancelled', 'Deleted'].includes(String(o.status || ''));
-                    const open = quickShipOrders.filter(o => (o.status || 'Pending') !== 'Shipped' && !isClosedSo(o));
+                    const open = quickShipOrders.filter(o => o.packMode !== 'DISPLAY' && (o.status || 'Pending') !== 'Shipped' && !isClosedSo(o));   // a display's shipments ship from the Fulfilment tab
                     const shipped = quickShipOrders.filter(o => o.status === 'Shipped');
                     const closed = quickShipOrders.filter(o => isClosedSo(o) && o.status !== 'Shipped')
                         .sort((a, b) => (b.closedAt || b.updatedAt || 0) - (a.closedAt || a.updatedAt || 0));
@@ -5925,7 +6032,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 {committedBinOf(o) && <span title={`${totalGathered(o)} piece(s) gathered for this order. App-only — NetSuite still shows them in their shelf bin.`} style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.06em', color: '#2e7d32', marginRight: '12px' }}>📦 {t('BIN')} {committedBinOf(o)} · {totalGathered(o)}</span>}
                                 {loaded && (ready
                                     ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#2e7d32', marginRight: '12px' }}>✓ {t('READY TO PACK')}</span>
-                                    : (gs.stage === 'PICK'
+                                    : gs.stage === 'SHIPPED' ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#2e7d32', marginRight: '12px' }}>✓ {t('ALL SHIPPED')}</span> : (gs.stage === 'PICK'
                                         ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.08em', color: theme.brass, marginRight: '12px' }}>⤓ {t('READY TO PICK INTO')} {cBin}</span>
                                         : <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.08em', color: theme.brass, marginRight: '12px' }}>{t('waiting on parts')}</span>))}
                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: o.status === 'Shipped' ? '#3a7d44' : (o.status === 'Picked' ? theme.brass : theme.inkSoft) }}>{o.status || 'Pending'}</span>
@@ -6007,6 +6114,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {o.packStatus === 'Packed'
                                         ? <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44' }}>📦 Packed · {(o.packPhotos || []).length} photo{(o.packPhotos || []).length === 1 ? '' : 's'} · {o.packedBy || ''}{o.nsIfTran ? ` · IF ${o.nsIfTran}${o.nsFulfillStatus ? ` (${o.nsFulfillStatus})` : ''}` : (o.nsFulfillQueued ? ' · IF queued…' : '')}{(o.trackingNumbers || []).length ? ` · 🚚 ${o.trackingNumbers.join(', ')}` : ''}</span>
                                         : (o.status === 'Picked' && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: theme.brass }}>→ in the PACKING tab queue</span>)}
+                                    {o.displayBuildId && (ready || (o.displayShipments || []).length > 0) && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#2e7d32' }}>📦 {(o.displayShipments || []).length} {t('display(s) shipped')}</span>}
+                                    {o.displayBuildId && ready && <button onClick={() => openShipDisplay(o)} disabled={isSyncing || shipBusy} title="Pack one display into its box and ship it to a showroom — its own $0 sales order to the customer, with the showroom's address" style={{ padding: '9px 18px', background: '#2e7d32', color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📦 {t('Ship one display')}</button>}
                                     {committedBinOf(o) && nsBinPlanOf({ so: o, isFeeCode }).some(r => r.qty > 0) && <button onClick={() => syncOrderBinToNetSuite(o)} disabled={isSyncing} title={`Gathered pieces not yet in ${cBin} in NetSuite — move them there as the items the order bills`} style={{ padding: '9px 14px', background: 'transparent', color: '#2e7d32', border: '1px solid #2e7d32', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⇄ {t('Into')} {cBin} {t('in NetSuite')} ({nsBinPlanOf({ so: o, isFeeCode }).filter(r => r.qty > 0).length})</button>}
                                     {gs.toPick.length > 0 && <button onClick={() => pickShelfIntoOrder(o)} disabled={isSyncing} title={`Pick every shelf line still missing from ${cBin} — NetSuite bin transfers into it`} style={{ padding: '9px 18px', background: '#2e7d32', color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⤓ {t('Pick all into')} {cBin} ({gs.toPick.length})</button>}
                                     <button onClick={() => toggleFinishAsAvailable(o)} title={finishAsAvailable(o) ? 'Parts are going to finishing as they arrive — switch back to waiting for the whole order' : 'The exception: send parts to finishing as they arrive, rather than waiting for the whole order'} style={{ padding: '9px 14px', background: 'transparent', color: finishAsAvailable(o) ? theme.brass : theme.inkSoft, border: `1px solid ${finishAsAvailable(o) ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⚡ {t(finishAsAvailable(o) ? 'Waiting off' : 'Finish as available')}</button>
@@ -6420,6 +6529,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 })()}
 
                 {/* 📋 TAB: BIN COUNT */}
+                {/* 📦 SHIP ONE DISPLAY (Stuart 2026-09-30) — opened from a ready display order's SO Pack card. */}
+                {shipDisplay && (
+                    <DisplayShipModal theme={theme} t={t} order={shipDisplay.so} n={shipDisplay.n} boards={shipDisplay.boards} share={shipDisplay.share} shareWhy={shipDisplay.why}
+                        saved={shipDisplay.saved} busy={shipBusy} onCancel={() => setShipDisplay(null)} onShip={shipOneDisplay}
+                        boxOptions={stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand).map(b => ({ value: b.name, label: `${b.name} — ${boxSizeLabel(b)}` }))} />
+                )}
                 {/* ASSEMBLY BUILD (Stuart 2026-09-30): the Bin Count's shape, posting an assembly build (./AssemblyBuildTab). */}
                 {activeTab === 'BUILD' && (
                     <AssemblyBuildTab theme={theme} t={t} hqParts={hqParts} nsStock={nsStock} activeBrand={activeBrand} nsConfig={BRAND_NETSUITE_MAP[activeBrand]}

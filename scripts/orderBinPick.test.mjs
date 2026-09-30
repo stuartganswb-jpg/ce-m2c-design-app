@@ -27,6 +27,12 @@ const all = { ...so, committedQty: { 'H1-1R/EP4': 50, 'H1-1CP-V/EP4': 100, 'H1-1
 eq('every piece in the bin → PACK', soGatherStageOf({ so: all, statOf }).stage, 'PACK');
 eq('…half the cover plates is not all of them', soGatherStageOf({ so: { ...all, committedQty: { ...all.committedQty, 'H1-1CP-V/EP4': 50 } }, statOf }).stage, 'PICK');
 
+// ── AS DISPLAYS SHIP, THE NEED FALLS WITH THEM (so.shippedQty) — never back to "waiting on parts" ──
+const after1 = { ...all, committedQty: { 'H1-1R/EP4': 49, 'H1-1CP-V/EP4': 98, 'H1-1STDOFF': 49 }, shippedQty: { 'H1-1R/EP4': 1, 'H1-1CP-V/EP4': 2, 'H1-1STDOFF': 1 } };
+eq('one display shipped: still READY TO PACK the other 49', soGatherStageOf({ so: after1, statOf }).stage, 'PACK');
+const allGone = { ...all, committedQty: {}, shippedQty: { 'H1-1R/EP4': 50, 'H1-1CP-V/EP4': 100, 'H1-1STDOFF': 50 } };
+eq('every display shipped: SHIPPED, the bin at 0', soGatherStageOf({ so: allGone, statOf }).stage, 'SHIPPED');
+
 // THE PICKS: each item's remaining need, from its live bins largest first, never from the order's own bin.
 const binsByCode = {
     'H1-1CP-V/EP4': [{ bin: 'M E4R-N2-R3', name: 'M E4R-N2-R3', qty: 60 }, { bin: 'RAW', name: 'RAW', qty: 70 }, { bin: 'ORDERS-COM1', name: 'ORDERS-COM1', qty: 5 }],
@@ -76,5 +82,7 @@ eq('one display of fifty: a pole (2 ft of H1-1R), a painted cap, two cover plate
 eq('refused: a line that does not divide, or a bin short of one display', [displayShareOf({ so: t, boards: 7 }).ok, displayShareOf({ so: { ...t, committedQty: { ...t.committedQty, HTSLNTCAR: 5 } }, boards: 50 }).why, displayShareOf({ so: t, boards: 0 }).ok],
     [false, 'HTSLNTCAR: the bin holds 5, a display needs 10', false]);
 
+eq('the last display: 2 cover plates left across two lines still ship (counted per item, not per line)', displayShareOf({ so: { ...t, committedQty: { 'H1-1R/EP4': 1, 'H1-138CC/P06': 1, 'H1-1CP-V/EP4': 2, 'H1-2RCTAECC/EP1': 1, HTSLNTCAR: 10 } }, boards: 50 }).ok, true);
+eq('…one cover plate short is refused, per item', displayShareOf({ so: { ...t, committedQty: { 'H1-1R/EP4': 1, 'H1-138CC/P06': 1, 'H1-1CP-V/EP4': 1, 'H1-2RCTAECC/EP1': 1, HTSLNTCAR: 10 } }, boards: 50 }).why, 'H1-1CP-V/EP4: the bin holds 1, a display needs 2');
 console.log(`orderBinPick: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

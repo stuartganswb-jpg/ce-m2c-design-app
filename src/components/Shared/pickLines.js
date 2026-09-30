@@ -182,10 +182,14 @@ export const unpackedSiblingsOf = (job, docs = []) => {
 // with the WHOLE need, and every gather caps at it. Compared line by line, the first 50 read both lines GATHERED and the
 // gather refused the second 50: the order packed short on every repeated item. Fees, kit lines and lines taken off the
 // order need nothing.
+// What has already SHIPPED of an item (a display order ships one display at a time — Shared/displayShipment) is no longer
+// needed in the order's bin: the need is what is ordered less what has gone (so.shippedQty, per code).
 export const soCodeNeedOf = (so, code, isFeeCode = null) => {
     const c = up(code);
     if (!c) return 0;
-    return ((so && so.lines) || []).reduce((a, l, i) => a + ((soLineCodeOf(l) === c && !soLineIsFee(so, l, i, isFeeCode)) ? (Number(l.qty) || 0) : 0), 0);
+    const ordered = ((so && so.lines) || []).reduce((a, l, i) => a + ((soLineCodeOf(l) === c && !soLineIsFee(so, l, i, isFeeCode)) ? (Number(l.qty) || 0) : 0), 0);
+    const shipped = Number(((so && so.shippedQty) || {})[c]) || 0;
+    return Math.max(0, ordered - shipped);
 };
 export const soPackLineStateOf = ({ so, line, idx, stat = null, isFeeCode = null }) => {
     const c = soLineCodeOf(line);
