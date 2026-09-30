@@ -5,7 +5,7 @@
 // the ONE list's answers so a reader swap cannot change what releases. If a rule change breaks a
 // row here, the change is wrong, not the test — unless Stuart changed the rule.
 
-import {
+import { packReadinessOf,
     GATES, gatesOf, openGatesOf, isReleasable, gateSummary,
     customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor, wholeOrderWait, canReopenPostedOrder, netSuiteOrderNoOf, setupWaitsOnShop, stageWaitsOnMatch, nothingToPick, isSalesDoc, stagingMatched } from '../src/components/Shared/orderStatus.js';
 
@@ -150,6 +150,24 @@ ok('a quote has none', netSuiteOrderNoOf({ status: 'CONFIGURED' }, null) === '')
     eq('a CPQ-split sales document obeys the same gate (no door is consulted)', stageWaitsOnMatch({ orderType: 'sales', salesOrderId: 'SO60585', partsList: [{ legacyErpId: 'H1-1R', qty: 35 }] }), 'Waiting on the WMS pick — small parts not picked yet');
     eq('a stock build skips the match, as the scheduler always has', stageWaitsOnMatch({ orderType: 'stock', stockErpId: 'H1-1R/P', partsList: [] }), '');
     eq('nothing to pick / matched / sales — the three facts the floor reads', [nothingToPick(poleOnly), stagingMatched({ ...mixed, stagingStatus: 'MATCHED' }), isSalesDoc({ salesOrderId: 'x' }), isSalesDoc({ orderType: 'stock' })], [true, true, true, false]);
+}
+// ── READY TO PACK — only when it is (2026-09-30, SO60676) ─────────────────────────────────────
+{
+    const so60676 = { salesOrderId: 'SO60676', orderType: 'sales', hasCustomSibling: true, customFabStatus: 'Complete', sentToPickPack: true, pickStatus: 'Picked_Awaiting_Staging', currentPhase: 'Setup', totalPoles: 15, tasks: {}, currentStepIndex: 0 };
+    let r = packReadinessOf(so60676);
+    eq('SO60676 today: not ready, and why — both finishing streams', [r.ready, r.word, r.waits], [false, 'NOT READY TO PACK', ['small parts: setup queue (not started)', 'poles: setup queue (not started)']]);
+    r = packReadinessOf({ ...so60676, currentPhase: 'Complete' });
+    eq('finishing complete and the shop half in → ready', [r.ready, r.word], [true, 'READY TO PACK']);
+    r = packReadinessOf({ ...so60676, currentPhase: 'Complete', customFabStatus: 'Sent to Plating' });
+    eq('finished but the custom half at the plater → not ready', [r.ready, r.waits], [false, ['custom shop: at the plater']]);
+    r = packReadinessOf({ ...so60676, currentPhase: 'Complete', held: true, heldReason: 'waiting on backordered material' });
+    eq('a hold says so first', [r.ready, r.waits[0]], [false, 'on hold — waiting on backordered material']);
+    r = packReadinessOf({ pickOnly: true, currentPhase: 'Complete', sentToPickPack: true, pickStatus: 'Pending' });
+    eq('pick-only with the pick still open → not ready', [r.ready, r.waits], [false, ['parts pick: still open in the WMS pick queue']]);
+    eq('packed and gathered say what they are', [packReadinessOf({ packStatus: 'Packed', nsIfTran: 'IF1' }).word, packReadinessOf({ packStatus: 'Gathered' }).word, packReadinessOf({ currentPhase: 'Closed' }).word], ['PACKED', 'GATHERED', 'CLOSED']);
+    r = packReadinessOf({ ...so60676, currentPhase: 'Painting', currentStepIndex: 1, tasks: { spinSpray: { status: 'Running', assignedTo: 'Ana' } } });
+    ok('mid-coat reads painting, never ready', !r.ready && /small parts: painting/.test(r.reason));
+    eq('no document → nothing', packReadinessOf(null), null);
 }
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

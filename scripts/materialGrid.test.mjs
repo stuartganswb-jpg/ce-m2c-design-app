@@ -3,6 +3,7 @@
 import {
     materialRowsOf, materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialCodesOf,
     materialRefreshable, materialAgeText, refreshDayKey, refreshDue, MATERIAL_STATE,
+    pickDoneOf, pickedRowsOf, PICK_STATE,
 } from '../src/components/Shared/materialGrid.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
@@ -103,6 +104,35 @@ const { COVERED, SHORT, UNVERIFIED } = MATERIAL_STATE;
     eq('another session started it five minutes ago: not again', refreshDue({ lastRunDay: '2026-09-22', running: { at: at(8, 55) } }, at(9)), false);
     eq('…but a run that hung for an hour is not a lock', refreshDue({ lastRunDay: '2026-09-22', running: { at: at(7) } }, at(9)), true);
     eq('the age line', [materialAgeText(at(9) - 5 * 60000, at(9)), materialAgeText(at(9) - 3 * 3600000, at(9)), materialAgeText(at(9) - 2 * 86400000, at(9)), materialAgeText(null)], ['5 min ago', '3 h ago', '2 days ago', '']);
+}
+
+// ── AFTER THE PICK, THE PICK IS THE TRUTH (2026-09-30, SO60676) ─────────────────────────────
+{
+    const L = (code, qty) => ({ legacyErpId: code, qty });
+    const so60676 = {
+        pickStatus: 'Picked_Awaiting_Staging',
+        partsList: [L('HUSCBPSTA', 1), L('HUSCBPSTA', 1), L('HCUSR1', 44), L('HCUMLB410EB', 1), L('HUSCBPSTA', 1), L('HUSCBPSTA', 1), L('HCUSR1', 44), L('H1-1JNR-16G', 1)],
+        materialRows: [
+            { code: 'HCUSR1', name: '1" Ring (Single)', need: 88, onHand: 0, short: 88, state: SHORT, coverCodes: ['HCUSR1'] },
+            { code: 'H1-1JNR-16G', need: 1, onHand: 922, short: 0, state: COVERED, coverCodes: ['H1-1JNR-16G', 'H1-1JNR-16G/P'] },
+            { code: 'CRS-BAR', need: 2, onHand: 40, short: 0, state: COVERED },
+        ],
+    };
+    ok('picked, awaiting staging = the pull has happened', pickDoneOf(so60676));
+    ok('pending, or no document = not yet', !pickDoneOf({ pickStatus: 'Pending' }) && !pickDoneOf(null));
+    ok('staged, cleared by hand, or packed = happened', pickDoneOf({ pickStatus: 'Staged_Ready_For_Finishing' }) && pickDoneOf({ pickStatus: 'Cleared_Overtaken' }) && pickDoneOf({ packStatus: 'Packed' }));
+    let r = pickedRowsOf(so60676);
+    eq('SO60676: the rings read picked 88 of 88, not the stale "0 on hand"', [r[0].pickState, r[0].picked, r[0].target, r[0].shortAtPick], [PICK_STATE.PICKED, 88, 88, 0]);
+    eq('a cover code finds its pick line', [r[1].pickState, r[1].picked], [PICK_STATE.PICKED, 1]);
+    eq('a material with no pick line says so', [r[2].pickState, r[2].picked], [PICK_STATE.NOT_ON_PICK, null]);
+    r = pickedRowsOf({ ...so60676, pickShorts: [{ line: 6, itemId: 'HCUSR1', target: 44, picked: 20 }] });
+    eq('a short pick on one of two lines', [r[0].pickState, r[0].picked, r[0].shortAtPick], [PICK_STATE.SHORT_AT_PICK, 64, 24]);
+    r = pickedRowsOf({ ...so60676, pickSkips: [{ line: 2 }, { line: 6 }] });
+    eq('both lines skipped', [r[0].pickState, r[0].picked], [PICK_STATE.SKIPPED, 0]);
+    r = pickedRowsOf({ ...so60676, pickSkips: [{ line: 2 }] });
+    eq('one of two skipped is short, not skipped', [r[0].pickState, r[0].picked, r[0].shortAtPick], [PICK_STATE.SHORT_AT_PICK, 44, 44]);
+    r = pickedRowsOf({ ...so60676, pickStatus: 'Cleared_Overtaken' });
+    eq('a pick cleared by hand says cleared, never a count', [r[0].pickState, r[0].picked], [PICK_STATE.CLEARED, null]);
 }
 
 console.log(`materialGrid: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

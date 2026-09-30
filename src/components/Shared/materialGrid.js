@@ -204,6 +204,39 @@ export const materialRefreshable = (d, coll) => {
     return false;
 };
 
+// ── AFTER THE PICK, THE PICK IS THE TRUTH (Stuart 2026-09-30, SO60676: "yes fix the material card") ──────────
+// The stock columns are read at release and each morning UNTIL the parts are pulled (materialRefreshable). After
+// that they are history — SO60676's card still said "1\" Ring · need 88 · on hand 0 · SHORT" from the 9/29 read,
+// taken before NetSuite committed the 88 rings to it, long after the pick had taken all 88. Once the document is
+// picked the card says what the pick TOOK, line by line from the pick's own records (pickShorts / pickSkips, by
+// partsList line): picked in full, short at the pick, skipped, or not a pick line at all.
+export const PICK_STATE = { PICKED: 'PICKED', SHORT_AT_PICK: 'SHORT_AT_PICK', SKIPPED: 'SKIPPED', CLEARED: 'CLEARED', NOT_ON_PICK: 'NOT_ON_PICK' };
+/** Has this document's parts pull happened (picked, staged, cleared by hand, or packed)? */
+export const pickDoneOf = (d) => {
+    if (!d) return false;
+    const ps = String(d.pickStatus || '');
+    return ps === 'Picked_Awaiting_Staging' || ps === 'Staged_Ready_For_Finishing' || ps.startsWith('Cleared') || !!d.packStatus;
+};
+/** The material rows as the pick left them. → [{ ...row, pickState, picked, target, shortAtPick }] */
+export const pickedRowsOf = (d) => {
+    const rows = (d && Array.isArray(d.materialRows)) ? d.materialRows : [];
+    const lines = (d && Array.isArray(d.partsList)) ? d.partsList : [];
+    const cleared = String((d && d.pickStatus) || '').startsWith('Cleared');
+    const shortAt = new Map(((d && d.pickShorts) || []).filter(x => x && Number.isInteger(x.line)).map(x => [x.line, x]));
+    const skipAt = new Set(((d && d.pickSkips) || []).filter(x => x && Number.isInteger(x.line)).map(x => x.line));
+    return rows.map(r => {
+        const codes = new Set([r.code, ...(Array.isArray(r.coverCodes) ? r.coverCodes : [])].map(U).filter(Boolean));
+        const idxs = lines.map((l, i) => ({ l, i })).filter(x => x.l && !x.l.isFee && !x.l.isKit && codes.has(U(x.l.legacyErpId || x.l.partId)));
+        if (!idxs.length) return { ...r, pickState: PICK_STATE.NOT_ON_PICK, picked: null, target: null, shortAtPick: 0 };
+        const target = idxs.reduce((a, x) => a + N(x.l.qty), 0);
+        if (cleared) return { ...r, pickState: PICK_STATE.CLEARED, picked: null, target, shortAtPick: 0 };
+        const picked = idxs.reduce((a, x) => a + (skipAt.has(x.i) ? 0 : shortAt.has(x.i) ? N(shortAt.get(x.i).picked) : N(x.l.qty)), 0);
+        const allSkipped = idxs.every(x => skipAt.has(x.i));
+        const pickState = allSkipped ? PICK_STATE.SKIPPED : picked < target ? PICK_STATE.SHORT_AT_PICK : PICK_STATE.PICKED;
+        return { ...r, pickState, picked, target, shortAtPick: Math.max(0, target - picked) };
+    });
+};
+
 /** "12 min ago" / "3 h ago" / "2 days ago" — the honesty line under the grid. */
 export const materialAgeText = (asOf, now = Date.now()) => {
     const t = N(asOf);

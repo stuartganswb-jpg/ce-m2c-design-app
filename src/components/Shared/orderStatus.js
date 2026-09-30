@@ -240,6 +240,34 @@ export function orderStatusOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
     };
 }
 
+// ── READY TO PACK — SAID ONCE, AND ONLY WHEN IT IS TRUE (Stuart 2026-09-30, SO60676: "it also needs to be very
+// clear at what stage everything is, it should not be seen as available to pack unless it is available to pack").
+// A finishing document joins the WMS pack queue when its finishing is COMPLETE (PickPackApp packQueue) and packs
+// only with its custom half in (customPartsReady, the pack guard). This is that rule in words, for every card that
+// shows a document: READY TO PACK only then; otherwise NOT READY TO PACK and exactly what it waits on — the hold,
+// the shop, each finishing stream by its stage, an open pick. Packed / gathered say so.
+// → { ready, done, word, reason, waits: [..] }
+export function packReadinessOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
+    if (!wo) return null;
+    if (wo.currentPhase === 'Closed') return { ready: false, done: true, word: 'CLOSED', reason: 'out of production', waits: [] };
+    if (wo.packStatus === 'Packed') return { ready: false, done: true, word: 'PACKED', reason: wo.nsIfTran ? `fulfilment ${wo.nsIfTran}` : 'packed — awaiting shipment', waits: [] };
+    if (wo.packStatus === 'Gathered') return { ready: false, done: true, word: 'GATHERED', reason: 'gathered into its order at Packaging Prep', waits: [] };
+    const waits = [];
+    if (wo.held) waits.push(`on hold${wo.heldReason ? ` — ${String(wo.heldReason).slice(0, 120)}` : ''}`);
+    if (wo.hasCustomSibling && !customPartsReady(wo)) waits.push(`custom shop: ${String(customFabLabel(wo)).toLowerCase()}`);
+    const ps = String(wo.pickStatus || '');
+    if (wo.sentToPickPack && (ps === '' || ps === 'Pending')) waits.push('parts pick: still open in the WMS pick queue');
+    if (!(wo.currentPhase === 'Complete' || wo.pickOnly === true)) {
+        const st = orderStatusOf(wo, { recipeLen, poleRecipeLen });
+        const open = st.streams.filter(x => x.key !== 'CUSTOM' && x.stage !== 'FINISHED' && x.stage !== 'NONE');
+        open.forEach(x => waits.push(`${x.label.toLowerCase()}: ${stageLabel(x.stage).toLowerCase()}${x.detail ? ` (${x.detail})` : ''}`));
+        if (!open.length) waits.push('finishing: not signed off the floor yet');
+    }
+    return waits.length
+        ? { ready: false, done: false, word: 'NOT READY TO PACK', reason: waits.join(' · '), waits }
+        : { ready: true, done: false, word: 'READY TO PACK', reason: 'finished — in the WMS pack queue', waits: [] };
+}
+
 // ── A STOCKED SALES ORDER (Order Entry / Quick Ship) ─────────────────────────────────────────
 // hq_sales_orders orderClass 'QUICKSHIP': no split, no floor docs — the lines are picked and packed
 // straight off the shelf by the WMS, which stamps pick/pack state on the SO doc itself. RTG shows
