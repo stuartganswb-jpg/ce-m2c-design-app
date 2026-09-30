@@ -20,6 +20,7 @@ import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
 import { coverCodesOf, backorderHoldOf, isBackorderHold } from '../Shared/backorder';
 import { uomStampOf } from '../Shared/uom';
 import { fetchAvailabilityUnits, fetchStockForOrder, fetchOrderCommitted, withOrderHeld } from '../Shared/oeReviewPlan';
+import { unmarkedKitLinesOf, kitRepairPlanOf, kitRepairStockCodesOf } from '../Shared/kitLinesRepair';
 import { jobFabFactsOf, cutSheetMissingOf, jobDrawingOf, shopReleaseFieldsOf } from '../Shared/cpqJobFacts';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
@@ -2529,6 +2530,86 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         if (skipped.length) addLog(`🎨 Not changed (a pole step completed, or the document changed since the list was drawn): ${skipped.join(' · ')}`, 'warn');
         if (!done && skipped.length) alert(`Nothing was written — ${skipped.join(' · ')}`);
     };
+    // 🧰 KIT LINES → PARTS (Stuart 2026-09-30, SO60432: "this is the kit code from the sale, it should not be looking to pick
+    // this" · "build the button"). A finishing document written before the kit rules (CPQ split 09-18, every door 09-28)
+    // carries the KIT as a pull line: the pick no longer offers it (Shared/pickLines.isKitHolderLine), but an item kit's
+    // parts were never written and its backorder waits on the kit. Listed from the live feed while the pick has not
+    // started; one press flags the kit lines in place, appends the parts and puts the backorders right on the document
+    // and its sales order (Shared/kitLinesRepair — the one rule, 10.5's re-read pattern).
+    const [kitLib, setKitLib] = useState([]);
+    useEffect(() => {
+        getDocs(query(collection(db, 'Approved_Designs'), where('partClass', '==', 'Kit')))
+            .then(snap => setKitLib(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+            .catch(e => console.warn('kit records read failed — kit-line repair list off:', e));
+    }, []);
+    const kitLineRepairs = useMemo(() => {
+        const byCode = new Map(kitLib.map(k => [String(k.legacyErpId || k.itemId || '').toUpperCase(), k]));
+        const find = (c) => byCode.get(String(c || '').toUpperCase()) || null;
+        return liveFin
+            .filter(f => f && !f.deleted && f.currentPhase !== 'Closed' && f.status !== 'Closed' && f.packStatus !== 'Packed')
+            .map(fin => ({ fin, kits: unmarkedKitLinesOf(fin, find) }))
+            .filter(x => x.kits.length);
+    }, [liveFin, kitLib]);
+    const writeKitParts = async (item) => {
+        const f0 = item && item.fin; if (!f0) return;
+        if (!window.confirm(`🧰 Write the kit lines of ${woRefOf(f0)} as their parts?\n\n${item.kits.map(k => `   ${k.code} — ${k.kind === 'SYSTEM' ? 'traverse system kit: flagged (its parts are already listed)' : `item kit ${k.hit.kitCode}: flagged, its parts added`}`).join('\n')}\n\nNo line moves. The backorders that point at a kit line are replaced by the parts' — read live from NetSuite. Nothing is sent to NetSuite.`)) return;
+        try {
+            const finSnap = await getDoc(doc(db, 'fin_workorders', f0.id));
+            if (!finSnap.exists()) return alert(`${woRefOf(f0)} no longer exists — nothing was written.`);
+            const fin = { id: finSnap.id, ...finSnap.data() };
+            const { libraryParts } = await loadTxData();
+            const byCode = new Map(libraryParts.map(p => [String(p.legacyErpId || p.itemId || '').toUpperCase(), p]));
+            const byId = new Map(libraryParts.map(p => [String(p.id), p]));
+            const findByCode = (c) => byCode.get(String(c || '').toUpperCase()) || null;
+            const findPart = (id) => byId.get(String(id)) || null;
+            const soRow = liveSO.find(s => s && (s.soId === fin.salesOrderId || s.id === fin.salesOrderId || s.soId === fin.orderKey)) || null;
+            const soSnap = soRow ? await getDoc(doc(db, 'hq_sales_orders', soRow.id)) : null;
+            const so = soSnap && soSnap.exists() ? { id: soSnap.id, ...soSnap.data() } : null;
+            // Live stock for every part's cover codes — this order's own NetSuite hold counted as its own. A code NetSuite
+            // returns nothing for is none on hand; a failed read writes no backorder at all (and says so).
+            let stockMap = null;
+            const codes = kitRepairStockCodesOf(fin, findByCode, findPart);
+            if (codes.length) {
+                try {
+                    const res = await fetchStockForOrder(codes, (BRAND_NETSUITE_MAP[fin.brand || activeBrand] || {}).location || '17', so && so.nsInternalId);
+                    stockMap = { ...res.map };
+                    codes.forEach(c => { if (!stockMap[c]) stockMap[c] = { available: 0, onOrder: 0 }; });
+                } catch (e) { stockMap = null; }
+            }
+            const plan = kitRepairPlanOf({ fin, soBackorderLines: so ? (so.backorderLines || []) : null, findByCode, findPart, stockMap, by: currentUser || '', now: Date.now() });
+            if (!plan.ok) return alert(`🧰 ${woRefOf(fin)}: nothing was written — ${plan.reason}.`);
+            await updateDoc(doc(db, 'fin_workorders', fin.id), plan.finPatch);
+            if (so && plan.soBackorderLines) await updateDoc(doc(db, 'hq_sales_orders', so.id), { backorderLines: plan.soBackorderLines, backorderAt: Date.now() });
+            const summary = `${plan.flagged.length} kit line(s) flagged, ${plan.appended.length} part line(s) added · backorders ${plan.dropped} dropped, ${plan.added} added${plan.stockKnown ? '' : ' (stock unreadable — none written)'} · ${plan.held ? 'still held' : 'hold cleared'}`;
+            addLog(`🧰 ${woRefOf(fin)}: kit lines written as their parts — ${summary}.`, 'success');
+            alert(`🧰 ${woRefOf(fin)} — ${summary}.\n\nThe WMS pick and the Setup Queue read the parts now.`);
+        } catch (e) { alert(`🧰 Kit repair failed — ${e.message || e}`); }
+    };
+    const kitLinePanel = () => {
+        if (!kitLineRepairs.length) return null;
+        return (
+            <div style={{ padding: '10px 24px', borderBottom: '1px solid var(--paper-2)' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>
+                    🧰 Kit lines on the pull list — a kit is sold, never picked · {kitLineRepairs.length}
+                </span>
+                <div style={{ fontSize: '11px', color: 'var(--ink-soft)', margin: '4px 0 8px', lineHeight: 1.5 }}>
+                    Written before the kit rules (2026-09-18 / 09-28): the kit itself sits on the pull list. The pick no longer offers it, but an item kit's parts were never written and its backorder waits on the kit. One press flags the kit lines where they are, adds the kit's parts in its finish, and replaces the kit's backorders with the parts' (read live). Nothing goes to NetSuite.
+                </div>
+                {kitLineRepairs.map(x => {
+                    const started = x.fin.pickStatus && x.fin.pickStatus !== 'Pending';
+                    return (
+                        <div key={x.fin.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 0', fontSize: '0.85rem', flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{woRefOf(x.fin)}</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{[...new Set(x.kits.map(k => k.code))].map(c => `${c} ×${x.kits.filter(k => k.code === c).length}`).join(' · ')}</span>
+                            {started
+                                ? <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f' }}>picking started ({x.fin.pickStatus}) — not rewritten</span>
+                                : <button onClick={() => writeKitParts(x)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}>🧰 Kit lines → parts</button>}
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    };
     const poleTrackPanel = () => {
         if (!poleTrackRepairs.length) return null;
         const fixable = poleTrackRepairs.filter(x => x.r.patch);
@@ -3640,6 +3721,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                         {bulkReopenPanel()}
                         {poleCountPanel()}
                         {poleTrackPanel()}
+                        {kitLinePanel()}
                         {reconcilePanel()}
                     </div>
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>
