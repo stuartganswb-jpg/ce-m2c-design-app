@@ -3097,6 +3097,50 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
 
     // --- NETSUITE ASSEMBLY BUILD (in-house convert: consume raw base -> build phosphated assembly) ---
+    // ── A CONVERT THAT ANSWERS AN OPEN TO-DO (Eric, App Imp 2026-09-29: "Converted the two parts of the Read brackets
+    // into the /P items. Both conversions posted … bracket order did not update") ─────────────────────────────────────
+    // Only a convert started from its "Needs Phosphating" row closed the to-do, built against the to-do's NetSuite work
+    // order and cleared the order's convert gate. H2-138-TB3/TB4 were converted from the item: the /P was built, but the
+    // to-dos stayed open, WO11574/WO11576 stayed Released and WO-OE-HRW-138TRAVLB stayed gated. So a convert started any
+    // other way — straight or onto the cart — asks whether it is FOR an open to-do of the same raw → /P (Cancel = plain stock).
+    const openConvertTodosFor = (baseErp, targetErp) => {
+        const b = String(baseErp || '').toUpperCase(), t = String(targetErp || '').toUpperCase();
+        return convertDemands.filter(d => d && d.status !== 'on_cart' && String(d.baseErpId || '').toUpperCase() === b && String(d.targetErpId || '').toUpperCase() === t)
+            .sort((x, y) => (Number(x.createdAt) || 0) - (Number(y.createdAt) || 0));
+    };
+    const askConvertTodo = (baseErp, targetErp, qty) => {
+        if (convertDemandId) return convertDemandId;
+        const list = openConvertTodosFor(baseErp, targetErp);
+        if (!list.length) return null;
+        const d = list[0];
+        const forWo = d.finWoErpId || d.finWoId || '';
+        if (!window.confirm(`This convert matches an open to-do${list.length > 1 ? ` (the oldest of ${list.length})` : ''}:\n\n   ${d.woNum || d.id} · ${d.qty} × ${d.baseErpId} → ${d.targetErpId}${forWo ? ` · for ${forWo}` : ''}${d.nsWoTran ? ` · NetSuite ${d.nsWoTran}` : ''}\n\nConvert ${qty} against that to-do?\n\nOK = it builds against the to-do's NetSuite work order and clears the order's convert gate — exactly as its Needs Phosphating row does.\nCancel = convert as plain stock; the to-do stays open.`)) return null;
+        setConvertDemandId(d.id);
+        return d.id;
+    };
+    // ✓ CONVERTED OUTSIDE THIS TO-DO (same card): the raw was already converted another way — close the to-do the way a
+    // convert does (ledgered) and clear the order's gate when it is the last. Nothing posts to NetSuite; the to-do's own
+    // work order was not built against, so it is named for closing by hand.
+    const settleConvertTodo = async (d) => {
+        if (!d) return;
+        const forWo = d.finWoErpId || d.finWoId || '';
+        if (!window.confirm(`✓ ${d.woNum || d.id} — ${d.qty} × ${d.baseErpId} → ${d.targetErpId}${forWo ? ` for ${forWo}` : ''} was converted another way?\n\nThe to-do closes${d.finWoId ? ", and when it is the order's last its convert gate clears" : ''}. Nothing is posted to NetSuite — the /P must already be built.${d.nsWoTran ? `\n\n⚠ Its NetSuite work order ${d.nsWoTran} was not built against: close it in NetSuite by hand, or it stays on order.` : ''}`)) return;
+        try {
+            setIsSyncing(true);
+            await hardDeleteWithLedger({ db, doc, setDoc, deleteDoc }, {
+                collection: 'convert_demand', docId: d.id, record: d, kind: 'convert_demand',
+                by: operator?.name || '', from: 'WMS', reason: 'converted outside the to-do',
+            });
+            let note = '';
+            if (d.finWoId) {
+                const cleared = await clearConvertGate(d, operator?.name || '');
+                note = cleared ? ` — ${d.finWoId} ${cleared === 'released' ? 'auto-released to the finishing floor' : 'released from its convert gate (RTG can dispatch it)'}` : ` — ${d.finWoId} still waits on another convert to-do`;
+            }
+            writeLog(`✓ Convert to-do ${d.woNum || d.id} settled: ${d.qty} × ${d.baseErpId} → ${d.targetErpId} converted outside the to-do${note}.${d.nsWoTran ? ` NetSuite ${d.nsWoTran} to close by hand.` : ''}`, 'wms');
+            alert(`✓ ${d.woNum || d.id} closed${note}.${d.nsWoTran ? `\n\nClose NetSuite work order ${d.nsWoTran} by hand.` : ''}`);
+        } catch (e) { alert('Could not close the to-do: ' + (e.message || e)); }
+        finally { setIsSyncing(false); }
+    };
     const pushAssemblyBuild = async () => {
         const base = convertBase;
         const target = (convertTargetId && hqParts.find(p => p.id === convertTargetId))
@@ -3111,6 +3155,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
         const srcBin = binOf(base);
         const destBin = convertDestScan.trim() ? convertDestScan.trim().toUpperCase() : binOf(target);   // the scan, else the home bin
+        // Is this convert FOR an open to-do? (asked only when it was not started from one)
+        const demandId = askConvertTodo(base.erpId, erpOf(target), qty);
         const memoText = `Phosphate convert by ${operator?.name || 'Unknown'}${convertMemo.trim() ? ` — ${convertMemo.trim()}` : ''}`;
 
         let dbg = '';
@@ -3131,7 +3177,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const lockRx = await lockBin(receiveBin);   // THE BIN LOCK — the home bin has to be a real bin
             if (!lockRx.ok) { setIsSyncing(false); return alert(lockRx.msg); }
             receiveBin = lockRx.bin;
-            const demandDoc = convertDemandId ? (convertDemands.find(d => d.id === convertDemandId) || {}) : {};
+            const demandDoc = demandId ? (convertDemands.find(d => d.id === demandId) || {}) : {};
             const demandWo = (!demandDoc.nsWoOnErp || demandDoc.nsWoOnErp === demandDoc.targetErpId) ? demandDoc.nsWoId : null;
             const built = await postConvertBuild({ itemId: assemblyId, quantity: qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: nsMemo(memoText), workOrderId: demandWo || undefined });
 
@@ -3141,9 +3187,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (binOf(target) === 'UNASSIGNED' && target.id) await updateDoc(doc(db, 'Approved_Designs', target.id), { 'manufacturingSpecs.binLocation': receiveBin }).catch(() => {});
             await coverBackordersOn(erpOf(target), qty, 'convert');   // close-out #18
             // Converted straight through (no cart hop) — the HQ to-do that opened this is satisfied.
-            if (convertDemandId) {
-                const dm = convertDemands.find(d => d.id === convertDemandId) || null;
-                await deleteDoc(doc(db, "convert_demand", convertDemandId)).catch(() => {});
+            if (demandId) {
+                const dm = convertDemands.find(d => d.id === demandId) || null;
+                await deleteDoc(doc(db, "convert_demand", demandId)).catch(() => {});
                 if (dm && dm.finWoId) {
                     try {
                         const cleared = await clearConvertGate(dm, operator?.name || '');
@@ -3383,7 +3429,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const base = convBatch || { id: batchId, brand: activeBrand, cartBin: bin, status: 'open', lines: [], createdAt: Date.now(), createdBy: operator?.name || 'Unknown' };
         // demandId rides on the line when this pull answers an HQ "Needs Phosphating" to-do, so the
         // to-do closes when the BUILD posts (not when it reaches the cart — it isn't done until then).
-        const line = { lineId: `L${Date.now()}`, rawId: convertBase.id, rawErpId: convertBase.erpId, rawName: convertBase.itemName, rawInternalId: convertBase.netSuiteInternalId, targetErpId: erpOf(convTarget), targetName: convTarget.itemName, targetInternalId: convTarget.netSuiteInternalId || null, qty, srcBin: src, status: 'on_cart', newBin: '', demandId: convertDemandId || null };
+        const demandId = askConvertTodo(convertBase.erpId, erpOf(convTarget), qty);   // FOR an open to-do? (asked only when not started from one)
+        const line = { lineId: `L${Date.now()}`, rawId: convertBase.id, rawErpId: convertBase.erpId, rawName: convertBase.itemName, rawInternalId: convertBase.netSuiteInternalId, targetErpId: erpOf(convTarget), targetName: convTarget.itemName, targetInternalId: convTarget.netSuiteInternalId || null, qty, srcBin: src, status: 'on_cart', newBin: '', demandId: demandId || null };
         try {
             setIsSyncing(true);
             // 1) Record the line FIRST — so a Firestore permission/write failure surfaces BEFORE any
@@ -6425,6 +6472,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     setConvertLot(new Date().toLocaleDateString('en-CA'));
                                                     setConvertDemandId(d.id);
                                                 }} disabled={isSyncing || onCart} style={{ padding: '10px 16px', background: onCart ? theme.paper2 : theme.brass, color: onCart ? theme.inkSoft : '#fff', border: onCart ? `1px solid ${theme.line}` : 'none', cursor: (isSyncing || onCart) ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>{onCart ? 'On cart' : 'Pull & Convert →'}</button>
+                                                {(isFloorSupervisor(operator) || normRole(operator?.role) === 'executive') && (
+                                                    <button onClick={() => settleConvertTodo(d)} disabled={isSyncing || onCart}
+                                                        title="The raw was already converted another way (not from this row): close this to-do and clear the order's convert gate. Nothing is posted to NetSuite — its work order is named for closing by hand."
+                                                        style={{ padding: '10px 12px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: isSyncing || onCart ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em' }}>✓ Converted outside this to-do</button>
+                                                )}
                                                 {d.nsWoId && ['admin', 'superadmin'].includes(safeUserRole) && (
                                                     <button onClick={async () => {
                                                         // ⟲ RE-ANCHOR (Stuart 2026-08-31): for the multi-fire cleanup — close the
