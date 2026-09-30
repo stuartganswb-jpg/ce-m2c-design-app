@@ -1658,9 +1658,13 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     // pick, the price and the NetSuite line all read that 1. One plate per arm: a selected
     // BACKPLATE's quantity is the quantity of the selected BRACKET at its own position and tier.
     const qtyOf = (c) => (Number(quantities[c.id]) > 0 ? Number(quantities[c.id]) : c.qty);
+    // ⚠ OF ITS OWN TIER WHEN IT HAS ONE (Eric 2026-09-30, App Imp: "Back/Cover plate options not calculating base on
+    // entered quantity (x3 in this instance)"). H1-138's CENTER-BACKPLATE pins carry no tier while its passing bracket
+    // H1-138ILPS is tagged FRONT, so "same tier" found no arm and the cover plate billed 1 under three brackets. A plate
+    // with no tier belongs to the bracket at its position — the same rule the riders below already follow.
     const armOf = (plate) => selected.find(x => x.role === 'BRACKET'
         && String(x.position || '').toUpperCase() === String(plate.position || '').toUpperCase()
-        && String(x.tier || '') === String(plate.tier || ''));
+        && (!plate.tier || String(x.tier || '') === String(plate.tier || '')));
     // One per bracket: the rider's own quantity (usually 1) × every bracket on the order, of its own
     // tier when it has one. Counted from the SELECTED brackets, so a centre bracket typed to 3 counts 3.
     const bracketCountFor = (rider) => selected

@@ -2512,6 +2512,13 @@ eq('nonsense is null', measureOf('n/a'), null);
     const dbl = resolve({ choices: [...cs, { id: 'BKC2', partId: 'H1-138DBA', role: 'BRACKET', position: 'CENTER', tier: 'BACK', proj: '3.625', nodes: ['bc2'] }, { id: 'PLC2', partId: 'H1-138CP-H', role: 'BACKPLATE', position: 'CENTER', tier: 'BACK', proj: '3.625', nodes: ['pc2'] }],
         answers: { rodKind: 'SOLID', proj: 3.625 }, selectedIds: [...sel, 'BKC2', 'PLC2'], quantities: { BKC: 3, BKC2: 2 } });
     eq('on a double each tier\'s plate follows its own tier\'s arm', [qty(dbl, 'PLC'), qty(dbl, 'PLC2')], [3, 2]);
+    // Eric 2026-09-30 (App Imp): H1-138ILPS is tagged tier FRONT, the CENTER-BACKPLATE plate pins carry NO tier —
+    // "same tier" found no arm and the cover plate billed 1 under three brackets.
+    const fr = cs.map(c => (c.id === 'BKC' ? { ...c, tier: 'FRONT' } : c));
+    const eric = resolve({ choices: fr, answers: { rodKind: 'SOLID', proj: 3.625 }, selectedIds: sel, quantities: { BKC: 3 } });
+    eq('a FRONT-tier bracket × 3 with an untiered cover plate → 3 cover plates', [qty(eric, 'BKC'), qty(eric, 'PLC')], [3, 3]);
+    const tiered = resolve({ choices: [...fr.filter(c => c.id !== 'PLC'), { id: 'PLC', partId: 'H1-138CP-H', role: 'BACKPLATE', position: 'CENTER', tier: 'BACK', proj: '3.625', nodes: ['pc'] }], answers: { rodKind: 'SOLID', proj: 3.625 }, selectedIds: sel, quantities: { BKC: 3 } });
+    eq('a plate that names ANOTHER tier still never follows this arm', qty(tiered, 'PLC'), 1);
 }
 
 // ── A RIDER'S TAG SPEAKS FOR THE RIDER ONLY (Stuart 2026-09-19, QUO153 row 4) ────────────────────
