@@ -405,5 +405,21 @@ eq('an Order Entry order already has them', soNeedsLines({ lines: [{ erp: 'A' }]
     eq('a job with no row labels re-reads onto the lines in their rows — nothing added twice', p2 ? [p2.added.length, p2.lines.length] : 'no patch', [0, 2]);
 }
 
+// ── ✎ A ROD LINE (2026-09-30, the wall's Row 1: SO60586's H1-75SR "70" is 35 rods × 2 ft, cut 18") ──
+{
+    const { rodLineEditOf } = await import('../src/components/Shared/displayRelease.js');
+    const so = { id: 'Q', lines: [{ erp: 'H1-75SR', finishCode: 'P06', toBeFinished: true, qty: 70, row: 'Row 1', name: 'H1-75SR — 3/4" Square Hollow Rod Stock (14 GA) [35 pc × 2 ft] [TO BE FINISHED — P06]' }, { erp: 'H1-2RCTAEC', qty: 35, isKit: true, itemKit: true }] };
+    const r = rodLineEditOf({ so, lineIdx: 0, pieces: 35, feetPer: 2, cutLength: 18, by: 'stuart', reason: 'build: 1 rod per board, 18" cut, 2 ft billed', now: 5 });
+    eq('70 ft → 35 rods × 18" cut, billed 2 ft each (70 ft), what it was kept', [r.ok, r.lines[0].qty, r.lines[0].perFoot, r.lines[0].feetPer, r.lines[0].billedFeet, r.lines[0].cutLength, r.lines[0].rodChangedFrom, r.lines[0].rodChangedBy],
+        [true, 35, true, 2, 70, 18, { qty: 70, perFoot: false, feetPer: null, cutLength: null }, 'stuart']);
+    eq('refused: a kit · no reason · a cut longer than the rod · started · gathered', [
+        rodLineEditOf({ so, lineIdx: 1, pieces: 35, feetPer: 2, cutLength: 18, reason: 'x' }).ok,
+        rodLineEditOf({ so, lineIdx: 0, pieces: 35, feetPer: 2, cutLength: 18, reason: ' ' }).ok,
+        rodLineEditOf({ so, lineIdx: 0, pieces: 35, feetPer: 1, cutLength: 18, reason: 'x' }).reason,
+        rodLineEditOf({ so: { ...so, oeGen: { 0: { kind: 'WO' } } }, lineIdx: 0, pieces: 35, feetPer: 2, cutLength: 18, reason: 'x' }).ok,
+        rodLineEditOf({ so: { ...so, committedQty: { 'H1-75SR/P06': 5 } }, lineIdx: 0, pieces: 35, feetPer: 2, cutLength: 18, reason: 'x' }).ok,
+    ], [false, false, 'a 18" cut is longer than the 1 ft billed per rod', false, false]);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

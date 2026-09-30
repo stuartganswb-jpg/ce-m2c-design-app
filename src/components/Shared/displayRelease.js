@@ -600,6 +600,34 @@ export const lineQtyEditOf = ({ so, lineIdx, qty, by = '', reason = '', now = Da
     return { ok: true, lines: next, from, to: n };
 };
 
+// ── ✎ A ROD LINE: HOW MANY RODS, HOW LONG, BILLED BY THE FOOT (Stuart 2026-09-30, the wall's Row 1) ──────────────────────
+// SO60586 came from a Quick Ship quote whose H1-75SR line reads "70" — its name says "[35 pc × 2 ft]": 70 FEET, 35 rods —
+// with no cut length and no per-foot mark. Started so, the shop gets 70 rods and no length. The build says 1 rod per board,
+// an 18" cut, 2 ft billed. This sets the line to the shape a CPQ rod line has (pieces, perFoot, feetPer, billedFeet,
+// cutLength), keeping what it was, who changed it, when and why. Only while nothing is raised or gathered for it; never a
+// kit or a kit's part. NetSuite's line (in feet) is unchanged when pieces × feet per piece is what it already bills. Pure.
+// @returns { ok, reason?, lines?, from?, to? }
+export const rodLineEditOf = ({ so, lineIdx, pieces, feetPer, cutLength, by = '', reason = '', now = Date.now() } = {}) => {
+    const lines = Array.isArray(so && so.lines) ? so.lines : [];
+    const l = lines[lineIdx];
+    const n = Number(pieces), f = Number(feetPer), c = Number(cutLength);
+    if (!l) return { ok: false, reason: 'no such line on the order' };
+    if (isKitLine(l) || l.inKit || isOffOrderLine(l)) return { ok: false, reason: 'not a rod line — a kit, a kit part or a line off the order' };
+    if (!(Number.isInteger(n) && n > 0)) return { ok: false, reason: 'the number of rods must be a whole number above 0' };
+    if (!(f > 0)) return { ok: false, reason: 'the feet billed per rod must be above 0' };
+    if (!(c > 0)) return { ok: false, reason: 'the cut length (inches) must be above 0' };
+    if (c > f * 12) return { ok: false, reason: `a ${c}" cut is longer than the ${f} ft billed per rod` };
+    if (!String(reason || '').trim()) return { ok: false, reason: 'say why — it is recorded on the line' };
+    if (so.oeGen && so.oeGen[lineIdx]) return { ok: false, reason: 'work has already been raised for this line — undo the row start first' };
+    if (committedQtyOf(so, soLineCodeOf(l)) > 0) return { ok: false, reason: `${soLineCodeOf(l)} is already gathered into the order — release it at SO Pack first` };
+    const from = { qty: N(l.qty), perFoot: !!l.perFoot, feetPer: N(l.feetPer) || null, cutLength: N(l.cutLength) || null };
+    const next = lines.map((x, i) => (i === lineIdx ? {
+        ...x, qty: n, perFoot: true, feetPer: f, billedFeet: Math.round(n * f * 1000) / 1000, cutLength: c,
+        rodChangedFrom: from, rodChangedBy: by, rodChangedAt: now, rodChangedReason: String(reason).trim(),
+    } : x));
+    return { ok: true, lines: next, from, to: { qty: n, feetPer: f, billedFeet: Math.round(n * f * 1000) / 1000, cutLength: c } };
+};
+
 // ── ✎ A KIT'S FINISH (Stuart 2026-09-29: "table top base back1 is ep1") ──────────────────────────────────────────────
 // A kit and its parts change together (the qty edit above refuses them): the kit line takes the new finish and its parts
 // are worked out again by the ONE kit rule (Shared/itemKit.itemKitOrderLinesOf) — each part the kit's finish, stock
