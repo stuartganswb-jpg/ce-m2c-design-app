@@ -754,11 +754,67 @@ const WmsGuide = () => (
     </div>
 );
 
+// ── 10.5 DISPLAY MANAGEMENT (Stuart 2026-09-30: "can you add the steps to the guide under display management 10.5") ──
+const DisplaysGuide = () => (
+    <div>
+        <h2 style={S.h2}>The idea in one minute</h2>
+        <p style={S.p}>A sales display (the Fabricut tabletop, the wall board) is sold as <b>one sales order</b> for all of its
+        boards — SO60551 is 50 tabletops. It is <b>made</b> row by row from <b>10.5</b>, <b>gathered</b> into one order bin
+        (ORDERS-COM1) in the warehouse, and <b>shipped one display at a time</b> to the showrooms, each on its own $0 sales
+        order to the customer with the showroom's address. The bulk order is invoiced in full; the bin ends at zero when the
+        last display ships.</p>
+        <div style={{ overflowX: 'auto' }}>
+            <table style={S.table}>
+                <thead><tr><th style={S.th}>You want to…</th><th style={S.th}>Go to</th></tr></thead>
+                <tbody>
+                    <tr><td style={S.td}>Set the order's lines right before anything starts</td><td style={S.td}><b>10.5 → the build → On the floor</b></td></tr>
+                    <tr><td style={S.td}>Start a row (work orders to the floors)</td><td style={S.td}><b>10.5 → Rows → ▶ Start row</b></td></tr>
+                    <tr><td style={S.td}>Gather a finished floor document into the order</td><td style={S.td}><b>WMS → Packaging Prep</b></td></tr>
+                    <tr><td style={S.td}>Pick the shelf items into the order's bin, and ship a display</td><td style={S.td}><b>WMS → SO Pack</b></td></tr>
+                    <tr><td style={S.td}>Make the UPS label for a display</td><td style={S.td}><b>WMS → Fulfillment</b></td></tr>
+                    <tr><td style={S.td}>Put an assembled item into stock the right way</td><td style={S.td}><b>WMS → Assembly Build</b></td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h2 style={S.h2}>1 · Set the order up on 10.5</h2>
+        <p style={S.p}>Open <b>10.5 Project Mgmt</b>, pick the build under <em>Sales display boards</em> and press <b>OPEN</b>.
+        The <em>On the floor</em> strip lists the sales order(s) anchored to it; nothing below starts work.</p>
+        <Path name="↻ Fix line codes" goes="run FIRST, when offered">Lines imported with the billing code (H1-1CP-R/EP2) become the base part with its finish beside it (H1-1CP-R · EP2), the way tab 7 writes them. <b>Always before a re-read</b> — a re-read first does not recognise those lines and adds them a second time.</Path>
+        <Path name="↻ Re-read lines" goes="the CPQ job's rules onto the order">Every line gains the fields CPQ's classifier reads; kits become their parts (added at the end, each part in the kit's finish or stock colour); the traverse track and F-clips take their sub finish (TCP → /C, TBR → /B). The confirm lists every change — read it: anything under <em>ADDED</em> means a line is about to be doubled, so cancel and fix codes first.</Path>
+        <Path name="✎ qty / ✎ finish" goes="one line, or a kit and its parts together">✎ on a line changes its quantity; <b>0 takes it off the order</b> (it stays in its place, greyed "off the order", so nothing that points at it breaks). On a kit, <b>✎ finish</b> gives the kit and its parts a finish (a Base Back end cap kit in EP1) and <b>✎ qty</b> changes the kit and its parts together. Both are refused once the line is started or gathered, and both say what to change in NetSuite by hand — the app does not send them.</Path>
+        <Path name="▶ Start row" goes="work orders to RTG → the floors">Starts a row by the same rules as a CPQ order: plated parts picked from stock (short → the Snapshot Backorder board), painted parts to finishing, poles to the shop. The confirm lists what starts and what is left as it is. Do not start rows until the lines read right.</Path>
+
+        <h2 style={S.h2}>2 · Everything into the order's bin</h2>
+        <p style={S.p}>WMS → <b>SO Pack</b>, the order's card. The badge at the top right says where it stands:</p>
+        <Path name="waiting on parts" goes="something is still coming">A floor document is not gathered yet, or the shelf cannot cover a line. Gather floor documents on <b>Packaging Prep</b>: open the document, <b>Start packing</b>, tick each line packed, scan the <b>custom shop label</b> on the poles (the short WO-OE-… key — 🖨 Handshake Labels reprints it), then <b>✓ Gather into SO</b>.</Path>
+        <Path name="⤓ Ready to pick into ORDERS-COM1" goes="press ⤓ PICK ALL INTO ORDERS-COM1">The floor pieces are in the bin and the shelf covers the rest. The confirm lists each item, the shelf bin it comes from and how many: pull them into ORDERS-COM1, then OK — each is a <b>NetSuite bin transfer</b> into the bin, so Bin Count and Stock View stay true. <b>⤓ PICK</b> on one line picks just that item.</Path>
+        <Path name="⇄ Into ORDERS-COM1 in NetSuite" goes="runs by itself after a gather; press it if the card offers it">Moves the floor-made pieces into the bin <b>in NetSuite</b> as the items the order bills — a painted part as its <b>/P</b> item (NetSuite never holds the paint; the app does), a pole or rod in <b>feet</b>. Anything NetSuite holds nowhere is named and left for you to adjust.</Path>
+        <Path name="✓ Ready to pack" goes="100% of every line is in the bin">The card then shows only <b>Item · Description · In ORDERS-COM1</b>, line by line. <b>RELEASE</b> on a line takes pieces back out — it asks for the shelf bin and moves them back in NetSuite first.</Path>
+
+        <h2 style={S.h2}>3 · Ship one display at a time</h2>
+        <Screen title="📦 Ship one display" tag="SO Pack → a ready display order">
+            <p style={S.p}>Press <b>📦 Ship one display</b> at the bottom of the card. It opens only when every piece is in the bin in
+            NetSuite (press ⇄ first if it says so).</p>
+            <Path name="1 · Ship to">Pick an address — the customer's NetSuite addresses, then the ones saved in the app — or <b>＋ New address</b> and type the showroom, attention, street, suite, city, state, zip, phone. A new address is saved for next time.</Path>
+            <Path name="2 · Into the box">The list is <b>one display</b>: every line ÷ the number of boards (SO60551: 1/50). Tick each line as it goes in, or <b>Tick all</b>.</Path>
+            <Path name="3 · Box and photo">The small-parts box and/or pole box, and <b>📷 Add photo</b> (required). The button stays grey and the red note says what is still missing.</Path>
+            <Path name="📦 Ship display n" goes="its own $0 sales order → fulfilment from the bin → Fulfillment tab">The app creates a <b>$0 NetSuite sales order</b> to the customer (Fabricut) with the showroom as a custom ship-to, memo "Display n of 50 SO60551", the bulk order as its reference — it lands in about a minute (HQ 11.1). When NetSuite takes it, the <b>fulfilment from ORDERS-COM1</b> queues itself. The bulk order counts one display off ("📦 n display(s) shipped") and the 10.5 build gets a shipped row.</Path>
+        </Screen>
+        <Path name="The UPS label" goes="WMS → Fulfillment">Each display appears as its own packed order (QS-DSP-SO60551-00n) with the showroom's address filled in: rate, <b>Ship</b> for the label; the tracking goes to NetSuite.</Path>
+        <Path name="The last display" goes="✓ ALL SHIPPED">After display 50 the card reads <b>✓ All shipped</b> and ORDERS-COM1 is at zero, in the app and in NetSuite. The bulk order is invoiced in full; close its lines in NetSuite.</Path>
+
+        <h2 style={S.h2}>Stocking an assembly</h2>
+        <Path name="WMS → Assembly Build" goes="the Bin Count's shape, posting an assembly build">Search the item, type how many to build and scan the bin they go into → <b>Review build</b>: NetSuite checks it without saving and shows what it will use up, part by part and bin by bin → <b>Approve &amp; Post Build</b>. NetSuite consumes the components and receives the item — the proper way to put an assembly in stock (a bin count only adjusts). If an open order is waiting for the item, it offers to send the new stock straight to that order's bin.</Path>
+    </div>
+);
+
 const SECTIONS = [
     { key: 'WO', label: 'Work Orders', comp: WorkOrdersGuide },
     { key: 'OC', label: 'Orders & Customers', comp: OrdersCustomersGuide },
     { key: 'SF', label: 'Shop Floor', comp: ShopFloorGuide },
     { key: 'WMS', label: 'Warehouse (WMS)', comp: WmsGuide },
+    { key: 'DSP', label: '10.5 Display Management', comp: DisplaysGuide },
     { key: 'RP', label: 'Rod Pieces', comp: RodPiecesGuide },
     { key: 'APP', label: 'Working on the App', comp: AppWorkGuide },
     { key: 'AU', label: '1.6 / 1.5 Authoring', comp: AuthoringGuide },
