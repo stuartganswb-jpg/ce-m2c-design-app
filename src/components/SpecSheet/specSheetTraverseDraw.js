@@ -414,7 +414,11 @@ function endsUnit(geo, d, x0, y0, s, nameOf, heading) {
         if (em.length) {
             const eb = groupBbox(em), lx = ox + (-eb.max[2]) * s, rx = ox + (-eb.min[2]) * s, by = oy - eb.min[0] * s;
             const name = [...new Set(d.groups[endKey].choices.map(nameOf))].join('/');
-            g += hDim(lx, rx, by + 0.22, `${ins(eb.max[2] - eb.min[2])} ${U(d.drive) === 'MOTORIZED' ? 'drive' : 'plug'}`, by, by);
+            // A label wider than its dimension goes BESIDE the arrows — centred, the manual plug's 11/16" label sat on
+            // its own extension line (Stuart 2026-10-01: "the line is overlapping the text"). The drive's fits, unchanged.
+            const endLabel = `${ins(eb.max[2] - eb.min[2])} ${U(d.drive) === 'MOTORIZED' ? 'drive' : 'plug'}`;
+            if (rx - lx >= endLabel.length * 0.055 + 0.1) g += hDim(lx, rx, by + 0.22, endLabel, by, by);
+            else g += hDim(lx, rx, by + 0.22, '', by, by) + text('dimt', rx + 0.08, by + 0.17, endLabel);   // the height a centred label sits at
             g += text('t2', lx, by + 0.48, name);
         }
     }
