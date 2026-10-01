@@ -14,6 +14,7 @@ import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
 import { autoPicksOf } from './hardwareAutoPicks';
 import { normalizeExtras } from './extrasRestore';
 import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf, noSpliceNote } from './flowExtras';
+import { shopNotesOf } from './lineShopNotes';
 import { workIsPristine } from './cpqWorkspace';
 import { parseKitCode } from './kitCode';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
@@ -1582,10 +1583,14 @@ function HardwareConfiguratorInner({
                 clearNodes: clearList,
             } : null,
         });
-        // A pole over the one-piece limit going out with no joiner says so ON THE LINE: the flag the
-        // reopen reads, and a shop note the floor's viewer and the shop card print (generalNotes).
-        const item = noSplice
-            ? { ...built, engineConfig: { ...built.engineConfig, spliceWaived: true }, generalNotes: [noSpliceNote(lengthInches, spliceOverIn)] }
+        // ── WHAT THE SHOP IS TOLD, ON THE LINE THE SHOP READS (Stuart 2026-10-01 · Shared/lineShopNotes) ──
+        // The note typed on each step ("Anything the shop needs to know about Pole length") was saved
+        // for Edit and read by nothing else. It goes on the line's generalNotes — View Item prints
+        // them, RTG stamps them on the shop order — under the step it was typed on. A pole over the
+        // one-piece limit going out with no joiner leads the list, and carries the flag the reopen reads.
+        const shopNotes = shopNotesOf({ steps, stepNotes, lead: noSplice ? [noSpliceNote(lengthInches, spliceOverIn)] : [] });
+        const item = (noSplice || shopNotes.length)
+            ? { ...built, ...(noSplice ? { engineConfig: { ...built.engineConfig, spliceWaived: true } } : {}), ...(shopNotes.length ? { generalNotes: shopNotes } : {}) }
             : built;
         if (typeof onAdd === 'function') onAdd(displaySnapshot ? { ...item, displaySnapshot, displayBoard } : item);
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);

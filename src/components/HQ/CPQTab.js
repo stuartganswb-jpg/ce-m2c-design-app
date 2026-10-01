@@ -3422,6 +3422,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                   // The money documents print these at their rate (Shared/lineClassification, Stuart 2026-10-01:
                   // H1-138TRV-4V/P at 144" read "12 × $0.00 = $240.00"); dropped here they never could.
                   ...(line.billedFeet !== undefined ? { billedFeet: Number(line.billedFeet) || 0 } : {}),
+                  // SHOP WORK STAYS OFF THE CUSTOMER'S PAPER (Stuart 2026-08-22: "track is all shop work so on
+                  // customer facing paperwork just refer to the fascia"). The kit marks its track line shopOnly and
+                  // the money documents drop such a row — but the mark was lost here, so a kit quote printed the
+                  // track as its own $0.00 line beside the fascia (found 2026-10-01). Only the money documents read
+                  // it; the router, the packing list, RTG's split and the floors still see the track.
+                  ...(line.shopOnly ? { shopOnly: true } : {}),
                   ...(line.hidden ? { hidden: true } : {}),
                   // ⚠ THE KIT MARKS MUST SURVIVE THE MERGE (2026-09-18). RTG's split reads THIS list, and it
                   // was losing them: a kit HOLDER (money and paper only) reached the floor as a small part to
