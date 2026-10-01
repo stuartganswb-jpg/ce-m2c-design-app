@@ -4,6 +4,7 @@ import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, 
     FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, sprayStationLockOf, sprayStationPatch, poleCoatIndexOf,
     isHandTask, mayRunHandStep, handStepWarning } from '../Shared/floorActivity';
 import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
+import { normalMinutesOf, punchCheckOf, catchUpRunOf, punchWarning, punchFlagText, TASK_LABEL_ES } from '../Shared/punchCheck';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
@@ -518,7 +519,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       }
       return null;
   };
-  const TASK_LABEL = { spinSetup: 'Sled Setup', spinSpray: 'Spray Coat', spinBake: 'Sled Bake', poleSpray: 'Pole Spray', poleBake: 'Pole Bake', hand: 'Hand Finish' };
+  const TASK_LABEL = { spinSetup: 'Sled Setup', spinSpray: 'Spray Coat', spinBake: 'Sled Bake', poleSpray: 'Pole Spray', poleBake: 'Pole Bake', hand: 'Hand Finish', poleHand: 'Pole Hand Finish' };
 
   // WHO IS ASKING, AND MAY THEY RUN A HAND COAT. The actor is the name the PIN resolved to (pinActor); with no
   // PIN in play (a station card) it is whoever is signed in on this screen. The role comes from the same two
@@ -574,14 +575,16 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                   u: actor, msg: `BLOCKED START · ${taskKey} · ${woRef(wo)} — ${actor} still has ${TASK_LABEL[open.key] || open.key} open on ${woRef(open.wo)}`,
                   action: 'BLOCKED', station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey, recipe: wo.recipe || '',
               });
-              alert(`${actor} already has a step running.\n\n${TASK_LABEL[open.key] || open.key} on ${woRef(open.wo)}${mins !== null ? ` — started ${mins} min ago` : ''}.\n\nStop that one first (■ Stop = it ran and is done). One open step per person keeps the step times real.\n\nA job in the OVEN is the exception — a running bake never blocks you.`);
+              alert(`${actor} already has a step running.\n\n${TASK_LABEL[open.key] || open.key} on ${woRef(open.wo)}${mins !== null ? ` — started ${mins} min ago` : ''}.\n\nComplete that one first (✓ Complete · Completado = it ran and is done). One open step per person keeps the step times real.\n\nA job in the OVEN is the exception — a running bake never blocks you.`);
               return;
           }
       }
       const startedMs = t.startTime || null;
       const elapsedMs = (action !== 'START' && t.status === 'Running' && startedMs) ? (Date.now() - startedMs) : null;
       const updates = { [`tasks.${taskKey}.manual`]: true };
+      let punch = null;   // ⏱ a completion that does not match the work — said after the write (Shared/punchCheck)
       if (action === 'START') {
+          updates[`tasks.${taskKey}.punchFlag`] = '';   // a fresh start clears the last coat's flag
           updates[`tasks.${taskKey}.status`] = 'Running';
           updates[`tasks.${taskKey}.startTime`] = Date.now();
           updates[`tasks.${taskKey}.assignedTo`] = actor || t.assignedTo || user?.name || 'Manual';
@@ -604,6 +607,20 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           // letting a blank ▶ line read as a rendering gap.
           if (!startedMs) updates[`tasks.${taskKey}.completedNoStart`] = true;
           if (!t.assignedTo) updates[`tasks.${taskKey}.assignedTo`] = actor || user?.name || null;
+          // ⏱ DOES THE PUNCH MATCH THE WORK (Stuart 2026-10-01, WO-SO60712: six steps logged 2:11 → 2:13)? Never
+          // started, or under a quarter of the step's normal time (never under a minute) — and, on its own count,
+          // the third step this person has completed on this order inside five minutes. The step still completes;
+          // it is stamped, logged and said.
+          const who = actor || user?.name || '';
+          const nowMs = Date.now();
+          const check = punchCheckOf({ startedMs, completedMs: nowMs, normalMins: normalMinutesOf(taskKey, wo, cfg) });
+          const catchUp = catchUpRunOf({ wo, actor: who, taskKey, nowMs });
+          updates[`tasks.${taskKey}.punchFlag`] = check.flag || '';
+          if (check.flag) {
+              updates[`tasks.${taskKey}.punchRanMs`] = startedMs ? nowMs - startedMs : null;
+              updates[`tasks.${taskKey}.punchNormalMins`] = check.normalMins;
+          }
+          if (check.flag || catchUp) punch = { who, check, catchUp };
       }
       try {
           await updateDoc(doc(db, 'fin_workorders', wo.id), updates);
@@ -621,6 +638,19 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               recipe: wo.recipe || '', stepIndex: wo.currentStepIndex || 0, poleStepIndex: poleIdxOf(wo),
               elapsedMs, startedAtMs: startedMs
           });
+          if (punch) {
+              const bits = [
+                  punch.check.flag === 'NO_START' ? 'completed with no start punch' : (punch.check.flag === 'TOO_SHORT' ? `ran ${(punch.check.ranMins || 0).toFixed(1)}m — normal ~${Math.round(punch.check.normalMins)}m` : ''),
+                  punch.catchUp ? `catch-up run: ${punch.catchUp.count} steps in 5 min (${punch.catchUp.keys.join(', ')})` : '',
+              ].filter(Boolean).join(' · ');
+              await logManual({
+                  ...(punch.who ? { u: punch.who } : {}),
+                  msg: `⏱ PUNCH WARNING · ${taskKey} · ${woRef(wo)} — ${bits}`,
+                  action: 'PUNCH_WARNING', station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey, recipe: wo.recipe || '',
+                  stepIndex: wo.currentStepIndex || 0, poleStepIndex: poleIdxOf(wo), elapsedMs, startedAtMs: startedMs,
+              });
+              alert(punchWarning({ who: punch.who, order: woRef(wo), step: TASK_LABEL[taskKey] || taskKey, stepEs: TASK_LABEL_ES[taskKey] || '', check: punch.check, catchUp: punch.catchUp }));
+          }
           loadManualRecent();
       } catch (e) { alert('Manual update failed: ' + (e.message || e)); }
   };
@@ -673,15 +703,15 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const step = r.steps[idx];
       const t = wo.tasks || {};
       if (isHandStep(step)) {
-          if (t.hand?.status === 'Running') return { key: 'hand', action: 'COMPLETE', label: '✓ Complete Hand Finish', running: t.hand };
-          if (t.hand?.status !== 'Complete') return { key: 'hand', action: 'START', label: '▶ Start Hand Finish' };
+          if (t.hand?.status === 'Running') return { key: 'hand', action: 'COMPLETE', label: '✓ Complete · Completado — Hand Finish', running: t.hand };
+          if (t.hand?.status !== 'Complete') return { key: 'hand', action: 'START', label: '▶ Start · Empieza — Hand Finish' };
           return { advance: true, label: idx + 1 >= len ? finalCoatLabel(wo) : `→ Coat Done — Advance to Coat ${idx + 2}` };
       }
       const seq = [['spinSetup', 'Sled Setup'], ['spinSpray', 'Spray Coat'], ['spinBake', 'Bake (oven)']];
       for (const [key, label] of seq) {
           const st = t[key]?.status;
-          if (st === 'Running') return { key, action: 'COMPLETE', label: `✓ Complete ${label}`, running: t[key] };
-          if (st !== 'Complete') return { key, action: 'START', label: `▶ Start ${label}` };
+          if (st === 'Running') return { key, action: 'COMPLETE', label: `✓ Complete · Completado — ${label}`, running: t[key] };
+          if (st !== 'Complete') return { key, action: 'START', label: `▶ Start · Empieza — ${label}` };
       }
       return { advance: true, label: idx + 1 >= len ? finalCoatLabel(wo) : `→ Unload — Advance to Coat ${idx + 2}` };
   };
@@ -702,17 +732,17 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       // start or stop at all. The pole stream reads its OWN recipe here — that is the whole reason
       // -P variants exist.
       if (isHandStep(poleStepOf(wo))) {
-          if (t.poleHand?.status === 'Running') return { key: 'poleHand', action: 'COMPLETE', label: '✓ Complete Pole Hand Finish', running: t.poleHand };
-          if (t.poleHand?.status !== 'Complete') return { key: 'poleHand', action: 'START', label: '▶ Start Pole Hand Finish' };
+          if (t.poleHand?.status === 'Running') return { key: 'poleHand', action: 'COMPLETE', label: '✓ Complete · Completado — Pole Hand Finish', running: t.poleHand };
+          if (t.poleHand?.status !== 'Complete') return { key: 'poleHand', action: 'START', label: '▶ Start · Empieza — Pole Hand Finish' };
           return { advance: true, label: idx + 1 >= len ? '✓ Poles Finished' : `→ Poles — Next Coat ${idx + 2}` };
       }
       if (t.poleSpray?.status !== 'Complete') {
-          if (t.poleSpray?.status === 'Running') return { key: 'poleSpray', action: 'COMPLETE', label: '✓ Complete Pole Spray', running: t.poleSpray };
-          return { key: 'poleSpray', action: 'START', label: '▶ Start Pole Spray' };
+          if (t.poleSpray?.status === 'Running') return { key: 'poleSpray', action: 'COMPLETE', label: '✓ Complete · Completado — Pole Spray', running: t.poleSpray };
+          return { key: 'poleSpray', action: 'START', label: '▶ Start · Empieza — Pole Spray' };
       }
       if (t.poleBake?.status !== 'Complete') {
-          if (t.poleBake?.status === 'Running') return { key: 'poleBake', action: 'COMPLETE', label: '✓ Complete Pole Bake', running: t.poleBake };
-          return { key: 'poleBake', action: 'START', label: '▶ Start Pole Bake' };
+          if (t.poleBake?.status === 'Running') return { key: 'poleBake', action: 'COMPLETE', label: '✓ Complete · Completado — Pole Bake', running: t.poleBake };
+          return { key: 'poleBake', action: 'START', label: '▶ Start · Empieza — Pole Bake' };
       }
       return { advance: true, label: idx + 1 >= len ? '✓ Poles Finished' : `→ Poles — Next Coat ${idx + 2}` };
   };
@@ -765,8 +795,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.06em' }}>{label}</span>
               {st === 'Running' && mins !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>{mins}m</span>}
               {st === 'Pending' && lastDoneOf(tk) && <span title={lastDoneOf(tk)} style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#3a7d44' }}>✓ coat {tk.completedCoat || '?'}</span>}
-              {st === 'Pending' && <button onClick={() => run('START')} style={{ ...base, background: 'var(--ink)', color: '#fff', border: 'none' }}>▶ Start</button>}
-              {st === 'Running' && <button onClick={() => run('COMPLETE')} title="The step ran and is done — logs the elapsed time" style={{ ...base, background: 'var(--brass)', color: '#fff', border: 'none' }}>■ Stop</button>}
+              {/* START · EMPIEZA / COMPLETE · COMPLETADO (Stuart 2026-10-01: "be clearer on the buttons … rather than stop") —
+                  the old "■ Stop" MEANT done, and read as "abandon it". Both languages, on the button. */}
+              {st === 'Pending' && <button onClick={() => run('START')} style={{ ...base, background: 'var(--ink)', color: '#fff', border: 'none' }}>▶ Start · Empieza</button>}
+              {st === 'Running' && <button onClick={() => run('COMPLETE')} title="The step ran and is done — logs the elapsed time" style={{ ...base, background: 'var(--brass)', color: '#fff', border: 'none' }}>✓ Complete · Completado</button>}
               {st === 'Complete' && (
                   <>
                       <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44' }}>✓</span>
@@ -1515,9 +1547,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                       {stChip(t.status)}
                                       {elapsed !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)' }}>{elapsed}m</span>}
                                       <span style={{ display: 'flex', gap: '8px' }}>
-                                          {t.status !== 'Running' && t.status !== 'Complete' && btn('▶ Start', () => manualTask(wo, key, 'START'), true)}
-                                          {running && btn('⏸ Stop', () => manualTask(wo, key, 'STOP'))}
-                                          {t.status !== 'Complete' && btn('✓ Complete', () => manualTask(wo, key, 'COMPLETE'))}
+                                          {t.status !== 'Running' && t.status !== 'Complete' && btn('▶ Start · Empieza', () => manualTask(wo, key, 'START'), true)}
+                                          {/* This one puts a STARTED step back to not-started — it never meant "done", so it no longer says Stop. */}
+                                          {running && btn('↩ Undo start · Deshacer', () => manualTask(wo, key, 'STOP'))}
+                                          {t.status !== 'Complete' && btn('✓ Complete · Completado', () => manualTask(wo, key, 'COMPLETE'))}
                                           {t.status === 'Complete' && btn('↩ Reopen', () => manualTask(wo, key, 'STOP'))}
                                       </span>
                                   </div>
@@ -1680,6 +1713,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                       </div>
                       {(tk.startTime || tk.assignedTo) && line('▶', tk.assignedTo, started)}
                       {st === 'Complete' && line('■', tk.completedBy || tk.assignedTo, done, mins !== null ? ` · ${mins}m` : '')}
+                      {punchFlagText(tk) && <div title="This completion did not match the work — logged in the floor log (Shared/punchCheck)" style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '2px' }}>{punchFlagText(tk)}</div>}
                       {noPin && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '2px' }}>
                           {unattributed ? "completed with no PIN — nobody recorded" : "completed without a PIN'd start — no run time"}
                       </div>}
