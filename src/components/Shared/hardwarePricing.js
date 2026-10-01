@@ -227,7 +227,20 @@ export function priceChoice(choice, part, ctx = {}) {
 // The kit and each part's finish come from ONE module (Shared/itemKit, 2026-09-28) — the order doors read the same.
 export { isItemKit };
 
-function kitComponentLines(holder, kitPart, ctx) {
+// ── …AND A FINIAL KIT BRINGS ITS OWN COLLAR, IN THE COLLAR'S FINISH (Stuart 2026-10-01, H1-138) ──────────
+// "i am leaving the collars as is but retagging the acrylic part of the finial with the kit code." The wood and acrylic
+// finials are sold to Fabricut as ONE number each (H1-138AKF → H1552F $45: the acrylic knob AND its collar), so the finial
+// pin now names the kit. Two things followed, both wrong:
+//   · every kit part took the KIT LINE's finish — and an acrylic finial's line wears none, so its steel collar went to the
+//     floor and to NetSuite raw (a wood gem's would have gone in the stain whatever it was made of);
+//   · the collar was on the order TWICE — once as the collar pin the finial requires (hardwareModel.companionsFor), once
+//     as the kit's own component.
+// The collar the finial requires IS the kit's collar. So when the kit lists it, the kit's line for it wears the finish
+// the COLLAR PIN wears — its 1.6 material decides, and a finish chosen on the collar itself still wins — and the
+// separate collar line is not written (priceConfiguration). The pin still renders the collar and still takes the finish
+// click; the kit's other parts (the wood or acrylic top) wear the kit's finish as before. A kit with no collar pin, or
+// one whose parts list does not name the collar, is exactly as it was.
+function kitComponentLines(holder, kitPart, ctx, collar = null) {
     const { findPart } = ctx;
     const missing = [];
     const lines = kitComponentsOf(kitPart).map(c => {
@@ -236,7 +249,12 @@ function kitComponentLines(holder, kitPart, ctx) {
         if (!part) missing.push(String(c.partId || '?'));
         // A PART WEARS THE KIT'S FINISH — OR ITS STOCK COLOUR (Stuart 2026-09-28). The kit's traverse colour (TCP → /C)
         // was dropped here, so a /C wall-bracket kit billed and pushed its backplate, lower arm and arm RAW.
-        const f = kitPartFinishOf(part, { finishCode: holder.finishCode, subFinishCode: holder.subFinishCode });
+        const isCollar = !!(collar && part && part.id && String(part.id) === collar.partDocId);
+        const f = isCollar
+            ? ((takesNoFinish(part) || !collar.finishCode)
+                ? { finishCode: '', subFinishCode: '', noFinish: true }
+                : { finishCode: collar.finishCode, subFinishCode: '', noFinish: false })
+            : kitPartFinishOf(part, { finishCode: holder.finishCode, subFinishCode: holder.subFinishCode });
         const p = priceChoice({ partId: c.partId, role: holder.role }, part, { ...ctx, finishCode: f.finishCode, subFinishCode: f.subFinishCode });
         return {
             partId: c.partId, name: part?.itemName || String(c.partId || ''), role: holder.role || '', position: holder.position || '',
@@ -256,7 +274,33 @@ export function priceConfiguration(model, ctx = {}) {
     // Roles the caller supplies from somewhere else (the pinned CARRIER, once the Traverse components
     // step names the carriers) — off the bill entirely, so nothing downstream counts the part twice.
     const skipRoles = new Set((Array.isArray(ctx.skipRoles) ? ctx.skipRoles : []).map(r => String(r).toUpperCase()));
+    // ── THE COLLARS A KIT BRINGS (see kitComponentLines) ─────────────────────────────────────
+    // For every chosen part that requires a collar: is it a kit whose parts list names that collar? Then the
+    // kit's collar line takes the collar pin's finish (kitCollar), and — when EVERY part asking for that collar
+    // pin is such a kit — the pin's own line is not written (collarInKit), so the collar is picked, pushed and
+    // counted once. A collar a loose (non-kit) finial also asks for keeps its line.
+    const docIdOf = (pid) => { const pt = typeof findPart === 'function' ? findPart(pid) : null; return pt && pt.id ? String(pt.id) : ''; };
+    const kitCollar = new Map();      // the kit's bom entry id → { partDocId, finishCode }
+    const collarAskers = new Map();   // collar choice id → [true when the asker is a kit that lists it]
+    (model?.bom || []).forEach(entry => {
+        const full = choiceById.get(String(entry.id || ''));
+        if (!full || !full.requiresCollar) return;
+        const col = companionsFor(model.choices || [], [full.id])[0];
+        if (!col) return;
+        const kitPart = typeof findPart === 'function' ? findPart(entry.partId) : null;
+        const colDoc = docIdOf(col.partId);
+        const listed = !!colDoc && isItemKit(kitPart) && kitComponentsOf(kitPart).some(c => docIdOf(c.partId) === colDoc);
+        if (!collarAskers.has(String(col.id))) collarAskers.set(String(col.id), []);
+        collarAskers.get(String(col.id)).push(listed);
+        if (!listed) return;
+        const row = (model.bom || []).find(e => e.id === col.id) || col;
+        const fin = (takesNoFinish(findPart(col.partId)) || col.noFinish) ? ''
+            : String((typeof ctx.finishFor === 'function' ? ctx.finishFor(row, row) : ctx.finishCode) || '').toUpperCase();
+        kitCollar.set(String(entry.id), { partDocId: colDoc, finishCode: fin });
+    });
+    const collarInKit = new Set([...collarAskers].filter(([, a]) => a.length && a.every(Boolean)).map(([id]) => id));
     const lines = (model?.bom || []).filter(entry => !skipRoles.has(String(entry.role || '').toUpperCase())).flatMap(entry => {
+        if (entry.id != null && collarInKit.has(String(entry.id))) return [];   // the kit's own collar line stands for it
         const choice = entry.raw && entry.raw.__choice ? entry.raw.__choice : entry;
         const part = typeof findPart === 'function' ? findPart(entry.partId) : null;
         // ⚠ THE FINISH IS A PER-PART DECISION (Stuart 2026-08-21: "in case people do choose
@@ -345,7 +389,7 @@ export function priceConfiguration(model, ctx = {}) {
             position: entry.position || '',
         };
         if (!isItemKit(part)) return [line];
-        const kit = kitComponentLines(line, part, ctx);
+        const kit = kitComponentLines(line, part, ctx, kitCollar.get(String(entry.id || '')) || null);
         return [{ ...line, isKit: true, itemKit: true, ...(kit.missing.length ? { kitMissing: kit.missing } : {}) }, ...kit.lines];
     });
     return { lines, total: lines.reduce((s, l) => s + l.total, 0) };

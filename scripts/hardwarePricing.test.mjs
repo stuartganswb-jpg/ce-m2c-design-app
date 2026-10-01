@@ -405,5 +405,70 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     eq('no collar, no rule — the customer row stands as before', [solo.unit, solo.source], [47, PRICE_SOURCES.CLIENT]);
 }
 
+// ── A FINIAL KIT BRINGS ITS OWN COLLAR, IN THE COLLAR'S FINISH (Stuart 2026-10-01 — H1-138 as it is in the library:
+//    the finial pin retagged to the Fabricut kit, the collar pin left as it was) ─────────────────────────────────────
+{
+    const { normalizeChoice } = await import('../src/components/Shared/hardwareModel.js');
+    const lib = {
+        'CE-INV-3597': { id: 'CE-INV-3597', legacyErpId: 'H1-138AKF', itemName: 'Acrylic Knob Finial', partClass: 'Kit',
+            clientPricing: [{ customerId: 'CUST-4720', clientSku: 'H1552F', price: 45 }],
+            manufacturingSpecs: { kitComponents: [{ partId: 'CE-INV-60132', qty: 1 }, { partId: 'CE-INV-55962', qty: 1 }] } },
+        'CE-INV-4484': { id: 'CE-INV-4484', legacyErpId: 'H1-138WCGF', itemName: 'Wood Gem Finial', partClass: 'Kit',
+            clientPricing: [{ customerId: 'CUST-4720', clientSku: 'H1551F', price: 47 }],
+            manufacturingSpecs: { kitComponents: [{ partId: 'CE-ASM-60131', qty: 1 }, { partId: 'CE-ASM-65309', qty: 1 }] } },
+        'CE-INV-60132': { id: 'CE-INV-60132', legacyErpId: 'H1-138FC2', itemName: 'Collar for 1-3/8" Acrylic Finial', partClass: 'Assembly', manufacturingSpecs: {}, clientPricing: [] },
+        'H1-138FC2/P': { id: 'CE-ASM-70001', legacyErpId: 'H1-138FC2/P', itemName: 'Collar - Paint', partClass: 'Assembly', manufacturingSpecs: {}, clientPricing: [] },
+        'H1-138FC2/EP5': { id: 'CE-ASM-70002', legacyErpId: 'H1-138FC2/EP5', itemName: 'Collar - EP5', partClass: 'Assembly', manufacturingSpecs: {}, clientPricing: [] },
+        'CE-INV-55962': { id: 'CE-INV-55962', legacyErpId: 'H1-138ACKF', itemName: 'Acrylic Knob Finial', partClass: 'Inventory', manufacturingSpecs: {}, clientPricing: [] },
+        'CE-ASM-60131': { id: 'CE-ASM-60131', legacyErpId: 'H1-138WFCON2', itemName: 'Collar for 1-3/8" Wood Gem Finial', partClass: 'Assembly', manufacturingSpecs: {}, clientPricing: [] },
+        'CE-ASM-65309': { id: 'CE-ASM-65309', legacyErpId: 'H1-138WGF', itemName: 'Wood Gem Finial', partClass: 'Inventory', manufacturingSpecs: {}, clientPricing: [] },
+        'CE-INV-20188': { id: 'CE-INV-20188', legacyErpId: 'H1-138ACBF', itemName: 'Acrylic Ball Finial', partClass: 'Inventory', manufacturingSpecs: {}, clientPricing: [] },
+    };
+    Object.values({ ...lib }).forEach(pt => { lib[pt.legacyErpId] = pt; });
+    const find = (k) => lib[String(k || '').toUpperCase()] || lib[k] || null;
+    // The pins, as 1.6 has them: the finial names the kit and the collar it requires; the collar is its own pin.
+    const pin = (x) => normalizeChoice({ nodes: ['n' + x.id], position: 'LEFT', tier: 'FRONT', ...x });
+    const AKF = pin({ id: 'FIN-A', partId: 'CE-INV-3597', role: 'FINIAL', materials: 'CLEAR (NO FINISH)', requiresCollar: 'H1-138FC2' });
+    const COL = pin({ id: 'COL-A', partId: 'CE-INV-60132', name: 'H1-138FC2', role: 'FINIAL', isCollar: true, materials: 'METAL' });
+    const WCGF = pin({ id: 'FIN-W', partId: 'CE-INV-4484', role: 'FINIAL', materials: 'WOOD', requiresCollar: 'H1-138WFCON2' });
+    const COLW = pin({ id: 'COL-W', partId: 'CE-ASM-60131', name: 'H1-138WFCON2', role: 'FINIAL', isCollar: true, materials: 'WOOD' });
+    const LOOSE = pin({ id: 'FIN-L', partId: 'CE-INV-20188', role: 'FINIAL', position: 'RIGHT', materials: 'CLEAR (NO FINISH)', requiresCollar: 'H1-138FC2' });
+    // The configurator's finish rule: one finish per material (metal P14, wood S11), nothing on clear.
+    const byMaterial = (over = {}) => (c) => over[c.id] || (c.noFinish ? '' : (c.materials || []).includes('WOOD') ? 'S11' : 'P14');
+    const ctx = (over) => ({ findPart: find, findByCode: find, customerId: 'CUST-4720', finishCode: 'P14', finishFor: byMaterial(over) });
+    const row = (l) => [l.billedId, l.finishCode, !!l.noFinish, l.total, !!l.inKit];
+
+    let cfg = priceConfiguration({ choices: [AKF, COL], bom: [AKF, COL] }, ctx());
+    eq('acrylic knob kit: the kit, its collar, its top — and NO second collar line', cfg.lines.map(l => l.billedId), ['H1-138AKF', 'H1-138FC2/P', 'H1-138ACKF']);
+    eq('the kit carries the money and Fabricut\'s number', [cfg.lines[0].unit, cfg.lines[0].sku, cfg.lines[0].isKit, cfg.total], [45, 'H1552F', true, 45]);
+    eq('the steel collar wears the METAL finish, as its painted item — not the clear kit line\'s nothing', row(cfg.lines[1]), ['H1-138FC2/P', 'P14', false, 0, true]);
+    eq('the acrylic top stays clear', row(cfg.lines[2]), ['H1-138ACKF', '', true, 0, true]);
+
+    cfg = priceConfiguration({ choices: [AKF, COL], bom: [AKF, COL] }, ctx({ 'COL-A': 'EP5' }));
+    eq('a finish chosen ON the collar wins', row(cfg.lines[1]), ['H1-138FC2/EP5', 'EP5', false, 0, true]);
+
+    cfg = priceConfiguration({ choices: [AKF, COL], bom: [AKF, COL] }, { ...ctx(), finishFor: (c) => (c.id === 'COL-A' ? '' : byMaterial()(c)) });
+    eq('no metal finish chosen yet: the collar is mill, and says so', row(cfg.lines[1]), ['H1-138FC2', '', true, 0, true]);
+
+    cfg = priceConfiguration({ choices: [WCGF, COLW], bom: [WCGF, COLW] }, ctx());
+    eq('wood gem kit: collar and top both in the stain, one collar', cfg.lines.map(l => [l.billedId, l.finishCode]), [['H1-138WCGF', 'S11'], ['H1-138WFCON2', 'S11'], ['H1-138WGF', 'S11']]);
+    eq('…at Fabricut\'s $47', [cfg.lines[0].unit, cfg.lines[0].sku, cfg.total], [47, 'H1551F', 47]);
+
+    cfg = priceConfiguration({ choices: [LOOSE, { ...COL, position: 'RIGHT', id: 'COL-R' }], bom: [LOOSE, { ...COL, position: 'RIGHT', id: 'COL-R' }] }, ctx());
+    eq('a LOOSE finial (not a kit) keeps its own collar line, exactly as before', cfg.lines.map(l => [l.billedId, l.finishCode, !!l.inKit]), [['H1-138ACBF', '', false], ['H1-138FC2/P', 'P14', false]]);
+
+    const shared = { ...COL, position: '' };   // one collar pin answering both ends
+    cfg = priceConfiguration({ choices: [AKF, LOOSE, shared], bom: [AKF, LOOSE, shared] }, ctx());
+    eq('a collar pin a loose finial ALSO asks for keeps its line; the kit still brings its own', cfg.lines.map(l => l.billedId), ['H1-138AKF', 'H1-138FC2/P', 'H1-138ACKF', 'H1-138ACBF', 'H1-138FC2/P']);
+
+    const noReq = pin({ id: 'FIN-N', partId: 'CE-INV-4484', role: 'FINIAL', materials: 'WOOD' });
+    cfg = priceConfiguration({ choices: [noReq, COLW], bom: [noReq] }, ctx());
+    eq('a kit pin that names no collar: its parts wear the kit\'s finish, as before', cfg.lines.map(l => [l.billedId, l.finishCode]), [['H1-138WCGF', 'S11'], ['H1-138WFCON2', 'S11'], ['H1-138WGF', 'S11']]);
+
+    const other = { ...lib['CE-INV-3597'], manufacturingSpecs: { kitComponents: [{ partId: 'CE-INV-55962', qty: 1 }] } };   // a kit that does NOT list the collar
+    cfg = priceConfiguration({ choices: [AKF, COL], bom: [AKF, COL] }, { ...ctx(), findPart: (k) => (String(k) === 'CE-INV-3597' ? other : find(k)) });
+    eq('a kit whose parts list does not name the collar leaves the collar line alone', cfg.lines.map(l => [l.billedId, !!l.inKit]), [['H1-138AKF', false], ['H1-138ACKF', true], ['H1-138FC2/P', false]]);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
