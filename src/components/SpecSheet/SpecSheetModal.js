@@ -21,6 +21,8 @@ import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from '.
 import { rodForArm, visibleNodesForRow } from './specSheetRows';
 import { specPages, auditPages } from './specSheetPages';
 import { composeTraverseSheet } from './specSheetTraverseDraw';
+import { solidReady, solidSheets } from './specSheetSolid';
+import { composeSolidSheet } from './specSheetSolidDraw';
 import { NARROW, narrowPages, pageFacts, traverseFacts, traverseNameParts, sheetName, sheetLabels, armOptions, setUpWords } from './specSheetNarrow';
 import { kitWantOf, kitName, kitLine } from './specSheetKits';
 import { H1_138TRV_PARTS } from '../Shared/traverseKitImport';
@@ -614,6 +616,36 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     })();
     pageList.length = 0;
     pageList.push(...paged);
+    // ── THE SOLID SHEETS (Stuart 2026-10-01) — one per bracket / return at one projection, with the client's
+    // dimensions, when the WHOLE assembly can be drawn that way (specSheetSolid.solidReady — H1-2TRV first; an
+    // assembly with doubles, a ceiling bracket, basics or an inside mount keeps the sheets it has). Presentation
+    // only, like the basics pairing above: the engine's pages and the audit below are untouched. A sheet takes the
+    // place of its group's first page, so the order stays the engine's; it carries the same pins a page does, so the
+    // pickers, the wall-mounts page and Flow Stock's focus read it as they read any page.
+    if (solidReady(built)) {
+      const sheetOf = new Map();
+      solidSheets({ pages: built, choices: engineChoices }).forEach(sh => sh.pageKeys.forEach(k => sheetOf.set(k, sh)));
+      const placed = new Set(), grouped = [];
+      for (const pg of pageList) {
+        const sh = sheetOf.get(pg.key);
+        if (!sh) { grouped.push(pg); continue; }
+        if (placed.has(sh.key)) continue;
+        placed.add(sh.key);
+        const bracketPin = pinForChoice(sh.subject);
+        if (!bracketPin) continue;
+        const nameParts = { codes: [bracketPin.partName], tail: pg.family ? ` · ${pg.family}` : '' };
+        grouped.push({
+          key: sh.key, kind: 'SOLID', solid: sh, bracketPin,
+          familyPins: sh.plates.map(x => pinForChoice(x.choice)).filter(Boolean),
+          ringPins: sh.rings.map(r => pinForChoice(r)).filter(Boolean), riderPins: [],
+          rodNodes: [...new Set(sh.rods.map(r => pinForChoice(r, { sideFirst: true })?.choiceNode).filter(Boolean))],
+          facts: pageFacts(sh.answers, bracketPin.partName),
+          nameParts, title: sheetName({ nameParts }), family: pg.family,
+        });
+      }
+      pageList.length = 0;
+      pageList.push(...grouped);
+    }
     if (!pageList.length) {
       setError('The engine offers no bracket this GLB carries — check that the pinned nodes still exist in the model.');
       return;
@@ -687,7 +719,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // A WIDE page is one that stands up two rods (a double) — its section is the projection deep,
   // so landscape is its natural orientation. Everything else prints portrait. The same rule keys
   // the bulk print/PDF below, so what you see per page is what the binder set contains.
-  const paperFor = useCallback((page) => ((page?.kind === 'TRAVERSE' || page?.kind === 'TRAVERSE_ENDS' || ((page?.rodNodes || []).length > 1) || page?.projTiers) ? 'letter' : 'letterP'), []);
+  const paperFor = useCallback((page) => ((page?.kind === 'SOLID' || page?.kind === 'TRAVERSE' || page?.kind === 'TRAVERSE_ENDS' || ((page?.rodNodes || []).length > 1) || page?.projTiers) ? 'letter' : 'letterP'), []);
   const curPage = shownPages[Math.min(pageIndex, Math.max(0, shownPages.length - 1))] || null;
   const layoutPaper = paperMode === 'P' ? 'letterP' : paperMode === 'L' ? 'letter' : paperFor(curPage);
   useEffect(() => { setPaperMode('auto'); }, [pageIndex]);
@@ -1619,6 +1651,17 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     kitOf: kitOf ? (d) => { const w = traverseKitWant(d); return w ? { name: kitOf(w), line: kitLine(kitParts, w) } : null; } : null,
   }), [pinForChoice, edition, fabCodeFor, custCodeFor, baseAssembly?.itemName, baseAssembly?.itemId, kitOf, traverseKitWant, kitParts]);
 
+  // A solid sheet: every code in the chosen edition, as the rows of the other sheets print them (rowCode — a part
+  // with no Fabricut number speaks its description, a customer SKU falls back to ours).
+  const composeSolidPage = useCallback((page) => composeSolidSheet({
+    page: page.solid,
+    scene: sceneRef.current,
+    title: baseAssembly?.itemName || baseAssembly?.itemId || '',
+    editionLabel,
+    toInches: M2IN,   // the scene is metres here (see UNIT AUTO-NORMALIZE)
+    nameOf: (c) => rowCode(pinForChoice(c)?.partName || c?.partId || ''),
+  }), [pinForChoice, rowCode, editionLabel, baseAssembly?.itemName, baseAssembly?.itemId]);
+
   // ---- compose current page ----
   useEffect(() => {
     if (!shownPages.length || error) return;
@@ -1629,6 +1672,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         if (page.kind === 'WALLMOUNTS') { setPageData(composeWallMountsPage()); setStatus(''); return; }
         if (page.kind === 'CATALOG') { setPageData(composeCatalogPage(page)); setStatus(''); return; }
         if (page.kind === 'TRAVERSE' || page.kind === 'TRAVERSE_ENDS') { setPageData(composeTraversePage(page)); setStatus(''); return; }
+        if (page.kind === 'SOLID') { setPageData(composeSolidPage(page)); setStatus(''); return; }
         const built = builtRowsFor(page);
         // GEOMETRY vs CELL (playbook 4.2, warn-only): the measured pole Ø / projection must agree
         // with what the selected dia×proj cell CLAIMS (sizeMatrix inches). The sheet still renders
@@ -1671,7 +1715,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, custCodeFor, editionLabel, editionRows, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, composeTraversePage, baseAssembly, kitOf]);
+  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, custCodeFor, editionLabel, editionRows, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, composeTraversePage, composeSolidPage, baseAssembly, kitOf]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; finialsRef.current = null; }, [wallCfg, side]);
@@ -1735,6 +1779,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (page.kind === 'WALLMOUNTS') return { svg: composeWallMountsPage('letterP').svg, paper: 'letterP' };
     if (page.kind === 'CATALOG') return { svg: composeCatalogPage(page, 'letterP').svg, paper: 'letterP' };
     if (page.kind === 'TRAVERSE' || page.kind === 'TRAVERSE_ENDS') return { svg: composeTraversePage(page).svg, paper: 'letter' };
+    if (page.kind === 'SOLID') return { svg: composeSolidPage(page).svg, paper: 'letter' };
     const built = builtRowsFor(page);
     const rows = editionRows(built.rows, page.bracketPin.partName);
     const titleCode = (kitOf && page.nameParts?.kit) ? kitOf(page.nameParts.kit) : (page.combo || [page])

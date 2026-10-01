@@ -485,3 +485,6 @@ export function composeTraverseSheet({ page, scene, nameOf, title = '', toInches
         viewMaps: [], paper: 'letter', scale,
     };
 }
+
+// The drawing kit, shared with the solid sheets (specSheetSolidDraw) — one set of views, dimensions and type for both.
+export { PAGE_W, PAGE_H, M, UW, VIEW, clipU, ringBodyBottom, segPath, hDim, vDim, wallHatch, text, STYLE, f3, ins, makeGeo };
