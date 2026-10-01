@@ -1608,7 +1608,14 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                   {activeDocJob.cpqData?.breakdown ? (
                                       activeDocJob.cpqData.breakdown.filter(item => !item.isDiscount && !item.isNetLine).map((item, i) => (
                                           <div key={i} style={{ display: 'flex', padding: '12px 0', borderBottom: '1px solid rgba(28,26,22,.08)', fontSize: '13px' }}>
-                                              <span style={{ flex: 3, fontWeight: 500 }}>{item.name}{item.cutLength ? <span style={{ color: 'var(--ink-soft)', fontWeight: 400, fontSize: '10px' }}> · cut {item.cutLength}"</span> : null}</span>
+                                              {/* THE ITEM NUMBER, ON THE ROUTER (Stuart 2026-10-01, QUO178: "in the bom it is not showing
+                                                  the wood components with the -O or -W"). The line is SAVED as the item it bills —
+                                                  H1-138WR-W, the walnut rod — but its name is the base product's ("1-3/8\" Wood Rod"),
+                                                  and this page printed the name alone, so nothing on it said walnut. Our number, in
+                                                  front, exactly as the line carries it; a heading row has none and prints as before. */}
+                                              <span style={{ flex: 3, fontWeight: 500 }}>{item.legacyErpId && !item.isHeader
+                                                  ? <><span style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, paddingLeft: '10px' }}>{item.legacyErpId}</span><span style={{ color: 'var(--ink-soft)' }}> · </span>{String(item.name || '').replace(/^\s*-\s*/, '')}</>
+                                                  : item.name}{item.cutLength ? <span style={{ color: 'var(--ink-soft)', fontWeight: 400, fontSize: '10px' }}> · cut {item.cutLength}"</span> : null}</span>
                                               {/* One pole, N feet of material (Stuart 2026-08-26): the qty is the PIECE
                                                   count; the feet it consumes print beside it so the shop reads both. */}
                                               <span style={{ flex: 1, textAlign: 'right', fontSize: '14px', fontWeight: 500 }}>{(() => { const ft = Number(item.feet) || (item.cutLength ? Math.ceil(Number(item.cutLength) / 12) : 0); return ft > 0 ? `${item.qty} (${ft} ft)` : item.qty; })()}</span>
