@@ -20,6 +20,7 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction, canReopenPostedOrder, netSuiteOrderNoOf } from '../Shared/orderStatus';
 import { packingListOf } from '../Shared/packingList';
 import { invoiceDocOf } from '../Shared/invoiceMath';
+import { coatCountsOf } from '../Shared/floorActivity';
 import PayLinkPanel from '../Shared/PayLinkPanel';
 import { usePayBlock } from '../Shared/payBlock';
 import NsInvoicesPanel from '../Shared/NsInvoicesPanel';
@@ -866,7 +867,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
           () => {});
       return () => unsub();
   }, []);
-  const recipeLenOf = (wo) => (((finRecipes[wo.recipe] || finRecipes[String(wo.recipe || '').toUpperCase()] || {}).steps) || []).length;
+  // Each stream against ITS recipe — small parts on -S, poles on -P — not the master's length (2026-10-01:
+  // on SL1 the master is 5 coats, the small parts run 3, and the chips called a 3-coat sled "coat 3 of 5").
+  const coatsOf = (wo) => coatCountsOf(finRecipes, wo);
   // A sales order's floor docs: RTG stamps quoteId with the CPQ job's id and carries the SO number.
   const finWosForJob = (job) => {
       const jobIds = [job.id, job.jobId].filter(Boolean).map(String);
@@ -2153,7 +2156,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                                           {lines.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.85rem' }}>No line items on this configuration.</div>}
                                                                           {lines.map((it, i) => {
                                                                               const w = woForLine(it.name);
-                                                                              const st = w ? orderStatusOf(w, { recipeLen: recipeLenOf(w) }) : null;
+                                                                              const st = w ? orderStatusOf(w, coatsOf(w)) : null;
                                                                               return (
                                                                                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', borderBottom: '1px solid var(--paper-2)', paddingBottom: '5px' }}>
                                                                                       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.name}>{it.name}</span>
@@ -2170,7 +2173,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                                                       <b style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{w.nsWoTran || w.woNum || w.displayId || w.id}</b>
                                                                                       <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{w.itemCode || w.stockErpId || w.type || ''} ×{w.totalParts || '?'}</span>
                                                                                   </div>
-                                                                                  <OrderStatusChips wo={w} recipeLen={recipeLenOf(w)} />
+                                                                                  <OrderStatusChips wo={w} {...coatsOf(w)} />
                                                                               </div>
                                                                           ))}
                                                                       </div>

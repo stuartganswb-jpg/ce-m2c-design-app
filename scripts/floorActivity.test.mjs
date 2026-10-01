@@ -84,5 +84,50 @@ eq('anything unknown reads as the spin machine, as sprayStationOf does', spraySt
     eq('a spin-load rollover (small parts back to coat 1) never moves the poles', poleCoatIndexOf({ ...s08, currentStepIndex: 0, poleStepIndex: 3 }), 3);
 }
 
+// ── EACH STREAM AGAINST ITS OWN RECIPE, AND A HAND COAT IS THE HAND FINISHERS' (Stuart 2026-10-01 — Sandra's App Imp
+//    card on WO-SO60712: SL1 as it is in Finish Recipes) ───────────────────────────────────────────────────────────
+{
+    const { coatCountsOf, streamHasHandCoat, partsRecipeOfWo, poleRecipeOfWo, isHandTask, mayRunHandStep, handStepWarning, HAND_TASK_KEYS, TASK_LABEL } = await import('../src/components/Shared/floorActivity.js');
+    const { orderStatusOf } = await import('../src/components/Shared/orderStatus.js');
+    const five = [{ step: 1, color: 'DTM-7', app: 'Sprayed' }, { step: 2, color: 'Platinum 587', app: 'Sprayed' }, { step: 3, color: 'WB-GR-001', app: 'Hand Applied' }, { step: 4, color: 'WB-OY-002', app: 'Hand Applied' }, { step: 5, color: '30 Sheen', app: 'Sprayed' }];
+    const three = [five[0], five[1], five[4]];
+    const recipes = { SL1: { code: 'SL1', steps: five }, 'SL1-P': { code: 'SL1-P', steps: five }, 'SL1-S': { code: 'SL1-S', steps: three }, P14: { code: 'P14', steps: three } };
+    const wo = { id: 'WO-SO60712', recipe: 'SL1', totalParts: 25, totalPoles: 1, poles: { qty: 1, type: 'POLE' }, currentPhase: 'Painting', currentStepIndex: 2, poleStepIndex: 1, tasks: {} };
+
+    const eqj = eq;
+    const ok = (n, c) => eq(n, !!c, true);
+    eqj('SL1: the small parts run 3 coats, the pole runs 5', coatCountsOf(recipes, wo), { recipeLen: 3, poleRecipeLen: 5 });
+    eqj('the recipes each stream reads', [partsRecipeOfWo(recipes, wo).code, poleRecipeOfWo(recipes, wo).code], ['SL1-S', 'SL1-P']);
+    eqj('the hand coats are the POLE\'s, not the small parts\'', [streamHasHandCoat(recipes, wo, 'parts'), streamHasHandCoat(recipes, wo, 'poles')], [false, true]);
+    eqj('a recipe with no variants reads the master for both', coatCountsOf(recipes, { ...wo, recipe: 'P14' }), { recipeLen: 3, poleRecipeLen: 3 });
+    eqj('an unknown recipe counts nothing — never a guess', coatCountsOf(recipes, { ...wo, recipe: 'NOPE' }), { recipeLen: 0, poleRecipeLen: 0 });
+    eqj('no recipes loaded yet / no document', [coatCountsOf(null, wo), coatCountsOf(recipes, null)], [{ recipeLen: 0, poleRecipeLen: 0 }, { recipeLen: 0, poleRecipeLen: 0 }]);
+
+    // The status every screen prints, fed those counts: the pole on coat 2 of FIVE — not "2 of 3".
+    const poleDetail = (w, lens) => orderStatusOf(w, lens).streams.find(x => x.key === 'POLES').detail;
+    ok('the pole reads coat 2 of 5', /coat 2 of 5/.test(poleDetail(wo, coatCountsOf(recipes, wo))));
+    ok('…where the master length alone called it "of 3" on a 3-coat reading', /coat 2 of 3/.test(poleDetail(wo, { recipeLen: 3 })));
+    ok('on coat 4 of 5 the pole is NOT finished (it was "done (3/3)")', !/done/.test(poleDetail({ ...wo, poleStepIndex: 3 }, coatCountsOf(recipes, wo))) && /done \(3\/3\)/.test(poleDetail({ ...wo, poleStepIndex: 3 }, { recipeLen: 3 })));
+    const handRunning = { ...wo, poleStepIndex: 2, tasks: { poleHand: { status: 'Running', assignedTo: 'Anne', startTime: 5 } } };
+    const pst = orderStatusOf(handRunning, coatCountsOf(recipes, wo)).streams.find(x => x.key === 'POLES');
+    eqj('a pole on its hand coat says so, and who', [pst.detail, pst.by], ['coat 3 of 5 · hand finish', 'Anne']);
+
+    // Who may run a hand coat.
+    eqj('the hand tasks: the small parts\' and the pole\'s', [HAND_TASK_KEYS, isHandTask('poleHand'), isHandTask('hand'), isHandTask('poleSpray'), isHandTask('spinSpray')], [['hand', 'poleHand'], true, true, false, false]);
+    eqj('hand finishers and the people who run the floor', ['hand_painter', 'paint_manager', 'floor_manager', 'admin', 'superadmin', 'programmer'].map(mayRunHandStep), [true, true, true, true, true, true]);
+    eqj('a painter, an operator, setup, nobody — no', ['painter', 'operator', 'setup', 'setup_manager', 'csr', '', undefined].map(mayRunHandStep), [false, false, false, false, false, false, false]);
+    ok('role spelling is forgiven (case, spaces)', mayRunHandStep(' Hand_Painter '));
+    ok('the pole hand task has a name', TASK_LABEL.poleHand === 'Pole Hand Finish');
+
+    // The stop, in both languages.
+    const msg = handStepWarning({ who: 'Rafa', order: 'SO60712', coat: 3, colour: 'WB-GR-001', poles: true });
+    ok('English: what it is and who to tell', /HAND FINISHING — POLES/.test(msg) && /SO60712 · coat 3 \(WB-GR-001\)/.test(msg) && /HAND FINISHERS/.test(msg) && /Please tell hand finishing that this order is ready for them\./.test(msg));
+    ok('Spanish: the same', /ACABADO A MANO — BARRAS/.test(msg) && /SO60712 · capa 3 \(WB-GR-001\)/.test(msg) && /equipo de ACABADO A MANO/.test(msg) && /Por favor avise al equipo de acabado a mano que este pedido está listo para ellos\./.test(msg));
+    ok('it names the person who pressed', /Rafa: this next step/.test(msg) && /Rafa: el siguiente paso/.test(msg));
+    ok('English comes first, then Spanish', msg.indexOf('HAND FINISHING') < msg.indexOf('ACABADO A MANO'));
+    const sp = handStepWarning({ order: 'WO-1', coat: 2, poles: false });
+    ok('small parts say small parts / piezas pequeñas, and read without a name', /SMALL PARTS/.test(sp) && /PIEZAS PEQUEÑAS/.test(sp) && /\nThis next step/.test(sp) && /\nEl siguiente paso/.test(sp));
+}
+
 console.log(`floorActivity: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

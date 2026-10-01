@@ -14,6 +14,7 @@ import Supplies from './Supplies';
 import Summary from './Summary';
 import { MixModal, QcModal } from './Modals';
 import { woRecipeCode, isPendingRecipe } from '../Shared/finishingTime';
+import { coatCountsOf } from '../Shared/floorActivity';
 
 // 🚀 SHARED APPS
 import FloorAssetViewer from './FloorAssetViewer';
@@ -201,7 +202,7 @@ const FinishingFloor = () => {
       {/* 🧭 The lookup — same question, same answer, from any screen. Fed the orders this app
           already subscribes to, so it adds no listener and can never be staler than the page. */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 30px 0' }}>
-        <WhereIsIt orders={workOrders} recipeLenOf={(o) => ((recipes[o.recipe] || recipes[String(o.recipe || '').toUpperCase()] || {}).steps || []).length} />
+        <WhereIsIt orders={workOrders} recipeLenOf={(o) => coatCountsOf(recipes, o).recipeLen} poleRecipeLenOf={(o) => coatCountsOf(recipes, o).poleRecipeLen} />
       </div>
       <main style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column' }}>
         <div style={{ backgroundColor: '#fff', border: '1px solid var(--line)', flex: 1, boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', borderRadius: '2px' }}>

@@ -38,8 +38,10 @@ const ago = (ms) => {
 };
 
 // size: 'sm' for dense lists, 'md' for a detail panel.
-const OrderStatusChips = ({ wo, recipeLen = 0, size = 'sm', showWho = true, style = {} }) => {
-    const st = orderStatusOf(wo, { recipeLen });
+// `poleRecipeLen` — the pole stream's own coat count (its -P recipe); omitted, it is recipeLen, as before.
+// Callers read both from Shared/floorActivity.coatCountsOf so no screen measures a pole against the parts' recipe.
+const OrderStatusChips = ({ wo, recipeLen = 0, poleRecipeLen, size = 'sm', showWho = true, style = {} }) => {
+    const st = orderStatusOf(wo, { recipeLen, poleRecipeLen });
     const all = [...st.streams, ...(st.fulfilment ? [st.fulfilment] : [])];
     if (!all.length) return null;
     const fs = size === 'md' ? '11px' : '10px';

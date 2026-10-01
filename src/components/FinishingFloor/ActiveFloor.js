@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { isFloorSupervisor } from '../Shared/finishingRoles';
 import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
-    FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, sprayStationLockOf, sprayStationPatch, poleCoatIndexOf } from '../Shared/floorActivity';
+    FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, sprayStationLockOf, sprayStationPatch, poleCoatIndexOf,
+    isHandTask, mayRunHandStep, handStepWarning } from '../Shared/floorActivity';
 import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
@@ -519,8 +520,32 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   };
   const TASK_LABEL = { spinSetup: 'Sled Setup', spinSpray: 'Spray Coat', spinBake: 'Sled Bake', poleSpray: 'Pole Spray', poleBake: 'Pole Bake', hand: 'Hand Finish' };
 
+  // WHO IS ASKING, AND MAY THEY RUN A HAND COAT. The actor is the name the PIN resolved to (pinActor); with no
+  // PIN in play (a station card) it is whoever is signed in on this screen. The role comes from the same two
+  // lists the PIN is checked against.
+  const roleOfActor = (actor) => {
+      if (!actor) return user?.role || '';
+      const pool = [...(finUsersRef.current || []), ...(users || [])];
+      const hit = pool.find(u => u && (u.name === actor || String(u.id) === String(actor)));
+      return (hit && hit.role) || '';
+  };
+  const handStepRefused = (wo, taskKey, actor) => {
+      if (!isHandTask(taskKey) || mayRunHandStep(roleOfActor(actor))) return false;
+      const poles = taskKey === 'poleHand';
+      const step = poles ? poleStepOf(wo) : currentPartsStep(wo);
+      logManual({
+          ...(actor ? { u: actor } : {}),
+          msg: `HAND STEP REFUSED · ${taskKey} · ${woRef(wo)} — ${actor || user?.name || 'unknown'} is not a hand finisher`,
+          action: 'BLOCKED', station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey, recipe: wo.recipe || '',
+      }).catch(() => {});
+      alert(handStepWarning({ who: actor || user?.name || '', order: woRef(wo), coat: (poles ? poleIdxOf(wo) : (wo.currentStepIndex || 0)) + 1, colour: (step && step.color) || '', poles }));
+      return true;
+  };
   const manualTask = async (wo, taskKey, action, actor) => {
       const t = (wo.tasks || {})[taskKey] || {};
+      // ✋ A HAND COAT IS THE HAND FINISHERS' (Stuart 2026-10-01 · Shared/floorActivity). Starting it — or
+      // completing it — from a painter's PIN is refused, in English and in Spanish, and the refusal is logged.
+      if ((action === 'START' || action === 'COMPLETE') && handStepRefused(wo, taskKey, actor)) return;
       // The gate. Checked at PIN time, because until they PIN we do not know who is asking.
       if (action === 'START') {
           // PRODUCTION GATE (Stuart 2026-08-10: "all steps work only in unison") — no step starts
@@ -891,8 +916,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       if (!users || users.length === 0) return "Pending";
       let eligible = users.filter(u => {
           if (taskType.includes('spin')) return ['painter', 'hand_painter', 'paint_manager'].includes(u.role);
+          // The pole's HAND coat is a hand task before it is a pole task (Shared/floorActivity.isHandTask).
+          if (isHandTask(taskType)) return ['hand_painter', 'paint_manager'].includes(u.role);
           if (taskType.includes('pole')) return ['painter', 'paint_manager'].includes(u.role);
-          if (taskType === 'hand') return ['hand_painter', 'paint_manager'].includes(u.role);
           return false;
       });
 
@@ -1321,7 +1347,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 const isSprayComplete = item.wo.tasks?.poleSpray?.status === 'Complete';
                                 const isBakeComplete = item.wo.tasks?.poleBake?.status === 'Complete';
                                 const blockBake = machineState.ovenPos === 'SPINDLE' && machineState.isOvenRunning;
-                                const len = recipeLen(item.wo);
+                                const len = poleRecipeLen(item.wo);   // the POLE's own recipe (-P), not the small parts' (2026-10-01)
                                 const idx = poleIdxOf(item.wo);
 
                                 if (item.step.app !== 'Sprayed') {
@@ -1330,7 +1356,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                         <div key={item.wo.id + 'poleHand'} style={{ ...cardStyle, textAlign: 'center' }}>
                                             <div onClick={() => setViewWo(item.wo)} title={`${item.wo.id} — tap for order details`} style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '6px', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--line)' }}>WO: {woRef(item.wo)}</div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '14px' }}>Poles · Step {item.step.step}: {item.step.color} (hand applied)</div>
-                                            <button onClick={() => handleCompletePoleStep(item.wo)} style={{ width: '100%', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{idx + 1 >= len ? 'Poles Finished' : 'Hand Coat Done → Next'}</button>
+                                            <button onClick={async () => { const a = await pinActor(); if (!a || handStepRefused(item.wo, 'poleHand', a)) return; handleCompletePoleStep(item.wo); }} title="A hand coat — the hand finishers' PIN only" style={{ width: '100%', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{idx + 1 >= len ? 'Poles Finished' : 'Hand Coat Done → Next'}</button>
                                         </div>
                                     );
                                 }
@@ -1582,6 +1608,11 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           const len = recipeLen(wo);
           const hasP = woHasPoles(wo);
           const pIdx = poleIdxOf(wo);
+          // THE POLE IS MEASURED AGAINST ITS OWN RECIPE (Sandra, App Imp 2026-10-01, WO-SO60712 on SL1: "the poles on
+          // this item need to go to hand finish"). They were going — SL1-P, five coats, two by hand — but this window
+          // counted them against the small parts' three ("Poles coat 2 of 3") and looked for a hand coat only in the
+          // small parts' recipe ("Hand Finish n/a — not in recipe SL1"), with no tile at all for the pole's hand task.
+          const poleLen = poleRecipeLen(wo);
           const t = wo.tasks || {};
           // WHO PINNED IT AND WHEN (Stuart 2026-07-30: "so i can visually confirm there is no human
           // error of forgotten pin steps"). Every task already carries assignedTo/startTime from the
@@ -1598,24 +1629,34 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           // reads the CURRENT coat's `app` and only looks at `hand` for a Hand Applied step — so the
           // order was never actually blocked. The grid was simply telling the operator to do
           // something the recipe never asked for.
-          const rSteps = (partsRecipeOf(wo)?.steps) || [];
-          const anyHand = rSteps.some(x => x.app === 'Hand Applied');
-          const anySpray = rSteps.some(x => x.app && x.app !== 'Hand Applied');
-          const appliesTo = { spinSetup: anySpray, spinSpray: anySpray, spinBake: anySpray, hand: anyHand, poleSpray: hasP, poleBake: hasP };
+          const rParts = partsRecipeOf(wo);
+          const rSteps = (rParts?.steps) || [];
+          const anyHand = rSteps.some(isHandStep);
+          const anySpray = rSteps.some(x => x.app && !isHandStep(x));
+          // …and the pole stream answers for itself, from ITS recipe.
+          const rPole = hasP ? poleRecipeOf(wo) : null;
+          const pSteps = (rPole?.steps) || [];
+          const poleHandCoat = pSteps.some(isHandStep);
+          const poleSprayCoat = !pSteps.length || pSteps.some(x => x.app && !isHandStep(x));
+          const appliesTo = { spinSetup: anySpray, spinSpray: anySpray, spinBake: anySpray, hand: anyHand, poleSpray: hasP && poleSprayCoat, poleBake: hasP && poleSprayCoat, poleHand: hasP && poleHandCoat };
+          // Which recipe each tile was judged against — so "not in recipe" names the one that was read.
+          const POLE_KEYS = ['poleSpray', 'poleBake', 'poleHand'];
+          const recipeNameFor = (key) => (POLE_KEYS.includes(key) ? (rPole?.code || wo.recipe) : (rParts?.code || wo.recipe)) || '';
+          const knownFor = (key) => (POLE_KEYS.includes(key) ? (!hasP || pSteps.length > 0) : rSteps.length > 0);
           const chip = (label, key) => {
               const tk = t[key] || {};
               const st = tk.status;
               // Not in this recipe → greyed, no status, no audit line. Nothing to do and nothing to
               // chase. rSteps empty means the recipe could not be resolved — say nothing rather
               // than grey out a step that may well be required.
-              if (rSteps.length && appliesTo[key] === false) {
+              if (knownFor(key) && appliesTo[key] === false) {
                   return (
                       <div key={label} style={{ padding: '8px 10px', border: '1px dashed var(--line)', background: 'var(--paper)', opacity: 0.7 }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
                               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--line)' }}>{label}</span>
                               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--line)' }}>n/a</span>
                           </div>
-                          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '3px' }}>not in recipe {wo.recipe || ''}</div>
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '3px' }}>not in recipe {recipeNameFor(key)}</div>
                       </div>
                   );
               }
@@ -1660,7 +1701,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           </div>
                       </div>
                       <div style={{ padding: '20px 26px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          <OrderStatusChips wo={wo} recipeLen={len} size="md" style={{ marginBottom: '14px' }} />
+                          <OrderStatusChips wo={wo} recipeLen={len} poleRecipeLen={hasP ? poleLen : undefined} size="md" style={{ marginBottom: '14px' }} />
                           {row('NetSuite WO', wo.nsWoTran || wo.nsWoId || 'not posted yet')}
                           {row('Item', wo.stockErpId || wo.type || '')}
                           {row('Recipe', wo.recipe || '')}
@@ -1668,7 +1709,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           {row('Customer', wo.customerName || wo.clientName || wo.customer || '')}
                           {row('Required', wo.reqDate || '')}
                           {row('Parts coat', len ? (wo.currentStepIndex >= len ? `done (${len}/${len})` : `${(wo.currentStepIndex || 0) + 1} of ${len}`) : '')}
-                          {hasP && row('Poles coat', len ? (pIdx >= len ? `done (${len}/${len})` : `${pIdx + 1} of ${len}`) : '')}
+                          {hasP && row('Poles coat', poleLen ? (pIdx >= poleLen ? `done (${poleLen}/${poleLen})` : `${pIdx + 1} of ${poleLen}${isHandStep(poleStepOf(wo)) ? ' · HAND FINISH' : ''}`) : '')}
                           {wo.convertSuggestion && row('⇄ Suggestion', `convert ${wo.convertSuggestion.qty} × ${wo.convertSuggestion.from} → ${wo.convertSuggestion.to} (Setup Queue converter)`)}
                           {row('Note', wo.note || '')}
                           {/* LIVE ON-HAND + BIN per pull line (Stuart 2026-08-29): visual proof the
@@ -1681,7 +1722,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                               {chip('Sled Bake', 'spinBake')}
                               {hasP && chip('Pole Spray', 'poleSpray')}
                               {hasP && chip('Pole Bake', 'poleBake')}
-                              {chip('Hand Finish', 'hand')}
+                              {chip(hasP ? 'Hand Finish · small parts' : 'Hand Finish', 'hand')}
+                              {hasP && chip('Hand Finish · poles', 'poleHand')}
                           </div>
                           {/* ▶ OPEN IN MANUAL CONTROL (Stuart 2026-07-28: "we have a shortage of
                               scanners right now") — the scan at the top of Manual Floor Control is
@@ -1784,14 +1826,14 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
     const eligibleUsers = users?.filter(u => {
         const isAdminOrMgr = ['admin', 'floor_manager', 'paint_manager'].includes(u.role);
         if (type.includes('spin')) return isAdminOrMgr || ['painter', 'hand_painter'].includes(u.role);
+        if (isHandTask(type)) return isAdminOrMgr || u.role === 'hand_painter';   // hand first: `poleHand` is not a painter's
         if (type.includes('pole')) return isAdminOrMgr || u.role === 'painter';
-        if (type === 'hand') return isAdminOrMgr || u.role === 'hand_painter';
         return false;
     }) || [];
 
     const loggedInUserHasAccess = ['admin', 'floor_manager', 'paint_manager'].includes(user?.role) || 
                                   (user?.role === 'painter' && ['spinSetup', 'spinSpray', 'spinBake', 'poleSpray', 'poleBake'].includes(type)) || 
-                                  (user?.role === 'hand_painter' && ['spinSetup', 'spinSpray', 'hand'].includes(type));
+                                  (user?.role === 'hand_painter' && ['spinSetup', 'spinSpray', 'hand', 'poleHand'].includes(type));
 
     let selectedOpManualLoad = 0;
     activeWOs.forEach(w => {

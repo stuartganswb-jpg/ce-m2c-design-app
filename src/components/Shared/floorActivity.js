@@ -22,7 +22,7 @@ import { resolveStreamRecipe } from './finishingTime.js';
 export const OVEN_KEYS = ['spinBake', 'poleBake'];
 export const TASK_LABEL = {
     spinSetup: 'Sled Setup', spinSpray: 'Spray Coat', spinBake: 'Sled Bake',
-    poleSpray: 'Pole Spray', poleBake: 'Pole Bake', hand: 'Hand Finish',
+    poleSpray: 'Pole Spray', poleBake: 'Pole Bake', hand: 'Hand Finish', poleHand: 'Pole Hand Finish',
 };
 export const isOvenTask = (key) => OVEN_KEYS.includes(key);
 
@@ -231,4 +231,56 @@ export function sprayStationLockOf(wo) {
 export function sprayStationPatch(to, by, at = Date.now()) {
     const station = to === SPRAY_STATIONS.BOOTH ? SPRAY_STATIONS.BOOTH : SPRAY_STATIONS.SPIN;
     return { sprayStation: station, sprayStationAt: at, sprayStationBy: by || '', ...(station === SPRAY_STATIONS.BOOTH ? { machineAssigned: null } : {}) };
+}
+
+// ── HOW MANY COATS EACH STREAM RUNS — ONE READING FOR EVERY SCREEN (Stuart 2026-10-01) ────────────
+// Sandra, App Imp, WO-SO60712 on SL1: "The poles on this item need to go to hand finish." The floor had it
+// right — the pole ran SL1-P, five coats, two of them by hand — but the order window counted the pole against
+// the SMALL-PARTS recipe ("Poles coat 2 of 3") and looked for a hand coat only there ("Hand Finish n/a — not
+// in recipe SL1"). The status chips on the Setup Queue, the CRM list and Where-is-it did the same thing with
+// the MASTER recipe's length. A stream's coat count is its own variant's (-S / -P when Finish Recipes has
+// one, else the master) — the rule the floor's engine has run since 08-11 — and every screen asks it here.
+const stepsOf = (recipe) => ((recipe && Array.isArray(recipe.steps)) ? recipe.steps : []);
+export const partsRecipeOfWo = (recipes, wo) => resolveStreamRecipe(recipes, wo && wo.recipe, partsStreamOf(wo || {}));
+export const poleRecipeOfWo = (recipes, wo) => resolveStreamRecipe(recipes, wo && wo.recipe, poleStreamOf(wo || {}));
+/** { recipeLen, poleRecipeLen } — exactly what Shared/orderStatus.orderStatusOf and OrderStatusChips take. */
+export const coatCountsOf = (recipes, wo) => ({
+    recipeLen: stepsOf(partsRecipeOfWo(recipes, wo)).length,
+    poleRecipeLen: stepsOf(poleRecipeOfWo(recipes, wo)).length,
+});
+/** Does this stream's own recipe carry a hand-applied coat? ('parts' | 'poles') */
+export const streamHasHandCoat = (recipes, wo, stream) =>
+    stepsOf(stream === 'poles' ? poleRecipeOfWo(recipes, wo) : partsRecipeOfWo(recipes, wo)).some(isHandStep);
+
+// ── A HAND COAT IS THE HAND FINISHERS' (Stuart 2026-10-01) ───────────────────────────────────────
+// "when the hand finishing steps arrive only allow the hand finishers to start those steps, if a painter tries
+//  to just click thru a popup warning in english and spanish to alert them this next step is for hand finishing
+//  and please alert hand finishing it is ready for them." On WO-SO60712 the two hand coats of the pole were
+// started and completed inside one minute by a painter stepping the order through.
+// The hand tasks are the small parts' (`hand`) and the pole's (`poleHand`). The pole's used to fall under the
+// floor's "pole → painter" rule because its key begins with "pole" — which let a painter start it and kept a
+// hand finisher out. Hand finishers and the people who run the floor may run a hand coat; nobody else.
+export const HAND_TASK_KEYS = ['hand', 'poleHand'];
+export const isHandTask = (key) => HAND_TASK_KEYS.includes(String(key || ''));
+export const HAND_FINISH_ROLES = ['hand_painter', 'paint_manager', 'floor_manager', 'admin', 'superadmin', 'programmer'];
+export const mayRunHandStep = (role) => HAND_FINISH_ROLES.includes(String(role || '').trim().toLowerCase());
+/** The stop a painter reads, in English and in Spanish — what the step is, and who to tell. */
+export function handStepWarning({ who = '', order = '', coat = null, colour = '', poles = false } = {}) {
+    const what = `${order || ''}${coat ? ` · coat ${coat}` : ''}${colour ? ` (${colour})` : ''}`.trim();
+    const que = `${order || ''}${coat ? ` · capa ${coat}` : ''}${colour ? ` (${colour})` : ''}`.trim();
+    return [
+        `✋ HAND FINISHING — ${poles ? 'POLES' : 'SMALL PARTS'}`,
+        what,
+        '',
+        `${who ? `${who}: t` : 'T'}his next step is done by the HAND FINISHERS. It cannot be started or completed from a painter's PIN.`,
+        'Please tell hand finishing that this order is ready for them.',
+        '',
+        '────────────',
+        '',
+        `✋ ACABADO A MANO — ${poles ? 'BARRAS' : 'PIEZAS PEQUEÑAS'}`,
+        que,
+        '',
+        `${who ? `${who}: e` : 'E'}l siguiente paso lo hace el equipo de ACABADO A MANO. No se puede iniciar ni completar con el PIN de un pintor.`,
+        'Por favor avise al equipo de acabado a mano que este pedido está listo para ellos.',
+    ].filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n');
 }

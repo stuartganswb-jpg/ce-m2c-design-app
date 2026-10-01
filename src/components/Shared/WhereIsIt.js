@@ -55,7 +55,8 @@ export const physicalPlaceOf = (o) => {
 const ORDER_MATCH_FIELDS = ['nsWoTran', 'nsWoId', 'woNum', 'woDisplayId', 'displayId', 'id', 'soNum', 'soId', 'salesOrderId', 'soAppId', 'orderKey', 'stockErpId', 'type', 'erpId', 'partErpId', 'rootItem', 'variantErpId', 'aliasErp', 'customerName', 'clientName', 'customer'];
 const EXTRA_MATCH_FIELDS = ['id', 'woNum', 'finWoId', 'finWoErpId', 'baseErpId', 'targetErpId', 'sourceItemId', 'targetItemId', 'customerName', 'poId', 'vendor'];
 
-const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = false }) => {
+// `poleRecipeLenOf` — the pole stream's own coat count (its -P recipe). Omitted, a pole reads against recipeLenOf, as before.
+const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, poleRecipeLenOf = null, compact = false }) => {
     const [q, setQ] = useState('');
     const [open, setOpen] = useState(false);
 
@@ -115,7 +116,8 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = 
                         </div>
                     )}
                     {hits.rows.map(o => {
-                        const st = orderStatusOf(o, { recipeLen: recipeLenOf(o) });
+                        const poleLen = typeof poleRecipeLenOf === 'function' ? poleRecipeLenOf(o) : undefined;
+                        const st = orderStatusOf(o, { recipeLen: recipeLenOf(o), poleRecipeLen: poleLen });
                         const tone = stageTone(st.slowest);
                         const place = physicalPlaceOf(o);
                         return (
@@ -125,7 +127,7 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = 
                                     <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>{o.stockErpId || o.type || ''}{o.customerName || o.clientName || o.customer ? ` · ${o.customerName || o.clientName || o.customer}` : ''}</span>
                                     {st.isSplit && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', textTransform: 'uppercase' }}>split</span>}
                                 </div>
-                                <OrderStatusChips wo={o} recipeLen={recipeLenOf(o)} />
+                                <OrderStatusChips wo={o} recipeLen={recipeLenOf(o)} poleRecipeLen={poleLen} />
                                 {/* A parked RTG record says what it is waiting on, in the gate list's words. */}
                                 {gateSummary(o) && (
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', marginTop: '7px' }}>

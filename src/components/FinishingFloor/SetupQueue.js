@@ -21,7 +21,7 @@ import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import { customFabLabel, setupWaitsOnShop, stageWaitsOnMatch, nothingToPick } from '../Shared/orderStatus';
-import { asksSprayStation, SPRAY_STATIONS, WINDOW_LABEL } from '../Shared/floorActivity';
+import { asksSprayStation, SPRAY_STATIONS, WINDOW_LABEL, coatCountsOf } from '../Shared/floorActivity';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
 // Finishing converts only ever run for the shop brands.
@@ -845,7 +845,8 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                 </div>
                 <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '12px' }}><span style={{color:'var(--ink-soft)'}}>Customer:</span> {wo.customer || wo.clientName || 'N/A'}</div>
                 {/* The same status every other screen shows — so "where is it" reads identically here. */}
-                <OrderStatusChips wo={wo} recipeLen={((recipes[wo.recipe] || recipes[(wo.recipe || '').toUpperCase()] || {}).steps || []).length} style={{ marginBottom: '12px' }} />
+                {/* Each stream against ITS recipe (-S / -P), not the master's length (Shared/floorActivity.coatCountsOf, 2026-10-01). */}
+                <OrderStatusChips wo={wo} {...coatCountsOf(recipes, wo)} style={{ marginBottom: '12px' }} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
                     <div style={{ fontSize: '0.9rem', color: 'var(--ink)' }}><span style={{color:'var(--ink-soft)'}}>Req Date:</span> <span style={{ fontWeight: 500 }}>{wo.reqDate || 'ASAP'}</span></div>
                     <label title={wo.urgent ? `Urgent${wo.urgentBy ? ` — marked by ${wo.urgentBy}` : ''}. Untick to clear.` : 'Mark this order URGENT — the card turns red and moves to the top of its finish batch'}

@@ -118,7 +118,7 @@ export const customFabLabel = (wo) => {
     return d ? `At the plater since ${d}` : 'At the plater';
 };
 const hasPoles = (wo) => num(wo?.totalPoles) > 0 || num(wo?.poles?.qty) > 0 || wo?.type === 'Poles';
-const TASK_LABEL = { spinSetup: 'sled setup', spinSpray: 'spray', spinBake: 'bake', poleSpray: 'pole spray', poleBake: 'pole bake', hand: 'hand finish' };
+const TASK_LABEL = { spinSetup: 'sled setup', spinSpray: 'spray', spinBake: 'bake', poleSpray: 'pole spray', poleBake: 'pole bake', hand: 'hand finish', poleHand: 'hand finish' };
 
 // The running task in a set, if any — that is what "right now" means on a floor.
 const runningOf = (tasks, keys) => {
@@ -225,7 +225,7 @@ export function orderStatusOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
         streams.push({ key: 'PARTS', label: 'Finishing', stage: 'FINISHED', detail: 'off the floor', since: wo.completedAt || null });
     } else {
         streams.push(finishingStream(wo, { key: 'PARTS', label: hasPoles(wo) ? 'Small parts' : 'Finishing', idxField: 'currentStepIndex', taskKeys: ['spinSetup', 'spinSpray', 'hand'], ovenKey: 'spinBake', len: recipeLen }));
-        if (hasPoles(wo)) streams.push(finishingStream(wo, { key: 'POLES', label: 'Poles', idxField: 'poleStepIndex', taskKeys: ['poleSpray'], ovenKey: 'poleBake', len: poleRecipeLen !== undefined ? poleRecipeLen : recipeLen }));
+        if (hasPoles(wo)) streams.push(finishingStream(wo, { key: 'POLES', label: 'Poles', idxField: 'poleStepIndex', taskKeys: ['poleSpray', 'poleHand'], ovenKey: 'poleBake', len: poleRecipeLen !== undefined ? poleRecipeLen : recipeLen }));
     }
 
     const fulfilment = fulfilmentOf(wo);
