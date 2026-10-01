@@ -13,7 +13,7 @@ import { explodeTraverse, usageAt } from './traverseExplode';
 import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
 import { autoPicksOf } from './hardwareAutoPicks';
 import { normalizeExtras } from './extrasRestore';
-import { rodMaterialsOf, extrasForRod, liveExtrasOf } from './flowExtras';
+import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf, noSpliceNote } from './flowExtras';
 import { workIsPristine } from './cpqWorkspace';
 import { parseKitCode } from './kitCode';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
@@ -186,6 +186,13 @@ function HardwareConfiguratorInner({
     // [{ code, qty, note }] — added by hand, AS TYPED. What bills is `extras` below: these, less any
     // item that does not fit the chosen rod (Shared/flowExtras).
     const [typedExtras, setExtras] = useState([]);
+    // ── THE SPLICE, DECLINED (Stuart 2026-10-01: "at 12 ft it needs and recommends one but we need to
+    // be able to make it 0 just in case and have it allow it with warning"). Over the one-piece limit
+    // the length step adds the joiner and used to put it straight back when it was removed. Setting it
+    // to 0 now STICKS: this flag stops the re-add, the step and the pricing panel say the pole ships
+    // in one piece, and the line carries that to the floor as a shop note. Saved with the line
+    // (engineConfig.spliceWaived) so Edit or a reopen does not quietly put the splice back.
+    const [spliceWaived, setSpliceWaived] = useState(false);
     const [drawnSplices, setDrawnSplices] = useState([]);   // [{ distInches, ref }] — where Vision drew them, for the pencil line
     // How many, per decision. Empty means "use the recommendation"; a typed number always wins.
     const [stepQty, setStepQty] = useState({});       // slot key → count
@@ -392,9 +399,9 @@ function HardwareConfiguratorInner({
     }, [findPart]);
     const spliceSatisfied = spliceCodes.some(c => extras.some(x => sameItemCode(x.code, c) && Number(x.qty) > 0));
     useEffect(() => {
-        if (!spliceNeeded || !spliceCode) return;   // several candidates → the operator picks
+        if (!spliceNeeded || !spliceCode || spliceWaived) return;   // several candidates → the operator picks · declined → it stays off
         setExtras(a => (a.some(x => sameItemCode(x.code, spliceCode) && Number(x.qty) > 0) ? a : [...a.filter(x => !sameItemCode(x.code, spliceCode)), { code: spliceCode, qty: '1', note: '' }]));
-    }, [spliceNeeded, spliceCode, extras, sameItemCode]);
+    }, [spliceNeeded, spliceCode, spliceWaived, extras, sameItemCode]);
     // The one sentence every refusal says — the same words on the button and in the strip.
     const dropRefusal = pendingDrops.length
         ? `${pendingDrops.length} selection${pendingDrops.length === 1 ? ' was' : 's were'} removed by a later choice — read the strip under the rail and press Understood on each before adding.`
@@ -1088,6 +1095,12 @@ function HardwareConfiguratorInner({
         source: 'traverse components', detail: c.billable ? c.why : `included — ${c.why}`, extra: true,
     })), [trvComponents]);
 
+    // Over the limit with NO joiner on the line — from the length step or from the traverse chart
+    // (its joiner is a tick on the Traverse components step). Allowed; said here, on the step, and
+    // on the line the floor reads (Shared/flowExtras.noSpliceOf).
+    const spliceOnLine = extras.filter(x => spliceCodes.some(c => sameItemCode(x.code, c))).reduce((n, x) => n + (Number(x.qty) > 0 ? Number(x.qty) : 0), 0)
+        + trvComponents.filter(c => /SPLICE|JOINER|JNR|SPLC/i.test(String(c.code || ''))).reduce((n, c) => n + (Number(c.qty) > 0 ? Number(c.qty) : 0), 0);
+    const noSplice = noSpliceOf({ lengthInches, limitInches: spliceOverIn, canSplice: spliceCodes.length > 0 || (isTraverse && !!trvRules), spliceQty: spliceOnLine });
     const grandTotal = priced.total + extraLines.reduce((s2, l) => s2 + l.total, 0) + configuratorTotal(trvComponents);
 
 
@@ -1351,6 +1364,7 @@ function HardwareConfiguratorInner({
         // part, and duplicates merge — so the splice check below can never miss its twin and add
         // another (QUO147: one splice → three, Stuart 2026-09-11; Shared/extrasRestore).
         setExtras(normalizeExtras(Array.isArray(s.extras) ? s.extras : [], extraItems, findPart));
+        setSpliceWaived(s.spliceWaived === true);   // a declined splice stays declined
         if (s.globalFinishes && typeof s.globalFinishes === 'object') setGlobalFinishes({ ...s.globalFinishes });
         else if (s.globalFinish) setGlobalFinish(s.globalFinish);
         if (Number(s.lengthInches) > 0) {
@@ -1485,12 +1499,13 @@ function HardwareConfiguratorInner({
             // The kit exactly as the handoff saves it: named only while it bills.
             kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
             trvSel, fabricId, sizePick, stepIx, drawnSplices, visionSeededId: seededRef.current || '',
+            ...(spliceWaived ? { spliceWaived: true } : {}),
         };
         if (!workPublishedRef.current && workIsPristine(work)) return;
         workPublishedRef.current = true;
         onWorkState(work);
     }, [onWorkState, assembly, answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, typedExtras,
-        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices]);
+        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices, spliceWaived]);
     const addConfiguration = () => {
         if (!priced.lines.length) return;
         // ⚠ NEVER ADD SHORT (Stuart 2026-09-10). A removal nobody has acknowledged is an order that
@@ -1518,7 +1533,7 @@ function HardwareConfiguratorInner({
         // DISPLAY MODE: the frame is the board — capture exactly it (transparent) for the designer.
         const displaySnapshot = (displayMode.on && frameRectRef.current) ? captureBoardFrame(glStateRef.current, frameRectRef.current, { scale: 1 }) : null;
         const displayBoard = displaySnapshot ? { widthIn: displayMode.widthIn, heightIn: displayMode.heightIn, lengthInches, readsInches: frameRectRef.current.reading != null ? Math.round(frameRectRef.current.reading * 10) / 10 : null } : null;
-        const item = handoffItem(resolved, {
+        const built = handoffItem(resolved, {
             ...pricingCtx, assembly, flow, findPart, qty: cfgQtyN, renderSnapshot,
             // The pins this line was resolved from — fingerprinted on the line so Approve can tell
             // when the tags have changed since the save (Shared/cartStaleness).
@@ -1567,10 +1582,15 @@ function HardwareConfiguratorInner({
                 clearNodes: clearList,
             } : null,
         });
+        // A pole over the one-piece limit going out with no joiner says so ON THE LINE: the flag the
+        // reopen reads, and a shop note the floor's viewer and the shop card print (generalNotes).
+        const item = noSplice
+            ? { ...built, engineConfig: { ...built.engineConfig, spliceWaived: true }, generalNotes: [noSpliceNote(lengthInches, spliceOverIn)] }
+            : built;
         if (typeof onAdd === 'function') onAdd(displaySnapshot ? { ...item, displaySnapshot, displayBoard } : item);
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
-        setStepNotes({}); setExtras([]); setDrawnSplices([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]);
+        setStepNotes({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]);
     };
 
     const railCell = (st, i) => {
@@ -2244,10 +2264,12 @@ function HardwareConfiguratorInner({
                                     for a location that differs. Vision draws the splice where the note says. */}
                                 {step?.kind === 'LENGTH' && spliceNeeded && (
                                     <div style={{ border: `1px solid ${spliceSatisfied ? 'var(--line)' : 'var(--brass)'}`, background: spliceSatisfied ? 'var(--paper)' : '#faf6ee', padding: '9px 11px', marginBottom: '8px', fontSize: '11.5px', color: 'var(--ink)', lineHeight: 1.45 }}>
-                                        <b>{spliceSatisfied ? 'Splice included' : '⚠ Splice required'}</b> — {lengthInches}&Prime; exceeds the {spliceOverIn}&Prime; one-piece limit.
-                                        {!spliceSatisfied && spliceCodes.length > 1 && <> Add the splice/joiner for this rod size below.</>}{' '}
-                                        Default location is the <b>CENTER of the run</b>; note the exact location below only if
-                                        different. Vision draws the splice where the note says.
+                                        <b>{spliceSatisfied ? 'Splice included' : '⚠ No splice on this pole'}</b> — {lengthInches}&Prime; exceeds the {spliceOverIn}&Prime; one-piece limit.{' '}
+                                        {spliceSatisfied
+                                            ? <>Default location is the <b>CENTER of the run</b>; note the exact location below only if
+                                                different. Vision draws the splice where the note says. Set the quantity to 0 to ship it in one piece.</>
+                                            : <>It will be quoted, built and shipped in <b>ONE PIECE</b>, and the line says so to the shop.
+                                                {spliceCodes.length > 1 ? ' Add the splice/joiner for this rod below' : ' Enter a quantity below'} if it should be spliced.</>}
                                     </div>
                                 )}
                                 <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '7px' }}>Add an item</div>
@@ -2260,12 +2282,19 @@ function HardwareConfiguratorInner({
                                         const slotScope = step?.kind === 'SLOT' ? step.slot.key : '';
                                         const row = extras.find(x => x.code === it.code && (x.slot || '') === slotScope);
                                         const qty = row?.qty ?? '';
-                                        const set = (patch) => setExtras(a => {
+                                        const set = (patch) => {
+                                          // The splice's own quantity is the override: 0 over the limit declines it, a number takes it back.
+                                          if ('qty' in patch && spliceCodes.includes(it.code)) {
+                                              if (Number(patch.qty) > 0) setSpliceWaived(false);
+                                              else if (spliceNeeded) setSpliceWaived(true);
+                                          }
+                                          setExtras(a => {
                                             const i = a.findIndex(x => x.code === it.code && (x.slot || '') === slotScope);
                                             if (i < 0) return [...a, { code: it.code, qty: '1', note: '', ...(slotScope ? { slot: slotScope } : {}), ...patch }];
                                             const next = [...a]; next[i] = { ...next[i], ...patch };
                                             return next[i].qty === '' || Number(next[i].qty) <= 0 ? next.filter((_, j) => j !== i) : next;
-                                        });
+                                          });
+                                        };
                                         const part = findPart(it.code);
                                         const line = row ? extraLines.find(l => l.partId === it.code && (l.slot || '') === slotScope) : null;
                                         return (
@@ -2442,7 +2471,13 @@ function HardwareConfiguratorInner({
                                                         {/* Rod stock bills by the foot, so say so — a $125 line beside a $12.50
                                                             item reads as a mistake unless the arithmetic is on screen. */}
                                                         {l.perFoot
-                                                            ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>{`one pole · ${l.cutLength ? `${l.cutLength}"` : ''} ${l.feet} ft × $${l.unit.toFixed(2)}`}</span>
+                                                            // ⚠ UNDER A KIT THE FEET BILLED ARE THE FEET ABOVE IT (Stuart 2026-10-01, H1-138TRV-4V/P at
+                                                            // 144": "it is 4ft kit with 12ft total length wanted so it should be 8 additional feet"). The
+                                                            // money was right — 8 ft × the kit row's $30 — but the line read "12 ft × $0.00": the pole's
+                                                            // whole length against the item's own rate. A kit line (billedFeet) says what it bills.
+                                                            ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>{l.billedFeet !== undefined
+                                                                ? `one pole · ${l.cutLength ? `${l.cutLength}" · ` : ''}${l.feet} ft — ${l.detail || ''}${l.billedFeet > 0 && l.total > 0 ? ` × $${(l.total / l.billedFeet).toFixed(2)}` : ''}`
+                                                                : `one pole · ${l.cutLength ? `${l.cutLength}"` : ''} ${l.feet} ft × $${l.unit.toFixed(2)}`}</span>
                                                             : (l.qty > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>×{l.qty}</span>)}
                                                         {l.extra && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-faint)' }}>added</span>}
                                                     </span>
@@ -2494,6 +2529,8 @@ function HardwareConfiguratorInner({
                                 {/* An amber warning is a placeholder that reached a customer, not an
                                     error — it must be visible without reading as a fault. */}
                                 {priceWarnings.map((w, i) => <div key={i} style={{ color: w.sev === 'amber' ? '#8a6508' : '#b00020', fontSize: '9px' }}>{w.sev === 'amber' ? '○' : '●'} {w.msg}</div>)}
+                                {/* Over the one-piece limit with no joiner — allowed, never silent (Stuart 2026-10-01). */}
+                                {noSplice && <div style={{ color: '#8a6508', fontSize: '9px' }}>○ No splice — this {lengthInches}&Prime; pole is over the {spliceOverIn}&Prime; one-piece limit and ships in ONE PIECE. {isTraverse ? 'Tick the joiner on the Traverse components step' : 'Add the joiner on the Pole length step'} if it should be spliced.</div>}
                                 {!!priced.lines.length && <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>Hover a line for the rule that set it{customerId ? '' : ' · no customer, so no client pricing'}</div>}
                             </div>
                         </div>

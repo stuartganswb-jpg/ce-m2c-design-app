@@ -3418,6 +3418,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                   // Per-foot stamps must survive the merge: money documents multiply qty by the
                   // feet, and the NetSuite push consumes rod stock by the foot off these two.
                   ...(line.perFoot ? { perFoot: true, feet: Number(line.feet) || 0 } : {}),
+                  // Under a kit the feet BILLED are the feet above it (Shared/kitSeed) — per pole, like `feet`.
+                  // The money documents print these at their rate (Shared/lineClassification, Stuart 2026-10-01:
+                  // H1-138TRV-4V/P at 144" read "12 × $0.00 = $240.00"); dropped here they never could.
+                  ...(line.billedFeet !== undefined ? { billedFeet: Number(line.billedFeet) || 0 } : {}),
                   ...(line.hidden ? { hidden: true } : {}),
                   // ⚠ THE KIT MARKS MUST SURVIVE THE MERGE (2026-09-18). RTG's split reads THIS list, and it
                   // was losing them: a kit HOLDER (money and paper only) reached the floor as a small part to
@@ -5401,6 +5405,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                                           // the OLD engine's state and would silently overwrite it.
                                           qty: parseInt(item.qty, 10) || assemblyQty || 1,
                                           ...visionFieldsOf(draft, activeDraftSvg),
+                                          // The line's OWN shop notes ride with the notes Vision drew, never under them —
+                                          // a declined splice says so to the floor (Stuart 2026-10-01, Shared/flowExtras.noSpliceNote).
+                                          generalNotes: [...(Array.isArray(item.generalNotes) ? item.generalNotes : []), ...visionFieldsOf(draft, activeDraftSvg).generalNotes],
                                           capturedViews: capturedViews || null,
                                       });
                                       if (activeDraftId) setDoc(doc(db, "cpq_drafts", activeDraftId), { status: 'CONFIGURED' }, { merge: true }).catch(() => {});

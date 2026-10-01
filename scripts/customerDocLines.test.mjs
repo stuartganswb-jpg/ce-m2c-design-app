@@ -189,5 +189,17 @@ for (const type of MONEY_DOC_TYPES) {
     eq('on the quote the same', customerDocLines(kitDoc, 'QUOTE').map(l => l.legacyErpId), ['H3642F']);
 }
 
+// ── A KIT'S ADDITIONAL FEET READ AS WHAT THEY BILL (Stuart 2026-10-01, H1-138TRV-4V/P at 144":
+//    "it is 4ft kit with 12ft total length wanted so it should be 8 additional feet") ──────────
+{
+    const pole = { name: '1-3/8" Traverse Rod', legacyErpId: 'H1-138TRV', qty: 1, price: 0, total: 240, perFoot: true, feet: 12, billedFeet: 8, cutLength: 144, billGroup: 2 };
+    const row = (ls, type) => customerDocLines(ls, type).filter(l => l.legacyErpId === 'H1-138TRV').map(l => [l.qty, l.price, l.total])[0];
+    for (const type of MONEY_DOC_TYPES) eq(`${type}: 8 additional ft × $30.00 = $240.00 — not 12 × $0.00`, row([pole], type), [8, 30, 240]);
+    eq('two of that configuration: 16 ft × $30.00 = $480.00', row([{ ...pole, qty: 2, total: 480 }], 'QUOTE'), [16, 30, 480]);
+    eq('a pole the kit covers whole (4 ft) prints its feet at $0, as before', row([{ ...pole, feet: 4, billedFeet: 0, total: 0, inKit: true }], 'QUOTE'), [4, 0, 0]);
+    eq('an ordinary per-foot pole is untouched: 2 poles × 7 ft at $12.50', customerDocLines([{ name: 'rod', legacyErpId: 'H1-138WR-W', qty: 2, price: 12.5, total: 175, perFoot: true, feet: 7 }], 'QUOTE').map(l => [l.qty, l.price, l.total])[0], [14, 12.5, 175]);
+    eq('the router and the packing list still read ONE pole, 12 ft', customerDocLines([pole], 'PACKING_SLIP').map(l => [l.qty, l.feet, l.price])[0], [1, 12, 0]);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

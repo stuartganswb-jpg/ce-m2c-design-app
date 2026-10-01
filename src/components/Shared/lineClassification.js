@@ -221,9 +221,22 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
     // FEET billed, so qty × unit = amount and the paper matches the estimate; the physical
     // documents (work order, router, packing list) keep qty = pieces with the cut length, because
     // one pole is what is built and boxed.
+    // ⚠ UNDER A KIT, THE FEET SOLD ARE THE FEET ABOVE IT (Stuart 2026-10-01, H1-138TRV-4V/P at 144": "it
+    // is 4ft kit with 12ft total length wanted so it should be 8 additional feet"). The kit pays for its
+    // first feet and the pole line carries only the additional-foot money (Shared/kitSeed: billedFeet, at
+    // the kit row's per-foot rate, the line's own unit left at 0) — so the paper read "12 × $0.00 =
+    // $240.00", and the invoice, which bills unit × shipped, billed that line nothing. The qty is the feet
+    // billed and the unit is what each cost, so qty × unit = amount here too. `feet` on the saved line is
+    // still the real length: the router, the cut and NetSuite's quantity do not move.
+    const kitFeet = (l) => {
+        const billed = Number(l.billedFeet), total = Number(l.total);
+        if (!(billed > 0) || !(total > 0)) return null;
+        const qty = (Number(l.qty) || 1) * billed;
+        return { ...l, qty, price: Math.round((total / qty) * 100) / 100 };
+    };
     return real.filter(l => !l.hidden && !l.shopOnly)
         .map(l => (l.perFoot && Number(l.feet) > 0
-            ? { ...l, qty: (Number(l.qty) || 1) * Number(l.feet) }
+            ? (kitFeet(l) || { ...l, qty: (Number(l.qty) || 1) * Number(l.feet) })
             : l))
         // ── THE CUSTOMER'S PART# ON THE CUSTOMER'S PAPER (Stuart 2026-08-31, invoice S060147:
         // "it has a customer part# associated with it and Brimar is the chosen customer … it

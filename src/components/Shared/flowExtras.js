@@ -24,7 +24,14 @@ export const ROD_MATERIALS = [
     { key: 'METAL', label: 'Metal' },
     { key: 'WOOD', label: 'Wood' },
     { key: 'CLEAR', label: 'Clear (acrylic)' },
+    // ⚠ A TRAVERSE ROD IS ITS OWN KIND (Stuart 2026-10-01, an H1-138 traverse quote carrying TWO joiners:
+    // H1-138JNR from the length step and H1-138TRVJNR from the traverse chart). A traverse is steel, so
+    // "METAL" let the round-rod joiner onto it — but its joiner is the chart's (Shared/traverseExplode,
+    // from 11 ft). So a traverse rod answers TRAVERSE, never its material, and only an item ticked
+    // TRAVERSE is offered with it.
+    { key: 'TRAVERSE', label: 'Traverse rod' },
 ];
+export const TRAVERSE_ROD = 'TRAVERSE';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 
@@ -35,12 +42,13 @@ export const baseMaterial = (m) => U(m).replace(/\s*\(.*\)\s*$/, '');
 const listOf = (v) => [...new Set((Array.isArray(v) ? v : String(v == null ? '' : v).split(/[,;|]+/))
     .map(baseMaterial).filter(Boolean))];
 
-/** What the chosen rod(s) are made in. [] = no rod chosen yet. A rod tagged with nothing is METAL. */
+/** What the chosen rod(s) are: the material of a solid rod (untagged = METAL), TRAVERSE for a traverse. [] = none chosen yet. */
 export function rodMaterialsOf(choices = [], selectedIds = []) {
     const want = new Set((selectedIds || []).filter(Boolean).map(String));
     const out = new Set();
     (choices || []).forEach(c => {
         if (!c || !want.has(String(c.id)) || !ROD_ROLES.includes(c.role)) return;
+        if (U(c.rodKind) === TRAVERSE_ROD || c.role === 'FASCIA' || c.role === 'TRACK') { out.add(TRAVERSE_ROD); return; }
         const mats = listOf(c.materials);
         (mats.length ? mats : ['METAL']).forEach(m => out.add(m));
     });
@@ -73,3 +81,19 @@ export function liveExtrasOf(extras = [], extraItems = [], rodMats = []) {
         return !it || extraFitsRod(it, rodMats);
     });
 }
+
+// ── A POLE OVER THE ONE-PIECE LIMIT, WITH NO SPLICE (Stuart 2026-10-01: "at 12 ft it needs and
+//    recommends one but we need to be able to make it 0 just in case and have it allow it with
+//    warning") ────────────────────────────────────────────────────────────────────────────────
+// The splice over the limit is a recommendation the operator may decline. When they do, the screen
+// says so in plain words and the line carries the fact to the floor as a shop note, so a 144" pole
+// with no joiner reads as a decision and not as something that was forgotten.
+//   canSplice  the flow offers a joiner for this rod (the length step's, or the traverse chart's)
+//   spliceQty  joiners actually on the line, from either source
+export function noSpliceOf({ lengthInches, limitInches, canSplice = false, spliceQty = 0 } = {}) {
+    const L = Number(lengthInches) || 0;
+    const lim = Number(limitInches) > 0 ? Number(limitInches) : 120;
+    return !!canSplice && L > lim && !(Number(spliceQty) > 0);
+}
+export const noSpliceNote = (lengthInches, limitInches) =>
+    `NO SPLICE — ${Number(lengthInches) || 0}" pole ships in ONE PIECE (over the ${Number(limitInches) > 0 ? Number(limitInches) : 120}" one-piece limit; no joiner on this line)`;

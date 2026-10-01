@@ -1,5 +1,5 @@
 // 🔗 A hand-added item for the rod it fits — H1-138's joiners (Stuart 2026-09-30).   node scripts/flowExtras.test.mjs
-import { rodMaterialsOf, itemRodMaterials, extraFitsRod, extrasForRod, liveExtrasOf, baseMaterial, ROD_MATERIALS } from '../src/components/Shared/flowExtras.js';
+import { rodMaterialsOf, itemRodMaterials, extraFitsRod, extrasForRod, liveExtrasOf, baseMaterial, ROD_MATERIALS, noSpliceOf, noSpliceNote } from '../src/components/Shared/flowExtras.js';
 import { normalizeChoice } from '../src/components/Shared/hardwareModel.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -50,7 +50,29 @@ eq('…switch back: it is live again, note and all', liveExtrasOf(typed, items, 
 eq('case of the code does not matter', liveExtrasOf([{ code: 'hscpc1', qty: '1' }], items, ['METAL']), []);
 eq('a row whose code is not on the list (an older order) is kept', liveExtrasOf([{ code: 'H1-OLDJNR', qty: '1' }], items, ['WOOD']).map(x => x.code), ['H1-OLDJNR']);
 eq('empty inputs', [liveExtrasOf(), extrasForRod(), rodMaterialsOf()], [[], [], []]);
-eq('the materials tab 11 offers', ROD_MATERIALS.map(m => m.key), ['METAL', 'WOOD', 'CLEAR']);
+eq('the rods tab 11 offers', ROD_MATERIALS.map(m => m.key), ['METAL', 'WOOD', 'CLEAR', 'TRAVERSE']);
+
+// ── A TRAVERSE ROD IS ITS OWN KIND (Stuart 2026-10-01: two joiners on an H1-138 traverse) ───
+const trv = [
+    { id: 'FA', partId: 'H1-138TRV', role: 'FASCIA', position: 'CENTER', tier: 'FRONT', materials: 'METAL', nodes: ['fa'] },
+    { id: 'TK', partId: 'H1-2TRVTRK', role: 'TRACK', position: 'CENTER', tier: 'FRONT', nodes: ['tk'] },
+    { id: 'TR', partId: 'H1-138TRV', role: 'ROD', rodKind: 'TRAVERSE', position: 'CENTER', tier: 'FRONT', nodes: ['tr'] },
+].map(normalizeChoice);
+eq('a fascia + its track is a TRAVERSE rod, not METAL', rodMaterialsOf(trv, ['FA', 'TK']), ['TRAVERSE']);
+eq('a pole tagged traverse reads the same', rodMaterialsOf(trv, ['TR']), ['TRAVERSE']);
+eq('raw fascia (un-normalized) too', rodMaterialsOf([{ id: 'f', role: 'FASCIA' }], ['f']), ['TRAVERSE']);
+eq('H1-138 traverse: the round-rod joiner is NOT offered — the chart supplies H1-138TRVJNR', extrasForRod(items, ['TRAVERSE']).map(i => i.code), ['H1-138RING']);
+eq('an item ticked TRAVERSE is', extrasForRod([{ code: 'X', rodMaterials: ['TRAVERSE'] }, JNR], ['TRAVERSE']).map(i => i.code), ['X']);
+eq('a flow with nothing ticked offers its splice on a traverse as before (H1-2TRV)', extrasForRod([{ code: 'H1-2TRVSPLC', label: 'Splice' }], ['TRAVERSE']).length, 1);
+
+// ── over the one-piece limit with no splice: allowed, and said ─────────────────────────────
+ok('144" with the joiner on the line: nothing to say', !noSpliceOf({ lengthInches: 144, limitInches: 120, canSplice: true, spliceQty: 1 }));
+ok('144" and the joiner set to 0: a no-splice pole', noSpliceOf({ lengthInches: 144, limitInches: 120, canSplice: true, spliceQty: 0 }));
+ok('exactly at the limit is one piece by right', !noSpliceOf({ lengthInches: 120, limitInches: 120, canSplice: true, spliceQty: 0 }));
+ok('a flow that offers no joiner is never warned', !noSpliceOf({ lengthInches: 200, limitInches: 120, canSplice: false, spliceQty: 0 }));
+ok('a blank limit is 120"', noSpliceOf({ lengthInches: 121, canSplice: true }) && !noSpliceOf({ lengthInches: 119, canSplice: true }));
+ok('the flow\'s own limit is used', !noSpliceOf({ lengthInches: 144, limitInches: 150, canSplice: true }));
+eq('the shop note', noSpliceNote(144, 120), 'NO SPLICE — 144" pole ships in ONE PIECE (over the 120" one-piece limit; no joiner on this line)');
 
 console.log(`flowExtras: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
