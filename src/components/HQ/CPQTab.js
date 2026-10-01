@@ -3,6 +3,7 @@ import { splitNodes, splitNodesLower, exactNode } from '../Shared/nodeList';
 import { Sheet2DOverlay, MaterialRail } from '../Shared/sheet2d';
 import { setupAllows, driveAllows, isTrvPoleChoice, trvAttachGate } from '../Shared/traverseTags';
 import { choicesFromAssembly, modelNodesOf } from '../Shared/hardwareAdapter';
+import { collarAudit } from '../Shared/collarAudit';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import HardwareConfigurator from '../Shared/HardwareConfigurator';
 import { kitsForSeeding } from '../Shared/kitSeed';
@@ -4422,6 +4423,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           Object.entries(g).forEach(([owner, ts]) => push('red', 'DEAD MAP', `${owner}: ${ts.length} mapped name(s) match no mesh in this .glb — that option controls nothing (renamed, re-imported, or stripped geometry).`));
       }
 
+      // ── EVERY FINIAL THAT NAMES A COLLAR MUST BE ABLE TO FIND IT (Stuart 2026-10-01 · Shared/collarAudit) ──
+      // The twelve H1-138 collar choices were ticked ✓FEE, which saves without the collar tag: every collar
+      // stopped coming with its finial and nothing said so. Read off the assembly's own pins, so it holds
+      // for either engine — and only once the pins on screen are THIS assembly's.
+      if (activeAssembly && shadowPinsFor === activeAssembly.id) {
+          collarAudit(shadowPins, activeAssembly.nodeClusters || []).forEach(x => push(x.sev, x.kind, x.msg));
+      }
+
       const order = { red: 0, amber: 1 };
       findings.sort((a, b) => order[a.sev] - order[b.sev]);
       return { red: findings.filter(f => f.sev === 'red').length, amber: findings.filter(f => f.sev === 'amber').length, findings };
@@ -4429,7 +4438,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       // A diagnostic must never be able to break the tool it diagnoses.
       console.error('Flow Doctor failed:', e);
       return { red: 0, amber: 1, findings: [{ sev: 'amber', kind: 'DOCTOR', msg: `The check itself errored (${e.message || e}) — the configurator is unaffected. Console has the trace.` }] };
-  } }, [showDoctor, activeFlow, activeAssembly, dynamicConfigParams, engineFlags.disabledSteps, visAudit, visTokenOwners, debugShowAll]); // eslint-disable-line react-hooks/exhaustive-deps
+  } }, [showDoctor, activeFlow, activeAssembly, dynamicConfigParams, engineFlags.disabledSteps, visAudit, visTokenOwners, debugShowAll, shadowPins, shadowPinsFor]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Steps flagged "clone along pole" (e.g. the center passing bracket) drive procedural cloning:
   // the selected option's meshes are cloned (qty) times and spaced down the pole in DynamicModel.
