@@ -4,6 +4,7 @@ import { Sheet2DOverlay, MaterialRail } from '../Shared/sheet2d';
 import { setupAllows, driveAllows, isTrvPoleChoice, trvAttachGate } from '../Shared/traverseTags';
 import { choicesFromAssembly, modelNodesOf } from '../Shared/hardwareAdapter';
 import { collarAudit } from '../Shared/collarAudit';
+import { clientNoteRow } from '../Shared/lineShopNotes';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import HardwareConfigurator from '../Shared/HardwareConfigurator';
 import { kitsForSeeding } from '../Shared/kitSeed';
@@ -3445,6 +3446,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                   dimensions: line.dimensions || null
               });
           });
+
+          // THE NOTES THE CUSTOMER MAY READ (Stuart 2026-10-01): the step notes ticked "show to the customer" close
+          // this configuration's rows, above its discount — display-only rows the money documents print and nothing
+          // else acts on (Shared/lineClassification.isDisplayOnlyLine). An unticked note never enters the order's lines.
+          (Array.isArray(item.clientNotes) ? item.clientNotes : []).forEach(t => { if (String(t || '').trim()) mergedBreakdown.push(clientNoteRow(t)); });
 
           // Three-line trade-discount display (configured total ▸ discount ▸ net). Display-only
           // rows: flagged so BOM/dispatch/packing consumers skip them, and nothing ever sums

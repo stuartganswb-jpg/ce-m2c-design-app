@@ -14,7 +14,7 @@ import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
 import { autoPicksOf } from './hardwareAutoPicks';
 import { normalizeExtras } from './extrasRestore';
 import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf, noSpliceNote } from './flowExtras';
-import { shopNotesOf } from './lineShopNotes';
+import { shopNotesOf, clientNotesOf } from './lineShopNotes';
 import { kitBracketPicksOf, kitBracketSummary } from './kitBracketPicks';
 import { workIsPristine } from './cpqWorkspace';
 import { parseKitCode } from './kitCode';
@@ -190,6 +190,9 @@ function HardwareConfiguratorInner({
     // undefined — which React answers by unmounting the whole tree. That is the white screen from
     // 2026-08-17: "once i hit new engine … goes full blank on me". Every hook lives in this block.
     const [stepNotes, setStepNotes] = useState({});   // step key → note, stamped with the step
+    // step key → true: this note is ALSO the customer's (prints on their quote, order and invoice). Off by default —
+    // a note is the shop's until somebody ticks it (Stuart 2026-10-01 · Shared/lineShopNotes.clientNotesOf).
+    const [stepNoteClient, setStepNoteClient] = useState({});
     // [{ code, qty, note }] — added by hand, AS TYPED. What bills is `extras` below: these, less any
     // item that does not fit the chosen rod (Shared/flowExtras).
     const [typedExtras, setExtras] = useState([]);
@@ -1394,6 +1397,7 @@ function HardwareConfiguratorInner({
         setPicks({ ...(s.picks || {}) });
         setPartFinish({ ...(s.partFinish || {}) });
         setStepNotes({ ...(s.stepNotes || {}) });
+        setStepNoteClient((s.stepNoteClient && typeof s.stepNoteClient === 'object') ? { ...s.stepNoteClient } : {});
         setStepQty({ ...(s.stepQty || {}) });   // operator-typed counts (rings, centre brackets) — defaults otherwise
         // Restored rows are re-keyed to the code THIS flow's add-by-hand list uses for the same
         // part, and duplicates merge — so the splice check below can never miss its twin and add
@@ -1536,12 +1540,13 @@ function HardwareConfiguratorInner({
             kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
             trvSel, fabricId, sizePick, stepIx, drawnSplices, visionSeededId: seededRef.current || '',
             ...(spliceWaived ? { spliceWaived: true } : {}),
+            ...(Object.keys(stepNoteClient).length ? { stepNoteClient } : {}),
         };
         if (!workPublishedRef.current && workIsPristine(work)) return;
         workPublishedRef.current = true;
         onWorkState(work);
     }, [onWorkState, assembly, answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, typedExtras,
-        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices, spliceWaived]);
+        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices, spliceWaived, stepNoteClient]);
     const addConfiguration = () => {
         if (!priced.lines.length) return;
         // ⚠ NEVER ADD SHORT (Stuart 2026-09-10). A removal nobody has acknowledged is an order that
@@ -1624,14 +1629,21 @@ function HardwareConfiguratorInner({
         // them, RTG stamps them on the shop order — under the step it was typed on. A pole over the
         // one-piece limit going out with no joiner leads the list, and carries the flag the reopen reads.
         const shopNotes = shopNotesOf({ steps, stepNotes, lead: noSplice ? [noSpliceNote(lengthInches, spliceOverIn)] : [] });
-        const item = (noSplice || shopNotes.length)
-            ? { ...built, ...(noSplice ? { engineConfig: { ...built.engineConfig, spliceWaived: true } } : {}), ...(shopNotes.length ? { generalNotes: shopNotes } : {}) }
+        // The notes ticked "show to the customer" also ride the line as clientNotes — CPQ's save writes them under
+        // this configuration as display-only rows the money documents print. The ticks are saved for Edit.
+        const clientNotes = clientNotesOf({ steps, stepNotes, visible: stepNoteClient });
+        const ticked = Object.keys(stepNoteClient).length > 0;
+        const item = (noSplice || shopNotes.length || ticked)
+            ? { ...built,
+                ...((noSplice || ticked) ? { engineConfig: { ...built.engineConfig, ...(noSplice ? { spliceWaived: true } : {}), ...(ticked ? { stepNoteClient: { ...stepNoteClient } } : {}) } } : {}),
+                ...(shopNotes.length ? { generalNotes: shopNotes } : {}),
+                ...(clientNotes.length ? { clientNotes } : {}) }
             : built;
         if (typeof onAdd === 'function') onAdd(displaySnapshot ? { ...item, displaySnapshot, displayBoard } : item);
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
         kitPicksDoneRef.current = new Set();   // the next configuration fills its own brackets
-        setStepNotes({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]);
+        setStepNotes({}); setStepNoteClient({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]);
     };
 
     const railCell = (st, i) => {
@@ -2608,10 +2620,20 @@ function HardwareConfiguratorInner({
                                         <div style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', lineHeight: 1.5 }}>
                                             {Object.entries(stepNotes).filter(([k, v]) => v && k !== step?.key).map(([k, v]) => {
                                                 const st = steps.find(x => x.key === k);
-                                                return <div key={k}><b style={{ color: 'var(--ink-soft)', fontWeight: 400 }}>{st?.label || k}:</b> {v}</div>;
+                                                return <div key={k}><b style={{ color: 'var(--ink-soft)', fontWeight: 400 }}>{st?.label || k}:</b> {v}{stepNoteClient[k] ? <span style={{ color: 'var(--brass)' }}> · customer sees this</span> : null}</div>;
                                             })}
                                         </div>
                                     )}
+                                </label>
+                                {/* CLIENT VISIBLE? (Stuart 2026-10-01: "if checked then the notes appear on their paperwork, if
+                                    not checked (default) only pass on internal documents"). The shop always gets the note. */}
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', marginTop: '-4px' }}
+                                    title="Off: the note goes to the shop only (View Item, the shop card). On: it ALSO prints on the customer's quote, sales order and invoice, under this configuration.">
+                                    <input type="checkbox" checked={!!stepNoteClient[step?.key]} disabled={!step?.key}
+                                        onChange={e => { const on = e.target.checked; const key = step.key; setStepNoteClient(m => { const n = { ...m }; if (on) n[key] = true; else delete n[key]; return n; }); }} />
+                                    <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: stepNoteClient[step?.key] ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                                        {stepNoteClient[step?.key] ? 'Shown to the customer — prints on their quote, order and invoice' : 'Show this note to the customer (off: shop only)'}
+                                    </span>
                                 </label>
                                 <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                     <span style={{ ...mono, fontSize: '8.5px' }}>Config memo · this line</span>

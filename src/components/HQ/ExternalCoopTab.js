@@ -1431,6 +1431,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
               // A checkout add-on (packaging, a rush fee) is a charge on the ORDER, not a product line: it prints
               // under the subtotal with shipping (Stuart 2026-10-01, Shared/FormPreview).
               ...(b.isAddOn ? { afterSubtotal: true } : {}),
+              // A note the customer may read: words under its configuration — no number, no quantity, no money.
+              ...(b.isNote ? { item: '', qty: '', price: null, amount: null, noSum: true, note: true } : {}),
           }));
       if (!isUnpricedRequest && shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt, afterSubtotal: true });
       // dateSaved is an ISO stamp — the doc was printing it verbatim ("2026-08-05T20:00:58.578Z").
@@ -1485,6 +1487,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
           // A net row restates the rows above it — it prints, it does not add (Shared/FormPreview).
           noSum: !!b.isNetLine || !!b.isHeader,
           ...(b.isAddOn ? { afterSubtotal: true } : {}),   // a charge on the order — under the subtotal, as on the quote
+          ...(b.isNote ? { item: '', qty: '', price: null, amount: null, noSum: true, note: true } : {}),
       });
       const invoiceDoc = (activeDocType === 'INVOICE' && packingList && !isQsDoc)
           ? invoiceDocOf({ priced: customerDocLines(activeDocJob.cpqData?.breakdown || [], 'INVOICE', cartFinishLabelOf(activeDocJob.cpqData), docOpts), packingList, shippingAmount: shippingAmt, orderedTotal: activeDocJob.cpqData?.totalPrice || 0 })
@@ -1610,7 +1613,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                   </div>
 
                                   {activeDocJob.cpqData?.breakdown ? (
-                                      activeDocJob.cpqData.breakdown.filter(item => !item.isDiscount && !item.isNetLine).map((item, i) => (
+                                      activeDocJob.cpqData.breakdown.filter(item => !item.isDiscount && !item.isNetLine && !item.isNote).map((item, i) => (
                                           <div key={i} style={{ display: 'flex', padding: '12px 0', borderBottom: '1px solid rgba(28,26,22,.08)', fontSize: '13px' }}>
                                               {/* THE ITEM NUMBER, ON THE ROUTER (Stuart 2026-10-01, QUO178: "in the bom it is not showing
                                                   the wood components with the -O or -W"). The line is SAVED as the item it bills —

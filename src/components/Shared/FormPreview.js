@@ -196,7 +196,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
           {lines.map((l, i) => (
             <tr key={i} style={{ borderBottom: '1px solid var(--line)' }}>
               <td style={{ ...cell, fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.item}</td>
-              <td style={cell}>
+              <td style={l.note ? { ...cell, fontStyle: 'italic', color: 'var(--ink-soft)' } : cell}>
                 {l.desc}
                 {/* The cut, not just the footage. A pole is quantified in FEET (qty 8 = eight feet
                     of stock); the number a reader needs is the 94.5" it is cut to. */}
@@ -204,7 +204,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
               </td>
               <td style={{ ...cell, textAlign: 'center', whiteSpace: 'nowrap' }}>{l.qty === '' || l.qty == null ? '' : l.qty}</td>
               {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.price == null ? '' : money(l.price)}</td>}
-              {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: l.bold ? 600 : 400 }}>{money(lineAmount(l))}</td>}
+              {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: l.bold ? 600 : 400 }}>{l.note ? '' : money(lineAmount(l))}</td>}
             </tr>
           ))}
         </tbody>

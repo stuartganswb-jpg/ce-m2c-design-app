@@ -38,3 +38,20 @@ export function shopNotesOf({ steps = [], stepNotes = {}, lead = [] } = {}) {
     });
     return out;
 }
+
+// ── …AND WHAT THE CUSTOMER IS TOLD (Stuart 2026-10-01) ──────────────────────────────────────────
+// "the line notes entered in the memo area lower right of cpq screen — these should have a check box for client
+//  visible? if checked then the notes appear on their paperwork, if not checked (default) only pass on internal
+//  documents." Every step note is the shop's (shopNotesOf, above). A note whose box is ticked is ALSO the
+// customer's: it prints on their quote, sales order and invoice under its configuration. Off by default — a note
+// is internal until somebody says otherwise — and a tick on an empty note prints nothing.
+//   visible  { stepKey: true }
+export function clientNotesOf({ steps = [], stepNotes = {}, visible = {} } = {}) {
+    const on = (visible && typeof visible === 'object') ? visible : {};
+    const shown = {};
+    Object.keys((stepNotes && typeof stepNotes === 'object') ? stepNotes : {}).forEach(k => { if (on[k] === true) shown[k] = stepNotes[k]; });
+    return shopNotesOf({ steps, stepNotes: shown });
+}
+
+/** The row a client-visible note is on the saved order: display-only everywhere, printed on money documents. */
+export const clientNoteRow = (text) => ({ name: `  Note — ${txt(text)}`, qty: 1, price: 0, total: 0, isNote: true, partHandling: '', partId: null });

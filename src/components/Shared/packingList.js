@@ -33,8 +33,9 @@ export const LINE_STATUS = Object.freeze({
 // paper, not parcels. (customerDocLines on a non-money type already drops display-only rows.)
 // ⚠ A KIT LINE IS PAPER TOO (2026-10-01). It is what the customer bought and where the money is, but nothing
 // called "the kit" is ever packed — its parts are — so measured against the packing list it would always read
-// "0 shipped" and the invoice would bill the kit nothing. It passes through like a fee, in full.
-export const isPhysicalLine = (l) => !!l && !l.isHeader && !l.isDiscount && !l.isNetLine && !l.isFee && !l.isKit && !l.isDisplayOnly && num(l.qty ?? l.quantity) > 0;
+// "0 shipped" and the invoice would bill the kit nothing. It passes through like a fee, in full. A note the
+// customer may read (isNote) is words: never a parcel, never a reason to call an invoice "adjusted".
+export const isPhysicalLine = (l) => !!l && !l.isHeader && !l.isDiscount && !l.isNetLine && !l.isFee && !l.isKit && !l.isNote && !l.isDisplayOnly && num(l.qty ?? l.quantity) > 0;
 
 /** The packer's count for one pack line of one pack document. Untouched tick = not packed. */
 export const packedQtyOf = (doc, line) => {

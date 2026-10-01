@@ -24,6 +24,9 @@ import { cleanSidemark } from './quoteDisplay.js';
 export function isDisplayOnlyLine(line) {
     if (!line) return true;
     if (line.isHeader || line.isDiscount || line.isNetLine || line.isSizeRow) return true;
+    // A NOTE THE CUSTOMER MAY READ (Stuart 2026-10-01, Shared/lineShopNotes.clientNoteRow) is words, not work:
+    // never picked, built, split or pushed. The money documents print it (customerDocLines); nothing else does.
+    if (line.isNote) return true;
     // A KIT HOLDER is money and paper only — what is made, picked and shipped are the parts beneath it
     // (Stuart 2026-09-18). Without this RTG's split filed the holder as a small part to pick.
     if (line.isKit) return true;
@@ -84,7 +87,7 @@ export const cartFinishLabelOf = (cpqData) =>
     ((cpqData && cpqData.cartItems) || []).map(ci => ci && String(ci.finishLabel || '').trim()).find(Boolean) || '';
 
 const withLineFinish = (l, fallback) => {
-    if (!l || l.isHeader || l.isDiscount || l.isNetLine || l.isFee || l.inKit) return l;
+    if (!l || l.isHeader || l.isDiscount || l.isNetLine || l.isFee || l.inKit || l.isNote) return l;
     // THEIR word first, ours otherwise, the code always (Stuart 2026-09-09: the customer's colour
     // name belongs on the customer's paper): "Aged Champagne (P14)"; a finish with no name prints
     // its code alone, exactly as before.
@@ -218,7 +221,7 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
     // bill shape: "the kit code and first 4 feet at price, extra feet immediately below, … then all included
     // components of kit at $0.00." The kit line prints, first in its configuration, on every money document; the
     // floors and the contents documents still never see it.
-    const real = (lines || []).filter(l => !(l && l.offOrder === true)).filter(l => !isDisplayOnlyLine(l) || (l && l.itemKit === true) || (money && l && (l.isKit === true || l.isDiscount || l.isNetLine)))
+    const real = (lines || []).filter(l => !(l && l.offOrder === true)).filter(l => !isDisplayOnlyLine(l) || (l && l.itemKit === true) || (money && l && (l.isKit === true || l.isDiscount || l.isNetLine || l.isNote === true)))
         .map(l => withLineFinish(reResolve(l, findPart, custKeys), finishFallback));
     if (!money) return real;
     // ── A POLE IS SOLD BY THE FOOT AND SHIPPED AS ONE PIECE (Stuart 2026-08-25) ──────────────
