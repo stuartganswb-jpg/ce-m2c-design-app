@@ -11,8 +11,8 @@
 //   end arm/miter  PLAN from above (wall at left, the left end at the bottom) + SIDE (the return leg). An end arm
 //                  is a part: the fascia is cut STRAIGHT and the arm butts it. A miter is a fee: the fascia itself
 //                  is mitred back to the wall. The track stops short of the return by the app's cut rule.
-//   track ends     from below: the manual plug beside the motorized drive, the track short of the fascia by the
-//                  cut rule each side.
+//   track ends     from below: the manual plug beside the motorized drive, the track drawn where the cut rule
+//                  puts it (the "track short" dimension itself was taken off both, 2026-10-01).
 //
 // The rear tier of a double sits where its TAG says (placement from the tag — the merged model parks one rear
 // track for every bracket). The cut rule is Shared/traverseTags TRAVERSE_DEDUCTIONS — never a number of our own.
@@ -425,8 +425,10 @@ function endsUnit(geo, d, x0, y0, s, nameOf, heading) {
         const ly = oy - b.center[0] * s;
         g += `<line x1="${f3(ax)}" y1="${f3(ly)}" x2="${f3(lx0)}" y2="${f3(ly)}" stroke="#777" stroke-width=".005"/>` + text('t2', lx0 + 0.05, ly + 0.04, `${word} ${[...new Set(d.groups[k].choices.map(nameOf))].join('/')}`);
     }
-    const fx = ox + (-fEnd) * s, tx = ox + (-(fEnd - short)) * s, ty = oy - vb.max[0] * s - 0.15;
-    g += hDim(fx, tx, ty, '', oy - vb.max[0] * s, oy - vb.max[0] * s) + text('dimt', tx + 0.08, ty + 0.03, `${ins(short)} track short of the fascia, each side (${ins(short * 2)} overall)`);
+    // NO "track short of the fascia" dimension here, manual or motorized (Stuart 2026-10-01: "remove that measurement from
+    // both … it is not important on the spec sheets and i still find it could be confusing" — the motorized track is cut
+    // 1" short but the Somfy drive fills it, so the number read as a gap that is not there). The track is still DRAWN at
+    // its cut position above; only the dimension is gone.
     return g;
 }
 
