@@ -15,6 +15,7 @@ import { autoPicksOf } from './hardwareAutoPicks';
 import { normalizeExtras } from './extrasRestore';
 import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf, noSpliceNote } from './flowExtras';
 import { shopNotesOf } from './lineShopNotes';
+import { kitBracketPicksOf, kitBracketSummary } from './kitBracketPicks';
 import { workIsPristine } from './cpqWorkspace';
 import { parseKitCode } from './kitCode';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
@@ -147,6 +148,11 @@ function HardwareConfiguratorInner({
     const [kitPick, setKitPick] = useState('');      // the kit chosen as a starting point
     const [kitSource, setKitSource] = useState(null);  // { code, name, baseFeet, record } — bills as line 1
     const [kitReport, setKitReport] = useState(null);  // what it carried, missed, or refused
+    // A KIT FILLS IN ITS OWN BRACKETS (Stuart 2026-10-01 · Shared/kitBracketPicks). Armed only by a kit the
+    // operator STARTS from — a line reopened from the cart keeps the picks it was saved with — and each
+    // (slot, part) is filled once, so a pick the operator changes or clears stays as they left it.
+    const kitPicksArmedRef = useRef(false);
+    const kitPicksDoneRef = useRef(new Set());
     const [kitMotor, setKitMotor] = useState('');      // the per-motor code chosen for a MOTORIZED kit (folds into the kit line)
     // The Traverse components selection. Declared HERE, above the pricing memos that read it (a const in
     // a temporal dead zone is a ReferenceError — this file has been taken out by that twice).
@@ -548,6 +554,8 @@ function HardwareConfiguratorInner({
     const applyKit = (id) => {
         setKitPick(id);
         setKitMotor('');
+        kitPicksArmedRef.current = false;
+        kitPicksDoneRef.current = new Set();
         if (!id) { setKitReport(null); setKitSource(null); return; }
         const chosen = kits.find(k => String(k.id || k.legacyErpId || '') === id);
         if (!chosen) return;
@@ -563,7 +571,13 @@ function HardwareConfiguratorInner({
         // seeds its length only where none has been typed; a typed length stands, and the bill follows
         // the rule either way (the kit below 4 ft, the kit + extra feet above it).
         if (seed.lengthInches && !String(poleIn || '').trim()) { setPoleIn(String(Math.floor(seed.lengthInches))); setPoleFrac(''); }
-        setKitReport({ name, blocked: null, carried: seed.carried, missed: seed.missed });
+        // The brackets are filled in now, not reported: the strip says what the kit will pick, and the old
+        // "pick the V backplate" instruction is dropped where the kit names its own (Shared/kitBracketPicks).
+        const fills = kitBracketSummary({ kit: chosen });
+        setKitReport({ name, blocked: null,
+            carried: fills ? [...seed.carried, fills] : seed.carried,
+            missed: fills ? seed.missed.filter(m => m.what !== 'bracket style') : seed.missed });
+        kitPicksArmedRef.current = true;
         // The kit now OWNS the first line of the bill, and the feet above its base set bill under
         // it. Held as the record, not a number: the price is resolved at pricing time through the
         // same rules every other line uses (customer row, level, alias) rather than re-derived.
@@ -629,6 +643,26 @@ function HardwareConfiguratorInner({
         });
         return q;
     }, [model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId]);
+
+    // ── THE KIT'S BRACKETS, PICKED AS THEY BECOME ANSWERABLE (Stuart 2026-10-01: "it should prepopulate
+    // ideally the steps … with the bracket selections in the kit … i had to manually select vertical
+    // backplates and it is expressly stated in the kit"). Real picks, in order: the arm once the
+    // projection is answered, then — on the next pass, when the arm holds its position — the plate in
+    // the kit's orientation. Declared HERE, below recommendFor (a dependency read above its const is a TDZ
+    // ReferenceError — the white screen this file has had twice). An effect because the plate slots only exist after the arms are chosen;
+    // bounded because each (slot, part) is filled once. The operator's own pick is never touched.
+    useEffect(() => {
+        if (!kitSource || !kitSource.record || !kitPicksArmedRef.current) return;
+        const add = kitBracketPicksOf({ model, kit: kitSource.record, answers: effAnswers, livePicks,
+            codeOf: (o) => ourId(o.partId) || o.name, done: kitPicksDoneRef.current,
+            // The centre is filled only where the span WANTS one (recommendFor: null = not known yet, 0 = a
+            // short pole held at both ends). Picked regardless it would count as one — above the kit's chart.
+            wants: (slot) => String(slot.position || '').toUpperCase() !== 'CENTER' || recommendFor(slot) > 0 });
+        const keys = Object.keys(add);
+        if (!keys.length) return;
+        keys.forEach(key => kitPicksDoneRef.current.add(`${key}|${add[key]}`));
+        setPicks(p => ({ ...p, ...add }));
+    }, [kitSource, model, effAnswers, livePicks, ourId, recommendFor]);
 
     const resolved = useMemo(
         () => resolveHardware({ choices, answers: effAnswers, selectedIds: Object.values(livePicks), modelNodes, quantities }),
@@ -1405,6 +1439,7 @@ function HardwareConfiguratorInner({
         if (!want && !wantCode) { kitRestoredRef.current = s.key; setKitPick(''); setKitMotor(''); setKitSource(null); setKitReport(null); return; }
         if (!kits.length) return;   // the list is still loading — this runs again when it lands
         kitRestoredRef.current = s.key;
+        kitPicksArmedRef.current = false;   // a reopened line keeps the brackets it was saved with — nothing is re-filled
         const idOf = (k) => String(k.id || k.legacyErpId || '');
         const chosen = kits.find(k => want && idOf(k) === want)
             || kits.find(k => wantCode && String(k.legacyErpId || '').trim().toUpperCase() === wantCode);
@@ -1595,6 +1630,7 @@ function HardwareConfiguratorInner({
         if (typeof onAdd === 'function') onAdd(displaySnapshot ? { ...item, displaySnapshot, displayBoard } : item);
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
+        kitPicksDoneRef.current = new Set();   // the next configuration fills its own brackets
         setStepNotes({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]);
     };
 
