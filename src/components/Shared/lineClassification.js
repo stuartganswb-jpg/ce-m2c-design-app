@@ -211,7 +211,14 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
     // on their paper; its parts (hidden) are not, on a money document. The floors never read this (isDisplayOnlyLine still
     // keeps the kit line off every pick and floor list).
     // A line taken off the order (offOrder — Shared/itemKit.isOffOrderLine; kept in its place at 0) is on no paper.
-    const real = (lines || []).filter(l => !(l && l.offOrder === true)).filter(l => !isDisplayOnlyLine(l) || (l && l.itemKit === true) || (money && l && (l.isDiscount || l.isNetLine)))
+    // ⚠ A TRAVERSE KIT IS WHAT THE CUSTOMER BOUGHT TOO (Stuart 2026-10-01, QUO180: "the bottom of the quote subtotal
+    // looks weird"). It was worse than the bottom: since isKit became display-only (09-18, to keep the holder off the
+    // floors) the kit line — HTS7501F, 42 × $136.00 — was dropped from the money documents with it, so three
+    // configurations printed rows that came to $16,048 less than their own Net Line Totals. His 09-03 rule is the
+    // bill shape: "the kit code and first 4 feet at price, extra feet immediately below, … then all included
+    // components of kit at $0.00." The kit line prints, first in its configuration, on every money document; the
+    // floors and the contents documents still never see it.
+    const real = (lines || []).filter(l => !(l && l.offOrder === true)).filter(l => !isDisplayOnlyLine(l) || (l && l.itemKit === true) || (money && l && (l.isKit === true || l.isDiscount || l.isNetLine)))
         .map(l => withLineFinish(reResolve(l, findPart, custKeys), finishFallback));
     if (!money) return real;
     // ── A POLE IS SOLD BY THE FOOT AND SHIPPED AS ONE PIECE (Stuart 2026-08-25) ──────────────
@@ -234,10 +241,23 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
         const qty = (Number(l.qty) || 1) * billed;
         return { ...l, qty, price: Math.round((total / qty) * 100) / 100 };
     };
+    // ── WHAT THE KIT PAID FOR PRINTS AT $0.00 (same day) ────────────────────────────────────
+    // An included bracket printed "42 × $32.00 = $0.00": its own price beside a zero amount. A row the kit covers
+    // prints a $0.00 unit; a row partly above the kit's chart (coveredQty — Shared/kitSeed) prints as TWO rows,
+    // the included ones at $0.00 and the rest at the price, so every row is qty × unit = amount.
+    const zeroed = (l) => (l.inKit && !(Number(l.total) > 0) ? { price: 0 } : {});
+    const kitCovered = (l) => {
+        if (l.isKit) return [l];
+        const qty = Number(l.qty) || 0, cov = Number(l.coveredQty) || 0;
+        if (cov > 0 && cov < qty && Number(l.total) > 0) {
+            return [{ ...l, qty: cov, price: 0, total: 0, inKit: true }, { ...l, qty: qty - cov, coveredQty: 0 }];
+        }
+        return [{ ...l, ...zeroed(l) }];
+    };
     return real.filter(l => !l.hidden && !l.shopOnly)
-        .map(l => (l.perFoot && Number(l.feet) > 0
-            ? (kitFeet(l) || { ...l, qty: (Number(l.qty) || 1) * Number(l.feet) })
-            : l))
+        .flatMap(l => (l.perFoot && Number(l.feet) > 0
+            ? [kitFeet(l) || { ...l, qty: (Number(l.qty) || 1) * Number(l.feet), ...zeroed(l) }]
+            : kitCovered(l)))
         // ── THE CUSTOMER'S PART# ON THE CUSTOMER'S PAPER (Stuart 2026-08-31, invoice S060147:
         // "it has a customer part# associated with it and Brimar is the chosen customer … it
         // should display their part#'s"). A line priced off the customer's own clientPricing row

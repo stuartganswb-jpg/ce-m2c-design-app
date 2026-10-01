@@ -3429,6 +3429,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                   // track as its own $0.00 line beside the fascia (found 2026-10-01). Only the money documents read
                   // it; the router, the packing list, RTG's split and the floors still see the track.
                   ...(line.shopOnly ? { shopOnly: true } : {}),
+                  // How many of this line the kit paid for, across the configuration quantity (Shared/kitSeed) — the
+                  // money documents print the included ones at $0.00 and only the rest at the price.
+                  ...(line.coveredQty !== undefined ? { coveredQty: (Number(line.coveredQty) || 0) * item.qty } : {}),
                   ...(line.hidden ? { hidden: true } : {}),
                   // ⚠ THE KIT MARKS MUST SURVIVE THE MERGE (2026-09-18). RTG's split reads THIS list, and it
                   // was losing them: a kit HOLDER (money and paper only) reached the floor as a small part to

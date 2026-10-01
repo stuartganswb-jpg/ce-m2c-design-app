@@ -1428,8 +1428,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
               bold: !!b.isNetLine || !!b.isHeader,
               // A net row restates the rows above it — it prints, it does not add (Shared/FormPreview).
               noSum: !!b.isNetLine || !!b.isHeader,
+              // A checkout add-on (packaging, a rush fee) is a charge on the ORDER, not a product line: it prints
+              // under the subtotal with shipping (Stuart 2026-10-01, Shared/FormPreview).
+              ...(b.isAddOn ? { afterSubtotal: true } : {}),
           }));
-      if (!isUnpricedRequest && shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt });
+      if (!isUnpricedRequest && shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt, afterSubtotal: true });
       // dateSaved is an ISO stamp — the doc was printing it verbatim ("2026-08-05T20:00:58.578Z").
       // The day it was saved, as a local calendar day — 'YYYY-MM-DD' through new Date() was UTC
       // midnight and printed the evening before (close-out item 6; Shared/quoteDisplay.docDateOf).
@@ -1481,13 +1484,14 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
           amount: b.amount != null ? b.amount : b.total, cut: b.cutLength || null, bold: !!b.isNetLine || !!b.isHeader,
           // A net row restates the rows above it — it prints, it does not add (Shared/FormPreview).
           noSum: !!b.isNetLine || !!b.isHeader,
+          ...(b.isAddOn ? { afterSubtotal: true } : {}),   // a charge on the order — under the subtotal, as on the quote
       });
       const invoiceDoc = (activeDocType === 'INVOICE' && packingList && !isQsDoc)
           ? invoiceDocOf({ priced: customerDocLines(activeDocJob.cpqData?.breakdown || [], 'INVOICE', cartFinishLabelOf(activeDocJob.cpqData), docOpts), packingList, shippingAmount: shippingAmt, orderedTotal: activeDocJob.cpqData?.totalPrice || 0 })
           : null;
       const invoiceFormData = invoiceDoc ? {
           ...quoteFormData, images: [],
-          lines: [...invoiceDoc.rows.map(docRow), ...(shippingAmt > 0 ? [{ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt }] : [])],
+          lines: [...invoiceDoc.rows.map(docRow), ...(shippingAmt > 0 ? [{ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt, afterSubtotal: true }] : [])],
           tax: 0, total: invoiceDoc.total,
       } : null;
       const soDocNumber = isQsDoc ? (activeDocJob.soId || activeDocJob.id) : quoteDisplayNo(activeDocJob);

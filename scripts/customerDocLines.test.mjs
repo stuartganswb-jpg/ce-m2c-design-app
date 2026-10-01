@@ -185,8 +185,11 @@ for (const type of MONEY_DOC_TYPES) {
         { name: 'Lower Arm', legacyErpId: 'H1-2TRVLA/C', qty: 50, price: 0, total: 0, hidden: true, inKit: true, kitOf: 'H1-2TRV-WB/C' },
         { name: 'Traverse system', legacyErpId: 'H1-2TRV-4M/P', qty: 1, price: 900, total: 900, isKit: true },
     ];
-    eq('on the invoice: the item kit under the customer\'s number at its price — no parts, no traverse holder', customerDocLines(kitDoc, 'INVOICE').map(l => [l.legacyErpId, l.total]), [['H3642F', 700]]);
-    eq('on the quote the same', customerDocLines(kitDoc, 'QUOTE').map(l => l.legacyErpId), ['H3642F']);
+    // ⚠ CHANGED 2026-10-01 (Stuart, QUO180): the TRAVERSE kit line prints too. It was dropped with the display-only
+    // rows, so a kit quote's rows came to less than its own net total — the kit IS the first line of the bill (09-03).
+    eq('on the invoice: the item kit under the customer\'s number at its price, and the traverse kit line — no parts', customerDocLines(kitDoc, 'INVOICE').map(l => [l.legacyErpId, l.total]), [['H3642F', 700], ['H1-2TRV-4M/P', 900]]);
+    eq('the contents documents still never carry a traverse kit holder', customerDocLines(kitDoc, 'PACKING_SLIP').some(l => l.legacyErpId === 'H1-2TRV-4M/P'), false);
+    eq('on the quote the same — the item kit, then the traverse kit line', customerDocLines(kitDoc, 'QUOTE').map(l => l.legacyErpId), ['H3642F', 'H1-2TRV-4M/P']);
 }
 
 // ── A KIT'S ADDITIONAL FEET READ AS WHAT THEY BILL (Stuart 2026-10-01, H1-138TRV-4V/P at 144":
@@ -199,6 +202,32 @@ for (const type of MONEY_DOC_TYPES) {
     eq('a pole the kit covers whole (4 ft) prints its feet at $0, as before', row([{ ...pole, feet: 4, billedFeet: 0, total: 0, inKit: true }], 'QUOTE'), [4, 0, 0]);
     eq('an ordinary per-foot pole is untouched: 2 poles × 7 ft at $12.50', customerDocLines([{ name: 'rod', legacyErpId: 'H1-138WR-W', qty: 2, price: 12.5, total: 175, perFoot: true, feet: 7 }], 'QUOTE').map(l => [l.qty, l.price, l.total])[0], [14, 12.5, 175]);
     eq('the router and the packing list still read ONE pole, 12 ft', customerDocLines([pole], 'PACKING_SLIP').map(l => [l.qty, l.feet, l.price])[0], [1, 12, 0]);
+}
+
+// ── A KIT QUOTE ADDS UP (Stuart 2026-10-01, QUO180 — its first configuration, as saved: 42 × a 12 ft kit) ──────
+{
+    const cfg = [
+        { name: '▶ H1-138TRV-4V/P · HTS7501F []', isHeader: true, qty: 42, total: 17388 },
+        { name: '  - 1 3/8" TRAVERSE VERTICAL TRAVERSE SYSTEM - PAINTED', legacyErpId: 'H1-138TRV-4V/P', clientSku: 'HTS7501F', qty: 42, price: 136, total: 5712, isKit: true, noNs: true },
+        { name: '  - 1-3/8" Traverse Rod', legacyErpId: 'H1-138TRV', qty: 42, price: 15, total: 10080, perFoot: true, feet: 12, billedFeet: 8, cutLength: 144 },
+        { name: '  - Steel End Cap', legacyErpId: 'H1-138EC/P', clientSku: 'H5509F', qty: 84, price: 19, total: 1596 },
+        { name: '  - Extended Bracket Arm', legacyErpId: 'H1-138TRVEBA/P', clientSku: 'H3629F', qty: 42, price: 32, total: 0, inKit: true },
+        { name: '  - Extended Bracket Arm', legacyErpId: 'H1-138TRVEBA/P', clientSku: 'H3629F', qty: 126, price: 32, total: 1344, coveredQty: 84 },   // centre 3 a pole, the chart covers 2
+        { name: '  - Vertical Backplate', legacyErpId: 'H1-138TRVBP-V/P', clientSku: 'H3625F', qty: 42, price: 0, total: 0, inKit: true },
+        { name: '  Line Discount - (35%)', qty: 1, price: -6556.2, total: -6556.2, isDiscount: true },
+        { name: '  Net Line Total', qty: 1, total: 12175.8, isNetLine: true },
+    ];
+    const out = customerDocLines(cfg, 'QUOTE');
+    const rows = out.filter(l => !l.isNetLine && !l.isDiscount).map(l => [l.legacyErpId, l.qty, l.price, l.total]);
+    eq('the kit line prints FIRST, under their number, at its price', rows[0], ['HTS7501F', 42, 136, 5712]);
+    eq('then the additional feet at the kit\'s rate', rows[1], ['H1-138TRV', 336, 30, 10080]);
+    eq('an included bracket prints a $0.00 unit — not "42 × $32.00 = $0.00"', rows[3], ['H3629F', 42, 0, 0]);
+    eq('a line partly above the chart is two rows: the included at $0.00, the rest at the price', [rows[4], rows[5]], [['H3629F', 84, 0, 0], ['H3629F', 42, 32, 1344]]);
+    ok('every product row is qty × unit = amount', out.filter(l => !l.isNetLine && !l.isDiscount).every(l => Math.abs((Number(l.qty) || 0) * (Number(l.price) || 0) - (Number(l.total) || 0)) < 0.01));
+    const goods = out.filter(l => !l.isNetLine && !l.isDiscount).reduce((s, l) => s + (Number(l.total) || 0), 0);
+    eq('and the rows come to the configuration\'s own figure before its discount', [goods, goods - 6556.2], [18732, 12175.8]);
+    eq('a pole the kit covers whole prints its feet at $0.00', customerDocLines([{ name: 'rod', legacyErpId: 'H1-138TRV', qty: 47, price: 15, total: 0, perFoot: true, feet: 3, billedFeet: 0, inKit: true }], 'QUOTE').map(l => [l.qty, l.price, l.total])[0], [141, 0, 0]);
+    eq('the floors and the packing list never see the kit line, and read the brackets whole', customerDocLines(cfg, 'PACKING_SLIP').map(l => [l.legacyErpId, l.qty]).slice(0, 4), [['H1-138TRV', 42], ['H1-138EC/P', 84], ['H1-138TRVEBA/P', 42], ['H1-138TRVEBA/P', 126]]);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

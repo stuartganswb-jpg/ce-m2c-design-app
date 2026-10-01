@@ -616,7 +616,7 @@ function HardwareConfiguratorInner({
     const recommendFor = useCallback((slot, choice) => {
         if (!slot) return null;
         if (slot.kind === 'BRACKET' && String(slot.position || '').toUpperCase() === 'CENTER') {
-            return advice ? centreBracketsFor(advice.brackets, bearingEnds(model.choices, Object.values(livePicks))) : null;
+            return advice ? centreBracketsFor(advice.brackets, bearingEnds(model.choices, Object.values(livePicks), model.slots)) : null;
         }
         return recommendedQty(choice, lengthFeet);
     }, [advice, model, livePicks, lengthFeet]);
@@ -2133,7 +2133,7 @@ function HardwareConfiguratorInner({
                                 const picked = step.slot.options.find(o => o.id === livePicks[step.slot.key]);
                                 const rec = recommendFor(step.slot, picked);
                                 const isCentre = step.slot.kind === 'BRACKET';
-                                const ends = isCentre ? bearingEnds(model.choices, Object.values(livePicks)) : 0;
+                                const ends = isCentre ? bearingEnds(model.choices, Object.values(livePicks), model.slots) : 0;
                                 return (
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
                                         <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>How many</span>

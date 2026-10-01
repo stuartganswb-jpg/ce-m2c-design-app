@@ -1598,7 +1598,14 @@ export function recommendedQty(choice, feet) {
 //
 //   8 ft wants 3 supports.  Traverse returns (no plate) → 3 in the centre.
 //                           Solid returns (plated)      → 2 ends + 1 centre.
-export function bearingEnds(choices = [], selectedIds = []) {
+// ⚠ AN END STILL TO BE ANSWERED WILL CARRY (Stuart 2026-10-01, a 72" H1-138 traverse: "the center bracket
+// recommendation is wrong, it states less 1 for the end, but it is 2 as there is 1pc on each end"). The walk
+// asks LEFT bracket → CENTRE → RIGHT, so on the centre step the right bracket is not chosen yet: the count
+// read ONE end, the centre asked for 2, and a number typed off that recommendation stayed. An end whose
+// BRACKET question is still open — offered, not answered, not replaced — is going to get a bracket, so it
+// counts. The 08-20 rule is untouched: a return with no plate REPLACES the bracket (its slot is suppressed,
+// so nothing is pending there) and still carries nothing. `slots` is optional: without it, exactly as before.
+export function bearingEnds(choices = [], selectedIds = [], slots = null) {
     const want = new Set((selectedIds || []).filter(Boolean).map(String));
     const chosen = choices.filter(c => want.has(c.id));
     return ['LEFT', 'RIGHT'].reduce((n, pos) => {
@@ -1606,7 +1613,10 @@ export function bearingEnds(choices = [], selectedIds = []) {
         const carries = here.some(c => c.role === 'BRACKET')
             || here.some(c => c.role === 'INSIDE_MOUNT')
             || here.some(c => c.role === 'RETURN' && !c.noBackplate);
-        return n + (carries ? 1 : 0);
+        const pending = !carries && Array.isArray(slots) && slots.some(s => s && s.kind === 'BRACKET'
+            && String(s.position || '').toUpperCase() === pos && !s.suppressedBy
+            && Array.isArray(s.options) && s.options.length > 0 && !s.options.some(o => want.has(o.id)));
+        return n + (carries || pending ? 1 : 0);
     }, 0);
 }
 

@@ -2097,6 +2097,22 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('a bare finial carries nothing on its own', count([finialEnd('LEFT'), finialEnd('RIGHT')], ['FIN-LEFT', 'FIN-RIGHT']), 0);
     eq('one end only counts once', count([platedReturn('LEFT'), bareReturn('RIGHT')], ['RET-LEFT', 'TRV-RIGHT']), 1);
 
+    // ⚠ AN END STILL TO BE ANSWERED WILL CARRY (Stuart 2026-10-01, 72" traverse: "it states less 1 for the end, but it
+    // is 2 as there is 1pc on each end"). On the CENTRE step the right bracket is not chosen yet — the walk is left,
+    // centre, right — so the count read one end and the centre asked for one too many.
+    {
+        const all = N([...base, finialEnd('LEFT'), finialEnd('RIGHT'), endBracket('LEFT'), endBracket('RIGHT'),
+            { id: 'BK-C', partId: 'H1-138ILPS', role: 'BRACKET', position: 'CENTER', nodes: ['bc'] }, bareReturn('LEFT'), bareReturn('RIGHT')]);
+        const at = (sel) => { const ids = ['ROD', ...sel]; return bearingEnds(all, ids, resolve({ choices: all, answers: { rodKind: 'SOLID' }, selectedIds: ids }).slots); };
+        eq('left bracket chosen, right still to be asked: BOTH ends carry', at(['FIN-LEFT', 'FIN-RIGHT', 'BK-LEFT']), 2);
+        eq('…the old reading, without the slots, was one', bearingEnds(all, ['ROD', 'FIN-LEFT', 'FIN-RIGHT', 'BK-LEFT']), 1);
+        eq('neither bracket chosen yet: both will', at(['FIN-LEFT', 'FIN-RIGHT']), 2);
+        eq('both chosen: two, counted once each', at(['FIN-LEFT', 'FIN-RIGHT', 'BK-LEFT', 'BK-RIGHT']), 2);
+        eq('a bare traverse return REPLACES its bracket — nothing is pending there, it still carries nothing', at(['TRV-LEFT', 'TRV-RIGHT']), 0);
+        eq('one bare return, the other end\'s bracket still open: one', at(['TRV-LEFT', 'FIN-RIGHT']), 1);
+        eq('a wanted 3 on a 6 ft pole is now 1 in the centre from the first look', centreBracketsFor(3, at(['FIN-LEFT', 'FIN-RIGHT', 'BK-LEFT'])), 1);
+    }
+
     // …and his two worked examples. An 8 ft H1-138 pole wants 3 supports.
     eq('8 ft with traverse returns → 3 in the centre', centreBracketsFor(3, 0), 3);
     eq('8 ft with solid plated returns → 1 in the centre', centreBracketsFor(3, 2), 1);

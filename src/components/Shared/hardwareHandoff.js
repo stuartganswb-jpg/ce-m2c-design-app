@@ -111,6 +111,9 @@ function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishC
         ...(l.billGroup ? { billGroup: l.billGroup } : {}),
         ...(l.shopOnly ? { shopOnly: true } : {}),
         ...(l.billedFeet !== undefined ? { billedFeet: l.billedFeet } : {}),
+        // How many of this line the kit paid for (Shared/kitSeed) — a line partly above the kit's chart bills only
+        // the rest, and a document can then say "1 included, 2 at $32" instead of "3 × $32.00 = $64.00".
+        ...(l.coveredQty !== undefined ? { coveredQty: l.coveredQty } : {}),
         // ⚠ PER-FOOT LINES SAY SO (Stuart 2026-08-25, first Brimar orders). The engine prices rod
         // stock by the foot with qty pinned at 1 (one pole on the router — 2026-08-20), so without
         // these two fields a downstream reader sees {qty:1, price:9, total:72} and has no way to

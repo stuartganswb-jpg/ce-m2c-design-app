@@ -269,16 +269,26 @@ export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, 
     if (!priced || !kitCode) return priced;
     const base = Number(baseFeet) > 0 ? Number(baseFeet) : 4;
     const price = Number(kitPrice) > 0 ? Number(kitPrice) : 0;
-    // What the kit covers, keyed by every spelling a line might carry (our code, the doc id).
-    const cover = new Map();
+    // What the kit covers: one ALLOWANCE per included part, known by every spelling a line might carry
+    // (our code, the doc id).
+    // ⚠ AN ALLOWANCE IS SPENT AS IT IS USED (Stuart 2026-10-01, QUO180: "if we overrule the imported kit chart and
+    // add extra brackets over what is included we need to charge for them"). Every line used to be measured
+    // against the WHOLE chart count by itself — left arm 1, centre arms 3, right arm 1 against a chart of 3 were
+    // each "within 3", so five brackets billed nothing; only a single line bigger than the chart ever charged.
+    // The lines draw the allowance down in the order they are billed, and what is left over is above the kit.
+    const allowances = [];   // [{ keys:Set, total, left }]
     (included || []).forEach(i => {
         const q = Number(i && i.qty) || 0;
         if (q <= 0) return;
-        [i.code, i.partId].map(keyOf).filter(Boolean).forEach(k => cover.set(k, (cover.get(k) || 0) + q));
+        const keys = [i.code, i.partId].map(keyOf).filter(Boolean);
+        if (!keys.length) return;
+        const hit = allowances.find(a => keys.some(k => a.keys.has(k)));
+        if (hit) { keys.forEach(k => hit.keys.add(k)); hit.total += q; hit.left += q; }
+        else allowances.push({ keys: new Set(keys), total: q, left: q });
     });
-    const coveredQty = (l) => {
-        for (const k of [l.partId, l.billedId, l.legacyErpId, l.code].map(keyOf)) { if (k && cover.has(k)) return cover.get(k); }
-        return 0;
+    const allowanceOf = (l) => {
+        const keys = [l.partId, l.billedId, l.legacyErpId, l.code].map(keyOf).filter(Boolean);
+        return allowances.find(a => keys.some(k => a.keys.has(k))) || null;
     };
 
     // ── ONE ADDITIONAL-FOOT LINE, NAMED FOR THE PART THE CUSTOMER UNDERSTANDS ────────────────
@@ -312,14 +322,16 @@ export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, 
             // A slot pick the kit already covers: the first `cov` bill nothing; the rest bill as
             // added parts. A line with nothing left to bill is INCLUDED; one wholly above the
             // kit is ADDED at its own rate, exactly as if the kit had never mentioned it.
-            const cov = coveredQty(l);
-            if (cov > 0) {
+            const al = allowanceOf(l);
+            if (al) {
                 const qty = Number(l.qty) > 0 ? Number(l.qty) : 1;
-                const above = Math.max(0, qty - cov);
+                const taken = Math.min(al.left, qty);
+                al.left -= taken;
+                const above = qty - taken;
                 const unit = Number(l.unit) || 0;
-                return { ...l, inKit: above === 0, coveredQty: Math.min(cov, qty), total: unit * above,
+                return { ...l, inKit: above === 0, coveredQty: taken, total: unit * above,
                     billGroup: above > 0 ? BILL_GROUP.ADDED : BILL_GROUP.INCLUDED,
-                    detail: above > 0 ? `${above} above the ${Math.min(cov, qty)} in the kit` : `included in the ${base} ft kit` };
+                    detail: above > 0 ? `${above} above the ${al.total} in the kit` : `included in the ${base} ft kit` };
             }
             return { ...l, billGroup: (Number(l.total) || 0) > 0 ? BILL_GROUP.ADDED : BILL_GROUP.INCLUDED };
         }

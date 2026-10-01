@@ -54,7 +54,15 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
 
   const billTo = (d.billTo && d.billTo.length) ? d.billTo : (isSample ? SAMPLE_BILL : ['—']);
   const shipTo = (d.shipTo && d.shipTo.length) ? d.shipTo : (isSample ? SAMPLE_SHIP : ['—']);
-  const lines = (d.lines && d.lines.length) ? d.lines : (isSample ? SAMPLE_LINES : []);
+  const allLines = (d.lines && d.lines.length) ? d.lines : (isSample ? SAMPLE_LINES : []);
+  // ── PRODUCTS, THEN THE CHARGES ON THE ORDER, THEN THE TOTAL (Stuart 2026-10-01, QUO180) ───────
+  // "it should finish the last line total, then show the box and shipping charges. subtotal should be all
+  //  product lines, then shipping + packaging, then total." A row the builder flags `afterSubtotal` — a
+  // checkout add-on (packaging, a rush fee) or shipping — is not a product line: it leaves the table and
+  // prints in the totals block UNDER the subtotal, so the subtotal is the goods and nothing else. A caller
+  // that flags nothing prints exactly as before.
+  const lines = allLines.filter(l => !l.afterSubtotal);
+  const charges = allLines.filter(l => l.afterSubtotal);
   const date = d.date || (isSample ? '06/27/2026' : '—');
   const po = d.po || (isSample ? 'CUST-10239' : '—');
   const termsLabel = d.termsLabel || (isSample ? 'Net 30' : '—');
@@ -69,7 +77,8 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
   const subtotal = lines.filter(l => !l.noSum).reduce((s, l) => s + lineAmount(l), 0);
   // The invented 8.75% demo tax stays on the SAMPLE only — real data with no tax field means 0.
   const tax = (d.tax != null) ? d.tax : (isSample && showMoney ? subtotal * 0.0875 : 0);
-  const total = (d.total != null) ? d.total : subtotal + tax;
+  const chargesTotal = charges.reduce((s2, l) => s2 + lineAmount(l), 0);
+  const total = (d.total != null) ? d.total : subtotal + chargesTotal + tax;
 
   const label = { fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' };
   const cell = { padding: '9px 12px', fontFamily: 'var(--sans)', fontSize: '12px', color: 'var(--ink)' };
@@ -193,7 +202,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
                     of stock); the number a reader needs is the 94.5" it is cut to. */}
                 {cutText(l.cut) && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '2px' }}>{cutText(l.cut)}</div>}
               </td>
-              <td style={{ ...cell, textAlign: 'center' }}>{l.qty === '' || l.qty == null ? '' : l.qty}</td>
+              <td style={{ ...cell, textAlign: 'center', whiteSpace: 'nowrap' }}>{l.qty === '' || l.qty == null ? '' : l.qty}</td>
               {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.price == null ? '' : money(l.price)}</td>}
               {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: l.bold ? 600 : 400 }}>{money(lineAmount(l))}</td>}
             </tr>
@@ -214,6 +223,15 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
           <div style={{ width: '260px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '12px', fontFamily: 'var(--mono)' }}><span style={{ color: 'var(--ink-soft)' }}>SUBTOTAL</span><span>{money(subtotal)}</span></div>
+            {charges.map((c, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '6px 0', fontSize: '12px', fontFamily: 'var(--mono)' }}>
+                <span style={{ color: 'var(--ink-soft)' }}>
+                  {String(c.desc || '').replace(/^\s*-\s*/, '').toUpperCase()}
+                  {c.qty !== '' && c.qty != null && c.price != null && <span style={{ display: 'block', fontSize: '9px', letterSpacing: '.04em' }}>{c.item ? `${c.item} · ` : ''}{c.qty} × {money(c.price)}</span>}
+                </span>
+                <span>{money(lineAmount(c))}</span>
+              </div>
+            ))}
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '12px', fontFamily: 'var(--mono)' }}><span style={{ color: 'var(--ink-soft)' }}>TAX</span><span>{money(tax)}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', marginTop: '6px', background: 'var(--paper-2)', border: '1px solid var(--line)', fontFamily: 'var(--serif)', fontSize: '15px', fontWeight: 500 }}>
               <span>{type === 'INVOICE' ? 'Balance Due' : 'Total'}</span><span>{money(total)}</span>

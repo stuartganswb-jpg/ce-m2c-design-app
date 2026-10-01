@@ -314,5 +314,39 @@ const kit = (align, code = 'HTS7504F') => ({ legacyErpId: code, partClass: 'Kit'
     eq('a refusal writes nothing', [r4.answers, r4.picks], [{}, {}]);
 }
 
+// ── THE KIT'S ALLOWANCE IS SPENT AS IT IS USED (Stuart 2026-10-01, QUO180: "if we overrule the imported kit chart
+//    and add extra brackets over what is included we need to charge for them") ─────────────────────────────────────
+{
+    const arm = (id, qty) => ({ partId: 'CE-ARM', billedId: 'H1-138TRVEBA/P', name: 'arm ' + id, role: 'BRACKET', position: id, qty, unit: 32, total: 32 * qty });
+    const plate = (id, qty) => ({ partId: 'CE-PL', billedId: 'H1-138TRVBP-V/P', name: 'plate ' + id, role: 'BACKPLATE', position: id, qty, unit: 0, total: 0 });
+    const rod = { partId: 'H1-138TRV', name: 'rod', role: 'ROD', perFoot: true, feet: 12, qty: 1, unit: 0, total: 0 };
+    const kitOf = (included) => ({ kitCode: 'H1-138TRV-4V/P', kitName: 'kit', kitPrice: 136, baseFeet: 4, perFootPrice: 30, included });
+    const by = (r, name) => r.lines.find(l => l.name === name);
+    const sum = (r, role) => r.lines.filter(l => l.role === role).reduce((n, l) => n + l.total, 0);
+
+    // 12 ft, chart = 4 brackets; the operator took the centre to 3 → 5 on the order.
+    let r = applyKitPricing({ lines: [rod, arm('L', 1), arm('C', 3), arm('R', 1), plate('L', 1), plate('C', 3), plate('R', 1)], total: 0 },
+        kitOf([{ code: 'H1-138TRVEBA/P', partId: 'CE-ARM', qty: 4 }, { code: 'H1-138TRVBP-V/P', qty: 4 }]));
+    eq('five arms against a chart of four: ONE is charged', sum(r, 'BRACKET'), 32);
+    eq('the left arm and the three centre arms are the kit\'s four', [by(r, 'arm L').coveredQty, by(r, 'arm L').inKit, by(r, 'arm C').coveredQty, by(r, 'arm C').inKit], [1, true, 3, true]);
+    eq('the right arm is the fifth — billed, and it says why', [by(r, 'arm R').coveredQty, by(r, 'arm R').total, by(r, 'arm R').inKit, by(r, 'arm R').billGroup, by(r, 'arm R').detail], [0, 32, false, BILL_GROUP.ADDED, '1 above the 4 in the kit']);
+    eq('the allowance is found by the doc id as well as the code (one allowance, two spellings)', by(r, 'arm L').total, 0);
+    eq('the plates draw their own allowance down the same way (a $0 part bills $0 either way)', [by(r, 'plate C').coveredQty, by(r, 'plate R').coveredQty, sum(r, 'BACKPLATE')], [3, 0, 0]);
+    eq('the kit line + 8 extra feet + the one arm', r.total, 136 + 8 * 30 + 32);
+
+    // Exactly the chart: nothing above it.
+    r = applyKitPricing({ lines: [rod, arm('L', 1), arm('C', 2), arm('R', 1)], total: 0 }, kitOf([{ code: 'H1-138TRVEBA/P', qty: 4 }]));
+    eq('four arms against a chart of four: all included', [sum(r, 'BRACKET'), r.lines.filter(l => l.role === 'BRACKET').every(l => l.inKit)], [0, true]);
+    // One line straddling the allowance.
+    r = applyKitPricing({ lines: [rod, arm('L', 1), arm('C', 5), arm('R', 1)], total: 0 }, kitOf([{ code: 'H1-138TRVEBA/P', qty: 3 }]));
+    eq('a centre of 5 on a chart of 3: 2 of them are the kit\'s, 3 are charged; the right arm too', [by(r, 'arm C').coveredQty, by(r, 'arm C').total, by(r, 'arm C').detail, by(r, 'arm R').total], [2, 96, '3 above the 3 in the kit', 32]);
+    // The same part named on two included rows is one allowance.
+    r = applyKitPricing({ lines: [rod, arm('L', 1), arm('C', 3), arm('R', 1)], total: 0 }, kitOf([{ code: 'H1-138TRVEBA/P', qty: 2 }, { partId: 'CE-ARM', code: 'H1-138TRVEBA/P', qty: 2 }]));
+    eq('two included rows for one part add up (2 + 2 = 4)', sum(r, 'BRACKET'), 32);
+    // A part the kit never mentions is as it was.
+    r = applyKitPricing({ lines: [rod, { partId: 'CE-FIN', billedId: 'H1-138EC/P', name: 'cap', role: 'FINIAL', qty: 2, unit: 19, total: 38 }], total: 38 }, kitOf([{ code: 'H1-138TRVEBA/P', qty: 4 }]));
+    eq('a part outside the kit bills at its own rate, untouched', [by(r, 'cap').total, by(r, 'cap').coveredQty, by(r, 'cap').billGroup], [38, undefined, BILL_GROUP.ADDED]);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);
