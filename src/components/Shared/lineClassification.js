@@ -1,6 +1,7 @@
 import { findClientPriceRow } from './clientPricing.js';
 import { isPoleCategory } from './poleCut.js';
 import { cleanSidemark } from './quoteDisplay.js';
+import { leftOffCustomerPaper } from './autoParts.js';
 
 // Single source of truth for splitting a CPQ order line into the two
 // production divisions: 'small' (-> Finishing Floor) vs 'custom' (-> Shop Floor).
@@ -200,11 +201,36 @@ const withGroupNetLines = (lines) => {
     return out;
 };
 
+// ── AN ITEM KIT SAYS ITS FINISH (Stuart 2026-10-02, QUO188: "on the quote form, it is not showing the finish for the
+// kit finial" — the customer had to call to confirm one end cap was EP1 and the other EP2). A kit line carries no
+// finish of its own: the acrylic end cap's top is clear, and the finish is on its collar — a hidden part row right
+// under it (Shared/hardwarePricing writes the kit, then its parts, each `kitOf` the kit's code). On the customer's
+// paper the kit line takes the finish of the first finished part inside it, so it reads "— Finish: Satin Nickel
+// (EP1)". A kit with no finished part, or a line that has a finish of its own, is left exactly as it was.
+const withKitFinish = (lines) => {
+    const rows = lines || [];
+    return rows.map((l, i) => {
+        if (!l || !l.isKit || !l.itemKit || l.finishCode) return l;
+        const code = String(l.legacyErpId || '').trim().toUpperCase();
+        const parts = [];
+        for (let j = i + 1; j < rows.length; j++) {
+            const p = rows[j];
+            if (!p || !p.inKit || String(p.kitOf || '').trim().toUpperCase() !== code) break;
+            parts.push(p);
+        }
+        const fin = parts.find(p => p.finishCode) || parts.find(p => p.finishLabel);
+        if (!fin) return l;
+        return { ...l, ...(fin.finishCode ? { finishCode: fin.finishCode } : {}), ...(fin.finishLabel ? { finishLabel: fin.finishLabel } : {}), ...(fin.clientFinishName ? { clientFinishName: fin.clientFinishName } : {}) };
+    });
+};
+
 export const customerDocLines = (lines = [], docType = '', finishFallback = '', opts = {}) => {
     const { findPart = null, custKeys = null } = opts || {};
     const money = MONEY_DOC_TYPES.includes(String(docType || '').toUpperCase());
     // Only the money documents keep a net row at all, so only they get the room and the per-room total.
     if (money) lines = withGroupNetLines(lines);
+    // …and only they name an item kit's finish from the part inside it that has one (below).
+    if (money) lines = withKitFinish(lines);
     // ── THE PAPER HAS TO ADD UP (Stuart 2026-09-11) ──────────────────────────────────────────
     // The discount / net rows are display-only for the FLOORS (never work) — but on a MONEY
     // document they are the arithmetic: without them a discounted quote printed every line at
@@ -257,7 +283,9 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
         }
         return [{ ...l, ...zeroed(l) }];
     };
-    return real.filter(l => !l.hidden && !l.shopOnly)
+    // Automatic hardware — an F-clip hanger, an end plug, an end stopper (Shared/autoParts) — is not something the
+    // customer chose and, at $0.00, only confused them (Stuart 2026-10-02, QUO188). It stays on every other reader.
+    return real.filter(l => !l.hidden && !l.shopOnly && !leftOffCustomerPaper(l))
         .flatMap(l => (l.perFoot && Number(l.feet) > 0
             ? [kitFeet(l) || { ...l, qty: (Number(l.qty) || 1) * Number(l.feet), ...zeroed(l) }]
             : kitCovered(l)))

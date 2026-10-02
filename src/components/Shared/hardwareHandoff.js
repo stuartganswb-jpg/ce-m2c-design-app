@@ -36,6 +36,7 @@ import { applyKitPricing, BILL_GROUP } from './kitSeed.js';
 import { priceConfiguration } from './hardwarePricing.js';
 import { ENGINE_VERSION } from './engineVersion.js';
 import { pinsFingerprint } from './cartStaleness.js';
+import { isAutoPartLine } from './autoParts.js';
 
 /** Lines a customer may see: no BOM-only parts. */
 export const customerLines = (lines = []) => lines.filter(l => !l.hidden);
@@ -114,6 +115,9 @@ function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishC
         // How many of this line the kit paid for (Shared/kitSeed) — a line partly above the kit's chart bills only
         // the rest, and a document can then say "1 included, 2 at $32" instead of "3 × $32.00 = $64.00".
         ...(l.coveredQty !== undefined ? { coveredQty: l.coveredQty } : {}),
+        // Hardware that comes with something and is never chosen — an F-clip, an end plug (Shared/autoParts). The
+        // customer's money documents leave it off while it bills nothing; every other reader sees it as before.
+        ...(isAutoPartLine(l) ? { autoPart: true } : {}),
         // ⚠ PER-FOOT LINES SAY SO (Stuart 2026-08-25, first Brimar orders). The engine prices rod
         // stock by the foot with qty pinned at 1 (one pole on the router — 2026-08-20), so without
         // these two fields a downstream reader sees {qty:1, price:9, total:72} and has no way to
@@ -224,6 +228,8 @@ export function handoffItem(resolved, ctx = {}) {
         // Without a mark the TAGS breakdown walk would push them a second time and the order would
         // carry double the carriers.
         trvComponent: true,
+        // …and an end stopper is automatic hardware too; the carriers are a choice and print (Shared/autoParts).
+        ...(isAutoPartLine({ trvComponent: true, legacyErpId: c.code }) ? { autoPart: true } : {}),
     }));
 
     // ── ONE BILL ORDER ON A KIT ORDER (F2 E / #46): kit · extra feet · added · included ────────

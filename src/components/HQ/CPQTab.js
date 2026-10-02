@@ -3433,6 +3433,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                   // How many of this line the kit paid for, across the configuration quantity (Shared/kitSeed) — the
                   // money documents print the included ones at $0.00 and only the rest at the price.
                   ...(line.coveredQty !== undefined ? { coveredQty: (Number(line.coveredQty) || 0) * item.qty } : {}),
+                  // Automatic hardware (an F-clip, an end plug, an end stopper — Shared/autoParts): off the customer's
+                  // money documents, on everything else. Lost here, the quote could not tell a clip from a choice.
+                  ...(line.autoPart ? { autoPart: true } : {}),
                   ...(line.hidden ? { hidden: true } : {}),
                   // ⚠ THE KIT MARKS MUST SURVIVE THE MERGE (2026-09-18). RTG's split reads THIS list, and it
                   // was losing them: a kit HOLDER (money and paper only) reached the floor as a small part to
