@@ -1,12 +1,14 @@
 import React from 'react';
 import { HOLD_STAGES } from './orderHold';
+import { isStoppedOrder } from './orderLifecycle';
 
 // ONE BANNER, EVERY SCREEN. A stopped order has to look the same in finishing, at the packing
 // bench and on the dispatch board — the whole point is that nobody can be looking at the order and
 // not know it is stopped (Stuart 2026-08-21). Rendered above everything, in red, with the reason
 // where the eye lands rather than behind a click.
 const HeldOrdersBanner = ({ orders = [], onRelease, refOf, style }) => {
-    const held = orders.filter(o => o && o.held === true)
+    // A closed / finished document is not stopped (Shared/orderLifecycle.isStoppedOrder).
+    const held = orders.filter(isStoppedOrder)
         .sort((a, b) => (a.heldAt || 0) - (b.heldAt || 0));
     if (!held.length) return null;
     const ago = (t) => {

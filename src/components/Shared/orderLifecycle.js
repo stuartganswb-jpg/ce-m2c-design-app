@@ -56,6 +56,12 @@ export const isDoneState = (d) => !!d && (
     isClosedState(d) || d.packStatus === 'Packed' ||
     d.status === 'Completed' || d.status === 'Built'
 );
+// ── A STOPPED ORDER IS A LIVE ONE (Stuart 2026-10-01, RTG's red "orders stopped — nothing moves until resolved") ──────────
+// "seeing SO60551 still there": WO-SO60551 / SHOP-SO60551 / WO-SO60585 / WO-SO60586 were the whole-order documents CLOSED on
+// 9/22-23 when those orders moved to row-by-row release, and each still carried the backorder hold it had when it was closed.
+// A hold on a document that is closed, packed, built or completed stops nothing — its work is over. The hold stays on the
+// record as history; the banner (Shared/HeldOrdersBanner — RTG, the WMS, the Setup Queue) lists only what can still move.
+export const isStoppedOrder = (d) => !!d && d.held === true && !isDoneState(d);
 // What the RECORD already knows from the floor (propagateFloorState stamps it at every completion,
 // pack and put-away). The audit compares the floor to THIS, not to a status the record never carries.
 export const FLOOR_REPORTED_DONE = ['Complete', 'Packed', 'Shelved', 'Plated'];

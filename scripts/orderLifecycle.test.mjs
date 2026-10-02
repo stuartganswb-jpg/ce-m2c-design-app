@@ -5,7 +5,7 @@
 // library part id — so the hq record was never in the key set and the shop could not tell RTG
 // anything. This pins that the id convention is a key, from either side.
 
-import { identityKeysOf, isClosedState, isDoneState, auditOrphans, queuedWriteTargets, orderDocIdsOf, entryNamesOrder, reopenPlanFor, planBulkReopen, planOrderReopen, pickStatusFromStamps, closedByBulkIn, DELETE, BULK_CLOSE_FROM, recordKnowsDone, linkedDocsOf } from '../src/components/Shared/orderLifecycle.js';
+import { identityKeysOf, isClosedState, isDoneState, auditOrphans, queuedWriteTargets, orderDocIdsOf, entryNamesOrder, reopenPlanFor, planBulkReopen, planOrderReopen, pickStatusFromStamps, closedByBulkIn, DELETE, BULK_CLOSE_FROM, recordKnowsDone, linkedDocsOf, isStoppedOrder } from '../src/components/Shared/orderLifecycle.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
@@ -214,6 +214,17 @@ eq('per-order: a put-away fin doc reopens anyway (the operator said so), from it
 eq('per-order: the record restores from its snapshot', [oneRow('hq_work_orders', 'WO-ONE').action, oneRow('hq_work_orders', 'WO-ONE').patch.status], ['RESTORE', 'Dispatched']);
 eq('per-order: the cut that close cancelled comes back; an older cancellation does not', [oneRow('rod_cut_orders', 'RC-ONE').action, oneRow('rod_cut_orders', 'RC-OLD')], ['RESTORE', undefined]);
 ok('bulk tool still ignores a non-bulk close', reopenPlanFor({ coll: 'fin_workorders', d: closedFin }).action === 'SKIP');
+
+// ── a hold on a closed / finished document stops nothing (2026-10-01, SO60551's retired whole-order docs on RTG's banner) ──
+eq('held and live is stopped; held and Closed / Completed / Packed / deleted is not; not held is not', [
+    isStoppedOrder({ id: 'WO-SO60428', held: true, currentPhase: 'Setup' }),
+    isStoppedOrder({ id: 'WO-SO60551', held: true, currentPhase: 'Closed', stepStatus: 'Closed', closedFrom: '10.5' }),
+    isStoppedOrder({ id: 'SHOP-SO60551', held: true, status: 'Completed', closedFrom: '10.5' }),
+    isStoppedOrder({ id: 'WO-X', held: true, packStatus: 'Packed' }),
+    isStoppedOrder({ id: 'WO-Y', held: true, deleted: true }),
+    isStoppedOrder({ id: 'WO-Z', held: true, currentPhase: 'Complete' }),
+    isStoppedOrder({ id: 'WO-N', currentPhase: 'Setup' }), isStoppedOrder(null),
+], [true, false, false, false, false, true, false, false]);
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
