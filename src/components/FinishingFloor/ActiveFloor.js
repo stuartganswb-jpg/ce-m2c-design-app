@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { isFloorSupervisor } from '../Shared/finishingRoles';
 import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
     FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, sprayStationLockOf, sprayStationPatch, poleCoatIndexOf,
-    isHandTask, mayRunHandStep, handStepWarning } from '../Shared/floorActivity';
+    isHandTask, mayRunHandStep, handStepWarning, TASK_LABEL as FLOOR_TASK_LABEL } from '../Shared/floorActivity';
 import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
 import { normalMinutesOf, punchCheckOf, catchUpRunOf, punchWarning, punchFlagText, TASK_LABEL_ES } from '../Shared/punchCheck';
 import { finishingDb as db } from '../../firebase';
@@ -463,7 +463,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // Complete. The write has gone in but the snapshot has not come back yet, so the answer is
   // computed on a local copy rather than by waiting — the prompt has to appear on the same tap.
   const raiseAdvancePrompt = (wo, taskKey) => {
-      const stream = (taskKey === 'poleSpray' || taskKey === 'poleBake') ? 'poles' : 'parts';
+      // Every pole task is the pole stream's — `poleHand` included (2026-10-01: it fell to 'parts', so completing a
+      // pole's hand coat asked whether the SMALL PARTS could advance and the pole's own next coat was never offered).
+      const stream = String(taskKey || '').startsWith('pole') ? 'poles' : 'parts';
       const after = { ...wo, tasks: { ...(wo.tasks || {}), [taskKey]: { ...((wo.tasks || {})[taskKey] || {}), status: 'Complete' } } };
       const act = stream === 'poles' ? nextPoleAction(after) : nextPartsAction(after);
       if (!act || !act.advance) return;                       // more steps left in this coat
@@ -1853,6 +1855,35 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
     const blockReason = hold ? `${hold.label} — ${hold.reason || 'held'}` : blockReasonProp;
     const task = wo.tasks?.[type] || {}; 
     const isRunning = task.status === 'Running';
+    // ⏱ THE CARD'S COMPLETE CHECKS THE PUNCH TOO (Stuart 2026-10-01 · Shared/punchCheck). Both of this card's
+    // buttons — "Complete Task" and the oven's "Mark Dry Early" — wrote the completion directly and so skipped the
+    // check Manual Control makes. Same rule, same stamp, same log line, same words in both languages.
+    const completeFromCard = () => {
+        const who = (user && user.name) || task.assignedTo || 'Tablet';
+        const nowMs = Date.now();
+        const startedMs = task.startTime || null;
+        const check = punchCheckOf({ startedMs, completedMs: nowMs, normalMins: normalMinutesOf(type, wo, cfg || {}) });
+        const catchUp = catchUpRunOf({ wo, actor: who, taskKey: type, nowMs });
+        updateDoc(doc(db, "fin_workorders", wo.id), {
+            [`tasks.${type}.status`]: 'Complete', [`tasks.${type}.completedAt`]: nowMs,
+            [`tasks.${type}.completedBy`]: who, [`tasks.${type}.completedVia`]: 'tablet',
+            [`tasks.${type}.completedCoat`]: ((type.startsWith('pole') ? poleCoatIndexOf(wo) : wo.currentStepIndex) || 0) + 1,
+            [`tasks.${type}.punchFlag`]: check.flag || '',
+            ...(check.flag ? { [`tasks.${type}.punchRanMs`]: startedMs ? nowMs - startedMs : null, [`tasks.${type}.punchNormalMins`]: check.normalMins } : {}),
+        });
+        if (!check.flag && !catchUp) return;
+        const bits = [
+            check.flag === 'NO_START' ? 'completed with no start punch' : (check.flag === 'TOO_SHORT' ? `ran ${(check.ranMins || 0).toFixed(1)}m — normal ~${Math.round(check.normalMins)}m` : ''),
+            catchUp ? `catch-up run: ${catchUp.count} steps in 5 min (${catchUp.keys.join(', ')})` : '',
+        ].filter(Boolean).join(' · ');
+        addDoc(collection(db, 'fin_logs'), {
+            u: who, cat: 'manual', t: serverTimestamp(), at: nowMs,
+            msg: `⏱ PUNCH WARNING · ${type} · ${woRef(wo)} — ${bits}`, action: 'PUNCH_WARNING', station: 'CARD',
+            woId: wo.id, woRefNo: woRef(wo), task: type, recipe: wo.recipe || '',
+            elapsedMs: startedMs ? nowMs - startedMs : null, startedAtMs: startedMs,
+        }).catch(() => {});
+        alert(punchWarning({ who, order: woRef(wo), step: FLOOR_TASK_LABEL[type] || type, stepEs: TASK_LABEL_ES[type] || '', check, catchUp }));
+    };
     
     const [manualOp, setManualOp] = useState("");
     const currentOp = manualOp || (aiRec === "NO OP AVAILABLE" ? "" : aiRec);
@@ -1911,7 +1942,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                 <div onClick={() => onViewWo && onViewWo(wo)} title={`${wo.id} — tap for order details`} style={{ color: 'var(--ink)', fontWeight: 500, fontSize: '0.95rem', cursor: onViewWo ? 'pointer' : 'default', textDecoration: onViewWo ? 'underline' : 'none', textDecorationColor: 'var(--line)' }}>{woRef(wo)}</div>
                 {sled && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{sled} Station (Oven)</div>}
                 <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)', margin: '16px 0' }}>{rem} mins</div>
-                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete', [`tasks.${type}.completedAt`]: Date.now(), [`tasks.${type}.completedBy`]: (user && user.name) || task.assignedTo || 'Tablet', [`tasks.${type}.completedVia`]: 'tablet', [`tasks.${type}.completedCoat`]: ((type.startsWith('pole') ? poleCoatIndexOf(wo) : wo.currentStepIndex) || 0) + 1 }); }} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
+                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); completeFromCard(); }} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
             </div>
         );
     }
@@ -1959,7 +1990,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                     updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() });
                 }} style={{ width: '100%', padding: '12px', background: disabledStart ? 'var(--paper-2)' : 'var(--ink)', color: disabledStart ? 'var(--ink-soft)' : '#fff', border: disabledStart ? '1px solid var(--line)' : 'none', cursor: disabledStart ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>{btnText}</button>
             ) : (
-                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete', [`tasks.${type}.completedAt`]: Date.now(), [`tasks.${type}.completedBy`]: (user && user.name) || task.assignedTo || 'Tablet', [`tasks.${type}.completedVia`]: 'tablet', [`tasks.${type}.completedCoat`]: ((type.startsWith('pole') ? poleCoatIndexOf(wo) : wo.currentStepIndex) || 0) + 1 }); }} style={{ width: '100%', padding: '12px', background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper)'}>Complete Task</button>
+                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); completeFromCard(); }} style={{ width: '100%', padding: '12px', background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper)'}>Complete Task</button>
             )}
         </div>
     )

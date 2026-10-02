@@ -917,15 +917,22 @@ function HardwareConfiguratorInner({
             if (!c || ((c.noFinish || owner.noFinish) && !ov)) return;
             // …and an unmatched track renders its stock look, never the configuration's finish.
             if (!ov && (c.role === 'TRACK' || owner.role === 'TRACK')) return;
-            const f = finishByCode.get(String(ov || finishFor(c)).toUpperCase());
+            // ⚠ A RETURN CUT INTO THE POLE IS DRAWN IN THE POLE'S FINISH (Stuart 2026-10-01, H1-2TRV wood miter return:
+            // "the pole renders correctly as wood, the return is in cart correctly as wood finish but the rendering is
+            // metal"). The 09-18 rule — a miter, a French return, a bend is fabrication ON the rod and wears what the rod
+            // wears — was written into the cart line (lineFinishFor) and never into this pass, which still asked the
+            // return's own material tag: metal, so the oak stain was refused and the return drew bare. Same rule, same
+            // two helpers, here: the rod's finish (its own per-part pick still wins), past the material gate.
+            const follows = !ov && followsRod(c);
+            const f = finishByCode.get(String(ov || (follows ? (partFinish[c.id] || rodFinishFor(c)) : finishFor(c))).toUpperCase());
             // The material gate, applied at the last moment: a global pick of a wood stain simply
             // does not land on the steel brackets, and nothing lands on the acrylic.
-            if (!f || (!ov && !finishesFor(c, [f]).length)) return;
+            if (!f || (!ov && !follows && !finishesFor(c, [f]).length)) return;
             const url = f.textureUrl || f.finalImageUrl;
             if (url) out[String(node).toLowerCase()] = url;
         });
         return out;
-    }, [resolved, chosenList, finishByCode, finishFor, matchFinishOverride]);
+    }, [resolved, chosenList, finishByCode, finishFor, matchFinishOverride, followsRod, rodFinishFor, partFinish]);
 
     // ── PRICE ─────────────────────────────────────────────────────────────────────────────────
     // ── OUR COST TO THEM IS THE DEFAULT, ONCE THERE IS A "THEM" ──────────────────────────────
