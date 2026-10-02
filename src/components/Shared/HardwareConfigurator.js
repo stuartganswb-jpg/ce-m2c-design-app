@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel, ViewCapturer } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
-import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
+import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor, companionsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
 import { configuratorLines, configuratorTotal, defaultPicks, carrierRows } from './traverseConfigurator';
 import { traverseAnswersMissing, drawLabel } from './traverseDraw';
@@ -1064,6 +1064,18 @@ function HardwareConfiguratorInner({
     // A hidden part with no price is still a real problem — it just is not the operator's, so it
     // is reported quietly rather than in red on a quote they cannot act on.
     const priceWarnings = useMemo(() => pricingWarnings({ lines: priced.lines.filter(l => !l.hidden) }), [priced]);
+    // The parts each item-kit line brings — the hidden lines that follow it (hardwarePricing writes a kit, then its
+    // parts). Read by the pricing panel so a kit line can say what each part wears.
+    const kitPartsByLine = useMemo(() => {
+        const m = new Map();
+        let cur = null;
+        (priced.lines || []).forEach(l => {
+            if (l.isKit && l.itemKit) { cur = l; m.set(l, []); return; }
+            if (cur && l.inKit && l.hidden && l.kitOf === (cur.billedId || '')) { m.get(cur).push(l); return; }
+            cur = null;
+        });
+        return m;
+    }, [priced]);
     // Added by hand — priced by the SAME chain as everything else (override → price level → client
     // row → base). A splice a customer negotiated is still that customer's price; nothing about it
     // being typed in rather than resolved changes what they pay for it.
@@ -1810,19 +1822,32 @@ function HardwareConfiguratorInner({
                 ))}
                 {step?.kind === 'SLOT' && livePicks[step.slot?.key] && (() => {
                     const o = step.slot.options.find(x => x.id === livePicks[step.slot.key]);
-                    if (!o || o.noFinish) return null;
-                    return (
-                        <div style={{ borderTop: '1px solid var(--line)', paddingTop: '9px' }}>
+                    if (!o) return null;
+                    // ⚠ A TWO-PART FINIAL'S COLLAR IS PICKED HERE TOO (Stuart 2026-10-02, H1-2TRV: "i am trying to put the
+                    // metal endcap on one side in EP2 and the acrylic endcap on the other side in EP1, what am i doing
+                    // wrong?"). Nothing — there was no place to do it: the acrylic top is clear, so its step offered no
+                    // "just this part" row at all, and its collar is never a step of its own, so it could only wear the
+                    // configuration's metal finish. The collar this finial brings (hardwareModel.companionsFor) gets its own
+                    // row on the finial's step — the same pick, saved the same way (partFinish by pin), read by the render,
+                    // the cart line and the kit's collar line alike.
+                    const collar = o.requiresCollar ? (companionsFor(model.choices, [o.id])[0] || null) : null;
+                    const rows = [
+                        ...(o.noFinish ? [] : [{ c: o, what: ourId(o.partId) }]),
+                        ...((collar && !collar.noFinish && finishesFor(collar, offeredFinishes).length) ? [{ c: collar, what: `collar ${ourId(collar.partId)}` }] : []),
+                    ];
+                    if (!rows.length) return null;
+                    return rows.map(({ c, what }) => (
+                        <div key={c.id} style={{ borderTop: '1px solid var(--line)', paddingTop: '9px' }}>
                             <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)', display: 'flex', alignItems: 'baseline', gap: '7px' }}>
-                                Just this part · {ourId(o.partId)}
-                                {partFinish[o.id] && <button onClick={() => setPartFinish(pf => { const n = { ...pf }; delete n[o.id]; return n; })}
+                                Just this part · {what}
+                                {partFinish[c.id] && <button onClick={() => setPartFinish(pf => { const n = { ...pf }; delete n[c.id]; return n; })}
                                     style={{ ...mono, fontSize: '7.5px', border: '1px solid var(--line)', background: '#fff', padding: '2px 5px', cursor: 'pointer', color: 'var(--ink-soft)' }}>back to config finish</button>}
                             </span>
                             {/* THE SAME LIST THE GRID USES — see offeredFinishes. This row reading
                                 the unfiltered library is what let a narrowed flow show everything. */}
-                            {swatchRow(finishesFor(o, offeredFinishes), partFinish[o.id] || globalFinishFor(o), (c) => setPartFinish(pf => ({ ...pf, [o.id]: c })))}
+                            {swatchRow(finishesFor(c, offeredFinishes), partFinish[c.id] || globalFinishFor(c), (code) => setPartFinish(pf => ({ ...pf, [c.id]: code })))}
                         </div>
-                    );
+                    ));
                 })()}
             </div>
         </div>
@@ -2551,6 +2576,26 @@ function HardwareConfiguratorInner({
                                                         rail is that there can be. A part that wears nothing says so rather than going
                                                         quiet, because a blank line and an unfinished part look identical otherwise. */}
                                                     {(() => {
+                                                        // ⚠ A KIT LINE SAYS WHAT ITS PARTS WEAR (Stuart 2026-10-02, H1-2RCTAEC: "now it takes no
+                                                        // finish, which is correct for the acrylic portion but the collar does take finish"). It
+                                                        // did — the collar billed and routed in EP2 — but the kit's parts are hidden lines, so the
+                                                        // one line on screen was the kit's own "clear · takes no finish". Each part, and its finish.
+                                                        const kitParts = (l.isKit && l.itemKit) ? (kitPartsByLine.get(l) || []) : [];
+                                                        if (kitParts.length) return (
+                                                            <span style={{ ...mono, display: 'block', fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', lineHeight: 1.5 }}>
+                                                                {kitParts.map((kp, ki) => {
+                                                                    const kf = kp.finishCode ? finishByCode.get(String(kp.finishCode).toUpperCase()) : null;
+                                                                    const label = kf ? (clientFinishName(kf) || ((kf.name && kf.name !== kf.code) ? kf.name : '')) : '';
+                                                                    return (
+                                                                        <span key={ki} style={{ display: 'block' }}>
+                                                                            {kp.billedId || ourId(kp.partId)}{kp.qty > l.qty ? ` ×${kp.qty / (l.qty || 1)}` : ''} — {kf
+                                                                                ? <span style={{ color: 'var(--brass)' }}>{label ? `${label} · ${kf.code}` : kf.code}</span>
+                                                                                : (kp.subFinishCode ? <span style={{ color: 'var(--brass)' }}>{kp.subFinishCode} · stock colour</span> : (kp.noFinish ? 'clear · takes no finish' : 'mill · no finish'))}
+                                                                        </span>
+                                                                    );
+                                                                })}
+                                                            </span>
+                                                        );
                                                         const f = l.finishCode ? finishByCode.get(String(l.finishCode).toUpperCase()) : null;
                                                         if (f) return (
                                                             <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--brass)' }}>
