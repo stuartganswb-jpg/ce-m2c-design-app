@@ -15,6 +15,7 @@ import { autoPicksOf } from './hardwareAutoPicks';
 import { normalizeExtras } from './extrasRestore';
 import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf, noSpliceNote } from './flowExtras';
 import { shopNotesOf, clientNotesOf } from './lineShopNotes';
+import { SCOPE, scopeTargetsOf, scopeInForce, swatchActionOf, highlightOf } from './finishScope';
 import { kitBracketPicksOf, kitBracketSummary } from './kitBracketPicks';
 import { workIsPristine } from './cpqWorkspace';
 import { parseKitCode } from './kitCode';
@@ -203,6 +204,8 @@ function HardwareConfiguratorInner({
     // in one piece, and the line carries that to the floor as a shop note. Saved with the line
     // (engineConfig.spliceWaived) so Edit or a reopen does not quietly put the splice back.
     const [spliceWaived, setSpliceWaived] = useState(false);
+    // What a swatch click applies to, when the operator has switched it on THIS step: { step, scope } (Shared/finishScope).
+    const [scopePick, setScopePick] = useState(null);
     const [drawnSplices, setDrawnSplices] = useState([]);   // [{ distInches, ref }] — where Vision drew them, for the pencil line
     // How many, per decision. Empty means "use the recommendation"; a typed number always wins.
     const [stepQty, setStepQty] = useState({});       // slot key → count
@@ -1795,6 +1798,19 @@ function HardwareConfiguratorInner({
         return kind === 'out' ? 'Outsourced' : 'In house';   // an unfamiliar material keeps the old words
     };
 
+    // ── WHAT A SWATCH CLICK APPLIES TO ON THIS STEP (Shared/finishScope) ────────────────────────
+    const stepOption = (step?.kind === 'SLOT' && livePicks[step.slot?.key]) ? (step.slot.options.find(x => x.id === livePicks[step.slot.key]) || null) : null;
+    const stepCollar = (stepOption && stepOption.requiresCollar) ? (companionsFor(model.choices, [stepOption.id])[0] || null) : null;
+    const scopeTargets = scopeTargetsOf({ option: stepOption, collar: stepCollar, wears: (c) => finishesFor(c, offeredFinishes).length > 0 });
+    const scopeNow = scopeInForce({ targets: scopeTargets, picked: scopePick, stepKey: step?.key || '', configFinishOf: globalFinishFor });
+    const scopeTarget = scopeTargets.find(t => t.scope === scopeNow) || scopeTargets[scopeTargets.length - 1];
+    const wearsMaterial = (c, mat) => finishesFor(c, [{ material: mat }]).length > 0;
+    const pickSwatch = (mat, code) => {
+        const a = swatchActionOf({ target: scopeTarget, material: mat, code, wearsMaterial });
+        if (a.kind === 'PART') setPartFinish(pf => { const n = { ...pf }; if (a.code) n[a.id] = a.code; else delete n[a.id]; return n; });
+        else setGlobalFinishes(gf => { const n = { ...gf }; if (a.code) n[mat] = a.code; else delete n[mat]; return n; });
+    };
+    const swatchSel = (mat) => highlightOf({ target: scopeTarget, material: mat, partFinish, configFinishOf: globalFinishFor, globalFinishes, wearsMaterial });
     const finishPanel = (
         <div style={{ ...boxStyle, minHeight: '0', position: 'sticky', top: '12px' }}>
             {boxHead('Finish', Object.keys(partFinish).length ? `${Object.keys(partFinish).length} exception(s)` : 'Whole configuration')}
@@ -1802,53 +1818,47 @@ function HardwareConfiguratorInner({
                 grid of swatches, and an operator who does not know it quotes the whole rod in one
                 finish when the customer asked for brass rings on a black pole. */}
             <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--line)', background: 'var(--paper)', fontSize: '11px', lineHeight: 1.45, color: 'var(--ink-soft)' }}>
-                Select a finish once for the whole configuration. Select again at any part you would
-                like in another finish.
+                Select a finish once for the whole configuration. On a part&rsquo;s step, a click changes
+                <b> that part only</b> &mdash; the switch below says what a click applies to.
+            </div>
+            {/* ── WHAT A CLICK APPLIES TO (Stuart 2026-10-02 · Shared/finishScope) ─────────────────
+                "when i change left to EP1 then right changes … this needs to work for all steps." The grid always
+                set the whole configuration and the per-part row was at the bottom of the rail, off the screen. One
+                grid, and this switch: this step's part (the default once the configuration has a finish for it), the
+                collar a two-part finial brings, or the whole configuration. */}
+            <div style={{ padding: '8px 13px', borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ ...mono, fontSize: '8.5px', color: 'var(--ink-soft)' }}>A click applies to</span>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                    {scopeTargets.map(t => (
+                        <button key={t.scope} onClick={() => setScopePick({ step: step?.key || '', scope: t.scope })}
+                            title={t.scope === SCOPE.WHOLE ? 'Every part that wears this finish' : 'Only this part — the rest of the configuration keeps its finish'}
+                            style={{ ...chip(t.scope === scopeNow), textTransform: 'none', letterSpacing: 0 }}>
+                            {t.scope === SCOPE.WHOLE ? 'Whole configuration' : `${t.scope === SCOPE.COLLAR ? 'Collar only' : 'This part only'} · ${ourId(t.choice.partId)}`}
+                        </button>
+                    ))}
+                </div>
+                {scopeTarget.choice && partFinish[scopeTarget.choice.id] && (
+                    <button onClick={() => setPartFinish(pf => { const n = { ...pf }; delete n[scopeTarget.choice.id]; return n; })}
+                        style={{ ...mono, alignSelf: 'flex-start', fontSize: '7.5px', border: '1px solid var(--line)', background: '#fff', padding: '2px 5px', cursor: 'pointer', color: 'var(--ink-soft)' }}>
+                        {ourId(scopeTarget.choice.partId)} is in {partFinish[scopeTarget.choice.id]} &mdash; back to the configuration finish
+                    </button>
+                )}
             </div>
             <div style={{ padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', maxHeight: 'calc(100vh - 160px)' }}>
                 {!finishGroups.length && <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-faint)' }}>Choose a part to see its finishes.</span>}
                 {finishGroups.map(([mat, g]) => (
                     <div key={mat} style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
-                        <span style={{ ...mono, fontSize: '9px' }}>{mat} <span style={{ color: 'var(--ink-faint)' }}>· {g.inHouse.length + g.out.length}</span></span>
+                        <span style={{ ...mono, fontSize: '9px' }}>{mat} <span style={{ color: 'var(--ink-faint)' }}>· {g.inHouse.length + g.out.length}{(scopeTarget.choice && !wearsMaterial(scopeTarget.choice, mat)) ? ' · sets the whole configuration' : ''}</span></span>
                         {!!g.inHouse.length && (<div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '5px' }}>
                             <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>{groupLabel(mat, 'in')} · {g.inHouse.length}</span>
-                            {swatchRow(g.inHouse, globalFinishes[mat] || '', (c) => setGlobalFinishes(gf => { const n = { ...gf }; if (c) n[mat] = c; else delete n[mat]; return n; }))}
+                            {swatchRow(g.inHouse, swatchSel(mat), (c) => pickSwatch(mat, c))}
                         </div>)}
                         {!!g.out.length && (<div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '5px' }}>
                             <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>{groupLabel(mat, 'out')} · {g.out.length}</span>
-                            {swatchRow(g.out, globalFinishes[mat] || '', (c) => setGlobalFinishes(gf => { const n = { ...gf }; if (c) n[mat] = c; else delete n[mat]; return n; }))}
+                            {swatchRow(g.out, swatchSel(mat), (c) => pickSwatch(mat, c))}
                         </div>)}
                     </div>
                 ))}
-                {step?.kind === 'SLOT' && livePicks[step.slot?.key] && (() => {
-                    const o = step.slot.options.find(x => x.id === livePicks[step.slot.key]);
-                    if (!o) return null;
-                    // ⚠ A TWO-PART FINIAL'S COLLAR IS PICKED HERE TOO (Stuart 2026-10-02, H1-2TRV: "i am trying to put the
-                    // metal endcap on one side in EP2 and the acrylic endcap on the other side in EP1, what am i doing
-                    // wrong?"). Nothing — there was no place to do it: the acrylic top is clear, so its step offered no
-                    // "just this part" row at all, and its collar is never a step of its own, so it could only wear the
-                    // configuration's metal finish. The collar this finial brings (hardwareModel.companionsFor) gets its own
-                    // row on the finial's step — the same pick, saved the same way (partFinish by pin), read by the render,
-                    // the cart line and the kit's collar line alike.
-                    const collar = o.requiresCollar ? (companionsFor(model.choices, [o.id])[0] || null) : null;
-                    const rows = [
-                        ...(o.noFinish ? [] : [{ c: o, what: ourId(o.partId) }]),
-                        ...((collar && !collar.noFinish && finishesFor(collar, offeredFinishes).length) ? [{ c: collar, what: `collar ${ourId(collar.partId)}` }] : []),
-                    ];
-                    if (!rows.length) return null;
-                    return rows.map(({ c, what }) => (
-                        <div key={c.id} style={{ borderTop: '1px solid var(--line)', paddingTop: '9px' }}>
-                            <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)', display: 'flex', alignItems: 'baseline', gap: '7px' }}>
-                                Just this part · {what}
-                                {partFinish[c.id] && <button onClick={() => setPartFinish(pf => { const n = { ...pf }; delete n[c.id]; return n; })}
-                                    style={{ ...mono, fontSize: '7.5px', border: '1px solid var(--line)', background: '#fff', padding: '2px 5px', cursor: 'pointer', color: 'var(--ink-soft)' }}>back to config finish</button>}
-                            </span>
-                            {/* THE SAME LIST THE GRID USES — see offeredFinishes. This row reading
-                                the unfiltered library is what let a narrowed flow show everything. */}
-                            {swatchRow(finishesFor(c, offeredFinishes), partFinish[c.id] || globalFinishFor(c), (code) => setPartFinish(pf => ({ ...pf, [c.id]: code })))}
-                        </div>
-                    ));
-                })()}
             </div>
         </div>
     );
