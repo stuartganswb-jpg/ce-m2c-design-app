@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { setAuditPage, auditPageOf } from '../Shared/auditContext';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { useNavigate } from 'react-router-dom';
 import { finishingDb as db, auth, functions, getOuterIdToken } from '../../firebase';
@@ -30,6 +31,8 @@ const FinishingFloor = () => {
   const [user, setUser] = useState(null);
   const [pinInput, setPinInput] = useState("");
   const [activeTab, setActiveTab] = useState('ACTIVE FLOOR');
+  // THE PAGE THE AUDIT TRAIL NAMES (RTG Audit Log, 2026-10-03): this app, the tab open, who is signed in.
+  useEffect(() => { setAuditPage({ app: 'Finishing floor', tab: activeTab, user: user?.name || '' }); }, [activeTab, user]);
   const [perms, setPerms] = useState({});
   
   const [workOrdersRaw, setWorkOrders] = useState([]);
@@ -92,7 +95,7 @@ const FinishingFloor = () => {
   }, [user]);
 
   const writeLog = async (msg, cat) => {
-    try { await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, t: serverTimestamp() }); } 
+    try { await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, src: 'FINISHING', page: auditPageOf() || null, t: serverTimestamp() }); } 
     catch (error) { console.error("Failed to write log:", error); }
   };
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { setAuditPage, auditPageOf } from '../Shared/auditContext';
 import { useNavigate } from 'react-router-dom';
 import { db, auth, functions, storage, getOuterIdToken } from '../../firebase';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, where, orderBy, onSnapshot, writeBatch, serverTimestamp, increment, arrayUnion } from "firebase/firestore";
@@ -106,6 +107,8 @@ const ShopFloor = () => {
     const [user, setUser] = useState(null);
     const [pinInput, setPinInput] = useState("");
     const [activeTab, setActiveTab] = useState('floor');
+    // THE PAGE THE AUDIT TRAIL NAMES (RTG Audit Log, 2026-10-03): this app, the tab open, who is signed in.
+    useEffect(() => { setAuditPage({ app: 'Shop', tab: activeTab, user: user?.name || '' }); }, [activeTab, user]);
     const [cfgQuote, setCfgQuote] = useState(null); // "view configured item" read-only 3D modal
     const [cfgLine, setCfgLine] = useState(0); // which cart line/configuration the viewer opens on
     const [sopView, setSopView] = useState(null); // assembly doc id -> SOP viewer modal
@@ -247,7 +250,7 @@ const ShopFloor = () => {
     const writeLog = async (msg, cat) => {
         try {
             // src stamp: the super-admin log viewer (AdminTab) labels these rows SHOP FLOOR.
-            await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, src: 'SHOP', t: serverTimestamp() });
+            await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, src: 'SHOP', page: auditPageOf() || null, t: serverTimestamp() });
         } catch (error) {
             console.error("Failed to write log:", error);
         }

@@ -1,6 +1,7 @@
 import { db } from '../../firebase';
 import { collection, doc, setDoc, getDocs, query, where } from 'firebase/firestore';
 import { memoCapFor, cappedMemo } from './nsMemoCap';
+import { auditPageOf } from './auditContext';
 
 // ============================================================================
 // LAYER 2 — STAGED NETSUITE WRITES (Stuart 2026-07-16)
@@ -51,6 +52,8 @@ export const enqueueNsWrite = async ({ kind, label, targetUrl, method, payload, 
     else if (method === 'POST' && /\/record\/v1\//.test(String(targetUrl))) p.memo = marker;
     await setDoc(ref, {
         id: ref.id, kind: kind || 'write', label: label || '', sourceApp: sourceApp || '', createdBy: createdBy || '',
+        // THE PAGE IT CAME FROM (RTG Audit Log, 2026-10-03): the app + tab open when it was queued. The worker ignores it.
+        page: auditPageOf() || null,
         targetUrl, method, payload: p, writeBack: writeBack || null, dedupeKey: dedupeKey || null,
         status: afterId ? 'WAITING' : 'PENDING', ...(afterId ? { afterId: String(afterId) } : {}), attempts: 0, lastError: null, nsId: null, nsTran: null,
         createdAt: Date.now(), nextAttemptAt: Date.now(), leasedAt: null, postedAt: null

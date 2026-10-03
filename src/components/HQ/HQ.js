@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
+import { setAuditPage } from '../Shared/auditContext';
 import { useNavigate } from 'react-router-dom';
 import { db, auth, functions, getOuterIdToken } from '../../firebase'; 
 import { collection, query, where, getDocs, doc, getDoc, addDoc, serverTimestamp, onSnapshot, orderBy, limit, updateDoc } from "firebase/firestore";
@@ -99,6 +100,8 @@ function HQ() {
   const [perms, setPerms] = useState({});
   const [activeBrand, setActiveBrand] = useState(null);
   const [activeTab, setActiveTab] = useState(TABS[0]);
+  // THE PAGE THE AUDIT TRAIL NAMES (RTG Audit Log, 2026-10-03): this app, the tab open, who is signed in.
+  useEffect(() => { setAuditPage({ app: 'HQ', tab: activeTab, user: user?.name || '' }); }, [activeTab, user]);
 
   // Tab notification badges: unread OS-Comms messages (addressed to me) + unseen Inception pins
   // (brand-wide, shown to anyone with Inception access). Seen-state for pins is per-user localStorage.

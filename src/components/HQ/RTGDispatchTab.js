@@ -18,6 +18,7 @@ import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe, writeShopDocOnce, claimRelease, endReleaseClaim } from '../Shared/floorRelease';
 import { keptShopJobText } from '../Shared/shopJobOnce';
 import { liveClaimOf, claimRefusedText } from '../Shared/releaseClaim';
+import AuditLogPanel from './AuditLogPanel';
 import { buildRepairOf, buildRepairLabel, buildRepairTexts, buildRepairStamp, typedWoNumber } from '../Shared/skippedBuild';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
 import { coverCodesOf, backorderHoldOf, isBackorderHold } from '../Shared/backorder';
@@ -4015,6 +4016,9 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     )}
                 </div>
             </div>
+            {/* 🧾 AUDIT LOG (Stuart 2026-10-03) — every page, who, item × qty, what the app says, what NetSuite says;
+                orange on anything that may not have gone through. Read-only; its own file (HQ/AuditLogPanel). */}
+            <AuditLogPanel />
             {/* ⚓ ANCHOR REVIEW — nothing reaches NetSuite until Accept (Stuart 2026-08-31). */}
             {anchorReview && (anchorReview.rows || []).length > 0 && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.8)', zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>

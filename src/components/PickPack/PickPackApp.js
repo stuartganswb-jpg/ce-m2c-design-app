@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useDeferredValue } from 'react';
+import { setAuditPage, auditPageOf } from '../Shared/auditContext';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import MaterialGridCard from '../Shared/MaterialGridCard';
@@ -192,6 +193,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [operator, setOperator] = useState(null);
     const [pinInput, setPinInput] = useState("");
     const [activeTab, setActiveTab] = useState('QUEUE');
+    // THE PAGE THE AUDIT TRAIL NAMES (RTG Audit Log, 2026-10-03): this app, the tab open, who is signed in.
+    useEffect(() => { setAuditPage({ app: 'WMS', tab: activeTab, user: operator?.name || '' }); }, [activeTab, operator]);
     // Sample-chip production control
     const [chipOrders, setChipOrders] = useState([]);
     const [showChipStats, setShowChipStats] = useState(false); // 📊 chip production statistics modal
@@ -562,7 +565,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
 
     const writeLog = async (msg, cat) => {
-        try { await addDoc(collection(db, "hq_logs"), { u: operator?.name || 'Unknown', msg, cat, t: serverTimestamp() }); } 
+        try { await addDoc(collection(db, "hq_logs"), { u: operator?.name || 'Unknown', msg, cat, src: 'WMS', page: auditPageOf() || null, t: serverTimestamp() }); } 
         catch (error) { console.error("Failed to write log:", error); }
     };
 
