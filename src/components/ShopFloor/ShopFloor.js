@@ -30,6 +30,7 @@ import RodPieceInventory, { RodCutPanel } from '../Shared/RodPieceInventory';
 import { shopDb, cleanId, SHOP_TABS } from './shopShared';
 import { routingForOrder } from './routingMatch';
 import { millBaseOf, finishRouteOf, finishSuffixOf } from '../Shared/finishRouting';
+import { shopDocNeedsPhos } from '../Shared/phosphateRule';
 import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, shortBuildStamps } from '../Shared/scrapClose';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
@@ -1365,10 +1366,10 @@ const ShopFloor = () => {
 
         const CustomCard = ({ order }) => {
             // "Parts Require Phosphate" (Stuart 2026-07-15): any IN-HOUSE finish → phosphate at
-            // the adjacent station before finishing. Stamped at dispatch (needsPhosphating);
-            // orders already in the queue derive it live from the recipe so the rule covers them.
-            const needsPhos = order.needsPhosphating === true ||
-                (!order.isOutsourced && !!order.finishRecipe && order.finishRecipe !== 'PENDING-RECIPE' && !/\b(MILL|RAW|UNFINISHED)\b/i.test(order.finishRecipe));
+            // the adjacent station before finishing. Stamped at dispatch (needsPhosphating) — the
+            // stamp wins; a document without one derives it from the recipe by the SAME rule
+            // (Shared/phosphateRule — a wood stain is never phosphated; Eric 2026-10-02).
+            const needsPhos = shopDocNeedsPhos(order);
             const phosCfgs = order.quoteId ? (orderConfigs[order.quoteId] || []) : [];
             const phosMulti = phosCfgs.length >= 2; // multi-config: per-row checks; single: one order-level box
             const phosMap = order.phosChecks || {};

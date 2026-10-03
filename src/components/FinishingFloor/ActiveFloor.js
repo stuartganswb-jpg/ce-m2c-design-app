@@ -5,6 +5,7 @@ import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, 
     isHandTask, mayRunHandStep, handStepWarning, TASK_LABEL as FLOOR_TASK_LABEL } from '../Shared/floorActivity';
 import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
 import { normalMinutesOf, punchCheckOf, catchUpRunOf, punchWarning, punchFlagText, TASK_LABEL_ES } from '../Shared/punchCheck';
+import { typedAlreadyBuilt } from '../Shared/skippedBuild';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
@@ -399,12 +400,20 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           `Supervisor override — nothing is scanned, QC'd or timed.`)) return;
 
       // NetSuite question — only for a stock build that hasn't already queued/posted its completion.
+      // The NORMAL answer builds; skipping takes typing the WO's own number (Eric 2026-10-02, WO11639:
+      // an OK on "already built?" skipped the build silently — Shared/skippedBuild).
       let blockNsPost = true;
       if (isStockBuild && !alreadyHandled) {
-          blockNsPost = window.confirm(
-              `Is ${wo.nsWoTran || wo.nsWoId} ALREADY BUILT in NetSuite?\n\n` +
-              `OK  = YES, already built → the app posts NOTHING (use this for a WO you built in NetSuite yourself).\n\n` +
-              `CANCEL = NO, not built yet → the app queues the assembly build now (watch HQ 11.1 → NetSuite Sync Queue).`);
+          const ref = wo.nsWoTran || wo.nsWoId;
+          const typed = window.prompt(
+              `NetSuite build for ${ref}\n\n` +
+              `Leave this BLANK and press OK → the app BUILDS it in NetSuite when packing puts it away (the normal answer).\n\n` +
+              `ONLY if ${ref} is ALREADY BUILT in NetSuite (you built it there yourself): type ${ref} and press OK → the app posts NO build.\n\n` +
+              `Cancel = stop, nothing is completed.`, '');
+          if (typed === null) return;
+          blockNsPost = typedAlreadyBuilt(typed, wo);
+          if (!blockNsPost && String(typed).trim()
+              && !window.confirm(`"${String(typed).trim()}" is not ${ref} — the app will BUILD it in NetSuite as normal. Continue?`)) return;
       }
 
       const updates = {
@@ -433,7 +442,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           setViewWo(null);
           alert(`✅ ${woRef(wo)} marked COMPLETE — it is now in the WMS Packing queue.\n\n` +
               (isStockBuild
-                  ? (blockNsPost ? 'No NetSuite build was posted (already built).' : 'The NetSuite assembly build was queued — check HQ 11.1 → NetSuite Sync Queue.')
+                  ? (blockNsPost ? `No NetSuite build will be posted — you typed ${wo.nsWoTran || wo.nsWoId} (already built). The order shows "build SKIPPED".` : 'The NetSuite assembly build posts when packing puts it away — check HQ 11.1 → NetSuite Sync Queue after.')
                   : 'Custom order — NetSuite is handled by the sales-order fulfillment, not here.'));
       } catch (e) { alert('Force complete failed: ' + (e.message || e)); }
   };

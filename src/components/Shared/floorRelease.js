@@ -24,7 +24,7 @@ import { collection, doc, getDocs, query, setDoc, updateDoc, where } from 'fireb
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { enqueueNsWrite } from './nsOutbox';
 import { withItemCode } from './workOrderContract';
-import { isOutsourcedFinishCode, finishRouteOf } from './finishRouting';
+import { isOutsourcedRecipe, needsPhosphatingOf } from './phosphateRule';
 import { uomStampOf } from './uom.js';
 import { isPoleCategory } from './poleCut';
 
@@ -200,15 +200,8 @@ export async function releaseStockWoToFloor({ hqOrder, brand, by = '', log = noo
 // fact), phosphate by the one rule, a caller-supplied id (the Order Entry pair's '<woId>-C'), the
 // urgent flag, the item's shopInstruction for C's card, and the cut-sheet facts. The caller passes
 // what only it knows (lines, cut list, fab notes, drawing, customer) in `fields`.
-const MILL_RE = /\b(MILL|RAW|UNFINISHED)\b/i;
-// A WOOD STAIN (S01…S99 — the pole rule's small-parts stains, Stuart 2026-09-01) is an in-house finish on WOOD:
-// nothing to phosphate (Stuart 2026-09-27, SO60551 Row 2's stained oak fascia would have been sent to the station).
-const STAIN_RE = /^S\d+\b/i;
-export const isOutsourcedRecipe = (recipe) => {
-    const r = String(recipe || '').trim();
-    if (!r) return false;
-    return isOutsourcedFinishCode(r) || !!finishRouteOf({ recipe: r }).outsourced;
-};
+// OUTSOURCED and PHOSPHATE are one rule each, in Shared/phosphateRule (the Shop card reads the same one).
+export { isOutsourcedRecipe };
 /**
  * @param {object} p.hqOrder       the RTG record (hq_work_orders / hq_sales_orders)
  * @param {'stock'|'sales'} p.orderType
@@ -224,11 +217,10 @@ export function buildShopDoc({ hqOrder = {}, orderType = 'stock', shopId, finish
     const isStock = orderType === 'stock';
     const recipe = String(finishRecipe || '');
     const isOutsourced = isOutsourcedRecipe(recipe);
-    // Fundamental rule (Stuart 2026-07-15): ANY in-house finish (a real recipe that is not outsourced
-    // and not mill/raw) → the custom parts get phosphated at the station adjacent to custom fab.
-    // An explicit flag on the record wins.
-    const needsPhosphating = hqOrder.needsPhosphating === true
-        || (!isOutsourced && recipe && recipe !== 'PENDING-RECIPE' && !MILL_RE.test(recipe) && !STAIN_RE.test(recipe.trim()));
+    // Fundamental rule (Stuart 2026-07-15): ANY in-house finish (a real recipe that is not outsourced,
+    // not mill/raw, not a wood stain) → the custom parts get phosphated at the station adjacent to
+    // custom fab (Shared/phosphateRule). An explicit flag on the record wins.
+    const needsPhosphating = hqOrder.needsPhosphating === true || needsPhosphatingOf(recipe);
     const orderKey = (orderType === 'sales' ? (hqOrder.soId || hqOrder.orderKey) : null) || hqOrder.hqJobId || hqOrder.id;
     const spec = part && part.manufacturingSpecs ? part.manufacturingSpecs : null;
     const docOut = {

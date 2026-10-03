@@ -33,6 +33,7 @@ import { holdSplitGroups } from '../Shared/rowPairShape';
 import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf, oeLinePlansOf, oeStartsLine } from '../Shared/oeGenerate';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import { runChunked, fetchAvailableById, fetchInboundById, backorderTallyOf } from '../Shared/stockPosition';
+import { buildSkippedAtForceComplete } from '../Shared/skippedBuild';
 
 const NS_SUITEQL_URL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
 
@@ -3641,6 +3642,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             const nsBits = [];
                                             if (fin?.nsWoTran || hq?.nsWoTran) nsBits.push(`WO ${fin?.nsWoTran || hq?.nsWoTran}`);
                                             if (fin?.nsWoCompletionTran) nsBits.push(`BUILD ${fin.nsWoCompletionTran}`);
+                                            else if (buildSkippedAtForceComplete(fin)) nsBits.push('⚠ build SKIPPED at force-complete');
                                             else if (fin?.nsCompletionQueued) nsBits.push('build queued…');
                                             if (fin?.nsWoClosed) nsBits.push('closed');
                                             return (

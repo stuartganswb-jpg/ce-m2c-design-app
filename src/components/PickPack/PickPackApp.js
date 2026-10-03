@@ -78,6 +78,7 @@ import { platingBalancesSql, assemblyBomSql, balancesOf, bomOf, platingPutAwayCh
 import { fetchStockHolds, holdsView, holdNote, ownRefsOf, heldByRef } from "../Shared/stockHolds";
 import { onceAtATime } from "../Shared/onceAtATime";
 import { clearReceiptGate } from "../Shared/workOrderCreate";
+import { buildSkippedAtForceComplete, skippedBuildHint, SKIPPED_BUILD_TEXT } from "../Shared/skippedBuild";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -6520,6 +6521,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>↩ Re-post put-away</button>
                                             )}
                                             <OrderStatusChips wo={j} showWho={false} />
+                                            {/* A build the force-complete skipped said nothing anywhere (Eric 2026-10-02,
+                                                WO11639): only the scrap posted. It says so here; RTG posts it. */}
+                                            {buildSkippedAtForceComplete(j) && (
+                                                <span title={`${j.forceCompletedBy ? `Force-completed by ${j.forceCompletedBy}, who marked it already built in NetSuite. ` : ''}${skippedBuildHint(j)}`}
+                                                    style={{ fontFamily: theme.mono, fontSize: '9px', color: '#d9534f', border: '1px solid #d9534f', padding: '2px 7px', letterSpacing: '.04em' }}>{SKIPPED_BUILD_TEXT}</span>
+                                            )}
                                             <span style={{ fontFamily: theme.mono, fontSize: '10px', color: j.nsIfTran ? '#3a7d44' : theme.inkSoft }}>
                                                 {j.nsIfTran ? `IF ${j.nsIfTran}${j.nsFulfillStatus ? ` · ${j.nsFulfillStatus}` : ''}` : (j.nsFulfillQueued ? 'IF queued…' : '')}
                                             </span>
