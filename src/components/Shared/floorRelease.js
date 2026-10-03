@@ -20,11 +20,12 @@
 // number onto BOTH docs. Moved, not rewritten.
 
 import { db } from '../../firebase';
-import { collection, doc, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore';
+import { collection, doc, getDocs, query, runTransaction, setDoc, updateDoc, where } from 'firebase/firestore';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { enqueueNsWrite } from './nsOutbox';
 import { withItemCode } from './workOrderContract';
 import { isOutsourcedRecipe, needsPhosphatingOf } from './phosphateRule';
+import { shopWriteDecision } from './shopJobOnce';
 import { uomStampOf } from './uom.js';
 import { isPoleCategory } from './poleCut';
 
@@ -202,6 +203,25 @@ export async function releaseStockWoToFloor({ hqOrder, brand, by = '', log = noo
 // what only it knows (lines, cut list, fab notes, drawing, customer) in `fields`.
 // OUTSOURCED and PHOSPHATE are one rule each, in Shared/phosphateRule (the Shop card reads the same one).
 export { isOutsourcedRecipe };
+
+/**
+ * WRITE A SHOP JOB ONCE (Eric 2026-10-02, SO60585 Row 2 — Shared/shopJobOnce): a release that finds the job
+ * already there leaves it exactly as it is (a second release had reset a completed, plated job to Pending).
+ * Read and write in one transaction, so two RTG tabs releasing at once still make one job.
+ * @param {boolean} [replace]  RTG's confirmed ↻ Re-dispatch only — its confirm says it overwrites.
+ * @returns {Promise<{ written: boolean, decision: 'CREATE'|'KEEP'|'REPLACE', existing: object|null }>}
+ */
+export async function writeShopDocOnce(shopId, shopDoc, { replace = false } = {}) {
+    if (!shopId) throw new Error('writeShopDocOnce: shopId is required');
+    const ref = doc(db, 'shop_custom_orders', shopId);
+    return runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        const existing = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+        const decision = shopWriteDecision(existing, { replace });
+        if (decision !== 'KEEP') tx.set(ref, shopDoc);
+        return { written: decision !== 'KEEP', decision, existing };
+    });
+}
 /**
  * @param {object} p.hqOrder       the RTG record (hq_work_orders / hq_sales_orders)
  * @param {'stock'|'sales'} p.orderType

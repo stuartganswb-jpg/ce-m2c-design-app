@@ -106,6 +106,7 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
         [[['H1-75SR', 50, 7.5]], ['H1-75SR'], 7.5, woId, 'SHOP']);
     eq('…and the counts the plater bills on', [shape.shopSibling.poles, shape.shopSibling.feet, shape.shopSibling.billableFeet], [50, 31.25, 32]);
     eq('the item\'s shop instruction rides the shop half', shape.shopSibling.shopInstruction, 'cut square');
+    eq('a row\'s ONE pole still leads with the row and its finish (Eric 2026-10-02: the wood row alone read by its item)', shape.shopSibling.itemName, `Base Front 1 · P24 · ${shape.shopSibling.cutList[0].name}`);
     eq('every document says which row and finish it is, and which lines', [shape.hq.rowLabel, shape.hq.finishGroup, shape.hq.soLineIdxs, shape.finPayload.rowLabel, shape.shopSibling.rowLabel], ['Base Front 1', 'P24', [0, 1, 2], 'Base Front 1', 'Base Front 1']);
     eq('the gate and the material grid ride all three', [shape.hq.awaitingComponents, shape.shopSibling.awaitingComponents, shape.finPayload.materialRows.length, shape.shopSibling.materialRows.length], [true, true, 1, 1]);
     eq('the RTG record is a sales record with no NetSuite anchor of its own', [shape.hq.orderType, shape.hq.orderClass, shape.hq.autoFlow, shape.hq.routeTo, 'nsWoId' in shape.hq, 'hqJobId' in shape.hq], ['sales', 'ORDER_ENTRY', true, 'FINISHING', false, false]);

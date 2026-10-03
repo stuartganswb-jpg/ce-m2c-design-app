@@ -359,8 +359,12 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         type: cutList.length === 1 ? cutList[0].legacyErpId : 'Mixed',
         erpId: cutList.length === 1 ? cutList[0].legacyErpId : '', partErpId: cutList.length === 1 ? cutList[0].legacyErpId : '', variantErpId: cutList.length === 1 ? (cutList[0].finishedCode || `${cutList[0].legacyErpId}/${finish}`) : '',
         rootItem: cutList.length === 1 ? cutList[0].legacyErpId : '',
-        // Named for the row: its poles and what rides them (a French return is not a pole — 2026-09-27).
-        itemName: cutList.length === 1 ? cutList[0].name : `${rowLabel ? `${rowLabel} · ` : ''}${finish} · ${cutList.filter(c => !c.rider).length} pole line${cutList.filter(c => !c.rider).length === 1 ? '' : 's'}${cutList.some(c => c.rider) ? ` + ${cutList.filter(c => c.rider).length} riding` : ''}`,
+        // Named for the row: its poles and what rides them (a French return is not a pole — 2026-09-27). A row's ONE pole
+        // still leads with the row and its finish — "Row 3 · S03 · 1-3/8" White Oak Rod" — so every row reads the same on
+        // the shop floor (Eric 2026-10-02: the wood row alone was named by its item). With no row, the item names it.
+        itemName: cutList.length === 1
+            ? (rowLabel ? `${rowLabel} · ${finish} · ${cutList[0].name}` : cutList[0].name)
+            : `${rowLabel ? `${rowLabel} · ` : ''}${finish} · ${cutList.filter(c => !c.rider).length} pole line${cutList.filter(c => !c.rider).length === 1 ? '' : 's'}${cutList.some(c => c.rider) ? ` + ${cutList.filter(c => c.rider).length} riding` : ''}`,
         ...salesHeader,
         recipe: finish,
         qty: shopQty.qty, totalParts: shopQty.qty,

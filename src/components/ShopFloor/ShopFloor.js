@@ -31,6 +31,7 @@ import { shopDb, cleanId, SHOP_TABS } from './shopShared';
 import { routingForOrder } from './routingMatch';
 import { millBaseOf, finishRouteOf, finishSuffixOf } from '../Shared/finishRouting';
 import { shopDocNeedsPhos } from '../Shared/phosphateRule';
+import { shopConfigsOf, alreadyDoneOf, alreadyDoneClosePatch } from '../Shared/shopJobOnce';
 import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, shortBuildStamps } from '../Shared/scrapClose';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
@@ -1238,11 +1239,38 @@ const ShopFloor = () => {
             const part = find(code) || find(String(millBaseOf(code)).toUpperCase());
             return String(part?.manufacturingSpecs?.shopInstruction || '');
         };
+        // A COPY THAT CAME BACK (Eric 2026-10-02, SO60585 Row 2 — Shared/shopJobOnce): the finishing half already
+        // says the shop work is done while this card is open. Starting it would tell finishing "In Process"; completing
+        // it would raise a second plating card. A supervisor closes it — the shop job only, nothing sent anywhere.
+        const platedOf = (order) => order.isOutsourced === true || !!finishRouteOf({ finishRecipe: order.finishRecipe, partsList: order.cutList, stockErpId: shopItemCodeOf(order) || '' }).outsourced;
+        const canCloseAlreadyDone = ['admin', 'executive', 'floormanager'].includes(safeUserRole);
+        const closeAlreadyDone = async (order, done) => {
+            if (!window.confirm(`✓ CLOSE ${order.woNum} AS ALREADY DONE?\n\nThe finishing side reads "${done.siblingStatus}" — the shop work on this job was done before this card came back.\n\nThis card closes as "${done.closeStatus}". Nothing else is written: finishing is not told anything, no plating card is raised, no label prints.`)) return;
+            try {
+                await updateDoc(doc(db, 'shop_custom_orders', order.id), touched(alreadyDoneClosePatch(done, { by: user.name })));
+                writeLog(`✓ ${order.woNum} closed as already done (finishing half: ${done.siblingStatus}) — no plating card, nothing sent to finishing`, 'production');
+            } catch (e) { alert('Failed to close: ' + (e.message || e)); }
+        };
+        const AlreadyDoneBanner = ({ order }) => {
+            const done = alreadyDoneOf(order, finSibs[order.finSiblingId], { plated: platedOf(order) });
+            if (!done) return null;
+            const when = done.siblingAt ? new Date(done.siblingAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+            return (
+                <div style={{ marginBottom: '10px', padding: '8px 10px', background: '#fff8e6', border: '1px solid #b08d57', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)' }}>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#8a6a2f', fontWeight: 700, marginBottom: '4px' }}>⚠ Already done — this card came back</div>
+                    The finishing side reads <b>{done.siblingStatus}</b>{when ? ` since ${when}` : ''}. Do not Start or Complete it{platedOf(order) ? ' — Complete would raise a second plating card' : ''}.
+                    {canCloseAlreadyDone
+                        ? <div style={{ marginTop: '6px' }}><button onClick={() => closeAlreadyDone(order, done)} style={{ background: '#b08d57', color: '#fff', border: 'none', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>✓ Already done — close</button></div>
+                        : <div style={{ marginTop: '4px', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>A floor manager closes it.</div>}
+                </div>
+            );
+        };
         // Compact staged row: enough to review (View Item / SOP / Drawing) without the bulk —
         // the full card renders on the right once started.
         const StagedCard = ({ order }) => (
             <div style={{ background: '#fff', border: isHeld(order) ? '2px solid #d9534f' : '1px solid var(--line)', padding: '14px 16px', marginBottom: '12px' }}>
                 <HoldBanner order={order} />
+                <AlreadyDoneBanner order={order} />
                 <UrgentBanner order={order} onAck={() => ackUrgent(order)} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', marginBottom: '6px' }}>
                     <span style={{ fontFamily: 'var(--sans)', fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>{order.item || order.partNum}</span>
@@ -1370,7 +1398,8 @@ const ShopFloor = () => {
             // stamp wins; a document without one derives it from the recipe by the SAME rule
             // (Shared/phosphateRule — a wood stain is never phosphated; Eric 2026-10-02).
             const needsPhos = shopDocNeedsPhos(order);
-            const phosCfgs = order.quoteId ? (orderConfigs[order.quoteId] || []) : [];
+            // A row / Order Entry pair is ONE configuration — the quote's other rows are not its boxes (Shared/shopJobOnce).
+            const phosCfgs = shopConfigsOf(order, orderConfigs);
             const phosMulti = phosCfgs.length >= 2; // multi-config: per-row checks; single: one order-level box
             const phosMap = order.phosChecks || {};
             const phosDoneCount = phosCfgs.filter(c => phosMap[c.key]?.done).length;
@@ -1459,6 +1488,7 @@ const ShopFloor = () => {
             return (
                 <div style={{ background: '#fff', border: isHeld(order) ? '2px solid #d9534f' : '1px solid var(--line)', borderLeft: isHeld(order) ? '4px solid #d9534f' : (isRunning ? '4px solid var(--brass)' : '1px solid var(--line)'), padding: '24px', marginBottom: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                     <HoldBanner order={order} />
+                    <AlreadyDoneBanner order={order} />
                     <UrgentBanner order={order} onAck={() => ackUrgent(order)} />
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                         <h4 style={{ margin: 0, fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.item || order.partNum}</h4>
@@ -1505,7 +1535,7 @@ const ShopFloor = () => {
 
                     {/* Per-configuration completion checklist — one box per cart line/sidemark */}
                     {(() => {
-                        const cfgs = order.quoteId ? (orderConfigs[order.quoteId] || []) : [];
+                        const cfgs = shopConfigsOf(order, orderConfigs);   // a row's job: none (it IS one configuration)
                         if (cfgs.length < 2) return null; // single-config orders: Start/Complete covers it
                         const checks = order.configChecks || {};
                         const doneCount = cfgs.filter(c => checks[c.key]?.done).length;

@@ -15,7 +15,8 @@ import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
 import { finishGroupsOf, docStreamsOf, poleCountRepairOf, poleTrackRepairOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
-import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe } from '../Shared/floorRelease';
+import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe, writeShopDocOnce } from '../Shared/floorRelease';
+import { keptShopJobText } from '../Shared/shopJobOnce';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
 import { coverCodesOf, backorderHoldOf, isBackorderHold } from '../Shared/backorder';
 import { uomStampOf } from '../Shared/uom';
@@ -1706,7 +1707,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 const leadLine = customLines.find(l => Number(l.cutLength) > 0) || customLines[0];
                 const firstPart = leadLine && leadLine.partId ? partCache.get(leadLine.partId) : null;
 
-                await setDoc(doc(db, "shop_custom_orders", shopId), buildShopDoc({
+                // WRITTEN ONCE (Eric 2026-10-02): only the confirmed ↻ Re-dispatch above overwrites an existing shop job.
+                const shopWrite = await writeShopDocOnce(shopId, buildShopDoc({
                     hqOrder: { ...so, hqJobId: so.hqJobId, soId: so.soId || null, orderKey, brand: activeBrand },
                     orderType: 'sales', shopId, finishRecipe: finishGroups.length > 1 ? (grp.finish || finishRecipe) : finishRecipe, finSiblingId: (finishingNeeded || pickOnly) ? finId : null,
                     part: firstPart, by: currentUser || '',
@@ -1734,8 +1736,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     // where the money is. ShopFloor's own heldGuard already refuses to start or
                     // complete a held order, so this needs nothing from the shop screen.
                     extra: { cutSheetMissing, visionUsed, ...(backorderHold('SHOP') || {}) },
-                }));
-                addLog(`Created Shop custom order ${shopId}${fabMethod ? ` [${fabMethod}]` : ''} (${customLines.length} custom lines).`, "success");
+                }), { replace: isRedispatch && !opts.skipConfirm });
+                if (shopWrite.written) addLog(`${shopWrite.decision === 'REPLACE' ? 'Re-wrote' : 'Created'} Shop custom order ${shopId}${fabMethod ? ` [${fabMethod}]` : ''} (${customLines.length} custom lines).`, "success");
+                else addLog(`🔒 ${keptShopJobText(shopWrite.existing)}`, 'warn');
             }
             if (!firstPair) firstPair = { finId, shopId, finishingNeeded, pickOnly, hasCustom };
             anyFin = anyFin || finishingNeeded || pickOnly;
@@ -2081,7 +2084,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 if (code) { const ps = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', code))); part = ps.docs.length ? { id: ps.docs[0].id, ...ps.docs[0].data() } : null; }
             } catch (e) { /* no instruction, nothing else changes */ }
 
-            await setDoc(doc(db, "shop_custom_orders", shopJobId), buildShopDoc({
+            // WRITTEN ONCE (Eric 2026-10-02, SO60585 Row 2): a second release of a job already on the shop floor —
+            // completed, plated and received in that case — rewrote it from scratch as Pending. It is left as it is now.
+            const shopWrite = await writeShopDocOnce(shopJobId, buildShopDoc({
                 hqOrder: { ...hqOrder, brand: activeBrand }, orderType, shopId: shopJobId, finishRecipe,
                 finSiblingId: hqOrder.finSiblingId || null, part, by: currentUser || '',
                 // ONE FIELD BUILDER (Shared/cpqJobFacts.shopReleaseFieldsOf, 2026-09-27): a row pair carries its own name,
@@ -2089,13 +2094,19 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 fields: shopReleaseFieldsOf({ hqOrder, originalJob, svgUri, outsourcePrice: matchedOutsource ? (matchedOutsource.multiplier || 0) : 0 }),
             }));
 
-            // Change status to Dispatched so it leaves the RTG board
+            // Change status to Dispatched so it leaves the RTG board — the job is on the shop floor either way.
             const collectionName = recordCollectionOf(hqOrder, orderType);
-            await updateDoc(doc(db, collectionName, hqOrder.id), { 
+            await updateDoc(doc(db, collectionName, hqOrder.id), {
                 pushedToShop: true,
-                status: "Dispatched" 
+                status: "Dispatched"
             });
 
+            if (!shopWrite.written) {
+                addLog(`🔒 ${keptShopJobText(shopWrite.existing)}`, 'warn');
+                if (!opts.auto) alert(`🔒 ${keptShopJobText(shopWrite.existing)}\n\nNothing on the shop floor changed; the RTG record is marked Dispatched.`);
+                loadRTGOrders();
+                return;
+            }
             addLog(`Dispatched ${shopJobId} to Shop Floor!`, "success");
             alert(`Successfully pushed ${shopJobId} to Shop Floor Custom Fabrication Queue!`);
             loadRTGOrders(); 
