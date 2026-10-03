@@ -15,8 +15,10 @@ import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
 import { finishGroupsOf, docStreamsOf, poleCountRepairOf, poleTrackRepairOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
-import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe, writeShopDocOnce } from '../Shared/floorRelease';
+import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe, writeShopDocOnce, claimRelease, endReleaseClaim } from '../Shared/floorRelease';
 import { keptShopJobText } from '../Shared/shopJobOnce';
+import { liveClaimOf, claimRefusedText } from '../Shared/releaseClaim';
+import { buildRepairOf, buildRepairLabel, buildRepairTexts, buildRepairStamp, typedWoNumber } from '../Shared/skippedBuild';
 import { planSmallLines, customShopQtyOf } from '../Shared/splitPlan';
 import { coverCodesOf, backorderHoldOf, isBackorderHold } from '../Shared/backorder';
 import { uomStampOf } from '../Shared/uom';
@@ -449,7 +451,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         if (!cfg || !cfg.enabled || autoBusyRef.current || isSyncing) return;
         const since = cfg.sinceAt || 0;
         const selfAuthorized = (o) => !!(o.autoFlow || o.orderClass === 'ORDER_ENTRY');
-        const fresh = (o) => (selfAuthorized(o) || (o.createdAt || 0) >= since) && !o.stopped && !autoTriedRef.current.has(o.id);
+        // A record another screen is releasing right now is skipped (Shared/releaseClaim) — every open RTG tab runs
+        // this engine; the claim, not this tab's memory, says who has it.
+        const fresh = (o) => (selfAuthorized(o) || (o.createdAt || 0) >= since) && !o.stopped && !autoTriedRef.current.has(o.id) && !liveClaimOf(o);
         // An app-created SO (CPQ save) waits for NetSuite to accept it (nsInternalId via writeBack)
         // before splitting to the floors, so a rejected order never becomes work.
         // hqJobId IS LOAD-BEARING (Stuart 2026-09-03, decision 6 + the every-order-via-RTG rule): an
@@ -487,7 +491,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     await pushToShop(wo, wo.orderType || 'stock', { auto: true });
                 } else if (isSalesFlow(wo) && wo.finPayload) {
                     addLog(`⚡ Auto-release: ${wo.id} → finishing floor (sales order is the NetSuite record)…`, 'info');
-                    await releaseFinWoToFloor(wo, currentUser || 'auto-release');
+                    if (!(await releaseFinWoToFloor(wo, currentUser || 'auto-release'))) addLog(`🔒 ${wo.id} not released — already released, or another screen is releasing it.`, 'warn');
                 } else {
                     addLog(`⚡ Auto-release: ${wo.id} → finishing floor, NetSuite work order queued (Route A)…`, 'info');
                     await pushToFinishing(wo, 'stock', { auto: true });
@@ -1434,6 +1438,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             ? `RE-DISPATCH SO ${so.soId || so.id}?\n\nThe split re-runs with the current routing rules and OVERWRITES the existing floor work orders (same ids) — any progress already logged against them is reset.`
             : `Import SO ${so.soId || so.id} and auto-split into Finishing + Shop work orders?`)) return;
 
+        // ONE RELEASE AT A TIME (Shared/releaseClaim): the SO is claimed and read fresh — an old view of the board in
+        // another tab cannot split it a second time. Only the confirmed ↻ Re-dispatch may split a Dispatched order.
+        const claim = await claimRelease({ coll: 'hq_sales_orders', id: so.id, by: currentUser || '', redispatch: isRedispatch && !opts.skipConfirm });
+        if (!claim.ok) { addLog(claimRefusedText(so.soId || so.id, claim.why), 'warn'); if (!opts.skipConfirm) alert(claimRefusedText(so.soId || so.id, claim.why)); return; }
+
         try {
             const jobSnap = await getDoc(doc(db, "jobs", so.hqJobId));
             if (!jobSnap.exists()) return alert(`Linked job ${so.hqJobId} not found.`);
@@ -1827,6 +1836,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             console.error("Auto-Split Error:", error);
             addLog(`Auto-Split Failed: ${error.message}`, "error");
             alert(`Failed to auto-split Sales Order:\n${error.message || error}`);
+        } finally {
+            await endReleaseClaim({ coll: 'hq_sales_orders', id: so.id, token: claim.token });
         }
     };
 
@@ -1870,6 +1881,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             if (done && !window.confirm(`⚠ ${done.help}`)) return;
         }
 
+        // ONE RELEASE AT A TIME (Shared/releaseClaim, 2026-10-02): claimed and read fresh before anything is written —
+        // the record this tab holds may be an old view of the board. A Dispatched record goes again only when a person
+        // walked past the "already dispatched" warning above.
+        const redispatch = !opts.auto && !!openGatesOf(hqOrder).find(x => x.key === 'dispatched');
+        const claimColl = recordCollectionOf(hqOrder, orderType);
+        const claim = await claimRelease({ coll: claimColl, id: hqOrder.id, by: currentUser || '', redispatch });
+        if (!claim.ok) { addLog(claimRefusedText(hqOrder.id, claim.why), 'warn'); if (!opts.auto) alert(claimRefusedText(hqOrder.id, claim.why)); return; }
+        try { await releaseToFinishingClaimed(hqOrder, orderType, opts, claim.token, redispatch); }
+        finally { await endReleaseClaim({ coll: claimColl, id: hqOrder.id, token: claim.token }); }
+    };
+    const releaseToFinishingClaimed = async (hqOrder, orderType, opts, claimToken, redispatch) => {
         // SALES-SNAPSHOT stock WOs (2026-07-16): the snapshot pre-builds the COMPLETE finishing
         // doc (pole rack info, paint sizes, stock ids) and parks the WO here for review —
         // releasing it is a verbatim copy, so nothing is lost or re-derived at dispatch.
@@ -1880,8 +1902,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 // payload, the board's later urgent statement winning, the dispatched stamps, then
                 // Route A. The WMS completions call the same function — no tab required.
                 // A supervisor's deliberate re-release (the scary confirm above) still copies the
-                // card: pass the record as not-yet-dispatched for that one call.
-                const res = await releaseStockWoToFloor({ hqOrder: { ...hqOrder, pushedToFinishing: false }, brand: activeBrand, by: currentUser || '', log: addLog });
+                // card: it says so (redispatch), and the claim this push holds rides through.
+                const res = await releaseStockWoToFloor({ hqOrder, brand: activeBrand, by: currentUser || '', log: addLog, redispatch, claimToken });
                 if (!res.released) { alert(`Not released — ${res.why}.`); return; }
                 if (!opts.auto) alert(`Successfully pushed ${fp.id} to Finishing Floor Setup Queue!${res.nsNote}`);
                 loadRTGOrders();
@@ -2062,6 +2084,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
 
     const pushToShop = async (hqOrder, orderType, opts = {}) => {
         if (!opts.auto && !window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
+        // ONE RELEASE AT A TIME (Shared/releaseClaim): claimed and read fresh — SO60585 Row 2 was released a second
+        // time at 12:55 from an old view of the board.
+        const claimColl = recordCollectionOf(hqOrder, orderType);
+        const claim = await claimRelease({ coll: claimColl, id: hqOrder.id, by: currentUser || '' });
+        if (!claim.ok) { addLog(claimRefusedText(hqOrder.id, claim.why), 'warn'); if (!opts.auto) alert(claimRefusedText(hqOrder.id, claim.why)); return; }
 
         try {
             const enriched = await fetchEnrichedJobData(hqOrder.hqJobId, orderType);
@@ -2115,6 +2142,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             console.error("Dispatch Error:", error);
             addLog(`Dispatch Failed: ${error.message}`, "error");
             alert("Failed to push to Shop Floor. Check permissions/console.");
+        } finally {
+            await endReleaseClaim({ coll: claimColl, id: hqOrder.id, token: claim.token });
         }
     };
 
@@ -3069,36 +3098,52 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     // narrow skip paths (stamp-then-crash, a consumed earlier fire). Say it in
                     // red and offer the posting right here; the outbox dedupeKey refuses a
                     // duplicate if an entry is actually in flight.
-                    const buildMissing = fin.orderType === 'stock' && fin.packStatus === 'Packed' && fin.nsWoId && !fin.nsWoCompletionPosted;
+                    // 2026-10-02 (Shared/skippedBuild.buildRepairOf): an Order Entry sales job with an anchor work
+                    // order is offered too (the server builds those), and a job a person marked ALREADY BUILT at
+                    // force-complete says so and takes the WO number typed — it is never "never posted".
+                    const buildRepair = buildRepairOf(fin);
                     return (
                         <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                             <OrderStatusChips wo={fin} showWho={false} />
                             {place && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink)', letterSpacing: '.03em' }}>📍 {place}</span>}
-                            {buildMissing && (
+                            {buildRepair && (
                                 <button onClick={async () => {
-                                    const qty = Number(fin.completedParts) > 0 ? Number(fin.completedParts) : (Number(fin.totalParts) || 1);
-                                    const bin = String(fin.putawayBin || '').trim().toUpperCase();
-                                    if (!window.confirm(`🔨 Post the NetSuite assembly build for ${woRefOf(fin)}?\n\nBuild ${qty} × ${fin.stockErpId || ''} AGAINST ${fin.nsWoTran || fin.nsWoId}${bin ? `, receiving into ${bin}` : ''}.\n\nThe pieces are on the shelf but NetSuite shows nothing — the automatic build at put-away never posted. Check 11.1 first if unsure; a duplicate in flight is refused by the queue itself. Continue?`)) return;
+                                    const r = buildRepair;
+                                    // The server's own entry (deterministic id) is the build in flight, or a failed one to retry
+                                    // in 11.1 — never queue a second beside it.
                                     try {
+                                        const ob = await getDoc(doc(db, 'ns_outbox', `wocmpl-${String(fin.id).replace(/[^A-Za-z0-9_-]/g, '_')}`));
+                                        if (ob.exists()) return alert(`🔨 ${woRefOf(fin)}: the automatic build is already in the NetSuite Sync Queue (${ob.data().status || '?'}${ob.data().lastError ? ` — ${String(ob.data().lastError).slice(0, 160)}` : ''}).\n\nNothing was queued. If it FAILED, retry it in HQ 11.1 → NetSuite Sync Queue.`);
+                                    } catch (e) { /* unreadable: the dedupeKey below still refuses an in-flight duplicate */ }
+                                    const what = `Build ${r.qty} × ${r.builds} AGAINST ${r.ref}${r.bin ? `, receiving into ${r.bin}` : ''}.`;
+                                    if (r.markedBuilt) {
+                                        const typed = window.prompt(`⚠ ${woRefOf(fin)} was marked ALREADY BUILT in NetSuite at force-complete${fin.forceCompletedBy ? ` (by ${fin.forceCompletedBy})` : ''}.\n\nPosting it now builds it AGAIN unless NetSuite shows no build on ${r.ref}.\n\nCheck NetSuite first. If ${r.ref} shows NO assembly build, type ${r.ref} and press OK to post:\n${what}`, '');
+                                        if (typed === null) return;
+                                        if (!typedWoNumber(typed, fin)) return alert(`Nothing was posted — "${String(typed).trim()}" is not ${r.ref}.`);
+                                    } else if (!window.confirm(`🔨 Post the NetSuite assembly build for ${woRefOf(fin)}?\n\n${what}\n\n${r.sales ? 'The order is packed' : 'The pieces are on the shelf'} but NetSuite shows nothing — the automatic build never posted. Check 11.1 first if unsure; a duplicate in flight is refused by the queue itself. Continue?`)) return;
+                                    try {
+                                        const texts = buildRepairTexts(fin, r);
                                         await enqueueNsWrite({
                                             kind: 'workordercompletion',
                                             dedupeKey: `wocmpl:${fin.id}`,
-                                            label: `Build NS WO ${fin.nsWoTran || fin.nsWoId} — ${fin.stockErpId || fin.id} ×${qty}`,
+                                            label: texts.label,
                                             sourceApp: 'RTG', createdBy: currentUser || '',
                                             targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${fin.nsWoId}/!transform/assemblyBuild`,
                                             method: 'POST',
                                             payload: {
-                                                quantity: qty,
-                                                memo: `Stock build ${fin.id} put away${bin ? ` ${bin}` : ''} — posted from RTG (auto build never fired)`,
-                                                ...(bin ? { inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: qty }] } } } : {}),
+                                                quantity: r.qty,
+                                                memo: texts.memo,
+                                                ...(r.bin ? { inventoryDetail: { quantity: r.qty, inventoryAssignment: { items: [{ binNumber: { refName: r.bin }, quantity: r.qty }] } } } : {}),
                                             },
                                             writeBack: { collection: 'fin_workorders', docId: fin.id, patch: { nsWoCompletionPosted: true }, idField: 'nsWoCompletionId', tranField: 'nsWoCompletionTran' },
                                         });
-                                        await updateDoc(doc(db, 'fin_workorders', fin.id), { nsCompletionQueued: true });
-                                        addLog(`🔨 Assembly build queued for ${woRefOf(fin)} ×${qty}${bin ? ` → ${bin}` : ''} — lands in ~1 min (11.1).`, 'success');
+                                        await updateDoc(doc(db, 'fin_workorders', fin.id), buildRepairStamp(r, { by: currentUser || '' }));
+                                        addLog(`🔨 Assembly build queued for ${woRefOf(fin)} ×${r.qty}${r.bin ? ` → ${r.bin}` : ''}${r.markedBuilt ? ' (was marked already built — WO number typed)' : ''} — lands in ~1 min (11.1).`, 'success');
                                     } catch (e) { addLog(`🔨 Build queue failed for ${woRefOf(fin)}: ${e.message || e}`, 'error'); alert('Build queue failed: ' + (e.message || e)); }
-                                }} title="The pieces are on the shelf but NetSuite never received the assembly build — post it now against the same work order, into the scanned bin."
-                                    style={{ padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', background: 'transparent', border: '1px solid #d9534f', cursor: 'pointer', textTransform: 'uppercase' }}>⚠ NS build never posted — 🔨 post now</button>
+                                }} title={buildRepair.markedBuilt
+                                    ? `Marked ALREADY BUILT in NetSuite at force-complete${fin.forceCompletedBy ? ` by ${fin.forceCompletedBy}` : ''}. Post only if NetSuite shows no build on ${buildRepair.ref} — it asks for the WO number.`
+                                    : `${buildRepair.sales ? 'Packed' : 'The pieces are on the shelf'} but NetSuite never received the assembly build — post it now against the same work order${buildRepair.bin ? ', into the scanned bin' : ''}.`}
+                                    style={{ padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', color: buildRepair.markedBuilt ? '#b08d57' : '#d9534f', background: 'transparent', border: `1px solid ${buildRepair.markedBuilt ? '#b08d57' : '#d9534f'}`, cursor: 'pointer', textTransform: 'uppercase' }}>{buildRepairLabel(buildRepair)}</button>
                             )}
                         </div>
                     );

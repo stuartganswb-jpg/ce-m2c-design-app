@@ -30,12 +30,58 @@ export const SKIPPED_BUILD_TEXT = '⚠ NetSuite build SKIPPED at force-complete 
 /** Where it gets posted if NetSuite was NOT in fact built. */
 export const skippedBuildHint = (wo) => {
     const bin = String((wo && wo.putawayBin) || '').trim().toUpperCase();
-    return `If NetSuite does NOT show ${(wo && (wo.nsWoTran || wo.nsWoId)) || 'the work order'} built: RTG → this order → "🔨 post now" builds ${buildQtyOf(wo)}${bin ? ` into ${bin}` : ''}.`;
+    const ref = (wo && (wo.nsWoTran || wo.nsWoId)) || 'the work order';
+    return `If NetSuite does NOT show ${ref} built: RTG → this order → "🔨 post only if NetSuite shows none", type ${ref} — it builds ${buildQtyOf(wo)}${bin ? ` into ${bin}` : ''}.`;
 };
 
-/** The force-complete answer: skip the build only when the operator typed the work order's own number. */
-export const typedAlreadyBuilt = (typed, wo) => {
+/** Did the operator type the work order's own number? (Force-complete's skip; RTG's post over an "already built".) */
+export const typedWoNumber = (typed, wo) => {
     const t = U(typed);
     if (!t) return false;
     return [wo && wo.nsWoTran, wo && wo.nsWoId].filter(Boolean).map(U).includes(t);
 };
+
+// ── RTG'S "🔨 POST NOW" (Stuart 2026-10-02) ────────────────────────────────────────────────────────────────
+// The repair for a packed job whose NetSuite build never posted. It used to read only `orderType 'stock'` and
+// say "never posted" on every one — including the jobs a person had marked ALREADY BUILT at force-complete
+// (seven packed stock jobs on 10/2: WO11639 plus six from August, built by hand in NetSuite), where a press
+// builds twice. And it never offered an Order Entry sales job with an anchor work order, which the server
+// builds too (WO11578, force-completed 10/1, its build switched off with nobody asked).
+//   · a job marked already built says so, and posting it takes typing the WO number;
+//   · an Order Entry sales job with an anchor WO is offered, posted as the server posts it (no bin unless one
+//     was scanned, the sales memo);
+//   · posting clears the skip stamp, so the "build SKIPPED" labels clear.
+
+/** A packed job the server builds whose build never posted — or null. */
+export const buildRepairOf = (fin) => {
+    if (!fin || !fin.nsWoId || !['stock', 'sales'].includes(String(fin.orderType || ''))) return null;
+    if (fin.packStatus !== 'Packed') return null;
+    if (fin.nsWoCompletionPosted || fin.nsWoCompletionTran || fin.nsWoCompletionId) return null;
+    const sales = fin.orderType === 'sales';
+    return {
+        ref: fin.nsWoTran || fin.nsWoId, qty: buildQtyOf(fin), sales,
+        bin: String(fin.putawayBin || '').trim().toUpperCase(),
+        markedBuilt: fin.forceCompleteNsBuildSkipped === true,
+        builds: String((sales && fin.nsWoOnErp) || fin.stockErpId || fin.id || ''),
+    };
+};
+
+/** The button's words. */
+export const buildRepairLabel = (r) => (r && r.markedBuilt
+    ? '⚠ Marked ALREADY BUILT at force-complete — 🔨 post only if NetSuite shows none'
+    : '⚠ NS build never posted — 🔨 post now');
+
+/** The outbox entry's label and memo — the server trigger's own wording, marked as posted from RTG. */
+export const buildRepairTexts = (fin, r) => ({
+    label: `Build NS WO ${r.ref} — ${r.builds}${r.sales && fin.nsWoOnErp ? ' (base assembly)' : ''} ×${r.qty}${r.sales ? ' · SALES' : ''}`,
+    memo: r.sales
+        ? `SO build ${fin.id} packed${r.bin ? ` ${r.bin}` : ''} — posted from RTG (auto build never fired)`
+        : `Stock build ${fin.id} put away${r.bin ? ` ${r.bin}` : ''} — posted from RTG (auto build never fired)`,
+});
+
+/** What the job is stamped with once RTG queues the build. */
+export const buildRepairStamp = (r, { by = '', now = Date.now() } = {}) => ({
+    nsCompletionQueued: true,
+    ...(r && r.markedBuilt ? { forceCompleteNsBuildSkipped: false } : {}),
+    nsBuildPostedFromRtgBy: by, nsBuildPostedFromRtgAt: now,
+});

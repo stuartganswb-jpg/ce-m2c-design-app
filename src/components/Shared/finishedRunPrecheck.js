@@ -30,11 +30,11 @@ import { queueNsAssemblyWorkOrder, pickNsWoItem, isNsAssemblyRec } from './nsWor
 // The firebase imports serve only the executor/gate-clearer at the bottom — the planners above
 // never touch them, so node tests can import the planning half without dragging firebase in.
 import { db } from '../../firebase';
-import { doc, setDoc, updateDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, getDoc, collection, query, where, getDocs, deleteField } from 'firebase/firestore';
 import { withItemCode } from './workOrderContract';
 import { isReleasable } from './orderStatus';
 import { buildParkedWorkOrder, ROUTE_SHOP } from './stockRun.js';
-import { buildFinDoc, buildShopDoc, releaseStockWoToFloor } from './floorRelease';
+import { buildFinDoc, buildShopDoc, releaseStockWoToFloor, claimRelease, endReleaseClaim } from './floorRelease';
 
 // ── PURE PLANNING ──────────────────────────────────────────────────────────────────────────────
 
@@ -332,20 +332,27 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
 // in stock, and from the WMS convert-complete hook when the last gate opens. Route A (an
 // app-queued NetSuite work order) deliberately never runs here: sales-typed payloads' NetSuite
 // record is the sales order itself.
-export const releaseFinWoToFloor = async (hqWo, by = '') => {
+export const releaseFinWoToFloor = async (hqWo, by = '', { claimToken = null } = {}) => {
     const fp = hqWo && hqWo.finPayload;
     if (!fp || !fp.id || hqWo.pushedToFinishing) return false;
-    // The NetSuite work-order stamp rides onto the floor card (Stuart 2026-08-29: every floor
-    // doc carries its NS WO number). The number lands on the hq record via the outbox writeBack,
-    // so at release time the hq doc is the source.
-    // ONE FLOOR DOCUMENT SHAPE (B's hand-off, landed 2026-09-12): the same builder every other
-    // release uses — the payload verbatim, the NetSuite anchor, PLUS what a hand-written copy never
-    // had: the board's later urgent statement, a hold placed while parked, needBy, the pole/sled
-    // assertion, withItemCode. Never both streams.
-    const now = Date.now();
-    await setDoc(doc(db, 'fin_workorders', fp.id), buildFinDoc({ hqOrder: hqWo, finPayload: fp, by: by || 'auto-flow', now }));
-    await updateDoc(doc(db, 'hq_work_orders', hqWo.id), { pushedToFinishing: true, status: 'Dispatched', dispatchedAt: now, dispatchedBy: by || 'auto-flow' });
-    return true;
+    // ONE RELEASE AT A TIME (Shared/releaseClaim, 2026-10-02): the record is claimed and read fresh first —
+    // the caller's copy may be an old view of the board (another RTG tab, a WMS gate clearing at the same
+    // moment). Refused → false, exactly as an already-dispatched record always was.
+    const claim = await claimRelease({ coll: 'hq_work_orders', id: hqWo.id, by, token: claimToken });
+    if (!claim.ok) return false;
+    try {
+        // The NetSuite work-order stamp rides onto the floor card (Stuart 2026-08-29: every floor
+        // doc carries its NS WO number). The number lands on the hq record via the outbox writeBack,
+        // so at release time the hq doc is the source.
+        // ONE FLOOR DOCUMENT SHAPE (B's hand-off, landed 2026-09-12): the same builder every other
+        // release uses — the payload verbatim, the NetSuite anchor, PLUS what a hand-written copy never
+        // had: the board's later urgent statement, a hold placed while parked, needBy, the pole/sled
+        // assertion, withItemCode. Never both streams.
+        const now = Date.now();
+        await setDoc(doc(db, 'fin_workorders', fp.id), buildFinDoc({ hqOrder: hqWo, finPayload: fp, by: by || 'auto-flow', now }));
+        await updateDoc(doc(db, 'hq_work_orders', hqWo.id), { pushedToFinishing: true, status: 'Dispatched', dispatchedAt: now, dispatchedBy: by || 'auto-flow', releaseClaim: deleteField() });
+        return true;
+    } catch (e) { await endReleaseClaim({ coll: 'hq_work_orders', id: hqWo.id, token: claim.token }); throw e; }
 };
 
 // Called by the WMS after a convert_demand carrying a finWoId completes (the demand doc is deleted

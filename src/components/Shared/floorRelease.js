@@ -20,7 +20,8 @@
 // number onto BOTH docs. Moved, not rewritten.
 
 import { db } from '../../firebase';
-import { collection, doc, getDocs, query, runTransaction, setDoc, updateDoc, where } from 'firebase/firestore';
+import { collection, deleteField, doc, getDocs, query, runTransaction, setDoc, updateDoc, where } from 'firebase/firestore';
+import { releaseClaimVerdict, newClaimToken } from './releaseClaim';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { enqueueNsWrite } from './nsOutbox';
 import { withItemCode } from './workOrderContract';
@@ -170,20 +171,61 @@ export function buildFinDoc({ hqOrder = {}, finPayload, by = '', now = Date.now(
 }
 
 /**
+ * CLAIM THE RTG RECORD BEFORE A RELEASE (Shared/releaseClaim — one release at a time, wherever it is pressed).
+ * Reads the record fresh in a transaction: refused when it is gone / closed / no longer Approved (unless a
+ * person confirmed a re-dispatch) or another screen's claim is live; otherwise stamps `releaseClaim`.
+ * @param {string} [token]  the claim the calling door already holds — passes straight through
+ * @returns {Promise<{ ok: boolean, why: string, token: string|null }>}
+ */
+export async function claimRelease({ coll, id, by = '', redispatch = false, token = null }) {
+    if (!coll || !id) return { ok: false, why: 'no RTG record to claim', token: null };
+    const ref = doc(db, coll, id);
+    const t = token || newClaimToken();
+    return runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        const v = releaseClaimVerdict(snap.exists() ? snap.data() : null, { now: Date.now(), redispatch, token: t });
+        if (!v.ok) return { ok: false, why: v.why, token: null };
+        tx.update(ref, { releaseClaim: { by: by || '', at: Date.now(), token: t } });
+        return { ok: true, why: '', token: t };
+    });
+}
+/** Let the claim go (a refused gate, a failure, a finished release) — only the holder's own claim. Never throws. */
+export async function endReleaseClaim({ coll, id, token }) {
+    if (!coll || !id || !token) return;
+    const ref = doc(db, coll, id);
+    try {
+        await runTransaction(db, async (tx) => {
+            const snap = await tx.get(ref);
+            const c = snap.exists() ? snap.data().releaseClaim : null;
+            if (c && c.token === token) tx.update(ref, { releaseClaim: deleteField() });
+        });
+    } catch (e) { /* the claim expires on its own (releaseClaim TTL) */ }
+}
+
+/**
  * Release a parked STOCK work order to the finishing floor: the verbatim finPayload (the Snapshot
  * model — nothing re-derived at dispatch), the board's later urgent statement winning, the
  * dispatched stamps, and then Route A. Returns { released, nsNote, finId }.
  * Refuses (released:false) when there is no payload, the order is sales-typed, or it was already
- * dispatched — the callers decide the gates (orderStatus.isReleasable) BEFORE calling this.
+ * dispatched — the callers decide the gates (orderStatus.isReleasable) BEFORE calling this. The
+ * record is CLAIMED first (claimRelease): "already dispatched" is read off the record itself, not
+ * off the caller's copy — a tab with an old view of the board cannot release it twice, and so
+ * cannot queue a second NetSuite work order.
+ * @param {boolean} [redispatch]  a person confirmed releasing an already-dispatched record (RTG's push)
+ * @param {string}  [claimToken]  the claim the calling door already holds
  */
-export async function releaseStockWoToFloor({ hqOrder, brand, by = '', log = noop }) {
+export async function releaseStockWoToFloor({ hqOrder, brand, by = '', log = noop, redispatch = false, claimToken = null }) {
     const fp = hqOrder && hqOrder.finPayload;
     if (!fp || !fp.id) return { released: false, nsNote: '', finId: null, why: 'no finPayload on the record' };
     if (fp.orderType === 'sales' || hqOrder.orderType === 'sales') return { released: false, nsNote: '', finId: fp.id, why: 'sales-typed — releaseFinWoToFloor is its door' };
-    if (hqOrder.pushedToFinishing) return { released: false, nsNote: '', finId: fp.id, why: 'already dispatched' };
+    if (hqOrder.pushedToFinishing && !redispatch) return { released: false, nsNote: '', finId: fp.id, why: 'already dispatched' };
+    const claim = await claimRelease({ coll: 'hq_work_orders', id: hqOrder.id, by, redispatch, token: claimToken });
+    if (!claim.ok) return { released: false, nsNote: '', finId: fp.id, why: claim.why };
     const now = Date.now();
-    await setDoc(doc(db, 'fin_workorders', fp.id), buildFinDoc({ hqOrder, finPayload: fp, by, now }));
-    await updateDoc(doc(db, 'hq_work_orders', hqOrder.id), { pushedToFinishing: true, status: 'Dispatched', dispatchedAt: now, dispatchedBy: by || '' });
+    try {
+        await setDoc(doc(db, 'fin_workorders', fp.id), buildFinDoc({ hqOrder, finPayload: fp, by, now }));
+        await updateDoc(doc(db, 'hq_work_orders', hqOrder.id), { pushedToFinishing: true, status: 'Dispatched', dispatchedAt: now, dispatchedBy: by || '', releaseClaim: deleteField() });
+    } catch (e) { await endReleaseClaim({ coll: 'hq_work_orders', id: hqOrder.id, token: claim.token }); throw e; }
     // ROUTE A (2026-07-16): these stocked items are real NetSuite assemblies with BOMs, so
     // releasing to the floor ALSO queues a real NetSuite work order (outbox — serial, retried,
     // idempotent). On-Ord sees it on the next live pull; component demand is real; the floor's

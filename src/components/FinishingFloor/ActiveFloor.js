@@ -5,7 +5,7 @@ import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, 
     isHandTask, mayRunHandStep, handStepWarning, TASK_LABEL as FLOOR_TASK_LABEL } from '../Shared/floorActivity';
 import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
 import { normalMinutesOf, punchCheckOf, catchUpRunOf, punchWarning, punchFlagText, TASK_LABEL_ES } from '../Shared/punchCheck';
-import { typedAlreadyBuilt } from '../Shared/skippedBuild';
+import { typedWoNumber } from '../Shared/skippedBuild';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
@@ -377,7 +377,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // order appears there immediately. No scan, no QC, no timing — it is the exception path.
   //
   // THE NETSUITE FORK (this is the part that matters): the onStockBuildDone trigger fires on any
-  // fin_workorders write where orderType 'stock' + nsWoId + bake Complete + !nsCompletionQueued,
+  // fin_workorders write where orderType 'stock' or 'sales' + nsWoId + packed + !nsCompletionQueued,
   // and enqueues the WO-linked assembly build. So for a WO that is ALREADY built in NetSuite we
   // write nsCompletionQueued:true in the SAME atomic update as the completion — the trigger reads
   // the after-state, sees the stamp and returns early, so nothing double-posts. For a WO that
@@ -389,7 +389,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const pend = [['Sled Setup', t.spinSetup], ['Sled Spray', t.spinSpray], ['Sled Bake', t.spinBake],
           ...(woHasPoles(wo) ? [['Pole Spray', t.poleSpray], ['Pole Bake', t.poleBake]] : []), ['Hand Finish', t.hand]]
           .filter(([, task]) => (task?.status || 'Pending') !== 'Complete').map(([label]) => label);
-      const isStockBuild = wo.orderType === 'stock' && !!wo.nsWoId;
+      // EVERY job the server builds in NetSuite — a stock build AND an Order Entry sales job carrying its anchor work
+      // order (functions onStockBuildDone builds both). The question used to be asked for stock only, so a force-
+      // completed Order Entry job was stamped "no build" without anyone being asked (WO11578, 10/1).
+      const buildsInNs = ['stock', 'sales'].includes(wo.orderType) && !!wo.nsWoId;
       const alreadyHandled = !!(wo.nsCompletionQueued || wo.nsWoCompletionPosted);
 
       if (!window.confirm(
@@ -399,19 +402,19 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           `Every step is marked Complete, the sled is freed, and the order goes STRAIGHT TO THE WMS PACKING QUEUE.\n\n` +
           `Supervisor override — nothing is scanned, QC'd or timed.`)) return;
 
-      // NetSuite question — only for a stock build that hasn't already queued/posted its completion.
+      // NetSuite question — for a job the server builds that hasn't already queued/posted its build.
       // The NORMAL answer builds; skipping takes typing the WO's own number (Eric 2026-10-02, WO11639:
       // an OK on "already built?" skipped the build silently — Shared/skippedBuild).
       let blockNsPost = true;
-      if (isStockBuild && !alreadyHandled) {
+      if (buildsInNs && !alreadyHandled) {
           const ref = wo.nsWoTran || wo.nsWoId;
           const typed = window.prompt(
               `NetSuite build for ${ref}\n\n` +
-              `Leave this BLANK and press OK → the app BUILDS it in NetSuite when packing puts it away (the normal answer).\n\n` +
+              `Leave this BLANK and press OK → the app BUILDS it in NetSuite when packing ${wo.orderType === 'sales' ? 'packs it' : 'puts it away'} (the normal answer).\n\n` +
               `ONLY if ${ref} is ALREADY BUILT in NetSuite (you built it there yourself): type ${ref} and press OK → the app posts NO build.\n\n` +
               `Cancel = stop, nothing is completed.`, '');
           if (typed === null) return;
-          blockNsPost = typedAlreadyBuilt(typed, wo);
+          blockNsPost = typedWoNumber(typed, wo);
           if (!blockNsPost && String(typed).trim()
               && !window.confirm(`"${String(typed).trim()}" is not ${ref} — the app will BUILD it in NetSuite as normal. Continue?`)) return;
       }
@@ -423,7 +426,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           "tasks.spinSetup.status": "Complete", "tasks.spinSpray.status": "Complete", "tasks.spinBake.status": "Complete",
           "tasks.hand.status": "Complete",
           forceCompletedAt: Date.now(), forceCompletedBy: user?.name || '',
-          forceCompleteNsBuildSkipped: isStockBuild ? blockNsPost : null,
+          forceCompleteNsBuildSkipped: buildsInNs ? blockNsPost : null,
       };
       if (woHasPoles(wo)) {
           updates.poleStepIndex = poleRecipeLen(wo) || len || poleIdxOf(wo);
@@ -441,8 +444,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           await tellRtg(wo, 'Complete');
           setViewWo(null);
           alert(`✅ ${woRef(wo)} marked COMPLETE — it is now in the WMS Packing queue.\n\n` +
-              (isStockBuild
-                  ? (blockNsPost ? `No NetSuite build will be posted — you typed ${wo.nsWoTran || wo.nsWoId} (already built). The order shows "build SKIPPED".` : 'The NetSuite assembly build posts when packing puts it away — check HQ 11.1 → NetSuite Sync Queue after.')
+              (buildsInNs
+                  ? (blockNsPost ? `No NetSuite build will be posted — you typed ${wo.nsWoTran || wo.nsWoId} (already built). The order shows "build SKIPPED".` : `The NetSuite assembly build posts when packing ${wo.orderType === 'sales' ? 'packs it' : 'puts it away'} — check HQ 11.1 → NetSuite Sync Queue after.`)
                   : 'Custom order — NetSuite is handled by the sales-order fulfillment, not here.'));
       } catch (e) { alert('Force complete failed: ' + (e.message || e)); }
   };
