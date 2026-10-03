@@ -29,6 +29,7 @@ import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isRe
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf, customerPriceLevel } from '../Shared/priceLevels';
 import { priceChoice, isItemKit } from '../Shared/hardwarePricing';
 import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, checkoutAssignmentOf } from '../Shared/feeRules';
+import { searchStockedItems, pickedItemEntries, isSearchableStockedItem } from '../Shared/checkoutSearch';
 import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
 import { extrasFromSavedItem } from '../Shared/extrasRestore';
 import { readWorkspace, writeWorkspace, restorableWorkspace, workspaceSeedOf, workHasProgress } from '../Shared/cpqWorkspace';
@@ -841,6 +842,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   // ADD-ONS AT CHECKOUT (Stuart 2026-07-30): fees picked at the END of the quote rather than built
   // into a flow — { [feeDocId]: qty | true }. Percentage fees are on/off; the rest take a quantity.
   const [addOnSel, setAddOnSel] = useState({});
+  // 🔎 Stocked items added from the checkout search this session (part doc ids) and what is typed in it (Shared/checkoutSearch).
+  const [checkoutPicks, setCheckoutPicks] = useState([]);
+  const [stockQuery, setStockQuery] = useState('');
   // Cart line discounts (manager+, Stuart 2026-09-11): the ticked lines and the tool's mode/value.
   const [discSel, setDiscSel] = useState([]);
   const [discTool, setDiscTool] = useState({ mode: 'PERCENT', value: '' });
@@ -895,7 +899,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   // sees when they first open the tab.
   const resetWorkspace = () => {
       setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setLineTag(''); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', sidemark: '', needBy: '', productionNotes: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
-      setEditingCartId(null); setAddOnSel({});
+      setEditingCartId(null); setAddOnSel({}); setCheckoutPicks([]); setStockQuery('');
       workRef.current = null;   // the configuration in progress goes with it (Shared/cpqWorkspace)
   };
   // Checkout with a line open in the configurator: the cart still holds that line AS IT WAS, so
@@ -1348,8 +1352,31 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       const curatedFeeCount = checkout.filter(e => e.isFee).length;
       const fees = curatedFeeCount > 0 ? [] : buildFeeCatalog(scopedParts, { priceFor });
       const seen = new Set(checkout.map(e => e.id));
-      return [...checkout, ...fees.filter(e => !seen.has(e.id))];
-  }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections, cpqFlows, activeFlowId, cart, liveAssemblies]);
+      const listed = [...checkout, ...fees.filter(e => !seen.has(e.id))];
+      // 🔎 ANY STOCKED ITEM (Stuart 2026-10-02 · Shared/checkoutSearch): the items picked from the checkout search,
+      // and — on a reopened quote — any stocked item the saved quote carries that the assignments above do not
+      // list, so a reopen never drops one. Priced by the very same chain (priceFor / skuFor), so a searched item is
+      // an ordinary checkout line from here on.
+      const listedIds = new Set(listed.map(e => e.id));
+      const selectedIds = Object.keys(addOnSel || {}).filter(k => { const v = addOnSel[k]; return v === true || Number(v) > 0; });
+      const pickedParts = [...new Set([...checkoutPicks, ...selectedIds])]
+          .filter(id => !listedIds.has(id))
+          .map(id => universe.find(p => p.id === id))
+          .filter(p => p && (checkoutPicks.includes(p.id) || isSearchableStockedItem(p)));
+      return [...listed, ...pickedItemEntries(pickedParts, { priceFor, skuFor })];
+  }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections, cpqFlows, activeFlowId, cart, liveAssemblies, checkoutPicks, addOnSel]);
+  // What the checkout search offers for what is typed — this brand's stocked items, not already on the list, each
+  // priced the way it would bill (the catalog entry builder, so the number shown is the number charged).
+  const stockSearchHits = useMemo(() => {
+      if (String(stockQuery || '').trim().length < 2) return [];
+      const universe = [...(libraryParts || []), ...(liveAssemblies || [])];
+      const hits = searchStockedItems(universe, stockQuery, { exclude: addOnCatalog.map(e => e.id), limit: 12 });
+      if (!hits.length) return [];
+      const lvl = customerPriceLevel(addOnCustomer, priceLevel);
+      const findByCode = (c) => { const k = String(c || '').trim().toUpperCase(); return k ? universe.find(p => [p.id, p.itemId, p.legacyErpId].some(x => String(x || '').trim().toUpperCase() === k)) || null : null; };
+      const ctx = { customerId: jobData.customerId, customer: addOnCustomer, priceLevel: lvl.level, levelIsDefault: lvl.isDefault, outsourceCodes: outsourceFinishes, findByCode };
+      return pickedItemEntries(hits, { priceFor: (p) => priceChoice({ partId: p.id }, p, ctx).price || 0, skuFor: (p) => priceChoice({ partId: p.id }, p, ctx).sku || '' });
+  }, [stockQuery, libraryParts, liveAssemblies, addOnCatalog, addOnCustomer, priceLevel, jobData.customerId, outsourceFinishes]);
 
   // ── 📦 FLAT-RATE SHIPPING, COUNTED IN BOXES (Eric 2026-09-29 · Stuart 2026-09-30 · Shared/flatRateShipping) ──
   // A customer whose checkout carries the flat-rate box items (assigned in 4.6) ships by the box: the cart is
@@ -6015,6 +6042,37 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                         onChange={setAddOnSel}
                         configSubtotal={cart.reduce((s, it) => { const d = tradeDiscountFor(it); const ld = lineDiscountOf(it); return s + ((it.pricing?.finalPrice || 0) - (d ? d.amount : 0) - (ld ? ld.amount : 0)) * (it.qty || 1); }, 0)}
                         title="Add-ons & fees — added as their own lines"
+                        footer={(
+                            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
+                                {/* 🔎 ANY STOCKED ITEM (Stuart 2026-10-02: "an open search field where we can add any stocked item,
+                                    no apply finish or anything … customer price if customer selected/loaded, if not base price"). */}
+                                <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>
+                                    Add any stocked item — search by item # or name
+                                </label>
+                                <input value={stockQuery} onChange={e => setStockQuery(e.target.value)} placeholder="e.g. HTTENDSTOP · joiner · end cap"
+                                    style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', fontFamily: 'var(--mono)', fontSize: '12px', border: '1px solid var(--line)', background: '#fff' }} />
+                                {String(stockQuery || '').trim().length >= 2 && !stockSearchHits.length && (
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-faint)', marginTop: '6px' }}>No stocked item matches — only items NetSuite holds as stocked are offered here.</div>
+                                )}
+                                {stockSearchHits.map(e => (
+                                    <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 0', borderBottom: '1px dashed var(--line)' }}>
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{e.code}{e.clientSku && <span style={{ color: 'var(--brass)' }}> · {e.clientSku}</span>}</div>
+                                            <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</div>
+                                        </div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: Number(e.unitPrice) > 0 ? 'var(--ink)' : '#b00020', whiteSpace: 'nowrap' }}>
+                                            {Number(e.unitPrice) > 0 ? `$${Number(e.unitPrice).toFixed(2)} ea` : 'no price — set one in 4.6'}
+                                        </div>
+                                        <button disabled={!(Number(e.unitPrice) > 0)}
+                                            title={Number(e.unitPrice) > 0 ? 'Add it to this order — quantity 1, change it in the list above' : 'An item with no price cannot go on the order — price it in 4.6 first'}
+                                            onClick={() => { setCheckoutPicks(p => (p.includes(e.id) ? p : [...p, e.id])); setAddOnSel(sel => ({ ...sel, [e.id]: 1 })); setStockQuery(''); }}
+                                            style={{ padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', border: 'none', cursor: Number(e.unitPrice) > 0 ? 'pointer' : 'not-allowed', background: Number(e.unitPrice) > 0 ? 'var(--ink)' : 'var(--paper-2)', color: Number(e.unitPrice) > 0 ? '#fff' : 'var(--ink-faint)' }}>
+                                            + Add
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                         note={`Percentages are worked out from the configured subtotal (${cart.length} item${cart.length === 1 ? '' : 's'}, before fees and shipping). Fees a flow already bills are untouched — this is for the ones that aren't steps.`}
                     />
 

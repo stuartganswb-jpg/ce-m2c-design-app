@@ -24,8 +24,11 @@ const T = {
 
 const money = (n) => `$${(Math.round((Number(n) || 0) * 100) / 100).toFixed(2)}`;
 
-const AddOnPicker = ({ catalog, selections, onChange, configSubtotal, title = 'Add-ons & fees', note, compact = false }) => {
-    if (!catalog || !catalog.length) return null;
+// `footer` — rendered inside the box, after the list (CPQ's "add any stocked item" search, 2026-10-02). With a
+// footer the box shows even while the list is empty, so the search is always there.
+const AddOnPicker = ({ catalog, selections, onChange, configSubtotal, title = 'Add-ons & fees', note, compact = false, footer = null }) => {
+    if ((!catalog || !catalog.length) && !footer) return null;
+    catalog = catalog || [];
     const set = (id, v) => onChange({ ...(selections || {}), [id]: v });
 
     const chosen = catalog.filter(e => {
@@ -88,6 +91,7 @@ const AddOnPicker = ({ catalog, selections, onChange, configSubtotal, title = 'A
                     <b style={{ color: T.ink }}>{money(total)}</b>
                 </div>
             )}
+            {footer}
         </div>
     );
 };

@@ -1433,7 +1433,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
               noSum: !!b.isNetLine || !!b.isHeader,
               // A checkout add-on (packaging, a rush fee) is a charge on the ORDER, not a product line: it prints
               // under the subtotal with shipping (Stuart 2026-10-01, Shared/FormPreview).
-              ...(b.isAddOn ? { afterSubtotal: true } : {}),
+              // Only a FEE is a charge on the order; a real item added at checkout (a wand, a stocked item from the
+              // search) is a product and prints with the products (Stuart 2026-10-02).
+              ...(b.isAddOn && b.isFee !== false ? { afterSubtotal: true } : {}),
               // A note the customer may read: words under its configuration — no number, no quantity, no money.
               ...(b.isNote ? { item: '', qty: '', price: null, amount: null, noSum: true, note: true } : {}),
           }));
@@ -1489,7 +1491,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
           amount: b.amount != null ? b.amount : b.total, cut: b.cutLength || null, bold: !!b.isNetLine || !!b.isHeader,
           // A net row restates the rows above it — it prints, it does not add (Shared/FormPreview).
           noSum: !!b.isNetLine || !!b.isHeader,
-          ...(b.isAddOn ? { afterSubtotal: true } : {}),   // a charge on the order — under the subtotal, as on the quote
+          ...(b.isAddOn && b.isFee !== false ? { afterSubtotal: true } : {}),   // a FEE on the order — under the subtotal, as on the quote
           ...(b.isNote ? { item: '', qty: '', price: null, amount: null, noSum: true, note: true } : {}),
       });
       const invoiceDoc = (activeDocType === 'INVOICE' && packingList && !isQsDoc)
