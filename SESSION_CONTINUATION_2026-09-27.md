@@ -1,5 +1,8 @@
 # Session continuation brief — 2026-09-27
 
+> **Superseded 2026-10-04 by `SESSION_CONTINUATION_2026-10-04.md`** — read that one. This file is kept as the record of
+> 09-22 → 09-27 (the bin lock, row pairs, Reopen for rows, live rod cuts).
+
 For the session that carries on from here. Written by the session that ran 2026-09-22 → 09-27 with
 Stuart (display releases, the row-pair route, the bin lock, App Imp triage). Read this first, then
 `STATE_OF_THE_APP_2026-09-23.md` for the wider orientation (it is still right; this brief is what

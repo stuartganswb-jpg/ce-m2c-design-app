@@ -142,3 +142,7 @@ Each is its own item (one at a time, plan first). Roughly by value:
    fix it in passing.
 
 ## 6. Changes since this file (append, newest first)
+
+- **2026-10-04 — `SESSION_CONTINUATION_2026-10-04.md`**: the week 09-29 → 10-03 in one place (three sessions: order route /
+  displays / WMS · App Imp / CPQ · spec sheets), live orders and open floor actions, what waits on Stuart, the merged
+  named-not-built list. The User Guide tab gained a Finishing Floor section and the week's key points the same day.
