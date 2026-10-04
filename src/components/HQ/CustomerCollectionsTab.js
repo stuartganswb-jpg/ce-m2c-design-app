@@ -27,6 +27,7 @@ import { configuratorOffer } from '../Shared/traverseConfigurator';
 import { parseControlWorkbook, workbookFileToSheets, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { parseTraverseKitSheets, diffTraverseKits, kitPricingRow, BILLABLE_ACCESSORY_SEED } from '../Shared/traverseKitImport';
 import { fabricutCodeOf, isPlatedSuffix, PRICE_LEVELS, customerPriceLevel } from '../Shared/priceLevels';
+import { tierRowOf, seedPlanOf, seedConfirmText, seedRowDoc, stockedVariantsOf } from '../Shared/tierRows';
 import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable, isCheckoutForCustomer, checkoutCustomerIds } from '../Shared/feeRules';
 import { PLATE_ROLES, plateRoleOf, pairedBackplateCode, includesPlate } from '../Shared/plateRules';
 import { canonicalCollection, canonicalCollections, collectionMergesOf, collectionMergeSummary } from '../Shared/collectionName';
@@ -57,30 +58,11 @@ const fmt = (v) => { const n = money(v); return n === '' ? '' : n.toFixed(2); };
 // A registry rather than an if-statement because the shape is customer-specific: Fabricut is the
 // only customer with a legacy struct, and every customer set up through this page from now on uses
 // clientPricing from the start.
-const fabricutSuggestion = (part, findByCode, outsourceCodes) => {
-    const fab = part?.manufacturingSpecs?.fabricut;
-    if (!fab) return null;
-    const code = upper(part.legacyErpId || part.itemId);
-    // PREMIUM = an OUTSOURCED finish, not "a suffix starting with EP" (Stuart 2026-07-29) — /P25 is
-    // plated too, and the EP test read it as an in-house paint and took the painted prices.
-    const plated = isPlatedSuffix(code.includes('/') ? code.split('/')[1] : '', outsourceCodes);
-    // Variant docs carry {cost, retail, wholesale} directly; base (mill) docs carry the painted and
-    // plated tiers side by side and the doc's own suffix picks which one applies.
-    const pick = (direct, painted, platedKey) => (fab[direct] !== undefined ? fab[direct] : (plated ? fab[platedKey] : fab[painted]));
-    const cost = pick('cost', 'paintedCost', 'platedCost');
-    const retail = pick('retail', 'paintedRetail', 'platedRetail');
-    let ws = pick('wholesale', 'paintedWholesale', 'platedWholesale');
-    if (ws === undefined || ws === null) ws = Number.isFinite(parseFloat(retail)) ? parseFloat(retail) / 2 : null;
-    if (cost === undefined && retail === undefined) return null;   // no tier for this variant
-    if (cost === null && retail === null) return null;             // group-priced plate ($0 with the arm)
-    return {
-        clientSku: fabricutCodeOf(part, findByCode, outsourceCodes) || '',
-        price: cost === null || cost === undefined ? '' : cost,
-        clientSalesPrice: ws === null || ws === undefined ? '' : ws,
-        clientRetailPrice: retail === null || retail === undefined ? '' : retail,
-        plated,
-    };
-};
+// ONE READER (Stuart 2026-10-04, H1-138BST): Shared/tierRows.tierRowOf — the same rule the price engine uses. A
+// variant with no tier box of its own inherits the base item's tier for its finish; a row takes all three numbers
+// from ONE source (the item's own price, else the painted / plated tier), never the own cost beside a tier's
+// wholesale and retail. The copy that lived here knew neither.
+const fabricutSuggestion = (part, findByCode, outsourceCodes) => tierRowOf(part, findByCode, outsourceCodes);
 const LEGACY_SOURCES = [
     { match: /fabricut/i, label: 'Fabricut pricing box', read: fabricutSuggestion },
 ];
@@ -562,7 +544,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false
         const targets = [];
         inventory.forEach(p => {
             const s2 = legacySrc.read(p, findByCode, outsourceFinishes);
-            if (s2 && (s2.clientSku || s2.price !== '' || s2.clientSalesPrice !== '' || s2.clientRetailPrice !== '')) targets.push({ p, s: s2 });
+            // Its own box only — a variant that merely INHERITS the base's tiers is seeded from its base item, by choice
+            // (stocked finishes), never swept up by a brand-wide refresh.
+            if (s2 && !s2.inherited && (s2.clientSku || s2.price !== '' || s2.clientSalesPrice !== '' || s2.clientRetailPrice !== '')) targets.push({ p, s: s2 });
         });
         if (!targets.length) return alert(`No items in this brand carry a ${legacySrc.label}.`);
         const overwrite = targets.filter(({ p }) => !!rowFor(p)).length;
@@ -681,18 +665,40 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false
             setTierRow(null); setTierEdit({});
         } catch (e) { console.error(e); alert('Save failed:\n\n' + (e.message || e)); }
     };
-    // Seed/refresh THIS customer's clientPricing row from the tiers just saved — the per-item
-    // version of ↺ Adopt, for the SELECTED customer (not just a /fabricut/-named one). SKU =
-    // resolved pattern #, price = cost, sales = wholesale, retail = MSRP; keyed by CRM doc id.
+    // Seed/refresh THIS customer's clientPricing rows from the SAVED tiers (Shared/tierRows, 2026-10-04): from a base
+    // item, its own row AND a row on every stocked, live finish under it — /EPn and the outsourced codes take the
+    // plated tier and the premium part #, the rest the painted tier; from a variant, that variant alone. Every row is
+    // listed before anything is written, and a row it replaces is named. Keyed by the CRM doc id.
+    const tierSeedOf = (p) => {
+        const fab = p.manufacturingSpecs?.fabricut || {};
+        const seed = { pricedWith: fab.pricedWith || '' };
+        [...TIER_FIELDS, ...CODE_FIELDS].forEach(f => { seed[f.key] = fab[f.key] === undefined || fab[f.key] === null ? '' : fab[f.key]; });
+        TIER_GROUPS.forEach(g => { seed[`incl_${g.key}`] = fab[g.f.cost] === null && fab[g.f.retail] === null; });
+        return seed;
+    };
     const seedRowFromTiers = async (p) => {
         if (!customer) return alert('Pick a customer first.');
+        // The seed reads what is SAVED. Numbers typed and not saved would be silently left out.
+        if (tierRow === p.id) {
+            const saved = tierSeedOf(p);
+            const dirty = Object.keys(saved).some(k => String(saved[k] ?? '') !== String(tierEdit[k] ?? ''));
+            if (dirty) return alert('These tiers have unsaved changes.\n\nPress "Save tiers" first — the seed writes from the SAVED tiers — then open the item again and seed.');
+        }
         const byCode = new Map(); inventory.forEach(x => { [x.legacyErpId, x.itemId].forEach(c => { const k = upper(c); if (k && k !== 'PENDING' && !byCode.has(k)) byCode.set(k, x); }); });
-        const sug = fabricutSuggestion(p, (c) => byCode.get(upper(c)) || null, outsourceFinishes);
-        if (!sug) return alert('No sellable tier price on this item (a group-priced $0 plate stays out of Client Pricing — its rule shows in "Priced in conjunction with").');
-        const rows = (p.clientPricing || []).filter(r => upper(r.customerId) !== upper(customer.id) && upper(r.customerId) !== upper(customer.name));
-        rows.push({ customerId: customer.id, customerName: customer.name || '', clientSku: sug.clientSku, price: sug.price, clientSalesPrice: sug.clientSalesPrice, clientRetailPrice: sug.clientRetailPrice, source: 'TIER_SEED', updatedAt: Date.now(), updatedBy: String(currentUser || '') });
-        try { await setDoc(doc(db, 'Approved_Designs', p.id), { clientPricing: rows }, { merge: true }); alert(`✅ ${customer.name} row seeded from the tiers (${sug.clientSku || 'no SKU'} · $${sug.price}).`); }
-        catch (e) { alert('Seed failed:\n\n' + (e.message || e)); }
+        const plan = seedPlanOf({ part: p, inventory, findByCode: (c) => byCode.get(upper(c)) || null, outsourceCodes: outsourceFinishes, customerKeys: custKeys });
+        if (!plan.rows.length) return alert('No sellable tier price on this item (a group-priced $0 plate stays out of Client Pricing — its rule shows in "Priced in conjunction with").');
+        const writes = plan.rows.filter(x => x.change !== 'SAME');
+        if (!writes.length) return alert(`Nothing to write — ${customer.name}'s ${plan.rows.length === 1 ? 'row already matches' : `${plan.rows.length} rows already match`} the saved tiers.`);
+        if (!window.confirm(seedConfirmText(plan, customer.name || 'the customer'))) return;
+        try {
+            const batch = writeBatch(db);
+            writes.forEach(x => {
+                const others = (x.part.clientPricing || []).filter(r => !custKeys.has(upper(r?.customerId)));
+                batch.set(doc(db, 'Approved_Designs', x.part.id), { clientPricing: [...others, seedRowDoc(x.row, { customerId: customer.id, customerName: customer.name || '', by: currentUser })] }, { merge: true });
+            });
+            await batch.commit();
+            alert(`✅ ${writes.length} ${customer.name} row${writes.length === 1 ? '' : 's'} seeded from the tiers: ${writes.map(x => x.code).join(', ')}.`);
+        } catch (e) { alert('Seed failed:\n\n' + (e.message || e)); }
     };
     // ---- ALIAS control (pivot phase B): the customer-facing identity, per collection ----------
     // An alias is a full Approved_Designs record pointing home via manufacturingSpecs.aliasOf
@@ -1623,7 +1629,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false
                                             {/* Seed the row + alias control — the two actions that used to live only in the
                                                 Master Library drawer (pivot phase B: 4.6 is the control surface). */}
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '14px', paddingTop: '12px', borderTop: `1px dashed ${theme.line}`, flexWrap: 'wrap' }}>
-                                                <button onClick={() => seedRowFromTiers(r.p)} style={btn(true)} title={`Write/refresh ${customer?.name || 'the customer'}'s clientPricing row from these tiers — SKU = pattern #, price = cost, sales = wholesale. Keyed by the CRM doc id.`}>↑ Seed {customer?.name || 'customer'} row from tiers</button>
+                                                {(() => {
+                                                    const nVar = stockedVariantsOf(r.p, inventory).length;
+                                                    return (
+                                                        <button onClick={() => seedRowFromTiers(r.p)} style={btn(true)} title={`Write/refresh ${customer?.name || 'the customer'}'s price row${nVar ? `s — this item (its own price) and its ${nVar} stocked finish${nVar === 1 ? '' : 'es'} (/EP and plated → plated tier + premium part #; /P → painted tier)` : ''} from the SAVED tiers. Every row is listed before it is written. Keyed by the CRM doc id.`}>↑ Seed {customer?.name || 'customer'} row{nVar ? `s — this item + ${nVar} stocked finish${nVar === 1 ? '' : 'es'}` : ' from tiers'}</button>
+                                                    );
+                                                })()}
                                                 {(() => {
                                                     const al = aliasesOf(r.p);
                                                     return (
