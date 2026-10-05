@@ -121,3 +121,39 @@ export function workspaceSeedOf(config, key) {
     const { assemblyId, ...rest } = config;
     return { ...rest, key, forAssemblyId: assemblyId, fromWorkspace: true };
 }
+
+// ── A CLEAN START LEAVES NOTHING TO RESTORE (Stuart 2026-10-04: "the clear all button on the cpq no longer
+//    totally clears out the selections it seems to leave some earlier selections still hanging there") ──────
+// The configurator is handed a SEED — a saved copy of a configuration's answers, picks and finishes — when a
+// cart line is Edited and, since 2026-09-29, every time CPQ comes back from a tab switch or a reload. The seed
+// was spent only by Add configuration. Clear All emptied the cart, the header and the flow and kept the seed,
+// so opening the same product again re-applied the earlier selections; ↺ Reset on a flow and picking a flow by
+// hand kept the seed AND the work in progress, so the selections came back at once and a reload brought them
+// back again. Every action that means "start clean" now drops both — and Clear All gives the page the tab
+// opens with: no product group, the price level back to its opening value, no step overrides, no line-discount
+// selection, no captured views, no pending traverse components (Stuart: "the reset resets all").
+// Edit and the restore set the seed themselves and are untouched.
+export const CLEAN_FLOW = 'FLOW';   // ↺ Reset on a flow · a flow or product group picked by hand
+export const CLEAN_ALL = 'ALL';     // Clear All · the clean page after a save
+/** What a clean start sets. Every scope drops the seed and the work in progress. */
+export function cleanStartOf(scope = CLEAN_FLOW) {
+    const base = { engineSeed: null, work: null };
+    if (scope !== CLEAN_ALL) return base;
+    return {
+        ...base,
+        pendingGroup: '', priceLevel: 'STANDARD', customOverrides: {},
+        discSel: [], discTool: { mode: 'PERCENT', value: '' }, capturedViews: null, trvPending: null,
+    };
+}
+/** A saved workspace as a clean start leaves it — what a reload would then find. */
+export function workspaceAfterClean(ws, scope = CLEAN_FLOW) {
+    const w = obj(ws), c = cleanStartOf(scope);
+    const engine = { ...obj(w.engine), activeAssemblyId: '', activeDraftId: null, activeDraftSvg: null };
+    if (scope !== CLEAN_ALL) return { ...w, engine, config: c.work };
+    return {
+        ...w, sessionId: null,
+        header: { jobData: {}, priceLevel: c.priceLevel, addOnSel: {} },
+        engine: { ...engine, activeFlowId: '', pendingGroup: c.pendingGroup, editingCartId: null },
+        oldEngine: {}, config: c.work,
+    };
+}

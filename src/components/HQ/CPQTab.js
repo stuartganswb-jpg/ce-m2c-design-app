@@ -32,7 +32,7 @@ import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, ch
 import { searchStockedItems, pickedItemEntries, isSearchableStockedItem } from '../Shared/checkoutSearch';
 import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
 import { extrasFromSavedItem } from '../Shared/extrasRestore';
-import { readWorkspace, writeWorkspace, restorableWorkspace, workspaceSeedOf, workHasProgress } from '../Shared/cpqWorkspace';
+import { readWorkspace, writeWorkspace, restorableWorkspace, workspaceSeedOf, workHasProgress, cleanStartOf, CLEAN_FLOW, CLEAN_ALL } from '../Shared/cpqWorkspace';
 import { shippingPlanOf, shippingChargeOf, FLAT_RATE_BOXES, TRAVERSE_PACK_FEE_CODE } from '../Shared/flatRateShipping';
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
@@ -855,7 +855,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   // 📏 Size-group landing (Stuart 2026-07-24 pivot): sibling per-assembly flows collapse into
   // one picker entry; Rod Diameter is asked FIRST, then that assembly's own flow loads.
   const [pendingGroup, setPendingGroup] = useState("");
-  const launchFlow = (id) => { setActiveFlowId(id); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); setAssemblyQty(1); setLineTag(''); };
+  // ── A CLEAN START LEAVES NOTHING TO RESTORE (Stuart 2026-10-04 · Shared/cpqWorkspace.cleanStartOf) ─────────
+  // The configurator's SEED (the saved copy Edit and the tab-switch / reload restore hand it) and the work in
+  // progress were dropped only by Add configuration. Clear All kept the seed, ↺ Reset and a flow picked by
+  // hand kept both — so the earlier answers, picks and finishes came straight back. Every clean start drops
+  // them; Clear All also returns the product group, the price level, the step overrides, the line-discount
+  // tool, the captured views and the pending traverse components to what the tab opens with.
+  const startClean = (scope) => {
+      const c = cleanStartOf(scope);
+      setEngineSeed(c.engineSeed);
+      workRef.current = c.work;
+      if (scope !== CLEAN_ALL) return;
+      setPendingGroup(c.pendingGroup); setPriceLevel(c.priceLevel); setCustomOverrides(c.customOverrides);
+      setDiscSel(c.discSel); setDiscTool(c.discTool); setCapturedViews(c.capturedViews);
+      trvPendingRef.current = c.trvPending;
+  };
+  // A flow picked by hand — and ↺ Reset, which is this flow picked again — is a new walk.
+  const launchFlow = (id) => { startClean(CLEAN_FLOW); setActiveFlowId(id); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); setAssemblyQty(1); setLineTag(''); };
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
@@ -900,7 +916,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   const resetWorkspace = () => {
       setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setLineTag(''); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', sidemark: '', needBy: '', productionNotes: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
       setEditingCartId(null); setAddOnSel({}); setCheckoutPicks([]); setStockQuery('');
-      workRef.current = null;   // the configuration in progress goes with it (Shared/cpqWorkspace)
+      // The seed, the configuration in progress, the product group, the price level, the step overrides, the
+      // line-discount tool, the captured views and the pending traverse parts go with it (cleanStartOf).
+      startClean(CLEAN_ALL);
   };
   // Checkout with a line open in the configurator: the cart still holds that line AS IT WAS, so
   // say so before the operator saves changes that are not in it.

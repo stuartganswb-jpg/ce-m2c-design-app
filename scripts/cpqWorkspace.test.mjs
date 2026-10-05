@@ -1,7 +1,7 @@
 // 🧷 The CPQ workspace survives a tab switch and a reload (Eric 2026-09-29 · Stuart 2026-09-30).   node scripts/cpqWorkspace.test.mjs
 import {
     workHasProgress, workIsPristine, workspaceIsEmpty, readWorkspace, writeWorkspace, clearAllWorkspaces,
-    restorableWorkspace, workspaceSeedOf, workspaceKey, WORKSPACE_VERSION,
+    restorableWorkspace, workspaceSeedOf, workspaceKey, WORKSPACE_VERSION, cleanStartOf, workspaceAfterClean, CLEAN_FLOW, CLEAN_ALL,
 } from '../src/components/Shared/cpqWorkspace.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -89,6 +89,19 @@ const seed = workspaceSeedOf(work, 42);
 eq('the seed is keyed, scoped to its assembly and marked', [seed.key, seed.forAssemblyId, seed.fromWorkspace, seed.assemblyId], [42, 'ASM-H1-1', true, undefined]);
 eq('it carries the operator\'s picks and the rest as saved', [seed.picks, seed.lengthInches, seed.memo, seed.stepIx, seed.globalFinishes], [work.picks, 116, 'TEST REPRO — APP IMP', 4, { METAL: 'P14' }]);
 eq('no configuration → no seed', workspaceSeedOf(null, 1), null);
+
+// ── a clean start leaves nothing to restore (Stuart 2026-10-04) ─────────────────────────────
+// His saved workspace that night: Fabricut H1 open, customer loaded, a configuration in progress.
+const live = { ...ws, header: { ...header, priceLevel: 'FAB_COST', addOnSel: { A1: 2 } }, engine: { ...engine, pendingGroup: 'Fabricut H1' } };
+eq('Clear All and ↺ Reset both drop the seed and the work in progress', [cleanStartOf(CLEAN_ALL).engineSeed, cleanStartOf(CLEAN_ALL).work, cleanStartOf(CLEAN_FLOW).engineSeed, cleanStartOf(CLEAN_FLOW).work], [null, null, null, null]);
+eq('Clear All also resets the product group, the price level, overrides, the discount tool, views and pending traverse parts', (() => { const c = cleanStartOf(CLEAN_ALL); return [c.pendingGroup, c.priceLevel, c.customOverrides, c.discSel, c.discTool, c.capturedViews, c.trvPending]; })(), ['', 'STANDARD', {}, [], { mode: 'PERCENT', value: '' }, null, null]);
+eq('↺ Reset touches nothing but the configuration', Object.keys(cleanStartOf(CLEAN_FLOW)).sort(), ['engineSeed', 'work']);
+const afterAll = workspaceAfterClean(live, CLEAN_ALL);
+eq('after Clear All the saved workspace is EMPTY — a reload finds the page the tab opens with', [workspaceIsEmpty(afterAll), restorableWorkspace({ ...afterAll, v: WORKSPACE_VERSION }, { cart: [] }).config], [true, null]);
+eq('…before it, there was a configuration to hand back', !!restorableWorkspace(live, { cart: [] }).config, true);
+const afterFlow = workspaceAfterClean(live, CLEAN_FLOW);
+eq('after ↺ Reset the header stays, and there is no configuration to hand back', [afterFlow.header.jobData.customerId, afterFlow.header.priceLevel, afterFlow.engine.activeFlowId, restorableWorkspace(afterFlow, { cart: [] }).config], ['CUST-4720', 'FAB_COST', 'FLOW-H1-1', null]);
+eq('…so re-opening the same product has no seed to apply', workspaceSeedOf(restorableWorkspace(afterFlow, { cart: [] }).config, 7), null);
 
 console.log(`cpqWorkspace: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
