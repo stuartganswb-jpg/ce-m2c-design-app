@@ -28,16 +28,15 @@ import { oeIsFloorLine, oeLineFinish, oeCoverageOf, oeLineStateOf } from './oeLi
 import { isOutsourcedFinishCode } from './finishRouting.js';
 import { rowRestampOf, isStockColourCode } from './subFinish.js';
 import { isKitLine, itemKitOrderLinesOf, isOffOrderLine } from './itemKit.js';
+import { rowKeyOf, rowOfLine } from './rowKey.js';
+import { isReleaseByCount, releasesOf, lineDueOf, lineTargetOf, rowTargetOf, rowDisplaysOf, releaseRowKeyOf, releaseLabelOf } from './rowRelease.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-/** "Row 2" → "ROW_2": the field key a row's run is recorded under on the sales order. */
-export const rowKeyOf = (label) => U(label).replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
-
-/** The row a sales-order line belongs to. `row` when it was written with one (a CPQ display
- *  order); otherwise the memo the operator typed on an Order Entry line ("Row 2"). */
-export const rowOfLine = (line) => String((line && (line.row || line.memo)) || '').trim();
+// "Row 2" → "ROW_2", and the row a line belongs to: one definition, in the leaf Shared/rowKey (the release counts and
+// the WMS readers read it too), re-exported here for every caller that already imports them from this module.
+export { rowKeyOf, rowOfLine };
 
 /**
  * A CPQ display order's breakdown → Order Entry's line shape, one per physical part per row.
@@ -280,21 +279,9 @@ export const LINE_STATE = {
  * `ref`, so a plated line can be followed from "issued" through staged → shipped → received → built
  * without any new field anywhere.
  */
-export const lineStateOf = ({ so, line, lineIdx, links, shipments = [], review = null, whole = null }) => {
-    if (whole) {
-        const done = whole.fin && /closed|complete|packed|shelved/i.test(String(whole.fin.currentPhase || whole.fin.status || ''));
-        return { key: done ? LINE_STATE.DONE : LINE_STATE.WHOLE, text: `on the whole-order documents (${wholeOrderText(whole)}) — managed on RTG`, tone: done ? 'green' : 'brass' };
-    }
-    // A shelf pick — unless it is made (cut, a fee on a pole, custom handling: oeIsFloorLine) or a start has
-    // already raised something for it (a custom line quoted with no finish, 2026-09-27).
-    // A LINE TAKEN OFF THE ORDER keeps its place and needs nothing (Shared/itemKit.isOffOrderLine, 2026-09-29).
-    if (isOffOrderLine(line)) return { key: LINE_STATE.STOCKED, text: `off the order${line.qtyChangedReason ? ` — ${line.qtyChangedReason}` : ''}`, tone: 'grey' };
-    // A KIT LINE is sold as one — its parts, below it, are what is made and picked (Shared/itemKit, 2026-09-28).
-    if (isKitLine(line)) return { key: LINE_STATE.STOCKED, text: 'kit — sold as one; its parts are the lines below', tone: 'grey' };
-    // A STOCK COLOUR is the start's to decide — the shelf, or painted from its /P (Shared/oeGenerate STOCK_FIRST).
-    const stockColour = !line.noFinish && line.finishOutsourced !== true && (line.stockColour === true || isStockColourCode(U(line.erp)));
-    if (!oeIsFloorLine(line) && !stockColour && !(so && so.oeGen && so.oeGen[lineIdx])) return { key: LINE_STATE.STOCKED, text: 'stocked — picked by the warehouse, not started here', tone: 'grey' };
-    const coverage = oeCoverageOf({ so, line, lineIdx, ...(links || {}), any: true });
+// What a line's COVERAGE says, with a plated line followed to its shipment and a parked work order waiting on material
+// read as backordered. One reading — the line's whole start, or one release of it (below).
+const coverageStateOf = ({ coverage, review = null, shipments = [] }) => {
     const base = oeLineStateOf({ coverage, review });
     // A plated line, once pulled: follow its shipment.
     if (coverage && coverage.kind === 'PLATING') {
@@ -315,6 +302,55 @@ export const lineStateOf = ({ so, line, lineIdx, links, shipments = [], review =
         return { key: LINE_STATE.BACKORDER, text: `${w.id} — backordered: ${why}`, tone: 'red' };
     }
     return { key: base.key, text: base.text, tone: base.tone };
+};
+// The word a line with several releases takes: the one furthest from done.
+const RELEASE_RANK = ['DEAD', 'BACKORDER', 'PARKED', 'PLATING', 'PLATING_STAGED', 'PLATING_SHIPPED', 'FLOOR', 'PO', 'PLATING_RECEIVED', 'PLATING_BUILT', 'DONE', 'STOCKED'];
+
+export const lineStateOf = ({ so, line, lineIdx, links, shipments = [], review = null, whole = null }) => {
+    if (whole) {
+        const done = whole.fin && /closed|complete|packed|shelved/i.test(String(whole.fin.currentPhase || whole.fin.status || ''));
+        return { key: done ? LINE_STATE.DONE : LINE_STATE.WHOLE, text: `on the whole-order documents (${wholeOrderText(whole)}) — managed on RTG`, tone: done ? 'green' : 'brass' };
+    }
+    // A shelf pick — unless it is made (cut, a fee on a pole, custom handling: oeIsFloorLine) or a start has
+    // already raised something for it (a custom line quoted with no finish, 2026-09-27).
+    // A LINE TAKEN OFF THE ORDER keeps its place and needs nothing (Shared/itemKit.isOffOrderLine, 2026-09-29).
+    if (isOffOrderLine(line)) return { key: LINE_STATE.STOCKED, text: `off the order${line.qtyChangedReason ? ` — ${line.qtyChangedReason}` : ''}`, tone: 'grey' };
+    // A KIT LINE is sold as one — its parts, below it, are what is made and picked (Shared/itemKit, 2026-09-28).
+    if (isKitLine(line)) return { key: LINE_STATE.STOCKED, text: 'kit — sold as one; its parts are the lines below', tone: 'grey' };
+    // A STOCK COLOUR is the start's to decide — the shelf, or painted from its /P (Shared/oeGenerate STOCK_FIRST).
+    const stockColour = !line.noFinish && line.finishOutsourced !== true && (line.stockColour === true || isStockColourCode(U(line.erp)));
+    const gen = so && so.oeGen && so.oeGen[lineIdx];
+    const byCount = isReleaseByCount(so);
+    if (!oeIsFloorLine(line) && !stockColour && !gen) {
+        // RELEASED BY COUNT (Shared/rowRelease, 2026-10-05): a stocked line follows its row — the warehouse is offered only
+        // the displays released.
+        if (byCount) {
+            const t = lineTargetOf(so, line);
+            const want = t.ok ? t.qty : Math.floor(N(line.qty) * N(t.target) / (N(t.of) || 1));
+            return { key: LINE_STATE.STOCKED, text: `stocked — ${want} of ${N(line.qty)} released to the pick at SO Pack`, tone: 'grey', releasedQty: want, dueQty: 0 };
+        }
+        return { key: LINE_STATE.STOCKED, text: 'stocked — picked by the warehouse, not started here', tone: 'grey' };
+    }
+    // A LINE WITH RELEASES ON IT (Shared/rowRelease): each release is read off its own documents; a line the row's
+    // target calls for more of than has been raised is still to start, and says how much.
+    if (byCount && releasesOf(gen).length) {
+        const rels = releasesOf(gen);
+        const due = lineDueOf(so, line, lineIdx, { round: !!(gen.rider || line.isFee) });
+        const states = rels.map(r => {
+            const one = { ...so, oeGen: { ...(so.oeGen || {}), [lineIdx]: { ...gen, kind: r.kind, ids: r.ids || [], ...(r.code ? { code: r.code } : {}), releases: undefined } } };
+            const st = coverageStateOf({ coverage: oeCoverageOf({ so: one, line, lineIdx, ...(links || {}), any: true }), shipments });
+            return { ...st, qty: N(r.qty), label: releaseLabelOf(r) };
+        });
+        const worst = RELEASE_RANK.map(k => states.find(x => x.key === k)).find(Boolean) || states[0];
+        const lagging = due.ok && due.qty > 0;
+        const head = `${N(gen.released)} of ${N(line.qty)} released`;
+        const parts = states.map(x => `${x.qty}${x.label ? ` (${x.label})` : ''}: ${x.text}`);
+        if (!due.ok) return { key: LINE_STATE.REVIEW, text: `${head} — ${due.why}; release the row whole or correct the line · ${parts.join(' · ')}`, tone: 'red', releasedQty: N(gen.released), dueQty: 0, releases: states };
+        if (lagging) return { key: review ? LINE_STATE.REVIEW : LINE_STATE.NONE, text: `${head} — ${due.qty} more due for the displays released${review ? `: ${(review.reasons || []).join('; ')}` : ' (not started)'} · ${parts.join(' · ')}`, tone: 'red', releasedQty: N(gen.released), dueQty: due.qty, releases: states };
+        return { key: worst.key, text: `${head} — ${parts.join(' · ')}`, tone: worst.tone, releasedQty: N(gen.released), dueQty: 0, releases: states };
+    }
+    const coverage = oeCoverageOf({ so, line, lineIdx, ...(links || {}), any: true });
+    return coverageStateOf({ coverage, review, shipments });
 };
 
 /** Row-level words. The order matters: the worst thing in the row is what the row says. */
@@ -424,6 +460,33 @@ export const rowStartText = (label, state) => {
         rest.length ? `\n${rest.length} line(s) already in motion or stocked are left as they are:\n${rest.map(l => `  • ${l.erp} — ${l.text}`).join('\n')}` : '',
         '\nEach work order lands on RTG under this sales order. Lines the plan cannot start cleanly are named for review, not guessed.',
     ].filter(Boolean).join('\n');
+};
+
+// ── ▶ START n OF m DISPLAYS (Stuart 2026-10-05, Shared/rowRelease) ───────────────────────────────────────────────────
+// The words of a release by count: every line at the quantity THIS release puts in motion, the stocked lines the
+// warehouse is now offered, and what is left for later. `lines` = Shared/rowRelease.rowReleasePlanOf's, each marked
+// `stocked` when it is a shelf pick the start never raises (10.5's reading of the line).
+export const rowReleaseText = ({ label, from = 0, to = 0, of = 0, lines = [] } = {}) => {
+    const add = Math.max(0, to - from);
+    const made = lines.filter(l => !l.stocked && l.now > 0);
+    const stocked = lines.filter(l => l.stocked && l.now > 0);
+    const span = add <= 1 ? `display ${to}` : `displays ${from + 1}–${to}`;
+    const row = (l) => `  • ${l.now} × ${l.erp}${l.finish ? ` in ${l.finish}` : ''}${l.soId ? ` (${l.soId})` : ''} — ${l.released + l.now} of ${l.qty} after this`;
+    return [
+        add > 0 ? `Start ${label} for ${add} of ${of} — ${span}?` : `Run ${label} again for the ${to} of ${of} displays already released?`,
+        made.length ? `\nTo the floors now — plated parts picked from stock (short → the Snapshot Backorder board), painted to finishing, poles to the shop:\n${made.map(row).join('\n')}` : (add > 0 ? '\nNothing on this row is made — it is all picked from the shelf.' : '\nNothing more is due on this row.'),
+        stocked.length ? `\nOffered to the warehouse at SO Pack (stocked lines follow the row's count):\n${stocked.map(row).join('\n')}` : '',
+        of - to > 0 ? `\n${of - to} display(s) of this row stay unreleased — start them from here when you choose.` : '\nThat is every display of this row.',
+        '\nThis release lands on RTG as its own work orders under the sales order. Lines the plan cannot start cleanly are named for review, not guessed.',
+    ].filter(Boolean).join('\n');
+};
+/** A row's release count across the orders that carry it: { byCount, released, of, left } — `orders` are the sales orders. */
+export const rowReleaseCountOf = ({ orders = [], rowKey = '', of = 0 } = {}) => {
+    const mine = (orders || []).filter(isReleaseByCount).filter(so => ((so.lines) || []).some(l => l && releaseRowKeyOf(l) === rowKey));
+    if (!mine.length) return { byCount: false, released: 0, of: 0, left: 0 };
+    const total = Math.floor(N(of)) || Math.max(0, ...mine.map(so => rowDisplaysOf(so, rowKey)));
+    const released = Math.max(0, ...mine.map(so => rowTargetOf(so, rowKey)));
+    return { byCount: true, released, of: total, left: Math.max(0, total - released) };
 };
 
 

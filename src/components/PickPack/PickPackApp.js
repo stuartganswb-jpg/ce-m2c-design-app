@@ -12,7 +12,8 @@ import { woRefOf } from '../Shared/woRef';
 import { pairWaitsOf, waitedText } from '../Shared/stagingPairs';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
-import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, soLineIsFee, unpackedSiblingsOf, soPackLineStateOf, gatherPlanOf, soCodeNeedOf } from '../Shared/pickLines';
+import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, soLineIsFee, unpackedSiblingsOf, soPackLineStateOf, gatherPlanOf, soCodeNeedOf, soCodeReleasedNeedOf, soCodeReleasedOf } from '../Shared/pickLines';
+import { isReleaseByCount } from '../Shared/rowRelease';
 import { isFeePart } from '../Shared/oeClassify';
 import { fetchAvailabilityUnits, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
@@ -20,7 +21,7 @@ import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shar
 import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, closeShortNext, shortBuildStamps, scrapRawOf, scrapBinOf, adjustmentPayload } from '../Shared/scrapClose';
 import { isFloorSupervisor, normRole } from '../Shared/finishingRoles';
 import AssemblyBuildTab from './AssemblyBuildTab';
-import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, nsBinPlanOf, nsBinMovesOf, displayShareOf } from '../Shared/orderBinPick';
+import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, nsBinPlanOf, nsBinMovesOf, displayShareOf, shippableDisplaysOf } from '../Shared/orderBinPick';
 import { displayShipmentOf, fulfilFromBinItems } from '../Shared/displayShipment';
 import DisplayShipModal from './DisplayShipModal';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
@@ -1841,6 +1842,13 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // pack gather, release). FieldPath makes the code ONE key; it lands exactly where committedQtyOf reads it.
     const updateCommittedQty = (orderId, code, n, fields = {}) =>
         updateDoc(doc(db, 'hq_sales_orders', orderId), new FieldPath('committedQty', String(code)), n, ...Object.entries(fields).flat());
+    // WHAT THE SHELF HAS GIVEN AN ORDER RELEASED BY COUNT (Shared/pickLines.soShelfToPickOf, 2026-10-05): an item picked
+    // from the shelf for one release and made on a floor for the next needs the two told apart, so every piece that comes
+    // off the shelf into such an order — a pick, or an arrival handed to it — is counted here, and a release back to the
+    // shelf comes off. An order released whole is not counted (its shelf picks are its whole need).
+    const countShelfPick = (order, code, n) => (isReleaseByCount(order) && Number(n)
+        ? updateDoc(doc(db, 'hq_sales_orders', order.id), new FieldPath('shelfPicked', String(code)), increment(Number(n))).catch(e => console.warn('shelfPicked write failed:', e))
+        : Promise.resolve());
     const commitToOrder = async (order, { code, qty, ordered, bin }) => {
         let want = bin || committedBinOf(order);
         if (!want) {
@@ -1896,6 +1904,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 committedUpdatedAt: Date.now(), committedUpdatedBy: operator?.name || '',
                 committedReleases: arrayUnion({ code: plan.code, qty: plan.qty, at: Date.now(), by: operator?.name || '', reason }),
             });
+            await countShelfPick(order, plan.code, -Math.min(plan.qty, Number((order.shelfPicked || {})[plan.code]) || 0));
             writeLog(`Released ${plan.qty} × ${plan.code} from ${packRef(order)}: ${reason}${plan.emptyAfter ? ' — bin now free' : ` (${plan.left} still gathered)`}`, 'wms');
         } catch (e) { alert('Could not release: ' + (e.message || e)); }
     };
@@ -2063,13 +2072,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const lock = await lockBin(bin);   // THE BIN LOCK — NetSuite's own bin, NetSuite's spelling
         if (!lock.ok) return alert(lock.msg);
         bin = lock.bin;
-        const codes = [...new Set((o.lines || []).map((l, i) => ({ l, i })).filter(x => soLineIsShelfPick(o, x.l, x.i) && !feeLine(o, x.l, x.i)).map(x => lineCodeOf(x.l)))]
+        // Released by count: every item with a shelf share released (a line picked for one release and made for the next
+        // reads "from the floor", but its shelf share is still a pick).
+        const codes = [...new Set((o.lines || []).map((l, i) => ({ l, i })).filter(x => !feeLine(o, x.l, x.i) && (isReleaseByCount(o) ? soCodeReleasedOf(o, lineCodeOf(x.l), isFeeCode).shelf > 0 : soLineIsShelfPick(o, x.l, x.i))).map(x => lineCodeOf(x.l)))]
             .filter(c => !only || c === String(only).toUpperCase());
         let live = {};
         setIsSyncing(true);
         try { live = (await fetchLiveBins(codes)) || {}; } finally { setIsSyncing(false); }
         const plan = shelfPickPlanOf({ so: o, binsOf: (c) => (live[c] && live[c].bins) || [], toBin: bin, only, isFeeCode });
-        if (!plan.length) return alert(`Nothing left to pick for ${packRef(o)} — every shelf line is already in ${bin}.`);
+        if (!plan.length) return alert(isReleaseByCount(o) ? `Nothing to pick for ${packRef(o)} right now — every shelf piece of the displays RELEASED is already in ${bin}. More is offered as rows are released on 10.5.` : `Nothing left to pick for ${packRef(o)} — every shelf line is already in ${bin}.`);
         const noId = plan.filter(p => p.ok && !((findPartByErpCode(p.code) || {}).netSuiteInternalId));
         const go = plan.filter(p => p.ok && !noId.includes(p)), bad = plan.filter(p => !p.ok);
         if (!go.length) return alert(`Nothing can be picked for ${packRef(o)} as it stands:\n\n${[...bad.map(p => `  • ${p.code}: ${p.why}`), ...noId.map(p => `  • ${p.code}: no NetSuite id — sync the item`)].join('\n')}`);
@@ -2090,6 +2101,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 if (!c) { failed.push(`${p.code}: ${moved} moved into ${bin} in NetSuite, but the order did not count them — tell Stuart`); continue; }
                 ord = { ...ord, committedBin: c.bin, committedQty: { ...(ord.committedQty || {}), [c.code]: c.total } };
                 await updateDoc(doc(db, 'hq_sales_orders', o.id), new FieldPath('nsBinQty', p.code), increment(moved)).catch(e => console.warn('nsBinQty write failed:', e));
+                await countShelfPick(o, p.code, moved);
                 done.push(`${moved} × ${p.code}`);
             }
         } finally { setIsSyncing(false); }
@@ -2120,7 +2132,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 if (!line) return null;
                 return {
                     orderId: o.id, ref: o.soId || o.id,
-                    ordered: soCodeNeedOf(o, c, isFeeCode) || Number(line.qty) || 0, gathered: committedQtyOf(o, c),   // the item's whole need (Shared/pickLines)
+                    // the item's whole need (Shared/pickLines) — on an order released by count, what is RELEASED of it
+                    ordered: isReleaseByCount(o) ? soCodeReleasedNeedOf(o, c, isFeeCode) : (soCodeNeedOf(o, c, isFeeCode) || Number(line.qty) || 0), gathered: committedQtyOf(o, c),
                     needBy: o.needBy || o.needByDate || o.reqDate || '', createdAt: Number(o.createdAt) || 0,
                 };
             })
@@ -2157,7 +2170,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (!order) continue;
             const oline = (order.lines || []).find(l => soLineCodeOf(l) === c);
             const done = await commitToOrder(order, { code: c, qty: a.qty, ordered: soCodeNeedOf(order, c, isFeeCode) || Number(oline && oline.qty) || 0 });
-            if (done) taken += a.qty;   // a refusal or a cancelled bin prompt leaves those pieces for stock
+            if (done) { taken += a.qty; await countShelfPick(order, c, a.qty); }   // a refusal or a cancelled bin prompt leaves those pieces for stock
         }
         writeLog(`Arrival alert: ${allocationSummary(plan, c)}${from ? ` (${from})` : ''} — ${taken} gathered into committed bins.`, 'wms');
         return taken;
@@ -6049,6 +6062,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     // order's bin · PACK — every piece in the bin, and the card shows only what is in it.
                     const gs = soGatherStageOf({ so: o, statOf: (c) => ((soStats[o.id] && soStats[o.id].codes[c]) || null), isFeeCode });
                     const ready = gs.stage === 'PACK';
+                    // RELEASED BY COUNT (Shared/rowRelease, Stuart 2026-10-05): the card speaks of what is RELEASED, and a
+                    // display ships once a display's worth of EVERY row is in the bin — the scarcest row decides how many.
+                    const byCount = isReleaseByCount(o);
+                    const canShip = (byCount && o.displayBuildId) ? shippableDisplaysOf({ so: o, boards: o.releaseOf, isFeeCode }) : 0;
                     const loaded = !!soStats[o.id];
                     const cBin = committedBinOf(o) || 'the order\'s bin';
                     const showLines = !!expandedSo[o.id] || ready || !loaded;
@@ -6072,8 +6089,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <span onClick={() => setExpandedSo(p => ({ ...p, [o.id]: !p[o.id] }))} title={showLines ? 'Collapse' : 'Show the lines anyway'} style={{ cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', marginRight: '10px', color: theme.inkSoft }}>{showLines ? '▾' : '▸'}</span>
                                 {finishAsAvailable(o) && <span title={`Parts go to finishing AS THEY ARRIVE instead of waiting for the whole order.${o.finishAsAvailableReason ? ` — ${o.finishAsAvailableReason}` : ''}`} style={{ fontFamily: theme.mono, fontSize: '9px', fontWeight: 700, letterSpacing: '.08em', color: theme.brass, border: `1px solid ${theme.brass}`, padding: '2px 6px', marginRight: '10px' }}>⚡ {t('FINISH AS AVAILABLE')}</span>}
                                 {committedBinOf(o) && <span title={`${totalGathered(o)} piece(s) gathered for this order. App-only — NetSuite still shows them in their shelf bin.`} style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.06em', color: '#2e7d32', marginRight: '12px' }}>📦 {t('BIN')} {committedBinOf(o)} · {totalGathered(o)}</span>}
-                                {loaded && (ready
-                                    ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#2e7d32', marginRight: '12px' }}>✓ {t('READY TO PACK')}</span>
+                                {loaded && gs.byCount && !gs.anyReleased
+                                    ? <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.08em', color: theme.inkSoft, marginRight: '12px' }}>{t('nothing released yet — rows start on 10.5')}</span>
+                                    : loaded && (ready
+                                    ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#2e7d32', marginRight: '12px' }}>✓ {byCount && gs.partial ? `${t('RELEASED PIECES ALL IN')} ${cBin}` : t('READY TO PACK')}</span>
                                     : gs.stage === 'SHIPPED' ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#2e7d32', marginRight: '12px' }}>✓ {t('ALL SHIPPED')}</span> : (gs.stage === 'PICK'
                                         ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.08em', color: theme.brass, marginRight: '12px' }}>⤓ {t('READY TO PICK INTO')} {cBin}</span>
                                         : <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.08em', color: theme.brass, marginRight: '12px' }}>{t('waiting on parts')}</span>))}
@@ -6103,7 +6122,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             )}
                             {showLines && !ready && <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                                 <thead><tr style={{ background: theme.paper2 }}>
-                                    {['Item #', 'Description', 'Bin', 'Ord', 'Hand', 'Prod', 'Comm', 'Status', ''].map(h => <th key={h} style={{ textAlign: ['Ord', 'Hand', 'Prod', 'Comm'].includes(h) ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>)}
+                                    {['Item #', 'Description', 'Bin', byCount ? 'Rel / Ord' : 'Ord', 'Hand', 'Prod', 'Comm', 'Status', ''].map(h => <th key={h} title={h === 'Rel / Ord' ? 'Pieces released so far (rows started on 10.5) of the pieces ordered' : undefined} style={{ textAlign: ['Ord', 'Rel / Ord', 'Hand', 'Prod', 'Comm'].includes(h) ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>)}
                                 </tr></thead>
                                 <tbody>
                                     {(o.lines || []).map((l, i) => (
@@ -6130,14 +6149,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 if (feeLine(o, l, i)) return (<>{[0, 1, 2, 3].map(k => <td key={k} style={{ padding: '9px 10px', textAlign: 'center', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>—</td>)}<td style={{ padding: '9px 12px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{t('not picked')}</td></>);
                                                 const st = lineStats(o, l, i);
                                                 const num = (v, col) => <td style={{ padding: '9px 10px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: col || theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{v}</td>;
-                                                const tone = { GATHERED: '#2e7d32', READY: '#3a7d44', 'IN PRODUCTION': theme.brass, SHORT: '#c0392b', UNKNOWN: theme.inkSoft }[st.state];
+                                                const tone = { GATHERED: '#2e7d32', READY: '#3a7d44', 'IN PRODUCTION': theme.brass, SHORT: '#c0392b', UNKNOWN: theme.inkSoft, 'NOT RELEASED': theme.inkSoft }[st.state];
                                                 return (<>
-                                                    {num(st.ordered)}
+                                                    {num(st.byCount ? `${st.released} / ${st.ordered}` : st.ordered)}
                                                     {num(st.avail == null ? '—' : st.avail, st.avail != null && st.avail < st.ordered ? '#c0392b' : theme.ink)}
                                                     {num(st.prod || '—', st.prod ? theme.brass : theme.inkSoft)}
                                                     {num(st.committed || '—', st.committed ? '#2e7d32' : theme.inkSoft)}
                                                     <td style={{ padding: '9px 12px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', color: tone, borderBottom: `1px solid ${theme.paper2}`, whiteSpace: 'nowrap' }}>
-                                                        {st.fromFloor ? (st.state === 'GATHERED' ? t('GATHERED') : t('from the floor')) : t(st.state)}
+                                                        {st.state === 'NOT RELEASED' ? t('not released') : st.fromFloor ? (st.state === 'GATHERED' ? t('GATHERED') : t('from the floor')) : t(st.state)}
                                                         {st.unit && <span style={{ color: theme.inkSoft }}> · {st.unit}</span>}
                                                     </td>
                                                 </>);
@@ -6156,8 +6175,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {o.packStatus === 'Packed'
                                         ? <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44' }}>📦 Packed · {(o.packPhotos || []).length} photo{(o.packPhotos || []).length === 1 ? '' : 's'} · {o.packedBy || ''}{o.nsIfTran ? ` · IF ${o.nsIfTran}${o.nsFulfillStatus ? ` (${o.nsFulfillStatus})` : ''}` : (o.nsFulfillQueued ? ' · IF queued…' : '')}{(o.trackingNumbers || []).length ? ` · 🚚 ${o.trackingNumbers.join(', ')}` : ''}</span>
                                         : (o.status === 'Picked' && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: theme.brass }}>→ in the PACKING tab queue</span>)}
-                                    {o.displayBuildId && (ready || (o.displayShipments || []).length > 0) && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#2e7d32' }}>📦 {(o.displayShipments || []).length} {t('display(s) shipped')}</span>}
-                                    {o.displayBuildId && ready && <button onClick={() => openShipDisplay(o)} disabled={isSyncing || shipBusy} title="Pack one display into its box and ship it to a showroom — its own $0 sales order to the customer, with the showroom's address" style={{ padding: '9px 18px', background: '#2e7d32', color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📦 {t('Ship one display')}</button>}
+                                    {o.displayBuildId && (ready || canShip > 0 || (o.displayShipments || []).length > 0) && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#2e7d32' }}>📦 {(o.displayShipments || []).length} {t('display(s) shipped')}{byCount ? ` · ${canShip} ${t('complete display(s) in the bin — can ship now')}` : ''}</span>}
+                                    {o.displayBuildId && (byCount ? (canShip > 0 || (ready && !gs.partial)) : ready) && <button onClick={() => openShipDisplay(o)} disabled={isSyncing || shipBusy} title="Pack one display into its box and ship it to a showroom — its own $0 sales order to the customer, with the showroom's address" style={{ padding: '9px 18px', background: '#2e7d32', color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📦 {t('Ship one display')}</button>}
                                     {committedBinOf(o) && nsBinPlanOf({ so: o, isFeeCode }).some(r => r.qty > 0) && <button onClick={() => syncOrderBinToNetSuite(o)} disabled={isSyncing} title={`Gathered pieces not yet in ${cBin} in NetSuite — move them there as the items the order bills`} style={{ padding: '9px 14px', background: 'transparent', color: '#2e7d32', border: '1px solid #2e7d32', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⇄ {t('Into')} {cBin} {t('in NetSuite')} ({nsBinPlanOf({ so: o, isFeeCode }).filter(r => r.qty > 0).length})</button>}
                                     {gs.toPick.length > 0 && <button onClick={() => pickShelfIntoOrder(o)} disabled={isSyncing} title={`Pick every shelf line still missing from ${cBin} — NetSuite bin transfers into it`} style={{ padding: '9px 18px', background: '#2e7d32', color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⤓ {t('Pick all into')} {cBin} ({gs.toPick.length})</button>}
                                     <button onClick={() => toggleFinishAsAvailable(o)} title={finishAsAvailable(o) ? 'Parts are going to finishing as they arrive — switch back to waiting for the whole order' : 'The exception: send parts to finishing as they arrive, rather than waiting for the whole order'} style={{ padding: '9px 14px', background: 'transparent', color: finishAsAvailable(o) ? theme.brass : theme.inkSoft, border: `1px solid ${finishAsAvailable(o) ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⚡ {t(finishAsAvailable(o) ? 'Waiting off' : 'Finish as available')}</button>

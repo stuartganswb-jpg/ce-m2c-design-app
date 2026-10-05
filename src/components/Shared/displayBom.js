@@ -16,6 +16,8 @@
 // `hidden` line are not parts anyone pulls, so they never reach it. Everything else does — the
 // traverse components included, because the board is built from them.
 
+import { rowKeyOf } from './rowKey.js';
+
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
@@ -481,10 +483,23 @@ export function displayDemandFrom(builds = []) {
             if (!started.size || !Array.isArray(l.byRow) || !l.byRow.length) return N(l[field]);
             return l.byRow.filter(r => !started.has(String(r.row || '').trim().toUpperCase())).reduce((s, r) => s + N(r[field]), 0);
         };
+        // A ROW RELEASED BY COUNT LEAVES THE DEMAND ONLY FOR THE DISPLAYS RELEASED (Stuart 2026-10-05, Shared/rowRelease):
+        // 10 of 35 in motion still leaves 25 displays of that row to make — and the Snapshot should go on saying so. The
+        // build records each row's count (`rowReleased`, by row key); a row with no count is as above — out once started.
+        const released = (b.rowReleased && typeof b.rowReleased === 'object') ? b.rowReleased : {};
+        const byCount = Object.keys(released).length > 0;
+        const leftOf = (row) => {
+            const k = rowKeyOf(row);
+            if (released[k] != null) return Math.max(0, Math.min(open, N(b.qty, 0) - N(released[k], 0)));
+            return started.has(String(row || '').trim().toUpperCase()) ? 0 : open;
+        };
+        const demandOf = (l, field) => ((byCount && Array.isArray(l.byRow) && l.byRow.length)
+            ? l.byRow.reduce((s, r) => s + N(r[field]) * leftOf(r.row), 0)
+            : perBoardOf(l, field) * open);
         (b.lines?.parts || []).forEach(l => {
             if (l.done) return;
             const key = `${l.billedId || l.code}|${l.finishCode || ''}`;
-            add(key, { code: l.code, billedId: l.billedId || '', partId: l.partId || '', finishCode: l.finishCode || '', name: l.name || '', perFoot: !!l.perFoot }, perBoardOf(l, 'qtyPerBoard') * open, perBoardOf(l, 'feetPerBoard') * open, b);
+            add(key, { code: l.code, billedId: l.billedId || '', partId: l.partId || '', finishCode: l.finishCode || '', name: l.name || '', perFoot: !!l.perFoot }, demandOf(l, 'qtyPerBoard'), demandOf(l, 'feetPerBoard'), b);
         });
         (b.lines?.chips || []).forEach(c => {
             if (c.done) return;

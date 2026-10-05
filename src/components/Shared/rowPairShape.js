@@ -27,6 +27,7 @@ import { findClientPriceRow } from './clientPricing.js';
 import { finishedCodeOf, isUnfinishedFinish } from './subFinish.js';
 import { isPoleCategory } from './poleCut.js';
 import { PAIR_TAG_LETTER } from './stagingKey.js';
+import { releaseLabelOf } from './rowRelease.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -288,8 +289,17 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
     const totalParts = pickOnlyDoc ? inHousePcs : (streams.totalParts || 1);
     const lineIdxs = (group.jobs || []).map(j => j.lineIdx).filter(i => Number.isInteger(i) && i >= 0);
     const soRef = String((so && (so.soId || so.id)) || '');
-    const label = `${rowLabel ? `${rowLabel} · ` : ''}${finish}`;
-    const itemName = `${rowLabel || `Order ${soRef}`} · ${finish} · ${small.length} small-part line${small.length === 1 ? '' : 's'}${custom.length ? ` + ${custom.length} custom` : ''}`;
+    // A RELEASE BY COUNT (Stuart 2026-10-05, Shared/rowRelease): this pair is SOME displays of its row — it says which
+    // ("displays 11–20 of 35") wherever it is named, and how many pieces of each order line it carries (`soLineQty`), so
+    // the gather at SO Pack brings in what the document holds, never the whole line.
+    const rel = group.release || null;
+    const relLabel = rel ? releaseLabelOf(rel) : '';
+    const relFields = rel ? {
+        releaseNo: N(rel.no), releaseFrom: N(rel.from), releaseTo: N(rel.to), releaseOf: N(rel.of), releaseLabel: relLabel,
+        soLineQty: (group.jobs || []).filter(j => Number.isInteger(j.lineIdx) && j.lineIdx >= 0).reduce((m, j) => ({ ...m, [j.lineIdx]: N(m[j.lineIdx]) + N(j.qty) }), {}),
+    } : {};
+    const label = `${rowLabel ? `${rowLabel} · ` : ''}${finish}${relLabel ? ` · ${relLabel}` : ''}`;
+    const itemName = `${rowLabel || `Order ${soRef}`} · ${finish}${relLabel ? ` · ${relLabel}` : ''} · ${small.length} small-part line${small.length === 1 ? '' : 's'}${custom.length ? ` + ${custom.length} custom` : ''}`;
     const salesHeader = {
         orderClass: 'ORDER_ENTRY', soAppId: so && so.id, soId: soRef, customerId: (so && so.customerId) || null, customer: cust,
         soAccepted: !!(so && so.nsInternalId), soLineIdxs: lineIdxs,
@@ -299,6 +309,7 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         // THE GROUP (2026-09-23): which row and which finish this pair is — every reader that
         // wants to show a row reads these two, never the door.
         rowKey: group.rowKey || '', rowLabel, finishGroup: finish, floorGroupKey: group.key,
+        ...relFields,
     };
     const finPayload = {
         id: woId, displayId: woId, woNum: woId,
@@ -308,6 +319,7 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         customerId: (so && so.customerId) || null, customerName: cust, customer: cust, clientName: cust,
         type: 'Mixed', itemName,
         rowKey: group.rowKey || '', rowLabel, finishGroup: finish,
+        ...relFields,
         recipe: finish, recipeLabel: null, recipeSource: 'lineCode',
         totalParts,
         ...(pickOnlyDoc ? { paintSize: null, paintSizes: null } : streams.fields),
@@ -363,8 +375,8 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         // still leads with the row and its finish — "Row 3 · S03 · 1-3/8" White Oak Rod" — so every row reads the same on
         // the shop floor (Eric 2026-10-02: the wood row alone was named by its item). With no row, the item names it.
         itemName: cutList.length === 1
-            ? (rowLabel ? `${rowLabel} · ${finish} · ${cutList[0].name}` : cutList[0].name)
-            : `${rowLabel ? `${rowLabel} · ` : ''}${finish} · ${cutList.filter(c => !c.rider).length} pole line${cutList.filter(c => !c.rider).length === 1 ? '' : 's'}${cutList.some(c => c.rider) ? ` + ${cutList.filter(c => c.rider).length} riding` : ''}`,
+            ? (rowLabel ? `${rowLabel} · ${finish}${relLabel ? ` · ${relLabel}` : ''} · ${cutList[0].name}` : cutList[0].name)
+            : `${rowLabel ? `${rowLabel} · ` : ''}${finish}${relLabel ? ` · ${relLabel}` : ''} · ${cutList.filter(c => !c.rider).length} pole line${cutList.filter(c => !c.rider).length === 1 ? '' : 's'}${cutList.some(c => c.rider) ? ` + ${cutList.filter(c => c.rider).length} riding` : ''}`,
         ...salesHeader,
         recipe: finish,
         qty: shopQty.qty, totalParts: shopQty.qty,

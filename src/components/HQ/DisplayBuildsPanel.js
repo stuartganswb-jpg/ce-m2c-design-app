@@ -37,8 +37,10 @@ import { hardDeleteWithLedger } from '../Shared/orderLifecycle';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, lineQtyEditOf, kitFinishEditOf, kitQtyEditOf, rodLineEditOf, rowUndoBlockersOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
+import { ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, lineQtyEditOf, kitFinishEditOf, kitQtyEditOf, rodLineEditOf, rowUndoBlockersOf, rowReleaseText, rowReleaseCountOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
+import { isReleaseByCount, releaseByCountPatch, releaseRowKeyOf, rowTargetOf, rowReleaseOf, nextRowReleaseOf, releaseRunOf, releaseLabelOf, releasesOf, stampWithoutRunOf, rowReleasePlanOf, ORDER_ROW_KEY } from '../Shared/rowRelease';
+import { soLineCodeOf, soCodeReleasedOf } from '../Shared/pickLines';
 import { finishedCodeOf } from '../Shared/subFinish';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' };
@@ -243,6 +245,11 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     // whole-order split and the automatic start stand down) and `finishAsAvailable` (rows release
     // alone). An order RTG ALREADY SPLIT is anchored for visibility only: nothing is written on it,
     // its rows read the whole-order documents, and it is never offered a Start.
+    // AN ORDER PUT ON THE ROW ROUTE FROM NOW ON IS RELEASED BY COUNT (Stuart 2026-10-05, Shared/rowRelease): its rows
+    // start for as many displays as are asked ("10 of 35"), its stocked lines follow each row's count at SO Pack. Only an
+    // order nothing has been started or gathered on — one already in motion keeps the whole-row rules it began under.
+    const countPatchFor = (so) => ((so && !isReleaseByCount(so) && !Object.keys(so.oeGen || {}).length && !Object.values(so.committedQty || {}).some(v => Number(v) > 0))
+        ? releaseByCountPatch(N(draft?.qty)) : {});
     const anchor = async (entry) => {
         const so = entry?.so;
         if (!so || !draft) return;
@@ -264,12 +271,13 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             const unnamed = src.filter(l => !rowOfLine(l)).length;
             text = `Anchor "${draft.name}" to sales order ${so.soId || so.id}?\n\n`
                 + (lines ? `${lines.length} line(s) will be written on the sales order from its CPQ breakdown, across ${rowsSeen.size} row(s)${unnamed ? ` — ${unnamed} name no row and will show as unassigned` : ''}.\n\n` : `Its ${src.length} existing line(s) are used as they are${unnamed ? ` — ${unnamed} name no row and will show as unassigned` : ''}.\n\n`)
-                + 'From then on this order\'s rows are started HERE, one at a time. RTG will not split it as a whole and will not auto-start it; every work order still lands on RTG under this order.';
+                + 'From then on this order\'s rows are started HERE, one at a time. RTG will not split it as a whole and will not auto-start it; every work order still lands on RTG under this order.'
+                + (Object.keys(countPatchFor(so)).length ? `\n\nIt is released BY COUNT: each row starts for as many of the ${N(draft.qty)} displays as you ask, and its stocked lines are offered to the warehouse for the displays released.` : '');
         }
         if (!window.confirm(text)) return;
         setBusy('Anchoring…');
         try {
-            if (!entry.whole) await updateDoc(doc(db, 'hq_sales_orders', so.id), displayAnchorPatch({ buildId: draft.id, lines, so }));
+            if (!entry.whole) await updateDoc(doc(db, 'hq_sales_orders', so.id), { ...displayAnchorPatch({ buildId: draft.id, lines, so }), ...countPatchFor(so) });
             const soAppIds = [...already, so.id];
             const b = { ...draft, soAppIds, soAppId: soAppIds[0], soNumber: draft.soNumber || so.soId || so.id, updatedAt: Date.now(), updatedBy: String(currentUser || '') };
             await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b, { merge: true });
@@ -323,7 +331,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             }
             // The retired split's own backorder records go with it (2026-09-27): each row records its own shortfalls
             // (OE_ROW) when it starts — a stale split record would sit on the Snapshot board after its row covered it.
-            await updateDoc(doc(db, 'hq_sales_orders', so.id), { ...displayAnchorPatch({ buildId: draft.id, lines, so }), backorderLines: (so.backorderLines || []).filter(r => r && r.source === 'OE_ROW') });
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), { ...displayAnchorPatch({ buildId: draft.id, lines, so }), ...countPatchFor(so), backorderLines: (so.backorderLines || []).filter(r => r && r.source === 'OE_ROW') });
             alert(`Retired: ${res.fin} finishing doc(s), ${res.shop} shop doc(s)${pkgClosed ? `, ${pkgClosed} packaging doc(s)` : ''} closed${res.rodCuts ? `, ${res.rodCuts} rod cut(s) cancelled` : ''}${(res.nsWritesCancelled || []).length ? `, ${res.nsWritesCancelled.length} queued NetSuite write(s) cancelled` : ''}${cancelled ? `, ${cancelled} plating demand(s) cancelled` : ''}${res.nsNeedsManualClose ? `.\n\n⚠ NetSuite work order ${res.ns} must be closed by hand — a task was raised.` : '.'}\n\n${so.soId || so.id} is now released by rows from here.`);
             await loadFloor(draft);
         } catch (e) { alert('Retire failed partway: ' + (e?.message || e) + '\n\nRead the floor again before doing anything else — some documents may already be closed.'); }
@@ -364,7 +372,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 pkgClosed++;
             }
             const { patch, clear } = reopenForRowsSoPatch({ so, buildId: draft.id, lines, by, now });
-            await updateDoc(doc(db, 'hq_sales_orders', so.id), { ...patch, ...Object.fromEntries(clear.map(k => [k, deleteField()])) });
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), { ...patch, ...countPatchFor(so), ...Object.fromEntries(clear.map(k => [k, deleteField()])) });
             alert(`⟲ ${so.soId || so.id} is open again, on the row route (${patch.status}). ${docs.length} whole-order document(s) marked retired${pkgClosed ? `, ${pkgClosed} pack card(s) closed` : ''}.\n\nIts rows read NOT STARTED — start them from here, one at a time.`);
             await loadFloor(draft);
         } catch (e) { alert('Reopen failed partway: ' + (e?.message || e) + '\n\nRead the floor again before doing anything else.'); }
@@ -747,6 +755,189 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         setStarting('');
     };
 
+    // ── ▶ START n OF m DISPLAYS OF A ROW (Stuart 2026-10-05, Shared/rowRelease) ─────────────────────────────────────────
+    // "we would like the ability to put say just 10pcs (full rows) of the 35pcs into motion." The row's count goes on the
+    // sales order FIRST (rowRelease.<ROW>), then the same generator runs: it raises, for each line, what that count calls
+    // for and has not yet been raised. `add` 0 runs the row again at the count it already has (a line named for a decision
+    // last time). Every line is read and confirmed at its quantity before anything is written; a line that does not divide
+    // evenly by the display stops a partial release. A release nothing came of (another session was starting it, NetSuite
+    // could not be read) is taken back, so the count never says more than was put in motion.
+    const [relN, setRelN] = useState({});
+    const rowKeyFor = (label) => (label === ORDER_ROW_LABEL ? ORDER_ROW_KEY : rowKeyOf(label));
+    const startRowByCount = async (label, state, add) => {
+        if (!draft || !floor) return;
+        const of = Math.floor(N(draft.qty));
+        const key = rowKeyFor(label);
+        if (!(of > 0)) return alert('The build does not say how many displays it is — set the quantity and save first.');
+        setStarting(label); setRunLog([]);
+        const log = (msg, level = 'info') => setRunLog(l => [...l, { msg, level }]);
+        try {
+            const targets = [];
+            for (const s of (floor.sos || []).filter(x => !x.whole && isReleaseByCount(x.so))) {
+                const fresh = await getDoc(doc(db, 'hq_sales_orders', s.so.id));
+                if (!fresh.exists()) continue;
+                const soNow = { id: fresh.id, ...fresh.data() };
+                if ((soNow.lines || []).some(l => l && releaseRowKeyOf(l) === key)) targets.push(soNow);
+            }
+            if (!targets.length) { log(`${label}: no sales order released by count carries this row.`, 'warn'); return; }
+            const from = Math.max(0, ...targets.map(so => rowTargetOf(so, key)));
+            const to = Math.min(of, from + Math.max(0, Math.floor(N(add))));
+            if (N(add) > 0 && to === from) { alert(`Every display of ${label} is already released (${from} of ${of}).`); return; }
+            const plans = targets.map(so => ({ so, plan: rowReleasePlanOf({ so, rowKey: key, target: to, of }) }));
+            const bad = plans.flatMap(x => x.plan.why.map(w => `${x.so.soId || x.so.id} · ${w}`));
+            if (bad.length) { alert(`Cannot start ${label} for ${to} of ${of}:\n\n${bad.map(b => `  • ${b}`).join('\n')}\n\nA partial release needs every line of the row to divide evenly by the display. Release every display of the row (${of - from} more), or correct the line's quantity (✎).`); return; }
+            // 10.5's own reading says which lines are shelf picks no start ever raises: they follow the count alone.
+            const stocked = new Set(state.lines.filter(l => l.key === 'STOCKED' && /^stocked —/.test(String(l.text || ''))).map(l => `${l.soAppId}|${l.lineIdx}`));
+            const textLines = plans.flatMap(x => x.plan.lines.filter(l => !l.fee).map(l => {
+                const isStocked = stocked.has(`${x.so.id}|${l.lineIdx}`);
+                return { ...l, stocked: isStocked, released: isStocked ? l.prev : l.released, now: isStocked ? Math.max(0, l.want - l.prev) : l.now, soId: targets.length > 1 ? (x.so.soId || x.so.id) : '' };
+            }));
+            if (!window.confirm(rowReleaseText({ label, from, to, of, lines: textLines }))) return;
+            const by = String(currentUser || '10.5');
+            const now = Date.now();
+            const before = {};
+            for (const so of targets) {
+                before[so.id] = rowReleaseOf(so, key);
+                await updateDoc(doc(db, 'hq_sales_orders', so.id), { [`rowRelease.${key}`]: nextRowReleaseOf({ so, rowKey: key, add: to - rowTargetOf(so, key), of, by, now }), releaseOf: of });
+            }
+            if (!libraryRef.current) {
+                log('Reading the Master Library…');
+                const snap = await getDocs(collection(db, 'Approved_Designs'));
+                libraryRef.current = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            }
+            const inventory = oeInventoryOf(libraryRef.current, activeBrand);
+            const onlyThese = (line) => !!line && releaseRowKeyOf(line) === key;
+            let ranTotal = 0, reviewTotal = 0, kept = 0;
+            for (const so of targets) {
+                const fresh = await getDoc(doc(db, 'hq_sales_orders', so.id));
+                const soNow = { id: fresh.id, ...fresh.data() };
+                const run = releaseRunOf(soNow, key);
+                log(`${label} · ${soNow.soId || soNow.id} — ${to} of ${of}${to > from ? ` (${releaseLabelOf(run)})` : ''}:`);
+                let res = null, threw = '';
+                try {
+                    res = await runOeAuto({
+                        so: soNow, brand: activeBrand, user: currentUser || '10.5', inventory, log,
+                        finishes: [...(finishes.inHouse || []), ...(finishes.outsourced || [])],
+                        only: onlyThese, slot: `displayRows.${key}`, force: true,
+                    });
+                } catch (e) { threw = String(e?.message || e); }
+                const nothing = threw || (res && (res.state === 'SKIPPED' || res.state === 'FAILED'));
+                if (nothing && to > from) {
+                    // Did ANY line take this run before it stopped? Then the release stands (and is run again); else it is taken back.
+                    const after = await getDoc(doc(db, 'hq_sales_orders', so.id));
+                    const data = after.exists() ? after.data() : {};
+                    const took = Object.entries(data.oeGen || {}).some(([i, g]) => g && (data.lines || [])[i] && releaseRowKeyOf(data.lines[i]) === key && releasesOf(g).some(r => Number(r.no) === Number(run.no)));
+                    if (!took) {
+                        await updateDoc(doc(db, 'hq_sales_orders', so.id), { [`rowRelease.${key}`]: before[so.id] || deleteField() });
+                        log(`   ${threw ? `failed — ${threw}` : res.state === 'SKIPPED' ? 'another session is already starting this row' : 'NetSuite could not be read'} — the release was TAKEN BACK (${from} of ${of} stands). Nothing was started; try again.`, 'error');
+                        continue;
+                    }
+                }
+                kept++;
+                if (threw) log(`   stopped partway — ${threw}. What was raised stands; press ▶ Try again for the rest.`, 'error');
+                else if (res.state === 'SKIPPED') log('   another session is already starting it — nothing done.', 'warn');
+                else log(`   ${res.ran} started · ${res.review.length} line(s) need a decision.`, res.review.length ? 'warn' : 'success');
+                ranTotal += res ? res.ran : 0; reviewTotal += res ? res.review.length : 0;
+            }
+            // A sales order of this build from before release counts starts its lines of the row whole, as it always has.
+            for (const s of (floor.sos || []).filter(x => !x.whole && !isReleaseByCount(x.so) && state.lines.some(l => l.soAppId === x.so.id && (l.key === 'NONE' || l.key === 'REVIEW')))) {
+                const fresh = await getDoc(doc(db, 'hq_sales_orders', s.so.id));
+                const soNow = { id: fresh.id, ...fresh.data() };
+                log(`${label} · ${soNow.soId || soNow.id} (released whole — on the row route before release counts):`);
+                const res = await runOeAuto({ so: soNow, brand: activeBrand, user: currentUser || '10.5', inventory, log, finishes: [...(finishes.inHouse || []), ...(finishes.outsourced || [])], only: (line) => !!line && releaseRowKeyOf(line) === key, slot: `displayRows.${key}`, force: true });
+                ranTotal += res.ran; reviewTotal += res.review.length;
+            }
+            const final = kept ? to : from;
+            if (final > 0 || ranTotal > 0) {
+                const rowsStarted = [...new Set([...(draft.rowsStarted || []), label])];
+                const b = { ...draft, rowsStarted, rowReleased: { ...(draft.rowReleased || {}), [key]: final }, status: draft.status === 'PLANNED' ? 'IN_PRODUCTION' : draft.status, updatedAt: Date.now(), updatedBy: String(currentUser || '') };
+                await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b, { merge: true });
+                await writeDemand([...builds.filter(x => x.id !== b.id), b]);
+                setDraft(b); setDirty(false);
+            }
+            setRelN(m => ({ ...m, [label]: '' }));
+            log(`${label}: ${final} of ${of} displays released — ${ranTotal} line(s) started${reviewTotal ? ` · ${reviewTotal} need a decision` : ''}.`, reviewTotal ? 'warn' : 'success');
+            await loadFloor(draft);
+        } catch (e) { log(`${label}: failed — ${e?.message || e}`, 'error'); }
+        finally { setStarting(''); }
+    };
+
+    // ↩ UNDO THE LAST RELEASE of a row — only while nothing on it has moved (the same test ↩ Undo row start uses), and
+    // only while nothing gathered into the order's bin would be left without a release to belong to. Its documents leave
+    // through the ledger, each line drops that release, and the row's count goes back to what it was before it.
+    const undoLastRelease = async (label) => {
+        if (!draft || !floor) return;
+        const key = rowKeyFor(label);
+        const by = String(currentUser || '10.5');
+        const ctx = { db, doc, updateDoc, getDoc, getDocs, query, collection, where, deleteDoc, setDoc };
+        setBusy('Checking the release…');
+        try {
+            const plan = [];
+            for (const s of (floor.sos || []).filter(x => !x.whole && isReleaseByCount(x.so))) {
+                const fresh = await getDoc(doc(db, 'hq_sales_orders', s.so.id));
+                if (!fresh.exists()) continue;
+                const so = { id: fresh.id, ...fresh.data() };
+                const rr = rowReleaseOf(so, key);
+                if (!rr || !(rowTargetOf(so, key) > 0)) continue;
+                const runs = Array.isArray(rr.log) ? rr.log : [];
+                const last = runs[runs.length - 1] || { no: 1, from: 0, to: rowTargetOf(so, key) };
+                const idxs = (so.lines || []).map((l, i) => i).filter(i => so.lines[i] && releaseRowKeyOf(so.lines[i]) === key);
+                const hit = idxs.filter(i => releasesOf((so.oeGen || {})[i]).some(r => Number(r.no) === Number(last.no)));
+                const ids = [...new Set(hit.flatMap(i => releasesOf(so.oeGen[i]).filter(r => Number(r.no) === Number(last.no) && String(r.kind) !== 'STOCK').flatMap(r => r.ids || [])))];
+                const hqs = [], fins = [], shops = [];
+                for (const id of ids) {
+                    const h = await getDoc(doc(db, 'hq_work_orders', id)); if (h.exists()) hqs.push({ id: h.id, ...h.data() });
+                    const f = await getDoc(doc(db, 'fin_workorders', id)); if (f.exists()) fins.push({ id: f.id, ...f.data() });
+                    const sh = await getDoc(doc(db, 'shop_custom_orders', `SHOP-${id}`)); if (sh.exists()) shops.push({ id: sh.id, ...sh.data() });
+                }
+                const oeGenAfter = { ...(so.oeGen || {}) };
+                hit.forEach(i => { const nx = stampWithoutRunOf(so.oeGen[i], last.no); if (nx) oeGenAfter[i] = nx; else delete oeGenAfter[i]; });
+                const rrAfter = { ...rr, boards: Math.max(0, Math.floor(N(last.from))), log: runs.slice(0, -1) };
+                const after = { ...so, oeGen: oeGenAfter, rowRelease: { ...(so.rowRelease || {}), [key]: rrAfter } };
+                // Nothing in the order's bin (or already shipped) may be left without a release to belong to.
+                const gathered = [...new Set(idxs.map(i => soLineCodeOf(so.lines[i])).filter(Boolean))].map(c => {
+                    const inEver = N((so.committedQty || {})[c]) + N((so.shippedQty || {})[c]);
+                    const stay = soCodeReleasedOf(after, c).total;
+                    return inEver > stay ? `${c}: ${inEver} in the order's bin or shipped — only ${stay} would stay released; release them at SO Pack first` : '';
+                }).filter(Boolean);
+                plan.push({ so, rr, last, hit, hqs, fins, shops, oeGenAfter, rrAfter, gathered, idxs });
+            }
+            setBusy('');
+            if (!plan.length) return alert(`${label} has no release to undo.`);
+            const blockers = [...new Set(plan.flatMap(x => [...rowUndoBlockersOf({ hqs: x.hqs, fins: x.fins, shops: x.shops }), ...x.gathered]))];
+            const span = releaseLabelOf({ from: plan[0].last.from, to: plan[0].last.to, of: N(draft.qty) });
+            if (blockers.length) return alert(`Cannot undo the last release of ${label} (${span}) — work has moved:\n\n${blockers.map(b => `  • ${b}`).join('\n')}\n\nClose or finish it on RTG, where that work is visible.`);
+            const docs = plan.flatMap(x => [...x.hqs.map(d => `hq ${d.id}`), ...x.fins.map(d => `floor ${d.id}`), ...x.shops.map(d => `shop ${d.id}`)]);
+            if (!window.confirm(`↩ Undo the last release of ${label} — ${span}?\n\nNothing on it has moved. These leave (recorded in the deletion ledger):\n${docs.map(d => `  • ${d}`).join('\n') || '  • (no documents — shelf picks only)'}\n\n${label} goes back to ${Math.floor(N(plan[0].last.from))} of ${N(draft.qty)} released.`)) return;
+            setBusy('Undoing the release…');
+            const reason = `${label}: ${span} taken back (10.5 ↩ Undo last release)`;
+            let final = 0;
+            for (const x of plan) {
+                for (const d of x.fins) await hardDeleteWithLedger(ctx, { collection: 'fin_workorders', docId: d.id, record: d, kind: 'fin_workorder', by, from: '10.5', reason });
+                for (const d of x.shops) await hardDeleteWithLedger(ctx, { collection: 'shop_custom_orders', docId: d.id, record: d, kind: 'shop_custom_order', by, from: '10.5', reason });
+                for (const d of x.hqs) await hardDeleteWithLedger(ctx, { collection: 'hq_work_orders', docId: d.id, record: d, kind: 'hq_work_order', by, from: '10.5', reason });
+                const patch = {};
+                x.hit.forEach(i => { patch[`oeGen.${i}`] = x.oeGenAfter[i] || deleteField(); });
+                // A line this row leaves with nothing raised drops the shortfall record its start wrote (OE_ROW).
+                const bare = x.idxs.filter(i => !x.oeGenAfter[i]);
+                const boLeft = (x.so.backorderLines || []).filter(r => !(r && r.source === 'OE_ROW' && bare.includes(r.lineIndex)));
+                if (boLeft.length !== (x.so.backorderLines || []).length) patch.backorderLines = boLeft;
+                patch[`rowRelease.${key}`] = (x.rrAfter.boards > 0 || x.rrAfter.log.length) ? x.rrAfter : deleteField();
+                patch[`displayRows.${key}`] = deleteField();
+                await updateDoc(doc(db, 'hq_sales_orders', x.so.id), patch);
+                final = Math.max(final, x.rrAfter.boards);
+            }
+            const rowReleased = { ...(draft.rowReleased || {}), [key]: final };
+            const b = { ...draft, rowReleased, rowsStarted: final > 0 ? (draft.rowsStarted || []) : (draft.rowsStarted || []).filter(r => r !== label), updatedAt: Date.now(), updatedBy: by };
+            await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b, { merge: true });
+            await writeDemand([...builds.filter(y => y.id !== b.id), b]);
+            setDraft(b); setDirty(false);
+            alert(`${label}: ${span} taken back — ${docs.length} document(s) removed through the ledger. ${final} of ${N(draft.qty)} released.`);
+            await loadFloor(draft);
+        } catch (e) { alert('Could not undo the release: ' + (e?.message || e)); }
+        setBusy('');
+    };
+
     // The display's own row order, so the panel reads top to bottom as the board does.
     const linesOf = (s) => (s.rowLines || s.so.lines || []);
     const rowOrder = useMemo(() => {
@@ -772,8 +963,10 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             un.forEach(e => unassigned.push({ ...e, soAppId: s.so.id, soId: s.so.soId || s.so.id, whole: !!s.whole }));
         });
         const labels = [...rowOrder, ...(byRow[ORDER_ROW_LABEL].length ? [ORDER_ROW_LABEL] : [])];
-        return { rows: labels.map(label => ({ label, state: rowStateOf({ entries: byRow[label] }) })), unassigned };
-    }, [anchored, floor, rowOrder]); // eslint-disable-line react-hooks/exhaustive-deps
+        // A row of an order released by count carries its count: how many displays are in motion, of how many.
+        const countOrders = (floor.sos || []).filter(s => !s.whole).map(s => ({ ...s.so, lines: linesOf(s) }));
+        return { rows: labels.map(label => ({ label, state: rowStateOf({ entries: byRow[label] }), count: rowReleaseCountOf({ orders: countOrders, rowKey: rowKeyFor(label), of: N(draft?.qty) }) })), unassigned };
+    }, [anchored, floor, rowOrder, draft?.qty]); // eslint-disable-line react-hooks/exhaustive-deps
     const anyAccepted = (floor?.sos || []).some(s => !s.whole && s.so.nsInternalId);
     // The plater's own word for a part line, from its shipments — by the code's base, since the
     // shipment names the core going out and the plated code coming back.
@@ -958,14 +1151,39 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead><tr>{['Row', 'Status', 'Lines', '', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
                         <tbody>
-                            {rowsView.rows.map(({ label, state }) => (
+                            {rowsView.rows.map(({ label, state, count }) => (
                                 <React.Fragment key={label}>
                                     <tr>
                                         <td style={{ ...td, fontFamily: 'var(--serif)', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{label}</td>
-                                        <td style={{ ...td, ...mono, color: TONE[ROW_TONE[state.key]] || 'var(--ink)', fontWeight: 600 }}>{state.text}</td>
+                                        <td style={{ ...td, ...mono, color: TONE[ROW_TONE[state.key]] || 'var(--ink)', fontWeight: 600 }}>{count.byCount ? `${count.released} of ${count.of} released${count.released > 0 ? ` · ${state.text}` : ''}` : state.text}</td>
                                         <td style={{ ...td, fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{state.lines.length} line(s) · {state.started} started · {state.open} to start{state.stocked ? ` · ${state.stocked} stocked` : ''}</td>
                                         <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                                            {state.open > 0 && (
+                                            {/* RELEASED BY COUNT (Shared/rowRelease): start as many of the remaining displays as asked. */}
+                                            {count.byCount && count.left > 0 && (() => {
+                                                const typed = relN[label];
+                                                const n = typed === undefined || typed === '' ? count.left : Math.max(1, Math.min(count.left, Math.floor(N(typed)) || 1));
+                                                const off = !!starting || !!busy || dirty || !anyAccepted;
+                                                return (<>
+                                                    <input type="number" min="1" max={count.left} value={typed === undefined || typed === '' ? count.left : typed}
+                                                        onChange={e => setRelN(m => ({ ...m, [label]: e.target.value }))} disabled={off}
+                                                        title={`How many of the ${count.left} display(s) of ${label} still unreleased to put in motion now`}
+                                                        style={{ ...inp, width: '58px', padding: '4px 6px', marginRight: '4px' }} />
+                                                    <span style={{ fontSize: '0.75rem', color: 'var(--ink-soft)', marginRight: '6px' }}>of {count.left} left</span>
+                                                    <button onClick={() => startRowByCount(label, state, n)} disabled={off}
+                                                        style={btn(true, { padding: '5px 12px', opacity: off ? .5 : 1 })}
+                                                        title={dirty ? 'Save the order first' : !anyAccepted ? 'Waits for NetSuite to accept the sales order' : `Start ${n} more display(s) of ${label} — displays ${count.released + 1}${n > 1 ? `–${count.released + n}` : ''} of ${count.of}`}>
+                                                        {starting === label ? '…' : `▶ Start ${n}`}
+                                                    </button>
+                                                </>);
+                                            })()}
+                                            {count.byCount && count.released > 0 && state.open > 0 && (
+                                                <button onClick={() => startRowByCount(label, state, 0)} disabled={!!starting || !!busy || dirty || !anyAccepted}
+                                                    style={btn(count.left === 0, { padding: '5px 12px', marginLeft: count.left > 0 ? '6px' : 0, opacity: (!!starting || dirty || !anyAccepted) ? .5 : 1 })}
+                                                    title={`Run ${label} again for the ${count.released} display(s) already released — ${state.open} line(s) are still to start`}>
+                                                    {starting === label ? '…' : '▶ Try again'}
+                                                </button>
+                                            )}
+                                            {!count.byCount && state.open > 0 && (
                                                 <button onClick={() => startRow(label, state)} disabled={!!starting || !!busy || dirty || !anyAccepted}
                                                     style={btn(true, { padding: '5px 12px', opacity: (!!starting || dirty || !anyAccepted) ? .5 : 1 })}
                                                     title={dirty ? 'Save the order first' : !anyAccepted ? 'Waits for NetSuite to accept the sales order' : `Start the ${state.open} line(s) of ${label} not yet raised`}>
@@ -974,7 +1192,12 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                             )}
                                         </td>
                                         <td style={{ ...td, textAlign: 'right' }}>
-                                            {state.lines.some(l => ['FLOOR', 'PARKED', 'STOCKED'].includes(l.key) && !/stocked — picked by the warehouse, not started here/.test(l.text)) && (
+                                            {count.byCount && count.released > 0 && (
+                                                <button onClick={() => undoLastRelease(label)} disabled={!!busy || !!starting}
+                                                    style={btn(false, { padding: '5px 10px', marginRight: '6px', color: '#b02d20', borderColor: '#b02d20' })}
+                                                    title="Take the row's latest release back — only while nothing on its documents has moved and nothing of it is gathered.">↩ Undo last release</button>
+                                            )}
+                                            {!count.byCount && state.lines.some(l => ['FLOOR', 'PARKED', 'STOCKED'].includes(l.key) && !/stocked — picked by the warehouse, not started here/.test(l.text)) && (
                                                 <button onClick={() => undoRowStart(label, state)} disabled={!!busy || !!starting}
                                                     style={btn(false, { padding: '5px 10px', marginRight: '6px', color: '#b02d20', borderColor: '#b02d20' })}
                                                     title="Put this row back to NOT STARTED while nothing on its documents has moved, so ▶ Start row writes it under today's rules.">↩ Undo row start</button>

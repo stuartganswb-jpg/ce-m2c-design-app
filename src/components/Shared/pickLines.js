@@ -2,6 +2,7 @@ import { committedQtyOf } from './committedBins.js';
 import { isKitLine, isOffOrderLine } from './itemKit.js';
 import { parseKitCode } from './kitCode.js';
 import { finishedCodeOf } from './subFinish.js';
+import { isReleaseByCount, releasedByKindOf, lineTargetOf } from './rowRelease.js';
 // ══ ONE READER FOR AN ORDER'S LINES ═══════════════════════════════════════════════════════════
 //
 // Brief D · D7. The warehouse takes work from two doors and they speak different dialects:
@@ -191,12 +192,80 @@ export const soCodeNeedOf = (so, code, isFeeCode = null) => {
     const shipped = Number(((so && so.shippedQty) || {})[c]) || 0;
     return Math.max(0, ordered - shipped);
 };
+// ── RELEASED BY COUNT: WHAT IS IN MOTION, NOT THE WHOLE ORDER (Stuart 2026-10-05, Shared/rowRelease) ──────────────────
+// An order released by count puts only some displays of a row in motion at a time. The WMS then asks, per line, what has
+// been RELEASED of it and where those pieces come from:
+//   · a line a start raised — its releases: a shelf pick (STOCK) or a floor document (WO);
+//   · a stocked line no start ever raises — its row's count ("1. release count"): displays released × pieces per display;
+//   · a made line not yet started — nothing.
+// An order NOT released by count (every order before 2026-10-05) is released whole: every line, all of it.
+// @returns { shelf, floor, total }
+export const soLineReleasedOf = (so, l, idx, isFeeCode = null) => {
+    if (!l || !soLineCodeOf(l) || soLineIsFee(so, l, idx, isFeeCode)) return { shelf: 0, floor: 0, total: 0 };
+    const q = Number(l.qty) || 0;
+    const g = so && so.oeGen && so.oeGen[idx];
+    if (!isReleaseByCount(so)) return soLineIsShelfPick(so, l, idx) ? { shelf: q, floor: 0, total: q } : { shelf: 0, floor: q, total: q };
+    if (g) return releasedByKindOf(g, q);
+    if (!soLineIsShelfPick(so, l, idx)) return { shelf: 0, floor: 0, total: 0 };
+    const t = lineTargetOf(so, l);
+    const n = t.ok ? t.qty : Math.floor(q * (Number(t.target) || 0) / (Number(t.of) || 1));
+    return { shelf: n, floor: 0, total: n };
+};
+/** Everything released of an ITEM across its lines: { shelf, floor, total }. */
+export const soCodeReleasedOf = (so, code, isFeeCode = null) => {
+    const c = up(code);
+    return ((so && so.lines) || []).reduce((a, l, i) => {
+        if (!c || soLineCodeOf(l) !== c) return a;
+        const r = soLineReleasedOf(so, l, i, isFeeCode);
+        return { shelf: a.shelf + r.shelf, floor: a.floor + r.floor, total: a.total + r.total };
+    }, { shelf: 0, floor: 0, total: 0 });
+};
+/** What the order's bin should hold of an item NOW: what is released less what has shipped (the whole need on an order released whole). */
+export const soCodeReleasedNeedOf = (so, code, isFeeCode = null) => {
+    if (!isReleaseByCount(so)) return soCodeNeedOf(so, code, isFeeCode);
+    const shipped = Number(((so && so.shippedQty) || {})[up(code)]) || 0;
+    return Math.max(0, soCodeReleasedOf(so, code, isFeeCode).total - shipped);
+};
+/**
+ * Pieces of an item still to PICK FROM THE SHELF on an order released by count. An item that only ever comes off the shelf:
+ * what is released less what has reached the bin (in it now, or shipped). An item that also comes off a floor (a stock
+ * colour picked for one release and painted for the next): the shelf's share less what the shelf picks have already
+ * moved (`shelfPicked`, counted by the pick), never more than is still missing in all.
+ */
+export const soShelfToPickOf = (so, code, isFeeCode = null) => {
+    const c = up(code);
+    const rel = soCodeReleasedOf(so, c, isFeeCode);
+    const inEver = committedQtyOf(so, c) + (Number(((so && so.shippedQty) || {})[c]) || 0);
+    if (!(rel.shelf > 0)) return 0;
+    if (!(rel.floor > 0)) return Math.max(0, rel.shelf - inEver);
+    const picked = Number(((so && so.shelfPicked) || {})[c]) || 0;
+    return Math.max(0, Math.min(rel.shelf - picked, rel.total - inEver));
+};
 export const soPackLineStateOf = ({ so, line, idx, stat = null, isFeeCode = null }) => {
     const c = soLineCodeOf(line);
     const ordered = Number(line && line.qty) || 0;
     const committed = committedQtyOf(so, c);
     if (isOffOrderLine(line)) return { code: c, ordered: 0, need: 0, committed, avail: null, held: 0, prod: 0, covered: 0, state: 'OFF THE ORDER', fee: true };
     if (soLineIsFee(so, line, idx, isFeeCode)) return { code: c, ordered, committed, avail: null, held: 0, prod: 0, covered: 0, state: 'FEE', fee: true };
+    if (isReleaseByCount(so)) {
+        // The line against what is RELEASED of its item — nothing released reads NOT RELEASED, never short.
+        const released = soLineReleasedOf(so, line, idx, isFeeCode).total;
+        const rel = soCodeReleasedOf(so, c, isFeeCode);
+        const need = soCodeReleasedNeedOf(so, c, isFeeCode);
+        const base = { code: c, ordered, need, released, committed, byCount: true };
+        if (!(rel.total > 0)) return { ...base, avail: null, held: 0, prod: 0, covered: committed, state: 'NOT RELEASED', fromFloor: !soLineIsShelfPick(so, line, idx) };
+        if (!soLineIsShelfPick(so, line, idx)) return { ...base, avail: null, held: 0, prod: 0, covered: committed, state: committed >= need ? 'GATHERED' : 'FROM THE FLOOR', fromFloor: true };
+        const free = stat && stat.avail != null ? stat.avail : null;
+        const held = stat ? (Number(stat.held) || 0) : 0;
+        const avail = free != null ? Math.max(0, free) + held : null;
+        const prod = stat ? (Number(stat.prod) || 0) : 0;
+        const covered = Math.max(committed, held) + (free != null ? Math.max(0, free) : 0);
+        const state = committed >= need ? 'GATHERED'
+            : covered >= need ? 'READY'
+                : (covered + prod) >= need ? 'IN PRODUCTION'
+                    : avail == null ? 'UNKNOWN' : 'SHORT';
+        return { ...base, avail, held, prod, covered, state };
+    }
     const need = Math.max(ordered, soCodeNeedOf(so, c, isFeeCode));
     if (!soLineIsShelfPick(so, line, idx)) {
         return { code: c, ordered, need, committed, avail: null, held: 0, prod: 0, covered: committed, state: committed >= need && need > 0 ? 'GATHERED' : 'FROM THE FLOOR', fromFloor: true };
@@ -232,7 +301,10 @@ export const gatherPlanOf = ({ job, order, lineIdxs = null, isFeeCode = null }) 
         .reduce((acc, x) => {
             // Each line adds its own pieces, up to what the ORDER still needs of the item (two lines of one item on this
             // document add both; a line another document already filled adds nothing).
-            const code = soLineCodeOf(x.l), qty = Number(x.l.qty) || 0, need = soCodeNeedOf(order, code, isFeeCode) || qty;
+            // A DOCUMENT OF A RELEASE CARRIES ONLY ITS OWN PIECES (Shared/rowRelease, 2026-10-05): it says how many of
+            // each line (`soLineQty`), and that — not the whole line — is what it brings into the order's bin.
+            const carried = job && job.soLineQty && job.soLineQty[x.i] != null ? (Number(job.soLineQty[x.i]) || 0) : null;
+            const code = soLineCodeOf(x.l), qty = carried != null ? carried : (Number(x.l.qty) || 0), need = soCodeNeedOf(order, code, isFeeCode) || qty;
             if (acc.have[code] == null) acc.have[code] = committedQtyOf(order, code);
             const add = Math.max(0, Math.min(qty, need - acc.have[code]));
             acc.have[code] += add;

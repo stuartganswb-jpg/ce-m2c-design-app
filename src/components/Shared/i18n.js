@@ -92,6 +92,11 @@ const ES = {
     'SHORT': 'FALTANTE',
     'UNKNOWN': 'SIN DATO',
     'from the floor': 'llega del taller',
+    // released by count (Shared/rowRelease, 2026-10-05)
+    'not released': 'no liberado',
+    'nothing released yet — rows start on 10.5': 'nada liberado todavía — las filas se inician en 10.5',
+    'RELEASED PIECES ALL IN': 'PIEZAS LIBERADAS, TODAS EN',
+    'complete display(s) in the bin — can ship now': 'exhibidor(es) completo(s) en el bin — se pueden enviar',
     'BIN': 'UBIC',
     'Release': 'Liberar',
     'Configured orders in production': 'Órdenes configuradas en producción',

@@ -7,6 +7,7 @@ import { executeMakeupActions } from './finishedRunPrecheck';
 import { receiptGateFields, ParkRefusal } from './workOrderCreate';
 import { materialRowsOf, materialStampOf } from './materialGrid.js';
 import { floorGroupsOf, splitGroupJobs, pairShapeOf, pairIdsOf } from './rowPairShape.js';
+import { releaseLabelOf } from './rowRelease.js';
 export { floorGroupsOf, splitGroupJobs, pairShapeOf, pairIdsOf };
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -73,7 +74,7 @@ export const parkRowPair = async ({ group, so, brand, user = '', inventory = [],
         poleChoice: (small.find(j => j.poleChoice) || {}).poleChoice || null,
         backOrder, shopWoIds: execRes ? execRes.shopWoIds : [], unitsKnown: !(group.jobs || []).some(j => j.unitsKnown === false),
     }), now);
-    const note = `Order Entry ${soRef} · ${(so && so.customer) || ''} · ${group.rowLabel ? `${group.rowLabel} · ` : ''}${group.finish}${so && so.productionNotes ? ` · 📝 ${so.productionNotes}` : ''}`;
+    const note = `Order Entry ${soRef} · ${(so && so.customer) || ''} · ${group.rowLabel ? `${group.rowLabel} · ` : ''}${group.finish}${group.release ? ` · ${releaseLabelOf(group.release)}` : ''}${so && so.productionNotes ? ` · 📝 ${so.productionNotes}` : ''}`;
     const shape = pairShapeOf({ group, so, brand, createdBy: user, now, inventory, gate: fullGate, materialStamp, woId, shopWoId, tasks: makeFullTasks(), note, custKeys });
     const hq = withItemCode({ ...shape.hq, finPayload: withItemCode(shape.finPayload) });
     await setDoc(doc(db, 'hq_work_orders', woId), hq, { merge: true });

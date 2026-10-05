@@ -10,7 +10,8 @@
 //            (a NetSuite bin transfer, shelf bin → the order's bin, and the order's count);
 //   PACK     every piece of every line is in the order's bin — the card shows only what is in it, line by line.
 // The rules are here; PickPackApp posts the transfers. Pure. scripts/orderBinPick.test.mjs.
-import { soLineCodeOf, soLineIsFee, soLineIsShelfPick, soCodeNeedOf, soPackLineStateOf } from './pickLines.js';
+import { soLineCodeOf, soLineIsFee, soLineIsShelfPick, soCodeNeedOf, soPackLineStateOf, soLineReleasedOf, soCodeReleasedOf, soCodeReleasedNeedOf, soShelfToPickOf } from './pickLines.js';
+import { isReleaseByCount } from './rowRelease.js';
 import { committedQtyOf } from './committedBins.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -30,7 +31,9 @@ export const lineBinShareOf = (so, idx, isFeeCode = null) => {
     let left = committedQtyOf(so, code);
     for (const x of lines) {
         if (soLineCodeOf(x.l) !== code) continue;
-        const take = Math.max(0, Math.min(N(x.l.qty), left));
+        // A line of an order released by count holds no more than has been released of it (Shared/rowRelease).
+        const cap = isReleaseByCount(so) ? soLineReleasedOf(so, x.l, x.idx, isFeeCode).total : N(x.l.qty);
+        const take = Math.max(0, Math.min(cap, left));
         if (x.idx === idx) return take;
         left -= take;
     }
@@ -46,6 +49,7 @@ export const soGatherStageOf = ({ so, statOf = () => null, isFeeCode = null } = 
     if (!lines.length) return { stage: 'WAITING', waiting: [], toPick: [] };
     // EVERYTHING HAS SHIPPED (a display order's last display gone): nothing is needed in the bin any more.
     if (lines.every(({ l }) => soCodeNeedOf(so, soLineCodeOf(l), isFeeCode) === 0) && Object.keys((so && so.shippedQty) || {}).length) return { stage: 'SHIPPED', waiting: [], toPick: [] };
+    if (isReleaseByCount(so)) return releasedStageOf({ so, statOf, isFeeCode, lines });
     const waiting = new Set(), toPick = new Set();
     lines.forEach(({ l, idx }) => {
         const code = soLineCodeOf(l);
@@ -56,6 +60,58 @@ export const soGatherStageOf = ({ so, statOf = () => null, isFeeCode = null } = 
     });
     const stage = waiting.size ? 'WAITING' : (toPick.size ? 'PICK' : 'PACK');
     return { stage, waiting: [...waiting], toPick: [...toPick] };
+};
+
+// ── THE SAME THREE STAGES, AGAINST WHAT IS RELEASED (Stuart 2026-10-05, Shared/rowRelease) ───────────────────────────
+// An order released by count is asked only for the displays in motion: an item nothing has been released of is neither
+// waited for nor picked. WAITING = a released piece is still coming (a floor document not gathered, or the shelf cannot
+// cover a released pick); PICK = the shelf covers what is released and not yet in the bin; PACK = every released piece
+// is in the bin. `partial` says more of the order is still to release; `anyReleased` false = nothing is in motion yet.
+const releasedStageOf = ({ so, statOf, isFeeCode, lines }) => {
+    const waiting = new Set(), toPick = new Set();
+    let anyReleased = false, partial = false;
+    [...new Set(lines.map(({ l }) => soLineCodeOf(l)))].forEach(code => {
+        const rel = soCodeReleasedOf(so, code, isFeeCode);
+        const whole = lines.filter(({ l }) => soLineCodeOf(l) === code).reduce((a, { l }) => a + N(l.qty), 0);
+        if (rel.total < whole) partial = true;
+        if (!(rel.total > 0)) return;
+        anyReleased = true;
+        const have = committedQtyOf(so, code), need = soCodeReleasedNeedOf(so, code, isFeeCode);
+        const out = Math.max(0, need - have);
+        if (!out) return;
+        const pick = Math.min(soShelfToPickOf(so, code, isFeeCode), out);
+        if (out - pick > 0) waiting.add(code);          // the rest comes off a floor
+        if (pick > 0) {
+            const st = statOf(code);
+            const free = st && st.avail != null ? Math.max(0, N(st.avail)) : null;
+            const covered = Math.max(have, st ? N(st.held) : 0) + (free != null ? free : 0);   // the order's view, as soPackLineStateOf reads it
+            if (free != null && covered >= have + pick) toPick.add(code); else waiting.add(code);
+        }
+    });
+    const stage = (!anyReleased || waiting.size) ? 'WAITING' : (toPick.size ? 'PICK' : 'PACK');
+    return { stage, waiting: [...waiting], toPick: [...toPick], byCount: true, anyReleased, partial };
+};
+
+/**
+ * ONE DISPLAY SHIPS WHEN A DISPLAY'S WORTH OF EVERY ROW IS IN THE BIN (Stuart 2026-10-05: "if we make 10pcs of row 1 and 25
+ * of row 2 and 7pc of row 3, the maximum that could be shipped would be 7"). How many whole displays the order's bin holds
+ * right now: the scarcest item decides. 0 when a line does not divide by the display, or anything is missing.
+ */
+export const shippableDisplaysOf = ({ so, boards, isFeeCode = null } = {}) => {
+    const b = Math.floor(N(boards));
+    if (!(b > 0)) return 0;
+    const per = new Map();
+    let bad = false;
+    pieceLinesOf(so, isFeeCode).forEach(({ l }) => {
+        const p = N(l.qty) / b;
+        if (!Number.isInteger(p)) { bad = true; return; }
+        if (p > 0) per.set(soLineCodeOf(l), (per.get(soLineCodeOf(l)) || 0) + p);
+    });
+    if (bad || !per.size) return 0;
+    let n = Infinity;
+    per.forEach((need, code) => { n = Math.min(n, Math.floor(committedQtyOf(so, code) / need)); });
+    const left = b - ((so && so.displayShipments) || []).length;
+    return Math.max(0, Math.min(Number.isFinite(n) ? n : 0, left));
 };
 
 /**
@@ -71,10 +127,13 @@ export const shelfPickPlanOf = ({ so, binsOf = () => [], toBin = '', only = null
     pieceLinesOf(so, isFeeCode).forEach(({ l, idx }) => {
         const code = soLineCodeOf(l);
         if (seen.has(code) || (only && U(only) !== code)) return;
-        if (!soLineIsShelfPick(so, l, idx)) return;
+        // Released by count: every item with a shelf share released and not yet picked — whichever of its lines says so.
+        const byCount = isReleaseByCount(so);
+        if (!byCount && !soLineIsShelfPick(so, l, idx)) return;
+        if (byCount && !(soCodeReleasedOf(so, code, isFeeCode).shelf > 0)) return;
         seen.add(code);
-        const need = soCodeNeedOf(so, code, isFeeCode), have = committedQtyOf(so, code);
-        const qty = Math.max(0, need - have);
+        const need = byCount ? soCodeReleasedNeedOf(so, code, isFeeCode) : soCodeNeedOf(so, code, isFeeCode), have = committedQtyOf(so, code);
+        const qty = byCount ? Math.min(soShelfToPickOf(so, code, isFeeCode), Math.max(0, need - have)) : Math.max(0, need - have);
         if (!qty) return;
         const bins = (binsOf(code) || []).filter(b => b && (b.name || b.bin) && N(b.qty) > 0 && U(b.name || b.bin) !== U(toBin))
             .sort((a, b) => N(b.qty) - N(a.qty));

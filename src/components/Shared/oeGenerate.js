@@ -38,6 +38,7 @@ import { rowKeyOf, rowOfLine } from './displayRelease.js';
 import { rowRestampOf, trvRoleOfCode, isUnfinishedFinish, isStockColourCode } from './subFinish.js';
 import { isKitLine, itemKitOfCode, isOffOrderLine } from './itemKit.js';
 import { STOCK_COLOUR_SUFFIX } from './finishVariant.js';
+import { isReleaseByCount, lineDueOf, releaseRunOf, releaseRowKeyOf, releaseStampOf } from './rowRelease.js';
 
 export { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig };
 
@@ -227,7 +228,17 @@ export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }
         // The line as CPQ's rules make it (oeLinePlansOf's linePatch — a track's sub finish and deducted cut); its
         // POSITION on the sales order is the plan's, since the patched line is a copy.
         const lineIdx = Number.isInteger(items[i].lineIdx) ? items[i].lineIdx : (so.lines || []).indexOf(soLine);
-        const l = linePatch ? { ...soLine, ...linePatch } : soLine;
+        const l0 = linePatch ? { ...soLine, ...linePatch } : soLine;
+        // RELEASED BY COUNT (Stuart 2026-10-05, Shared/rowRelease): the job is planned for what its row's count calls for
+        // and has not yet been raised — never the whole line. The sales order's line is untouched (the quantity is the
+        // job's); every caller — 10.5's ▶ Start, the review on Order Entry Needs — gets the same answer here.
+        let l = l0, release = null;
+        if (isReleaseByCount(so)) {
+            const due = lineDueOf(so, soLine, lineIdx, { round: !!rider });
+            if (!due.ok || !(due.qty > 0)) { log(`⏸ ${U(soLine.erp)} (SO ${so.soId || so.id}): ${!due.ok ? due.why : 'nothing more is due for the displays released of its row'} — not planned.`, 'warn'); continue; }
+            l = { ...l0, qty: due.qty, ...(l0.perFoot ? { billedFeet: Math.round(due.qty * (Number(l0.feetPer) || 0) * 1000) / 1000 } : {}) };
+            release = { ...releaseRunOf(so, releaseRowKeyOf(soLine)), qty: due.qty };
+        }
         const erp = U(l.erp);
         // A stock colour is planned from its BASE item (H1-2TRVBP/C → H1-2TRVBP in TCP): the shelf first, else its /P painted.
         const { part, aliasNote } = resolveOePart(stockFirst && isStockColourCode(erp) ? baseCodeOf(erp) : erp, inventory);
@@ -244,7 +255,7 @@ export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }
         }
         jobs.push({
             key: i, so, line: l, lineIdx, ...(linePatch ? { linePatch } : {}), part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy, stock: !!stock, ...(stockFirst ? { stockFirst: true } : {}),
-            ...(division ? { division } : {}), ...(rider ? { rider: true } : {}),
+            ...(division ? { division } : {}), ...(rider ? { rider: true } : {}), ...(release ? { release } : {}),
             // A per-foot line NEEDS feet from the vendor (the SO stored pieces + billedFeet).
             ...(l.perFoot ? { buyQty: Number(l.billedFeet) || (Number(l.qty) || 0) * (Number(l.feetPer) || 1) } : {}),
         });
@@ -255,10 +266,18 @@ export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }
 // EACH SALES-ORDER LINE RECORDS WHAT WAS RAISED FOR IT. Until 2026-09-20 the link was GUESSED back from
 // the work orders (same item + same finish), so two identical lines read as one and a partly covered
 // quantity read as covered — survivable while a person pressed Generate, not once it runs by itself.
-const stampLineGenerated = async (so, lineIdx, entry) => {
+// A RELEASE BY COUNT ADDS TO THE LINE'S RECORD (Shared/rowRelease.releaseStampOf): the stamp is read fresh and the release
+// — how many pieces, by which route, under which documents — joins the ones before it. A whole-line start writes the
+// stamp it always has.
+const stampLineGenerated = async (so, lineIdx, entry, release = null) => {
     if (!so || !so.id || !(lineIdx >= 0)) return;
-    try { await updateDoc(doc(db, 'hq_sales_orders', so.id), { [`oeGen.${lineIdx}`]: entry }); }
-    catch (e) { console.warn('oeGen stamp failed', so.id, lineIdx, e); }
+    try {
+        if (!release) { await updateDoc(doc(db, 'hq_sales_orders', so.id), { [`oeGen.${lineIdx}`]: entry }); return; }
+        const snap = await getDoc(doc(db, 'hq_sales_orders', so.id));
+        const cur = snap.exists() ? (((snap.data() || {}).oeGen || {})[lineIdx] || null) : null;
+        const next = releaseStampOf({ cur, kind: entry.kind, ids: entry.ids || [], code: entry.code || '', qty: Number(release.qty) || 0, run: release, at: entry.at, by: entry.by, auto: entry.auto, rowKey: entry.rowKey, finish: entry.finish, rider: !!entry.rider });
+        await updateDoc(doc(db, 'hq_sales_orders', so.id), { [`oeGen.${lineIdx}`]: next });
+    } catch (e) { console.warn('oeGen stamp failed', so.id, lineIdx, e); }
 };
 
 // CPQ'S RULES ARE WRITTEN ON THE LINE AT THE START (Shared/subFinish.rowRestampOf — SO60551's track: TCP, 17.5"). The
@@ -305,7 +324,8 @@ export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inve
     for (const job of jobs.filter(j => j.stock)) {
         const code = U(job.finishedErp);
         const g = floorGroupsOf([job], job.so)[0] || {};
-        await stampLineGenerated(job.so, job.lineIdx, { kind: 'STOCK', code, qty: Number(job.qty) || 0, at: Date.now(), by: user || '', auto: !!auto, rowKey: g.rowKey || '', finish: U(job.finish) });
+        await stampLineGenerated(job.so, job.lineIdx, { kind: 'STOCK', code, qty: Number(job.qty) || 0, at: Date.now(), by: user || '', auto: !!auto, rowKey: g.rowKey || '', finish: U(job.finish) },
+            job.release ? { ...job.release, qty: Number(job.qty) || 0 } : null);
         log(`📦 ${job.qty} × ${code} (SO ${job.so.soId || job.so.id}${g.rowLabel ? ` · ${g.rowLabel}` : ''}) — in stock: picked by the warehouse at SO Pack into the order's bin. No work order.`, 'success');
         stockPicked++;
     }
@@ -387,6 +407,8 @@ export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inve
             custKeys = customerKeys(so.customerId || null, cs && cs.exists() ? cs.data() : { name: so.customer || '' });
         } catch (e) { custKeys = customerKeys(so.customerId || null, { name: so.customer || '' }); }
         for (const group of floorGroupsOf(jobsOfSo, so)) {
+            // A release by count names its pair and says what it carries of each line (Shared/rowPairShape.pairShapeOf).
+            group.release = (group.jobs.find(j => j.release) || {}).release || null;
             const receiptRefs = group.jobs.flatMap(j => j.__rcptRefs || []);
             let res;
             try {
@@ -409,7 +431,9 @@ export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inve
             for (const job of group.jobs) {
                 const lk = `${so.id}|${job.lineIdx}`;
                 idsByLine[lk] = [...(idsByLine[lk] || []), res.woId, ...(res.shopWoId ? [res.shopWoId] : [])];
-                await stampLineGenerated(so, job.lineIdx, { kind: 'WO', ids: idsByLine[lk], at: Date.now(), by: user || '', auto: !!auto, rowKey: group.rowKey || '', finish: group.finish, ...(job.rider ? { rider: true } : {}) });
+                // A release records THIS pair's documents and pieces; a whole-line start, every document raised for the line.
+                await stampLineGenerated(so, job.lineIdx, { kind: 'WO', ids: job.release ? [res.woId, ...(res.shopWoId ? [res.shopWoId] : [])] : idsByLine[lk], at: Date.now(), by: user || '', auto: !!auto, rowKey: group.rowKey || '', finish: group.finish, ...(job.rider ? { rider: true } : {}) },
+                    job.release ? { ...job.release, qty: Number(job.qty) || 0 } : null);
                 if (!job.rider && job.linePatch) await stampLinePatch(so, job.lineIdx, job.linePatch);
             }
             const g = res.gate || {};
@@ -505,8 +529,13 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], finishes
     // Read FRESH, and read everything ever raised — the run must never raise a line twice on its own.
     const linkSet = links || (await loadOeLinks([so.id], { all: true }))[so.id] || { wos: [], pos: [], demands: [] };
     const plans = oeLinePlansOf({ so, inventory, finishes: Array.isArray(finishes) ? finishes : await loadOeFinishes() });
+    // RELEASED BY COUNT (Shared/rowRelease): a line is open while its row's count calls for more of it than has been
+    // raised — a line already partly released is open again when more displays are released. A line that cannot be
+    // divided by the display is open too, so it is NAMED below, never skipped in silence.
+    const byCount = isReleaseByCount(so);
+    const dueOf = (p) => lineDueOf(so, p.line, p.lineIdx, { round: p.door === 'RIDER' });
     const open = plans.filter(oeStartsLine)
-        .filter(p => !oeCoverageOf({ so, line: p.line, lineIdx: p.lineIdx, ...linkSet, any: true }))
+        .filter(p => { if (!byCount) return !oeCoverageOf({ so, line: p.line, lineIdx: p.lineIdx, ...linkSet, any: true }); const d = dueOf(p); return d.ok ? d.qty > 0 : d.target > 0; })
         .filter(p => (typeof only === 'function' ? only(p.line, p.lineIdx) : true));
     const sig = oeAutoSig(open);
     if (!open.length) return { ran: 0, review: [], state: 'DONE' };
@@ -525,6 +554,7 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], finishes
             const part = pl.part || (door === 'STOCK_FIRST' ? resolveOePart(baseCodeOf(erp), inventory).part : null);
             const fin = pl.finish;
             const named = (reasons) => review.push({ lineIdx, erp, finish: fin || pl.ownFinish, reasons });
+            if (byCount && !dueOf(pl).ok) { named([`${dueOf(pl).why} — release every display of its row, or correct the line's quantity`]); continue; }
             if (door === 'KIT') { named([`${erp} is a kit and its parts are not on the order — re-read the lines (10.5) or enter it again (tab 7) so its parts are made and picked`]); continue; }
             if (!part) { named([`${erp} is not in the Master Library (real codes, customer codes and aliases searched)`]); continue; }
             if (!fin) { named([pl.finishWhy || 'no finish recorded on this line']); continue; }

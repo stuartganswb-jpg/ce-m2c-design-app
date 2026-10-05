@@ -31,6 +31,7 @@ import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { holdSplitGroups } from '../Shared/rowPairShape';
 import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf, oeLinePlansOf, oeStartsLine } from '../Shared/oeGenerate';
+import { isReleaseByCount, lineDueOf } from '../Shared/rowRelease';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import { runChunked, fetchAvailableById, fetchInboundById, backorderTallyOf } from '../Shared/stockPosition';
 import { buildSkippedAtForceComplete } from '../Shared/skippedBuild';
@@ -2344,7 +2345,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         (scoped ? scoped.orders.filter(e => e.so.id === scoped.soId) : oeNeeds.orders.filter(e => !e.so.displayRelease)).forEach((entry) => oeLinePlansOf({ so: entry.so, inventory: hqParts, finishes: oeFinishes }).forEach(pl => {
             if (!oeStartsLine(pl)) return;
             if (onlyIdx && !onlyIdx.has(pl.lineIdx)) return;
-            if (!oeLinkFor(entry, pl.line)) work.push({ so: entry.so, l: pl.line, plan: pl });
+            // Released by count (Shared/rowRelease): a line is work while its row's count calls for more than has been raised.
+            if (isReleaseByCount(entry.so) ? lineDueOf(entry.so, pl.line, pl.lineIdx, { round: pl.door === 'RIDER' }).qty > 0 : !oeLinkFor(entry, pl.line)) work.push({ so: entry.so, l: pl.line, plan: pl });
         }));
         if (!work.length) return alert(scoped ? 'Every to-be-finished line on that order already has live work behind it — nothing to start.' : 'Every made-to-order line already has a linked order — nothing to generate.');
         // Outsourced-finish (plating) and bought-raw (PO) lines keep their existing per-line
