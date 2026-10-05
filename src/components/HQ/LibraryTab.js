@@ -22,6 +22,7 @@ import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
 import { fabricutCodeOf } from '../Shared/priceLevels';
 import { ALT_POSITIONS } from '../Shared/altPattern';
+import { canRetireInApp, isAppRetired } from '../Shared/appRetire';
 import { SOURCING, SOURCING_LABEL, sourcingOf, sourcingPatch } from '../Shared/sourcing';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { canonicalCollection } from '../Shared/collectionName';
@@ -92,6 +93,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [orphanBusy, setOrphanBusy] = useState(false);
   const [mojiBusy, setMojiBusy] = useState(false);         // 🔤 garbled-text repair running
   const [tempFilter, setTempFilter] = useState(false);     // ⏳ show only TEMP-flagged legacy items
+  const [retiredFilter, setRetiredFilter] = useState(false); // ⊘ show only the app-only items retired HERE (Shared/appRetire) — the way back to one
   const [tempBusy, setTempBusy] = useState(false);         // ☢ temp-nuke running
 
   const [pdfFile, setPdfFile] = useState(null);
@@ -420,7 +422,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   };
 
   const filteredInventory = inventory.filter(part => {
-    if (part.manufacturingSpecs?.isRetired === true || retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired (custitem28 / locked) items from the browse list
+    // ⊘ RETIRED view: ONLY the app-only items retired here (no NetSuite item — Shared/appRetire), so one can be opened
+    // and brought back. Every other view hides retired items, as always.
+    if (retiredFilter) { if (!isAppRetired(part)) return false; }
+    else if (part.manufacturingSpecs?.isRetired === true || retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired (custitem28 / locked) items from the browse list
     if (tempFilter && part.manufacturingSpecs?.isTemp !== true) return false; // ⏳ TEMP view: only custitem_app_temp legacy items
     const term = searchTerm.toLowerCase();
     const specs = part.manufacturingSpecs || {};
@@ -1626,6 +1631,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           {tempFilter && (
               <button onClick={nukeTempItems} disabled={tempBusy} title="Delete ALL TEMP-flagged items in this brand from the app library (items referenced by a BOM or CPQ flow are skipped and listed). NetSuite is untouched — uncheck their sync flag there too, or the next item sync brings them back. Typed confirmation required." style={{ padding: '10px 14px', border: 'none', background: '#d9534f', color: '#fff', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: tempBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{tempBusy ? '⟳ Working…' : '☢ Nuke temp items'}</button>
           )}
+          <button onClick={() => setRetiredFilter(v => !v)} title="Show only the items retired here in the app — records with no NetSuite item, hidden from every browse and pick screen. Open one and untick Retired to bring it back. (Items NetSuite retired are not listed: NetSuite owns that flag.)" style={{ padding: '10px 14px', border: `1px solid ${retiredFilter ? 'var(--brass)' : 'var(--line)'}`, background: retiredFilter ? 'var(--brass)' : '#fff', color: retiredFilter ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap' }}>{retiredFilter ? '✓ ⊘ Retired' : '⊘ Retired'}</button>
           <button onClick={scanOrphans} disabled={orphanBusy} title="Scan every assembly BOM (assembly_pins) and every CPQ flow (linked assemblies/items, style & sub options, included parts), then show ONLY items with no NetSuite id that nothing references — test leftovers safe to clean out" style={{ padding: '10px 14px', border: `1px solid ${orphanMode ? '#d9534f' : 'var(--line)'}`, background: orphanMode ? '#d9534f' : '#fff', color: orphanMode ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: orphanBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{orphanBusy ? '⟳ Scanning…' : orphanMode ? '✓ 🧹 Orphans' : '🧹 Orphans (unused · no NS#)'}</button>
           {orphanMode && !orphanBusy && (
               <button onClick={() => deleteOrphans(filteredInventory)} disabled={filteredInventory.length === 0} title="Delete every item currently shown (all unreferenced + NetSuite-less). Search/filters narrow what's shown first." style={{ padding: '10px 14px', border: 'none', background: filteredInventory.length ? '#d9534f' : 'var(--paper-2)', color: filteredInventory.length ? '#fff' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: filteredInventory.length ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>🗑 Delete {filteredInventory.length} shown</button>
@@ -2257,6 +2263,18 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                         return ( <label key={brand.id} style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px', cursor: isOwner ? 'not-allowed' : 'pointer', opacity: isOwner ? 0.6 : 1, color: 'var(--ink)' }}><input type="checkbox" checked={isOwner || isShared} disabled={isOwner} onChange={() => handleBrandToggle(brand.id)} />{brand.name} {isOwner && "(Owner)"}</label> );
                      })}
                    </div>
+                   {/* RETIRED — FOR AN ITEM NETSUITE HAS NO RECORD OF (Stuart 2026-10-05, Shared/appRetire): "can you retire
+                       the 9". Retirement comes from NetSuite's OLD flag; an app-made record has no NetSuite item, so
+                       the same flag every browse and pick screen already hides by is set here instead. NetSuite-linked
+                       items are not offered it — the item sync owns their flag and would write it back. */}
+                   {canRetireInApp(activePart) && (
+                     <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginTop: '16px', cursor: 'pointer', background: editSpecs.isRetired === true ? 'rgba(217,83,79,.07)' : '#fff', border: `1px solid ${editSpecs.isRetired === true ? '#d9534f' : 'var(--line)'}`, padding: '12px 14px' }}>
+                       <input type="checkbox" checked={editSpecs.isRetired === true} onChange={(e) => setEditSpecs({ ...editSpecs, isRetired: e.target.checked })} style={{ width: '16px', height: '16px', marginTop: '2px', cursor: 'pointer', flexShrink: 0 }} />
+                       <span style={{ fontSize: '0.9rem', color: 'var(--ink)' }}>Retired — hide this item
+                         <span style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block', marginTop: '4px', lineHeight: 1.5 }}>This record has no NetSuite item, so it is retired here. Once saved it leaves the Master Library, Stock View, 4.6 and the order-entry and checkout pickers; nothing is deleted. To bring it back, switch on the <b>Retired</b> view at the top of the Library, open it and untick this.</span>
+                       </span>
+                     </label>
+                   )}
                  </div>
               </div>
 
