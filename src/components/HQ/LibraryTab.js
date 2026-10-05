@@ -15,7 +15,7 @@ import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
-import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch, updateDoc, addDoc, serverTimestamp } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch, updateDoc, addDoc, serverTimestamp, deleteField } from "firebase/firestore";
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { fixMojibake } from '../Shared/textRepair';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
@@ -23,6 +23,7 @@ import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPri
 import { fabricutCodeOf } from '../Shared/priceLevels';
 import { ALT_POSITIONS } from '../Shared/altPattern';
 import { canRetireInApp, isAppRetired } from '../Shared/appRetire';
+import { TIER_SAVE_GROUPS } from '../Shared/tierRows';
 import { SOURCING, SOURCING_LABEL, sourcingOf, sourcingPatch } from '../Shared/sourcing';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { canonicalCollection } from '../Shared/collectionName';
@@ -901,6 +902,17 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       if (activePart.isNew) {
           const { isNew, itemName: _draftName, legacyErpId: _draftErp, ...identity } = activePart;
           Object.assign(payload, stripUndefinedDeep(identity), { createdAt: new Date().toISOString() });
+      }
+      // A CLEARED PRICE IS NO PRICE (Stuart 2026-10-05: 'ok to push' · 'edit LibraryTab.js for the Library fix').
+      // Emptying a price in Customer Alias & Pricing leaves '' in the box, and a merge write cannot drop a field by
+      // leaving it out — so '' was STORED. The price reader takes it as this item's own price with no number in it:
+      // the tier under it stops answering and the line quotes $0 (LBR on H1-1D, H1-2RCT6PA, H1-2RCT6RA, H1-2TRVDRA;
+      // the same '' sat on H1-DBLFR, H1-DBLMR and H1-2TRVMTR). The save removes those fields instead, as 4.6's Save
+      // tiers does — the nine price fields Save tiers owns (Shared/tierRows.TIER_SAVE_GROUPS), nothing else in the
+      // box; null stays "$0 · w/ arm". Done after the strip above, which would take a delete marker apart.
+      const fabOut = payload.manufacturingSpecs && payload.manufacturingSpecs.fabricut;
+      if (fabOut && typeof fabOut === 'object') {
+          TIER_SAVE_GROUPS.flatMap(g => g.fields).forEach(k => { if (typeof fabOut[k] === 'string' && fabOut[k].trim() === '') fabOut[k] = deleteField(); });
       }
       // A write that never settles used to leave the button on "Saving..." forever with no
       // message — race a watchdog so a dead connection or a stale tab SAYS so instead.
