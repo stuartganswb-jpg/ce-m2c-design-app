@@ -21,6 +21,7 @@ import { fixMojibake } from '../Shared/textRepair';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
 import { fabricutCodeOf } from '../Shared/priceLevels';
+import { ALT_POSITIONS } from '../Shared/altPattern';
 import { SOURCING, SOURCING_LABEL, sourcingOf, sourcingPatch } from '../Shared/sourcing';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { canonicalCollection } from '../Shared/collectionName';
@@ -2112,6 +2113,57 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                                      </div>
                                  ))}
                              </div>
+
+                             {/* A SECOND PATTERN # — THE SAME ITEM, ORDERED ANOTHER WAY (Stuart 2026-10-04, Shared/altPattern):
+                                 "we need to be able to enter both depending on what they order." A traverse arm is one
+                                 number with the horizontal backplate and another with the vertical; a return arm is one at
+                                 the left end and another at the right. Each row says WHEN its number applies; the quote
+                                 prints it in place of the pattern # above. On the base item, as the pattern #s are. */}
+                             {!codeUp.includes('/') && (() => {
+                                 const rows = Array.isArray(fab.altCodes) ? fab.altCodes : [];
+                                 const setRows = (next) => setF('altCodes', next);
+                                 const setRow = (i, k, v) => setRows(rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
+                                 return (
+                                     <div style={{ marginBottom: '16px', padding: '12px 14px', border: '1px dashed var(--line)', background: '#fff' }}>
+                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink)' }}>A second pattern # — same item, ordered another way</div>
+                                         <div style={{ fontSize: '0.72rem', color: 'var(--ink-soft)', margin: '2px 0 10px', lineHeight: 1.5 }}>Printed in place of the pattern # above when this item is picked with that backplate, or sits at that position — a traverse arm with the vertical backplate, a return arm on the right. The price and the item do not change.</div>
+                                         {rows.map((r, i) => {
+                                             const plate = String(r.plate || '').trim().toUpperCase();
+                                             const unknown = !!plate && typeof findByCode === 'function' && !findByCode(plate.split('/')[0]);
+                                             const noWhen = !plate && !r.position && !!(r.painted || r.premium);
+                                             return (
+                                                 <div key={i} style={{ marginBottom: '8px' }}>
+                                                     <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
+                                                         <div style={{ flex: 1.2 }}>
+                                                             <label style={{ ...labelStyle, marginBottom: '4px' }}>With backplate (our item #)</label>
+                                                             <input value={r.plate || ''} onChange={e => setRow(i, 'plate', e.target.value.toUpperCase())} placeholder="any" style={{ ...fieldStyle, textTransform: 'uppercase', ...(unknown ? { borderColor: '#d9534f' } : {}) }} />
+                                                         </div>
+                                                         <div style={{ flex: 0.7 }}>
+                                                             <label style={{ ...labelStyle, marginBottom: '4px' }}>At position</label>
+                                                             <select value={r.position || ''} onChange={e => setRow(i, 'position', e.target.value)} style={fieldStyle}>
+                                                                 <option value="">any</option>
+                                                                 {ALT_POSITIONS.map(pos => <option key={pos} value={pos}>{pos[0] + pos.slice(1).toLowerCase()}</option>)}
+                                                             </select>
+                                                         </div>
+                                                         <div style={{ flex: 1 }}>
+                                                             <label style={{ ...labelStyle, marginBottom: '4px' }}>Pattern # (painted)</label>
+                                                             <input value={r.painted || ''} onChange={e => setRow(i, 'painted', e.target.value.toUpperCase())} placeholder="—" style={{ ...fieldStyle, textTransform: 'uppercase' }} />
+                                                         </div>
+                                                         <div style={{ flex: 1 }}>
+                                                             <label style={{ ...labelStyle, marginBottom: '4px' }}>Pattern # (premium /EP)</label>
+                                                             <input value={r.premium || ''} onChange={e => setRow(i, 'premium', e.target.value.toUpperCase())} placeholder="—" style={{ ...fieldStyle, textTransform: 'uppercase' }} />
+                                                         </div>
+                                                         <button onClick={() => setRows(rows.filter((_, j) => j !== i))} title="Remove this second pattern #" style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.2rem', cursor: 'pointer', paddingBottom: '10px' }}>×</button>
+                                                     </div>
+                                                     {unknown && <div style={{ fontSize: '0.72rem', color: '#d9534f', marginTop: '3px' }}>{plate} is not in the library — this row will never apply.</div>}
+                                                     {noWhen && <div style={{ fontSize: '0.72rem', color: '#d9534f', marginTop: '3px' }}>Say when it applies — a backplate, a position, or both. A row with neither is ignored.</div>}
+                                                 </div>
+                                             );
+                                         })}
+                                         <button onClick={() => setRows([...rows, { plate: '', position: '', painted: '', premium: '' }])} style={{ padding: '8px 14px', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>＋ Add a second pattern #</button>
+                                     </div>
+                                 );
+                             })()}
 
                              <div style={{ marginBottom: '18px' }}>
                                  <label style={{ ...labelStyle, marginBottom: '4px' }}>Priced in conjunction with…</label>

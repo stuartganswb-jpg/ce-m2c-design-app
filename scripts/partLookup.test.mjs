@@ -186,5 +186,36 @@ eq('no customer → no their-code', anon.find(r => r.ours === 'H1-75ILE').theirs
 eq('our codes unaffected', searchLookup('H1-75ILE', anon).map(r => r.ours), ['H1-75ILE']);
 eq('their code no longer resolves', searchLookup('H3553F', anon), []);
 
+// ── A SECOND NUMBER, ORDERED ANOTHER WAY (Stuart 2026-10-04, Shared/altPattern) ───────────────────────────────
+// "we need to be able to enter both depending on what they order." A traverse arm is H3629F with the horizontal
+// backplate and H3626F with the vertical; a return arm is H3634F on the left and H3635F on the right. Typing the
+// second number has to find the item — and SAY when that number applies, so the reader knows how to pick it.
+{
+    const asm2 = { id: 'ASM-TRV', itemId: 'CE-ASM-TRV', nodeClusters: [
+        { id: 'CL-BL', category: 'BRACKET', position: 'LEFT', nodes: ['bl'] },
+        { id: 'CL-EL', category: 'BRACKET', position: 'LEFT', nodes: ['el'] },
+        { id: 'CL-ER', category: 'BRACKET', position: 'RIGHT', nodes: ['er'] },
+    ] };
+    const pins2 = [
+        { id: 'A1', assemblyId: 'ASM-TRV', clusterId: 'CL-BL', partId: 'CE-INV-62502', partName: 'Extended Bracket Arm (4-5/8" P)', targetNode: 'bl', sort: 1 },
+        { id: 'R1', assemblyId: 'ASM-TRV', clusterId: 'CL-EL', partId: 'CE-INV-SRA', partName: 'Traverse End Return Arm (3-5/8" P)', targetNode: 'el', sort: 2 },
+        { id: 'R2', assemblyId: 'ASM-TRV', clusterId: 'CL-ER', partId: 'CE-INV-SRA', partName: 'Traverse End Return Arm (3-5/8" P)', targetNode: 'er', sort: 3 },
+    ];
+    const parts2 = [
+        { id: 'CE-INV-62502', itemId: 'CE-INV-62502', legacyErpId: 'H1-138TRVEBA', clientPricing: [],
+          manufacturingSpecs: { fabricut: { fabCodePainted: 'H3629F', fabCodePremium: 'H3629F PREMIUM', altCodes: [{ plate: 'H1-138TRVBP-V', painted: 'H3626F', premium: 'H3626F PREMIUM' }] } } },
+        { id: 'CE-INV-SRA', itemId: 'CE-INV-SRA', legacyErpId: 'H1-2TRVSRA', clientPricing: [],
+          manufacturingSpecs: { fabricut: { fabCodePainted: 'H3634F', fabCodePremium: 'H3634F PREMIUM', altCodes: [{ position: 'RIGHT', painted: 'H3635F', premium: 'H3635F PREMIUM' }] } } },
+    ];
+    const find2 = (key) => parts2.find(p => p.id === key || p.itemId === key || p.legacyErpId === key) || null;
+    const idx2 = indexForAssembly({ assembly: asm2, pins: pins2, flow: { id: 'FLOW-TRV', name: 'Traverse' }, findPart: find2, aliasCtx: { ...aliasCtx, findByCode: find2 } });
+    eq('the ordinary number still finds the arm, shown as it was', searchLookup('H3629F', idx2).map(r => [r.ours, r.theirs]), [['H1-138TRVEBA', 'H3629F']]);
+    eq('the vertical number finds the same arm — and says which backplate', searchLookup('H3626F', idx2).map(r => [r.ours, r.theirs]), [['H1-138TRVEBA', 'H3626F · with H1-138TRVBP-V']]);
+    eq('the right-hand number finds the RIGHT pin only', searchLookup('H3635F', idx2).map(r => [r.ours, r.tags.position, r.theirs]), [['H1-2TRVSRA', 'RIGHT', 'H3635F · at the right']]);
+    eq('the left-hand number finds both ends, as before', searchLookup('H3634F', idx2).map(r => r.tags.position).sort(), ['LEFT', 'RIGHT']);
+    eq('our code is unaffected', searchLookup('H1-2TRVSRA', idx2).map(r => r.theirs), ['H3634F', 'H3634F']);
+    ok('a row with no second number carries an empty list', index.every(r => Array.isArray(r.theirsAlt) && r.theirsAlt.length === 0));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

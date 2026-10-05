@@ -470,5 +470,103 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     eq('a kit whose parts list does not name the collar leaves the collar line alone', cfg.lines.map(l => [l.billedId, !!l.inKit]), [['H1-138AKF', false], ['H1-138ACKF', true], ['H1-138FC2/P', false]]);
 }
 
+// ── THE NUMBER FOLLOWS HOW IT WAS ORDERED (Stuart 2026-10-04, Shared/altPattern) ──────────────────────────────────
+// "we need to be able to enter both depending on what they order it must be clear on the customer forms and to the
+//  floor" · "we have to sell these as each … in the configurator we select left, center, right" · "just be sure we do
+//  not break anything on the actual multi part kit brackets … like this bracket H1-138ILJL".
+// The 1-3/8" traverse arm is H3629F with the horizontal backplate, H3626F with the vertical; the 2" traverse return
+// arm is H3634F at the left, H3635F at the right. Records as the library carried them that day.
+{
+    const INCL = { cost: null, wholesale: null, retail: null, paintedCost: null, paintedWholesale: null, paintedRetail: null, platedCost: null, platedWholesale: null, platedRetail: null };
+    const rec = (id, code, extra = {}) => ({ id, legacyErpId: code, itemName: code, partClass: 'Assembly', manufacturingSpecs: {}, clientPricing: [], ...extra });
+    const armBox = { paintedCost: 32, paintedWholesale: 64, paintedRetail: 128, platedCost: 42, platedWholesale: 77, platedRetail: 154, fabCodePainted: 'H3629F', fabCodePremium: 'H3629F PREMIUM' };
+    const ALT = [{ plate: 'H1-138TRVBP-V', position: '', painted: 'H3626F', premium: 'H3626F PREMIUM' }];
+    const mk = (armAlt, extra = []) => {
+        const list = [
+            rec('CE-INV-62502', 'H1-138TRVEBA', { manufacturingSpecs: { fabricut: { ...armBox, ...(armAlt ? { altCodes: armAlt } : {}) } } }),
+            rec('CE-ASM-62509', 'H1-138TRVEBA/P'), rec('CE-ASM-62503', 'H1-138TRVEBA/EP1'),
+            rec('CE-INV-54516', 'H1-138TRVBP-V', { manufacturingSpecs: { fabricut: INCL } }), rec('CE-ASM-59332', 'H1-138TRVBP-V/P'), rec('CE-ASM-59333', 'H1-138TRVBP-V/EP1'),
+            rec('CE-INV-59340', 'H1-138TRVBP-H', { manufacturingSpecs: { fabricut: INCL } }), rec('CE-ASM-59341', 'H1-138TRVBP-H/P'), rec('CE-ASM-59342', 'H1-138TRVBP-H/EP1'),
+            rec('CE-INV-SRA', 'H1-2TRVSRA', { manufacturingSpecs: { fabricut: { paintedCost: 22, platedCost: 30, fabCodePainted: 'H3634F', fabCodePremium: 'H3634F PREMIUM',
+                altCodes: [{ plate: '', position: 'RIGHT', painted: 'H3635F', premium: 'H3635F PREMIUM' }] } } }),
+            rec('CE-ASM-SRAP', 'H1-2TRVSRA/P'), rec('CE-ASM-SRAE', 'H1-2TRVSRA/EP1'),
+            // H1-138ILJL — the real in-app kit: cuff + arm, sold to Fabricut as one piece (H3599F)
+            rec('CE-INV-ILJL', 'H1-138ILJL', { partClass: 'Kit', manufacturingSpecs: { fabricut: { paintedCost: 41.5, platedCost: 59.5, fabCodePainted: 'H3599F', fabCodePremium: 'H3599F PREMIUM' },
+                kitComponents: [{ partId: 'CE-INV-CUFF', qty: 1 }, { partId: 'CE-INV-CA', qty: 1 }] } }),
+            rec('CE-INV-CUFF', 'H1-138CUFF'), rec('CE-ASM-CUFFP', 'H1-138CUFF/P'), rec('CE-INV-CA', 'H1-138CA'), rec('CE-ASM-CAP', 'H1-138CA/P'),
+            rec('CE-INV-56818', 'H1-138BP-H', { manufacturingSpecs: { fabricut: INCL } }), rec('CE-ASM-56825', 'H1-138BP-H/P'),
+            ...extra,
+        ];
+        const idx = {}; list.forEach(r => { idx[r.id] = r; idx[r.legacyErpId] = r; });
+        return (k) => idx[String(k || '')] || idx[String(k || '').toUpperCase()] || null;
+    };
+    const FAB = { id: 'CUST-4720', name: 'FABRICUT' };
+    const fin = { 'ARM-R': 'EP1', 'PL-R': 'EP1' };
+    const cx = (find, over = {}) => ({ findPart: find, findByCode: find, customerId: FAB.id, customer: FAB, priceLevel: 'FAB_COST', levelIsDefault: true,
+        outsourceCodes: ['P25', 'LBR'], finishFor: (c) => fin[c.id] || 'P06', ...over });
+    const arm = (id, position, qty = 1) => ({ id, partId: 'CE-INV-62502', name: 'arm', role: 'BRACKET', position, qty });
+    const plate = (id, position, partId) => ({ id, partId, name: 'plate', role: 'BACKPLATE', position, qty: 1 });
+    const V = 'CE-INV-54516', H = 'CE-INV-59340';
+    const bom = [arm('ARM-L', 'LEFT'), plate('PL-L', 'LEFT', V), arm('ARM-C', 'CENTER', 3), plate('PL-C', 'CENTER', H), arm('ARM-R', 'RIGHT'), plate('PL-R', 'RIGHT', V)];
+    const show = (l) => [l.billedId, l.sku, l.aliasCode, l.unit, l.total, l.position];
+
+    const find = mk(ALT);
+    const cfg = priceConfiguration({ choices: bom, bom }, cx(find));
+    eq('each bracket is its own line, with its plate beneath — six lines, sold each', cfg.lines.length, 6);
+    eq('LEFT, vertical backplate → the vertical number, the arm\'s price', show(cfg.lines[0]), ['H1-138TRVEBA/P', 'H3626F', 'H3626F', 32, 32, 'LEFT']);
+    eq('CENTER, horizontal backplate → the arm\'s ordinary number, ×3', show(cfg.lines[2]), ['H1-138TRVEBA/P', '', 'H3629F', 32, 96, 'CENTER']);
+    eq('RIGHT, vertical backplate, plated → the PREMIUM vertical number at the plated price', show(cfg.lines[4]), ['H1-138TRVEBA/EP1', 'H3626F PREMIUM', 'H3626F PREMIUM', 42, 42, 'RIGHT']);
+    eq('the plates are untouched — included, no number of their own', [cfg.lines[1], cfg.lines[3], cfg.lines[5]].map(l => [l.billedId, l.sku, l.aliasCode, l.unit]),
+        [['H1-138TRVBP-V/P', '', '', 0], ['H1-138TRVBP-H/P', '', '', 0], ['H1-138TRVBP-V/EP1', '', '', 0]]);
+
+    // THE MONEY, THE ITEMS AND THE LINES ARE EXACTLY WHAT THEY WERE — only two fields on the matching arm lines differ.
+    const before = priceConfiguration({ choices: bom, bom }, cx(mk(null)));
+    const strip = (l) => { const { sku, aliasCode, ...rest } = l; return rest; };
+    eq('without the second number on the record, every line reads as it did', before.lines.map(l => l.aliasCode), ['H3629F', '', 'H3629F', '', 'H3629F PREMIUM', '']);
+    eq('…and with it, nothing but the printed number moves', cfg.lines.map(strip), before.lines.map(strip));
+    eq('…the total with it', cfg.total, before.total);
+
+    // A ROW SEEDED FROM THE TIERS (4.6) carries the ordinary number as the customer's SKU — the second number replaces it;
+    // another customer's OWN number on their own row stands.
+    const seeded = mk(ALT, [rec('CE-ASM-62509', 'H1-138TRVEBA/P', { clientPricing: [{ customerId: 'CUST-4720', clientSku: 'H3629F', price: 32 }] })]);
+    eq('a Fabricut row carrying the ordinary number gives way', show(priceConfiguration({ choices: bom, bom }, cx(seeded)).lines[0]), ['H1-138TRVEBA/P', 'H3626F', 'H3626F', 32, 32, 'LEFT']);
+    const brimar = mk(ALT, [rec('CE-ASM-62509', 'H1-138TRVEBA/P', { clientPricing: [{ customerId: 'CUST-9', clientSku: 'TB-EXT', price: 50 }] })]);
+    const bl = priceConfiguration({ choices: bom, bom }, cx(brimar, { customerId: 'CUST-9', customer: { id: 'CUST-9', name: 'BRIMAR' } })).lines[0];
+    eq('another customer\'s own SKU on their own row stands', [bl.sku, bl.unit], ['TB-EXT', 50]);
+
+    // NOT THE PLATE PICKED WITH IT: another position, a hidden rider, the other rod of a double.
+    const one = (b, choices) => priceConfiguration({ choices: choices || b, bom: b }, cx(find)).lines[0].aliasCode;
+    eq('a vertical plate at ANOTHER position is not this arm\'s', one([arm('ARM-L', 'LEFT'), plate('PL-X', 'CENTER', V)]), 'H3629F');
+    eq('no plate picked → the ordinary number', one([arm('ARM-L', 'LEFT')]), 'H3629F');
+    eq('a hidden plate rider is not a pick', one([arm('ARM-L', 'LEFT'), { ...plate('PL-HID', 'LEFT', V), hidden: true }]), 'H3629F');
+    {
+        const a = { ...arm('ARM-L', 'LEFT'), tier: 'BACK' }, pf = { ...plate('PL-F', 'LEFT', V), tier: 'FRONT' }, pb = { ...plate('PL-B', 'LEFT', V), tier: 'BACK' }, pn = plate('PL-N', 'LEFT', V);
+        eq('a plate tagged for the FRONT rod is not the BACK arm\'s', one([a, pf], [a, pf]), 'H3629F');
+        eq('…one tagged BACK is', one([a, pb], [a, pb]), 'H3626F');
+        eq('…and a plate with no tier belongs to the arm at its position (hardwareModel.armOf)', one([a, pn], [a, pn]), 'H3626F');
+    }
+
+    // BY POSITION — the 2" traverse return arm, one item at both ends.
+    const ends = [{ id: 'END-L', partId: 'CE-INV-SRA', name: 'return arm', role: 'RETURN', position: 'LEFT', qty: 1 }, { id: 'END-R', partId: 'CE-INV-SRA', name: 'return arm', role: 'RETURN', position: 'RIGHT', qty: 1 }];
+    const ec = priceConfiguration({ choices: ends, bom: ends }, cx(find, { finishFor: (c) => (c.id === 'END-R' ? 'EP1' : 'P06') }));
+    eq('the left end prints the left-hand number', show(ec.lines[0]), ['H1-2TRVSRA/P', '', 'H3634F', 22, 22, 'LEFT']);
+    eq('the right end prints the right-hand number — premium, plated', show(ec.lines[1]), ['H1-2TRVSRA/EP1', 'H3635F PREMIUM', 'H3635F PREMIUM', 30, 30, 'RIGHT']);
+
+    // ⚠ A REAL KIT BRACKET IS NOT TOUCHED — H1-138ILJL with a backplate picked at its position: the kit line, its
+    // number, its price and its two parts beneath are exactly what they were; and a second number typed on a KIT
+    // record is never applied (a kit is sold under its own number, whole).
+    const kitBom = [{ id: 'BK-C', partId: 'CE-INV-ILJL', name: 'in-line joining loop bracket', role: 'BRACKET', position: 'CENTER', qty: 2 }, plate('PL-C', 'CENTER', 'CE-INV-56818')];
+    const kc = priceConfiguration({ choices: kitBom, bom: kitBom }, cx(find));
+    eq('the kit, its two parts, then the plate', kc.lines.map(l => [l.billedId, l.aliasCode, l.unit, l.total, !!l.isKit, !!l.inKit, !!l.hidden, l.qty]), [
+        ['H1-138ILJL', 'H3599F', 41.5, 83, true, false, false, 2],
+        ['H1-138CUFF/P', '', 0, 0, false, true, true, 2],
+        ['H1-138CA/P', '', 0, 0, false, true, true, 2],
+        ['H1-138BP-H/P', '', 0, 0, false, false, false, 1]]);
+    const kitAlt = mk(ALT, [rec('CE-INV-ILJL', 'H1-138ILJL', { partClass: 'Kit', manufacturingSpecs: { fabricut: { paintedCost: 41.5, platedCost: 59.5, fabCodePainted: 'H3599F', fabCodePremium: 'H3599F PREMIUM',
+        altCodes: [{ plate: 'H1-138BP-H', painted: 'WRONG' }, { position: 'CENTER', painted: 'WRONG' }] },
+        kitComponents: [{ partId: 'CE-INV-CUFF', qty: 1 }, { partId: 'CE-INV-CA', qty: 1 }] } })]);
+    eq('a second number on a KIT record is never applied', priceConfiguration({ choices: kitBom, bom: kitBom }, cx(kitAlt)).lines, kc.lines);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

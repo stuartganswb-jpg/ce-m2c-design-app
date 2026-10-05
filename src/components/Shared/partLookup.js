@@ -22,6 +22,7 @@
 import { admits, contextOf, normalizeChoice, applyFitsDefaults, ROD_ROLES } from './hardwareModel.js';
 import { choicesFromAssembly } from './hardwareAdapter.js';
 import { aliasFor } from './hardwarePricing.js';
+import { altPatternListOf } from './altPattern.js';
 
 const U = (v) => String(v ?? '').trim().toUpperCase();
 const clean = (v) => String(v ?? '').trim();
@@ -61,6 +62,11 @@ function rowOf({ choice, part, flow, aliasCtx }) {
         part: part || null,
         ours,
         theirs: part ? clean(aliasFor(part, aliasCtx)) : '',
+        // A SECOND number the same item answers to when ordered another way (Shared/altPattern, 2026-10-04) — the
+        // vertical-backplate number on a traverse arm, the right-hand number on a return arm. A number tied to a
+        // position is listed on the pin at that position only, so H3635F finds the RIGHT arm and not the left.
+        theirsAlt: part ? altPatternListOf(part, aliasCtx && aliasCtx.findByCode)
+            .filter(a => !a.position || !clean(choice.position) || a.position === U(choice.position)) : [],
         name: clean(choice.name || part?.itemName || ours),
         role: clean(choice.role),
         // The decision tags, exactly as the gate will read them. Blank means "untagged", which is a
@@ -189,6 +195,15 @@ export function searchLookup(term, index = [], { limit = 24 } = {}) {
         else if (theirs && q && theirs.includes(q)) score = 45;
         else if (ours && q && ours.includes(q)) score = 40;
         else if (U(row.name).includes(qText)) score = 20;
+        // …or one of its second numbers. The row then SHOWS that number and when it applies — someone reading H3626F
+        // off an order needs to see why this arm answered, and which backplate to pick with it.
+        let alt = null, altScore = 0;
+        (row.theirsAlt || []).forEach(a => {
+            const k = codeKey(a.code);
+            const sc = !k || !q ? 0 : (k === q ? 100 : (k.startsWith(q) ? 70 : (k.includes(q) ? 45 : 0)));
+            if (sc > altScore) { altScore = sc; alt = a; }
+        });
+        if (alt && altScore > score) { scored.push({ ...row, theirs: `${alt.code} · ${alt.when}`, score: altScore }); return; }
         if (!score) return;
         scored.push({ ...row, score });
     });

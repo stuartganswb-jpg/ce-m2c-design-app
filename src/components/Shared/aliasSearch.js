@@ -5,10 +5,16 @@
 //   • clientPricing[].clientSku            — "Their SKU", set per customer in 4.6
 //   • manufacturingSpecs.fabricut.fabCode* — the painted / premium / base pattern #s from the
 //                                            Customer Alias & Pricing box
+//   • manufacturingSpecs.fabricut.altCodes — a SECOND number the same item answers to when it is
+//                                            ordered another way (the vertical-backplate number on a
+//                                            traverse arm, the right-hand number on a return arm —
+//                                            Shared/altPattern, 2026-10-04)
 // ONE matcher, imported by every search field (Master Library, Mass Update, Stock View, the
 // Sales Snapshot…) so HTS7504F finds H1-2TRV-4/P everywhere, not just on the screen that
 // happened to be taught. Alias RECORDS (partClass Alias) already match by their own code in any
 // list that includes them — this covers the codes that live ON the main record.
+
+import { altPatternCodesOf } from './altPattern.js';
 
 const FAB_CODE_KEYS = ['fabCodePainted', 'fabCodePremium', 'fabCodeBase'];
 
@@ -18,6 +24,7 @@ export const customerCodesOf = (part) => {
     const out = [];
     const fab = part.manufacturingSpecs?.fabricut;
     if (fab) for (const k of FAB_CODE_KEYS) { if (fab[k]) out.push(String(fab[k])); }
+    for (const c of altPatternCodesOf(part)) out.push(c);
     const rows = Array.isArray(part.clientPricing) ? part.clientPricing : [];
     for (const r of rows) { if (r && r.clientSku) out.push(String(r.clientSku)); }
     return out;

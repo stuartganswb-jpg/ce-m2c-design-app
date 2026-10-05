@@ -39,6 +39,7 @@ import { takesNoFinish } from './finishLabel.js';
 import { isItemKit, kitComponentsOf, kitPartFinishOf } from './itemKit.js';
 import { fabricutPriceOf, fabricutCodeOf, priceLevelShort, isPlatedSuffix } from './priceLevels.js';
 import { finishVariantOf, stockColourVariantOf } from './finishVariant.js';
+import { altPatternRowsOf, printedPatternOf } from './altPattern.js';
 import { speciesVariantOf } from './sizeMatrix.js';
 import { ROD_ROLES, companionsFor } from './hardwareModel.js';
 import { traverseCutLength } from './traverseTags.js';
@@ -299,6 +300,20 @@ export function priceConfiguration(model, ctx = {}) {
         kitCollar.set(String(entry.id), { partDocId: colDoc, finishCode: fin });
     });
     const collarInKit = new Set([...collarAskers].filter(([, a]) => a.length && a.every(Boolean)).map(([id]) => id));
+    // ── THE BACKPLATE PICKED WITH AN ARM (Stuart 2026-10-04, Shared/altPattern) ──────────────────────
+    // "we need to be able to enter both depending on what they order": a 1-3/8" traverse arm is H3629F with the
+    // horizontal backplate and H3626F with the vertical one, each bracket picked on its own — left, center, right.
+    // The plate at an arm's position (of its tier, when the plate names one) is hardwareModel's own pairing, `armOf`,
+    // read from the arm's side. Asked only for an item that carries a second number; it decides which number the
+    // line prints and nothing else.
+    const tierOf = (e) => String((choiceById.get(String(e && e.id != null ? e.id : '')) || {}).tier || '');
+    const plateCodeAt = (entry) => {
+        const pos = String(entry.position || '').toUpperCase();
+        const pl = (model?.bom || []).find(e => e !== entry && !e.hidden && String(e.role || '').toUpperCase() === 'BACKPLATE'
+            && String(e.position || '').toUpperCase() === pos && (!tierOf(e) || tierOf(e) === tierOf(entry)));
+        const pp = pl && typeof findPart === 'function' ? findPart(pl.partId) : null;
+        return pp ? String((pp.legacyErpId && pp.legacyErpId !== 'PENDING' ? pp.legacyErpId : pp.itemId) || '') : '';
+    };
     const lines = (model?.bom || []).filter(entry => !skipRoles.has(String(entry.role || '').toUpperCase())).flatMap(entry => {
         if (entry.id != null && collarInKit.has(String(entry.id))) return [];   // the kit's own collar line stands for it
         const choice = entry.raw && entry.raw.__choice ? entry.raw.__choice : entry;
@@ -328,6 +343,11 @@ export function priceConfiguration(model, ctx = {}) {
         const collarRow = collar ? ((model.bom || []).find(e => e.id === collar.id) || collar) : null;
         const tierFinishCode = collarRow ? String((typeof ctx.finishFor === 'function' ? ctx.finishFor(collarRow, collarRow) : ctx.finishCode) || '').toUpperCase() : '';
         const p = priceChoice(choice, part, (finishCode === ctx.finishCode && !subFinishCode && !tierFinishCode) ? ctx : { ...ctx, finishCode, subFinishCode, tierFinishCode });
+        // THE NUMBER FOLLOWS HOW THIS ONE WAS ORDERED — its backplate, or its end of the rod (Shared/altPattern). Only an
+        // item that carries a second number is asked, and never a kit: a kit is sold under its own number, whole.
+        const altNo = (part && !isItemKit(part) && altPatternRowsOf(part, ctx.findByCode).length)
+            ? printedPatternOf(part, { printed: p.sku || p.aliasCode, plateCode: plateCodeAt(entry), position: entry.position, billedId: p.billedId, outsourceCodes: ctx.outsourceCodes }, ctx.findByCode)
+            : '';
         // ⚠ ROD STOCK IS SOLD BY THE FOOT (Stuart 2026-08-20: "it needs to take billed ft qty on
         // step 6 and multiply it times price of selected rod in 10 and 11 if double"). H1-138R is
         // "Round Hollow Rod Stock" at 12.50 — a foot of it, not a pole of it — so a ten-foot order
@@ -362,8 +382,8 @@ export function priceConfiguration(model, ctx = {}) {
             partId: entry.partId,
             name: entry.name,
             role: entry.role || '',
-            sku: p.sku,
-            aliasCode: p.aliasCode,
+            sku: altNo || p.sku,
+            aliasCode: altNo || p.aliasCode,
             billedId: p.billedId,   // the finished SKU that is actually sold and billed
             qty,
             perFoot,                  // the line is priced by the foot — the panel says so
