@@ -121,3 +121,46 @@ export const seedRowDoc = (row, { customerId, customerName = '', by = '', now = 
     customerId, customerName, clientSku: row.clientSku || '', price: row.price, clientSalesPrice: row.clientSalesPrice,
     clientRetailPrice: row.clientRetailPrice, source: 'TIER_SEED', updatedAt: now, updatedBy: String(by || ''),
 });
+
+// ── SAVE TIERS WRITES ITS OWN FIELDS — NEVER THE WHOLE BOX (2026-10-04) ─────────────────────────────────────
+// 4.6's Save tiers began with `setDoc({ manufacturingSpecs: { fabricut: {} } }, { merge: true })` — "ensure the map
+// exists". In Firestore an EMPTY map in a merge write is put on the update mask, so that line REPLACED the box with
+// {} and the save then wrote back only the fields the editor knows. Everything else an item's box carried went on
+// every save: the second pattern numbers (altCodes, 2026-10-04), the per-finish exact numbers the spec sheet
+// falls back to (exact_*), the import and repair stamps. An update by dotted path creates the box when it is
+// missing — the line was never needed. The patch below is the WHOLE write: dotted paths under the box, one per
+// field the editor owns, and nothing that names the box itself.
+//   · blank            → the field is deleted (no data at that tier → standard pricing)
+//   · "$0 · w/ arm"    → the tier's three fields are written null (the level quotes $0)
+//   · anything else    → the number / the trimmed text
+export const TIER_BOX = 'manufacturingSpecs.fabricut';
+export const TIER_SAVE_GROUPS = [
+    { key: 'painted', fields: ['paintedCost', 'paintedWholesale', 'paintedRetail'] },
+    { key: 'plated', fields: ['platedCost', 'platedWholesale', 'platedRetail'] },
+    { key: 'direct', fields: ['cost', 'wholesale', 'retail'] },
+];
+export const TIER_SAVE_CODES = ['fabCodePainted', 'fabCodePremium', 'fabCodeBase'];
+/** Every field Save tiers may write — and so the only fields it can change. */
+export const TIER_SAVE_FIELDS = [...TIER_SAVE_GROUPS.flatMap(g => g.fields), ...TIER_SAVE_CODES, 'pricedWith', 'source', 'updatedAt'];
+const numOrBlank = (v) => ((v === '' || v === null || v === undefined || isNaN(parseFloat(v))) ? '' : parseFloat(v));
+
+/**
+ * The update Save tiers sends. `del` is Firestore's deleteField (passed in so this stays pure).
+ * @param edit  the editor's state: one value per field, `incl_<group>` for "$0 · w/ arm", `pricedWith`
+ */
+export function tierSavePatchOf(edit = {}, { del, now = Date.now() } = {}) {
+    const gone = () => (typeof del === 'function' ? del() : del);
+    const patch = {};
+    TIER_SAVE_GROUPS.forEach(g => {
+        const incl = !!edit[`incl_${g.key}`];
+        g.fields.forEach(key => { const v = edit[key]; patch[`${TIER_BOX}.${key}`] = incl ? null : (v === '' || v === undefined || v === null ? gone() : numOrBlank(v)); });
+    });
+    TIER_SAVE_CODES.forEach(key => { const v = String(edit[key] || '').trim(); patch[`${TIER_BOX}.${key}`] = v === '' ? gone() : v; });
+    const pw = String(edit.pricedWith || '').trim();
+    patch[`${TIER_BOX}.pricedWith`] = pw === '' ? gone() : pw;
+    patch[`${TIER_BOX}.source`] = 'COLLECTION_PAGE';
+    patch[`${TIER_BOX}.updatedAt`] = now;
+    return patch;
+}
+/** Does a patch touch only fields INSIDE the box — never the box (or its parent) as a whole? */
+export const isFieldOnlyPatch = (patch) => Object.keys(patch || {}).every(k => k.startsWith(`${TIER_BOX}.`) && TIER_SAVE_FIELDS.includes(k.slice(TIER_BOX.length + 1)));

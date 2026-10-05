@@ -27,7 +27,7 @@ import { configuratorOffer } from '../Shared/traverseConfigurator';
 import { parseControlWorkbook, workbookFileToSheets, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { parseTraverseKitSheets, diffTraverseKits, kitPricingRow, BILLABLE_ACCESSORY_SEED } from '../Shared/traverseKitImport';
 import { fabricutCodeOf, isPlatedSuffix, PRICE_LEVELS, customerPriceLevel } from '../Shared/priceLevels';
-import { tierRowOf, seedPlanOf, seedConfirmText, seedRowDoc, stockedVariantsOf } from '../Shared/tierRows';
+import { tierRowOf, seedPlanOf, seedConfirmText, seedRowDoc, stockedVariantsOf, tierSavePatchOf } from '../Shared/tierRows';
 import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable, isCheckoutForCustomer, checkoutCustomerIds } from '../Shared/feeRules';
 import { PLATE_ROLES, plateRoleOf, pairedBackplateCode, includesPlate } from '../Shared/plateRules';
 import { canonicalCollection, canonicalCollections, collectionMergesOf, collectionMergeSummary } from '../Shared/collectionName';
@@ -646,21 +646,13 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false
     const saveTiers = async () => {
         const p = inventory.find(x => x.id === tierRow);
         if (!p) return;
-        const patch = {};
-        TIER_GROUPS.forEach(g => {
-            const incl = !!tierEdit[`incl_${g.key}`];
-            Object.values(g.f).forEach(key => {
-                const v = tierEdit[key];
-                patch[`manufacturingSpecs.fabricut.${key}`] = incl ? null : (v === '' ? deleteField() : money(v));
-            });
-        });
-        CODE_FIELDS.forEach(f => { const v = String(tierEdit[f.key] || '').trim(); patch[`manufacturingSpecs.fabricut.${f.key}`] = v === '' ? deleteField() : v; });
-        const pw = String(tierEdit.pricedWith || '').trim();
-        patch['manufacturingSpecs.fabricut.pricedWith'] = pw === '' ? deleteField() : pw;
-        patch['manufacturingSpecs.fabricut.source'] = 'COLLECTION_PAGE';
-        patch['manufacturingSpecs.fabricut.updatedAt'] = Date.now();
+        // THE WHOLE WRITE IS THIS PATCH (Shared/tierRows.tierSavePatchOf, 2026-10-04): dotted paths, one per field the
+        // editor owns. The `setDoc({ manufacturingSpecs: { fabricut: {} } }, { merge: true })` that stood here "to ensure
+        // the map exists" REPLACED the box with {} on every save — an empty map in a merge is written as the whole
+        // field — and took the second pattern numbers (altCodes), exact_* and the import stamps with it. An update by
+        // dotted path creates the box when it is missing.
+        const patch = tierSavePatchOf(tierEdit, { del: () => deleteField() });
         try {
-            await setDoc(doc(db, 'Approved_Designs', p.id), { manufacturingSpecs: { fabricut: {} } }, { merge: true }); // ensure the map exists
             await updateDoc(doc(db, 'Approved_Designs', p.id), patch);
             setTierRow(null); setTierEdit({});
         } catch (e) { console.error(e); alert('Save failed:\n\n' + (e.message || e)); }
