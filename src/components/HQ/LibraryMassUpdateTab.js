@@ -21,6 +21,7 @@ import { planNodeThumbs, planModelThumbs, slotReportText, modelReportText, NODE_
 // match nothing. That module exists for exactly this, and the sweep below still does it by hand.
 import { splitNodes } from '../Shared/nodeList';
 import { canonicalCollection, canonicalCollections } from '../Shared/collectionName';
+import { finishCodeOf, missingMaterialOf, duplicateCodesOf, duplicateRemovalText, withoutIds, withMaterial, finishSaveRefusal, materialKnownFromCode, finishLine } from '../Shared/finishLibrary';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -213,6 +214,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [], bomSuffix: '', isSubFinish: false, subFinishCode: '' });
     const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: [], subFinishCode: '' });
     const [newFinishClientMapping, setNewFinishClientMapping] = useState({ customerId: '', clientFinishName: '' });
+    // The finish list's tick-boxes and the bulk material (Shared/finishLibrary, 2026-10-05).
+    const [finSel, setFinSel] = useState([]);
+    const [finBulkMaterial, setFinBulkMaterial] = useState('');
     
     const [finishUploadProgress, setFinishUploadProgress] = useState(0);
     const [inlineTextureProgress, setInlineTextureProgress] = useState({});
@@ -1442,6 +1446,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const handleSyncFloorRecipes = async () => {
         if (!window.confirm("Sync finishes with the Finishing Floor?\n\n• Floor recipes missing here import to HQ\n• HQ finishes with NO floor recipe (new from sales) PUSH to the floor as NEEDS-RECIPE stubs — Grace builds the recipe there, or deletes it\n• -S/-P stream variants are skipped both ways (floor routing detail)")) return;
         let currentFinishes = [...globalFinishes]; let addedCount = 0;
+        const needMaterial = [];   // imported with no material — a person sets it (they are ticked for the bulk bar)
         floorRecipeData.forEach(recipe => {
             // -S/-P stream variants never become HQ finishes — the MASTER code is the finish;
             // the floor resolves the variant per stream (Stuart 2026-08-11).
@@ -1450,7 +1455,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 // Floor recipes are keyed by their code (fin_recipes doc id). Carry the FULL code as
                 // the finish ID/Code (was truncated to 5 chars, which broke code-based dedup on
                 // re-sync for longer codes); name seeds the same value as an editable placeholder.
-                currentFinishes.push({ id: `FIN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, name: recipe.id.toUpperCase(), code: recipe.id.toUpperCase(), type: 'MIXED', textureUrl: '', status: 'Production Ready', clientMapping: [] });
+                // A MATERIAL WHERE THE CODE STATES ONE (S01 → WOOD, P01 / EP1 / MEP1 → METAL), AND NO GUESS WHERE IT DOES
+                // NOT (2026-10-05): the nine finishes this sync made with no material applied to no part, and SM01 —
+                // guessed METAL by the 08-17 seed — was a wood stain. The ones left blank are listed and ticked below.
+                const made = { id: `FIN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`, name: recipe.id.toUpperCase(), code: recipe.id.toUpperCase(), type: 'MIXED', textureUrl: '', status: 'Production Ready', clientMapping: [], material: materialKnownFromCode(recipe.id) };
+                currentFinishes.push(made);
+                if (!made.material) needMaterial.push(made);
                 addedCount++;
             }
         });
@@ -1479,12 +1489,15 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
         if (addedCount > 0) await setDoc(doc(db, "system", "master_finishes"), { finishes: currentFinishes }, { merge: true });
         if (addedCount > 0 || pushedCount > 0) {
-            alert(`Sync complete:\n\n• ${addedCount} floor recipe(s) imported to HQ\n• ${pushedCount} HQ finish(es) pushed to the floor as NEEDS-RECIPE stubs${pushedCodes.length ? `:\n  ${pushedCodes.join(', ')}` : ''}\n\nGrace finds them flagged on Finishing → FINISH RECIPES — she adds the recipe steps, or deletes them (which offers to remove the finish from HQ too).`);
+            if (needMaterial.length) setFinSel(needMaterial.map(f => f.id));
+            alert(`Sync complete:\n\n• ${addedCount} floor recipe(s) imported to HQ\n• ${pushedCount} HQ finish(es) pushed to the floor as NEEDS-RECIPE stubs${pushedCodes.length ? `:\n  ${pushedCodes.join(', ')}` : ''}\n\nGrace finds them flagged on Finishing → FINISH RECIPES — she adds the recipe steps, or deletes them (which offers to remove the finish from HQ too).${needMaterial.length ? `\n\n⚠ ${needMaterial.length} imported finish(es) have NO MATERIAL yet and cannot be applied to any part until one is set:\n  ${needMaterial.map(f => f.code).join(', ')}\nThey are ticked in the list — choose the material in the bar above it and press Apply.` : ''}`);
         } else alert("HQ and the floor are in sync!");
     };
 
     const handleAddGlobalFinish = async () => {
-        if (!newFinishConfig.name) return alert("Finish name required.");
+        // ONE RECORD PER CODE, A MATERIAL ON EVERY FINISH (Shared/finishLibrary, 2026-10-05).
+        const refusal = finishSaveRefusal({ config: newFinishConfig, lists: [globalFinishes, outsourceFinishes], exceptId: editingGlobalFinish, originalCode: editingGlobalFinish ? finishCodeOf(globalFinishes.find(f => f.id === editingGlobalFinish)) : '' });
+        if (refusal) return alert(refusal);
         let updatedFinishes;
         
         // BOM species suffix (e.g. "-O" oak / "-W" walnut): quotes + pushes consume `<base><suffix>`
@@ -1573,6 +1586,35 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         );
     };
 
+    // ── THE FINISH LIBRARY KEEPS ITSELF STRAIGHT (Stuart 2026-10-05, M2C · FLAT IRON NEW · Shared/finishLibrary) ──
+    // Codes that exist twice (both copies show on the CPQ finish board), finishes with no material (they apply
+    // to no part), and one action on several ticked finishes instead of ten edits.
+    const finishDups = duplicateCodesOf(globalFinishes);
+    const finishDupRemovable = finishDups.reduce((n, d) => n + d.remove.length, 0);
+    const finishNoMaterial = missingMaterialOf(globalFinishes);
+    const saveMasterFinishes = (list) => setDoc(doc(db, "system", "master_finishes"), { finishes: list }, { merge: true });
+    const finTicked = globalFinishes.filter(f => finSel.includes(f.id));
+    const handleRemoveDuplicateFinishes = async () => {
+        const ids = finishDups.flatMap(d => d.remove.map(r => r.id));
+        if (!ids.length) return alert(`Each duplicate copy holds something the other lacks (customer names, a species suffix, a sub-finish or its own picture) — look at these by hand:\n\n${finishDups.map(d => d.code).join(', ')}`);
+        if (!window.confirm(duplicateRemovalText(finishDups))) return;
+        try { await saveMasterFinishes(withoutIds(globalFinishes, ids)); setFinSel(sel => sel.filter(id => !ids.includes(id))); }
+        catch (e) { alert('Remove failed: ' + (e.message || e)); }
+    };
+    const handleBulkFinishMaterial = async () => {
+        if (!finTicked.length) return;
+        if (!finBulkMaterial) return alert('Choose the material to set.');
+        if (!window.confirm(`Set material ${finBulkMaterial} on ${finTicked.length} finish(es)?\n\n${finTicked.map(f => `  ${finishCodeOf(f)}${f.name && String(f.name).toUpperCase() !== finishCodeOf(f) ? ` (${f.name})` : ''} — now ${String(f.material || '').toUpperCase() || 'NONE'}`).join('\n')}\n\nA part only wears a finish of a material it is made in — a wood rod takes WOOD finishes, a steel bracket METAL.`)) return;
+        try { await saveMasterFinishes(withMaterial(globalFinishes, finTicked.map(f => f.id), finBulkMaterial)); setFinSel([]); }
+        catch (e) { alert('Save failed: ' + (e.message || e)); }
+    };
+    const handleBulkFinishRemove = async () => {
+        if (!finTicked.length) return;
+        if (!window.confirm(`DELETE ${finTicked.length} master finish record(s)?\n\n${finTicked.map(f => `  ${finishLine(f)}`).join('\n')}\n\nFlows, recipes and quotes know a finish by its CODE — a code whose LAST record is deleted disappears from the CPQ finish board.`)) return;
+        try { await saveMasterFinishes(withoutIds(globalFinishes, finTicked.map(f => f.id))); setFinSel([]); }
+        catch (e) { alert('Remove failed: ' + (e.message || e)); }
+    };
+
     const handleRemoveFinish = async (idToRemove) => {
         if (!window.confirm("Delete this Master Finish?")) return;
         await setDoc(doc(db, "system", "master_finishes"), { finishes: globalFinishes.filter(f => f.id !== idToRemove) }, { merge: true });
@@ -1580,6 +1622,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
     const handleAddOutsourceFinish = async () => {
         if (!newOutsourceFinishConfig.name) return alert("Descriptive name required.");
+        // The same two rules as an in-house finish: a material, and a code no other record holds.
+        const outRefusal = finishSaveRefusal({ config: newOutsourceFinishConfig, lists: [globalFinishes, outsourceFinishes], exceptId: editingOutsourceFinish, originalCode: editingOutsourceFinish ? finishCodeOf(outsourceFinishes.find(f => f.id === editingOutsourceFinish)) : '' });
+        if (outRefusal) return alert(outRefusal);
         // Doc id derives from the Code (the main identifier) when given, else the descriptive name
         // (backward compatible). Editing keeps the existing id so references stay intact.
         const idBasis = (newOutsourceFinishConfig.code || newOutsourceFinishConfig.name).toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -2248,7 +2293,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                 <div><label style={labelStyle}>Category / Type</label><input value={newFinishConfig.type} onChange={(e) => setNewFinishConfig({...newFinishConfig, type: e.target.value})} placeholder="e.g. METAL, WOOD" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
                                                 <div><label style={labelStyle} title="MATERIAL — the finish family this finish belongs to. A part only wears a finish whose material the part is made in, so a wood stain never lands on a steel bracket and nothing lands on clear acrylic. The list is the MATERIALS Master Dictionary above.">Material</label>
                                                     <select value={newFinishConfig.material || ''} onChange={(e) => setNewFinishConfig({...newFinishConfig, material: e.target.value})} style={fieldStyle}>
-                                                        <option value="">— unset (reads as METAL) —</option>
+                                                        <option value="">— choose (required) —</option>
                                                         {(globalLists.materials || []).map(m => <option key={m} value={String(m).toUpperCase()}>{m}</option>)}
                                                     </select>
                                                 </div>
@@ -2291,6 +2336,35 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                     )}
                                     <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
                                         {globalFinishes.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No finishes added yet.</span>}
+                                        {/* ONE RECORD PER CODE · A MATERIAL ON EVERY FINISH (Stuart 2026-10-05, Shared/finishLibrary) */}
+                                        {finishDups.length > 0 && (
+                                            <div style={{ border: '1px solid #d9534f', background: '#fdf2f2', padding: '12px 14px', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.ink }}>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700, marginBottom: '4px' }}>⚠ {finishDups.length} code{finishDups.length === 1 ? '' : 's'} exist more than once</div>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{finishDups.map(d => `${d.code} ×${1 + d.remove.length + d.look.length}`).join(' · ')}</div>
+                                                <div style={{ marginTop: '4px', color: theme.inkSoft }}>A flow offers finishes by code, so every copy shows on the CPQ finish board.</div>
+                                                <button onClick={handleRemoveDuplicateFinishes} style={{ marginTop: '8px', background: '#d9534f', color: '#fff', border: 'none', padding: '7px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{finishDupRemovable ? `Remove the ${finishDupRemovable} cop${finishDupRemovable === 1 ? 'y' : 'ies'} that hold nothing — lists them first` : 'Why these need a look'}</button>
+                                            </div>
+                                        )}
+                                        {finishNoMaterial.length > 0 && (
+                                            <div style={{ border: '1px solid #e07b00', background: '#fff8ee', padding: '12px 14px', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.ink }}>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#b05f00', fontWeight: 700, marginBottom: '4px' }}>⚠ {finishNoMaterial.length} finish{finishNoMaterial.length === 1 ? ' has' : 'es have'} no material — {finishNoMaterial.length === 1 ? 'it' : 'they'} cannot be applied to any part</div>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{finishNoMaterial.map(finishCodeOf).join(' · ')}</div>
+                                                <button onClick={() => setFinSel(finishNoMaterial.map(f => f.id))} style={{ marginTop: '8px', background: 'transparent', color: '#b05f00', border: '1px solid #e07b00', padding: '7px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Tick them</button>
+                                            </div>
+                                        )}
+                                        {finTicked.length > 0 && (
+                                            <div style={{ position: 'sticky', top: 0, zIndex: 2, display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', background: theme.ink, color: '#fff', padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+                                                <span>{finTicked.length} ticked</span>
+                                                <select value={finBulkMaterial} onChange={e => setFinBulkMaterial(e.target.value)} style={{ fontFamily: 'var(--mono)', fontSize: '11px', padding: '5px 6px' }}>
+                                                    <option value="">Set material…</option>
+                                                    {(globalLists.materials || []).map(m => <option key={m} value={String(m).toUpperCase()}>{m}</option>)}
+                                                </select>
+                                                <button onClick={handleBulkFinishMaterial} disabled={!finBulkMaterial} style={{ background: '#fff', color: theme.ink, border: 'none', padding: '6px 12px', cursor: finBulkMaterial ? 'pointer' : 'not-allowed', opacity: finBulkMaterial ? 1 : 0.5, fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Apply</button>
+                                                <span style={{ flex: 1 }} />
+                                                <button onClick={handleBulkFinishRemove} style={{ background: 'transparent', color: '#ffb4b0', border: '1px solid #ffb4b0', padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Remove ticked</button>
+                                                <button onClick={() => setFinSel([])} style={{ background: 'transparent', color: '#fff', border: '1px solid rgba(255,255,255,.4)', padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Clear</button>
+                                            </div>
+                                        )}
                                         {/* MASTERS ONLY at top level (Stuart 2026-08-11): -S/-P stream variants are
                                             floor routing detail — they show INSIDE their master's card as chips,
                                             never as their own rows, and never in the CPQ flow builder. */}
@@ -2302,10 +2376,13 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                             return (
                                                 <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}`, borderLeft: `2px solid ${theme.brass}` }}>
                                                     <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                                                        <input type="checkbox" checked={finSel.includes(finish.id)} onChange={e => setFinSel(sel => (e.target.checked ? [...sel, finish.id] : sel.filter(id => id !== finish.id)))} title="Tick to set a material on, or remove, several finishes at once" style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
                                                         <div style={{ width: '48px', height: '48px', background: finish.textureUrl ? `url(${finish.textureUrl}) center/cover` : theme.paper2, borderRadius: '50%', border: `1px solid ${theme.line}` }} />
                                                         <div>
                                                             <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.code || finish.name}</div>
                                                             {finish.code && finish.name && <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.inkSoft, marginTop: '2px' }}>{finish.name}</div>}
+                                                            {/* THE MATERIAL, ON THE ROW (2026-10-05): it decides which parts wear the finish and was only visible inside Edit. */}
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginTop: '4px', color: String(finish.material || '').trim() ? theme.ink : '#b05f00', fontWeight: String(finish.material || '').trim() ? 400 : 700 }}>Material: {String(finish.material || '').trim().toUpperCase() || 'NONE — applies to no part'}</div>
                                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Status: {hasRecipe ? 'Production Ready' : 'Working / R&D'}</div>
                                                             {(variantS || variantP) && (
                                                                 <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>

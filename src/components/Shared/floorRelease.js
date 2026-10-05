@@ -20,7 +20,7 @@
 // number onto BOTH docs. Moved, not rewritten.
 
 import { db } from '../../firebase';
-import { collection, deleteField, doc, getDocs, query, runTransaction, setDoc, updateDoc, where } from 'firebase/firestore';
+import { collection, deleteField, doc, getDoc, getDocs, query, runTransaction, setDoc, updateDoc, where } from 'firebase/firestore';
 import { releaseClaimVerdict, newClaimToken } from './releaseClaim';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { enqueueNsWrite } from './nsOutbox';
@@ -235,6 +235,21 @@ export async function releaseStockWoToFloor({ hqOrder, brand, by = '', log = noo
     return { released: true, nsNote, finId: fp.id };
 }
 
+// ── THE FINISH LIBRARY, FOR THE RELEASE (Stuart 2026-10-05) ──────────────────────────────────────────────
+// The shop job's phosphate stamp reads the finish's MATERIAL (a WOOD finish is never phosphated), so the release
+// needs the library's list: one small document (system/master_finishes), kept for five minutes. Unreadable →
+// null, and the rule falls back to the S-code exactly as it did before.
+let finishListCache = { at: 0, list: null };
+export async function fetchMasterFinishes({ now = Date.now(), maxAgeMs = 5 * 60 * 1000 } = {}) {
+    if (finishListCache.list && now - finishListCache.at < maxAgeMs) return finishListCache.list;
+    try {
+        const snap = await getDoc(doc(db, 'system', 'master_finishes'));
+        const list = snap.exists() && Array.isArray(snap.data().finishes) ? snap.data().finishes : [];
+        finishListCache = { at: now, list };
+        return list;
+    } catch (e) { return null; }
+}
+
 // ── THE SHOP DOCUMENT, BUILT ONCE (Brief B1) ─────────────────────────────────────────────────
 // pushToShop's payload, the CPQ split's shop half and (through parkWorkOrder + pushToShop) A's
 // component milling orders all wrote shop_custom_orders by hand. The decisions they must agree on
@@ -273,8 +288,10 @@ export async function writeShopDocOnce(shopId, shopDoc, { replace = false } = {}
  * @param {object} [p.part]        the library record for the item (shopInstruction comes from it)
  * @param {object} [p.fields]      caller-specific fields (item, partNum, qty, cutList, fabNotes, imageUrl…)
  * @param {object} [p.extra]       stamps (cutSheetMissing, visionUsed)
+ * @param {Array}  [p.finishes]    the finish library's list (fetchMasterFinishes) — a recipe whose finish is tagged
+ *                                 WOOD is never phosphated, whatever its code (Stuart 2026-10-05; Shared/phosphateRule)
  */
-export function buildShopDoc({ hqOrder = {}, orderType = 'stock', shopId, finishRecipe = '', finSiblingId = null, part = null, by = '', now = Date.now(), fields = {}, extra = {} }) {
+export function buildShopDoc({ hqOrder = {}, orderType = 'stock', shopId, finishRecipe = '', finSiblingId = null, part = null, by = '', now = Date.now(), fields = {}, extra = {}, finishes = null }) {
     if (!shopId) throw new Error('buildShopDoc: shopId is required');
     const isStock = orderType === 'stock';
     const recipe = String(finishRecipe || '');
@@ -282,7 +299,7 @@ export function buildShopDoc({ hqOrder = {}, orderType = 'stock', shopId, finish
     // Fundamental rule (Stuart 2026-07-15): ANY in-house finish (a real recipe that is not outsourced,
     // not mill/raw, not a wood stain) → the custom parts get phosphated at the station adjacent to
     // custom fab (Shared/phosphateRule). An explicit flag on the record wins.
-    const needsPhosphating = hqOrder.needsPhosphating === true || needsPhosphatingOf(recipe);
+    const needsPhosphating = hqOrder.needsPhosphating === true || needsPhosphatingOf(recipe, finishes);
     const orderKey = (orderType === 'sales' ? (hqOrder.soId || hqOrder.orderKey) : null) || hqOrder.hqJobId || hqOrder.id;
     const spec = part && part.manufacturingSpecs ? part.manufacturingSpecs : null;
     const docOut = {

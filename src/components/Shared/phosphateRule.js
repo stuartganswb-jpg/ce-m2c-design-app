@@ -8,6 +8,12 @@
 // stamped the document; the Shop card re-derived it live without the exemption and without reading the
 // stamp, so a stained wood rod stamped "no phosphate" still read "Parts Require Phosphate" on the card
 // (Eric 2026-10-02: wood rods). One definition, here; the card honours the document's own stamp first.
+//
+// WOOD IS WHAT THE FINISH IS TAGGED, NOT ONLY WHAT ITS CODE LOOKS LIKE (Stuart 2026-10-05: "if any finish is
+// tagged wood that should remove the phosphate rather than just relying on the s code"). M2C's stains are
+// SM01…SM10 — no "S + digit" — so an oak rod in SM01 would have been sent to the phosphate station. The finish
+// library's MATERIAL is the fact: a recipe whose finish is tagged WOOD is never phosphated. The S-code stays as
+// the fallback for a caller that has no finish list to ask, so nothing that was exempt becomes un-exempt.
 // Pure. Harness: scripts/phosphateRule.test.mjs.
 
 import { isOutsourcedFinishCode, finishRouteOf } from './finishRouting.js';
@@ -22,10 +28,31 @@ export const isOutsourcedRecipe = (recipe) => {
     return isOutsourcedFinishCode(r) || !!finishRouteOf({ recipe: r }).outsourced;
 };
 
-/** Does a custom part finished in this recipe get phosphated? */
-export const needsPhosphatingOf = (recipe) => {
+const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
+/** The finish code a recipe string leads with: "S03", "S03 - Pure Oak", "SM01 Natural Oak" → the code. */
+export const recipeCodeOf = (recipe) => U(recipe).split(/\s+-\s+|\s+/)[0] || '';
+
+/**
+ * Is this recipe a WOOD finish? Tagged WOOD in the finish library (any record with that code, or named exactly
+ * as the recipe reads) — or, with no list to ask or no tag found, an S-code stain.
+ * @param finishes  system/master_finishes' list, when the caller has it
+ */
+export const isWoodFinishRecipe = (recipe, finishes = null) => {
     const r = String(recipe || '').trim();
-    return !!r && r !== 'PENDING-RECIPE' && !isOutsourcedRecipe(r) && !MILL_RE.test(r) && !STAIN_RE.test(r);
+    if (!r) return false;
+    if (STAIN_RE.test(r)) return true;
+    if (!Array.isArray(finishes) || !finishes.length) return false;
+    const whole = U(r), code = recipeCodeOf(r);
+    return finishes.some(f => f && /WOOD/.test(U(f.material)) && (U(f.code) === code || U(f.name) === whole || (!U(f.code) && U(f.name) === code)));
+};
+
+/**
+ * Does a custom part finished in this recipe get phosphated?
+ * @param finishes  the finish library's list (optional) — a finish tagged WOOD is never phosphated
+ */
+export const needsPhosphatingOf = (recipe, finishes = null) => {
+    const r = String(recipe || '').trim();
+    return !!r && r !== 'PENDING-RECIPE' && !isOutsourcedRecipe(r) && !MILL_RE.test(r) && !isWoodFinishRecipe(r, finishes);
 };
 
 /** What a shop document shows: its own stamp when it carries one, else the rule on its recipe. */

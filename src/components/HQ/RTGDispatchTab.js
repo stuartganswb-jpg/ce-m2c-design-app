@@ -15,7 +15,7 @@ import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
 import { finishGroupsOf, docStreamsOf, poleCountRepairOf, poleTrackRepairOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
-import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe, writeShopDocOnce, claimRelease, endReleaseClaim } from '../Shared/floorRelease';
+import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe, writeShopDocOnce, claimRelease, endReleaseClaim, fetchMasterFinishes } from '../Shared/floorRelease';
 import { keptShopJobText } from '../Shared/shopJobOnce';
 import { liveClaimOf, claimRefusedText } from '../Shared/releaseClaim';
 import AuditLogPanel from './AuditLogPanel';
@@ -1719,6 +1719,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
 
                 // WRITTEN ONCE (Eric 2026-10-02): only the confirmed ↻ Re-dispatch above overwrites an existing shop job.
                 const shopWrite = await writeShopDocOnce(shopId, buildShopDoc({
+                    finishes: await fetchMasterFinishes(),   // a finish tagged WOOD is never phosphated (2026-10-05)
                     hqOrder: { ...so, hqJobId: so.hqJobId, soId: so.soId || null, orderKey, brand: activeBrand },
                     orderType: 'sales', shopId, finishRecipe: finishGroups.length > 1 ? (grp.finish || finishRecipe) : finishRecipe, finSiblingId: (finishingNeeded || pickOnly) ? finId : null,
                     part: firstPart, by: currentUser || '',
@@ -2115,6 +2116,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // WRITTEN ONCE (Eric 2026-10-02, SO60585 Row 2): a second release of a job already on the shop floor —
             // completed, plated and received in that case — rewrote it from scratch as Pending. It is left as it is now.
             const shopWrite = await writeShopDocOnce(shopJobId, buildShopDoc({
+                finishes: await fetchMasterFinishes(),   // a finish tagged WOOD is never phosphated (2026-10-05)
                 hqOrder: { ...hqOrder, brand: activeBrand }, orderType, shopId: shopJobId, finishRecipe,
                 finSiblingId: hqOrder.finSiblingId || null, part, by: currentUser || '',
                 // ONE FIELD BUILDER (Shared/cpqJobFacts.shopReleaseFieldsOf, 2026-09-27): a row pair carries its own name,
