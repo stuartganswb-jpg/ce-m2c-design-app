@@ -22,6 +22,7 @@ import { planNodeThumbs, planModelThumbs, slotReportText, modelReportText, NODE_
 import { splitNodes } from '../Shared/nodeList';
 import { canonicalCollection, canonicalCollections } from '../Shared/collectionName';
 import { finishCodeOf, missingMaterialOf, duplicateCodesOf, duplicateRemovalText, withoutIds, withMaterial, finishSaveRefusal, materialKnownFromCode, finishLine } from '../Shared/finishLibrary';
+import { parseQuestions, questionsText } from '../Shared/finishQuestions';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -1518,11 +1519,13 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 // the track/components take when THIS finish is on the mainline.
                 isSubFinish: !!newFinishConfig.isSubFinish,
                 subFinishCode: String(newFinishConfig.subFinishCode || '').toUpperCase(),
-                material: String(newFinishConfig.material || '').toUpperCase()
+                material: String(newFinishConfig.material || '').toUpperCase(),
+                // What this finish asks of the order (Shared/finishQuestions — brass: brushed / polished, lacquered or not).
+                questions: parseQuestions(newFinishConfig.questionsText)
             } : f);
         } else {
             const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working', clientMapping: newFinishConfig.clientMapping || [], bomSuffix, isSubFinish: !!newFinishConfig.isSubFinish, subFinishCode: String(newFinishConfig.subFinishCode || '').toUpperCase(), material: String(newFinishConfig.material || '').toUpperCase() };
-            updatedFinishes = [...globalFinishes, newFinish];
+            updatedFinishes = [...globalFinishes, { ...newFinish, questions: parseQuestions(newFinishConfig.questionsText) }];
         }
 
         await setDoc(doc(db, "system", "master_finishes"), { finishes: updatedFinishes }, { merge: true });
@@ -1541,6 +1544,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             bomSuffix: finish.bomSuffix || '',
             isSubFinish: !!finish.isSubFinish,
             subFinishCode: finish.subFinishCode || '',
+            questionsText: questionsText(finish.questions),
             // ⚠ MUST BE LOADED (Stuart 2026-08-17: "i hit seed, but everything still shows as
             // unset"). The seed wrote correctly — the editor simply never read the field back, so
             // it showed blank AND would have written that blank over the seeded value on the next
@@ -1646,7 +1650,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             // plated finish is metal today, but nothing about being outsourced makes it so — and
             // the day a wood or acrylic process is sent out, the rule must already be there rather
             // than discovered by a wood rod wearing a nickel plate.
-            material: String(newOutsourceFinishConfig.material || '').toUpperCase()
+            material: String(newOutsourceFinishConfig.material || '').toUpperCase(),
+            // What this finish asks of the order (Shared/finishQuestions) — an array, so the merge replaces it whole.
+            questions: parseQuestions(newOutsourceFinishConfig.questionsText)
         }, { merge: true });
 
         setNewOutsourceFinishConfig({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: [], subFinishCode: '' });
@@ -1665,7 +1671,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             textureUrl: finish.textureUrl || '',
             clientMapping: finish.clientMapping || [],
             subFinishCode: finish.subFinishCode || '',
-            material: finish.material || ''
+            material: finish.material || '',
+            questionsText: questionsText(finish.questions)
         });
         setEditingOutsourceFinish(finish.id);
         setShowOutsourceFinishForm(true);
@@ -2298,6 +2305,13 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                     </select>
                                                 </div>
                                             </div>
+                                            {/* WHAT THE FINISH ASKS OF THE ORDER (Stuart 2026-10-06 · Shared/finishQuestions): solid brass is one
+                                                finish, and the order must say brushed or polished, lacquered or not. */}
+                                            <div>
+                                                <label style={labelStyle} title="One question per line — a label, a colon, then the choices separated by commas. CPQ asks each one once per configuration wherever this finish is worn, will not add the configuration until every one is answered, and prints the answers in the finish on every line that wears it (quote, sales order, floor sheets, pick, packing list).">Questions the order must answer (optional — one per line)</label>
+                                                <textarea value={newFinishConfig.questionsText || ''} onChange={(e) => setNewFinishConfig({...newFinishConfig, questionsText: e.target.value})} placeholder={'Surface: Brushed, Polished\nCoating: Unlacquered, Lacquered'} rows={2} style={{ ...fieldStyle, fontFamily: 'var(--mono)', fontSize: '0.85rem', resize: 'vertical' }} />
+                                                <div style={{ fontSize: '0.78rem', color: theme.inkSoft, marginTop: '4px' }}>Asked once per configuration in CPQ, required before the configuration is added, and printed in the finish on every line that wears it.</div>
+                                            </div>
                                             <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>
                                                 <label style={labelStyle}>Seamless Texture Map (JPG/PNG)</label>
                                                 {newFinishConfig.textureUrl && <div style={{ color: theme.inkSoft, fontSize: '0.85rem', marginBottom: '8px' }}>Asset Ready</div>}
@@ -2440,6 +2454,13 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                         {(globalLists.materials || []).map(m => <option key={m} value={String(m).toUpperCase()}>{m}</option>)}
                                                     </select>
                                                 </div>
+                                            </div>
+                                            {/* WHAT THE FINISH ASKS OF THE ORDER (Stuart 2026-10-06 · Shared/finishQuestions): solid brass is one
+                                                finish, and the order must say brushed or polished, lacquered or not. */}
+                                            <div>
+                                                <label style={labelStyle} title="One question per line — a label, a colon, then the choices separated by commas. CPQ asks each one once per configuration wherever this finish is worn, will not add the configuration until every one is answered, and prints the answers in the finish on every line that wears it (quote, sales order, floor sheets, pick, packing list).">Questions the order must answer (optional — one per line)</label>
+                                                <textarea value={newOutsourceFinishConfig.questionsText || ''} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, questionsText: e.target.value})} placeholder={'Surface: Brushed, Polished\nCoating: Unlacquered, Lacquered'} rows={2} style={{ ...fieldStyle, fontFamily: 'var(--mono)', fontSize: '0.85rem', resize: 'vertical' }} />
+                                                <div style={{ fontSize: '0.78rem', color: theme.inkSoft, marginTop: '4px' }}>Asked once per configuration in CPQ, required before the configuration is added, and printed in the finish on every line that wears it.</div>
                                             </div>
                                             
                                             <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>

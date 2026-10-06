@@ -28,6 +28,7 @@ import { indexForAssembly } from './partLookup.js';
 import { handoffItem, customerLines } from './hardwareHandoff';
 import { finishLabelOf, takesNoFinish } from './finishLabel';
 import { wearsAsTwin } from './materialTwin';
+import { questionsOf, unansweredOf } from './finishQuestions';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 import { captureTransparentPng, saveGuideCapture } from './guideCapture';
@@ -205,6 +206,9 @@ function HardwareConfiguratorInner({
     // in one piece, and the line carries that to the floor as a shop note. Saved with the line
     // (engineConfig.spliceWaived) so Edit or a reopen does not quietly put the splice back.
     const [spliceWaived, setSpliceWaived] = useState(false);
+    // What a finish asks of the order (Shared/finishQuestions — solid brass: brushed or polished, lacquered or not):
+    // one answer per finish for the whole configuration. { LBR: { Surface: 'Polished', Coating: 'Lacquered' } }
+    const [finishAnswers, setFinishAnswers] = useState({});
     // What a swatch click applies to, when the operator has switched it on THIS step: { step, scope } (Shared/finishScope).
     const [scopePick, setScopePick] = useState(null);
     const [drawnSplices, setDrawnSplices] = useState([]);   // [{ distInches, ref }] — where Vision drew them, for the pencil line
@@ -1077,6 +1081,19 @@ function HardwareConfiguratorInner({
     // A hidden part with no price is still a real problem — it just is not the operator's, so it
     // is reported quietly rather than in red on a quote they cannot act on.
     const priceWarnings = useMemo(() => pricingWarnings({ lines: priced.lines.filter(l => !l.hidden) }), [priced]);
+    // THE FINISHES THAT ASK SOMETHING, among those a line actually wears (Stuart 2026-10-06, the brass surface and
+    // coating: "a dedicated field would be better" · one answer for the "whole config" · "yes required").
+    const askingFinishes = useMemo(() => {
+        const worn = new Set(priced.lines.map(l => String(l.finishCode || '').toUpperCase()).filter(Boolean));
+        return [...worn].map(c => finishByCode.get(c)).filter(f => f && questionsOf(f).length)
+            .map(f => ({ finish: f, code: String(f.code || f.name || '').toUpperCase(), questions: questionsOf(f) }));
+    }, [priced, finishByCode]);
+    // only the answers of finishes still worn travel with the line
+    const liveFinishAnswers = useMemo(() => {
+        const out = {};
+        askingFinishes.forEach(a => { if (finishAnswers[a.code]) out[a.code] = finishAnswers[a.code]; });
+        return out;
+    }, [askingFinishes, finishAnswers]);
     // The parts each item-kit line brings — the hidden lines that follow it (hardwarePricing writes a kit, then its
     // parts). Read by the pricing panel so a kit line can say what each part wears.
     const kitPartsByLine = useMemo(() => {
@@ -1436,6 +1453,7 @@ function HardwareConfiguratorInner({
         // another (QUO147: one splice → three, Stuart 2026-09-11; Shared/extrasRestore).
         setExtras(normalizeExtras(Array.isArray(s.extras) ? s.extras : [], extraItems, findPart));
         setSpliceWaived(s.spliceWaived === true);   // a declined splice stays declined
+        setFinishAnswers((s.finishAnswers && typeof s.finishAnswers === 'object') ? JSON.parse(JSON.stringify(s.finishAnswers)) : {});
         if (s.globalFinishes && typeof s.globalFinishes === 'object') setGlobalFinishes({ ...s.globalFinishes });
         else if (s.globalFinish) setGlobalFinish(s.globalFinish);
         if (Number(s.lengthInches) > 0) {
@@ -1573,12 +1591,13 @@ function HardwareConfiguratorInner({
             trvSel, fabricId, sizePick, stepIx, drawnSplices, visionSeededId: seededRef.current || '',
             ...(spliceWaived ? { spliceWaived: true } : {}),
             ...(Object.keys(stepNoteClient).length ? { stepNoteClient } : {}),
+            ...(Object.keys(finishAnswers).length ? { finishAnswers } : {}),
         };
         if (!workPublishedRef.current && workIsPristine(work)) return;
         workPublishedRef.current = true;
         onWorkState(work);
     }, [onWorkState, assembly, answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, typedExtras,
-        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices, spliceWaived, stepNoteClient]);
+        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices, spliceWaived, stepNoteClient, finishAnswers]);
     const addConfiguration = () => {
         if (!priced.lines.length) return;
         // ⚠ NEVER ADD SHORT (Stuart 2026-09-10). A removal nobody has acknowledged is an order that
@@ -1592,6 +1611,13 @@ function HardwareConfiguratorInner({
         const bareWood = chosenList.filter(c => Array.isArray(c.materials) && c.materials.includes('WOOD') && !c.noFinish && !finishFor(c));
         if (bareWood.length) {
             alert(`Pick the WOOD finish first — ${bareWood.map(c => c.name || c.partId).join(', ')} would leave here with no stain.\n\nChoose it on the WOOD row of the finish step, or on the part itself.`);
+            return;
+        }
+        // A FINISH THAT ASKS IS ANSWERED BEFORE THE LINE LEAVES (Stuart 2026-10-06: "yes required"). Solid brass with
+        // no word on brushed / polished, lacquered or not, is an order the floor cannot make.
+        const openQuestions = askingFinishes.map(a => [a, unansweredOf(a.finish, finishAnswers[a.code])]).filter(([, m]) => m.length);
+        if (openQuestions.length) {
+            alert(`Answer the finish questions first — ${openQuestions.map(([a, m]) => `${a.code}${a.finish.name ? ` (${String(a.finish.name).trim()})` : ''}: ${m.join(', ')}`).join(' · ')}.\n\nThey are at the top of the finish panel and apply to the whole configuration.`);
             return;
         }
         // THE HANDOFF IS BUILT HERE, in the shape CPQ has always written — so the shop floor, the
@@ -1619,6 +1645,8 @@ function HardwareConfiguratorInner({
             // Filtered to extras actually TAKEN: extraLines coerces a 0 qty to 1 for display.
             extras, extraLines: extraLines.filter(l => Number((extras.find(x => x.code === l.partId && (x.slot || '') === (l.slot || '')) || {}).qty) > 0),
             stepNotes, answers, picks: livePicks, partFinish, globalFinish, globalFinishes, stepQty,
+            // What the finishes were asked — written into each line's finish text, and kept for Edit.
+            finishAnswers: liveFinishAnswers,
             // The kit, so the cart bills exactly what the panel showed — and WHICH kit, so Edit restores it.
             kit: kitBill, kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
             // The Traverse components answers (carrier style + count, draw, picks) — Edit restores them, or
@@ -1675,7 +1703,7 @@ function HardwareConfiguratorInner({
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
         kitPicksDoneRef.current = new Set();   // the next configuration fills its own brackets
-        setStepNotes({}); setStepNoteClient({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]);
+        setStepNotes({}); setStepNoteClient({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setFinishAnswers({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]);
     };
 
     const railCell = (st, i) => {
@@ -1855,6 +1883,29 @@ function HardwareConfiguratorInner({
                     </button>
                 )}
             </div>
+            {/* ── WHAT THE FINISH ASKS (Stuart 2026-10-06 · Shared/finishQuestions) ─────────────────────────
+                Solid brass is one finish and one item per part; brushed or polished, lacquered or not is asked here,
+                once for the whole configuration, and Add waits for it. The answers print in each line's finish. */}
+            {askingFinishes.map(a => {
+                const mine = finishAnswers[a.code] || {};
+                const open = unansweredOf(a.finish, mine);
+                return (
+                    <div key={a.code} style={{ padding: '8px 13px', borderBottom: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '6px', background: open.length ? '#fdf3ec' : 'transparent' }}>
+                        <span style={{ ...mono, fontSize: '8.5px', color: open.length ? '#b0281a' : 'var(--ink-soft)' }}>
+                            {a.code}{a.finish.name ? ` · ${String(a.finish.name).trim()}` : ''} — {open.length ? 'answer before adding' : 'whole configuration'}
+                        </span>
+                        {a.questions.map(q => (
+                            <div key={q.label} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '5px' }}>
+                                <span style={{ ...mono, fontSize: '8.5px', minWidth: '58px', color: 'var(--ink-soft)' }}>{q.label}</span>
+                                {q.choices.map(ch => (
+                                    <button key={ch} onClick={() => setFinishAnswers(all => ({ ...all, [a.code]: { ...(all[a.code] || {}), [q.label]: ch } }))}
+                                        style={{ ...chip(String(mine[q.label] || '').toUpperCase() === ch.toUpperCase()), textTransform: 'none', letterSpacing: 0 }}>{ch}</button>
+                                ))}
+                            </div>
+                        ))}
+                    </div>
+                );
+            })}
             <div style={{ padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', maxHeight: 'calc(100vh - 160px)' }}>
                 {!finishGroups.length && <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-faint)' }}>Choose a part to see its finishes.</span>}
                 {finishGroups.map(([mat, g]) => (
@@ -2588,7 +2639,7 @@ function HardwareConfiguratorInner({
                                                         {l.extra && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-faint)' }}>added</span>}
                                                     </span>
                                                     <span style={{ display: 'block', fontSize: '11px', color: 'var(--ink-soft)', lineHeight: 1.25 }}>
-                                                        {findPart(l.partId)?.itemName || l.name}
+                                                        {findPart((l.twinOf && l.soldPartId) || l.partId)?.itemName || l.name}
                                                     </span>
                                                     {/* ⚠ THE FINISH, ON EVERY LINE (Stuart 2026-08-21: "ideally under each item id and
                                                         description list the finish, this way we are covered in case people do choose

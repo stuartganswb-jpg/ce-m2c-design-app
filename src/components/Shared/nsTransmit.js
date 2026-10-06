@@ -261,6 +261,9 @@ export function resolveJobLines(job, data) {
                       // in-house finish-to-order line bills the BASE item by design, and the
                       // NetSuite document then said nothing about the finish at all).
                       finishNote: (!finishedErpId && code) ? code : '',
+                      // What the finish was asked (Shared/finishQuestions — solid brass: brushed or polished, lacquered or
+                      // not; Stuart 2026-10-06). It is how the part is made, so it is on the NetSuite line too.
+                      finishDetail: code ? String(l.finishDetail || '').trim() : '',
                       // The ITEM's handling is the routing signal, exactly as it is on the floors;
                       // the line already carries it, resolved from the same place.
                       partCategory: l.partHandling || masterPart.manufacturingSpecs?.partHandling || '',
@@ -474,7 +477,7 @@ export function resolveJobLines(job, data) {
           // each carrying its own Tag (custcol3) — merging them would blank the room attribution.
           // A discounted cart line never merges with a full-price twin of the same item (its rate differs).
           // …and a part the kit paid for ($0) never merges with a paid twin of the same item.
-          const key = `${l.nsId}|${l.finishedErpId}|${l.finishNote || ''}|${l.projection}|${l.sidemark || ''}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}|${(l.netFactor && l.netFactor !== 1) ? l.netFactor : ''}|${l.inKit ? 'kit' : ''}`;
+          const key = `${l.nsId}|${l.finishedErpId}|${l.finishNote || ''}|${l.projection}|${l.sidemark || ''}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}|${(l.netFactor && l.netFactor !== 1) ? l.netFactor : ''}|${l.inKit ? 'kit' : ''}|${l.finishDetail || ''}`;
           const cur = agg.get(key);
           if (cur) cur.qty += l.qty;
           else agg.set(key, { ...l });
@@ -571,9 +574,10 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
                     const face = line.aliasFace ? `${line.aliasFace.legacyErpId || line.aliasFace.itemId || line.aliasFace.itemName} — ` : '';
                     // A base-billed finish-to-order line SAYS its finish (Stuart 2026-08-30,
                     // SO60104/05: the NetSuite document was silent about the finish entirely).
+                    const asked = line.finishDetail ? ` · ${line.finishDetail}` : '';   // brushed / polished, lacquered or not
                     return line.finishedErpId
-                        ? `${face}${line.masterPart.itemName} → ${line.finishedErpId} (finished assembly, CPQ)`
-                        : `${face}${line.masterPart.itemName}${line.finishNote ? ` — TO BE FINISHED · ${line.finishNote}` : ''} (Mapped from CPQ)`;
+                        ? `${face}${line.masterPart.itemName} → ${line.finishedErpId}${asked} (finished assembly, CPQ)`
+                        : `${face}${line.masterPart.itemName}${line.finishNote ? ` — TO BE FINISHED · ${line.finishNote}${asked}` : ''} (Mapped from CPQ)`;
                 })(),
                 custcol_part_category: line.partCategory
             };

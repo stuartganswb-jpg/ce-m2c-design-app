@@ -33,6 +33,7 @@
 // safer than two lists that can disagree about what is on the order.
 
 import { applyKitPricing, BILL_GROUP } from './kitSeed.js';
+import { answersOf, answersText, finishTextWith } from './finishQuestions.js';
 import { priceConfiguration } from './hardwarePricing.js';
 import { ENGINE_VERSION } from './engineVersion.js';
 import { pinsFingerprint } from './cartStaleness.js';
@@ -60,7 +61,7 @@ const codeOf = (part, fallback) => String(
  *   cutLength      the shop cuts to this; absent on anything that is not cut
  *   dimensions     wall measurements for returns, read by fabrication
  */
-function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishCode = '') {
+function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishCode = '', finishDetail = '', finishOptions = null) {
     return {
         // ⚠ THE 1.6 LABEL NEVER LEAVES 1.6 (Stuart 2026-08-31, invoice S060147: descriptions read
         // "H21INPOLELEFT" — the designer's node label). A pin's partName is whatever the .glb slot
@@ -90,11 +91,15 @@ function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishC
         // still does — RTG reads those for the recipe. But a configuration with an exception in it
         // cannot be sprayed off one label, so the line says what IT is finished in. A part that
         // wears nothing carries nothing, and the floor reads that as mill.
-        ...(l.finishCode ? { finishCode: l.finishCode, finishLabel: finishName || l.finishCode } : {}),
+        // …and what that finish was ASKED (Shared/finishQuestions — solid brass: brushed or polished, lacquered or
+        // not; Stuart 2026-10-06: "a dedicated field would be better"). Written INTO the finish text, because that
+        // one string is what every document and floor screen already prints; kept beside it in words and by answer.
+        ...(l.finishCode ? { finishCode: l.finishCode, finishLabel: finishTextWith(finishName || l.finishCode, finishDetail) } : {}),
+        ...(l.finishCode && finishDetail ? { finishDetail, ...(finishOptions ? { finishOptions } : {}) } : {}),
         // THEIR word for the finish (Stuart 2026-09-09: the documents and View Item "neither one
         // has the same customer part#, customer color#") — the 4.5 client mapping for the customer
         // this was quoted to, stamped so paper and screens can say it without a second lookup.
-        ...(l.finishCode && clientFinishName ? { clientFinishName } : {}),
+        ...(l.finishCode && clientFinishName ? { clientFinishName: finishTextWith(clientFinishName, finishDetail) } : {}),
         // ── A STOCK-COLOUR PART SAYS ITS COLOUR (Stuart 2026-09-09: the track "should show the
         // finish associated in library with P14"). The track is MADE in bronze or champagne, the
         // one aligned to the order's finish in 4.5 (subFinishCode). It carries no finishCode — the
@@ -171,6 +176,13 @@ export function handoffItem(resolved, ctx = {}) {
         const hit = (Array.isArray(f?.clientMapping) ? f.clientMapping : []).find(m => custKeys.has(String(m?.customerId || '').trim().toUpperCase()));
         return String(hit?.clientFinishName || '').trim();
     };
+    // What each finish was asked, per configuration (Shared/finishQuestions): the answers ride every line that
+    // wears the finish, in the finish's own order and spelling — an answer the finish does not offer is not printed.
+    const finishAnswers = (ctx.finishAnswers && typeof ctx.finishAnswers === 'object') ? ctx.finishAnswers : {};
+    const finishRecordOf = (code) => (finishes || []).find(x => String(x.code || x.name || '').toUpperCase() === String(code || '').toUpperCase()) || null;
+    const answersFor = (code) => finishAnswers[String(code || '').toUpperCase()] || null;
+    const finishDetailOf = (code) => (code ? answersText(finishRecordOf(code), answersFor(code)) : '');
+    const finishOptionsOf = (code) => { const a = code ? answersOf(finishRecordOf(code), answersFor(code)) : {}; return Object.keys(a).length ? a : null; };
     // The order's finish and the stock colour aligned to it; a part that is made in the base
     // colours (role TRACK, or flagged usesSubFinish in the library) wears that instead of a finish.
     const orderFinish = (finishes || []).find(x => String(x.code || '').toUpperCase() === String(ctx.finishCode || '').toUpperCase());
@@ -181,7 +193,8 @@ export function handoffItem(resolved, ctx = {}) {
         // line is named, handled and joined as the twin's own record, not as the standard part the flow pins.
         const part = typeof findPart === 'function' ? ((l.twinOf && l.soldPartId && findPart(l.soldPartId)) || findPart(l.partId)) : null;
         // The engine's own answer first (the rod's finish decides the colour); the order finish's otherwise.
-        return handoffLine(l, part, finishNameOf(l.finishCode), clientFinishNameOf(l.finishCode), l.subFinishCode || (takesSub(l, part) ? alignedSub : ''));
+        return handoffLine(l, part, finishNameOf(l.finishCode), clientFinishNameOf(l.finishCode), l.subFinishCode || (takesSub(l, part) ? alignedSub : ''),
+            finishDetailOf(l.finishCode), finishOptionsOf(l.finishCode));
     });
 
     // Added by hand — real lines, so they route and bill like everything else. They carry their own
@@ -291,6 +304,8 @@ export function handoffItem(resolved, ctx = {}) {
             // finish alone and the wood parts came back wearing nothing. The whole map travels now;
             // the restore already reads it first (globalFinish stays for lines saved before).
             globalFinishes: (ctx.globalFinishes && typeof ctx.globalFinishes === 'object') ? { ...ctx.globalFinishes } : {},
+            // What the finishes were asked (brushed / polished, lacquered or not) — so Edit brings the answers back.
+            ...(Object.keys(finishAnswers).length ? { finishAnswers: JSON.parse(JSON.stringify(finishAnswers)) } : {}),
             // Operator-TYPED slot counts (ring count, centre brackets…). Without these a reopened
             // line fell back to the recommendations — 20 rings restored as the chart's 50
             // (Stuart 2026-08-28, first live heal). Defaults stay defaults: only typed counts save.
