@@ -648,6 +648,20 @@ const WmsGuide = () => (
             <p style={S.p}>A line that reads <b>from the floor</b> is made to order. It arrives from finishing or from
             the plater — never pull it off a shelf.</p>
         </Screen>
+        <Screen title="A configured order, line by line" tag="item · ordered · packed · box · where it is">
+            <p style={S.p}>An order configured in CPQ is listed <b>part by part</b>, not document by document. Each row is
+            one part of the order: how many were <b>ordered</b>, how many the packer has <b>packed</b> (the count ticked
+            at Packaging Prep), the <b>box</b> it went in, and the stamps that are about <i>that part</i> — a pole shows
+            the custom shop and the pole finishing, a small part shows its finishing and the warehouse pick. The same
+            item on several windows of one order is one row, added up.</p>
+            <p style={S.p}>The top of the card counts it: <b>14 of 22 pieces packed · 6 ready to pack · 2 still
+            coming</b>, and says <b>WAITING ON PARTS</b>, <b>READY TO PACK</b> or <b>ALL PACKED — READY TO SHIP</b>. A
+            green row is packed, an amber row is part packed. A document on hold says so above its lines, with the
+            reason — a backorder names the material it is waiting for.</p>
+            <p style={S.p}>The <b>box</b> is written when a document's packing is <i>completed</i>, so a part ticked on a
+            document still open shows packed with no box yet. The stocked-order cards above carry the same two columns,
+            <b>Packed</b> and <b>Box</b>.</p>
+        </Screen>
         <Path name="Nothing on this order is committed" goes="check the sales order's LOCATION in NetSuite before you suspect the items">
             NetSuite commits stock per location. When a <i>whole</i> order reads uncommitted while the bins plainly
             have stock, the pattern is the diagnosis and it points at the order, not the parts.

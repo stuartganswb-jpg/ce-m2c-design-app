@@ -55,7 +55,8 @@ import { encodeUomScan, uomDisplay } from '../Shared/labelScan';
 // Shared/packingList), the same branded form (S1's FormPreview), printed the way every form prints.
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
-import { packingListOf } from '../Shared/packingList';
+import { packingListOf, packedQtyOf } from '../Shared/packingList';
+import { soPackBoardOf, lineBoxOf, LINE_STATE, ORDER_VERDICT } from '../Shared/soPackBoard';
 import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
 import { customerKeys } from '../Shared/clientPricing';
 // ⚠ ALIASED ON PURPOSE. This file already has a LOCAL `packSizeOf` (~:3763) that parses a pack
@@ -275,6 +276,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [platingFees, setPlatingFees] = useState({}); // system/plating_fees.rules — { PRODUCTTYPE: { fee, unit } }
     const [expandedShip, setExpandedShip] = useState({}); // out-at-plater shipments: collapsed by default
     const [expandedSo, setExpandedSo] = useState({});     // SO Pack: force a not-yet-ready card open
+    const [soLinesHidden, setSoLinesHidden] = useState({}); // SO Pack: a configured order's lines folded away by hand
     // ── WHICH POLE IS THIS? (Stuart 2026-09-09) ──────────────────────────────────────────────
     // "if the labels fall of the pole there is no way for packaging to be sure they are packing
     // the correct pole with the correct small parts."
@@ -6069,6 +6071,18 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     const loaded = !!soStats[o.id];
                     const cBin = committedBinOf(o) || 'the order\'s bin';
                     const showLines = !!expandedSo[o.id] || ready || !loaded;
+                    // PACKED · BOX, line by line (Shared/soPackBoard, Stuart 2026-10-06): this order is its own pack document —
+                    // the packer's count on each sold line (`packedLines.L<n>`) and the box chosen for that half of it, which
+                    // is on record once its packing is completed.
+                    const packLineByKey = Object.fromEntries(packLinesOf(o, { isFeeCode }).map(l => [l.key, l]));
+                    const packCells = (i) => {
+                        const pl = packLineByKey[`L${i}`];
+                        const pk = pl ? packedQtyOf(o, pl) : 0, bx = pl ? lineBoxOf(o, pl, pk) : '';
+                        return (<>
+                            <td style={{ padding: '9px 10px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', fontWeight: pk ? 700 : 400, color: pk ? '#2e7d32' : theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{pk || '—'}</td>
+                            <td title={!bx && pk > 0 ? t('The box is recorded when this document\'s packing is completed') : undefined} style={{ padding: '9px 10px', fontFamily: theme.mono, fontSize: '11px', color: bx ? theme.ink : theme.inkSoft, whiteSpace: 'nowrap', borderBottom: `1px solid ${theme.paper2}` }}>{bx ? `📦 ${bx}` : '—'}</td>
+                        </>);
+                    };
                     return (
                         <div style={{ border: `1px solid ${ready ? '#3a7d44' : theme.line}`, boxShadow: ready ? '0 0 0 2px rgba(58,125,68,0.18)' : 'none', marginBottom: '16px', background: '#fff' }}>
                             <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.line}`, background: theme.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -6103,7 +6117,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                    of each line in the bin ORDERS-COM1 line by line"). Fees, kit lines and lines off the order carry no pieces. */
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                                     <thead><tr style={{ background: theme.paper2 }}>
-                                        {['Item #', 'Description', `In ${cBin}`, ''].map(h => <th key={h} style={{ textAlign: h.startsWith('In ') ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em' }}>{h}</th>)}
+                                        {['Item #', 'Description', `In ${cBin}`, 'Packed', 'Box', ''].map(h => <th key={h} style={{ textAlign: (h.startsWith('In ') || h === 'Packed') ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em' }}>{h}</th>)}
                                     </tr></thead>
                                     <tbody>
                                         {(o.lines || []).map((l, i) => ({ l, i })).filter(x => lineCodeOf(x.l) && !feeLine(o, x.l, x.i)).map(({ l, i }) => (
@@ -6111,6 +6125,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{lineCodeOf(l)}</td>
                                                 <td style={{ padding: '9px 18px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.name}{l.row ? ` · ${l.row}` : ''}</td>
                                                 <td style={{ padding: '9px 10px', textAlign: 'center', fontFamily: theme.mono, fontSize: '13px', color: '#2e7d32', borderBottom: `1px solid ${theme.paper2}` }}>{lineBinShareOf(o, i, isFeeCode)}</td>
+                                                {packCells(i)}
                                                 <td style={{ padding: '9px 12px', textAlign: 'right', borderBottom: `1px solid ${theme.paper2}` }}>
                                                     <button onClick={() => releaseFromOrder(o, lineCodeOf(l), Number(l.qty) || 0)} title={`Take pieces of ${lineCodeOf(l)} back out of ${cBin}`} style={{ padding: '5px 9px', background: 'transparent', color: '#c0392b', border: '1px solid #c0392b', fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer', marginRight: '6px' }}>RELEASE</button>
                                                     <button onClick={() => printOrderLineLabels(o, l)} title={`Print ${Math.max(1, Math.min(50, Number(l.qty) || 1))} × ${l.erp || ''} item label(s)`} style={{ padding: '5px 9px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer' }}>🖨</button>
@@ -6122,7 +6137,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             )}
                             {showLines && !ready && <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                                 <thead><tr style={{ background: theme.paper2 }}>
-                                    {['Item #', 'Description', 'Bin', byCount ? 'Rel / Ord' : 'Ord', 'Hand', 'Prod', 'Comm', 'Status', ''].map(h => <th key={h} title={h === 'Rel / Ord' ? 'Pieces released so far (rows started on 10.5) of the pieces ordered' : undefined} style={{ textAlign: ['Ord', 'Rel / Ord', 'Hand', 'Prod', 'Comm'].includes(h) ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>)}
+                                    {['Item #', 'Description', 'Bin', byCount ? 'Rel / Ord' : 'Ord', 'Hand', 'Prod', 'Comm', 'Packed', 'Box', 'Status', ''].map(h => <th key={h} title={h === 'Rel / Ord' ? 'Pieces released so far (rows started on 10.5) of the pieces ordered' : undefined} style={{ textAlign: ['Ord', 'Rel / Ord', 'Hand', 'Prod', 'Comm', 'Packed'].includes(h) ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>)}
                                 </tr></thead>
                                 <tbody>
                                     {(o.lines || []).map((l, i) => (
@@ -6146,7 +6161,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             </td>
                                             <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.toBeFinished ? theme.brass : (l.bin ? theme.ink : theme.inkSoft), borderBottom: `1px solid ${theme.paper2}` }}>{l.toBeFinished && !soLineIsShelfPick(o, l, i) ? (l.finishOutsourced ? 'FROM PLATING' : 'FROM FINISHING') : (l.toBeFinished ? 'SHELF' : (l.bin || 'UNASSIGNED'))}</td>
                                             {(() => {
-                                                if (feeLine(o, l, i)) return (<>{[0, 1, 2, 3].map(k => <td key={k} style={{ padding: '9px 10px', textAlign: 'center', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>—</td>)}<td style={{ padding: '9px 12px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{t('not picked')}</td></>);
+                                                if (feeLine(o, l, i)) return (<>{[0, 1, 2, 3, 4, 5].map(k => <td key={k} style={{ padding: '9px 10px', textAlign: 'center', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>—</td>)}<td style={{ padding: '9px 12px', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{t('not picked')}</td></>);
                                                 const st = lineStats(o, l, i);
                                                 const num = (v, col) => <td style={{ padding: '9px 10px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: col || theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{v}</td>;
                                                 const tone = { GATHERED: '#2e7d32', READY: '#3a7d44', 'IN PRODUCTION': theme.brass, SHORT: '#c0392b', UNKNOWN: theme.inkSoft, 'NOT RELEASED': theme.inkSoft }[st.state];
@@ -6155,6 +6170,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     {num(st.avail == null ? '—' : st.avail, st.avail != null && st.avail < st.ordered ? '#c0392b' : theme.ink)}
                                                     {num(st.prod || '—', st.prod ? theme.brass : theme.inkSoft)}
                                                     {num(st.committed || '—', st.committed ? '#2e7d32' : theme.inkSoft)}
+                                                    {packCells(i)}
                                                     <td style={{ padding: '9px 12px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', color: tone, borderBottom: `1px solid ${theme.paper2}`, whiteSpace: 'nowrap' }}>
                                                         {st.state === 'NOT RELEASED' ? t('not released') : st.fromFloor ? (st.state === 'GATHERED' ? t('GATHERED') : t('from the floor')) : t(st.state)}
                                                         {st.unit && <span style={{ color: theme.inkSoft }}> · {st.unit}</span>}
@@ -6205,9 +6221,22 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         {t('Configured orders in production')} · {cpqOrders.length} — {t('packed on Packaging Prep; this is where their pieces are')}
                                     </div>
                                     {cpqOrders.map(({ so, docs }) => {
-                                        const allDone = docs.every(d => d.packStatus === 'Packed' || d.currentPhase === 'Complete');
+                                        // LINE BY LINE (Shared/soPackBoard, Stuart 2026-10-06): every part of the order — ordered beside
+                                        // packed, the box it is in, and the stamps that are about THAT line. The rows are the ones the
+                                        // packer ticks at Packaging Prep (a packed document's poles come off its own stamp, so only an
+                                        // open document asks the shop order for them).
+                                        const board = soPackBoardOf({ docs, refOf: woRefOf,
+                                            linesOf: (d) => (d.packStatus === 'Packed' && Array.isArray(d.poleLines) && d.poleLines.length) ? packLinesOf(d, { isFeeCode }) : packLinesFor(d) });
+                                        const allPacked = board.verdict === ORDER_VERDICT.ALL_PACKED;
+                                        const readyToPack = board.verdict === ORDER_VERDICT.READY;
+                                        const hidden = !!soLinesHidden[so.id];
+                                        // A HELD document says so above its lines, with the reason (a backorder names the material it waits for).
+                                        const holdOfDoc = Object.fromEntries(docs.map(d => [d.id, (d.packStatus === 'Packed' || d.currentPhase === 'Closed') ? null : holdGateOf(d)]));
+                                        const th = (h, align = 'left') => <th key={h} style={{ textAlign: align, padding: '7px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}`, whiteSpace: 'nowrap' }}>{t(h)}</th>;
+                                        const rowBg = { [LINE_STATE.PACKED]: '#f0f7f1', [LINE_STATE.PART]: '#fdf6e3', [LINE_STATE.CLOSED]: theme.paper };
+                                        const cell = { padding: '8px 10px', borderBottom: `1px solid ${theme.paper2}`, verticalAlign: 'middle' };
                                         return (
-                                            <div key={so.id} style={{ border: `1px solid ${allDone ? '#3a7d44' : theme.line}`, boxShadow: allDone ? '0 0 0 2px rgba(58,125,68,0.18)' : 'none', marginBottom: '14px', background: '#fff' }}>
+                                            <div key={so.id} style={{ border: `1px solid ${allPacked ? '#3a7d44' : theme.line}`, boxShadow: allPacked ? '0 0 0 2px rgba(58,125,68,0.18)' : 'none', marginBottom: '14px', background: '#fff' }}>
                                                 <div style={{ padding: '12px 18px', borderBottom: `1px solid ${theme.line}`, background: theme.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                                                     <div>
                                                         <span style={{ fontFamily: theme.serif, fontSize: '1.1rem', color: theme.ink, fontWeight: 500 }}>{so.customer || so.customerName || 'Customer'}</span>
@@ -6215,21 +6244,44 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         {(so.needBy || so.needByDate) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#d9534f', marginLeft: '12px' }}>{t('NEED BY')} {so.needBy || so.needByDate}</span>}
                                                         {so.sidemark && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '3px', textTransform: 'uppercase', letterSpacing: '.05em' }}>REF: {so.sidemark}</div>}
                                                     </div>
-                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
+                                                            <b>{board.pieces.packed} {t('of')} {board.pieces.ordered}</b> {t('pieces packed')}
+                                                            {board.pieces.ready > 0 && <span style={{ color: '#3f7fc4' }}> · {board.pieces.ready} {t('ready to pack')}</span>}
+                                                            {board.pieces.waiting > 0 && <span style={{ color: theme.brass }}> · {board.pieces.waiting} {t('still coming')}</span>}
+                                                        </span>
                                                         {committedBinOf(so) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#2e7d32' }}>📦 {t('BIN')} {committedBinOf(so)} · {totalGathered(so)}</span>}
-                                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: allDone ? '#2e7d32' : theme.brass }}>{allDone ? `✓ ${t('ALL PARTS DONE')}` : t('in production')}</span>
+                                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: allPacked ? '#2e7d32' : (readyToPack ? '#3f7fc4' : theme.brass) }}>{allPacked ? `✓ ${t('ALL PACKED')} — ${t('READY TO SHIP')}` : (readyToPack ? t('READY TO PACK') : t('WAITING ON PARTS'))}</span>
+                                                        <span onClick={() => setSoLinesHidden(p => ({ ...p, [so.id]: !p[so.id] }))} title={hidden ? t('Show the lines') : t('Hide the lines')} style={{ cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{hidden ? '▸' : '▾'}</span>
                                                     </span>
                                                 </div>
-                                                <div style={{ padding: '6px 18px 12px' }}>
-                                                    {docs.map(d => (
-                                                        <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', padding: '8px 0', borderBottom: `1px solid ${theme.paper2}` }}>
-                                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink, minWidth: '150px' }}>{woRefOf(d)}</span>
-                                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, flex: 1, minWidth: '160px' }}>{woItemCodeOf(d) || '—'}{woItemNameOf(d) ? ` · ${woItemNameOf(d)}` : ''}</span>
-                                                            <OrderStatusChips wo={d} showWho={false} />
-                                                            {d.packStatus === 'Packed' && <span style={{ fontFamily: theme.mono, fontSize: '9px', color: '#3a7d44', letterSpacing: '.06em' }}>📦 {t('PACKED')}</span>}
-                                                        </div>
-                                                    ))}
-                                                </div>
+                                                {!hidden && (
+                                                    <div style={{ overflowX: 'auto' }}>
+                                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                                            <thead><tr style={{ background: theme.paper2 }}>
+                                                                {th('Item #')}{th('Description')}{th('Work order')}{th('Ordered', 'center')}{th('Packed', 'center')}{th('Box')}{th('Where it is')}
+                                                            </tr></thead>
+                                                            <tbody>
+                                                                {board.rows.map((r, i) => {
+                                                                    const full = r.state === LINE_STATE.PACKED, part = r.state === LINE_STATE.PART, off = r.state === LINE_STATE.CLOSED;
+                                                                    const hold = (i === 0 || board.rows[i - 1].docId !== r.docId) ? holdOfDoc[r.docId] : null;
+                                                                    return (<React.Fragment key={`${r.docId}-${r.key || i}`}>
+                                                                        {hold && <tr><td colSpan={7} style={{ padding: '7px 10px', background: '#fdf3f3', borderBottom: `1px solid ${theme.paper2}`, fontFamily: theme.mono, fontSize: '10px', color: '#c0392b', lineHeight: 1.5 }}><b style={{ letterSpacing: '.06em' }}>{hold.label}</b> · {r.ref}{hold.reason ? <span style={{ color: theme.ink }}> — {hold.reason}</span> : null}</td></tr>}
+                                                                        <tr style={{ background: rowBg[r.state] || '#fff', opacity: off ? 0.6 : 1 }}>
+                                                                            <td style={{ ...cell, fontFamily: theme.mono, color: theme.ink, whiteSpace: 'nowrap' }}>{r.noLines ? '—' : (r.code || '—')}</td>
+                                                                            <td style={{ ...cell, color: theme.inkSoft }}>{r.noLines ? t('no line detail recorded on this document') : r.name}</td>
+                                                                            <td style={{ ...cell, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, whiteSpace: 'nowrap' }}>{r.ref}</td>
+                                                                            <td style={{ ...cell, textAlign: 'center', fontFamily: theme.mono, fontSize: '13px', color: theme.ink }}>{r.noLines ? '—' : r.ordered}</td>
+                                                                            <td style={{ ...cell, textAlign: 'center', fontFamily: theme.mono, fontSize: '13px', fontWeight: 700, color: full ? '#2e7d32' : (part ? '#b8860b' : theme.inkSoft) }}>{r.noLines ? '—' : r.packed}</td>
+                                                                            <td title={!r.box && r.packed > 0 ? t('The box is recorded when this document\'s packing is completed') : undefined} style={{ ...cell, fontFamily: theme.mono, fontSize: '11px', color: r.box ? theme.ink : theme.inkSoft, whiteSpace: 'nowrap' }}>{r.box ? `📦 ${r.box}` : '—'}</td>
+                                                                            <td style={cell}><OrderStatusChips stamps={r.stamps} showWho={full || part} /></td>
+                                                                        </tr>
+                                                                    </React.Fragment>);
+                                                                })}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })}

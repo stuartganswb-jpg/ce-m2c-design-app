@@ -40,9 +40,11 @@ const ago = (ms) => {
 // size: 'sm' for dense lists, 'md' for a detail panel.
 // `poleRecipeLen` — the pole stream's own coat count (its -P recipe); omitted, it is recipeLen, as before.
 // Callers read both from Shared/floorActivity.coatCountsOf so no screen measures a pole against the parts' recipe.
-const OrderStatusChips = ({ wo, recipeLen = 0, poleRecipeLen, size = 'sm', showWho = true, style = {} }) => {
-    const st = orderStatusOf(wo, { recipeLen, poleRecipeLen });
-    const all = [...st.streams, ...(st.fulfilment ? [st.fulfilment] : [])];
+// `stamps` — a caller that shows ONE LINE of a document passes the stamps that are about that line
+// (Shared/soPackBoard.lineStampsOf); they render exactly as a document's own do. Omitted, nothing changes.
+const OrderStatusChips = ({ wo, recipeLen = 0, poleRecipeLen, size = 'sm', showWho = true, style = {}, stamps = null }) => {
+    const st = Array.isArray(stamps) ? null : orderStatusOf(wo, { recipeLen, poleRecipeLen });
+    const all = st ? [...st.streams, ...(st.fulfilment ? [st.fulfilment] : [])] : stamps;
     if (!all.length) return null;
     const fs = size === 'md' ? '11px' : '10px';
 
