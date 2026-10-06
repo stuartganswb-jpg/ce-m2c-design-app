@@ -374,6 +374,8 @@ const cartBaseFront3 = {
             /* 8 */ { erp: 'H1-138CC', row: 'Row 4', qty: 0, offOrder: true, finishCode: 'P29' },
             /* 9 */ { erp: 'H1-MITER', row: 'Row 4', qty: 70, isFee: true },
             /* 10 */ { erp: 'H1-75SPF', row: 'Row 4', qty: 35, finishCode: 'P06', billedErp: 'H1-75SPF/P', toBeFinished: true },
+            /* 11 */ { erp: 'HTSLNTCAR', row: 'Row 4', qty: 280, toBeFinished: false },                              // stocked: no start ever stamps it
+            /* 12 */ { erp: 'HTSLNTCAR', row: 'Row 6', qty: 280, toBeFinished: false },                              // …and its row is not released at all
         ],
         oeGen: { 0: rel(2), 1: rel(4), 2: { kind: 'WO', ids: ['WO-OLD'] }, 3: rel(2), 4: rel(4, 'STOCK'), 7: rel(2, 'STOCK'), 10: rel(2) },
     };
@@ -388,8 +390,10 @@ const cartBaseFront3 = {
     ok('a kit holder is not material', !lines.some(l => l.seed.code === 'H1-2TRV-WB/C'));
     eq('…its parts are', by['H1-2TRVLA/C|#H1-2TRVLA/C'].qty, 33);
     ok('a line taken off the order and a fee are not material', !lines.some(l => ['H1-138CC', 'H1-MITER'].includes(l.seed.code)));
-    eq('the lines that count', lines.length, 7);
-    eq('nothing released → every piece', orderDemandLines({ ...so, oeGen: {} }).reduce((a, l) => a + l.qty, 0), 35 + 70 + 35 + 35 + 70 + 35 + 35 + 35);
+    eq('a stocked line no start ever stamps follows its ROW\'s count — 2 of 35 released is 16 of 280 on the shelf pick', lines.filter(l => l.seed.code === 'HTSLNTCAR').map(l => l.qty), [264, 280]);
+    eq('the lines that count', lines.length, 9);
+    eq('nothing stamped, no row released → every piece', orderDemandLines({ ...so, oeGen: {}, rowRelease: {} }).reduce((a, l) => a + l.qty, 0), 35 + 70 + 35 + 35 + 70 + 35 + 35 + 35 + 280 + 280);
+    ok('an order NOT released by count is never asked — it is released whole', orderDemandLines({ ...so, releaseByCount: false }).length === 0);
     eq('no lines, no order → nothing', [orderDemandLines({}), orderDemandLines(null)], [[], []]);
 
     // the build as designed still names a tracker code the order no longer carries

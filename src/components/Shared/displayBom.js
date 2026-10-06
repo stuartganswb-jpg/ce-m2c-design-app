@@ -17,8 +17,8 @@
 // traverse components included, because the board is built from them.
 
 import { rowKeyOf } from './rowKey.js';
-import { isKitLine, isOffOrderLine } from './itemKit.js';
-import { isReleaseByCount, releasedQtyOf } from './rowRelease.js';
+import { isReleaseByCount } from './rowRelease.js';
+import { soLineIsFee, soLineReleasedOf } from './pickLines.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
@@ -464,18 +464,21 @@ export const openBoards = (b) => Math.max(0, N(b?.qty, 0) - N(b?.built, 0));
 // right (H1-75SPSS, H1-2RCTACROD4 — demand on items nobody stocks), knew nothing of a kit opened into its parts, a
 // quantity corrected with ✎ or a stock-colour swap, and met the order only by row NAME ("Top Row 1" on the design,
 // "ROW 1" on the order — so a row long since started went on publishing demand). Once a build's sales orders are
-// released by count the truth is on the orders themselves: every line, less the pieces already released to a floor or
-// to the shelf pick (Shared/rowRelease.releasedQtyOf — a line a release could not start is still to be covered, and
-// still counts). Kit holders, lines taken off the order and fees are not material. A rod is counted in pieces AND
-// feet (pieces × the feet billed per rod), since rod stock is kept by the foot.
+// released by count the truth is on the orders themselves: every line, less the pieces already RELEASED — read through
+// the one reader the WMS uses (Shared/pickLines.soLineReleasedOf): a line a start raised by its releases, a stocked
+// line no start ever raises by its row's count, a made line not yet started (or one a release could not start) not at
+// all — so it is still to be covered, and still counts. What the WMS does not treat as pieces is not material here
+// either (soLineIsFee: fees, a fee riding its pole, kit holders, lines taken off the order). A rod is counted in pieces
+// AND feet (pieces × the feet billed per rod), since rod stock is kept by the foot.
+// Only ever asked of an order released by count — any other order is released whole and would read as nothing.
 // Pure. @returns [{ key, seed, qty, feet }] — the shape displayDemandFrom adds up.
 export function orderDemandLines(so) {
     const out = [];
     (Array.isArray(so && so.lines) ? so.lines : []).forEach((l, idx) => {
-        if (!l || isKitLine(l) || isOffOrderLine(l) || l.isFee || l.lineIsFee) return;
+        if (!l || l.lineIsFee || soLineIsFee(so, l, idx)) return;
         const erp = U(l.erp);
         if (!erp) return;
-        const left = Math.max(0, N(l.qty) - releasedQtyOf(so, idx, l));
+        const left = Math.max(0, N(l.qty) - soLineReleasedOf(so, l, idx).total);
         if (!(left > 0)) return;
         const fin = U(l.finishCode), billed = U(l.billedErp);
         const feetPer = l.perFoot ? N(l.feetPer) : 0;
