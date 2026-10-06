@@ -10,14 +10,16 @@
 //                 same reader the bench uses, poles by their shop cut rows). "Ordered" is what the document carries of
 //                 the part: the pieces the order breaks down into, not the configuration line the customer reads.
 //   · PACKED      the packer's count on the tick (Shared/packingList.packedQtyOf — the printed packing list's count).
-//   · THE BOX     the box chosen for that half of the document (packBoxes.SMALL / .POLE), which is written when the
-//                 document's packing is COMPLETED — a line ticked on a document still open has no box on record yet.
+//   · THE BOX     the NUMBERED box each packed piece went in (Shared/orderBoxes — "Box 2 · Tube 10ft", or
+//                 "Box 1 ×8 · Box 2 ×6" for a line split across boxes), written with the tick. A document packed before
+//                 box numbers shows the box TYPE chosen for that half of it (packBoxes), on record once it was completed.
 //   · WHERE IT IS the document's own stamps (Shared/orderStatus.orderStatusOf — one vocabulary, every screen), but
 //                 only the ones that are about THIS line: a pole follows the custom shop and the pole stream, a small
 //                 part follows the small-parts stream and the warehouse pick.
 // Pure — nothing is written. Harness: scripts/soPackBoard.test.mjs.
 import { orderStatusOf, packReadinessOf } from './orderStatus.js';
 import { packedQtyOf } from './packingList.js';
+import { boxSlotOf, boxSpreadOf, boxSpreadLabel } from './orderBoxes.js';
 
 const num = (v) => Number(v) || 0;
 const str = (v) => String(v == null ? '' : v).trim();
@@ -31,14 +33,13 @@ export const LINE_STATE = Object.freeze({
 });
 export const ORDER_VERDICT = Object.freeze({ ALL_PACKED: 'ALL_PACKED', READY: 'READY', WAITING: 'WAITING', NONE: 'NONE' });
 
-/** Which of the document's two boxes a line goes in — the pack bench's own grouping (its `cat`), poles → the pole box. */
-export const boxSlotOf = (line) => {
-    if (!line) return 'SMALL';
-    if (line.cat != null) return line.cat === 'POLE' ? 'POLE' : 'SMALL';
-    return line.isPole ? 'POLE' : 'SMALL';
-};
+export { boxSlotOf };   // which half of a document a line is — the pack bench's grouping (Shared/orderBoxes)
 
-/** The box a packed line is in, AS RECORDED — '' while nothing of it is packed or its document is still open. */
+/**
+ * The box TYPE a packed line went in, as documents packed BEFORE box numbers recorded it (packBoxes.SMALL / .POLE,
+ * written at completion) — '' while nothing of it is packed or its document is still open. A line packed since
+ * says its box NUMBER on its tick, and that is read first (Shared/orderBoxes).
+ */
 export const lineBoxOf = (doc, line, packed) => {
     if (!doc || !line || !(num(packed) > 0)) return '';
     return str(doc.packBoxes && doc.packBoxes[boxSlotOf(line)]);
@@ -81,9 +82,10 @@ export function lineStampsOf(doc, line, coats = {}) {
  * @param linesOf  (doc) → its pack lines — the pack bench's reader (riders are packed with their pole, never rows)
  * @param refOf    (doc) → the reference to print for it
  * @param coatsOf  (doc) → { recipeLen, poleRecipeLen } when the caller knows the coat counts
+ * @param boxes    the order's numbered boxes (Shared/orderBoxes.orderBoxesOf) — for a box's type beside its number
  * @returns {{ rows, pieces: { ordered, packed, ready, waiting }, lines: { all, packed }, verdict }}
  */
-export function soPackBoardOf({ docs = [], linesOf = () => [], refOf = (d) => (d && d.id) || '', coatsOf = () => ({}) } = {}) {
+export function soPackBoardOf({ docs = [], linesOf = () => [], refOf = (d) => (d && d.id) || '', coatsOf = () => ({}), boxes = [] } = {}) {
     const rows = [];
     let anyWaiting = false, live = 0, done = 0;
     (docs || []).forEach(doc => {
@@ -120,11 +122,15 @@ export function soPackBoardOf({ docs = [], linesOf = () => [], refOf = (d) => (d
                 : packed > 0 ? LINE_STATE.PART
                 : (rd && rd.ready) ? LINE_STATE.READY : LINE_STATE.WAITING;
             const open = counts.find(c => c.packed < c.ordered) || null;
-            const ticks = group.map(l => (doc.packedLines && doc.packedLines[l.key]) || null).filter(Boolean).sort((x, y) => num(y.at) - num(x.at));
+            const tickList = group.map(l => (doc.packedLines && doc.packedLines[l.key]) || null).filter(Boolean);
+            const ticks = [...tickList].sort((x, y) => num(y.at) - num(x.at));
             rows.push({
                 docId: doc.id || '', ref, key: first.key, keys: group.map(l => l.key), code: str(first.erp), aliasErp: str(first.aliasErp), name: str(first.name), isPole: !!first.isPole,
                 docReady: !!(rd && rd.ready),
-                ordered, packed, box: [...new Set(counts.map(c => lineBoxOf(doc, c.l, c.packed)).filter(Boolean))].join(', '), state,
+                ordered, packed, state,
+                // The numbered box(es) its ticks name; else the box type a document packed before box numbers recorded.
+                boxSpread: boxSpreadOf(tickList),
+                box: boxSpreadLabel(boxSpreadOf(tickList), boxes) || [...new Set(counts.map(c => lineBoxOf(doc, c.l, c.packed)).filter(Boolean))].join(', '),
                 packedBy: ticks.length ? str(ticks[0].by) : '', packedAt: ticks.length ? (ticks[0].at || null) : null,
                 stamps: lineStampsOf(doc, (open || counts[0]).l, coats),
             });

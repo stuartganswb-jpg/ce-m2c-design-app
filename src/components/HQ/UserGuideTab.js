@@ -658,9 +658,26 @@ const WmsGuide = () => (
             coming</b>, and says <b>WAITING ON PARTS</b>, <b>READY TO PACK</b> or <b>ALL PACKED — READY TO SHIP</b>. A
             green row is packed, an amber row is part packed. A document on hold says so above its lines, with the
             reason — a backorder names the material it is waiting for.</p>
-            <p style={S.p}>The <b>box</b> is written when a document's packing is <i>completed</i>, so a part ticked on a
-            document still open shows packed with no box yet. The stocked-order cards above carry the same two columns,
-            <b>Packed</b> and <b>Box</b>.</p>
+            <p style={S.p}>The <b>box</b> is the numbered box the piece went in — <b>Box 2 · Tube 10ft</b>, or
+            <b>Box 1 ×8 · Box 2 ×6</b> for a line split across two — and the top of the card counts the order's boxes.
+            An order packed before box numbers shows the box <i>type</i> it recorded. The stocked-order cards above
+            carry the same two columns, <b>Packed</b> and <b>Box</b>.</p>
+        </Screen>
+        <Screen title="Numbered boxes" tag="Packaging Prep → the order's Boxes strip">
+            <p style={S.p}>Every customer order is packed into <b>numbered boxes</b>: Box 1, Box 2, Box 3. The numbers
+            belong to the <b>sales order</b>, so when a second document of the same order is packed days later, Box 1
+            and Box 2 are already there — add to one of them, or open Box 3.</p>
+            <p style={S.p}><b>+ New box</b>: choose the box type, and the order gets its next number. <b>Tap a box</b> to
+            open it — one box is open at a time on your bench, and <b>✓ Packed</b> puts the line in it. Nothing can be
+            ticked until a box is open.</p>
+            <p style={S.p}><b>Splitting a line.</b> On a packed line, <b>→ Box N</b> moves pieces into the open box and
+            asks how many: all of them moves the line, fewer splits it (8 in Box 1, 6 in Box 2).</p>
+            <p style={S.p}><b>Labels.</b> 🖨 on a box prints its label — the order number, <b>BOX 2 of 3</b>, the box
+            type and what is in it. Print <b>All box labels</b> once the last box is added, so every label says the
+            right "of N". An empty last box can be removed with ✕.</p>
+            <p style={S.p}>Packing cannot be completed while a packed line is in no box. Stock put-away and a floor
+            document that is <i>gathered</i> into its order use no boxes — the order is boxed when the order itself is
+            packed.</p>
         </Screen>
         <Path name="Nothing on this order is committed" goes="check the sales order's LOCATION in NetSuite before you suspect the items">
             NetSuite commits stock per location. When a <i>whole</i> order reads uncommitted while the bins plainly

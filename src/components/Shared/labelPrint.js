@@ -378,6 +378,29 @@ export const printSalesOrderLabels = ({ soRef, customer, sidemark, needBy, pcs, 
         Array.from({ length: Math.max(1, Math.min(50, parseInt(copies) || 1)) },
             () => soLabelInner({ soRef, customer, sidemark, needBy, pcs, note })));
 
+// ── ORDER BOX LABEL (Stuart 2026-10-06: box numbers — "SO60831 · Box 2 of 3") ─────────────────────────────────
+// The sales-order label with the box on it: which order, WHICH BOX of how many, the box type, and what is in it.
+// The barcode stays the ORDER NUMBER (his ruling on the sales-order label) — scanning a box means "this order".
+// "of N" is the order's box count when the label is printed; reprint (All box labels) once the last box is added.
+const OBOX_CSS = `${PAGE_CSS}
+.l{padding:0.1in 0.16in;display:flex;flex-direction:column;}
+.hd{display:flex;justify-content:space-between;align-items:baseline;gap:8pt;}
+.so{font-size:17pt;font-weight:900;line-height:1.05;word-break:break-all;}
+.bx{font-size:17pt;font-weight:900;white-space:nowrap;}
+.cu{font-size:11pt;font-weight:700;margin-top:2pt;line-height:1.15;max-height:0.28in;overflow:hidden;}
+.ty{font-size:9pt;font-weight:700;margin-top:1pt;}
+.it{font-size:7.5pt;line-height:1.2;margin-top:2pt;max-height:0.37in;overflow:hidden;}
+.bc{margin-top:auto;} .bc svg{width:100%;height:0.3in;display:block;} .bct{font-size:7.5pt;letter-spacing:2px;text-align:center;}`;
+const orderBoxLabelInner = ({ soRef, customer, sidemark, boxNo, boxTotal, boxType, pcs, items }) => `<div class="l">
+  <div class="hd"><span class="so">${esc(soRef || '')}</span><span class="bx">BOX ${esc(boxNo)}${boxTotal ? ` of ${esc(boxTotal)}` : ''}</span></div>
+  <div class="cu">${esc(customer || '')}${sidemark ? `${customer ? ' · ' : ''}REF ${esc(sidemark)}` : ''}</div>
+  <div class="ty">${esc(boxType || '')}${boxType && pcs ? ' · ' : ''}${pcs ? `${esc(pcs)} pc${Number(pcs) === 1 ? '' : 's'}` : ''}</div>
+  <div class="it">${(items || []).map(i => `${esc(i.code || i.name || '')} ×${esc(i.qty)}`).join(' · ')}</div>
+  <div class="bc">${code128BSvg(String(soRef || ''))}<div class="bct">${esc(soRef || '')}</div></div>
+</div>`;
+export const printOrderBoxLabels = (labels = []) =>
+    printDoc(`Box labels ${(labels[0] && labels[0].soRef) || ''} (${labels.length})`, OBOX_CSS, (labels || []).map(orderBoxLabelInner));
+
 export const printStockItemLabels = ({ itemId, itemName, uom, woNum, copies = 1 }) =>
     printDoc(`Item ${itemId || ''} ×${copies}`, STOCK_CSS, Array.from({ length: Math.max(1, Math.min(50, parseInt(copies) || 1)) }, () => stockItemLabelInner({ itemId, itemName, uom, woNum })));
 
