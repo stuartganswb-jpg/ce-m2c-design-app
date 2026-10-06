@@ -5,7 +5,7 @@
 // library part id — so the hq record was never in the key set and the shop could not tell RTG
 // anything. This pins that the id convention is a key, from either side.
 
-import { identityKeysOf, isClosedState, isDoneState, auditOrphans, queuedWriteTargets, orderDocIdsOf, entryNamesOrder, reopenPlanFor, planBulkReopen, planOrderReopen, pickStatusFromStamps, closedByBulkIn, DELETE, BULK_CLOSE_FROM, recordKnowsDone, linkedDocsOf, isStoppedOrder } from '../src/components/Shared/orderLifecycle.js';
+import { identityKeysOf, isClosedState, isDoneState, auditOrphans, queuedWriteTargets, orderDocIdsOf, entryNamesOrder, reopenPlanFor, planBulkReopen, planOrderReopen, pickStatusFromStamps, closedByBulkIn, DELETE, BULK_CLOSE_FROM, recordKnowsDone, linkedDocsOf, isStoppedOrder, isPairDocument } from '../src/components/Shared/orderLifecycle.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
@@ -225,6 +225,30 @@ eq('held and live is stopped; held and Closed / Completed / Packed / deleted is 
     isStoppedOrder({ id: 'WO-Z', held: true, currentPhase: 'Complete' }),
     isStoppedOrder({ id: 'WO-N', currentPhase: 'Setup' }), isStoppedOrder(null),
 ], [true, false, false, false, false, true, false, false]);
+
+// ── A ROW / ORDER ENTRY PAIR IS ITS OWN ORDER (Stuart 2026-10-06: "fix the rtg bug" — RTG's ✕ Close on one wall row closed
+//    every other row's shop job; the sales order's keys are shared by sibling pairs and must never link them) ──
+const row1 = { id: 'WO-OE-SO60585-0001', woId: 'WO-OE-SO60585-0001', soId: 'SO60585', soAppId: 'SO-APP-X', status: 'Dispatched', shopSiblingId: 'SHOP-WO-OE-SO60585-0001-C' };
+const row1c = { id: 'WO-OE-SO60585-0001-C', woId: 'WO-OE-SO60585-0001-C', soId: 'SO60585', soAppId: 'SO-APP-X', status: 'Dispatched', finSiblingId: 'WO-OE-SO60585-0001' };
+const row2 = { id: 'WO-OE-SO60585-0002', woId: 'WO-OE-SO60585-0002', soId: 'SO60585', soAppId: 'SO-APP-X', status: 'Dispatched', shopSiblingId: 'SHOP-WO-OE-SO60585-0002-C' };
+const fin1 = { id: 'WO-OE-SO60585-0001', orderKey: 'SO-APP-X', salesOrderId: 'SO-APP-X', soId: 'SO60585', orderType: 'sales', currentPhase: 'Closed', closedFrom: '10.5', shopSiblingId: 'SHOP-WO-OE-SO60585-0001-C' };
+const shop1 = { id: 'SHOP-WO-OE-SO60585-0001-C', orderKey: 'SO60585', finSiblingId: 'WO-OE-SO60585-0001', status: 'Completed', closed: true, closedFrom: '10.5' };
+const fin2 = { id: 'WO-OE-SO60585-0002', orderKey: 'SO-APP-X', salesOrderId: 'SO-APP-X', soId: 'SO60585', orderType: 'sales', currentPhase: 'Setup', shopSiblingId: 'SHOP-WO-OE-SO60585-0002-C' };
+const shop2 = { id: 'SHOP-WO-OE-SO60585-0002-C', orderKey: 'SO60585', finSiblingId: 'WO-OE-SO60585-0002', status: 'In Process' };
+ok('a pair is told by its own id, or its sibling\'s', isPairDocument(row1) && isPairDocument(shop1) && isPairDocument({ id: 'x', finSiblingId: 'WO-OE-SO60585-0001' }) && !isPairDocument({ id: 'WO-SO60170', soId: 'SO60170' }) && !isPairDocument(null));
+eq('a pair\'s RTG record is keyed by its own ids — never its sales order number', identityKeysOf(row1), ['WO-OE-SO60585-0001', 'SHOP-WO-OE-SO60585-0001-C', 'WO-OE-SO60585-0001-C']);
+eq('…its finishing document too — never the sales order\'s id', identityKeysOf(fin1), ['WO-OE-SO60585-0001', 'SHOP-WO-OE-SO60585-0001-C', 'WO-OE-SO60585-0001-C']);
+eq('…and its shop half — never the sales order number every row\'s shop job carries', identityKeysOf(shop1), ['SHOP-WO-OE-SO60585-0001-C', 'WO-OE-SO60585-0001', 'WO-OE-SO60585-0001-C']);
+ok('no key is shared between two rows of one order', !identityKeysOf(row1).some(k => identityKeysOf(row2).includes(k)) && !identityKeysOf(shop1).some(k => identityKeysOf(shop2).includes(k)) && !identityKeysOf(fin1).some(k => identityKeysOf(fin2).includes(k)));
+ok('asked for the ORDER, a pair still names its sales order (the floor\'s report to its record)', identityKeysOf(fin1, { orderLevel: true }).includes('SO-APP-X') && identityKeysOf(shop1, { orderLevel: true }).includes('SO60585'));
+eq('a whole-order document keeps every key it had', identityKeysOf({ id: 'WO-SO60170', soId: 'SO60170', orderKey: 'SO60170', shopSiblingId: 'SHOP-SO60170' }), ['WO-SO60170', 'SO60170', 'SHOP-SO60170']);
+// the audit: row 1 was closed on the floor (restarted from 10.5) and its records are still open — the finding names ROW 1's record
+{
+    const findings = auditOrphans({ hqOrders: [row1, row1c, row2], finWos: [fin1, fin2], shopJobs: [shop1, shop2] });
+    const parents = [...new Set(findings.filter(f => f.type === 'FLOOR_CLOSED').map(f => f.parent.id))].sort();
+    eq('a closed row\'s documents are laid against their OWN records, never a sibling row\'s', parents.every(id => /-0001(-C)?$/.test(id)), true);
+    ok('…and row 2 is never named', !findings.some(f => f.parent && f.parent.id === 'WO-OE-SO60585-0002') && parents.length > 0, JSON.stringify(findings.map(f => [f.type, f.parent && f.parent.id, f.floor && f.floor.id])));
+}
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

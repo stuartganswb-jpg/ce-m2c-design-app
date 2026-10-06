@@ -24,11 +24,26 @@ import { isQuickShip } from './pickLines.js';
 import { isOpenPo } from './poLock.js';
 import { shortBalanceOpen } from './scrapClose.js';
 
-export const identityKeysOf = (o) => {
-    const raw = [
-        o && o.id, o && o.woId, o && o.soId, o && o.orderKey, o && o.hqJobId, o && o.quoteId,
-        o && o.finSiblingId, o && o.shopSiblingId,
-    ].filter(Boolean).map(String);
+// ── A ROW / ORDER ENTRY PAIR IS ITS OWN ORDER ON THE FLOOR (Stuart 2026-10-06: "fix the rtg bug") ─────────────────────
+// RTG's ✕ Close on ONE row's work order of a display order closed every other row's shop job on that sales order — and
+// from the Setup Queue the same close reached every row's finishing job and the sales order itself. Every pair of an
+// order (a display row, an Order Entry finish group) carries its sales order's keys: `soId` on the RTG record, the
+// order's id as the finishing document's `orderKey`, the sales order NUMBER as the shop document's `orderKey`
+// (Shared/floorRelease.buildShopDoc). Those keys are SHARED by the sibling pairs, so linking through them let one
+// pair's close, hold, reopen and audit take its siblings' documents with it — the very thing the audit below already
+// refuses for `soAppId` ("sibling lines share it"). A pair is identified by its OWN ids: its finishing document
+// (WO-OE-…), its shop half (…-C / SHOP-…-C) and the two RTG records of the same ids. The sales order's keys are still
+// read where a caller asks for the ORDER (`orderLevel` — the floor's report to its record, unchanged).
+const PAIR_ID = /^(SHOP-)?WO-OE-/i;
+export const isPairDocument = (o) => !!o && [o.id, o.finSiblingId, o.shopSiblingId].some(v => PAIR_ID.test(String(v || '')));
+export const identityKeysOf = (o, { orderLevel = false } = {}) => {
+    const pair = !orderLevel && isPairDocument(o);
+    const raw = (pair
+        ? [o.id, o.woId, o.finSiblingId, o.shopSiblingId]
+        : [
+            o && o.id, o && o.woId, o && o.soId, o && o.orderKey, o && o.hqJobId, o && o.quoteId,
+            o && o.finSiblingId, o && o.shopSiblingId,
+        ]).filter(Boolean).map(String);
     // THE SHOP DOC'S OWN CONVENTION IS A KEY (Brief B7, C's finding 2026-09-03): a shop job is
     // written as SHOP-<hq work order id> (pushToShop, the split's shop half, RTG's component gate
     // reads it back the same way), but a STOCK milling spine's orderKey and quoteId are the LIBRARY
@@ -107,9 +122,11 @@ export const openExtraForSearch = (d) => {
  * Find every document belonging to one order, starting from ANY of them.
  * Returns { fin: Map, shop: Map, hq: {coll, id, data} | null }.
  */
-export async function linkedDocsOf(ctx, order, kind) {
+export async function linkedDocsOf(ctx, order, kind, { orderLevel = false } = {}) {
     const { db, doc, getDoc, getDocs, query, collection, where } = ctx;
-    const keys = identityKeysOf(order);
+    // A pair's own ids only (identityKeysOf) — and its record is its OWN RTG record, never its sales order's.
+    const pair = !orderLevel && isPairDocument(order);
+    const keys = identityKeysOf(order, { orderLevel });
     const fin = new Map(), shop = new Map();
     await Promise.all(keys.map(async (k) => {
         const [f, s] = await Promise.all([
@@ -132,7 +149,7 @@ export async function linkedDocsOf(ctx, order, kind) {
     // The RTG parent, hunted from the floor as well as from the board — this is the leg that was
     // missing everywhere except RTG itself, and the reason floor closes left orphans behind.
     let hq = null;
-    const hqColls = kind === 'sales' ? ['hq_sales_orders'] : ['hq_work_orders', 'hq_sales_orders'];
+    const hqColls = pair ? ['hq_work_orders'] : (kind === 'sales' ? ['hq_sales_orders'] : ['hq_work_orders', 'hq_sales_orders']);
     for (const coll of hqColls) {
         if (hq) break;
         for (const k of keys) {
@@ -145,7 +162,7 @@ export async function linkedDocsOf(ctx, order, kind) {
     // the loop above never found it, propagateFloorState returned null, and no CPQ order's record
     // ever learned its floorPhase (the audit found the parent through the record's OWN soId; the
     // floor's report could not). Same match the audit makes, from the other side.
-    if (!hq && slice.length) {
+    if (!hq && !pair && slice.length) {
         for (const field of ['soId', 'hqJobId']) {
             if (hq) break;
             try {
@@ -395,7 +412,9 @@ export async function closeDocsExactly(ctx, { fins = [], shops = [], records = [
 export async function propagateFloorState(ctx, { finWo, phase, by, extra, extraOf }) {
     const { db, doc, updateDoc } = ctx;
     if (!finWo) return null;
-    const links = await linkedDocsOf(ctx, finWo, finWo.orderType === 'sales' ? 'sales' : 'stock');
+    // The floor's report goes to the record it has always gone to (`orderLevel`): a pair's finishing document reports
+    // through its sales order's keys, exactly as before 2026-10-06 — only what a close / hold / reopen REACHES changed.
+    const links = await linkedDocsOf(ctx, finWo, finWo.orderType === 'sales' ? 'sales' : 'stock', { orderLevel: true });
     if (!links.hq) return null;                       // orphan — the audit below is what surfaces it
     // `extra` (2026-09-04): facts the floor wants on the record beside the phase — a scrap count,
     // a red-line alert, a reset. With no `phase` the record's floorPhase is left alone.
