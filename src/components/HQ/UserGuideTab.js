@@ -919,6 +919,19 @@ const DisplaysGuide = () => (
         </Screen>
         <div style={S.note}><b>Review it as a quote.</b> The copy carries the rows as they were quoted. Open each row with Edit and add it again to rebuild its parts by today's rules, then read the quote in the CRM. Approve it only when its parts read right — then type the new sales order number on the new build order and anchor it; it arrives released by count, at 0 on every row.</div>
 
+        <h2 style={S.h2}>What the displays still need — Stock View's Display column</h2>
+        <p style={S.p}><b>12.5 Stock View</b> has a <b>Display</b> column beside Backorder: the material the open display orders
+        still call for and nothing has been released against yet. The recommended order and build quantities count it. Hover a
+        number to see which build orders it comes from.</p>
+        <Screen title="What is counted" tag="12.5 Stock View → Display">
+            <Path name="An order released by count" goes="its own lines, less what is released">Every line of the sales order as it reads on 10.5 — corrected quantities, kits opened into their parts, stock-colour swaps included — less the pieces already released to a floor or to the shelf pick. Rows 1 at 2 of 35 leaves 33 displays of Row 1 in the column. A line a release could not start (stock short, a decision needed) stays in until it starts.</Path>
+            <Path name="Rods" goes="counted in feet">Rod stock is kept by the foot, so a rod line is counted in feet: 33 rods billed at 2 ft read 66. The hover says <em>66 ft (33 rods)</em>.</Path>
+            <Path name="Raw item and finished item" goes="both rows show it">A painted or plated line shows on its finished item's row and on the raw item's row, so the raw material to buy or make is visible where it is stocked.</Path>
+            <Path name="A build order with no sales order yet" goes="the display as designed × displays">Until a sales order is anchored, the build order publishes the display's bill for every display on it — a first look at what a new order will need.</Path>
+            <Path name="An order started the old way" goes="the bill × displays, less rows started">It keeps the earlier rule. When all its parts are made, set <b>Boards built</b> to the number ordered (or the status to COMPLETE) and it leaves the column.</Path>
+            <Path name="⟳ Publish demand" goes="works it out again now">On the build order, beside <em>Demand published to Stock View</em>. The column is also published again after every release, undo, restart and line change on 10.5 — the button is for when something changed elsewhere.</Path>
+        </Screen>
+
         <h2 style={S.h2}>2 · Everything into the order's bin</h2>
         <p style={S.p}>WMS → <b>SO Pack</b>, the order's card. The badge at the top right says where it stands:</p>
         <Path name="waiting on parts" goes="something is still coming">A floor document is not gathered yet, or the shelf cannot cover a line. Gather floor documents on <b>Packaging Prep</b>: open the document, <b>Start packing</b>, tick each line packed, scan the <b>custom shop label</b> on the poles (the short WO-OE-… key — 🖨 Handshake Labels reprints it), then <b>✓ Gather into SO</b>.</Path>

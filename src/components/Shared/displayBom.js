@@ -17,6 +17,8 @@
 // traverse components included, because the board is built from them.
 
 import { rowKeyOf } from './rowKey.js';
+import { isKitLine, isOffOrderLine } from './itemKit.js';
+import { isReleaseByCount, releasedQtyOf } from './rowRelease.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
@@ -456,25 +458,65 @@ export function floorLinksByLine(parts = [], { fin = [], shop = [], plating = []
 /** Boards still to build on an order. */
 export const openBoards = (b) => Math.max(0, N(b?.qty, 0) - N(b?.built, 0));
 
+// ── AN ORDER RELEASED BY COUNT IS ITS OWN DEMAND (Stuart 2026-10-06: "look at the open demand on the stock view planning
+// report for all the raw items we will need to cover all this … we are going live here and that is a key tool") ────────
+// The build's bill is the display AS DESIGNED: it still carried the tracker's codes after the order's lines were put
+// right (H1-75SPSS, H1-2RCTACROD4 — demand on items nobody stocks), knew nothing of a kit opened into its parts, a
+// quantity corrected with ✎ or a stock-colour swap, and met the order only by row NAME ("Top Row 1" on the design,
+// "ROW 1" on the order — so a row long since started went on publishing demand). Once a build's sales orders are
+// released by count the truth is on the orders themselves: every line, less the pieces already released to a floor or
+// to the shelf pick (Shared/rowRelease.releasedQtyOf — a line a release could not start is still to be covered, and
+// still counts). Kit holders, lines taken off the order and fees are not material. A rod is counted in pieces AND
+// feet (pieces × the feet billed per rod), since rod stock is kept by the foot.
+// Pure. @returns [{ key, seed, qty, feet }] — the shape displayDemandFrom adds up.
+export function orderDemandLines(so) {
+    const out = [];
+    (Array.isArray(so && so.lines) ? so.lines : []).forEach((l, idx) => {
+        if (!l || isKitLine(l) || isOffOrderLine(l) || l.isFee || l.lineIsFee) return;
+        const erp = U(l.erp);
+        if (!erp) return;
+        const left = Math.max(0, N(l.qty) - releasedQtyOf(so, idx, l));
+        if (!(left > 0)) return;
+        const fin = U(l.finishCode), billed = U(l.billedErp);
+        const feetPer = l.perFoot ? N(l.feetPer) : 0;
+        out.push({
+            key: `${billed || erp}|${fin}`,
+            seed: { code: erp, billedId: billed, partId: l.partId || '', finishCode: fin, name: l.name || '', perFoot: !!l.perFoot },
+            qty: left, feet: Math.round(left * feetPer * 1000) / 1000,
+        });
+    });
+    return out;
+}
+const orderIsClosed = (so) => !!so && (U(so.status) === 'CLOSED' || U(so.status) === 'CANCELLED' || !!so.closedAt || so.deleted === true);
+
 /**
  * The open DISPLAY DEMAND per item across every order that is not complete — what the Sales
  * Snapshot's "Display" column reads (S2). Keyed by the finished SKU CPQ billed where there is
  * one, else the base code + finish. Quantities are (boards still to build) × per-board; feet the
  * same. Chips are listed by finish so a chip run can be sized. Nothing here is a NetSuite commit.
+ * @param builds          every build order of the brand
+ * @param ordersByBuild   { [buildId]: [sales order, …] } — the orders anchored to each build, as they stand. A build
+ *                        whose orders are ALL released by count publishes their lines (orderDemandLines); any other
+ *                        build publishes its bill, as before. Omitted, every build publishes its bill.
  */
-export function displayDemandFrom(builds = []) {
+export function displayDemandFrom(builds = [], { ordersByBuild = null } = {}) {
     const byItem = {};
     const add = (key, seed, qty, feet, b) => {
         if (!(qty > 0)) return;
         const cur = byItem[key] || { ...seed, qty: 0, feet: 0, builds: [] };
         cur.qty += qty; cur.feet += feet;
-        cur.builds.push({ id: b.id, name: b.name || b.displayName || b.id, qty });
+        // One entry per build order, however many of its lines carry the item.
+        const mine = cur.builds.find(x => x.id === b.id);
+        if (mine) { mine.qty += qty; mine.feet = (mine.feet || 0) + feet; }
+        else cur.builds.push({ id: b.id, name: b.name || b.displayName || b.id, qty, feet });
         byItem[key] = cur;
     };
     builds.forEach(b => {
         if (!b || b.status === 'COMPLETE' || b.status === 'CANCELLED') return;
         const open = openBoards(b);
         if (!open) return;
+        const orders = ((ordersByBuild && ordersByBuild[b.id]) || []).filter(Boolean);
+        const fromOrders = orders.length > 0 && orders.every(isReleaseByCount);
         // A STARTED ROW HAS LEFT THE DEMAND (Stuart 2026-09-22, Shared/displayRelease). Its parts are
         // now committed by work orders on RTG — counting them here as well would show the same
         // pieces twice on the Sales Snapshot. Per row, from the per-row split each line carries.
@@ -496,7 +538,8 @@ export function displayDemandFrom(builds = []) {
         const demandOf = (l, field) => ((byCount && Array.isArray(l.byRow) && l.byRow.length)
             ? l.byRow.reduce((s, r) => s + N(r[field]) * leftOf(r.row), 0)
             : perBoardOf(l, field) * open);
-        (b.lines?.parts || []).forEach(l => {
+        if (fromOrders) orders.filter(so => !orderIsClosed(so)).forEach(so => orderDemandLines(so).forEach(e => add(e.key, e.seed, e.qty, e.feet, b)));
+        else (b.lines?.parts || []).forEach(l => {
             if (l.done) return;
             const key = `${l.billedId || l.code}|${l.finishCode || ''}`;
             add(key, { code: l.code, billedId: l.billedId || '', partId: l.partId || '', finishCode: l.finishCode || '', name: l.name || '', perFoot: !!l.perFoot }, demandOf(l, 'qtyPerBoard'), demandOf(l, 'feetPerBoard'), b);
@@ -508,6 +551,20 @@ export function displayDemandFrom(builds = []) {
     });
     return { byItem, openBoards: builds.reduce((s, b) => s + ((b && b.status !== 'COMPLETE' && b.status !== 'CANCELLED') ? openBoards(b) : 0), 0), builds: builds.filter(b => b && b.status !== 'COMPLETE' && b.status !== 'CANCELLED' && openBoards(b) > 0).map(b => ({ id: b.id, name: b.name || b.id, open: openBoards(b) })) };
 }
+
+/**
+ * What one demand entry — or one build order's share of it — adds to a stock row: FEET for a rod (rod stock is kept by
+ * the foot), pieces for everything else. A per-foot entry with no feet on it is counted in pieces rather than lost; a
+ * record published before each build carried its own feet shares the entry's feet by pieces.
+ */
+export const displayDemandAmountOf = (e, b = null) => {
+    if (!e) return 0;
+    const feet = N(e.feet);
+    if (!e.perFoot || !(feet > 0)) return N(b ? b.qty : e.qty);
+    if (!b) return feet;
+    if (b.feet != null) return N(b.feet);
+    return N(e.qty) > 0 ? feet * N(b.qty) / N(e.qty) : 0;
+};
 
 /** A ship plan: `perShip` boards every `everyDays` from `start` until `qty` is covered. Dates as YYYY-MM-DD. */
 export function shipPlanFill({ qty, perShip, start, everyDays = 7 }) {

@@ -4,6 +4,7 @@ import BufferedInput from '../Shared/BufferedInput';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, addDoc, serverTimestamp } from "firebase/firestore";
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
+import { displayDemandAmountOf } from '../Shared/displayBom';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { SOURCING, sourcingOf, orderRouteFor, ORDER_ROUTE } from '../Shared/sourcing';
@@ -207,19 +208,27 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     }, [activeBrand]);
     // A row's display demand: the billed finished SKU first (H1-1BR/EP4), then the base code — and,
     // on a base row, every billed variant of it (the same rollup the committed column makes).
+    // A ROD IS DEMAND IN FEET (Stuart 2026-10-06): rod stock is kept by the foot, and the column counted rods — 33 rods
+    // of 2 ft read 33 against a stock figure in feet. A per-foot entry is added up in its feet (the pieces ride along
+    // for the tooltip); everything else in pieces, as before (Shared/displayBom.displayDemandAmountOf).
     const displayDemandFor = (erpId) => {
         const up = String(erpId || '').toUpperCase();
         const isVariant = /\/(P|EP[1-6]|MEP|P25)$/i.test(up);
-        let qty = 0; const builds = new Map();
+        let qty = 0, pieces = 0, feet = false; const builds = new Map();
         Object.values(displayDemand.byItem || {}).forEach(e => {
             if (!e) return;
             const billed = String(e.billedId || '').toUpperCase(), code = String(e.code || '').toUpperCase();
             const hit = billed === up || (!e.billedId && code === up) || (!isVariant && billed.startsWith(`${up}/`));
             if (!hit) return;
-            qty += Number(e.qty) || 0;
-            (e.builds || []).forEach(b => builds.set(b.id || b.name, { name: b.name || b.id, qty: (builds.get(b.id || b.name)?.qty || 0) + (Number(b.qty) || 0) }));
+            qty += displayDemandAmountOf(e);
+            pieces += Number(e.qty) || 0;
+            if (e.perFoot) feet = true;
+            (e.builds || []).forEach(b => {
+                const cur = builds.get(b.id || b.name) || { name: b.name || b.id, qty: 0, pieces: 0 };
+                builds.set(b.id || b.name, { ...cur, qty: cur.qty + displayDemandAmountOf(e, b), pieces: cur.pieces + (Number(b.qty) || 0), feet: cur.feet || !!e.perFoot });
+            });
         });
-        return { qty, builds: [...builds.values()] };
+        return { qty: Math.round(qty * 100) / 100, pieces, feet, builds: [...builds.values()].map(b => ({ ...b, qty: Math.round(b.qty * 100) / 100 })) };
     };
     useEffect(() => onSnapshot(doc(db, 'system', 'retired_items'),
         s => setRetiredDoc(s.exists() ? { internalIds: s.data().internalIds || [], items: s.data().items || [] } : { internalIds: [], items: [] }),
@@ -2691,7 +2700,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const display = displayDemandFor(erpId);
         return {
             ...part,
-            stock: { ...stock, aggregatedCommitted, aggregatedBackorder, displayDemand: display.qty, displayBuilds: display.builds },
+            stock: { ...stock, aggregatedCommitted, aggregatedBackorder, displayDemand: display.qty, displayBuilds: display.builds, displayDemandFeet: display.feet },
             wip: wipByErp[erpId] || { qty: 0, lines: [] }, // in-progress plating for this item
             rop, moq, leadTime,
             isLowStock: stock.available <= rop && rop > 0
@@ -4300,7 +4309,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             );
                                         })()}
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.aggregatedBackorder > 0 ? '#d9534f' : 'var(--ink-soft)' }}>{item.stock.aggregatedBackorder}</td>
-                                        <td title={item.stock.displayDemand > 0 ? (item.stock.displayBuilds || []).map(b => `${b.name}: ${b.qty}`).join('\n') : ''} style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.displayDemand > 0 ? '#7a5cc4' : 'var(--ink-soft)', cursor: item.stock.displayDemand > 0 ? 'help' : 'default' }}>{item.stock.displayDemand || '-'}</td>
+                                        <td title={item.stock.displayDemand > 0 ? [item.stock.displayDemandFeet ? 'Open display demand, in FEET (rod stock is kept by the foot)' : 'Open display demand', ...(item.stock.displayBuilds || []).map(b => `${b.name}: ${b.qty}${b.feet ? ` ft (${b.pieces} rods)` : ''}`)].join('\n') : ''} style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.displayDemand > 0 ? '#7a5cc4' : 'var(--ink-soft)', cursor: item.stock.displayDemand > 0 ? 'help' : 'default' }}>{item.stock.displayDemand || '-'}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', color: 'var(--ink-soft)' }}>{item.rop || '-'}</td>
                                         {(() => {
                                             const rec = recommendedProductionFor(item);

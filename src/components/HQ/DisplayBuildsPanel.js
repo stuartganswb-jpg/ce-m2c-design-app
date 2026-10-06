@@ -76,10 +76,37 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     const finishList = useMemo(() => [...finishes.inHouse, ...finishes.outsourced], [finishes]);
 
     // ── the demand record: recomputed from EVERY open order of the brand on every write ──────
+    // AN ORDER RELEASED BY COUNT PUBLISHES ITS OWN LINES (Stuart 2026-10-06, Shared/displayBom.orderDemandLines): each open
+    // build's anchored sales orders are read as they stand and handed to the one demand function, which uses them in
+    // place of the build's bill when every one is released by count.
     const writeDemand = async (all) => {
         const brand = activeBrand || 'ALL';
-        const dem = displayDemandFrom(all.filter(b => !b.brandId || b.brandId === brand));
+        const mine = all.filter(b => !b.brandId || b.brandId === brand);
+        const ordersByBuild = {};
+        for (const b of mine) {
+            if (!b || b.status === 'COMPLETE' || b.status === 'CANCELLED' || !openBoards(b)) continue;
+            const sos = [];
+            for (const id of anchoredIdsOf(b)) {
+                const snap = await getDoc(doc(db, 'hq_sales_orders', id));
+                if (snap.exists() && !(snap.data() || {}).deleted) sos.push({ id: snap.id, ...snap.data() });
+            }
+            if (sos.length) ordersByBuild[b.id] = sos;
+        }
+        const dem = displayDemandFrom(mine, { ordersByBuild });
         await setDoc(doc(db, 'system', `display_demand_${brand}`), { ...dem, brandId: brand, updatedAt: Date.now(), updatedBy: String(currentUser || '') });
+        return dem;
+    };
+    // After a write that changes an order's lines or what is released of them, and on ⟳ Publish demand. A failure here
+    // never undoes the change that was just made — it is said, and the button publishes again.
+    const republishDemand = async (b = null) => {
+        try { return await writeDemand(b ? [...builds.filter(x => x.id !== b.id), b] : builds); }
+        catch (e) { console.warn('display demand not republished', e); return null; }
+    };
+    const publishDemandNow = async () => {
+        setBusy('Publishing demand…');
+        const dem = await republishDemand(draft && !dirty ? draft : null);
+        setBusy('');
+        alert(dem ? `Demand published to Stock View: ${Object.keys(dem.byItem || {}).length} item(s) across ${(dem.builds || []).length} open build order(s), ${dem.openBoards} display(s) open.` : 'The demand could not be published — try again.');
     };
 
     const open = (b) => { setDraft(JSON.parse(JSON.stringify(b))); setDirty(false); };
@@ -331,7 +358,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             const b = { ...draft, soAppIds, soAppId: soAppIds[0], soNumber: draft.soNumber || so.soId || so.id, updatedAt: Date.now(), updatedBy: String(currentUser || '') };
             await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b, { merge: true });
             setDraft(b); setDirty(false); setAddSo('');
-            await loadFloor(b);
+            await republishDemand(b); await loadFloor(b);
         } catch (e) { alert('Anchor failed: ' + (e?.message || e)); }
         setBusy('');
     };
@@ -382,7 +409,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             // (OE_ROW) when it starts — a stale split record would sit on the Snapshot board after its row covered it.
             await updateDoc(doc(db, 'hq_sales_orders', so.id), { ...displayAnchorPatch({ buildId: draft.id, lines, so }), ...countPatchFor(so), backorderLines: (so.backorderLines || []).filter(r => r && r.source === 'OE_ROW') });
             alert(`Retired: ${res.fin} finishing doc(s), ${res.shop} shop doc(s)${pkgClosed ? `, ${pkgClosed} packaging doc(s)` : ''} closed${res.rodCuts ? `, ${res.rodCuts} rod cut(s) cancelled` : ''}${(res.nsWritesCancelled || []).length ? `, ${res.nsWritesCancelled.length} queued NetSuite write(s) cancelled` : ''}${cancelled ? `, ${cancelled} plating demand(s) cancelled` : ''}${res.nsNeedsManualClose ? `.\n\n⚠ NetSuite work order ${res.ns} must be closed by hand — a task was raised.` : '.'}\n\n${so.soId || so.id} is now released by rows from here.`);
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
         } catch (e) { alert('Retire failed partway: ' + (e?.message || e) + '\n\nRead the floor again before doing anything else — some documents may already be closed.'); }
         setBusy('');
     };
@@ -423,7 +450,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             const { patch, clear } = reopenForRowsSoPatch({ so, buildId: draft.id, lines, by, now });
             await updateDoc(doc(db, 'hq_sales_orders', so.id), { ...patch, ...countPatchFor(so), ...Object.fromEntries(clear.map(k => [k, deleteField()])) });
             alert(`⟲ ${so.soId || so.id} is open again, on the row route (${patch.status}). ${docs.length} whole-order document(s) marked retired${pkgClosed ? `, ${pkgClosed} pack card(s) closed` : ''}.\n\nIts rows read NOT STARTED — start them from here, one at a time.`);
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
         } catch (e) { alert('Reopen failed partway: ' + (e?.message || e) + '\n\nRead the floor again before doing anything else.'); }
         setBusy('');
     };
@@ -439,7 +466,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         try {
             await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: fix.lines, lineCodesFixedAt: Date.now(), lineCodesFixedBy: String(currentUser || '10.5') });
             alert(`↻ ${fix.fixed.length} line code(s) fixed on ${so.soId || so.id}.`);
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
         } catch (e) { alert('Could not fix the line codes: ' + (e?.message || e)); }
         setBusy('');
     };
@@ -486,7 +513,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             setBusy('Re-reading lines…');
             await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: patch.lines, backorderLines: patch.backorderLines, linesRereadAt: Date.now(), linesRereadBy: String(currentUser || '10.5') });
             alert(`↻ ${so.soId || so.id}: ${patch.enriched} line(s) completed, ${patch.added.length} added${(patch.kitsExploded || []).length ? `, ${patch.kitsExploded.length} kit(s) became their parts (added at the end — start them on their rows)` : ''}${(patch.restamped || []).length ? `, ${patch.restamped.length} brought to CPQ's rules` : ''}${patch.droppedBackorders ? `, ${patch.droppedBackorders} stale backorder record(s) removed` : ''}.${(patch.restamped || []).some(c => c.netsuite) ? `\n\n⚠ Change in NetSuite before packing:\n${patch.restamped.filter(c => c.netsuite).map(c => `  • line ${c.idx + 1}: ${c.text.split(':')[0]}`).join('\n')}` : ''}`);
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
         } catch (e) { alert('Could not re-read the lines: ' + (e?.message || e)); }
         setBusy('');
     };
@@ -510,7 +537,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             if (!window.confirm(`Change line ${l.lineIdx + 1} (${line.erp}) from ${r.from} to ${r.to}${r.to === 0 ? ' — OFF THE ORDER' : ''}?\n\n"${String(why).trim()}" is recorded on the line.\n\n⚠ NetSuite: change the same line on the sales order by hand — the app does not send it.`)) return;
             await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: r.lines });
             alert(`✎ ${so.soId || so.id} line ${l.lineIdx + 1}: ${line.erp} ${r.from} → ${r.to}. Change NetSuite to match.`);
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
         } catch (e) { alert('Could not change the line: ' + (e?.message || e)); }
     };
 
@@ -540,7 +567,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             if (!window.confirm(`Line ${l.lineIdx + 1} (${line.erp}): ${r.from.qty}${r.from.perFoot ? ` rods × ${r.from.feetPer} ft` : ''}${r.from.cutLength ? ` · cut ${r.from.cutLength}"` : ' · no cut'} → ${r.to.qty} rods × ${r.to.feetPer} ft (${r.to.billedFeet} ft billed) · cut ${r.to.cutLength}"?\n\n"${String(why).trim()}" is recorded on the line.\n\n${nsSame ? `NetSuite: unchanged — the line already bills ${r.to.billedFeet} ft.` : `⚠ NetSuite: the line should bill ${r.to.billedFeet} ft — change it by hand.`}`)) return;
             await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: r.lines });
             alert(`✎ ${so.soId || so.id} line ${l.lineIdx + 1}: ${line.erp} — ${r.to.qty} rods × ${r.to.cutLength}" (${r.to.billedFeet} ft).`);
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
         } catch (e) { alert('Could not change the line: ' + (e?.message || e)); }
     };
 
@@ -565,7 +592,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             r.oeGenDrop.forEach(i => { patch[`oeGen.${i}`] = deleteField(); });
             await updateDoc(doc(db, 'hq_sales_orders', so.id), patch);
             alert(`✎ ${so.soId || so.id} kit line ${l.lineIdx + 1}: ${line.erp} ${r.from} → ${r.to}${r.to === 0 ? ' (off the order)' : ''}. Change NetSuite to match.`);
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
         } catch (e) { alert('Could not change the kit: ' + (e?.message || e)); }
     };
 
@@ -593,7 +620,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             if (!window.confirm(`Kit line ${l.lineIdx + 1} (${line.erp}${line.row ? `, ${line.row}` : ''}): finish ${r.from} → ${r.to}?\n\nIts parts:\n${r.parts.map(p => `  • line ${p.idx + 1}: ${p.from} → ${p.to}`).join('\n')}\n\n"${String(why).trim()}" is recorded on the kit. A part that must now be made reads NOT STARTED — ▶ Start row plans it.\n\n⚠ NetSuite: change the same lines on the sales order by hand — the app does not send it.`)) return;
             await updateDoc(doc(db, 'hq_sales_orders', so.id), { lines: r.lines });
             alert(`✎ ${so.soId || so.id} kit line ${l.lineIdx + 1}: ${line.erp} ${r.from} → ${r.to}. Change NetSuite to match.`);
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
         } catch (e) { alert('Could not change the kit: ' + (e?.message || e)); }
     };
 
@@ -644,7 +671,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 await updateDoc(doc(db, 'hq_sales_orders', p.so.id), patch);
             }
             alert(`${label} is NOT STARTED again — ${docs.length} document(s) removed through the ledger. Press ▶ Start row.`);
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
         } catch (e) { alert('Could not undo the row: ' + (e?.message || e)); }
         setBusy('');
     };
@@ -716,7 +743,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                     if (ok) { await updateDoc(doc(db, 'hq_sales_orders', soAppId), { [`oeGen.${l.lineIdx}`]: deleteField() }); cleared++; }
                 }
             }
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
             alert(`${label}: ${cancelled} plating demand(s) cancelled, ${cleared} line(s) back to NOT STARTED.${refused.length ? `\n\nNot undone:\n${refused.map(x => `  • ${x}`).join('\n')}` : ''}${cleared ? '\n\nPress ▶ Start row to run it under the stock-first rule.' : ''}`);
         } catch (e) { alert('Could not undo it: ' + (e?.message || e)); }
         setBusy('');
@@ -747,7 +774,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             // "The order itself" marks the display's own line (its base) — not a row, never unassigned.
             const next = cur.map((l, i) => (i !== lineIdx ? l : label === ORDER_ROW_LABEL ? { ...l, row: '', orderLevel: true } : { ...l, row: label, orderLevel: false }));
             await updateDoc(doc(db, 'hq_sales_orders', soAppId), { lines: next });
-            await loadFloor(draft);
+            await republishDemand(); await loadFloor(draft);
         } catch (e) { alert('Could not assign the row: ' + (e?.message || e)); }
         setBusy('');
     };
@@ -1227,7 +1254,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             <div style={{ display: 'flex', gap: '18px', marginBottom: '16px', flexWrap: 'wrap' }}>
                 <span style={mono}>Open to build: <b style={{ color: 'var(--ink)' }}>{openN}</b> of {draft.qty}</span>
                 <span style={mono}>Shipped: <b style={{ color: 'var(--ink)' }}>{shippedN}</b> · planned {plannedShip}{plannedShip !== N(draft.qty) ? ` (⚠ plan ≠ ${draft.qty})` : ''}</span>
-                <span style={mono}>Demand published to the Sales Snapshot: open boards × per board, lines not done, rows not started</span>
+                <span style={mono}>Demand published to Stock View: {(floor?.sos || []).length > 0 && (floor.sos || []).every(x => isReleaseByCount(x.so)) ? 'the order\'s own lines, pieces not yet released' : 'open boards × per board, lines not done, rows not started'}</span>
+                <button onClick={publishDemandNow} disabled={!!busy || dirty} style={btn(false, { padding: '2px 10px' })} title="Work the open display demand out again from every open build order and its sales orders, and publish it to Stock View's Display column">⟳ Publish demand</button>
             </div>
 
             {/* the orders on the floor — several per build; anchored ones read, the typed one offered */}

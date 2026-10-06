@@ -1,5 +1,6 @@
 // Harness for Shared/displayBom.js — the bill of a sales display board.
 //   node scripts/displayBom.test.mjs
+import { orderDemandLines, displayDemandAmountOf } from '../src/components/Shared/displayBom.js';
 import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength, raisePlan, targetCodeOf, SAMPLE_BIN_BY_STYLE, cpqEntryRows, cpqEntryCsv, floorLinksByLine } from '../src/components/Shared/displayBom.js';
 
 let pass = 0, fail = 0;
@@ -351,6 +352,75 @@ const cartBaseFront3 = {
     eq('a rod longer than the board is capped inside it', fitRowToLength(band, { lengthInches: 40, aspect: 8 }).w, Math.round(2400 * 0.96));
     eq('no length or no aspect → the row is untouched', [fitRowToLength(band, { lengthInches: 0, aspect: 8 }), fitRowToLength(band, { lengthInches: 10, aspect: 0 })], [band, band]);
     ok('never leaves the face', (() => { const r = fitRowToLength({ ...band, x: 2300 }, { lengthInches: 16.75, aspect: 8 }); return r.x >= 0 && r.x + r.w <= 2400; })());
+}
+
+// ── AN ORDER RELEASED BY COUNT IS ITS OWN DEMAND (Stuart 2026-10-06) ──────────────────────────────────
+// The wall as it stands: 35 displays, rows 1 / 4 released for 2, row 2 whole (the old way), a line a release could not
+// start, a kit opened into its parts, a line taken off the order, a fee, and rods billed by the foot.
+{
+    const rel = (qty, kind = 'WO') => ({ kind, ids: ['WO-1'], releases: [{ no: 1, kind, from: 0, to: 2, of: 35, qty, ids: ['WO-1'] }], released: qty });
+    const so = {
+        id: 'SO-A', soId: 'SO60585', releaseByCount: true, releaseOf: 35, status: 'Dispatched',
+        rowRelease: { ROW_1: { boards: 2, of: 35 }, ROW_2: { boards: 35, of: 35, whole: true }, ROW_4: { boards: 2, of: 35 } },
+        lines: [
+            /* 0 */ { erp: 'H1-75SR', row: 'Row 1', qty: 35, finishCode: 'P06', billedErp: 'H1-75SR/P', toBeFinished: true, perFoot: true, feetPer: 2, cutLength: 18, name: 'Square rod' },
+            /* 1 */ { erp: 'H1-75SPF', row: 'Row 1', qty: 70, finishCode: 'P06', billedErp: 'H1-75SPF/P', toBeFinished: true, name: 'Pyramid cap' },
+            /* 2 */ { erp: 'H1-1R', row: 'Row 2', qty: 35, finishCode: 'EP2', billedErp: 'H1-1R/EP2', toBeFinished: true, perFoot: true, feetPer: 2 },
+            /* 3 */ { erp: 'H1-138TRV', row: 'Row 4', qty: 35, finishCode: 'P29', billedErp: 'H1-138TRV/P', toBeFinished: true, perFoot: true, feetPer: 2 },
+            /* 4 */ { erp: 'HTTENDSTOP', row: 'Row 4', qty: 70, toBeFinished: false },
+            /* 5 */ { erp: 'H1-2TRVBP', row: 'Row 4', qty: 35, finishCode: 'TBR', toBeFinished: true },          // the release could not start it
+            /* 6 */ { erp: 'H1-2TRV-WB/C', row: 'Row 4', qty: 35, isKit: true },                                    // a kit holder: sold, never made
+            /* 7 */ { erp: 'H1-2TRVLA/C', row: 'Row 4', qty: 35, inKit: true, kitLineIdx: 6, toBeFinished: false },
+            /* 8 */ { erp: 'H1-138CC', row: 'Row 4', qty: 0, offOrder: true, finishCode: 'P29' },
+            /* 9 */ { erp: 'H1-MITER', row: 'Row 4', qty: 70, isFee: true },
+            /* 10 */ { erp: 'H1-75SPF', row: 'Row 4', qty: 35, finishCode: 'P06', billedErp: 'H1-75SPF/P', toBeFinished: true },
+        ],
+        oeGen: { 0: rel(2), 1: rel(4), 2: { kind: 'WO', ids: ['WO-OLD'] }, 3: rel(2), 4: rel(4, 'STOCK'), 7: rel(2, 'STOCK'), 10: rel(2) },
+    };
+    const lines = orderDemandLines(so);
+    const by = Object.fromEntries(lines.map(l => [`${l.key}#${l.seed.code}`, l]));
+    eq('a line released for 2 of 35 still owes 33 displays', [lines[0].qty, lines[1].qty], [33, 66]);
+    eq('a rod carries its feet as well as its pieces', [lines[0].feet, lines[0].seed.perFoot], [66, true]);
+    eq('keyed by the SKU CPQ billed, with the base item as its code', [lines[1].key, lines[1].seed.code, lines[1].seed.billedId, lines[1].seed.finishCode], ['H1-75SPF/P|P06', 'H1-75SPF', 'H1-75SPF/P', 'P06']);
+    ok('a row started the old way (a stamp for the whole line) has left the demand', !lines.some(l => l.seed.code === 'H1-1R'));
+    eq('a stocked line follows its shelf releases', by['HTTENDSTOP|#HTTENDSTOP'].qty, 66);
+    eq('a line the release could not start is still all to be covered', by['H1-2TRVBP|TBR#H1-2TRVBP'].qty, 35);
+    ok('a kit holder is not material', !lines.some(l => l.seed.code === 'H1-2TRV-WB/C'));
+    eq('…its parts are', by['H1-2TRVLA/C|#H1-2TRVLA/C'].qty, 33);
+    ok('a line taken off the order and a fee are not material', !lines.some(l => ['H1-138CC', 'H1-MITER'].includes(l.seed.code)));
+    eq('the lines that count', lines.length, 7);
+    eq('nothing released → every piece', orderDemandLines({ ...so, oeGen: {} }).reduce((a, l) => a + l.qty, 0), 35 + 70 + 35 + 35 + 70 + 35 + 35 + 35);
+    eq('no lines, no order → nothing', [orderDemandLines({}), orderDemandLines(null)], [[], []]);
+
+    // the build as designed still names a tracker code the order no longer carries
+    const build = { id: 'B-WALL', name: 'Wall × 35', qty: 35, built: 0, status: 'IN_PRODUCTION', rowReleased: { ROW_1: 2 },
+        lines: { parts: [{ key: 'H1-75SPSS/P|P06', code: 'H1-75SPSS', billedId: 'H1-75SPSS/P', finishCode: 'P06', qtyPerBoard: 2, feetPerBoard: 0, byRow: [{ row: 'Row 1', qtyPerBoard: 2 }] }],
+                 chips: [{ code: 'P06', name: 'Satin Black', qtyPerBoard: 1 }] } };
+    const old = displayDemandFrom([build]);
+    ok('without its orders a build publishes its bill, as before', !!old.byItem['H1-75SPSS/P|P06'] && old.byItem['H1-75SPSS/P|P06'].qty === 66);
+    const dem = displayDemandFrom([build], { ordersByBuild: { 'B-WALL': [so] } });
+    ok('with its orders released by count, the tracker\'s code is gone', !dem.byItem['H1-75SPSS/P|P06']);
+    eq('the same item on two rows adds up — one entry for the build', [dem.byItem['H1-75SPF/P|P06'].qty, dem.byItem['H1-75SPF/P|P06'].builds], [99, [{ id: 'B-WALL', name: 'Wall × 35', qty: 99, feet: 0 }]]);
+    eq('a rod: pieces, feet, and the build\'s share of both', [dem.byItem['H1-75SR/P|P06'].qty, dem.byItem['H1-75SR/P|P06'].feet, dem.byItem['H1-75SR/P|P06'].builds[0].feet], [33, 66, 66]);
+    eq('chips are not on the order — they still come from the build', dem.byItem['CHIP|P06'].qty, 35);
+    eq('the totals read the same', [dem.openBoards, dem.builds], [35, [{ id: 'B-WALL', name: 'Wall × 35', open: 35 }]]);
+    const mixed = displayDemandFrom([build], { ordersByBuild: { 'B-WALL': [so, { id: 'SO-B', lines: [{ erp: 'X', qty: 5 }] }] } });
+    ok('one order NOT released by count → the build keeps publishing its bill', !!mixed.byItem['H1-75SPSS/P|P06'] && !mixed.byItem['H1-75SPF/P|P06']);
+    const two = displayDemandFrom([build], { ordersByBuild: { 'B-WALL': [so, { id: 'SO-B', releaseByCount: true, releaseOf: 35, lines: [{ erp: 'H1-75SPF', qty: 35, finishCode: 'P06', billedErp: 'H1-75SPF/P' }] }] } });
+    eq('two orders of one display add up', two.byItem['H1-75SPF/P|P06'].qty, 134);
+    const closed = displayDemandFrom([build], { ordersByBuild: { 'B-WALL': [so, { id: 'SO-B', releaseByCount: true, status: 'Closed', lines: [{ erp: 'H1-75SPF', qty: 35, billedErp: 'H1-75SPF/P', finishCode: 'P06' }] }] } });
+    eq('a closed order asks for nothing', closed.byItem['H1-75SPF/P|P06'].qty, 99);
+    ok('every display built → no demand, whatever the order says', Object.keys(displayDemandFrom([{ ...build, built: 35 }], { ordersByBuild: { 'B-WALL': [so] } }).byItem).length === 0);
+    ok('a complete build publishes nothing', Object.keys(displayDemandFrom([{ ...build, status: 'COMPLETE' }], { ordersByBuild: { 'B-WALL': [so] } }).byItem).length === 0);
+    ok('a build with no order anchored publishes its bill', !!displayDemandFrom([build], { ordersByBuild: {} }).byItem['H1-75SPSS/P|P06']);
+
+    // what a stock row adds: feet for a rod, pieces otherwise
+    const rod = dem.byItem['H1-75SR/P|P06'], cap = dem.byItem['H1-75SPF/P|P06'];
+    eq('a rod is demand in feet', [displayDemandAmountOf(rod), displayDemandAmountOf(rod, rod.builds[0])], [66, 66]);
+    eq('a part is demand in pieces', [displayDemandAmountOf(cap), displayDemandAmountOf(cap, cap.builds[0])], [99, 99]);
+    eq('a record published before each build carried feet shares them by pieces', displayDemandAmountOf({ perFoot: true, qty: 50, feet: 100 }, { id: 'B', qty: 20 }), 40);
+    eq('a per-foot entry with no feet on it is counted in pieces, never lost', displayDemandAmountOf({ perFoot: true, qty: 12, feet: 0 }), 12);
+    eq('nothing → 0', displayDemandAmountOf(null), 0);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
