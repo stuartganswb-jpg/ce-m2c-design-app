@@ -78,6 +78,9 @@ function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishC
         // finishes — so the line joins to THAT record: its bin, its stock, its NetSuite id (2026-09-18).
         partId: l.soldPartId || l.partId || null,
         legacyErpId: l.billedId || codeOf(part, l.partId),
+        // The standard part this line's item stands in for (H1-1BBS for H1-1BS, Shared/materialTwin) — kept so a
+        // reader of the saved line can tell a brass twin from a brass item picked on its own.
+        ...(l.twinOf ? { twinOf: l.twinOf } : {}),
         ...(l.sku || l.aliasCode ? { clientSku: l.sku || l.aliasCode } : {}),
         ...(l.hidden ? { hidden: true } : {}),
         ...(l.isFee ? { isFee: true } : {}),
@@ -174,7 +177,9 @@ export function handoffItem(resolved, ctx = {}) {
     const alignedSub = String(orderFinish?.subFinishCode || '').trim().toUpperCase();
     const takesSub = (l, part) => String(l.role || '').toUpperCase() === 'TRACK' || !!part?.manufacturingSpecs?.usesSubFinish;
     const lines = priced.lines.map(l => {
-        const part = typeof findPart === 'function' ? findPart(l.partId) : null;
+        // A part sold as its TWIN in another material (Stuart 2026-10-06, the 1" brass) is a different product: the
+        // line is named, handled and joined as the twin's own record, not as the standard part the flow pins.
+        const part = typeof findPart === 'function' ? ((l.twinOf && l.soldPartId && findPart(l.soldPartId)) || findPart(l.partId)) : null;
         // The engine's own answer first (the rod's finish decides the colour); the order finish's otherwise.
         return handoffLine(l, part, finishNameOf(l.finishCode), clientFinishNameOf(l.finishCode), l.subFinishCode || (takesSub(l, part) ? alignedSub : ''));
     });

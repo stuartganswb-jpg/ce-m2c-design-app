@@ -27,6 +27,7 @@ import { TIER_SAVE_GROUPS } from '../Shared/tierRows';
 import { SOURCING, SOURCING_LABEL, sourcingOf, sourcingPatch } from '../Shared/sourcing';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { canonicalCollection } from '../Shared/collectionName';
+import { materialTwinsOf, withTwin, twinRefusal } from '../Shared/materialTwin';
 
 
 const AVAILABLE_BRANDS = [
@@ -87,6 +88,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [isSaving, setIsSaving] = useState(false);
   
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' });
+  const [twinDraft, setTwinDraft] = useState({ material: '', code: '' }); // "also made in another material as" — the row being typed
   const [aliasAudit, setAliasAudit] = useState(null); // 🔎 "where is this used?" scan { code, loading, hits, scanned }
   const [aliasForm, setAliasForm] = useState({ code: '', name: '', price: '', collection: '' }); // alias creator
   const [orphanMode, setOrphanMode] = useState(false);     // show only unreferenced, NS-less items
@@ -2544,6 +2546,47 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>CPQ and Order Entry never apply the configuration's finish to this part; it prices and pulls as the plain item and the floor sheet reads "no finish". Splices, joiners, connectors, hidden hardware. (Bulk: 4.5 Mass Update → Unfinished.)</div>
                           </div>
                       </div>
+                      {/* ALSO MADE IN ANOTHER MATERIAL (Stuart 2026-10-06, the 1" brass · Shared/materialTwin): "the brass
+                          items have their own part# … ideally in the cpq we just tag it as in the .glb the brass items are
+                          identical to their steel counter parts". The STANDARD part names the item it is made as in that
+                          material; a finish of that material (4.5 — LBR · BRASS) then lands on this part only where it
+                          names one, and the CPQ line becomes that item — its number, its price, its NetSuite item. */}
+                      {(() => {
+                          const twins = materialTwinsOf({ manufacturingSpecs: { customData: editSpecs.customData || {} } });
+                          const setTwins = (list) => handleCustomFieldChange('materialTwins', list);
+                          const addTwin = () => {
+                              const why = twinRefusal(activePart, twinDraft.material, twinDraft.code, findByCode);
+                              if (why || !twinDraft.material) return alert(why || 'Pick the material and type the item number.');
+                              setTwins(withTwin(twins, twinDraft.material, twinDraft.code));
+                              setTwinDraft({ material: '', code: '' });
+                          };
+                          return (
+                              <div style={{ gridColumn: 'span 2', padding: '6px 0', borderTop: '1px solid var(--line)' }}>
+                                  <label style={labelStyle}>Also made in another material — its twin item</label>
+                                  <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', margin: '-2px 0 8px' }}>The same part in the 3D model, sold under its own number (the 1" brass). When a finish of that material is picked in CPQ, the line becomes the twin item — its price, pattern # and NetSuite item — and that finish is offered on this part. A part with no twin in a material does not take that material's finishes.</div>
+                                  {twins.map(t => {
+                                      const hit = findByCode(t.code);
+                                      return (
+                                          <div key={t.material} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 0', fontSize: '0.9rem' }}>
+                                              <b style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{t.material}</b>
+                                              <span>→ <b>{t.code}</b>{hit ? ` — ${hit.itemName || ''}` : ''}</span>
+                                              {!hit && <span style={{ color: '#b0281a', fontSize: '0.8rem' }}>not in the Master Library — the swap will not happen</span>}
+                                              <button type="button" onClick={() => setTwins(withTwin(twins, t.material, ''))} style={{ border: '1px solid var(--line)', background: '#fff', cursor: 'pointer', padding: '2px 8px', fontSize: '0.8rem' }}>Remove</button>
+                                          </div>
+                                      );
+                                  })}
+                                  <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr auto', gap: '10px', alignItems: 'center', marginTop: '6px' }}>
+                                      <select value={twinDraft.material} onChange={(e) => setTwinDraft({ ...twinDraft, material: e.target.value })} style={fieldStyle}>
+                                          <option value="">— material —</option>
+                                          {(globalLists.materials || []).map(m => <option key={m} value={String(m).toUpperCase()}>{m}</option>)}
+                                      </select>
+                                      <input value={twinDraft.code} onChange={(e) => setTwinDraft({ ...twinDraft, code: e.target.value })} placeholder="the twin's item number, e.g. H1-1BBS" style={{ ...fieldStyle, textTransform: 'uppercase' }} />
+                                      <button type="button" onClick={addTwin} style={{ border: '1px solid var(--ink)', background: 'var(--ink)', color: '#fff', cursor: 'pointer', padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase' }}>Add twin</button>
+                                  </div>
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Added or removed here, written when the record is saved.</div>
+                              </div>
+                          );
+                      })()}
                   </div>
               </div>
               {(isBracketRecord || isBackplateRecord || isFeeRecord) && (

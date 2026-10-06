@@ -39,6 +39,7 @@ import { takesNoFinish } from './finishLabel.js';
 import { isItemKit, kitComponentsOf, kitPartFinishOf } from './itemKit.js';
 import { fabricutPriceOf, fabricutCodeOf, priceLevelShort, isPlatedSuffix } from './priceLevels.js';
 import { finishVariantOf, stockColourVariantOf } from './finishVariant.js';
+import { materialTwinOf } from './materialTwin.js';
 import { altPatternRowsOf, printedPatternOf } from './altPattern.js';
 import { speciesVariantOf } from './sizeMatrix.js';
 import { ROD_ROLES, companionsFor } from './hardwareModel.js';
@@ -65,14 +66,15 @@ const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : nu
  * What one selected part costs, and why.
  *
  * @param choice   a resolved hardware-model choice (carries partId and any authored price)
- * @param part     the Approved_Designs doc for that part — the carrier of basePrice,
- *                 clientPricing[] and the manufacturingSpecs tier box
+ * @param pinned   the Approved_Designs doc for that part — the carrier of basePrice,
+ *                 clientPricing[] and the manufacturingSpecs tier box (under a finish of another
+ *                 material it is priced and sold as its twin — Shared/materialTwin)
  * @param ctx      { customerId, customer, priceLevel, finishCode, outsourceCodes, findByCode }
  *                 …and optionally `finishFor(choice, entry)` — the per-part finish, where the
  *                 caller allows a part to be finished differently from the configuration.
- * @returns { price, source, sku, aliasCode, detail }
+ * @returns { price, source, sku, aliasCode, billedId, detail } — plus { soldPartId, twinOf } when sold as a twin
  */
-export function priceChoice(choice, part, ctx = {}) {
+export function priceChoice(choice, pinned, ctx = {}) {
     const { customerId, customer, priceLevel = 'STANDARD', finishCode, outsourceCodes, findByCode, levelIsDefault } = ctx;
     // ── 0 — WHICH RECORD IS THIS, ONCE A FINISH IS CHOSEN ────────────────────────────────────
     // Before anything is priced, the mill base resolves to the item that is actually sold: the /P
@@ -89,6 +91,16 @@ export function priceChoice(choice, part, ctx = {}) {
     //        when the caller passes no finish lookup (`ctx.finishObjOf`), so every other line is exactly
     //        as it was. Runs BEFORE the /P //EPn swap, as the old engine ordered it (sizeMatrix).
     const finishObj = (finishCode && typeof ctx.finishObjOf === 'function') ? (ctx.finishObjOf(finishCode) || null) : null;
+    // ── 0· — THE SAME PART IN ANOTHER MATERIAL (Stuart 2026-10-06, the 1" brass: "when LBR is selected it
+    //        swaps out the standard parts for the brass parts"). The flow pins the standard part; its library
+    //        record names the item it is made as in the finish's material (Shared/materialTwin — H1-1BS + LBR
+    //        is H1-1BBS). A twin is a different PRODUCT — its own number, pattern number, price, stock and
+    //        NetSuite item — so every rule below runs on the twin, and the line joins to it (`soldPartId`).
+    //        Identity when the finish names no material, or the part names no twin in it.
+    const twin = finishObj ? materialTwinOf(pinned, finishObj, findByCode) : null;
+    const part = twin || pinned;
+    const pinnedCode = twin ? String((pinned.legacyErpId && pinned.legacyErpId !== 'PENDING' ? pinned.legacyErpId : pinned.itemId) || '').trim() : '';
+    const asTwin = (r) => (twin ? { ...r, soldPartId: twin.id, twinOf: pinnedCode } : r);
     const basePart = part;
     const speciesPart = speciesVariantOf(part, finishObj, findByCode) || part;
     const speciesSwapped = !!part && speciesPart !== part;
@@ -198,12 +210,12 @@ export function priceChoice(choice, part, ctx = {}) {
     // …and the same for a stock-colour item: H1-2TRV-WB/C is the thing pulled, H1-2TRV-WB is the product
     // that carries the price and the customer's pattern number (Stuart 2026-09-18: "the placeholder for
     // the item# and price").
-    if (first.source !== PRICE_SOURCES.NONE || !(speciesSwapped || stockColour)) return first;
+    if (first.source !== PRICE_SOURCES.NONE || !(speciesSwapped || stockColour)) return asTwin(first);
     const baseSold = stockColour ? basePart : (finishVariantOf(basePart, finishCode, findByCode) || basePart);
     const alt = chain(baseSold);
-    if (alt.source === PRICE_SOURCES.NONE) return first;
+    if (alt.source === PRICE_SOURCES.NONE) return asTwin(first);
     const baseCode = String((basePart.legacyErpId && basePart.legacyErpId !== 'PENDING' ? basePart.legacyErpId : basePart.itemId) || '').trim();
-    return { ...alt, billedId, detail: `${alt.detail ? alt.detail + ' · ' : ''}priced from the base product ${baseCode} — ${billedId} carries no price of its own` };
+    return asTwin({ ...alt, billedId, detail: `${alt.detail ? alt.detail + ' · ' : ''}priced from the base product ${baseCode} — ${billedId} carries no price of its own` });
 }
 
 /**
@@ -345,8 +357,10 @@ export function priceConfiguration(model, ctx = {}) {
         const p = priceChoice(choice, part, (finishCode === ctx.finishCode && !subFinishCode && !tierFinishCode) ? ctx : { ...ctx, finishCode, subFinishCode, tierFinishCode });
         // THE NUMBER FOLLOWS HOW THIS ONE WAS ORDERED — its backplate, or its end of the rod (Shared/altPattern). Only an
         // item that carries a second number is asked, and never a kit: a kit is sold under its own number, whole.
-        const altNo = (part && !isItemKit(part) && altPatternRowsOf(part, ctx.findByCode).length)
-            ? printedPatternOf(part, { printed: p.sku || p.aliasCode, plateCode: plateCodeAt(entry), position: entry.position, billedId: p.billedId, outsourceCodes: ctx.outsourceCodes }, ctx.findByCode)
+        // (a part sold as its twin in another material is asked on the twin's record — Shared/materialTwin)
+        const numbered = (p.twinOf && typeof findPart === 'function' && findPart(p.soldPartId)) || part;
+        const altNo = (numbered && !isItemKit(numbered) && altPatternRowsOf(numbered, ctx.findByCode).length)
+            ? printedPatternOf(numbered, { printed: p.sku || p.aliasCode, plateCode: plateCodeAt(entry), position: entry.position, billedId: p.billedId, outsourceCodes: ctx.outsourceCodes }, ctx.findByCode)
             : '';
         // ⚠ ROD STOCK IS SOLD BY THE FOOT (Stuart 2026-08-20: "it needs to take billed ft qty on
         // step 6 and multiply it times price of selected rod in 10 and 11 if double"). H1-138R is
@@ -397,6 +411,8 @@ export function priceConfiguration(model, ctx = {}) {
             // …or the stock colour it is made in, and the record that is actually pulled for it.
             ...(subFinishCode ? { subFinishCode } : {}),
             ...(p.soldPartId ? { soldPartId: p.soldPartId } : {}),
+            // …or the twin it is sold as in the finish's material, and the standard part it stands in for.
+            ...(p.twinOf ? { twinOf: p.twinOf } : {}),
             // …and WHY it has none, where it has none: a clear acrylic finial takes no finish at
             // all, which is a different fact from a steel part left in mill.
             noFinish: unfinished,

@@ -27,6 +27,7 @@ import { findClientPriceRow, customerKeys } from './clientPricing';
 import { indexForAssembly } from './partLookup.js';
 import { handoffItem, customerLines } from './hardwareHandoff';
 import { finishLabelOf, takesNoFinish } from './finishLabel';
+import { wearsAsTwin } from './materialTwin';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 import { captureTransparentPng, saveGuideCapture } from './guideCapture';
@@ -754,14 +755,23 @@ function HardwareConfiguratorInner({
         const f = finishByCode.get(c);
         setGlobalFinishes(g => ({ ...g, [matOfFinish(f)]: c }));
     }, [finishByCode, matOfFinish]);
-    // The default THIS part wears: the material's own pick.
+    // ── WHO WEARS A FINISH (Stuart 2026-10-06, the 1" brass · Shared/materialTwin) ─────────────────
+    // The material rule, as ever (hardwareModel.finishesFor) — and a part ALSO wears a finish of a material
+    // its library record names a TWIN in: LBR is a BRASS finish, and H1-1BS is made in brass as H1-1BBS.
+    // "it is just the parts listed": a part with no brass twin does not wear LBR, on any path.
+    const twinWear = useCallback((c, f) => !!c && !!f && !c.noFinish && !finishesFor(c, [f]).length
+        && wearsAsTwin(findPart(c.partId), f, findPart), [findPart]);
+    const wearsFinish = useCallback((c, f) => !!c && !!f && (finishesFor(c, [f]).length > 0 || twinWear(c, f)), [twinWear]);
+    // The default THIS part wears: the material's own pick. A finish the part wears as a twin outranks the
+    // one of its own material — pick LBR for the configuration and the brass-made parts go brass while
+    // everything else keeps the metal finish.
     const globalFinishFor = useCallback((c) => {
-        for (const code of Object.values(globalFinishes)) {
-            const f = finishByCode.get(String(code || '').toUpperCase());
-            if (f && finishesFor(c, [f]).length) return String(code).toUpperCase();
-        }
+        const picks = Object.values(globalFinishes).map(code => [String(code || '').toUpperCase(), finishByCode.get(String(code || '').toUpperCase())]).filter(([, f]) => f);
+        const asTwin = picks.find(([, f]) => twinWear(c, f));
+        if (asTwin) return asTwin[0];
+        for (const [code, f] of picks) if (finishesFor(c, [f]).length) return code;
         return '';
-    }, [globalFinishes, finishByCode]);
+    }, [globalFinishes, finishByCode, twinWear]);
     const chosenList = useMemo(
         () => [...resolved.choices.filter(c => Object.values(livePicks).includes(c.id)), ...resolved.riders, ...resolved.companions],
         [resolved, livePicks]);
@@ -888,9 +898,9 @@ function HardwareConfiguratorInner({
         const code = partFinish[choice.id] || partFinishByPart[String(choice.partId || '').toUpperCase()] || armFinishOf(choice) || globalFinishFor(choice);
         if (!code) return '';
         const f = finishByCode.get(String(code).toUpperCase());
-        if (!f || !finishesFor(choice, [f]).length) return '';
+        if (!f || !wearsFinish(choice, f)) return '';
         return code;
-    }, [partFinish, partFinishByPart, armFinishOf, globalFinishFor, finishByCode, matchFinishOverride, followsRod, rodFinishFor, findPart]);
+    }, [partFinish, partFinishByPart, armFinishOf, globalFinishFor, finishByCode, matchFinishOverride, followsRod, rodFinishFor, findPart, wearsFinish]);
 
     // NODE → TEXTURE. A no-finish part is skipped entirely, so the clear rule paints it instead —
     // the collar of a two-part finial takes the finish, the acrylic top never does.
@@ -930,12 +940,12 @@ function HardwareConfiguratorInner({
             const f = finishByCode.get(String(ov || (follows ? (partFinish[c.id] || rodFinishFor(c)) : finishFor(c))).toUpperCase());
             // The material gate, applied at the last moment: a global pick of a wood stain simply
             // does not land on the steel brackets, and nothing lands on the acrylic.
-            if (!f || (!ov && !follows && !finishesFor(c, [f]).length)) return;
+            if (!f || (!ov && !follows && !wearsFinish(c, f))) return;
             const url = f.textureUrl || f.finalImageUrl;
             if (url) out[String(node).toLowerCase()] = url;
         });
         return out;
-    }, [resolved, chosenList, finishByCode, finishFor, matchFinishOverride, followsRod, rodFinishFor, partFinish]);
+    }, [resolved, chosenList, finishByCode, finishFor, matchFinishOverride, followsRod, rodFinishFor, partFinish, wearsFinish]);
 
     // ── PRICE ─────────────────────────────────────────────────────────────────────────────────
     // ── OUR COST TO THEM IS THE DEFAULT, ONCE THERE IS A "THEM" ──────────────────────────────
@@ -1768,7 +1778,7 @@ function HardwareConfiguratorInner({
 
     const finishGroups = useMemo(() => {
         // …and then the parts have their say: a finish no chosen part can wear is not offered.
-        const usable = offeredFinishes.filter(f => !chosenList.length || chosenList.some(c => finishesFor(c, [f]).length));
+        const usable = offeredFinishes.filter(f => !chosenList.length || chosenList.some(c => wearsFinish(c, f)));
         const byMat = new Map();
         usable.forEach(f => {
             const m = String(f.material || f.type || 'METAL').toUpperCase();
@@ -1781,7 +1791,7 @@ function HardwareConfiguratorInner({
             (out ? byMat.get(m).out : byMat.get(m).inHouse).push(f);
         });
         return [...byMat.entries()];
-    }, [offeredFinishes, chosenList]);
+    }, [offeredFinishes, chosenList, wearsFinish]);
 
     // ── WHAT THE FINISH IS, NOT WHO APPLIES IT (Stuart 2026-08-21) ──────────────────────────
     // "we can rename the categories to Wood, Painted and Plated rather than in house and
@@ -1795,16 +1805,17 @@ function HardwareConfiguratorInner({
         const m = String(mat || '').toUpperCase();
         if (m.includes('WOOD')) return 'Wood';
         if (m.includes('METAL')) return kind === 'out' ? 'Plated' : 'Painted';
+        if (m.includes('BRASS')) return 'Solid brass';      // the part is MADE in it — in house or sent out is ours to know
         return kind === 'out' ? 'Outsourced' : 'In house';   // an unfamiliar material keeps the old words
     };
 
     // ── WHAT A SWATCH CLICK APPLIES TO ON THIS STEP (Shared/finishScope) ────────────────────────
     const stepOption = (step?.kind === 'SLOT' && livePicks[step.slot?.key]) ? (step.slot.options.find(x => x.id === livePicks[step.slot.key]) || null) : null;
     const stepCollar = (stepOption && stepOption.requiresCollar) ? (companionsFor(model.choices, [stepOption.id])[0] || null) : null;
-    const scopeTargets = scopeTargetsOf({ option: stepOption, collar: stepCollar, wears: (c) => finishesFor(c, offeredFinishes).length > 0 });
+    const scopeTargets = scopeTargetsOf({ option: stepOption, collar: stepCollar, wears: (c) => offeredFinishes.some(f => wearsFinish(c, f)) });
     const scopeNow = scopeInForce({ targets: scopeTargets, picked: scopePick, stepKey: step?.key || '', configFinishOf: globalFinishFor });
     const scopeTarget = scopeTargets.find(t => t.scope === scopeNow) || scopeTargets[scopeTargets.length - 1];
-    const wearsMaterial = (c, mat) => finishesFor(c, [{ material: mat }]).length > 0;
+    const wearsMaterial = (c, mat) => wearsFinish(c, { material: mat });
     const pickSwatch = (mat, code) => {
         const a = swatchActionOf({ target: scopeTarget, material: mat, code, wearsMaterial });
         if (a.kind === 'PART') setPartFinish(pf => { const n = { ...pf }; if (a.code) n[a.id] = a.code; else delete n[a.id]; return n; });

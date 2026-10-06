@@ -21,6 +21,7 @@ import { priceChoice } from '../Shared/hardwarePricing';
 import { customerPriceLevel } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { sizeKeyOf, SIZE_FAMILIES, speciesVariantOf } from "../Shared/sizeMatrix";
+import { materialTwinOf } from "../Shared/materialTwin";
 import { takesNoFinish } from "../Shared/finishLabel";
 import { isItemKit, itemKitOrderLinesOf } from "../Shared/itemKit";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
@@ -236,12 +237,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const unsubFin = onSnapshot(doc(db, "system", "master_finishes"), (s) => {
             const arr = (s.exists() && s.data().finishes) || [];
             // bomSuffix = the species a stain consumes (OAK / WALNUT, tab 4.5) — read by the to-be-finished add.
-            setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false, subFinishCode: String(f.subFinishCode || '').toUpperCase(), bomSuffix: String(f.bomSuffix || '').trim() })), ...prev.filter(p => p.outsourced)]);
+            setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false, subFinishCode: String(f.subFinishCode || '').toUpperCase(), bomSuffix: String(f.bomSuffix || '').trim(), material: String(f.material || '').toUpperCase() })), ...prev.filter(p => p.outsourced)]);
         }, e => console.warn('Quick Ship finishes listen failed', e));
         const unsubOut = onSnapshot(collection(db, "hq_outsource_finishes"), (s) => {
             // code falls back to NAME (the finishText convention) — EP3–EP6 are stored name-only
             const arr = s.docs.map(d => d.data()).filter(f => f && (f.code || f.name));
-            setFinishList(prev => [...prev.filter(p => !p.outsourced), ...arr.map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: true, subFinishCode: String(f.subFinishCode || '').toUpperCase() }))]);
+            setFinishList(prev => [...prev.filter(p => !p.outsourced), ...arr.map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: true, subFinishCode: String(f.subFinishCode || '').toUpperCase(), material: String(f.material || '').toUpperCase() }))]);
         }, e => console.warn('Quick Ship outsource finishes listen failed', e));
         // Rush fee menu (Mass Update 4.5 → RUSH FEE TYPES). The dollar amount rides in the entry.
         const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (s) => {
@@ -986,6 +987,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const typed = parseFloat(tbfPrice);
         const priced = Number.isFinite(typed) ? typed : tbfResolved;
         const fin = finishList.find(f => f.code === tbfFinish);
+        // THE SAME PART IN ANOTHER MATERIAL IS ANOTHER ITEM (Stuart 2026-10-06, the 1" brass · Shared/materialTwin):
+        // H1-1BS in LBR is H1-1BBS — its own number, its own price ("special prices for the brass"). That swap is
+        // CPQ's to make; this form refuses the order instead — "quick ship can refuse, this is a custom product and
+        // needs vision/cpq".
+        const twinItem = materialTwinOf(real, fin, (c) => rawFindReal(c));
+        if (twinItem) return alert(`${erpOf(real)} in ${tbfFinish} is a custom product — it is made as ${erpOf(twinItem)} (${twinItem.itemName || 'its own item'}), with its own price.\n\nConfigure it in Vision / CPQ; Quick Ship does not take this order.`);
         // FINISH-DRIVEN SPECIES (Stuart 2026-09-16: "when used for these items it must follow the same
         // and apply the correct material to the bom"). A stain tagged OAK / WALNUT in 4.5 consumes the
         // per-species item — H1-138WEC + S04 is H1-138WEC-O on the line, the pick, the floor and
