@@ -6,7 +6,7 @@ import { collection, query, where, getDocs, doc, getDoc, addDoc, serverTimestamp
 import { signInWithCustomToken } from 'firebase/auth'; 
 import { httpsCallable } from 'firebase/functions'; 
 import '../../App.css';
-import { clearAllWorkspaces } from '../Shared/cpqWorkspace';
+import { clearAllWorkspaces, writeWorkspace, headerWorkspaceOf } from '../Shared/cpqWorkspace';
 
 const InceptionTab = lazy(() => import('./InceptionTab'));
 const VisualAssemblyTab = lazy(() => import('./VisualAssemblyTab')); 
@@ -198,6 +198,19 @@ function HQ() {
       localStorage.setItem('hq_reopen_quote', JSON.stringify(session));
       setActiveTab('8. CPQ Configurator');
     };
+    // A quote COPIED into a new one (Shared/reopenQuote.quoteCopyOf, fired from 10.5 → ⧉ Duplicate): the copied cart
+    // with NO quote session behind it — so the save mints a new quote — and its header handed over as a CPQ
+    // workspace, the door the tab already restores from on every open.
+    const handleCopyQuote = (e) => {
+      const { cartItems, header, brand } = e.detail || {};
+      if (!Array.isArray(cartItems) || !cartItems.length) return;
+      setGlobalCart(cartItems);
+      clearAllWorkspaces(localStorage);
+      localStorage.removeItem('hq_active_quote_session');
+      localStorage.removeItem('hq_reopen_quote');
+      writeWorkspace(localStorage, brand, headerWorkspaceOf(header));
+      setActiveTab('8. CPQ Configurator');
+    };
     // Reopen-in-Vision (Shared/reopenQuote.js): restore the quote's Vision session (customer /
     // job / quote id, consumed by ClientVisionTab on mount) and jump to the Vision board —
     // dimensions, bracket placement, and shop notes are edited there.
@@ -228,8 +241,10 @@ function HQ() {
     window.addEventListener('REOPEN_SO_IN_ORDERENTRY', handleReopenSo);
     window.addEventListener('NAVIGATE_TAB', handleTabNavigation);
     window.addEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);
+    window.addEventListener('COPY_QUOTE_INTO_CPQ', handleCopyQuote);
     window.addEventListener('REOPEN_QUOTE_IN_VISION', handleReopenVision);
     return () => {
+      window.removeEventListener('COPY_QUOTE_INTO_CPQ', handleCopyQuote);
       window.removeEventListener('REOPEN_QUOTE_IN_ORDERENTRY', handleReopenQsQuote);
       window.removeEventListener('REOPEN_SO_IN_ORDERENTRY', handleReopenSo);
       window.removeEventListener('NAVIGATE_TAB', handleTabNavigation);

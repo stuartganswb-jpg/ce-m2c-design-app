@@ -869,6 +869,7 @@ const DisplaysGuide = () => (
                     <tr><td style={S.td}>Start a row (work orders to the floors)</td><td style={S.td}><b>10.5 → Rows → ▶ Start row</b></td></tr>
                     <tr><td style={S.td}>Start a row for only some of the displays (10 of 35)</td><td style={S.td}><b>10.5 → Rows → the count box → ▶ Start 10</b></td></tr>
                     <tr><td style={S.td}>Put an order that is already on the floor onto counts, or run a row again</td><td style={S.td}><b>10.5 → Rows → ⇄ Release by count</b>, then <b>⟲ Restart row</b></td></tr>
+                    <tr><td style={S.td}>Order the same display again, for another number of displays</td><td style={S.td}><b>10.5 → the build → ⧉ Duplicate for…</b></td></tr>
                     <tr><td style={S.td}>Gather a finished floor document into the order</td><td style={S.td}><b>WMS → Packaging Prep</b></td></tr>
                     <tr><td style={S.td}>Pick the shelf items into the order's bin, and ship a display</td><td style={S.td}><b>WMS → SO Pack</b></td></tr>
                     <tr><td style={S.td}>Make the UPS label for a display</td><td style={S.td}><b>WMS → Fulfillment</b></td></tr>
@@ -906,6 +907,17 @@ const DisplaysGuide = () => (
         </Screen>
         <div style={S.note}><b>Tell the floor before a restarted row is started again.</b> Pieces already cut, picked or painted stay where they are and nothing in the app says they exist. The new jobs for the same pieces are completed without making them twice. A row that is nearly finished is better left alone to finish on the work orders it has.</div>
         <div style={S.note}><b>Closing one row closes that row.</b> ✕ Close, a hold, or ⟲ Reopen on one row's work order — on RTG or in the Setup Queue — reaches that row's finishing order, shop order and record, and nothing of the other rows or the sales order. To close the whole order, close the sales order itself.</div>
+
+        <h2 style={S.h2}>Ordering the same display again</h2>
+        <p style={S.p}>A repeat order is copied from the one before it, so nothing is entered twice. Open the build order that
+        was made before and press <b>⧉ Duplicate for…</b> at the top.</p>
+        <Screen title="⧉ Duplicate for…" tag="10.5 → the build">
+            <Path name="How many displays" goes="a new build order + a new quote in CPQ">Type the count (100). The window lists every row at the new count with the price it carries, the base at checkout, the total and the price per display. On yes, a <b>new build order</b> is opened for the same display — nothing anchored, nothing released — and <b>CPQ opens on a new, unsaved quote</b>: the same rows, the same customer and price level. Saving it in CPQ gives it its own quote number; the first order and its quote are not touched.</Path>
+            <Path name="Prices" goes="the price set on a row is kept">A row whose price was set in the cart (<em>Price set to $100.00</em>) keeps that price in the copy, so the copy totals the same per display. It also stays when a row is opened with <b>Edit</b> and added again — today's rules rebuild the row's parts, the price set on it does not move. <b>Clear</b>, in the cart's line-discount strip, is how a set price comes off.</Path>
+            <Path name="What is not copied" goes="typed fresh on the new quote">The PO number, the need-by date and the shipping charge belong to the first order and come over blank. So do the NetSuite numbers and every work order: the new order starts with nothing on a floor.</Path>
+            <Path name="An order that was not a CPQ quote" goes="named in the window, added as a row in CPQ">If part of the display went in through Order Entry (tab 7), CPQ cannot open it. The window lists those lines for the new count; configure them in CPQ as one more row before saving, so the new order is one sales order.</Path>
+        </Screen>
+        <div style={S.note}><b>Review it as a quote.</b> The copy carries the rows as they were quoted. Open each row with Edit and add it again to rebuild its parts by today's rules, then read the quote in the CRM. Approve it only when its parts read right — then type the new sales order number on the new build order and anchor it; it arrives released by count, at 0 on every row.</div>
 
         <h2 style={S.h2}>2 · Everything into the order's bin</h2>
         <p style={S.p}>WMS → <b>SO Pack</b>, the order's card. The badge at the top right says where it stands:</p>

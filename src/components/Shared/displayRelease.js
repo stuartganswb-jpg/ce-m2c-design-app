@@ -839,6 +839,34 @@ export const kitQtyEditOf = ({ so, lineIdx, qty, by = '', reason = '', now = Dat
     return { ok: true, lines: next, from, to: n, parts, oeGenDrop };
 };
 
+// ── ⧉ DUPLICATE A BUILD ORDER FOR N DISPLAYS (Stuart 2026-10-06: "duplicate the first order of 50 with a brand new
+// identical order for 100pcs do not release it yet") ───────────────────────────────────────────────────────────────────
+// The words of the confirmation: the new build order, every row with its count and its price, the checkout add-ons,
+// what does NOT come across, and the lines of any anchored order that is not a CPQ quote (the tabletop's Base Front 1
+// went in through tab 7 as a work-around) — named for the new count, to be added as a row in CPQ. Pure.
+// `copy` = Shared/reopenQuote.quoteCopyOf's result; `others` = [{ soId, lines }] as the sales orders carry them.
+const money = (n) => `$${(Math.round(N(n) * 100) / 100).toFixed(2)}`;
+export const duplicateOtherLinesOf = (others = [], { from = 0, to = 0 } = {}) =>
+    (others || []).flatMap(o => ((o && o.lines) || []).filter(l => l && !isOffOrderLine(l) && N(l.qty) > 0).map(l => {
+        const qty = N(from) > 0 ? Math.round(N(l.qty) * N(to) / N(from) * 1000) / 1000 : N(l.qty);
+        return { soId: (o.soId || o.id || ''), row: rowOfLine(l) || String(l.memo || '').trim(), erp: U(l.erp), qty, finish: U(l.finishCode || ''), cutLength: N(l.cutLength) || 0 };
+    }));
+export const duplicateText = ({ build, to = 0, copy, others = [] } = {}) => {
+    const o = duplicateOtherLinesOf(others, { from: copy.from, to });
+    const addOnTotal = (copy.addOns || []).reduce((a, x) => a + (x.isFee ? 0 : x.price * x.qty), 0);
+    return [
+        `⧉ Duplicate "${(build && build.name) || ''}" as a NEW order for ${to} display${to === 1 ? '' : 's'}?`,
+        `\n1. A new build order is opened: ${(build && build.displayName) || 'the same display'} × ${to}${build && build.customerName ? ` — ${build.customerName}` : ''}. No sales order is on it yet, and nothing is released.`,
+        `\n2. CPQ opens on a NEW, unsaved quote copied from ${copy.sources.map(s => s.quoteNo || s.jobId).join(' + ')} — ${copy.rows.length} row(s), each as it was configured, at the price it carries:\n`
+            + copy.rows.map(r => `  • ${r.sidemark || r.assemblyName}: ${r.was} → ${r.qty} × ${money(r.net)}${r.priceSet ? ' (price set on the line)' : (r.percent ? ` (${r.percent}% off ${money(r.gross)})` : '')}`).join('\n'),
+        (copy.addOns || []).length ? `\nAt checkout:\n${copy.addOns.map(a => `  • ${a.code || a.name}: ${a.was} → ${a.qty}${a.isFee ? '' : ` × ${money(a.price)} when it was saved — checkout prices it again`}`).join('\n')}` : '',
+        `\nRows ${money(copy.subtotal)}${addOnTotal ? ` + add-ons ${money(addOnTotal)} = ${money(copy.subtotal + addOnTotal)}` : ''} — ${money((copy.subtotal + addOnTotal) / to)} a display.`,
+        o.length ? `\n⚠ NOT in the copy — ${[...new Set(o.map(x => x.soId))].join(', ')} is not a CPQ quote. Add as a row in CPQ before saving, for ${to} displays:\n${o.map(x => `  • ${x.row ? `${x.row}: ` : ''}${x.qty} × ${x.erp}${x.finish ? ` in ${x.finish}` : ''}${x.cutLength ? ` · cut ${x.cutLength}"` : ''}`).join('\n')}` : '',
+        '\nNot copied: the PO number, the need-by date, the shipping charge, the NetSuite numbers and every work order. The rows are the parts as they were quoted — Edit a row and add it again and today\'s rules rebuild its parts; the price set on it stays.',
+        '\nNothing is saved as a quote until you save it in CPQ, and nothing reaches NetSuite or a floor from here.',
+    ].filter(Boolean).join('\n');
+};
+
 // ── ↩ UNDO A ROW START — only while nothing on its documents has moved (Stuart 2026-09-27) ─────────────────
 // A row started under an older rule (SO60551's ROW 1 without its French returns; Row 2's stained fascia sent to
 // finishing as a small part) is put back: its pair's documents are removed through the ledger and its lines read

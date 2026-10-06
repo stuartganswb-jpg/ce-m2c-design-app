@@ -83,6 +83,15 @@ export const clearLineDiscount = (cart, ids) => {
     });
 };
 
+// AN EDITED LINE KEEPS THE PRICE SET ON IT (Stuart 2026-10-06: "use old prices they are negotiated to match the
+// correct total"). Edit hands the line to the configurator and Add configuration puts a freshly BUILT line in its
+// place — which carried no stamp, so a row set to $100.00 came back at its configured price and the quote's total
+// moved without a word. The stamp is the cart's, not the configurator's: the rebuilt line takes the one its
+// predecessor had (a net price stays that price; a percent is that percent of the new configured price). A line
+// rebuilt with a stamp of its own keeps its own. Clear, in the cart, is still how a set price comes off.
+export const keepLineDiscount = (built, was) =>
+    (built && !built.lineDiscount && was && was.lineDiscount) ? { ...built, lineDiscount: was.lineDiscount } : built;
+
 export const cartHasLineDiscounts = (cart) => (cart || []).some(it => !!lineDiscountOf(it));
 
 /**

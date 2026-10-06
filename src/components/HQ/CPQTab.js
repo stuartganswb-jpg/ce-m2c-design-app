@@ -30,7 +30,7 @@ import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf, custome
 import { priceChoice, isItemKit } from '../Shared/hardwarePricing';
 import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, checkoutAssignmentOf } from '../Shared/feeRules';
 import { searchStockedItems, pickedItemEntries, isSearchableStockedItem } from '../Shared/checkoutSearch';
-import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
+import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, keepLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
 import { extrasFromSavedItem } from '../Shared/extrasRestore';
 import { readWorkspace, writeWorkspace, restorableWorkspace, workspaceSeedOf, workHasProgress, cleanStartOf, CLEAN_FLOW, CLEAN_ALL } from '../Shared/cpqWorkspace';
 import { shippingPlanOf, shippingChargeOf, FLAT_RATE_BOXES, TRAVERSE_PACK_FEE_CODE } from '../Shared/flatRateShipping';
@@ -931,7 +931,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   const placeInCart = (built) => {
       setCart(prev => {
           const at = editingCartId ? prev.findIndex(c => c.id === editingCartId) : -1;
-          return at >= 0 ? prev.map((c, i) => (i === at ? built : c)) : [...prev, built];
+          // …and the rebuilt line keeps the price set on the one it replaces (Shared/lineDiscount.keepLineDiscount).
+          return at >= 0 ? prev.map((c, i) => (i === at ? keepLineDiscount(built, c) : c)) : [...prev, built];
       });
       setEditingCartId(null);
       setEngineSeed(null);   // the Edit hand-off is spent — see reopenSeed below

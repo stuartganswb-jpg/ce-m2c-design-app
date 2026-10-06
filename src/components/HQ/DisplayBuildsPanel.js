@@ -37,7 +37,8 @@ import { hardDeleteWithLedger, closeDocsExactly, isClosedState } from '../Shared
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, lineQtyEditOf, kitFinishEditOf, kitQtyEditOf, rodLineEditOf, rowUndoBlockersOf, rowReleaseText, rowReleaseCountOf, countSwitchText, rowRestartPlanOf, rowRestartText, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
+import { quoteDoorOf, quoteCopyOf, confirmCartReplace, openQuoteCopyInCpq } from '../Shared/reopenQuote';
+import { duplicateText, ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, lineQtyEditOf, kitFinishEditOf, kitQtyEditOf, rodLineEditOf, rowUndoBlockersOf, rowReleaseText, rowReleaseCountOf, countSwitchText, rowRestartPlanOf, rowRestartText, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
 import { isReleaseByCount, releaseByCountPatch, releaseRowKeyOf, rowTargetOf, rowReleaseOf, nextRowReleaseOf, releaseRunOf, releaseLabelOf, releasesOf, stampWithoutRunOf, rowReleasePlanOf, countSwitchOf, isWholeStamp, ORDER_ROW_KEY } from '../Shared/rowRelease';
 import { soLineCodeOf, soCodeReleasedOf } from '../Shared/pickLines';
@@ -86,21 +87,27 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     const mutate = (fn) => { setDraft(d => fn({ ...d })); setDirty(true); };
     const setLine = (group, key, patch) => mutate(d => ({ ...d, lines: { ...d.lines, [group]: (d.lines?.[group] || []).map(l => (l.key === key ? { ...l, ...patch } : l)) } }));
 
+    // A new build order, as it is opened: the display's bill as designed now, nothing built, nothing anchored.
+    const buildOf = ({ disp, qty, cust = null, soNumber = '', poNumber = '', extra = {} }) => {
+        const id = `BUILD-${String(disp.name || disp.id).toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Date.now().toString().slice(-5)}`;
+        return {
+            id, displayId: disp.id, displayName: disp.name, style: disp.style, brandId: activeBrand || '',
+            name: `${disp.name} × ${qty}${cust ? ` — ${cust.name}` : ''}`,
+            customerId: cust?.id || '', customerName: cust?.name || '', soNumber: String(soNumber || '').trim(), poNumber: String(poNumber || '').trim(),
+            qty, built: 0, status: 'PLANNED', shipPlan: [], notes: '', sampleBin: SAMPLE_BIN_BY_STYLE[disp.style] || '',
+            lines: buildLinesFrom(disp, finishList, flows), snapshotAt: Date.now(),
+            createdAt: Date.now(), createdBy: String(currentUser || ''), updatedAt: Date.now(), updatedBy: String(currentUser || ''),
+            ...extra,
+        };
+    };
     const create = async () => {
         const disp = displays.find(d => d.id === newForm?.displayId);
         if (!disp) return alert('Pick the display this order builds.');
         const qty = N(newForm.qty, 0);
         if (!(qty > 0)) return alert('How many boards?');
         const cust = customers.find(c => c.id === newForm.customerId);
-        const id = `BUILD-${String(disp.name || disp.id).toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Date.now().toString().slice(-5)}`;
-        const b = {
-            id, displayId: disp.id, displayName: disp.name, style: disp.style, brandId: activeBrand || '',
-            name: `${disp.name} × ${qty}${cust ? ` — ${cust.name}` : ''}`,
-            customerId: cust?.id || '', customerName: cust?.name || '', soNumber: String(newForm.soNumber || '').trim(), poNumber: String(newForm.poNumber || '').trim(),
-            qty, built: 0, status: 'PLANNED', shipPlan: [], notes: '', sampleBin: SAMPLE_BIN_BY_STYLE[disp.style] || '',
-            lines: buildLinesFrom(disp, finishList, flows), snapshotAt: Date.now(),
-            createdAt: Date.now(), createdBy: String(currentUser || ''), updatedAt: Date.now(), updatedBy: String(currentUser || ''),
-        };
+        const b = buildOf({ disp, qty, cust, soNumber: newForm.soNumber, poNumber: newForm.poNumber });
+        const id = b.id;
         setBusy('Opening the order…');
         try { await setDoc(doc(db, 'system', 'displays', 'builds', id), b); await writeDemand([...builds.filter(x => x.id !== id), b]); setNewForm(null); open(b); }
         catch (e) { alert('Create failed: ' + (e?.message || e)); }
@@ -150,6 +157,48 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
         } catch (e) { /* the copy below still works */ }
         try { await navigator.clipboard.writeText(csv); } catch (e) { /* download is enough */ }
         alert(`⬇ ${name}\n\n${rows.length} entries across ${new Set(rows.map(r => r.row)).size} rows for ${draft.qty} boards — downloaded and copied.`);
+    };
+
+    // ── ⧉ DUPLICATE FOR N DISPLAYS (Stuart 2026-10-06: "duplicate the first order of 50 with a brand new identical order
+    // for 100pcs do not release it yet … use old prices … base front 1 put it all on one sales order") ──────────────────
+    // One press: a NEW build order for the same display (nothing anchored, nothing released) and CPQ opened on a NEW,
+    // unsaved quote copied from the CPQ quote(s) of the orders anchored here (Shared/reopenQuote.quoteCopyOf — each row at
+    // the new count, the price set on it kept). An anchored order that is not a CPQ quote cannot be copied into CPQ; its
+    // lines are named in the confirmation, for the new count, to be added there as a row. Nothing here writes a quote, a
+    // sales order, a work order or a NetSuite record — the quote exists once it is saved in CPQ, and is reviewed there.
+    const duplicateBuild = async () => {
+        if (!draft || dirty || busy) return;
+        const disp = displays.find(d => d.id === draft.displayId);
+        if (!disp) return alert('The display this order was opened from no longer exists.');
+        if (!floor || floor.loading) return alert('Still reading the orders on the floor — try again in a moment.');
+        if (!(floor.sos || []).length) return alert('No sales order is anchored to this build order — there is no quote to copy. Open a new build order instead.');
+        const typed = window.prompt(`⧉ Duplicate "${draft.name}" as a NEW order.\n\nFor how many displays?`, String(N(draft.qty) * 2));
+        if (typed == null) return;
+        const to = Number(String(typed).trim());
+        if (!(Number.isInteger(to) && to > 0)) return alert('Give a whole number of displays.');
+        setBusy('Reading the quote…');
+        try {
+            const jobs = [], others = [];
+            for (const s of floor.sos) {
+                const snap = s.so.hqJobId ? await getDoc(doc(db, 'jobs', s.so.hqJobId)) : null;
+                const job = snap && snap.exists() ? { id: snap.id, ...snap.data() } : null;
+                if (job && quoteDoorOf(job) === 'CPQ') jobs.push(job); else others.push(s.so);
+            }
+            if (!jobs.length) { alert('None of the orders anchored here came from a CPQ quote — there is nothing CPQ can open. Reopen the order in Order Entry (tab 7) and save it as a new one.'); return; }
+            const wrongBrand = jobs.find(j => j.brandId && activeBrand && j.brandId !== activeBrand);
+            if (wrongBrand) { alert(`${wrongBrand.quoteNo || wrongBrand.id} belongs to another division — switch to it first.`); return; }
+            const copy = quoteCopyOf(jobs, { from: N(draft.qty), to });
+            if (!copy.ok) { alert(`Cannot duplicate — ${copy.reason}.`); return; }
+            if (!window.confirm(duplicateText({ build: draft, to, copy, others }))) return;
+            if (!confirmCartReplace('the copy')) return;
+            const cust = customers.find(c => c.id === draft.customerId) || (draft.customerId ? { id: draft.customerId, name: draft.customerName || '' } : null);
+            const b = buildOf({ disp, qty: to, cust, extra: { copiedFromBuildId: draft.id } });
+            setBusy('Opening the new order…');
+            await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b);
+            await writeDemand([...builds.filter(x => x.id !== b.id), b]);
+            openQuoteCopyInCpq(copy, { brand: activeBrand || '' });
+        } catch (e) { alert('Duplicate failed: ' + (e?.message || e)); }
+        setBusy('');
     };
 
     // ── THE ORDER ON THE FLOOR (Stuart 2026-09-17: "the work order#s should just appear there") ──
@@ -1160,6 +1209,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 <span style={{ ...mono, color: dirty ? '#b02d20' : 'var(--ink-soft)' }}>{dirty ? 'unsaved' : 'saved'}</span>
                 <button onClick={resnapshot} style={btn(false)} title="Re-take the bill from the display as designed now">⟳ Re-snapshot</button>
                 <button onClick={entrySheet} disabled={!!busy || dirty} style={btn(false, { borderColor: 'var(--brass)' })} title="One line per part per row for the whole order — what to enter in CPQ as one sales order (downloads a CSV and copies it)">⬇ CPQ entry sheet</button>
+                <button onClick={duplicateBuild} disabled={!!busy || dirty || !anchored} style={btn(false, { borderColor: 'var(--brass)', opacity: (!!busy || dirty || !anchored) ? .5 : 1 })} title={anchored ? 'A NEW build order for the same display and a NEW quote in CPQ, copied from this order\'s quote at the count you give — rows at the prices they carry. Nothing is released.' : 'Anchor a sales order first — its quote is what gets copied'}>⧉ Duplicate for…</button>
                 <button onClick={save} disabled={!dirty || !!busy} style={btn(dirty, { opacity: dirty ? 1 : .5 })}>Save order</button>
             </div>
 

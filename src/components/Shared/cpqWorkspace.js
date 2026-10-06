@@ -89,6 +89,17 @@ export function writeWorkspace(storage, brand, ws) {
     } catch { /* not persisted — it simply won't survive a reload */ }
 }
 
+/**
+ * A workspace holding a header and nothing else, under no quote session — how a COPIED quote (Shared/reopenQuote
+ * .quoteCopyOf) hands CPQ its customer, job, price level and checkout add-ons: through the one restore door, so the
+ * tab opens on it exactly as it opens on work left behind by a tab switch.
+ */
+export const headerWorkspaceOf = (header, now = Date.now()) => ({
+    sessionId: null, savedAt: now,
+    header: { jobData: obj(obj(header).jobData), priceLevel: txt(obj(header).priceLevel) || 'STANDARD', addOnSel: obj(obj(header).addOnSel) },
+    engine: {}, oldEngine: {}, config: null,
+});
+
 /** Every division's workspace goes — a quote reopened from the CRM owns the screen now. */
 export function clearAllWorkspaces(storage) {
     try {

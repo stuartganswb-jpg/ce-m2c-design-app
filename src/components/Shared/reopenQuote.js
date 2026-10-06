@@ -1,4 +1,5 @@
 import { isQuickShip } from './pickLines.js';
+import { lineDiscountOf } from './lineDiscount.js';
 // "Reopen in CPQ": load a finalized quote's configuration back into the CPQ configurator so
 // details can change without rebuilding from scratch. Used by the CRM (ExternalCoopTab) and the
 // ERP hub (ERPPushPullTab). Dispatches REOPEN_QUOTE_IN_CPQ, handled in HQ.js (which owns the
@@ -98,6 +99,96 @@ export const reopenQuoteInOrderEntry = (job) => {
         if (!window.confirm(`⚠ This quote already reached NetSuite estimate ${job.netsuiteEstimateNo || job.netsuiteEstimateId}.\n\nReopening and re-saving creates a NEW estimate — the old one must be closed in NetSuite by hand.\n\nReopen anyway?`)) return false;
     }
     window.dispatchEvent(new CustomEvent('REOPEN_QUOTE_IN_ORDERENTRY', { detail: { jobId } }));
+    return true;
+};
+
+// ── ⧉ A QUOTE COPIED INTO A NEW ONE (Stuart 2026-10-06: "duplicate the first order of 50 with a brand new identical
+// order for 100pcs do not release it yet … use old prices they are negotiated to match the correct total") ───────────
+// Reopen CPQ saves back into the SAME quote, so it can never make a second order. A copy is the same cart handed to
+// CPQ with NO quote behind it: every line loses its masterQuoteId (finalize then mints a new quote number and a new
+// job), its Vision drawing link and its saved trade-discount stamp, and takes a new line id; the configuration, the
+// parts, the pictures and the PRICE SET ON THE LINE (`lineDiscount`, a net unit price or a percent) are kept exactly —
+// that is where a negotiated price lives, so the copy totals what the original did, per display. Quantities scale by
+// displays: a row of 50 for 50 displays is 100 for 100, and a checkout add-on counted per display (50 bases) grows the
+// same way, while a flat fee (qty 1) stays. A row that would not come out whole is refused, named. The header comes
+// too, except what belongs to the first order alone: its PO number, need-by date and shipping charge.
+// Several quotes of one display (it can span sales orders) become ONE cart, in the order given.
+// Pure. @returns { ok, reason?, cartItems, header: { jobData, priceLevel, addOnSel }, rows, addOns, subtotal, from, to, sources }
+const NUM = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const round2 = (n) => Math.round(NUM(n) * 100) / 100;
+export const quoteCopyOf = (jobs, { from = 0, to = 0, now = Date.now() } = {}) => {
+    const list = (Array.isArray(jobs) ? jobs : [jobs]).filter(Boolean);
+    const f = NUM(from), t = NUM(to);
+    if (!list.length) return { ok: false, reason: 'no CPQ quote to copy' };
+    if (!(Number.isInteger(f) && f > 0)) return { ok: false, reason: 'the order being copied names no number of displays' };
+    if (!(Number.isInteger(t) && t > 0)) return { ok: false, reason: 'give a whole number of displays' };
+    const noOf = (job) => (job && (job.quoteNo || job.netsuiteEstimateNo || job.jobId || job.id)) || 'the quote';
+    const cartItems = [], rows = [], addOns = [], addOnSel = {};
+    let n = 0;
+    for (const job of list) {
+        const wrong = wrongDoorReason(job, 'CPQ');
+        if (wrong) return { ok: false, reason: wrong };
+        const items = Array.isArray(job.cpqData?.cartItems) ? job.cpqData.cartItems : [];
+        if (!items.length) return { ok: false, reason: `${noOf(job)} carries no CPQ cart snapshot (it was finalized before per-item carts existed), so it cannot be copied` };
+        const jobId = job.jobId || job.id || '';
+        for (const it of items) {
+            const was = NUM(it.qty) || 1;
+            const qty = was * t / f;
+            const label = `${it.sidemark || it.assemblyName || 'a row'}`;
+            if (!(Number.isInteger(qty) && qty > 0)) return { ok: false, reason: `"${label}" is ${was} for ${f} displays — ${t} displays would need ${Math.round(qty * 1000) / 1000}, which is not a whole number` };
+            const { masterQuoteId, visionDraftId, tradeDiscount, displaySnapshot, ...rest } = it;
+            const copy = { ...rest, id: String(NUM(now) + n++), qty, copiedFrom: { jobId, quoteNo: job.quoteNo || '', itemId: it.id == null ? '' : String(it.id) } };
+            cartItems.push(copy);
+            const d = lineDiscountOf(copy);
+            const gross = NUM(copy.pricing && copy.pricing.finalPrice);
+            rows.push({ sidemark: it.sidemark || '', assemblyName: it.assemblyName || '', was, qty, gross, net: d ? d.net : gross, priceSet: !!d && d.mode === 'NET', percent: d && d.mode === 'PERCENT' ? d.percent : 0 });
+        }
+        // The checkout add-ons: one per display grows with the displays, anything else stays as it was saved.
+        Object.entries(savedAddOnSelOf(job)).forEach(([partId, v]) => {
+            const perDisplay = typeof v === 'number' && v > 0 && Number.isInteger(v * t / f) && Number.isInteger(v / f);
+            addOnSel[partId] = perDisplay ? v * t / f : v;
+        });
+        ((job.cpqData && job.cpqData.breakdown) || []).filter(l => l && l.isAddOn && l.partId).forEach(l => {
+            const v = addOnSel[l.partId];
+            addOns.push({ partId: l.partId, code: l.legacyErpId || '', name: String(l.name || '').replace(/^\s*[-–]\s*/, '').trim(), was: NUM(l.qty), qty: typeof v === 'number' ? v : NUM(l.qty), price: NUM(l.price), isFee: l.isFee !== false });
+        });
+    }
+    const head = list[0];
+    const header = {
+        jobData: {
+            customerId: head.customer?.id || '',
+            jobName: head.jobName || '',
+            sidemark: head.orderSidemark || '',
+            poNumber: '', needBy: '', shippingAmount: '',
+            internalMemo: head.internalMemo || '',
+            productionNotes: head.productionNotes || '',
+            shippingMethod: head.shippingMethod || 'SAVED',
+            shippingAddressId: head.shippingAddressId || '',
+            orderDiscountPercent: (head.orderDiscount && head.orderDiscount.mode === 'ORDER_PERCENT' && Number(head.orderDiscount.percent) > 0) ? String(head.orderDiscount.percent) : '',
+            ...(head.customShippingAddress ? { customShippingAddress: head.customShippingAddress } : {}),
+        },
+        priceLevel: head.priceLevel || cartItems[0].priceLevel || 'STANDARD',
+        addOnSel,
+    };
+    return {
+        ok: true, cartItems, header, rows, addOns, from: f, to: t,
+        // The configured rows at the prices carried — before add-ons, shipping and any checkout discount.
+        subtotal: round2(rows.reduce((a, r) => a + r.net * r.qty, 0)),
+        sources: list.map(job => ({ jobId: job.jobId || job.id || '', quoteNo: job.quoteNo || '', customer: job.customer?.name || '' })),
+    };
+};
+/** A cart already in the configurator is replaced by a copy — asked first, exactly as a reopen asks. */
+export const confirmCartReplace = (what = 'the copy') => {
+    try {
+        const cur = JSON.parse(localStorage.getItem('hq_global_cart') || '[]');
+        if (cur.length && !window.confirm(`A CPQ cart with ${cur.length} item(s) is already in progress — ${what} REPLACES that cart.\n\nContinue?`)) return false;
+    } catch (e) { /* unreadable stored cart — proceed */ }
+    return true;
+};
+/** Hand a copy (quoteCopyOf) to CPQ as a NEW, unsaved quote. HQ.js owns the cart and the tab. */
+export const openQuoteCopyInCpq = (copy, { brand = '' } = {}) => {
+    if (!copy || !copy.ok || !Array.isArray(copy.cartItems) || !copy.cartItems.length) return false;
+    window.dispatchEvent(new CustomEvent('COPY_QUOTE_INTO_CPQ', { detail: { cartItems: copy.cartItems, header: copy.header, brand } }));
     return true;
 };
 
