@@ -57,7 +57,7 @@ import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
 import { packingListOf, packedQtyOf } from '../Shared/packingList';
 import { soPackBoardOf, lineBoxOf, LINE_STATE, ORDER_VERDICT } from '../Shared/soPackBoard';
-import { orderBoxesOf, withNewBox, newBoxRefusal, boxOf, boxName, tickBoxesOf, tickIntoBox, moveIntoBox, unboxedQtyOf, boxSpreadLabel, boxContentsOf, boxRemovalRefusal, unboxedLinesOf, boxCompleteBlocker, packBoxesOfTicks, docBoxLinesOf } from '../Shared/orderBoxes';
+import { boxHomeFor, boxOpenRefusal, isBoxShipped, spreadTrackingOf, orderBoxesOf, withNewBox, newBoxRefusal, boxOf, boxName, tickBoxesOf, tickIntoBox, moveIntoBox, unboxedQtyOf, boxSpreadLabel, boxContentsOf, boxRemovalRefusal, unboxedLinesOf, boxCompleteBlocker, packBoxesOfTicks, docBoxLinesOf } from '../Shared/orderBoxes';
 import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
 import { customerKeys } from '../Shared/clientPricing';
 // ⚠ ALIASED ON PURPOSE. This file already has a LOCAL `packSizeOf` (~:3763) that parses a pack
@@ -945,18 +945,17 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // line's tick says which box (and how many, when it is split). Stock put-away and an Order Entry document that
     // GATHERS into its order have no customer box here — the order is boxed when the order itself is packed.
     const usesBoxes = (job) => !!job && job.orderType !== 'stock' && !oeOrderOfDoc(job);
-    const boxHomeOf = (job) => {
-        if (isQsOrder(job)) return { coll: 'hq_sales_orders', id: job.id, data: job, so: job };
-        const so = soIndex[String(job.soAppId || '')] || soIndex[String(job.salesOrderId || '')] || soIndex[String(job.orderKey || '')] || null;
-        return so ? { coll: 'hq_sales_orders', id: so.id, data: so, so } : { coll: 'fin_workorders', id: job.id, data: job, so: null };
-    };
+    const boxHomeOf = (job) => boxHomeFor(job, { soIndex, isOrderDoc: isQsOrder });   // ONE resolver — the Fulfilment tab stamps the same list
     const orderPackDocsOf = (job) => isQsOrder(job) ? [job] : finAll.filter(w => w.id === job.id || (job.orderKey && w.orderKey === job.orderKey) || (job.salesOrderId && w.salesOrderId === job.salesOrderId));
     // A packed document's poles come off its own stamp; only an open one asks the shop order for them.
     const packLinesAsPacked = (d) => (d.packStatus === 'Packed' && Array.isArray(d.poleLines) && d.poleLines.length) ? packLinesOf(d, { isFeeCode }) : packLinesFor(d);
     const openBoxNoOf = (job) => {
         if (!job || openBoxSel.id !== job.id || !usesBoxes(job)) return null;
-        return boxOf(orderBoxesOf(boxHomeOf(job).data), openBoxSel.no) ? openBoxSel.no : null;
+        const b = boxOf(orderBoxesOf(boxHomeOf(job).data), openBoxSel.no);
+        return b && !isBoxShipped(b) ? openBoxSel.no : null;   // a box that has shipped takes nothing more
     };
+    // Pieces in a box that has SHIPPED are gone with it: they cannot be moved to another box or un-ticked here.
+    const shippedBoxOfTick = (job, tick) => { const boxes = orderBoxesOf(boxHomeOf(job).data); return tickBoxesOf(tick).map(b => boxOf(boxes, b.no)).find(isBoxShipped) || null; };
     const packIsMine = (job) => {
         if (claimIsMine(claimOf(job, 'pack'))) return true;
         const c = claimOf(job, 'pack');
@@ -1004,6 +1003,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const moveLineIntoBox = async (job, line) => {
         if (!packIsMine(job)) return;
         const tick = job.packedLines && job.packedLines[line.key];
+        const gone = shippedBoxOfTick(job, tick);
+        if (gone) return alert(`Pieces of this line are in Box ${gone.no}, which has SHIPPED${gone.trackingNumber ? ` (${gone.trackingNumber})` : ''} — they cannot be moved.`);
         const to = openBoxNoOf(job);
         const pre = moveIntoBox(tick, line, to, 1);
         if (!tick || !to || !pre.movable) return alert(pre.msg || 'Open a box first.');
@@ -2388,6 +2389,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         catch (e) { alert('Could not mark packed: ' + (e.message || e)); }
     };
     const unpackLine = async (job, line) => {
+        const gone = shippedBoxOfTick(job, job.packedLines && job.packedLines[line.key]);
+        if (gone) return alert(`"${line.name}" is in Box ${gone.no}, which has SHIPPED${gone.trackingNumber ? ` (${gone.trackingNumber})` : ''} — it cannot go back to TO PACK.`);
         if (!window.confirm(`Move "${line.name}" back to TO PACK?`)) return;
         const patch = { [`packedLines.${line.key}`]: deleteField() };
         if (line.isPole) ridersOf(packLinesFor(job), line.key).forEach(r => { patch[`packedLines.${r.key}`] = deleteField(); });
@@ -6188,10 +6191,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         const pl = packLineByKey[`L${i}`];
                         const pk = pl ? packedQtyOf(o, pl) : 0;
                         // The numbered box(es) on the tick (Shared/orderBoxes); an order packed before box numbers shows the box type.
-                        const bx = pl ? (boxSpreadLabel(tickBoxesOf(o.packedLines && o.packedLines[pl.key]), orderBoxesOf(o)) || lineBoxOf(o, pl, pk)) : '';
+                        const spread = pl ? tickBoxesOf(o.packedLines && o.packedLines[pl.key]) : [];
+                        const bx = pl ? (boxSpreadLabel(spread, orderBoxesOf(o)) || lineBoxOf(o, pl, pk)) : '';
                         return (<>
                             <td style={{ padding: '9px 10px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', fontWeight: pk ? 700 : 400, color: pk ? '#2e7d32' : theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{pk || '—'}</td>
-                            <td title={!bx && pk > 0 ? t('Packed, but not in a numbered box yet') : undefined} style={{ padding: '9px 10px', fontFamily: theme.mono, fontSize: '11px', color: bx ? theme.ink : theme.inkSoft, whiteSpace: 'nowrap', borderBottom: `1px solid ${theme.paper2}` }}>{bx ? `📦 ${bx}` : '—'}</td>
+                            <td title={!bx && pk > 0 ? t('Packed, but not in a numbered box yet') : undefined} style={{ padding: '9px 10px', fontFamily: theme.mono, fontSize: '11px', color: bx ? theme.ink : theme.inkSoft, whiteSpace: 'nowrap', borderBottom: `1px solid ${theme.paper2}` }}>{bx ? `📦 ${bx}` : '—'}
+                                {spreadTrackingOf(spread, orderBoxesOf(o)).map(tk => <div key={tk.no} style={{ fontSize: '10px', color: '#2e7d32' }}>🚚 {spread.length > 1 ? `${t('Box')} ${tk.no} ` : ''}{tk.trackingNumber}</div>)}</td>
                         </>);
                     };
                     return (
@@ -6360,7 +6365,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             <b>{board.pieces.packed} {t('of')} {board.pieces.ordered}</b> {t('pieces packed')}
                                                             {board.pieces.ready > 0 && <span style={{ color: '#3f7fc4' }}> · {board.pieces.ready} {t('ready to pack')}</span>}
                                                             {board.pieces.waiting > 0 && <span style={{ color: theme.brass }}> · {board.pieces.waiting} {t('still coming')}</span>}
-                                                            {soBoxes.length > 0 && <span title={soBoxes.map(boxName).join('\n')}> · 📦 {soBoxes.length} {soBoxes.length === 1 ? t('box') : t('boxes')}</span>}
+                                                            {soBoxes.length > 0 && <span title={soBoxes.map(b => `${boxName(b)}${isBoxShipped(b) ? ` — shipped ${b.trackingNumber || ''}` : ''}`).join('\n')}> · 📦 {soBoxes.length} {soBoxes.length === 1 ? t('box') : t('boxes')}{soBoxes.some(isBoxShipped) ? ` · 🚚 ${soBoxes.filter(isBoxShipped).length} ${t('shipped')}` : ''}</span>}
                                                         </span>
                                                         {committedBinOf(so) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#2e7d32' }}>📦 {t('BIN')} {committedBinOf(so)} · {totalGathered(so)}</span>}
                                                         <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: allPacked ? '#2e7d32' : (readyToPack ? '#3f7fc4' : theme.brass) }}>{allPacked ? `✓ ${t('ALL PACKED')} — ${t('READY TO SHIP')}` : (readyToPack ? t('READY TO PACK') : t('WAITING ON PARTS'))}</span>
@@ -6385,7 +6390,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                                             <td style={{ ...cell, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, whiteSpace: 'nowrap' }}>{r.ref}</td>
                                                                             <td style={{ ...cell, textAlign: 'center', fontFamily: theme.mono, fontSize: '13px', color: theme.ink }}>{r.noLines ? '—' : r.ordered}</td>
                                                                             <td style={{ ...cell, textAlign: 'center', fontFamily: theme.mono, fontSize: '13px', fontWeight: 700, color: full ? '#2e7d32' : (part ? '#b8860b' : theme.inkSoft) }}>{r.noLines ? '—' : r.packed}</td>
-                                                                            <td title={!r.box && r.packed > 0 ? t('Packed, but not in a numbered box yet') : undefined} style={{ ...cell, fontFamily: theme.mono, fontSize: '11px', color: r.box ? theme.ink : theme.inkSoft, whiteSpace: 'nowrap' }}>{r.box ? `📦 ${r.box}` : '—'}</td>
+                                                                            <td title={!r.box && r.packed > 0 ? t('Packed, but not in a numbered box yet') : undefined} style={{ ...cell, fontFamily: theme.mono, fontSize: '11px', color: r.box ? theme.ink : theme.inkSoft, whiteSpace: 'nowrap' }}>{r.box ? `📦 ${r.box}` : '—'}
+                                                                                {(r.boxTracking || []).map(tk => <div key={tk.no} title={tk.shipService ? `UPS ${tk.shipService}` : undefined} style={{ fontSize: '10px', color: '#2e7d32' }}>🚚 {(r.boxSpread || []).length > 1 ? `${t('Box')} ${tk.no} ` : ''}{tk.trackingNumber}</div>)}</td>
                                                                             <td style={cell}><OrderStatusChips stamps={r.stamps} showWho={full || part} /></td>
                                                                         </tr>
                                                                     </React.Fragment>);
@@ -6633,12 +6639,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginRight: '4px' }}>📦 {t('Boxes')}{boxHomeOf(packJob).so ? ` · SO ${boxHomeOf(packJob).so.soId || boxHomeOf(packJob).so.id}` : ''}</span>
                                                 {orderBoxes.length === 0 && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.brass }}>{t('No box yet — add the first one')} →</span>}
                                                 {orderBoxes.map(b => {
-                                                    const isOpen = openBox === b.no, pcs = (boxContents[b.no] && boxContents[b.no].pcs) || 0;
+                                                    const isOpen = openBox === b.no, pcs = (boxContents[b.no] && boxContents[b.no].pcs) || 0, shipped = isBoxShipped(b);
                                                     const last = b.no === orderBoxes[orderBoxes.length - 1].no;
                                                     return (
                                                         <span key={b.no} style={{ display: 'inline-flex', alignItems: 'stretch', border: `1px solid ${isOpen ? theme.ink : theme.line}` }}>
-                                                            <button onClick={() => setOpenBoxSel(isOpen ? { id: null, no: null } : { id: packJob.id, no: b.no })} title={`${boxName(b)} — ${pcs} pc${pcs === 1 ? '' : 's'}${(boxContents[b.no] ? `: ${boxContents[b.no].items.map(i => `${i.code} ×${i.qty}`).join(', ')}` : '')}\n${isOpen ? 'Open — tap to close it' : 'Tap to pack into this box'}`} style={{ background: isOpen ? theme.ink : theme.paper, color: isOpen ? '#fff' : theme.ink, border: 'none', padding: '9px 12px', fontFamily: theme.mono, fontSize: '11px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                                <b>{t('Box')} {b.no}</b>{b.type ? ` · ${b.type}` : ''} · {pcs} pc{pcs === 1 ? '' : 's'}{isOpen ? ` · ${t('OPEN')}` : ''}
+                                                            <button onClick={() => { if (shipped) return alert(boxOpenRefusal(b)); setOpenBoxSel(isOpen ? { id: null, no: null } : { id: packJob.id, no: b.no }); }} title={shipped ? boxOpenRefusal(b) : `${boxName(b)} — ${pcs} pc${pcs === 1 ? '' : 's'}${(boxContents[b.no] ? `: ${boxContents[b.no].items.map(i => `${i.code} ×${i.qty}`).join(', ')}` : '')}\n${isOpen ? 'Open — tap to close it' : 'Tap to pack into this box'}`} style={{ background: isOpen ? theme.ink : (shipped ? '#f0f7f1' : theme.paper), color: isOpen ? '#fff' : (shipped ? '#2e7d32' : theme.ink), border: 'none', padding: '9px 12px', fontFamily: theme.mono, fontSize: '11px', cursor: shipped ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
+                                                                <b>{t('Box')} {b.no}</b>{b.type ? ` · ${b.type}` : ''} · {pcs} pc{pcs === 1 ? '' : 's'}{isOpen ? ` · ${t('OPEN')}` : ''}{shipped ? ` · 🚚 ${t('SHIPPED')}${b.trackingNumber ? ` ${b.trackingNumber}` : ''}` : ''}
                                                             </button>
                                                             <button onClick={() => printOrderBoxLabelsFor(packJob, b.no)} title={`Print the label for Box ${b.no} — "${t('Box')} ${b.no} of ${orderBoxes.length}"`} style={{ background: '#fff', color: theme.inkSoft, border: 'none', borderLeft: `1px solid ${theme.line}`, padding: '0 9px', cursor: 'pointer' }}>🖨</button>
                                                             {last && pcs === 0 && <button onClick={() => removeOrderBox(packJob, b.no)} title={`Remove Box ${b.no} — it is empty`} style={{ background: '#fff', color: '#c0392b', border: 'none', borderLeft: `1px solid ${theme.line}`, padding: '0 9px', cursor: 'pointer', fontFamily: theme.mono }}>✕</button>}

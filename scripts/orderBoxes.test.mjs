@@ -1,7 +1,8 @@
 // 🧪 Numbered boxes — an order's boxes, which box each packed piece is in, the split (Stuart 2026-10-06).
 //    node scripts/orderBoxes.test.mjs
 import { orderBoxesOf, nextBoxNoOf, withNewBox, newBoxRefusal, boxOf, boxName, tickBoxesOf, tickQtyOf, unboxedQtyOf, tickIntoBox, moveIntoBox,
-    boxSpreadOf, boxSpreadLabel, boxContentsOf, boxRemovalRefusal, unboxedLinesOf, boxCompleteBlocker, packBoxesOfTicks, docBoxLinesOf, boxSlotOf } from '../src/components/Shared/orderBoxes.js';
+    boxSpreadOf, boxSpreadLabel, boxContentsOf, boxRemovalRefusal, unboxedLinesOf, boxCompleteBlocker, packBoxesOfTicks, docBoxLinesOf, boxSlotOf,
+    boxShipStampsOf, boxesAfterVoid, boxOpenRefusal, docBoxNosOf, boxHomeFor, isBoxShipped } from '../src/components/Shared/orderBoxes.js';
 import { soPackBoardOf } from '../src/components/Shared/soPackBoard.js';
 import { packLinesOf } from '../src/components/Shared/pickLines.js';
 import { packedQtyOf, packingListOf } from '../src/components/Shared/packingList.js';
@@ -84,6 +85,22 @@ eq('the last box, empty, may go', boxRemovalRefusal(four, 4, contents), '');
 ok('an empty box in the middle stays — no gaps', /Only the last box \(Box 4\)/.test(boxRemovalRefusal(four, 2, {})));
 ok('a box that is not there', /no Box 9/.test(boxRemovalRefusal(four, 9, {})));
 
+// ── a box ships once ────────────────────────────────────────────────────────────────────────────────────────
+{
+  const shippedList = boxShipStampsOf(boxes, [{ no: 2, trackingNumber: '1Z999', weight: 12, length: 120, width: 4, height: 4 }], { shipmentId: 'S1', shipService: 'Ground', by: 'Eric', now: 50, withRef: 'WO-S11', withDocId: 'S11' });
+  eq('the shipped box carries its tracking; the others are as they were', shippedList.map(b => `${b.no}:${b.trackingNumber || '-'}`), ['1:-', '2:1Z999', '3:-']);
+  eq('READ BACK, the stamps are all still there (the list is written whole)', orderBoxesOf({ orderBoxes: shippedList })[1], { no: 2, type: 'Tube 10ft', by: 'Ana', at: 20, shippedAt: 50, shippedBy: 'Eric', shipCarrier: 'UPS', shipService: 'Ground', shipmentId: 'S1', trackingNumber: '1Z999', shippedWith: 'WO-S11', shippedWithId: 'S11', weight: 12, length: 120, width: 4, height: 4 });
+  ok('…so adding Box 4 afterwards keeps Box 2\'s tracking', withNewBox(orderBoxesOf({ orderBoxes: shippedList }), { type: 'Small Box A' }).list[1].trackingNumber === '1Z999');
+  ok('a shipped box cannot be packed into', /already SHIPPED \(1Z999\)/.test(boxOpenRefusal(shippedList[1])) && boxOpenRefusal(shippedList[0]) === '');
+  ok('…nor removed', /has shipped/.test(boxRemovalRefusal(shippedList.slice(0, 2), 2, {})));
+  eq('voided: back to packed-and-waiting, nothing else lost', boxesAfterVoid(shippedList, 'S1')[1], { no: 2, type: 'Tube 10ft', by: 'Ana', at: 20 });
+  eq('a void of another shipment touches nothing', boxesAfterVoid(shippedList, 'S2')[1].trackingNumber, '1Z999');
+  eq('the boxes a document\'s pieces are in — a rider names none', [docBoxNosOf(ep5P), docBoxNosOf(s11P), docBoxNosOf(ep5), docBoxNosOf(null)], [[1, 3], [1, 2], [], []]);
+  eq('where the list lives: the sales order; the order itself for Order Entry; the document when there is none',
+      [boxHomeFor({ id: 'W', salesOrderId: 'SO1' }, { soIndex: { SO1: { id: 'x9', soId: 'SO1' } } }), boxHomeFor({ id: 'Q' }, { isOrderDoc: () => true }), boxHomeFor({ id: 'W2', salesOrderId: 'NONE' }, { soIndex: {} })].map(h => `${h.coll}/${h.id}`),
+      ['hq_sales_orders/x9', 'hq_sales_orders/Q', 'fin_workorders/W2']);
+}
+
 // ── SO Pack reads the box numbers ───────────────────────────────────────────────────────────────────────────
 const closeOut = (d, lines) => ({ ...d, packStatus: 'Packed', packedAt: 9, packedBy: 'Sandra', packBoxes: packBoxesOfTicks(d, lines, boxes) });
 const board = soPackBoardOf({ docs: [closeOut(ep5P, ep5L), s11P], linesOf, refOf: (d) => d.id, boxes });
@@ -92,6 +109,14 @@ eq('each part with its box — a split line and a part on two lines say every bo
 ok('a line ticked on a document still OPEN already has its box', board.rows[2].box === 'Box 1 · Small Box A' && board.rows[2].stamps[0].detail === 'packing still open');
 const before = { ...ep5, packStatus: 'Packed', packBoxes: { SMALL: 'Small Box A' }, packedLines: { L0: { at: 1, by: 'A', qty: 48 }, L1: { at: 1, by: 'A', qty: 1 }, L2: { at: 1, by: 'A', qty: 1 } } };
 eq('a document packed BEFORE box numbers still shows the box type it recorded', soPackBoardOf({ docs: [before], linesOf, refOf: (d) => d.id, boxes: [] }).rows.map(r => r.box), ['Small Box A', 'Small Box A']);
+
+// Box 2 has shipped: SO Pack shows its tracking on the parts that are in it — and only on those.
+{
+  const shippedBoxes = boxShipStampsOf(boxes, [{ no: 2, trackingNumber: '1Z999' }, { no: 3, trackingNumber: '1Z333' }], { shipmentId: 'S1', shipService: 'Ground', now: 50 });
+  const b2 = soPackBoardOf({ docs: [closeOut(ep5P, ep5L), s11P], linesOf, refOf: (d) => d.id, boxes: shippedBoxes });
+  eq('tracking per box, beside each part', b2.rows.map(r => `${r.code}: ${r.boxTracking.map(t => `Box ${t.no} ${t.trackingNumber}`).join(' + ') || '-'}`),
+      ['H1-138BPR/EP5: Box 3 1Z333', 'H1-138CP-V/EP5: Box 3 1Z333', 'H1-138WGF-O: -', 'H1-138WR-O: Box 2 1Z999']);
+}
 
 // the packing list — ordered beside packed — is untouched by any of it
 const pl = packingListOf({ ordered: [{ erp: 'H1-138BPR/EP5', name: 'Passing Ring', qty: 48 }, { erp: 'H1-138CP-V/EP5', name: 'Cover Plate', qty: 2 }], packDocs: [ep5P] });

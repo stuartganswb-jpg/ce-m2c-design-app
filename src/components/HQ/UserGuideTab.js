@@ -679,6 +679,19 @@ const WmsGuide = () => (
             document that is <i>gathered</i> into its order use no boxes — the order is boxed when the order itself is
             packed.</p>
         </Screen>
+        <Screen title="A box ships once" tag="WMS → Fulfillment">
+            <p style={S.p}>The Fulfillment tab ships one packed document at a time, and offers <b>one package per
+            numbered box</b> holding that document's pieces — Box 1, Box 3 — each starting from its standard box's
+            size. Weigh and measure each, rate, ship.</p>
+            <p style={S.p}>A box can hold pieces of two documents of one order, and it gets <b>one label</b>. Once a
+            box has shipped, its tracking number is on the box: the next document of the order is offered only the
+            boxes still here, and the box already gone is named ("already shipped — Box 1, 1Z…"). A document whose
+            every box has already left has nothing to buy — <b>Mark shipped — in those boxes</b> puts their tracking
+            on it and takes it out of the queue.</p>
+            <p style={S.p}>A shipped box cannot be packed into, and its pieces cannot be moved or un-ticked. SO Pack
+            shows the tracking number beside each part, per box. <b>Void</b> un-ships the boxes of that shipment — a
+            document that only travelled in one of them returns to the ship queue.</p>
+        </Screen>
         <Path name="Nothing on this order is committed" goes="check the sales order's LOCATION in NetSuite before you suspect the items">
             NetSuite commits stock per location. When a <i>whole</i> order reads uncommitted while the bins plainly
             have stock, the pattern is the diagnosis and it points at the order, not the parts.

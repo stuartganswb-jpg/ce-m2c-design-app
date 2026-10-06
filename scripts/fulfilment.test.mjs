@@ -2,7 +2,9 @@
 import {
   isReadyToShip, fulfilmentQueueOf, recentlyShippedOf, shipToOf, addressErrors, boxDims, packagesFromPack,
   blankPackage, packageErrors, rateOf, sortedRates, shipPatchOf, voidPatchOf, nsShipPayloadOf, labelDocHtml, boxSizeLabel,
+  shipmentPackagesOf, shippedBoxesOf, rideAlongPatchOf, voidEffectsOf,
 } from '../src/components/Shared/fulfilment.js';
+import { boxShipStampsOf } from '../src/components/Shared/orderBoxes.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -81,6 +83,65 @@ eq('no box', boxSizeLabel(null), '— × — × — (L×W×H)');
 ok('label doc is 4x6', labelDocHtml(['data:image/gif;base64,AAA']).includes('size:4in 6in'));
 ok('one page per label', labelDocHtml(['a', 'b']).split('class="pg"').length === 3);
 ok('label src escaped', !labelDocHtml(['x" onerror="y']).includes('" onerror="'));
+
+// ── ONE PACKAGE PER NUMBERED BOX — AND A BOX SHIPS ONCE (Stuart 2026-10-06) ─────────────────────────────────
+{
+  const std = [{ id: 's', name: 'Small Box A', w: 8, h: 6, d: 12 }, { id: 't', name: 'Tube 10ft', w: 4, h: 4, d: 120 }];
+  const T = (no, qty) => ({ at: 1, by: 'Sandra', qty, boxes: [{ no, qty }] });
+  // SO60831: document A (small parts in Box 1 and 3), document B (a finial in Box 1, the pole in Box 2).
+  const A = { id: 'A', packStatus: 'Packed', packBoxes: { SMALL: 'Small Box A', POLE: '' }, packedLines: { L0: { at: 1, by: 'S', qty: 48, boxes: [{ no: 1, qty: 30 }, { no: 3, qty: 18 }] }, L1: T(1, 1) } };
+  const B = { id: 'B', packStatus: 'Packed', packBoxes: { SMALL: 'Small Box A', POLE: 'Tube 10ft' }, packedLines: { L0: T(1, 2), 'POLE-0': T(2, 1), 'POLE-0-R0': { at: 1, by: 'S', qty: 1, withPole: 'POLE-0' } } };
+  let boxes = [{ no: 1, type: 'Small Box A', by: 'S', at: 1 }, { no: 2, type: 'Tube 10ft', by: 'S', at: 2 }, { no: 3, type: 'Small Box A', by: 'S', at: 3 }];
+
+  let sp = shipmentPackagesOf({ doc: A, boxes, stdBoxes: std });
+  eq('a document ships the boxes ITS pieces are in — one package each, by number', sp.packages.map((p) => `Box ${p.boxNo} ${p.boxName} ${p.length}x${p.width}x${p.height} ${p.fromStandard}`), ['Box 1 Small Box A 12x8x6 true', 'Box 3 Small Box A 12x8x6 true']);
+  eq('…nothing shipped yet', [sp.already, sp.numbered, sp.rides], [[], true, false]);
+  eq('a box type with no standard box on file starts blank, still its own package', shipmentPackagesOf({ doc: A, boxes: [{ no: 1, type: 'Odd crate' }, { no: 3, type: '' }], stdBoxes: std }).packages.map((p) => `${p.boxNo}:${p.boxName}:${p.length}`), ['1:Odd crate:', '3:Custom box:']);
+  const legacy = { id: 'L', packStatus: 'Packed', packBoxes: { SMALL: 'Small Box A', POLE: 'Tube 10ft' }, packedLines: { L0: { at: 1, by: 'S', qty: 4 } } };
+  sp = shipmentPackagesOf({ doc: legacy, boxes: [], stdBoxes: std });
+  eq('a document packed BEFORE box numbers: the two box types it recorded, as before', [sp.numbered, sp.packages.map((p) => `${p.slot}:${p.boxName}`), sp.packages.some((p) => p.boxNo)], [false, ['SMALL:Small Box A', 'POLE:Tube 10ft'], false]);
+
+  // A ships: Box 1 and Box 3 go out.
+  const pkgs = shipmentPackagesOf({ doc: A, boxes, stdBoxes: std }).packages.map((p, i) => ({ ...p, weight: String(5 + i) }));
+  const result = { shipmentId: '1ZSHIPA', serviceCode: '03', serviceName: 'Ground', environment: 'PRODUCTION', negotiated: 20, published: 30, packages: [{ trackingNumber: '1ZA1' }, { trackingNumber: '1ZA3' }] };
+  const patchA = shipPatchOf({ result, packages: pkgs, labelUrls: ['u1', 'u3'], by: 'Eric', now: 100 });
+  eq('the shipment record names each box', patchA.shipPackages.map((p) => `Box ${p.boxNo} ${p.trackingNumber} ${p.weight}lb ${p.labelUrl}`), ['Box 1 1ZA1 5lb u1', 'Box 3 1ZA3 6lb u3']);
+  eq('the boxes this shipment sent', shippedBoxesOf(patchA).map((b) => `${b.no}:${b.trackingNumber}:${b.weight}`), ['1:1ZA1:5', '3:1ZA3:6']);
+  boxes = boxShipStampsOf(boxes, shippedBoxesOf(patchA), { shipmentId: patchA.shipmentId, shipService: patchA.shipService, by: 'Eric', now: 100, withRef: 'WO-SO60831-EP5', withDocId: 'A' });
+  eq('the order\'s boxes carry their tracking number', boxes.map((b) => `${b.no}:${b.trackingNumber || '-'}:${b.shippedWith || '-'}`), ['1:1ZA1:WO-SO60831-EP5', '2:-:-', '3:1ZA3:WO-SO60831-EP5']);
+  ok('…and nothing else about a box is lost', boxes[0].type === 'Small Box A' && boxes[0].by === 'S' && boxes[1].shippedAt === undefined);
+
+  // B ships next: Box 1 already left — only Box 2 is bought a label.
+  sp = shipmentPackagesOf({ doc: { ...B }, boxes, stdBoxes: std });
+  eq('a box ships ONCE: the sibling is offered only the box still here', [sp.packages.map((p) => p.boxNo), sp.already.map((a) => `${a.no}:${a.trackingNumber}:${a.shippedWith}`), sp.rides], [[2], ['1:1ZA1:WO-SO60831-EP5'], false]);
+  const patchB = shipPatchOf({ result: { shipmentId: '1ZSHIPB', serviceName: 'Ground', environment: 'PRODUCTION', packages: [{ trackingNumber: '1ZB2' }] }, packages: sp.packages.map((p) => ({ ...p, weight: '9' })), labelUrls: ['u2'], by: 'Eric', now: 200, already: sp.already });
+  eq('…and carries BOTH tracking numbers — every box its pieces travel in', [patchB.trackingNumbers, patchB.shipPackages.map((p) => `Box ${p.boxNo}${p.shippedEarlier ? ' earlier' : ''} ${p.trackingNumber}`)], [['1ZA1', '1ZB2'], ['Box 1 earlier 1ZA1', 'Box 2 1ZB2']]);
+  eq('…but stamps only the box it sent', shippedBoxesOf(patchB).map((b) => b.no), [2]);
+  eq('NetSuite gets a package line per tracking number, with real weights', nsShipPayloadOf(patchB).package.items.map((i) => `${i.packageTrackingNumber}:${i.packageWeight}`), ['1ZA1:5', '1ZB2:9']);
+  ok('a second stamp never overwrites a shipped box', boxShipStampsOf(boxes, [{ no: 1, trackingNumber: 'OTHER' }], { shipmentId: 'X' })[0].trackingNumber === '1ZA1');
+
+  // C — a document whose only box already left: nothing to buy.
+  const C = { id: 'C', packStatus: 'Packed', packedLines: { L0: T(1, 4) } };
+  sp = shipmentPackagesOf({ doc: C, boxes, stdBoxes: std });
+  eq('every box already shipped → it RIDES: no package to buy', [sp.packages.length, sp.rides, sp.already.map((a) => a.no)], [0, true, [1]]);
+  const ride = rideAlongPatchOf({ already: sp.already, by: 'Eric', now: 300 });
+  eq('marked shipped IN that box — its tracking, no shipment of its own', [ride.shippedAt, ride.shipmentId, ride.trackingNumbers, ride.shipService, ride.shippedInBoxes, ride.shipPackages.map((p) => p.labelUrl)], [300, '', ['1ZA1'], 'Ground', [1], ['']]);
+  ok('…which takes it out of the ship queue', !isReadyToShip({ ...C, ...ride }));
+
+  // D — voiding A's shipment.
+  const shippedA = { ...A, ...patchA }, shippedB = { ...B, ...patchB }, rodeC = { ...C, ...ride };
+  boxes = boxShipStampsOf(boxes, shippedBoxesOf(patchB), { shipmentId: '1ZSHIPB', shipService: 'Ground', by: 'Eric', now: 200, withRef: 'WO-B', withDocId: 'B' });
+  const v = voidEffectsOf({ doc: shippedA, boxes, siblings: [shippedA, shippedB, rodeC, legacy], by: 'Eric', now: 400 });
+  eq('its boxes are back to packed-and-waiting; the sibling\'s box is untouched', v.boxes.map((b) => `${b.no}:${b.trackingNumber || '-'}:${b.shippedAt || '-'}`), ['1:-:-', '2:1ZB2:200', '3:-:-']);
+  eq('a box back from a void keeps what it is', [v.boxes[0].type, v.boxes[0].by, v.changed], ['Small Box A', 'S', true]);
+  eq('the document that rode in that box returns to the queue; the one with its own shipment keeps it, less that box', v.siblings.map((x) => `${x.id}:${x.kind}`), ['B:TRIM', 'C:RETURN']);
+  eq('…B keeps Box 2', [v.siblings[0].patch.trackingNumbers, v.siblings[0].patch.shipPackages.map((p) => p.boxNo)], [['1ZB2'], [2]]);
+  ok('…C is ready to ship again, with the void on its record', isReadyToShip({ ...rodeC, ...v.siblings[1].patch }) && v.siblings[1].patch.shipVoided[0].trackingNumbers[0] === '1ZA1');
+  eq('after the void A is offered its boxes again', shipmentPackagesOf({ doc: { ...shippedA, ...voidPatchOf({ prior: shippedA }) }, boxes: v.boxes, stdBoxes: std }).packages.map((p) => p.boxNo), [1, 3]);
+  eq('voiding a shipment made before box numbers touches no box and no sibling', [voidEffectsOf({ doc: { id: 'L', shipmentId: 'OLD' }, boxes, siblings: [shippedB] }).changed, voidEffectsOf({ doc: { id: 'L', shipmentId: 'OLD' }, boxes, siblings: [shippedB] }).siblings], [false, []]);
+  eq('a document with no shipment id voids nothing', voidEffectsOf({ doc: { id: 'Z', shipmentId: '' }, boxes, siblings: [shippedB] }).changed, false);
+}
+
 
 console.log(`fulfilment: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -19,7 +19,7 @@
 // Pure — nothing is written. Harness: scripts/soPackBoard.test.mjs.
 import { orderStatusOf, packReadinessOf } from './orderStatus.js';
 import { packedQtyOf } from './packingList.js';
-import { boxSlotOf, boxSpreadOf, boxSpreadLabel } from './orderBoxes.js';
+import { boxSlotOf, boxSpreadOf, boxSpreadLabel, spreadTrackingOf } from './orderBoxes.js';
 
 const num = (v) => Number(v) || 0;
 const str = (v) => String(v == null ? '' : v).trim();
@@ -130,6 +130,7 @@ export function soPackBoardOf({ docs = [], linesOf = () => [], refOf = (d) => (d
                 ordered, packed, state,
                 // The numbered box(es) its ticks name; else the box type a document packed before box numbers recorded.
                 boxSpread: boxSpreadOf(tickList),
+                boxTracking: spreadTrackingOf(boxSpreadOf(tickList), boxes),   // a box ships once — its tracking number is on the box
                 box: boxSpreadLabel(boxSpreadOf(tickList), boxes) || [...new Set(counts.map(c => lineBoxOf(doc, c.l, c.packed)).filter(Boolean))].join(', '),
                 packedBy: ticks.length ? str(ticks[0].by) : '', packedAt: ticks.length ? (ticks[0].at || null) : null,
                 stamps: lineStampsOf(doc, (open || counts[0]).l, coats),

@@ -8,16 +8,18 @@
 // which decide TEST vs LIVE on the server from system/ups_config — in TEST nothing is recorded.
 import React, { useEffect, useMemo, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
-import { doc, getDoc, getDocs, updateDoc, onSnapshot, query, collection, where } from 'firebase/firestore';
+import { doc, getDoc, getDocs, updateDoc, onSnapshot, query, collection, where, runTransaction } from 'firebase/firestore';
 import { ref as storageRef, uploadString, getDownloadURL } from 'firebase/storage';
 import { db, functions, storage } from '../../firebase';
 import { enqueueNsWrite } from './nsOutbox';
 import { propagateFloorState } from './orderLifecycle';
 import { printHtmlDocument } from './labelPrint';
 import {
-    fulfilmentQueueOf, recentlyShippedOf, shipToOf, addressErrors, boxDims, packagesFromPack, blankPackage,
+    fulfilmentQueueOf, recentlyShippedOf, shipToOf, addressErrors, boxDims, blankPackage,
     packageErrors, sortedRates, rateOf, shipPatchOf, voidPatchOf, nsShipPayloadOf, labelDocHtml, boxSizeLabel,
+    shipmentPackagesOf, shippedBoxesOf, rideAlongPatchOf, voidEffectsOf,
 } from './fulfilment';
+import { orderBoxesOf, boxHomeFor, boxShipStampsOf, boxesAfterVoid, boxOf, isBoxShipped } from './orderBoxes';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 const NS_BASE = 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1';
@@ -33,6 +35,10 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
     const [address, setAddress] = useState(null);
     const [addressSource, setAddressSource] = useState('');
     const [packages, setPackages] = useState([]);
+    // ONE PACKAGE PER NUMBERED BOX, AND A BOX SHIPS ONCE (Shared/fulfilment.shipmentPackagesOf, Stuart 2026-10-06):
+    // `already` = this document's boxes that left on an earlier shipment; `rides` = every one of them has.
+    const [already, setAlready] = useState([]);
+    const [rides, setRides] = useState(false);
     const [rates, setRates] = useState(null);
     const [serviceCode, setServiceCode] = useState('');
     const [busy, setBusy] = useState('');
@@ -50,12 +56,22 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
 
     const packDocRef = (d) => doc(db, isQsOrder(d) ? 'hq_sales_orders' : 'fin_workorders', d.id);
     const soOf = (d) => (isQsOrder(d) ? d : (soIndex[String(d.salesOrderId || '')] || soIndex[String(d.orderKey || '')] || null));
+    // Where the order's numbered boxes live — the same resolver the pack bench writes them through.
+    const boxHomeOf = (d) => boxHomeFor(d, { soIndex, isOrderDoc: isQsOrder });
+    const boxesOf = (d) => orderBoxesOf(boxHomeOf(d).data);
+    const writeBoxes = (d, change) => { const home = boxHomeOf(d); return runTransaction(db, async (tx) => {
+        const ref = doc(db, home.coll, home.id);
+        const snap = await tx.get(ref);
+        if (snap.exists()) tx.update(ref, { orderBoxes: change(orderBoxesOf(snap.data())) });
+    }); };
 
-    // Choosing an order loads its ship-to (order → customer record) and its packages (the boxes
-    // the packer chose, measured from the standard box where one is on file).
+    // Choosing an order loads its ship-to (order → customer record) and its packages: one per numbered box
+    // holding this document's pieces that has not already shipped, measured from the standard box where one is
+    // on file (a document packed before box numbers: the two box types it recorded).
     const choose = async (d) => {
         setSelectedId(d.id); setRates(null); setServiceCode(''); setNote(null);
-        setPackages(packagesFromPack(d.packBoxes, brandBoxes));
+        const sp = shipmentPackagesOf({ doc: d, boxes: boxesOf(d), stdBoxes: brandBoxes });
+        setPackages(sp.packages); setAlready(sp.already); setRides(sp.rides);
         const so = soOf(d);
         let customer = null;
         const custId = so && (so.customerId || (so.customer && so.customer.id));
@@ -73,7 +89,7 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
         setPkg(i, box ? { boxName: box.name, ...boxDims(box), fromStandard: true } : { boxName: 'Custom box', fromStandard: false });
     };
 
-    const problems = selected ? [...addressErrors(address).map((f) => `Ship-to: ${f}`), ...packageErrors(packages)] : [];
+    const problems = (selected && !rides) ? [...addressErrors(address).map((f) => `Ship-to: ${f}`), ...packageErrors(packages)] : [];
 
     const getRates = async () => {
         if (problems.length) return setNote({ ok: false, text: problems.join(' · ') });
@@ -102,20 +118,56 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
             targetUrl: `${NS_BASE}/itemFulfillment/${nsIfId}`,
             method: 'PATCH',
             payload: nsShipPayloadOf(patch),
-            dedupeKey: `ship:${patch.shipmentId}`,
+            dedupeKey: `ship:${patch.shipmentId || `boxes:${d.id}:${patch.shippedAt}`}`,
             writeBack: { collection: isQsOrder(d) ? 'hq_sales_orders' : 'fin_workorders', docId: d.id, patch: { nsShipPosted: true, nsShipPending: false } },
         });
         await updateDoc(packDocRef(d), { nsShipQueued: true, nsShipPending: false }).catch(() => {});
         return 'NetSuite: the fulfillment update (status Shipped + tracking) is queued — watch 11.1 → NetSuite Sync Queue.';
     };
 
+    // What every shipment record is followed by: the sales order, RTG, the NetSuite Item Fulfillment.
+    const tellOrderRtgNetSuite = async (d, patch) => {
+        const so = soOf(d);
+        if (!isQsOrder(d) && so && so.id) await updateDoc(doc(db, 'hq_sales_orders', so.id), { shippedAt: patch.shippedAt, trackingNumbers: patch.trackingNumbers, shipCarrier: 'UPS', shipService: patch.shipService }).catch(() => {});
+        try {
+            await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                { finWo: d, by: operator?.name || '', extra: { shippedAt: patch.shippedAt, trackingNumbers: patch.trackingNumbers, shipCarrier: 'UPS', shipService: patch.shipService } });
+        } catch (e) { console.warn('RTG propagate failed (shipment stands):', e); }
+        try { return await sendShipToNetSuite(d, patch); }
+        catch (e) { await updateDoc(packDocRef(d), { nsShipPending: true }).catch(() => {}); return `⚠ NetSuite update NOT queued: ${e.message || e} — send it from "Shipped recently".`; }
+    };
+
+    // EVERY BOX OF THIS DOCUMENT HAS ALREADY SHIPPED (its pieces left in a box a sibling's shipment sent): there is
+    // no label to buy. It is marked shipped IN those boxes — their tracking, no shipment of its own.
+    const markShippedInBoxes = async () => {
+        const d = selected;
+        if (!d || !rides) return;
+        if (!window.confirm(`Mark ${packRefOf(d)} shipped?\n\nEvery box holding its pieces has already shipped:\n${already.map((a) => `• Box ${a.no} — ${a.trackingNumber}${a.shippedWith ? ` (with ${a.shippedWith})` : ''}`).join('\n')}\n\nNo label is bought. The tracking goes onto this document, RTG and its NetSuite fulfillment.`)) return;
+        setBusy('ship'); setNote(null);
+        try {
+            const patch = rideAlongPatchOf({ already, by: operator?.name || '' });
+            await updateDoc(packDocRef(d), patch);
+            const nsWords = await tellOrderRtgNetSuite(d, patch);
+            writeLog(`Marked ${packRefOf(d)} shipped in ${already.map((a) => `Box ${a.no}`).join(', ')} · ${patch.trackingNumbers.join(', ')} (already shipped — no label)`, 'fulfilment');
+            setSelectedId(null);
+            setNote({ ok: true, text: `Marked shipped — tracking ${patch.trackingNumbers.join(', ')}. ${nsWords}` });
+        } catch (e) {
+            setNote({ ok: false, text: errText(e) });
+        } finally { setBusy(''); }
+    };
+
     const ship = async () => {
         const svc = rates && rates.services.find((s) => s.code === serviceCode);
         if (!svc) return setNote({ ok: false, text: 'Choose a service first.' });
         if (problems.length) return setNote({ ok: false, text: problems.join(' · ') });
+        // A BOX SHIPS ONCE — checked again at the last moment: another bench may have shipped one of these boxes
+        // with a sibling document since this order was chosen.
+        const justGone = packages.filter((p) => p.boxNo && isBoxShipped(boxOf(boxesOf(selected), p.boxNo)));
+        if (justGone.length) return setNote({ ok: false, text: `${justGone.map((p) => `Box ${p.boxNo}`).join(', ')} ${justGone.length === 1 ? 'has' : 'have'} just shipped with another document of this order. Choose ${packRefOf(selected)} again — it will be offered only the boxes still here.` });
         const price = rateOf(svc, config.rateDisplay);
         const envWords = isLive ? 'LIVE — this buys a real UPS label billed to the account' : 'TEST — a sample label only; nothing is recorded or billed';
-        if (!window.confirm(`Ship ${packRefOf(selected)} by UPS ${svc.name} (${fmtUsd(price)})?\n\n${packages.length} package${packages.length === 1 ? '' : 's'} to ${address.addressee || address.attention}, ${address.city} ${address.state}\n\n${envWords}.`)) return;
+        const goneWords = already.length ? `\n\nNOT in this shipment — already shipped: ${already.map((a) => `Box ${a.no} (${a.trackingNumber})`).join(', ')}.` : '';
+        if (!window.confirm(`Ship ${packRefOf(selected)} by UPS ${svc.name} (${fmtUsd(price)})?\n\n${packages.length} package${packages.length === 1 ? '' : 's'}${packages.some((p) => p.boxNo) ? ` (${packages.map((p) => (p.boxNo ? `Box ${p.boxNo}` : 'extra')).join(', ')})` : ''} to ${address.addressee || address.attention}, ${address.city} ${address.state}${goneWords}\n\n${envWords}.`)) return;
         setBusy('ship'); setNote(null);
         const d = selected;
         try {
@@ -139,20 +191,21 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                     labelUrls.push(await getDownloadURL(sref));
                 } catch (e) { labelUrls.push(''); console.warn('label upload failed (label still prints):', e); }
             }
-            const patch = shipPatchOf({ result: r, packages, labelUrls, by: operator?.name || '' });
+            const patch = shipPatchOf({ result: r, packages, labelUrls, by: operator?.name || '', already });
             await updateDoc(packDocRef(d), { ...patch, shipTo: address });
-            const so = soOf(d);
-            if (!isQsOrder(d) && so && so.id) await updateDoc(doc(db, 'hq_sales_orders', so.id), { shippedAt: patch.shippedAt, trackingNumbers: patch.trackingNumbers, shipCarrier: 'UPS', shipService: patch.shipService }).catch(() => {});
-            try {
-                await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
-                    { finWo: d, by: operator?.name || '', extra: { shippedAt: patch.shippedAt, trackingNumbers: patch.trackingNumbers, shipCarrier: 'UPS', shipService: patch.shipService } });
-            } catch (e) { console.warn('RTG propagate failed (shipment stands):', e); }
-            let nsWords = '';
-            try { nsWords = await sendShipToNetSuite(d, patch); } catch (e) { nsWords = `⚠ NetSuite update NOT queued: ${e.message || e} — send it from "Shipped recently".`; await updateDoc(packDocRef(d), { nsShipPending: true }).catch(() => {}); }
-            writeLog(`Shipped ${packRefOf(d)} UPS ${patch.shipService} · ${patch.trackingNumbers.join(', ')} · ${fmtUsd(r.negotiated ?? r.published)}`, 'fulfilment');
+            // A BOX SHIPS ONCE: each numbered box this shipment sent carries its tracking on the order's box list,
+            // so a later document of the order is not offered it again and SO Pack shows it per box.
+            let boxWords = '';
+            const sent = shippedBoxesOf(patch);
+            if (sent.length) {
+                try { await writeBoxes(d, (list) => boxShipStampsOf(list, sent, { shipmentId: patch.shipmentId, shipService: patch.shipService, by: operator?.name || '', now: patch.shippedAt, withRef: packRefOf(d), withDocId: d.id })); }
+                catch (e) { boxWords = ` ⚠ The order's boxes were NOT marked shipped (${e.message || e}) — tell Stuart: ${sent.map((b) => `Box ${b.no} ${b.trackingNumber}`).join(', ')}.`; }
+            }
+            const nsWords = await tellOrderRtgNetSuite(d, patch);
+            writeLog(`Shipped ${packRefOf(d)} UPS ${patch.shipService} · ${patch.trackingNumbers.join(', ')}${sent.length ? ` · ${sent.map((b) => `Box ${b.no}`).join(', ')}` : ''} · ${fmtUsd(r.negotiated ?? r.published)}`, 'fulfilment');
             printLabels(images);
             setSelectedId(null); setRates(null); setServiceCode('');
-            setNote({ ok: true, text: `Shipped — tracking ${patch.trackingNumbers.join(', ')}. ${nsWords}` });
+            setNote({ ok: true, text: `Shipped — tracking ${patch.trackingNumbers.join(', ')}. ${nsWords}${boxWords}` });
         } catch (e) {
             setNote({ ok: false, text: errText(e) });
         } finally { setBusy(''); }
@@ -161,11 +214,27 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
     const reprint = (d) => printLabels((d.shipPackages || []).map((p) => p.labelUrl).filter(Boolean));
 
     const voidShipment = async (d) => {
-        if (!window.confirm(`Void UPS shipment ${d.shipmentId} for ${packRefOf(d)}?\n\nThe label(s) stop working and the order returns to the ship queue.${d.nsShipQueued || d.nsShipPosted ? '\n\n⚠ NetSuite was already sent this tracking — the fulfillment in NetSuite must be corrected by hand (remove the package line, set status back to Packed).' : ''}`)) return;
+        // A VOID UN-SHIPS ITS BOXES (Shared/fulfilment.voidEffectsOf): they are packed-and-waiting again, and any
+        // other document of the order that travels in one of them loses that tracking — one with no label of its
+        // own returns to the ship queue.
+        const sibs = isQsOrder(d) ? [] : docs.filter((x) => x && x.id !== d.id && !isQsOrder(x) && ((d.orderKey && x.orderKey === d.orderKey) || (d.salesOrderId && x.salesOrderId === d.salesOrderId)));
+        const fx = voidEffectsOf({ doc: d, boxes: boxesOf(d), siblings: sibs, by: operator?.name || '' });
+        const sibWords = fx.siblings.length ? `\n\nAlso on this order:\n${fx.siblings.map((x) => { const sd = sibs.find((y) => y.id === x.id); return `• ${packRefOf(sd)} ${x.kind === 'RETURN' ? 'travelled in a box of this shipment — it returns to the ship queue' : 'loses the tracking of the box that was in this shipment'}`; }).join('\n')}` : '';
+        const nsSent = d.nsShipQueued || d.nsShipPosted || fx.siblings.some((x) => { const sd = sibs.find((y) => y.id === x.id); return sd && (sd.nsShipQueued || sd.nsShipPosted); });
+        if (!window.confirm(`Void UPS shipment ${d.shipmentId} for ${packRefOf(d)}?\n\nThe label(s) stop working and the order returns to the ship queue.${sibWords}${nsSent ? '\n\n⚠ NetSuite was already sent this tracking — the fulfillment in NetSuite must be corrected by hand (remove the package line, set status back to Packed).' : ''}`)) return;
         setBusy(`void:${d.id}`); setNote(null);
         try {
             await httpsCallable(functions, 'upsVoid')({ brand: activeBrand, shipmentId: d.shipmentId, environment: d.shipEnvironment });
             await updateDoc(packDocRef(d), voidPatchOf({ by: operator?.name || '', prior: d }));
+            if (fx.changed) await writeBoxes(d, (list) => boxesAfterVoid(list, d.shipmentId));
+            for (const x of fx.siblings) {
+                const sd = sibs.find((y) => y.id === x.id);
+                await updateDoc(packDocRef(sd), x.patch);
+                try {
+                    await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                        { finWo: sd, by: operator?.name || '', extra: x.kind === 'RETURN' ? { shippedAt: null, trackingNumbers: [] } : { trackingNumbers: x.patch.trackingNumbers } });
+                } catch (e) { console.warn('RTG propagate failed (void stands):', e); }
+            }
             const so = soOf(d);
             if (!isQsOrder(d) && so && so.id) await updateDoc(doc(db, 'hq_sales_orders', so.id), { shippedAt: null, trackingNumbers: [] }).catch(() => {});
             try {
@@ -235,7 +304,18 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                                 <input type="checkbox" checked={!!address.residential} onChange={(e) => setAddr('residential', e.target.checked)} /> Residential address
                             </label>
 
-                            <div style={label}>Packages — dimensions in inches, weight in lb; every field can be changed</div>
+                            {already.length > 0 && (
+                                <div style={{ margin: '0 0 12px', padding: '8px 10px', background: theme.paper, borderLeft: '3px solid #3a7d44', fontSize: '12px' }}>
+                                    <b>Already shipped — not in this shipment:</b> {already.map((a) => `Box ${a.no}${a.boxName ? ` · ${a.boxName}` : ''} — ${a.trackingNumber}${a.shippedWith ? ` (with ${a.shippedWith})` : ''}`).join(' · ')}
+                                </div>
+                            )}
+                            {rides ? (
+                                <div style={{ padding: '14px', border: `1px solid ${theme.line}`, background: theme.paper }}>
+                                    <div style={{ fontSize: '13px', marginBottom: '10px' }}>Every box holding this document's pieces has already shipped — there is no label to buy.</div>
+                                    <button style={{ ...btn(true), background: '#3a7d44', borderColor: '#3a7d44' }} disabled={busy === 'ship'} onClick={markShippedInBoxes}>{busy === 'ship' ? 'Marking…' : 'Mark shipped — in those boxes'}</button>
+                                </div>
+                            ) : (<>
+                            <div style={label}>Packages — one per numbered box; dimensions in inches, weight in lb; every field can be changed</div>
                             <div style={{ overflowX: 'auto', margin: '6px 0 8px' }}>
                                 <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '13px' }}>
                                     <thead><tr style={{ textAlign: 'left', color: theme.inkSoft }}>
@@ -244,7 +324,7 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                                     <tbody>
                                         {packages.map((p, i) => (
                                             <tr key={i}>
-                                                <td style={{ padding: '4px', fontFamily: theme.mono }}>{i + 1}</td>
+                                                <td style={{ padding: '4px', fontFamily: theme.mono, whiteSpace: 'nowrap' }}>{p.boxNo ? `Box ${p.boxNo}` : i + 1}</td>
                                                 <td style={{ padding: '4px' }}>
                                                     <select style={{ ...input, width: '100%' }} value={brandBoxes.some((b) => b.name === p.boxName) ? p.boxName : ''} onChange={(e) => pickBox(i, e.target.value)}>
                                                         <option value="">{p.fromStandard ? 'Custom box' : (p.boxName || 'Custom box')}</option>
@@ -257,7 +337,8 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                                                     </td>
                                                 ))}
                                                 <td style={{ padding: '4px' }}>
-                                                    {packages.length > 1 && <button style={btn(false)} onClick={() => { setPackages((rows) => rows.filter((_, j) => j !== i)); setRates(null); setServiceCode(''); }}>Remove</button>}
+                                                    {/* A numbered box holds this document's pieces — it ships with it. Only an extra package can be dropped. */}
+                                                    {!p.boxNo && packages.length > 1 && <button style={btn(false)} onClick={() => { setPackages((rows) => rows.filter((_, j) => j !== i)); setRates(null); setServiceCode(''); }}>Remove</button>}
                                                 </td>
                                             </tr>
                                         ))}
@@ -301,6 +382,7 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                                     </div>
                                 </div>
                             )}
+                            </>)}
                         </div>
                     )}
 
@@ -311,7 +393,7 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                         {shipped.map((d) => (
                             <div key={d.id} style={{ padding: '10px 12px', borderBottom: `1px solid ${theme.line}`, display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                                 <div style={{ marginRight: 'auto', fontSize: '12px' }}>
-                                    <span style={{ fontFamily: theme.mono }}>{packRefOf(d)}</span> · UPS {d.shipService} · {(d.trackingNumbers || []).join(', ')}
+                                    <span style={{ fontFamily: theme.mono }}>{packRefOf(d)}</span> · UPS {d.shipService} · {(d.shipPackages || []).some((p) => p.boxNo) ? (d.shipPackages || []).map((p) => `${p.boxNo ? `Box ${p.boxNo} ` : ''}${p.trackingNumber}${p.shippedEarlier ? ' (shipped earlier)' : ''}`).join(', ') : (d.trackingNumbers || []).join(', ')}
                                     <div style={{ fontSize: '11px', color: theme.inkSoft }}>
                                         {when(d.shippedAt)}{d.shippedBy ? ` · ${d.shippedBy}` : ''} · {d.nsShipPosted ? 'NetSuite updated' : (d.nsShipQueued ? 'NetSuite update queued' : (d.nsShipPending ? 'NetSuite waiting' : ''))}
                                     </div>

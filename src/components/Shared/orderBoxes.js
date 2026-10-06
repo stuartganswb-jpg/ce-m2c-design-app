@@ -11,7 +11,11 @@
 //     it has always been, so the packing list and the invoice quantities read exactly as before.
 //   · A LINE CAN BE SPLIT — some of its pieces moved into another box (moveIntoBox).
 //   · packBoxes IS STILL WRITTEN at completion, from the ticks (packBoxesOfTicks): the type of the first box each half
-//     went in. The Fulfilment tab seeds its packages from it and is untouched by this.
+//     went in — what a document packed before box numbers carries, and still the Fulfilment tab's fallback.
+//   · A BOX SHIPS ONCE (Stuart 2026-10-06: "your proposal is good, go ahead"). Fulfilment ships one DOCUMENT at a
+//     time and a box can hold pieces of two, so the shipment stamps the BOX (`shippedAt`, `trackingNumber`,
+//     `shipmentId` … on its entry in the order's list): a later document of the order is not offered that box again,
+//     a shipped box cannot be packed into, and SO Pack shows the tracking number per box.
 // Pure — the WMS pack bench writes, SO Pack reads. Harness: scripts/orderBoxes.test.mjs.
 
 const num = (v) => Number(v) || 0;
@@ -26,10 +30,26 @@ export const boxSlotOf = (line) => {
 
 // ── the order's boxes ─────────────────────────────────────────────────────────────────────────────────────────
 /** The order's boxes, in number order. `home` = the document the list lives on (the sales order). */
+// Every field a box carries rides through (its shipment stamps live on it) — the list is read, changed and
+// written back whole, and a reader that kept only the fields it knew would erase the rest.
 export const orderBoxesOf = (home) => (Array.isArray(home && home.orderBoxes) ? home.orderBoxes : [])
     .filter(b => b && num(b.no) > 0)
-    .map(b => ({ no: num(b.no), type: str(b.type), by: str(b.by), at: b.at || null }))
+    .map(b => ({ ...b, no: num(b.no), type: str(b.type), by: str(b.by), at: b.at || null }))
     .sort((a, b) => a.no - b.no);
+
+/**
+ * WHERE an order's box list lives: on its sales order, so every document of the order shares the numbering — the
+ * order itself when the pack document IS the order (Order Entry), the pack document when no sales order is on file.
+ * ONE resolver, used by the pack bench (which writes the list) and the Fulfilment tab (which stamps it).
+ * @param isOrderDoc (doc) → is this pack document a sales order itself?
+ * @returns {{ coll: 'hq_sales_orders'|'fin_workorders', id, data, so }}
+ */
+export const boxHomeFor = (job, { soIndex = {}, isOrderDoc = () => false } = {}) => {
+    if (!job) return null;
+    if (isOrderDoc(job)) return { coll: 'hq_sales_orders', id: job.id, data: job, so: job };
+    const so = soIndex[String(job.soAppId || '')] || soIndex[String(job.salesOrderId || '')] || soIndex[String(job.orderKey || '')] || null;
+    return so ? { coll: 'hq_sales_orders', id: so.id, data: so, so } : { coll: 'fin_workorders', id: job.id, data: job, so: null };
+};
 
 export const nextBoxNoOf = (boxes = []) => (boxes || []).reduce((m, b) => Math.max(m, num(b && b.no)), 0) + 1;
 export const boxOf = (boxes = [], no) => (boxes || []).find(b => num(b.no) === num(no)) || null;
@@ -123,6 +143,7 @@ export function boxContentsOf({ docs = [], linesOf = () => [] } = {}) {
 export const boxRemovalRefusal = (boxes = [], no, contents = {}) => {
     const n = num(no);
     if (!boxOf(boxes, n)) return `There is no Box ${n} on this order.`;
+    if (isBoxShipped(boxOf(boxes, n))) return `Box ${n} has shipped${boxOf(boxes, n).trackingNumber ? ` (${boxOf(boxes, n).trackingNumber})` : ''} — it stays on the order.`;
     if (contents[n] && contents[n].pcs > 0) return `Box ${n} has ${contents[n].pcs} piece(s) in it — move them to another box first.`;
     if (n !== nextBoxNoOf(boxes) - 1) return `Only the last box (Box ${nextBoxNoOf(boxes) - 1}) can be removed, so the numbers never have a gap. Box ${n} can stay empty, or be used.`;
     return '';
@@ -161,3 +182,50 @@ export const docBoxLinesOf = (doc, lines = [], boxes = []) => {
     const spread = boxSpreadOf((lines || []).filter(l => l && !l.rider).map(l => doc && doc.packedLines && doc.packedLines[l.key]).filter(Boolean));
     return spread.map(b => `${boxName(boxOf(boxes, b.no) || { no: b.no, type: '' })} — ${b.qty} pc${b.qty === 1 ? '' : 's'}`);
 };
+
+// ── a box ships once ──────────────────────────────────────────────────────────────────────────────────────────
+export const isBoxShipped = (box) => !!(box && box.shippedAt);
+/** Why a box may not be opened to pack into, or ''. A box that has left the building takes nothing more. */
+export const boxOpenRefusal = (box) => (isBoxShipped(box)
+    ? `Box ${box.no} has already SHIPPED${box.trackingNumber ? ` (${box.trackingNumber})` : ''} — nothing more can go in it. Open another box, or add a new one.`
+    : '');
+
+/** The boxes a document's packed pieces are in, by number — read off its ticks (a rider's tick names none). */
+export const docBoxNosOf = (doc) => {
+    const nos = new Set();
+    Object.values((doc && doc.packedLines) || {}).forEach(t => tickBoxesOf(t).forEach(b => nos.add(b.no)));
+    return [...nos].sort((a, b) => a - b);
+};
+
+/**
+ * The order's box list after a shipment: each box that went out carries its tracking number and the shipment it
+ * left on. A box already shipped is never stamped twice.
+ * @param shipped  [{ no, trackingNumber, weight, length, width, height }] — the numbered packages of this shipment
+ */
+export const boxShipStampsOf = (boxes = [], shipped = [], { shipmentId = '', shipService = '', shipCarrier = 'UPS', by = '', now = Date.now(), withRef = '', withDocId = '' } = {}) => {
+    const byNo = new Map((shipped || []).filter(p => p && num(p.no) > 0).map(p => [num(p.no), p]));
+    return (boxes || []).map(b => {
+        const p = byNo.get(num(b.no));
+        if (!p || isBoxShipped(b)) return b;
+        return { ...b, shippedAt: now, shippedBy: str(by), shipCarrier, shipService: str(shipService), shipmentId: str(shipmentId), trackingNumber: str(p.trackingNumber),
+            shippedWith: str(withRef), shippedWithId: str(withDocId),
+            weight: num(p.weight), length: num(p.length), width: num(p.width), height: num(p.height) };
+    });
+};
+
+const SHIP_KEYS = ['shippedAt', 'shippedBy', 'shipCarrier', 'shipService', 'shipmentId', 'trackingNumber', 'shippedWith', 'shippedWithId', 'weight', 'length', 'width', 'height'];
+/** The order's box list after a shipment is VOIDED: its boxes are back to packed-and-waiting, the others untouched. */
+export const boxesAfterVoid = (boxes = [], shipmentId = '') => {
+    const id = str(shipmentId);
+    return (boxes || []).map(b => {
+        if (!id || str(b.shipmentId) !== id) return b;
+        const out = { ...b };
+        SHIP_KEYS.forEach(k => { delete out[k]; });
+        return out;
+    });
+};
+
+/** The shipped boxes among those a part is in, with their tracking: [{ no, trackingNumber, shipService }]. */
+export const spreadTrackingOf = (spread = [], boxes = []) => (spread || [])
+    .map(b => boxOf(boxes, b.no)).filter(isBoxShipped)
+    .map(b => ({ no: b.no, trackingNumber: str(b.trackingNumber), shipService: str(b.shipService) }));

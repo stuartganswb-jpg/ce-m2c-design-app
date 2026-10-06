@@ -8,6 +8,7 @@
 // Stuart 2026-09-16: the new boxes are not in stock yet — every package's dimensions are editable
 // and overrule the standard box they started from.
 import { isClosedState } from './orderLifecycle.js';
+import { docBoxNosOf, boxOf, isBoxShipped, boxesAfterVoid } from './orderBoxes.js';
 
 // ── THE QUEUE ────────────────────────────────────────────────────────────────────────────────
 // A pack doc ships once: packed (not a stock put-away), not yet shipped, not closed or deleted.
@@ -97,6 +98,34 @@ export function packagesFromPack(packBoxes, stdBoxes = []) {
 
 export const blankPackage = () => ({ boxName: 'Custom box', slot: '', length: '', width: '', height: '', weight: '', fromStandard: false });
 
+// ── ONE PACKAGE PER NUMBERED BOX — AND A BOX SHIPS ONCE (Stuart 2026-10-06) ──────────────────────────────────
+// An order is packed into numbered boxes (Shared/orderBoxes), and a box can hold pieces of TWO documents of the
+// order — but this tab ships one document at a time. So a shipment is the boxes holding THIS document's pieces
+// that have not already left: a box that went out on a sibling's shipment is named (its tracking number rides on
+// this document too) and is never bought a second label.
+//   packages  the rows to rate and ship — one per box still here (dimensions start from its standard box)
+//   already   the document's boxes that shipped earlier: [{ no, boxName, trackingNumber, shipService, shippedWith, … }]
+//   numbered  false = a document packed before box numbers: the two box types it recorded, as before
+//   rides     true = every box of this document has already shipped — nothing to buy, it is marked shipped in them
+export function shipmentPackagesOf({ doc, boxes = [], stdBoxes = [] } = {}) {
+    const nos = docBoxNosOf(doc);
+    if (!nos.length) return { packages: packagesFromPack(doc && doc.packBoxes, stdBoxes), already: [], numbered: false, rides: false };
+    const packages = [], already = [];
+    nos.forEach((no) => {
+        const box = boxOf(boxes, no) || { no, type: '' };
+        if (isBoxShipped(box)) {
+            already.push({ no, boxName: str(box.type), trackingNumber: str(box.trackingNumber), shipService: str(box.shipService), shipmentId: str(box.shipmentId),
+                shippedWith: str(box.shippedWith), shippedAt: box.shippedAt, weight: Number(box.weight) || 0, length: Number(box.length) || 0, width: Number(box.width) || 0, height: Number(box.height) || 0 });
+            return;
+        }
+        const std = (stdBoxes || []).find((b) => str(b.name) === str(box.type)) || null;
+        packages.push({ boxNo: no, boxName: str(box.type) || 'Custom box', slot: '', ...boxDims(std), weight: '', fromStandard: !!std });
+    });
+    return { packages, already, numbered: true, rides: packages.length === 0 && already.length > 0 };
+}
+// A box that shipped earlier, as a row of this document's shipment record (no label of its own here).
+const earlierRow = (a) => ({ boxNo: a.no, boxName: a.boxName || '', length: a.length, width: a.width, height: a.height, weight: a.weight, trackingNumber: a.trackingNumber, labelUrl: '', shippedEarlier: true });
+
 // The same limits the upsRate / upsShip functions enforce, said before the call.
 export function packageErrors(rows) {
     const list = Array.isArray(rows) ? rows : [];
@@ -126,9 +155,11 @@ export const sortedRates = (services = [], display = 'both') => [...(services ||
 // ── WHAT A SHIPMENT STAMPS ───────────────────────────────────────────────────────────────────
 // On the pack doc and its sales order. `shippedAt` is the field the lifecycle already reads as
 // shipped (orderLifecycle.openForSearch, the reopen rules); RTG's floorPhase stays 'Packed'.
-export function shipPatchOf({ result, packages, labelUrls = [], by = '', now = Date.now() }) {
+// `already` = this document's boxes that left on an earlier shipment (shipmentPackagesOf): their tracking numbers
+// and package rows ride on the document too, so the order, RTG and NetSuite see EVERY box its pieces travel in.
+export function shipPatchOf({ result, packages, labelUrls = [], by = '', now = Date.now(), already = [] }) {
     const pk = (result && result.packages) || [];
-    const trackingNumbers = pk.map((p) => p.trackingNumber).filter(Boolean);
+    const trackingNumbers = [...new Set([...(already || []).map((a) => a.trackingNumber), ...pk.map((p) => p.trackingNumber)].filter(Boolean))];
     return {
         shippedAt: now,
         shippedBy: by,
@@ -139,11 +170,37 @@ export function shipPatchOf({ result, packages, labelUrls = [], by = '', now = D
         shipEnvironment: result.environment || '',
         shipCharge: { published: result.published ?? null, negotiated: result.negotiated ?? null },
         trackingNumbers,
-        shipPackages: (packages || []).map((p, i) => ({
+        shipPackages: [...(already || []).map(earlierRow), ...(packages || []).map((p, i) => ({
+            ...(Number(p.boxNo) > 0 ? { boxNo: Number(p.boxNo) } : {}),
             boxName: p.boxName || '', length: Number(p.length), width: Number(p.width), height: Number(p.height), weight: Number(p.weight),
             trackingNumber: (pk[i] && pk[i].trackingNumber) || '',
             labelUrl: labelUrls[i] || '',
-        })),
+        }))],
+    };
+}
+
+/** The numbered boxes a shipment just sent out, for the order's box list (Shared/orderBoxes.boxShipStampsOf). */
+export const shippedBoxesOf = (patch) => ((patch && patch.shipPackages) || [])
+    .filter((p) => Number(p.boxNo) > 0 && !p.shippedEarlier)
+    .map((p) => ({ no: Number(p.boxNo), trackingNumber: p.trackingNumber || '', weight: p.weight, length: p.length, width: p.width, height: p.height }));
+
+// A document whose every box has ALREADY shipped (its pieces left in a box a sibling's shipment sent): there is
+// no label to buy. It is marked shipped IN those boxes — their tracking numbers, no shipment of its own — which is
+// what takes it out of the queue and tells RTG and NetSuite. Undone by voiding the shipment that carried the box.
+export function rideAlongPatchOf({ already = [], by = '', now = Date.now() } = {}) {
+    const rows = (already || []).filter((a) => a && a.trackingNumber);
+    return {
+        shippedAt: now,
+        shippedBy: by,
+        shipCarrier: 'UPS',
+        shipServiceCode: '',
+        shipService: (rows[0] && rows[0].shipService) || '',
+        shipmentId: '',
+        shipEnvironment: 'PRODUCTION',
+        shipCharge: { published: null, negotiated: null },
+        trackingNumbers: [...new Set(rows.map((a) => a.trackingNumber))],
+        shipPackages: rows.map(earlierRow),
+        shippedInBoxes: rows.map((a) => a.no),
     };
 }
 
@@ -154,6 +211,37 @@ export function voidPatchOf({ by = '', now = Date.now(), prior = {} }) {
             shipmentId: prior.shipmentId || '', trackingNumbers: prior.trackingNumbers || [], voidedAt: now, voidedBy: by,
         }],
     };
+}
+
+/**
+ * What voiding a shipment undoes beyond its own document: the boxes it sent are back to packed-and-waiting, and
+ * every OTHER document of the order that travels in one of them loses that tracking number — one with no shipment
+ * of its own (it rode along) returns to the ship queue; one with its own shipment keeps it, less the voided box.
+ * @param doc       the document whose shipment is voided
+ * @param boxes     the order's box list          @param siblings  the order's other pack documents
+ * @returns {{ boxes, changed: boolean, siblings: Array<{ id, kind: 'RETURN'|'TRIM', patch }> }}
+ */
+export function voidEffectsOf({ doc, boxes = [], siblings = [], by = '', now = Date.now() } = {}) {
+    const shipmentId = str(doc && doc.shipmentId);
+    const gone = (boxes || []).filter((b) => shipmentId && str(b.shipmentId) === shipmentId);
+    const goneNos = new Set(gone.map((b) => Number(b.no)));
+    const goneTracking = new Set(gone.map((b) => str(b.trackingNumber)).filter(Boolean));
+    const out = [];
+    (siblings || []).forEach((sib) => {
+        if (!sib || sib.id === (doc && doc.id) || !sib.shippedAt) return;
+        const rows = Array.isArray(sib.shipPackages) ? sib.shipPackages : [];
+        const hit = rows.some((p) => goneNos.has(Number(p.boxNo))) || (sib.trackingNumbers || []).some((tn) => goneTracking.has(str(tn)));
+        if (!hit) return;
+        const keptRows = rows.filter((p) => !goneNos.has(Number(p.boxNo)));
+        const keptTracking = (sib.trackingNumbers || []).filter((tn) => !goneTracking.has(str(tn)));
+        if (!str(sib.shipmentId)) {
+            // It had no label of its own: with its box un-shipped it is simply packed and waiting again.
+            out.push({ id: sib.id, kind: 'RETURN', patch: { ...voidPatchOf({ by, now, prior: sib }), shippedInBoxes: [] } });
+        } else {
+            out.push({ id: sib.id, kind: 'TRIM', patch: { trackingNumbers: keptTracking, shipPackages: keptRows } });
+        }
+    });
+    return { boxes: boxesAfterVoid(boxes, shipmentId), changed: gone.length > 0, siblings: out };
 }
 
 // The NetSuite Item Fulfillment update: status Shipped + one package line per UPS package.
