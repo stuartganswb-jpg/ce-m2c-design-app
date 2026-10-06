@@ -156,6 +156,27 @@ export const stampWithoutRunOf = (cur, no) => {
     return { ...rest, kind: anyFloor ? 'WO' : 'STOCK', ids: [...new Set(left.flatMap(r => r.ids || []))], ...(lastCode ? { code: lastCode } : {}), releases: left, released: left.reduce((a, r) => a + N(r.qty), 0) };
 };
 
+/** A start stamp written for the WHOLE line — a row started before release counts (no releases recorded on it). */
+export const isWholeStamp = (gen) => !!gen && !Array.isArray(gen.releases);
+
+/**
+ * THE SWITCH — an order ALREADY on the row route goes onto release counts (Stuart 2026-10-06, the wall: released whole on
+ * 10-01/02, "i am just trying to get the first 2 thru the floor"). Every row with anything started is recorded as FULLY
+ * released: its documents are for every display, so nothing on the floor changes and every reader goes on reading the
+ * whole line off them. A row with nothing started reads 0 and takes the count box. Rows are then put back one at a time
+ * with ⟲ Restart row (Shared/displayRelease.rowRestartPlanOf).
+ * @returns { patch: { releaseByCount, releaseOf, rowRelease }, rows: [rowKey] } | null (already by count, or no display count)
+ */
+export const countSwitchOf = ({ so, of, by = '', now = Date.now() } = {}) => {
+    const total = Math.floor(N(of));
+    if (!so || isReleaseByCount(so) || !(total > 0)) return null;
+    const started = new Set();
+    ((so.lines) || []).forEach((l, i) => { if (l && so.oeGen && so.oeGen[i]) { const k = releaseRowKeyOf(l); if (k) started.add(k); } });
+    const rowRelease = { ...((so.rowRelease) || {}) };
+    started.forEach(k => { rowRelease[k] = { boards: total, of: total, at: now, by: by || '', whole: true, log: [{ no: 1, from: 0, to: total, at: now, by: by || '', whole: true }] }; });
+    return { patch: { ...releaseByCountPatch(total), rowRelease }, rows: [...started] };
+};
+
 /**
  * WHAT RELEASING A ROW TO `target` DISPLAYS ASKS OF ONE SALES ORDER — read before anything is written, so the confirm
  * names every line at its quantity and a line that cannot be divided stops the release. Kit lines and lines off the

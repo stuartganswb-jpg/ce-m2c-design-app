@@ -21,7 +21,7 @@
 //
 // Pure. The panel loads and writes; RTG's guards read `displayRelease` on the sales order.
 
-import { isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf } from './pickLines.js';
+import { isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soCodeReleasedOf } from './pickLines.js';
 import { committedQtyOf } from './committedBins.js';
 import { isDisplayOnlyLine, isParkedGeometryLine, headerSidemarkOf } from './lineClassification.js';
 import { oeIsFloorLine, oeLineFinish, oeCoverageOf, oeLineStateOf } from './oeLines.js';
@@ -349,6 +349,10 @@ export const lineStateOf = ({ so, line, lineIdx, links, shipments = [], review =
         if (lagging) return { key: review ? LINE_STATE.REVIEW : LINE_STATE.NONE, text: `${head} — ${due.qty} more due for the displays released${review ? `: ${(review.reasons || []).join('; ')}` : ' (not started)'} · ${parts.join(' · ')}`, tone: 'red', releasedQty: N(gen.released), dueQty: due.qty, releases: states };
         return { key: worst.key, text: `${head} — ${parts.join(' · ')}`, tone: worst.tone, releasedQty: N(gen.released), dueQty: 0, releases: states };
     }
+    // ON RELEASE COUNTS THE LINE'S OWN RECORD IS THE ONLY ONE (2026-10-06): a made line with nothing recorded on it has
+    // nothing raised — the documents of a row that was restarted are closed and still carry its item and finish, and read
+    // by that old lookup they would call the line done.
+    if (byCount && !gen) return coverageStateOf({ coverage: null, review, shipments });
     const coverage = oeCoverageOf({ so, line, lineIdx, ...(links || {}), any: true });
     return coverageStateOf({ coverage, review, shipments });
 };
@@ -488,6 +492,56 @@ export const rowReleaseCountOf = ({ orders = [], rowKey = '', of = 0 } = {}) => 
     const released = Math.max(0, ...mine.map(so => rowTargetOf(so, rowKey)));
     return { byCount: true, released, of: total, left: Math.max(0, total - released) };
 };
+
+// ── ⇄ RELEASE BY COUNT, AND ⟲ RESTART A ROW (Stuart 2026-10-06, the wall) ─────────────────────────────────────────────
+// "i prefer to restart and just alert the floor not to duplicate, i have them on a floor stop right now … we can restart
+//  the entire order and run thru with the new code. Note row 2 is entirely complete."
+// The wall's six rows were released whole on 10-01/02 and every one has shop work on it, so ↩ Undo refuses them all.
+// Two steps put it on the new rule: the SWITCH (Shared/rowRelease.countSwitchOf — every started row reads fully
+// released, nothing on the floor changes), then ⟲ RESTART ROW for each row to run again: its documents are CLOSED —
+// the same stamps as any close, state kept, reopenable — its lines drop their start records and the row reads 0 of N.
+// A row left alone (Row 2, its plated poles back and built) keeps its documents and finishes on them.
+/** The words of the switch. `rows` = the labels that read fully released after it. */
+export const countSwitchText = ({ orders = [], of = 0, rows = [] } = {}) => [
+    `⇄ Release ${orders.join(' + ')} by count?`,
+    `\nEach row then starts for as many of the ${of} displays as you ask, and its stocked lines are offered to the warehouse only for the displays released.`,
+    rows.length ? `\nRows already started stay exactly as they are and read ${of} of ${of} released:\n${rows.map(r => `  • ${r}`).join('\n')}\nTo run one of them again by count, press ⟲ Restart row on it afterwards.` : '\nNo row has been started yet — every row reads 0 and takes the count box.',
+    '\nNothing on the floors, in the warehouse or in NetSuite changes now. This cannot be switched back.',
+].join('\n');
+/**
+ * What restarting ONE row of ONE sales order touches — pure. Every line of the row drops its start record; the documents
+ * those records name are the ones to close; a shortfall record the row's start wrote goes with it. Refused (`gathered`)
+ * while pieces of the row are in the order's bin or shipped beyond what would still be released — they would be left
+ * with no release to belong to.
+ * @returns { idxs, hit, ids, after, gathered: [text], backorderLines, boChanged }
+ */
+export const rowRestartPlanOf = ({ so, rowKey } = {}) => {
+    const lines = (so && so.lines) || [];
+    const idxs = lines.map((l, i) => i).filter(i => lines[i] && releaseRowKeyOf(lines[i]) === rowKey);
+    const hit = idxs.filter(i => so.oeGen && so.oeGen[i]);
+    const ids = [...new Set(hit.flatMap(i => (so.oeGen[i].ids || [])))];
+    const oeGen = { ...((so && so.oeGen) || {}) };
+    hit.forEach(i => { delete oeGen[i]; });
+    const rowRelease = { ...((so && so.rowRelease) || {}) };
+    delete rowRelease[rowKey];
+    const after = { ...(so || {}), oeGen, rowRelease };
+    const gathered = [...new Set(idxs.map(i => soLineCodeOf(lines[i])).filter(Boolean))].map(c => {
+        const inEver = N(((so && so.committedQty) || {})[c]) + N(((so && so.shippedQty) || {})[c]);
+        const stay = soCodeReleasedOf(after, c).total;
+        return inEver > stay ? `${c}: ${inEver} in the order's bin or shipped — only ${stay} would stay released; release them at SO Pack first` : '';
+    }).filter(Boolean);
+    const bo = Array.isArray(so && so.backorderLines) ? so.backorderLines : [];
+    const backorderLines = bo.filter(r => !(r && r.source === 'OE_ROW' && idxs.includes(r.lineIndex)));
+    return { idxs, hit, ids, after, gathered, backorderLines, boChanged: backorderLines.length !== bo.length };
+};
+/** The words of a row restart. `docs` = [{ kind: 'floor' | 'shop' | 'RTG', id, text }] still open; `stock` = shelf-pick lines. */
+export const rowRestartText = ({ label, of = 0, docs = [], stock = 0 } = {}) => [
+    `⟲ Restart ${label} — close its documents and put it back to 0 of ${of}?`,
+    docs.length ? `\nThese are CLOSED (the close RTG uses — state kept, reopenable), with what is on them now:\n${docs.map(d => `  • ${d.kind} ${d.id}${d.text ? ` — ${d.text}` : ''}`).join('\n')}` : '\nNo floor document is open on this row.',
+    stock ? `\n${stock} shelf-pick line(s) drop their record too (nothing of them is in the order's bin).` : '',
+    '\n⚠ Pieces already cut, picked or painted for this row stay where they are — nothing in the app will say they exist. Tell the floor BEFORE the row is started again, so the new jobs are not made twice.',
+    `\n${label}'s lines read NOT STARTED; start it for as many displays as you choose. The sales order, its lines and NetSuite are not touched.`,
+].filter(Boolean).join('\n');
 
 
 // ── REOPEN FOR ROWS (Stuart 2026-09-26) ──────────────────────────────────────────────────────

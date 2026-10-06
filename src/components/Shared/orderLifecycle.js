@@ -218,6 +218,20 @@ export async function cancelQueuedNsWrites(ctx, { order, links, by, reason, floo
     return out;
 }
 
+// WHAT A CLOSE WRITES ON EACH KIND OF DOCUMENT — one definition, so every close leaves the same stamps and the same
+// state-before for the reopen (closeOrderEverywhere below, and closeDocsExactly for a row's own documents).
+const closeSnapOf = (d, keys) => Object.fromEntries(keys.map(k => [k, d && d[k] !== undefined ? d[k] : null]));
+export const closeStampOf = ({ by = '', from = '', reason = '', now = Date.now() } = {}) => ({ closedAt: now, closedBy: by || '', closedFrom: from || 'APP', ...(reason ? { closeReason: reason } : {}) });
+// Clearing the PICK fields is part of closing — a job with only its phase stamped stayed in the WMS pick queue
+// afterwards (Sandra 2026-08-17).
+export const finClosePatch = (d, stamp) => ({
+    currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed', sentToPickPack: false, pickStatus: 'Closed', ...stamp,
+    stateBeforeClose: closeSnapOf(d, ['currentPhase', 'stepStatus', 'status', 'sentToPickPack', 'pickStatus', 'currentStepIndex']),
+});
+// The shop queues exit on 'Completed'; `closed: true` records it was closed, not built.
+export const shopClosePatch = (d, stamp) => ({ status: 'Completed', closed: true, ...stamp, stateBeforeClose: closeSnapOf(d, ['status', 'closed']) });
+export const recordClosePatch = (d, stamp) => ({ status: 'Closed', ...stamp, stateBeforeClose: closeSnapOf(d, ['status']) });
+
 /**
  * Close an order EVERYWHERE, from any starting screen.
  *
@@ -236,35 +250,22 @@ export async function cancelQueuedNsWrites(ctx, { order, links, by, reason, floo
 export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason, notify, keepRecord = false }) {
     const { db, doc, updateDoc } = ctx;
     const links = await linkedDocsOf(ctx, order, kind);
-    const stamp = {
-        closedAt: Date.now(),
-        closedBy: by || '',
-        closedFrom: from || 'APP',
-        ...(reason ? { closeReason: reason } : {}),
-    };
+    const stamp = closeStampOf({ by, from, reason });
     const done = { fin: 0, shop: 0, hq: 0, ns: null };
 
     // THE STATE BEFORE THE CLOSE RIDES ON THE DOCUMENT (2026-09-10): the bulk close overwrote
     // currentPhase / pickStatus / sentToPickPack and the reopen had to reconstruct them from stamps.
     // Now every close keeps what it replaced, so a reopen restores exactly, never infers.
-    const snap = (d, keys) => Object.fromEntries(keys.map(k => [k, d && d[k] !== undefined ? d[k] : null]));
     for (const [id, d] of links.fin) {
-        // Clearing the PICK fields is part of closing — a job with only its phase stamped stayed in
-        // the WMS pick queue afterwards (Sandra 2026-08-17).
-        await updateDoc(doc(db, 'fin_workorders', id), {
-            currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed',
-            sentToPickPack: false, pickStatus: 'Closed', ...stamp,
-            stateBeforeClose: snap(d, ['currentPhase', 'stepStatus', 'status', 'sentToPickPack', 'pickStatus', 'currentStepIndex']),
-        });
+        await updateDoc(doc(db, 'fin_workorders', id), finClosePatch(d, stamp));
         done.fin++;
     }
     for (const [id, d] of links.shop) {
-        // The shop queues exit on 'Completed'; `closed: true` records it was closed, not built.
-        await updateDoc(doc(db, 'shop_custom_orders', id), { status: 'Completed', closed: true, ...stamp, stateBeforeClose: snap(d, ['status', 'closed']) });
+        await updateDoc(doc(db, 'shop_custom_orders', id), shopClosePatch(d, stamp));
         done.shop++;
     }
     if (links.hq && !keepRecord) {
-        await updateDoc(doc(db, links.hq.coll, links.hq.id), { status: 'Closed', ...stamp, stateBeforeClose: snap(links.hq.data, ['status']) });
+        await updateDoc(doc(db, links.hq.coll, links.hq.id), recordClosePatch(links.hq.data, stamp));
         done.hq++;
     }
 
@@ -343,6 +344,47 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
         done.nsNeedsManualClose = true;
     }
     return { ...done, hqFound: !!links.hq, finIds: [...links.fin.keys()], shopIds: [...links.shop.keys()] };
+}
+
+/**
+ * CLOSE EXACTLY THESE DOCUMENTS — a ROW of an order released by rows (10.5 ⟲ Restart row, Stuart 2026-10-06: "i prefer
+ * to restart … we can restart the entire order and run thru with the new code").
+ *
+ * closeOrderEverywhere finds an order's documents by IDENTITY, and a row's pair shares its sales order's keys with
+ * every other row of that order (each row's shop document carries the sales order number as its orderKey) — so closing
+ * one row by identity reaches its neighbours. A row restart names its documents instead: the finishing documents, the
+ * shop documents and the RTG records of that row's pairs, read by id, and nothing else is touched. Each takes the same
+ * stamps and state-before as any close (reopenable), a document already closed is left as it is, an open rod cut raised
+ * for one of them is cancelled, and a NetSuite write still queued for one of them is cancelled.
+ * @param fins / shops / records  [{ id, data }] — fin_workorders, shop_custom_orders, hq_work_orders
+ * @returns { fin, shop, records, rodCuts, nsWritesCancelled, nsWritesInFlight, ids }
+ */
+export async function closeDocsExactly(ctx, { fins = [], shops = [], records = [], by, from, reason, label = '' }) {
+    const { db, doc, updateDoc, getDocs, query, collection, where } = ctx;
+    const stamp = closeStampOf({ by, from, reason });
+    const open = (x) => x && x.id && !isClosedState(x.data || {});
+    const done = { fin: 0, shop: 0, records: 0, rodCuts: 0, nsWritesCancelled: [], nsWritesInFlight: [], ids: [] };
+    for (const x of fins.filter(open)) { await updateDoc(doc(db, 'fin_workorders', x.id), finClosePatch(x.data, stamp)); done.fin++; done.ids.push(x.id); }
+    for (const x of shops.filter(open)) { await updateDoc(doc(db, 'shop_custom_orders', x.id), shopClosePatch(x.data, stamp)); done.shop++; done.ids.push(x.id); }
+    for (const x of records.filter(open)) { await updateDoc(doc(db, 'hq_work_orders', x.id), recordClosePatch(x.data, stamp)); done.records++; done.ids.push(x.id); }
+    // An open rod cut raised for one of these documents dies with it — never DONE, no inventory moved.
+    try {
+        const keys = [...new Set([...fins, ...records].map(x => String(x.id)).filter(Boolean))];
+        for (let i = 0; i < keys.length && getDocs && query && collection && where; i += 10) {
+            const snap = await getDocs(query(collection(db, 'rod_cut_orders'), where('finWoId', 'in', keys.slice(i, i + 10))));
+            for (const d of snap.docs) {
+                if (['DONE', 'CANCELLED'].includes(String((d.data() || {}).status || 'OPEN').toUpperCase())) continue;
+                await updateDoc(doc(db, 'rod_cut_orders', d.id), { status: 'CANCELLED', cancelledAt: Date.now(), cancelledBy: by || '', cancelReason: `${label || 'its work order'} closed${from ? ` from ${from}` : ''}${reason ? ` — ${reason}` : ''} — the cut was still open; no inventory moved` });
+                done.rodCuts++;
+            }
+        }
+    } catch (e) { console.warn('rod cut cancel on the row close failed (the documents are closed regardless):', e); }
+    try {
+        const links = { fin: new Map([...fins, ...records].map(x => [String(x.id), x.data || {}])), shop: new Map(shops.map(x => [String(x.id), x.data || {}])) };
+        const nsq = await cancelQueuedNsWrites(ctx, { order: { id: label || (records[0] && records[0].id) || 'row' }, links, by, reason, floorOnly: true });
+        done.nsWritesCancelled = nsq.cancelled; done.nsWritesInFlight = nsq.inFlight;
+    } catch (e) { console.warn('queued-write cancel on the row close failed (the documents are closed regardless):', e); }
+    return done;
 }
 
 /**

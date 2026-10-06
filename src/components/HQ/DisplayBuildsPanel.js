@@ -33,13 +33,13 @@ import { collection, doc, onSnapshot, setDoc, deleteDoc, updateDoc, query, where
 import { DISPLAY_STYLES, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, cpqEntryRows, cpqEntryCsv, SAMPLE_BIN_BY_STYLE, floorLinksByLine } from '../Shared/displayBom';
 import { linkedDocsOf, identityKeysOf, closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { cancelPlatingDemand } from '../Shared/platingDemand';
-import { hardDeleteWithLedger } from '../Shared/orderLifecycle';
+import { hardDeleteWithLedger, closeDocsExactly, isClosedState } from '../Shared/orderLifecycle';
 import { finishSuffixOf } from '../Shared/finishRouting.js';
 // ── MISSION CONTROL (Stuart 2026-09-22): rows are started FROM HERE, through Order Entry's one
 // generator scoped to a row, and read back from the floor. Shared/displayRelease says how.
-import { ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, lineQtyEditOf, kitFinishEditOf, kitQtyEditOf, rodLineEditOf, rowUndoBlockersOf, rowReleaseText, rowReleaseCountOf, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
+import { ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, lineQtyEditOf, kitFinishEditOf, kitQtyEditOf, rodLineEditOf, rowUndoBlockersOf, rowReleaseText, rowReleaseCountOf, countSwitchText, rowRestartPlanOf, rowRestartText, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
-import { isReleaseByCount, releaseByCountPatch, releaseRowKeyOf, rowTargetOf, rowReleaseOf, nextRowReleaseOf, releaseRunOf, releaseLabelOf, releasesOf, stampWithoutRunOf, rowReleasePlanOf, ORDER_ROW_KEY } from '../Shared/rowRelease';
+import { isReleaseByCount, releaseByCountPatch, releaseRowKeyOf, rowTargetOf, rowReleaseOf, nextRowReleaseOf, releaseRunOf, releaseLabelOf, releasesOf, stampWithoutRunOf, rowReleasePlanOf, countSwitchOf, isWholeStamp, ORDER_ROW_KEY } from '../Shared/rowRelease';
 import { soLineCodeOf, soCodeReleasedOf } from '../Shared/pickLines';
 import { finishedCodeOf } from '../Shared/subFinish';
 
@@ -882,6 +882,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 const runs = Array.isArray(rr.log) ? rr.log : [];
                 const last = runs[runs.length - 1] || { no: 1, from: 0, to: rowTargetOf(so, key) };
                 const idxs = (so.lines || []).map((l, i) => i).filter(i => so.lines[i] && releaseRowKeyOf(so.lines[i]) === key);
+                // A row started WHOLE before release counts has no releases to take back one at a time.
+                if (idxs.some(i => isWholeStamp((so.oeGen || {})[i]))) { setBusy(''); return alert(`${label} was started whole, before release counts — there is no single release to undo.\n\nTo run it again by count, press ⟲ Restart row.`); }
                 const hit = idxs.filter(i => releasesOf((so.oeGen || {})[i]).some(r => Number(r.no) === Number(last.no)));
                 const ids = [...new Set(hit.flatMap(i => releasesOf(so.oeGen[i]).filter(r => Number(r.no) === Number(last.no) && String(r.kind) !== 'STOCK').flatMap(r => r.ids || [])))];
                 const hqs = [], fins = [], shops = [];
@@ -935,6 +937,114 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             alert(`${label}: ${span} taken back — ${docs.length} document(s) removed through the ledger. ${final} of ${N(draft.qty)} released.`);
             await loadFloor(draft);
         } catch (e) { alert('Could not undo the release: ' + (e?.message || e)); }
+        setBusy('');
+    };
+
+    // ⇄ RELEASE BY COUNT — an order already on the row route goes onto release counts (Shared/rowRelease.countSwitchOf,
+    // Stuart 2026-10-06, the wall). Rows already started read fully released and keep their documents; nothing on the
+    // floors changes. Each order is read fresh, and the confirm names the rows.
+    const switchToCounts = async () => {
+        if (!draft || !floor) return;
+        const of = Math.floor(N(draft.qty));
+        if (!(of > 0)) return alert('The build does not say how many displays it is — set the quantity and save first.');
+        const by = String(currentUser || '10.5');
+        const now = Date.now();
+        setBusy('Reading the orders…');
+        try {
+            const plans = [];
+            for (const s of (floor.sos || []).filter(x => !x.whole)) {
+                const fresh = await getDoc(doc(db, 'hq_sales_orders', s.so.id));
+                if (!fresh.exists()) continue;
+                const so = { id: fresh.id, ...fresh.data() };
+                const sw = countSwitchOf({ so, of, by, now });
+                if (sw) plans.push({ so, sw });
+            }
+            setBusy('');
+            if (!plans.length) return alert('Every sales order of this build is already released by count.');
+            const keys = new Set(plans.flatMap(x => x.sw.rows));
+            const labels = [...rowOrder, ORDER_ROW_LABEL].filter(l => keys.has(rowKeyFor(l)));
+            if (!window.confirm(countSwitchText({ orders: plans.map(x => x.so.soId || x.so.id), of, rows: labels }))) return;
+            setBusy('Switching…');
+            for (const x of plans) await updateDoc(doc(db, 'hq_sales_orders', x.so.id), x.sw.patch);
+            const rowReleased = { ...(draft.rowReleased || {}) };
+            keys.forEach(k => { rowReleased[k] = of; });
+            const b = { ...draft, rowReleased, updatedAt: Date.now(), updatedBy: by };
+            await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b, { merge: true });
+            await writeDemand([...builds.filter(y => y.id !== b.id), b]);
+            setDraft(b); setDirty(false);
+            await loadFloor(draft);
+        } catch (e) { alert('Could not switch: ' + (e?.message || e)); }
+        setBusy('');
+    };
+
+    // ⟲ RESTART A ROW (Shared/displayRelease.rowRestartPlanOf, Stuart 2026-10-06: "i prefer to restart and just alert the
+    // floor not to duplicate"). The row's documents — the finishing documents, shop documents and RTG records its lines
+    // name, read by id — are CLOSED through the lifecycle's exact close (state kept, reopenable; never another row's),
+    // its lines drop their start records and the row reads 0 of N. Refused while pieces of the row are in the order's
+    // bin, or out at the plater. A reason is asked for and stamped on every document closed.
+    const restartRow = async (label) => {
+        if (!draft || !floor) return;
+        const key = rowKeyFor(label);
+        const by = String(currentUser || '10.5');
+        const ctx = { db, doc, updateDoc, getDoc, getDocs, query, collection, where, deleteDoc, setDoc };
+        setBusy('Reading the row…');
+        try {
+            const plan = [];
+            for (const s of (floor.sos || []).filter(x => !x.whole && isReleaseByCount(x.so))) {
+                const fresh = await getDoc(doc(db, 'hq_sales_orders', s.so.id));
+                if (!fresh.exists()) continue;
+                const so = { id: fresh.id, ...fresh.data() };
+                const p = rowRestartPlanOf({ so, rowKey: key });
+                if (!p.hit.length && !rowReleaseOf(so, key)) continue;
+                const records = [], fins = [], shops = [];
+                for (const id of p.ids) {
+                    const h = await getDoc(doc(db, 'hq_work_orders', id)); if (h.exists()) records.push({ id: h.id, data: h.data() });
+                    const f = await getDoc(doc(db, 'fin_workorders', id)); if (f.exists()) fins.push({ id: f.id, data: f.data() });
+                    const sh = await getDoc(doc(db, 'shop_custom_orders', `SHOP-${id}`)); if (sh.exists()) shops.push({ id: sh.id, data: sh.data() });
+                }
+                // Anything of this row still OUT at the plater would come back with no order to belong to.
+                const out = [];
+                const shopIds = shops.map(x => x.id);
+                for (let i = 0; i < shopIds.length; i += 10) {
+                    const qs = await getDocs(query(collection(db, 'plating_shipments'), where('shopOrderId', 'in', shopIds.slice(i, i + 10))));
+                    qs.docs.forEach(d => { const v = d.data() || {}; if (['staged', 'shipped'].includes(String(v.status || '').toLowerCase())) out.push(`${v.qty || '?'} × ${v.targetErpId || v.erpId || 'a part'} is ${String(v.status).toLowerCase()} at the plater — receive it first, or it comes back with no order to belong to`); });
+                }
+                plan.push({ so, p, records, fins, shops, out });
+            }
+            setBusy('');
+            if (!plan.length) return alert(`${label} has nothing started — there is nothing to restart.`);
+            const blockers = [...new Set(plan.flatMap(x => [...x.p.gathered, ...x.out]))];
+            if (blockers.length) return alert(`Cannot restart ${label}:\n\n${blockers.map(b => `  • ${b}`).join('\n')}`);
+            const live = (x) => !isClosedState(x.data || {});
+            const docs = plan.flatMap(x => [
+                ...x.fins.filter(live).map(d => ({ kind: 'floor', id: d.id, text: [d.data.pickOnly ? 'pick only' : `${d.data.currentPhase || 'Setup'}${d.data.machineAssigned ? ` on ${d.data.machineAssigned}` : ''}`, `${N(d.data.totalParts)} pcs`, `pick ${String(d.data.pickStatus || 'Pending').toLowerCase().replace(/_/g, ' ')}`].join(' · ') })),
+                ...x.shops.filter(live).map(d => ({ kind: 'shop', id: d.id, text: `${d.data.status || 'Pending'} · ${N(d.data.poles) || N(d.data.qty)} pole(s)` })),
+                ...x.records.filter(live).map(d => ({ kind: 'RTG', id: d.id, text: '' })),
+            ]);
+            const stock = plan.reduce((a, x) => a + x.p.hit.filter(i => String((x.so.oeGen[i] || {}).kind) === 'STOCK').length, 0);
+            const why = window.prompt(`${rowRestartText({ label, of: N(draft.qty), docs, stock })}\n\nWhy? (stamped on every document closed)`, 'restarted to release by count');
+            if (why === null) return;
+            const reason = String(why).trim();
+            if (!reason) return alert('A reason is needed — nothing was changed.');
+            setBusy('Restarting the row…');
+            let closed = 0;
+            for (const x of plan) {
+                const res = await closeDocsExactly(ctx, { fins: x.fins, shops: x.shops, records: x.records, by, from: '10.5', reason: `${label}: ${reason}`, label: `${label} of ${x.so.soId || x.so.id}` });
+                closed += res.fin + res.shop + res.records;
+                const patch = {};
+                x.p.hit.forEach(i => { patch[`oeGen.${i}`] = deleteField(); });
+                if (x.p.boChanged) patch.backorderLines = x.p.backorderLines;
+                patch[`rowRelease.${key}`] = deleteField();
+                patch[`displayRows.${key}`] = deleteField();
+                await updateDoc(doc(db, 'hq_sales_orders', x.so.id), patch);
+            }
+            const b = { ...draft, rowReleased: { ...(draft.rowReleased || {}), [key]: 0 }, rowsStarted: (draft.rowsStarted || []).filter(r => r !== label), updatedAt: Date.now(), updatedBy: by };
+            await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b, { merge: true });
+            await writeDemand([...builds.filter(y => y.id !== b.id), b]);
+            setDraft(b); setDirty(false);
+            alert(`${label} restarted — ${closed} document(s) closed. It reads 0 of ${N(draft.qty)}; tell the floor, then start it for as many displays as you choose.`);
+            await loadFloor(draft);
+        } catch (e) { alert('Restart stopped partway: ' + (e?.message || e) + '\n\nRead the row again before doing anything else — some documents may already be closed.'); }
         setBusy('');
     };
 
@@ -1147,6 +1257,11 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                         <span style={{ ...mono, color: 'var(--ink)' }}>Rows — released from here</span>
                         <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>Each row starts by the same rules as a CPQ order: plated parts picked from stock (short → the Snapshot Backorder board), painted to finishing, poles to the shop — a plated pole goes on to the plater from there. Work orders land on RTG under this sales order; RTG still governs them.</span>
                         {!anyAccepted && <span style={{ fontSize: '0.78rem', color: '#b02d20' }}>⚠ No anchored sales order that rows can start from has been accepted by NetSuite yet — rows can be read, not started.</span>}
+                        {(floor.sos || []).some(s => !s.whole && !isReleaseByCount(s.so)) && (
+                            <button onClick={switchToCounts} disabled={!!busy || !!starting || dirty}
+                                style={btn(false, { padding: '4px 10px', borderColor: 'var(--brass)', color: 'var(--brass)' })}
+                                title="Put this build's sales orders on release counts: each row then starts for as many displays as you ask. Rows already started stay as they are (fully released); restart one with ⟲ Restart row.">⇄ Release by count</button>
+                        )}
                     </div>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead><tr>{['Row', 'Status', 'Lines', '', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
@@ -1196,6 +1311,11 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                                                 <button onClick={() => undoLastRelease(label)} disabled={!!busy || !!starting}
                                                     style={btn(false, { padding: '5px 10px', marginRight: '6px', color: '#b02d20', borderColor: '#b02d20' })}
                                                     title="Take the row's latest release back — only while nothing on its documents has moved and nothing of it is gathered.">↩ Undo last release</button>
+                                            )}
+                                            {count.byCount && (count.released > 0 || state.started > 0) && (
+                                                <button onClick={() => restartRow(label)} disabled={!!busy || !!starting}
+                                                    style={btn(false, { padding: '5px 10px', marginRight: '6px', color: '#b02d20', borderColor: '#b02d20' })}
+                                                    title="Close this row's documents (state kept, reopenable) and put the row back to 0 — for a row whose work has already moved. The floor must be told: pieces already made stay where they are.">⟲ Restart row</button>
                                             )}
                                             {!count.byCount && state.lines.some(l => ['FLOOR', 'PARKED', 'STOCKED'].includes(l.key) && !/stocked — picked by the warehouse, not started here/.test(l.text)) && (
                                                 <button onClick={() => undoRowStart(label, state)} disabled={!!busy || !!starting}

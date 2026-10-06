@@ -1,10 +1,10 @@
 // node scripts/rowRelease.test.mjs — a row is released by the display, not only whole (Stuart 2026-10-05: "put say just
 // 10pcs (full rows) of the 35pcs into motion" · "1. release count" · "if we make 10pcs of row 1 and 25 of row 2 and 7pc of
 // row 3, the maximum that could be shipped would be 7").
-import { isReleaseByCount, releaseByCountPatch, releaseRowKeyOf, rowTargetOf, rowDisplaysOf, releaseRunOf, nextRowReleaseOf, releaseLabelOf, lineTargetOf, lineDueOf, releasedByKindOf, releasedQtyOf, releaseStampOf, stampWithoutRunOf, rowReleasePlanOf, ORDER_ROW_KEY } from '../src/components/Shared/rowRelease.js';
+import { isReleaseByCount, releaseByCountPatch, releaseRowKeyOf, rowTargetOf, rowDisplaysOf, releaseRunOf, nextRowReleaseOf, releaseLabelOf, lineTargetOf, lineDueOf, releasedByKindOf, releasedQtyOf, releaseStampOf, stampWithoutRunOf, rowReleasePlanOf, countSwitchOf, isWholeStamp, ORDER_ROW_KEY } from '../src/components/Shared/rowRelease.js';
 import { soLineReleasedOf, soCodeReleasedOf, soCodeReleasedNeedOf, soShelfToPickOf, soPackLineStateOf, gatherPlanOf, soLineIsShelfPick, soCodeNeedOf } from '../src/components/Shared/pickLines.js';
 import { soGatherStageOf, shelfPickPlanOf, lineBinShareOf, shippableDisplaysOf, displayShareOf, nsBinPlanOf } from '../src/components/Shared/orderBinPick.js';
-import { lineStateOf, rowStateOf, rowReleaseText, rowReleaseCountOf, LINE_STATE } from '../src/components/Shared/displayRelease.js';
+import { lineStateOf, rowStateOf, rowReleaseText, rowReleaseCountOf, countSwitchText, rowRestartPlanOf, rowRestartText, LINE_STATE } from '../src/components/Shared/displayRelease.js';
 import { pairShapeOf } from '../src/components/Shared/rowPairShape.js';
 
 let pass = 0, fail = 0;
@@ -165,6 +165,35 @@ const shape = pairShapeOf({ group, so: live, brand: 'ce', woId: 'WO-OE-SO70001-0
 eq('the pair is named for its release and carries the line\'s 20', [shape.hq.itemName, shape.hq.releaseLabel, shape.hq.soLineQty, shape.finPayload.soLineQty, shape.finPayload.releaseTo, shape.hq.qty], ['Row 1 · P06 · displays 11–20 of 35 · 1 small-part line', 'displays 11–20 of 35', { 0: 20 }, { 0: 20 }, 20, 20]);
 const whole = pairShapeOf({ group: { ...group, release: null }, so: live, brand: 'ce', woId: 'W', shopWoId: 'W-C', inventory: [part] });
 eq('a whole-row pair carries no release fields and its old name', [whole.hq.itemName, 'soLineQty' in whole.hq, 'releaseLabel' in whole.finPayload], ['Row 1 · P06 · 1 small-part line', false, false]);
+
+// ── THE WALL, 2026-10-06: released whole on 10-01/02, switched onto counts, then restarted row by row ───────────────
+// Row 1's connector and plated finial were started whole; Row 2's pole too; Row 3 and the base were never started.
+const wall = { ...base, releaseByCount: undefined, releaseOf: undefined, oeGen: { 0: { kind: 'WO', ids: ['WO-OE-SO70001-0001'], rowKey: 'ROW_1', finish: 'P06' }, 2: { kind: 'STOCK', code: 'H1-1BF/EP2', qty: 35 }, 3: { kind: 'WO', ids: ['WO-OE-SO70001-0002', 'WO-OE-SO70001-0002-C'] }, 4: { kind: 'WO', ids: ['WO-OE-SO70001-0002', 'WO-OE-SO70001-0002-C'], rider: true } }, backorderLines: [{ code: 'H1-1BF/EP2', qty: 35, source: 'OE_ROW', lineIndex: 2 }, { code: 'ZZ', qty: 1, source: 'SPLIT', lineIndex: 9 }], displayRows: { ROW_1: { state: 'DONE' } } };
+ok('a stamp from before release counts is a whole-line stamp', isWholeStamp(wall.oeGen[0]) && !isWholeStamp(st1) && !isWholeStamp(null));
+const sw = countSwitchOf({ so: wall, of: 35, by: 'stuart', now: 9 });
+eq('the switch: by count of 35, and every STARTED row reads fully released', [sw.patch.releaseByCount, sw.patch.releaseOf, sw.rows.sort(), sw.patch.rowRelease.ROW_1, Object.keys(sw.patch.rowRelease).sort()], [true, 35, ['ROW_1', 'ROW_2'], { boards: 35, of: 35, at: 9, by: 'stuart', whole: true, log: [{ no: 1, from: 0, to: 35, at: 9, by: 'stuart', whole: true }] }, ['ROW_1', 'ROW_2']]);
+eq('an order already on counts, or a build with no display count, is not switched', [countSwitchOf({ so: live, of: 35 }), countSwitchOf({ so: wall, of: 0 })], [null, null]);
+ok('the switch says what stays and that it cannot be undone', /Release SO70001 by count\?/.test(countSwitchText({ orders: ['SO70001'], of: 35, rows: ['Row 1', 'Row 2'] })) && /read 35 of 35 released:\n  • Row 1\n  • Row 2/.test(countSwitchText({ orders: ['SO70001'], of: 35, rows: ['Row 1', 'Row 2'] })) && /cannot be switched back/.test(countSwitchText({ orders: ['X'], of: 35, rows: [] })));
+const sw1 = { ...wall, ...sw.patch };
+// after the switch: nothing on the floor changes — the started rows read whole, the others 0
+eq('after the switch a started row is 35 of 35 with nothing more due; a row never started is 0 of 35', [rowReleaseCountOf({ orders: [sw1], rowKey: 'ROW_1', of: 35 }), lineDueOf(sw1, lines[0], 0).qty, rowReleaseCountOf({ orders: [sw1], rowKey: 'ROW_3', of: 35 }).released], [{ byCount: true, released: 35, of: 35, left: 0 }, 0, 0]);
+eq('…its made line still reads off its own document, its stocked line follows the row (35), the unstarted row offers nothing', [lineStateOf({ so: sw1, line: lines[0], lineIdx: 0, links }).text, soLineReleasedOf(sw1, lines[1], 1).total, soLineReleasedOf(sw1, lines[2], 2), soLineReleasedOf(sw1, lines[5], 5).total], ['WO-OE-SO70001-0001 — on the floor', 35, { shelf: 35, floor: 0, total: 35 }, 0]);
+eq('…a whole-row document still gathers its whole line', gatherPlanOf({ job: { id: 'WO-OE-SO70001-0001', soLineIdxs: [0] }, order: sw1 }).map(w => [w.qty, w.add]), [[70, 70]]);
+// restart Row 1
+const rp = rowRestartPlanOf({ so: sw1, rowKey: 'ROW_1' });
+eq('restart Row 1: its lines, the ones with a record, and exactly the documents they name', [rp.idxs, rp.hit, rp.ids], [[0, 1, 2, 7], [0, 2], ['WO-OE-SO70001-0001']]);
+eq('…the row\'s records and count are gone, Row 2\'s untouched', [Object.keys(rp.after.oeGen).sort(), Object.keys(rp.after.rowRelease), rp.gathered], [['3', '4'], ['ROW_2'], []]);
+eq('…its own shortfall record goes, another writer\'s stays', [rp.boChanged, rp.backorderLines.map(r => r.code)], [true, ['ZZ']]);
+eq('…and the row then reads 0 of 35, every line due nothing until it is started', [rowReleaseCountOf({ orders: [rp.after], rowKey: 'ROW_1', of: 35 }).released, lineDueOf(rp.after, lines[0], 0).qty, soLineReleasedOf(rp.after, lines[1], 1).total], [0, 0, 0]);
+// the closed documents of the restarted row still exist and still carry its item — they must not read as work
+const closedLinks = { wos: [{ id: 'WO-OE-SO70001-0001', status: 'Closed', closedFrom: '10.5', rootItem: 'H1-138CC', recipe: 'P06' }], pos: [], demands: [] };
+eq('a restarted row\'s closed document does not make its line read done', lineStateOf({ so: rp.after, line: lines[0], lineIdx: 0, links: closedLinks }).key, LINE_STATE.NONE);
+eq('…while on an order released whole the old lookup is unchanged', lineStateOf({ so: { ...wall, oeGen: {} }, line: lines[0], lineIdx: 0, links: closedLinks }).key, LINE_STATE.DONE);
+eq('a row with pieces already in the order\'s bin is refused, and says which', rowRestartPlanOf({ so: { ...sw1, committedQty: { 'H1-1STDOFF': 5 } }, rowKey: 'ROW_1' }).gathered, ['H1-1STDOFF: 5 in the order\'s bin or shipped — only 0 would stay released; release them at SO Pack first']);
+ok('the restart says what closes and to tell the floor', /Restart Row 1 — close its documents and put it back to 0 of 35\?/.test(rowRestartText({ label: 'Row 1', of: 35, docs: [{ kind: 'floor', id: 'WO-A', text: 'Setup · 280 pcs' }], stock: 1 })) && /floor WO-A — Setup · 280 pcs/.test(rowRestartText({ label: 'Row 1', of: 35, docs: [{ kind: 'floor', id: 'WO-A', text: 'Setup · 280 pcs' }] })) && /Tell the floor BEFORE/.test(rowRestartText({ label: 'Row 1', of: 35 })));
+// then Row 1 for 2 of 35
+const two = { ...rp.after, rowRelease: { ...rp.after.rowRelease, ROW_1: nextRowReleaseOf({ so: rp.after, rowKey: 'ROW_1', add: 2, of: 35 }) } };
+eq('Row 1 started again for 2: 4 connectors, 2 standoffs, 2 finials due — Row 2 still whole', [lineDueOf(two, lines[0], 0).qty, soLineReleasedOf(two, lines[1], 1).total, lineDueOf(two, lines[2], 2).qty, lineDueOf(two, lines[3], 3).qty], [4, 2, 2, 0]);
 
 console.log(`rowRelease: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
