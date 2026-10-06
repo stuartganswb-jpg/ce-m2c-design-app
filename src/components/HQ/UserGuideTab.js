@@ -691,6 +691,8 @@ const WmsGuide = () => (
             <p style={S.p}>A shipped box cannot be packed into, and its pieces cannot be moved or un-ticked. SO Pack
             shows the tracking number beside each part, per box. <b>Void</b> un-ships the boxes of that shipment — a
             document that only travelled in one of them returns to the ship queue.</p>
+            <p style={S.p}>The <b>sales order</b> keeps every tracking number of every shipment of the order: each
+            shipment adds its own, and a void takes away only its own.</p>
         </Screen>
         <Path name="Nothing on this order is committed" goes="check the sales order's LOCATION in NetSuite before you suspect the items">
             NetSuite commits stock per location. When a <i>whole</i> order reads uncommitted while the bins plainly

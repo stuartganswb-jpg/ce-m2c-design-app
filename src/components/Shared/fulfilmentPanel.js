@@ -8,7 +8,7 @@
 // which decide TEST vs LIVE on the server from system/ups_config — in TEST nothing is recorded.
 import React, { useEffect, useMemo, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
-import { doc, getDoc, getDocs, updateDoc, onSnapshot, query, collection, where, runTransaction } from 'firebase/firestore';
+import { doc, getDoc, getDocs, updateDoc, onSnapshot, query, collection, where, runTransaction, arrayUnion } from 'firebase/firestore';
 import { ref as storageRef, uploadString, getDownloadURL } from 'firebase/storage';
 import { db, functions, storage } from '../../firebase';
 import { enqueueNsWrite } from './nsOutbox';
@@ -17,7 +17,7 @@ import { printHtmlDocument } from './labelPrint';
 import {
     fulfilmentQueueOf, recentlyShippedOf, shipToOf, addressErrors, boxDims, blankPackage,
     packageErrors, sortedRates, rateOf, shipPatchOf, voidPatchOf, nsShipPayloadOf, labelDocHtml, boxSizeLabel,
-    shipmentPackagesOf, shippedBoxesOf, rideAlongPatchOf, voidEffectsOf,
+    shipmentPackagesOf, shippedBoxesOf, rideAlongPatchOf, voidEffectsOf, soAfterVoid,
 } from './fulfilment';
 import { orderBoxesOf, boxHomeFor, boxShipStampsOf, boxesAfterVoid, boxOf, isBoxShipped } from './orderBoxes';
 
@@ -128,7 +128,9 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
     // What every shipment record is followed by: the sales order, RTG, the NetSuite Item Fulfillment.
     const tellOrderRtgNetSuite = async (d, patch) => {
         const so = soOf(d);
-        if (!isQsOrder(d) && so && so.id) await updateDoc(doc(db, 'hq_sales_orders', so.id), { shippedAt: patch.shippedAt, trackingNumbers: patch.trackingNumbers, shipCarrier: 'UPS', shipService: patch.shipService }).catch(() => {});
+        // THE SALES ORDER HOLDS EVERY TRACKING NUMBER of every shipment of the order (Stuart 2026-10-06) — this one's
+        // are ADDED to its list (arrayUnion: two benches shipping two documents at once both land), never written over it.
+        if (!isQsOrder(d) && so && so.id) await updateDoc(doc(db, 'hq_sales_orders', so.id), { shippedAt: patch.shippedAt, shipCarrier: 'UPS', shipService: patch.shipService, ...((patch.trackingNumbers || []).length ? { trackingNumbers: arrayUnion(...patch.trackingNumbers) } : {}) }).catch(() => {});
         try {
             await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
                 { finWo: d, by: operator?.name || '', extra: { shippedAt: patch.shippedAt, trackingNumbers: patch.trackingNumbers, shipCarrier: 'UPS', shipService: patch.shipService } });
@@ -235,8 +237,10 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                         { finWo: sd, by: operator?.name || '', extra: x.kind === 'RETURN' ? { shippedAt: null, trackingNumbers: [] } : { trackingNumbers: x.patch.trackingNumbers } });
                 } catch (e) { console.warn('RTG propagate failed (void stands):', e); }
             }
+            // The sales order loses only THIS shipment's tracking; what the order's other documents shipped stays on it,
+            // and it reads un-shipped only when nothing of the order is shipped any more.
             const so = soOf(d);
-            if (!isQsOrder(d) && so && so.id) await updateDoc(doc(db, 'hq_sales_orders', so.id), { shippedAt: null, trackingNumbers: [] }).catch(() => {});
+            if (!isQsOrder(d) && so && so.id) await updateDoc(doc(db, 'hq_sales_orders', so.id), soAfterVoid({ so, doc: d, siblings: sibs, returnedIds: fx.siblings.filter((x) => x.kind === 'RETURN').map((x) => x.id) })).catch(() => {});
             try {
                 await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
                     { finWo: d, by: operator?.name || '', extra: { shippedAt: null, trackingNumbers: [] } });

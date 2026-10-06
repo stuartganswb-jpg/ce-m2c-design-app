@@ -2,7 +2,7 @@
 import {
   isReadyToShip, fulfilmentQueueOf, recentlyShippedOf, shipToOf, addressErrors, boxDims, packagesFromPack,
   blankPackage, packageErrors, rateOf, sortedRates, shipPatchOf, voidPatchOf, nsShipPayloadOf, labelDocHtml, boxSizeLabel,
-  shipmentPackagesOf, shippedBoxesOf, rideAlongPatchOf, voidEffectsOf,
+  shipmentPackagesOf, shippedBoxesOf, rideAlongPatchOf, voidEffectsOf, ownTrackingOf, soAfterVoid,
 } from '../src/components/Shared/fulfilment.js';
 import { boxShipStampsOf } from '../src/components/Shared/orderBoxes.js';
 let pass = 0, fail = 0;
@@ -140,6 +140,22 @@ ok('label src escaped', !labelDocHtml(['x" onerror="y']).includes('" onerror="')
   eq('after the void A is offered its boxes again', shipmentPackagesOf({ doc: { ...shippedA, ...voidPatchOf({ prior: shippedA }) }, boxes: v.boxes, stdBoxes: std }).packages.map((p) => p.boxNo), [1, 3]);
   eq('voiding a shipment made before box numbers touches no box and no sibling', [voidEffectsOf({ doc: { id: 'L', shipmentId: 'OLD' }, boxes, siblings: [shippedB] }).changed, voidEffectsOf({ doc: { id: 'L', shipmentId: 'OLD' }, boxes, siblings: [shippedB] }).siblings], [false, []]);
   eq('a document with no shipment id voids nothing', voidEffectsOf({ doc: { id: 'Z', shipmentId: '' }, boxes, siblings: [shippedB] }).changed, false);
+
+  // ── THE SALES ORDER HOLDS EVERY TRACKING NUMBER ───────────────────────────────────────────────────────────
+  const added = (so, patch) => [...new Set([...(so.trackingNumbers || []), ...patch.trackingNumbers])];   // what arrayUnion does on the server
+  let so = { id: 'SO60831' };
+  so = { ...so, trackingNumbers: added(so, patchA) };
+  so = { ...so, trackingNumbers: added(so, patchB), shippedAt: 200 };
+  eq('two documents shipped → the order holds all three numbers, each once', so.trackingNumbers, ['1ZA1', '1ZA3', '1ZB2']);
+  eq('what a shipment itself bought — not a box that left earlier on a sibling\'s', [ownTrackingOf(shippedA), ownTrackingOf(shippedB), ownTrackingOf(rodeC)], [['1ZA1', '1ZA3'], ['1ZB2'], []]);
+  eq('a shipment made before box numbers: its own list', ownTrackingOf({ trackingNumbers: ['1ZOLD', '1ZOLD', ''] }), ['1ZOLD']);
+  let after = soAfterVoid({ so, doc: shippedB, siblings: [shippedA, shippedB, rodeC] });
+  eq('voiding B takes away ONLY B\'s number — the order is still shipped', after, { trackingNumbers: ['1ZA1', '1ZA3'] });
+  after = soAfterVoid({ so, doc: shippedA, siblings: [shippedA, shippedB, rodeC], returnedIds: ['C'] });
+  eq('voiding A takes away A\'s two; B\'s stays', after, { trackingNumbers: ['1ZB2'] });
+  eq('voiding the only shipment left → the order reads un-shipped', soAfterVoid({ so: { trackingNumbers: ['1ZB2'], shippedAt: 200 }, doc: shippedB, siblings: [shippedB] }), { trackingNumbers: [], shippedAt: null });
+  eq('an order whose list was OVERWRITTEN before today comes out whole: the other document\'s number is put back', soAfterVoid({ so: { trackingNumbers: ['1ZB2'] }, doc: shippedB, siblings: [{ id: 'OLD', shippedAt: 5, trackingNumbers: ['1ZOLD'] }, shippedB] }), { trackingNumbers: ['1ZOLD'] });
+  eq('a number NetSuite put on the order (the tracking pull) is not this void\'s to remove', soAfterVoid({ so: { trackingNumbers: ['1ZNS', '1ZB2'] }, doc: shippedB, siblings: [] }), { trackingNumbers: ['1ZNS'] });
 }
 
 

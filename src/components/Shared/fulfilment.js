@@ -244,6 +244,32 @@ export function voidEffectsOf({ doc, boxes = [], siblings = [], by = '', now = D
     return { boxes: boxesAfterVoid(boxes, shipmentId), changed: gone.length > 0, siblings: out };
 }
 
+// ── THE SALES ORDER HOLDS EVERY TRACKING NUMBER (Stuart 2026-10-06: "the sales orders should hold the multiples
+// as well") ───────────────────────────────────────────────────────────────────────────────────────────────────
+// An order of several documents ships several times. Each shipment used to WRITE the sales order's
+// trackingNumbers — the last one won — and a void emptied the list, whatever else had shipped. Now a shipment
+// ADDS its numbers (the panel writes them with arrayUnion, so two benches shipping at once both land), and a void
+// takes away only its own.
+/** The tracking numbers a document's OWN shipment bought — not a box that left earlier on a sibling's. */
+export const ownTrackingOf = (doc) => {
+    const rows = Array.isArray(doc && doc.shipPackages) ? doc.shipPackages : [];
+    if (!rows.length) return [...new Set(((doc && doc.trackingNumbers) || []).filter(Boolean))];
+    return [...new Set(rows.filter((p) => !p.shippedEarlier).map((p) => p.trackingNumber).filter(Boolean))];
+};
+/**
+ * The sales order after a VOID: its list less the voided shipment's own numbers — rebuilt with what the order's
+ * other shipped documents carry, so an order whose list was overwritten before 2026-10-06 comes out whole — and
+ * `shippedAt` cleared only when nothing of the order is shipped any more.
+ * @param siblings   the order's other pack documents     @param returnedIds  those this void sends back to the queue
+ */
+export function soAfterVoid({ so, doc, siblings = [], returnedIds = [] } = {}) {
+    const gone = new Set(ownTrackingOf(doc));
+    const back = new Set(returnedIds || []);
+    const stillOut = (siblings || []).filter((x) => x && x.id !== (doc && doc.id) && x.shippedAt && !back.has(x.id)).flatMap((x) => x.trackingNumbers || []);
+    const trackingNumbers = [...new Set([...((so && so.trackingNumbers) || []), ...stillOut].filter((tn) => tn && !gone.has(tn)))];
+    return { trackingNumbers, ...(trackingNumbers.length ? {} : { shippedAt: null }) };
+}
+
 // The NetSuite Item Fulfillment update: status Shipped + one package line per UPS package.
 export function nsShipPayloadOf(patch) {
     const pk = (patch && patch.shipPackages) || [];
