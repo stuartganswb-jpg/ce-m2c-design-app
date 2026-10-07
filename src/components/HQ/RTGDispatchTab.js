@@ -41,6 +41,7 @@ import { millBaseOf } from '../Shared/finishRouting';
 import { woRecipeCode } from '../Shared/finishingTime';
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
 import { isPoleCategory } from '../Shared/poleCut';
+import { withCartLines, lineFactsOf, pairFactsOf } from '../Shared/partFacts';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
@@ -1066,6 +1067,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // as NetSuite holds it — a legacy pair item is 3 PR, not 6. `pcs` is what gets sprayed
             // and boxed. Read off the item here, where the part is already in hand.
             ...uomStampOf(part, Number(line.qty) || 1),
+            // WHAT IT IS MADE OF, AND WHICH LINE OF THE ORDER IT IS FOR (Shared/partFacts, 2026-10-07) — the item's own
+            // Raw Mat, and the quote line the split stamped on the row. Cards and labels read these; nothing routes by them.
+            ...lineFactsOf(line, part),
             assetUrl: (line.partId && assetMap.get(line.partId)) || null
         };
     });
@@ -1447,7 +1451,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         try {
             const jobSnap = await getDoc(doc(db, "jobs", so.hqJobId));
             if (!jobSnap.exists()) return alert(`Linked job ${so.hqJobId} not found.`);
-            const job = jobSnap.data();
+            // EVERY ROW KNOWS ITS SALES-ORDER LINE (Shared/partFacts, Stuart 2026-10-07: "the cards really need to display
+            // Line 1 of 5, Line 2 of 5"). A quote's lines are its ▶ header rows, and the split drops headers — so each row
+            // is stamped with its line (and the room typed on it) HERE, on a copy, before they go. Nothing else about the
+            // quote or what the split does with it changes.
+            const jobRaw = jobSnap.data();
+            const cartLines = withCartLines((jobRaw.cpqData && jobRaw.cpqData.breakdown) || []);
+            const job = { ...jobRaw, cpqData: { ...(jobRaw.cpqData || {}), breakdown: cartLines.rows } };
             if (isOrderEntryOrder(so, job)) return oeRefusal(`its quote ${so.hqJobId} was built in Order Entry`);
 
             const lines0 = getJobLines(job);
@@ -1557,6 +1567,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             } else if (hasSmall && !so.nsInternalId) {
                 addLog(`⚠ SO ${orderKey}: not yet accepted by NetSuite — plated lines cannot be stock-checked, they go to the pick with a warning.`, 'warn');
             }
+            // THE PAIR BY MATERIAL, AND THE LINES IT COVERS (Shared/partFacts) — one stamp, on both of its documents: the
+            // small parts of this finish with the shop's rods, counted apart ("WOOD · 1 rod + 2 small parts").
+            const pairFacts = pairFactsOf({
+                partsList: allPartsList,
+                cutList: customLines.map(l => ({ qty: Number(l.qty) || 1, cutLength: l.cutLength || null, feetPer: l.feetPer || null, rider: !!l.rider, ...lineFactsOf(l, l.partId ? partCache.get(l.partId) : null) })),
+                lineCount: cartLines.lineCount,
+            });
             const plan = planSmallLines(allPartsList, recipeCode, stockRead, { since: so.createdAt || Date.now() });
             // THE MATERIAL GRID on the whole-order finishing document (Shared/materialGrid, 2026-09-23):
             // the same read the plan just made — on hand vs need per part, back orders named.
@@ -1674,6 +1691,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     extra: {
                         needBy: so.needBy || '', cutSheetMissing, visionUsed,
                         ...materialStamp,
+                        ...pairFacts,
                         ...(finHold || {}),
                     },
                 }));
@@ -1706,6 +1724,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     legacyErpId: l.legacyErpId || l.partId || null,
                     // Same unit rule on the shop's cut list (Stuart 2026-09-16).
                     ...uomStampOf(l.partId ? partCache.get(l.partId) : null, Number(l.qty) || 1),
+                    // Its material and its sales-order line, as on the parts list (Shared/partFacts, 2026-10-07).
+                    ...lineFactsOf(l, l.partId ? partCache.get(l.partId) : null),
                 }));
                 // A POLE COUNTS AS A POLE (Stuart 2026-09-12): qty = poles, never lines — a return or a
                 // miter is fabrication on the rod. feet / billableFeet ride on the shop doc so the plating
@@ -1746,7 +1766,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     // cannot ship is the same waste as a sled sprayed for one, and the shop half is
                     // where the money is. ShopFloor's own heldGuard already refuses to start or
                     // complete a held order, so this needs nothing from the shop screen.
-                    extra: { cutSheetMissing, visionUsed, ...(backorderHold('SHOP') || {}) },
+                    extra: { cutSheetMissing, visionUsed, ...pairFacts, ...(backorderHold('SHOP') || {}) },
                 }), { replace: isRedispatch && !opts.skipConfirm });
                 if (shopWrite.written) addLog(`${shopWrite.decision === 'REPLACE' ? 'Re-wrote' : 'Created'} Shop custom order ${shopId}${fabMethod ? ` [${fabMethod}]` : ''} (${customLines.length} custom lines).`, "success");
                 else addLog(`🔒 ${keptShopJobText(shopWrite.existing)}`, 'warn');

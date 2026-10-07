@@ -11,6 +11,7 @@ import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orde
 import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
 import { propagateFloorState } from '../Shared/orderLifecycle';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
+import PartFactsStrip from '../Shared/PartFactsStrip';
 import { pickGateOf } from '../Shared/orderStatus';
 import PullLinesLive from '../Shared/PullLinesLive';
 import { woRefOf } from '../Shared/woRef';
@@ -1754,6 +1755,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           {row('Item', wo.stockErpId || wo.type || '')}
                           {row('Recipe', wo.recipe || '')}
                           {row('Quantity', `${wo.totalParts || 0} pcs${hasP ? ` · ${Number(wo.totalPoles || (wo.poles && wo.poles.qty)) || 0} pole(s)` : ''}`)}
+                          {/* By material, and the sales-order lines it covers (Shared/partFacts, Stuart 2026-10-07). */}
+                          <PartFactsStrip doc={wo} docs={workOrders} refOf={woRefOf} style={{ margin: '6px 0' }} />
                           {row('Customer', wo.customerName || wo.clientName || wo.customer || '')}
                           {row('Required', wo.reqDate || '')}
                           {row('Parts coat', len ? (wo.currentStepIndex >= len ? `done (${len}/${len})` : `${(wo.currentStepIndex || 0) + 1} of ${len}`) : '')}

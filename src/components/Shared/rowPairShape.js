@@ -26,6 +26,7 @@ import { isOutsourcedFinishCode } from './finishRouting.js';
 import { findClientPriceRow } from './clientPricing.js';
 import { finishedCodeOf, isUnfinishedFinish } from './subFinish.js';
 import { isPoleCategory } from './poleCut.js';
+import { materialOfPart, pairFactsOf } from './partFacts.js';
 import { PAIR_TAG_LETTER } from './stagingKey.js';
 import { releaseLabelOf } from './rowRelease.js';
 
@@ -212,6 +213,9 @@ export const poleTrackRepairOf = (fin) => {
     return { patch: { poleStepIndex: 0 } };
 };
 
+// An Order Entry line is its own line number on the sales order (Shared/partFacts — "Line 3 of 7").
+const lineNoOf = (job) => (Number.isInteger(job && job.lineIdx) && job.lineIdx >= 0 ? { lineNo: job.lineIdx + 1 } : {});
+
 /**
  * THE PAIR'S THREE DOCUMENTS — pure. Mirrors buildParkedWorkOrder's sales shape, multi-line:
  * the RTG record, the finishing payload (every small part of the group, the CPQ split's parts-list
@@ -242,6 +246,9 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
                 paintSize: (specs.paintSize || '').toUpperCase() || null,
                 productType: (specs.productType || (part && part.productType) || '').toUpperCase() || null,
                 soLineIdx: job.lineIdx,
+                // What it is made of, and its line on the sales order — as the CPQ split stamps them (Shared/partFacts,
+                // 2026-10-07). An Order Entry line IS its own line number.
+                material: materialOfPart(part), ...lineNoOf(job),
                 // THE CUSTOMER'S CODE on the pick line, as the CPQ split puts it (buildPartsList): the line's own,
                 // else the item's clientPricing row for this customer (Shared/clientPricing).
                 clientSku: (job.line && job.line.clientSku) || ((findClientPriceRow((part && part.clientPricing) || (job.part && job.part.clientPricing), custKeys) || {}).clientSku) || '',
@@ -266,9 +273,12 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
             ...(!job.rider && job.line && job.line.trvRole ? { trvRole: job.line.trvRole, ...(N(job.line.trvCutFrom) > 0 ? { trvCutFrom: N(job.line.trvCutFrom), trvDrive: job.line.trvDrive || 'MANUAL' } : {}) } : {}),
             ...(!job.rider ? { finishedCode: finishedCodeOf(erp, job.finish) } : {}),
             finishCode: job.finish, soLineIdx: job.lineIdx,
+            material: materialOfPart(job.part), ...lineNoOf(job),
             ...uomStampOf(job.part, N(job.qty) || 1),
         };
     });
+    // The pair by material and the lines it covers — one stamp on all three documents (Shared/partFacts).
+    const pairFacts = pairFactsOf({ partsList, cutList, lineCount: ((so && so.lines) || []).length });
     const pullLines = custom.flatMap(job => (job.__planLines || []).map(pl => ({ ...pl, soLineIdx: job.lineIdx })));
     const shopQty = customShopQtyOf(cutList);
     // Poles are the pieces the shop cuts — a rider is fabrication on one, never a pole of its own.
@@ -342,6 +352,7 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         brand: brand || null, createdAt: now, updatedAt: now, createdBy,
         releasedDirect: false,
         soLineIdxs: lineIdxs,
+        ...pairFacts,
         ...(materialStamp || {}),
     };
     const hq = {
@@ -358,6 +369,7 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         ...(partsList.length ? { partsList, bomExploded: false } : {}),
         ...(custom.length ? { shopSiblingId: `SHOP-${shopWoId}`, hasCustomSibling: true, shopWoId } : {}),
         ...gate,
+        ...pairFacts,
         ...(materialStamp || {}),
         finPayload,
         createdAt: now, createdBy,
@@ -383,6 +395,7 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         poles: shopQty.poles, feet: shopQty.feet, billableFeet: shopQty.billableFeet, riderLines: shopQty.riders,
         ...(cutList.length === 1 && cutList[0].cutLength ? { cutLength: cutList[0].cutLength } : {}),
         cutList, pullLines,
+        ...pairFacts,
         reqDate: needBy, ...(needBy ? { needBy } : {}),
         note: note || label, memo: note || label,
         ...gate,

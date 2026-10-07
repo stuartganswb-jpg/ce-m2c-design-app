@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useMemo, useDeferredValue } from 'r
 import { setAuditPage, auditPageOf } from '../Shared/auditContext';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
+import PartFactsStrip from '../Shared/PartFactsStrip';
+import { materialLabelText, lineSpanText } from '../Shared/partFacts';
 import MaterialGridCard from '../Shared/MaterialGridCard';
 import { coverArrival } from '../Shared/backorderCover';
 import { uomOf, uomLabel } from '../Shared/uom';
@@ -4978,6 +4980,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // SETUP LABEL (Stuart 2026-07-21 — replaces the Phase-2 stub that only console.logged):
     // prints the 4×2 the Staging Handshake scans AND that rides the fixture into finishing.
     // Barcode = the shared staging key (orderKey), exactly what VERIFY & STAGE resolves.
+    // The parts by material and the sales-order lines, for a label (Shared/partFacts, Stuart 2026-10-07) — '' on a
+    // document from before the stamp, and the label prints as it always did.
+    const labelFactsOf = (job) => [materialLabelText(job && job.partsByMaterial), lineSpanText(job && job.lineNos, job && job.lineCount)].filter(Boolean).join(' · ');
     const printZebraLabel = (job, type) => {
         const base = {
             kind: type === 'SMALL_PARTS' ? 'SETUP · SMALL PARTS' : String(type || 'SETUP').replace(/_/g, ' '),
@@ -4989,7 +4994,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             qty: job.totalParts || '',
             finish: job.recipe || '',
             qtyLabel: `${job.totalParts || 0} pcs`,
-            customer: job.customerName || job.clientName || job.customer || ''
+            customer: job.customerName || job.clientName || job.customer || '',
+            facts: labelFactsOf(job),
         };
         // ONE ORDER, MACHINE-SIZED LOADS (Stuart 2026-08-28): a small-parts order bigger than one
         // spray-zone load (70 S · 35 M · 17 L) prints one label PER LOAD — PART 1 OF n — instead
@@ -5863,6 +5869,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         </div>
                                                     );
                                                 })()}
+                                                {/* WHAT IT IS MADE OF · WHICH LINES · THE ORDER'S OTHER WORK ORDERS (Shared/partFacts, 2026-10-07) */}
+                                                <PartFactsStrip doc={job} docs={finAll} refOf={packRef} style={{ marginTop: '8px' }} />
                                                 <OrderStatusChips wo={job} style={{ marginTop: '8px' }} />
                                                 {renderSprayStationChoice(job)}
                                                 {renderClaimLine(job, 'pick')}
@@ -6008,6 +6016,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {/* The same chips as everywhere else — this panel said only "small-only",
                                                     so a row gave no clue whether finishing had moved on (2026-08-03). */}
                                                 <div style={{ padding: '0 12px 10px' }}><OrderStatusChips wo={job} showWho={false} /></div>
+                                                {/* The handshake by material: wood with wood, metal with metal (Shared/partFacts, 2026-10-07). */}
+                                                <PartFactsStrip doc={job} docs={finAll} refOf={packRef} style={{ padding: '0 12px 10px' }} />
                                                 {open && (
                                                     <div style={{ borderTop: `1px solid ${theme.line}`, padding: '10px 12px', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, lineHeight: 1.8 }}>
                                                         {(job.nsWoTran || job.soNum) && <div style={{ color: theme.ink }}>{job.nsWoTran ? `NetSuite WO: ${job.nsWoTran}` : ''}{job.nsWoTran && job.soNum ? ' · ' : ''}{job.soNum ? `SO: ${job.soNum}` : ''}</div>}
@@ -6062,6 +6072,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     <span style={{ color: '#3a7d44' }}>✔ {w.ready}</span> · <span style={{ color: theme.ink }}>✗ {w.missing}</span>
                                                 </div>
                                                 {custOf(w.doc) ? <div style={{ fontSize: '0.72rem', fontFamily: theme.mono, color: theme.inkSoft, marginTop: '2px' }}>{custOf(w.doc)}</div> : null}
+                                                <PartFactsStrip doc={w.doc} style={{ marginTop: '5px' }} />
                                             </div>
                                         ))}
                                     </div>
@@ -6698,7 +6709,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             }} title="Item labels with the WO # as batch reference" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
                                         ) : (<>
                                             {!isQsOrder(packJob) && (
-                                                <button onClick={() => printHandshakeLabels({ woRef: packRef(packJob), orderKey: stagingKeyOf(packJob), item: packJob.stockErpId || packJob.type || '', qty: packJob.totalParts || '', qtyLabel: `${packJob.totalParts || 0} pcs`, finish: packJob.recipe || '', customer: packJob.customerName || packJob.clientName || packJob.customer || '', hasCustom: !!packJob.hasCustomSibling })} title="Reprint both staging-handshake labels (small parts + custom shop when the order has one) — same barcode key the handshake scans" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Handshake Labels</button>
+                                                <button onClick={() => printHandshakeLabels({ woRef: packRef(packJob), orderKey: stagingKeyOf(packJob), item: packJob.stockErpId || packJob.type || '', qty: packJob.totalParts || '', qtyLabel: `${packJob.totalParts || 0} pcs`, finish: packJob.recipe || '', customer: packJob.customerName || packJob.clientName || packJob.customer || '', hasCustom: !!packJob.hasCustomSibling, facts: labelFactsOf(packJob) })} title="Reprint both staging-handshake labels (small parts + custom shop when the order has one) — same barcode key the handshake scans" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Handshake Labels</button>
                                             )}
                                             <button onClick={() => { const ls = packLinesOf(packJob); if (ls.length) printItemLabels(ls.map(l => ({ itemId: l.erp, itemName: l.name }))); }} title="One 2×4 item label per line on this order" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
                                         </>)}

@@ -33,6 +33,8 @@ import { routingForOrder } from './routingMatch';
 import { millBaseOf, finishRouteOf, finishSuffixOf } from '../Shared/finishRouting';
 import { shopDocNeedsPhos } from '../Shared/phosphateRule';
 import { shopConfigsOf, alreadyDoneOf, alreadyDoneClosePatch } from '../Shared/shopJobOnce';
+import PartFactsStrip from '../Shared/PartFactsStrip';
+import { rowsByLine, lineHeadText, materialLabelText, lineSpanText } from '../Shared/partFacts';
 import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, shortBuildStamps } from '../Shared/scrapClose';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
@@ -1365,10 +1367,13 @@ const ShopFloor = () => {
         // reprint from Recently Completed (same function).
         const shopLabelCuts = (order) => (Array.isArray(order.cutList) ? order.cutList : [])
             .filter(c => c && c.cutLength != null && String(c.cutLength) !== '')
-            .map(c => ({ cutLength: c.cutLength, qty: c.qty, name: c.name || '', uom: c.uom || null }));
+            // What the cut is made of and which line of the sales order it is for (Shared/partFacts, Stuart 2026-10-07).
+            .map(c => ({ cutLength: c.cutLength, qty: c.qty, name: c.name || '', uom: c.uom || null,
+                facts: [c.material || '', lineHeadText(c.lineNo, order.lineCount, c.lineTag || '')].filter(Boolean).join(' · ') }));
+        const jobLabelFacts = (order) => [materialLabelText(order.partsByMaterial), lineSpanText(order.lineNos, order.lineCount)].filter(Boolean).join(' · ');
         const printZebraLabel = (order) => {
             const cuts = shopLabelCuts(order);
-            const one = (qty, cutLength, cutTag, uom) => `
+            const one = (qty, cutLength, cutTag, uom, facts) => `
                 ^XA
                 ^FO50,50^A0N,40,40^FDWO: ${order.woNum}${cutTag ? `  ${cutTag}` : ''}^FS
                 ^FO50,100^A0N,30,30^FDSO: ${soNumOf(order)}${order.rowLabel ? ` - ${order.rowLabel}` : ''}^FS
@@ -1376,20 +1381,20 @@ const ShopFloor = () => {
                 ${order.isOutsourced ? `^FO50,200^A0N,30,30^FDService/Ea: $${order.outsourcePrice}^FS` : ''}
                 ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
                 ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${shopItemCodeOf(order) || order.item || order.partNum}^FS
-                ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${uom ? uomLabel(qty, uom) : qty}  ${cutLength ? `Cut: ${cutLength}"` : ''}^FS
+                ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${uom ? uomLabel(qty, uom) : qty}  ${cutLength ? `Cut: ${cutLength}"` : ''}${facts ? `  ${String(facts).replace(/·/g, '-').slice(0, 26)}` : ''}^FS
                 ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${stagingKeyOf(order)}^FS
                 ^XZ
             `;
             const zpl = cuts.length > 1
-                ? cuts.map((c, i) => one(c.qty, c.cutLength, `Cut ${i + 1}/${cuts.length}`, c.uom || order.uom)).join('')
-                : one(order.qty, order.cutLength, '', order.uom);
+                ? cuts.map((c, i) => one(c.qty, c.cutLength, `Cut ${i + 1}/${cuts.length}`, c.uom || order.uom, c.facts)).join('')
+                : one(order.qty, order.cutLength, '', order.uom, (cuts[0] && cuts[0].facts) || jobLabelFacts(order));
             emitLabel(zpl, () => printShopCompletionLabel({
                 // THE STAGING KEY IS THE WORK ORDER (2026-09-23): the barcode names the finishing half — the pair's spine.
                 woNum: order.woNum, soNum: soNumOf(order), orderKey: stagingKeyOf(order),
                 // A row pair's short id no longer spells its row (2026-09-28, Shared/rowPairShape.pairIdsOf) — the label says it.
                 rowLabel: order.rowLabel || '',
                 item: shopItemCodeOf(order) || order.item || order.partNum, qty: order.qty, cutLength: order.cutLength,
-                cuts, uom: order.uom || null,
+                cuts, uom: order.uom || null, facts: jobLabelFacts(order),
                 finishRecipe: order.finishRecipe, isOutsourced: order.isOutsourced,
                 outsourcePrice: order.outsourcePrice, clientName: order.clientName
             }));
@@ -1501,6 +1506,9 @@ const ShopFloor = () => {
                         </div>
                     </div>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '16px' }}>SO: {soNumOf(order)}{(c => c ? ` · ${c}` : '')(shopItemCodeOf(order))}</div>
+                    {/* WHAT THIS PAIR IS MADE OF · WHICH LINES OF THE ORDER · THE ORDER'S OTHER SHOP JOBS (Shared/partFacts, Stuart
+                        2026-10-07) — so the wood rod is handed over with the wood parts and the metal with the metal. */}
+                    <PartFactsStrip doc={order} docs={customOrdersRaw} refOf={(o) => o.woNum || o.id} matesLabel="Other shop jobs on this order" style={{ marginTop: '-8px', marginBottom: '16px' }} />
                     <div style={{ display: 'flex', gap: '24px', marginBottom: '20px', background: 'var(--paper)', padding: '16px', border: '1px solid var(--line)' }}>
                         <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.uom ? uomLabel(order.qty, order.uom) : order.qty}</span></div>
                         {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
@@ -1757,9 +1765,11 @@ const ShopFloor = () => {
                     {Array.isArray(order.cutList) && order.cutList.length > 0 && (
                         <div style={{ marginBottom: '20px' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Cut List</div>
-                            {order.cutList.map((c, i) => (
+                            {rowsByLine(order.cutList, order.lineCount).map((grp, gi) => (<React.Fragment key={`ln${gi}`}>
+                            {grp.head && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', margin: gi ? '12px 0 6px' : '0 0 6px', borderBottom: '1px solid var(--ink)', paddingBottom: '3px' }}>{grp.head}</div>}
+                            {grp.rows.map((c, i) => (
                                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '6px', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>
-                                    <span style={{ color: 'var(--ink)' }}>{c.name}</span>
+                                    <span style={{ color: 'var(--ink)' }}>{c.name}{c.material ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', fontWeight: 700, letterSpacing: '.06em', color: 'var(--ink-soft)', marginLeft: '8px' }}>{c.material}{!grp.head && c.lineNo && Number(order.lineCount) > 1 ? ` · ${lineHeadText(c.lineNo, order.lineCount, c.lineTag || '')}` : ''}</span> : null}</span>
                                     {/* "2 × 7" beats a bare 14 (Stuart 2026-08-03): a doubled count
                                         hides that this is two identical builds, and it stopped
                                         matching the per-unit figures on the configured-item viewer. */}
@@ -1773,6 +1783,7 @@ const ShopFloor = () => {
                                     ); })()}
                                 </div>
                             ))}
+                            </React.Fragment>))}
                         </div>
                     )}
 

@@ -210,17 +210,21 @@ const SETUP_CSS = `${PAGE_CSS}
 .wo{font-size:22pt;font-weight:900;line-height:1.02;margin-top:1pt;word-break:break-all;}
 .ln{font-size:10.5pt;font-weight:700;margin-top:2pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .sub{font-size:8.5pt;color:#222;margin-top:1pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mat{font-size:9pt;font-weight:800;margin-top:1pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .bc{margin-top:auto;} .bc svg{width:100%;height:0.38in;display:block;} .bct{font-size:7pt;letter-spacing:1px;text-align:center;}`;
 // A QUANTITY NEVER PRINTS WITHOUT ITS UNIT (Stuart 2026-09-16): callers pass `qtyLabel` (the one
 // string from Shared/uom — "3 PR = 6 pcs", or "40 pcs" for a floor count); `qty` alone still prints
 // as ×N for the callers that have nothing better yet.
-const setupLabelInner = ({ kind, woRef, orderKey, item, qty, qtyLabel, finish, customer }) => {
+// `facts` — the parts by material and the sales-order lines ("WOOD 1 rod + 2 pcs · Lines 1–2 of 5", Shared/partFacts,
+// 2026-10-07): the two halves of a handshake used to print the same words; this says what is IN the order.
+const setupLabelInner = ({ kind, woRef, orderKey, item, qty, qtyLabel, finish, customer, facts }) => {
     const key = String(orderKey || woRef || '');
     const q = qtyLabel ? ` &nbsp;·&nbsp; ${esc(qtyLabel)}` : (qty ? ` &nbsp;×${esc(qty)}` : '');
     return `<div class="l">
   <div class="hd"><span class="k">${esc(kind || 'SETUP · SMALL PARTS')}</span><span class="tag">ATTACH TO FIXTURE</span></div>
   <div class="wo">${esc(woRef || key)}</div>
   <div class="ln">${esc(item || '')}${q}${finish ? ` &nbsp;·&nbsp; ${esc(finish)}` : ''}</div>
+  ${facts ? `<div class="mat">${esc(facts)}</div>` : ''}
   <div class="sub">${esc(customer || '')}</div>
   <div class="bc">${code128BSvg(key)}<div class="bct">${esc(key)}</div></div>
 </div>`;
@@ -506,20 +510,22 @@ export const printShopCompletionLabel = (o = {}) => {
     const toPlating = !!o.isOutsourced;
     const cuts = shopCompletionCuts(o);
     // The count prints in the line's unit when the shop doc carries one ("3 PR = 6 pcs"), else ×N.
-    const page = (qty, cutLength, cutTag, uom) => `<div class="l">
+    // `facts` — what the cut is made of and which sales-order line it is for (Shared/partFacts, 2026-10-07).
+    const page = (qty, cutLength, cutTag, uom, facts) => `<div class="l">
   <div class="k">${toPlating ? 'CUSTOM · TO PLATING' : 'CUSTOM · SHOP COMPLETE'}${cutTag ? ` &nbsp;·&nbsp; ${cutTag}` : ''}</div>
   <div class="wo">${esc(o.woNum || key)}</div>
   <div class="rows">
     ${o.soNum || o.rowLabel ? `<div class="r">${o.soNum ? `<b>SO:</b> ${esc(o.soNum)}` : ''}${o.soNum && o.rowLabel ? ' &nbsp;·&nbsp; ' : ''}${o.rowLabel ? esc(o.rowLabel) : ''}</div>` : ''}
     <div class="r">${esc(o.item || o.partNum || '')}${qty ? (uom ? ` &nbsp;·&nbsp; ${esc(uomLabel(qty, uom))}` : ` &nbsp;×${esc(qty)}`) : ''}${cutLength ? ` &nbsp;·&nbsp; CUT ${esc(cutLength)}"` : ''}</div>
     ${o.finishRecipe ? `<div class="r"><b>FINISH:</b> ${esc(o.finishRecipe)}</div>` : ''}
+    ${facts ? `<div class="r"><b>${esc(facts)}</b></div>` : ''}
     ${toPlating && o.outsourcePrice ? `<div class="r"><b>SERVICE/EA:</b> $${esc(o.outsourcePrice)}</div>` : ''}
     ${o.clientName ? `<div class="r">${esc(o.clientName)}</div>` : ''}
   </div>
   <div class="bc">${code128BSvg(key)}<div class="bct">${esc(key)}</div></div>
 </div>`;
     const bodies = cuts.length > 1
-        ? cuts.map((c, i) => page(c.qty, c.cutLength, `CUT ${i + 1}/${cuts.length}`, c.uom || o.uom))
-        : [page(o.qty, o.cutLength, '', o.uom)];
+        ? cuts.map((c, i) => page(c.qty, c.cutLength, `CUT ${i + 1}/${cuts.length}`, c.uom || o.uom, c.facts || o.facts))
+        : [page(o.qty, o.cutLength, '', o.uom, (cuts[0] && cuts[0].facts) || o.facts)];
     return printDoc(`Custom ${o.woNum || ''}`, SHOP_CSS, bodies);
 };

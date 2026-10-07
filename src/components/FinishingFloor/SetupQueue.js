@@ -20,6 +20,7 @@ import { closeOrderEverywhere, propagateFloorState, linkedDocsOf } from '../Shar
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
+import PartFactsStrip from '../Shared/PartFactsStrip';
 import { customFabLabel, setupWaitsOnShop, stageWaitsOnMatch, nothingToPick } from '../Shared/orderStatus';
 import { asksSprayStation, SPRAY_STATIONS, WINDOW_LABEL, coatCountsOf } from '../Shared/floorActivity';
 
@@ -908,6 +909,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                             (Poles: {wo.poles?.qty || 0}, Fin: {wo.smallParts?.fin || 0}, Rng: {wo.smallParts?.rng || 0}, Brk: {wo.smallParts?.brk || 0})
                         </span>
                     )}
+                    {/* WHAT THIS WORK ORDER IS MADE OF · WHICH LINES OF THE ORDER · ITS OTHER WORK ORDERS (Shared/partFacts,
+                        Stuart 2026-10-07) — wood with wood, metal with metal. Nothing renders on an older document. */}
+                    <PartFactsStrip doc={wo} docs={workOrders} refOf={woRefOf} style={{ margin: '6px 0' }} />
                     {/* Only REAL dimensions. 10L × 5W × 2H is the fallback every stock build gets
                         when nothing measured it — printing it as fact told the floor a size that
                         was never established. */}

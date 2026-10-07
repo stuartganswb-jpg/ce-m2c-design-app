@@ -642,6 +642,16 @@ const WmsGuide = () => (
             <Path name="The material card">Each part with its need, what is on hand, what is short and what is on order. Once the order is picked it shows what the pick <b>took</b> — picked, short at the pick, skipped. The verdict at the bottom is plain: <b>READY TO PACK</b>, or <b>NOT READY TO PACK</b> and what it is waiting on.</Path>
             <Path name="Stock held for another order" goes="a warning — you can still go ahead">NetSuite can hold limited stock for a named order. If the pieces you are about to pick, convert or pull for plating are held for a <b>different</b> order, the screen says whose they are before you take them. Stock held for the order in your hands counts as its own.</Path>
             <Path name="Waiting on its other half" goes="beside the staging handshake, oldest first">Every order with one half ready and the other not — small parts picked but the shop half missing, or the shop done and the small parts not picked — and any pair that is ready but was never scanned together. Read it at the start of a shift so nothing sits.</Path>
+            <Path name="Wood with wood, metal with metal" goes="every card and label says what the work order is made of">A work order's
+            card now leads with its parts <b>by material</b> — <b>WOOD · 1 rod + 2 small parts</b>, <b>METAL · 56 small parts</b> — on the
+            shop card, the finishing cards, the pick card and both handshake cards, and the setup and shop labels print it. Rods are
+            counted apart from small parts. The card also names the order's <b>other work orders</b> and their material, so the
+            wood rod is staged with the wood parts and the metal with the metal. The material is the item's <b>Raw Mat</b> in the
+            Library (blank reads as metal). Orders released before 2026-10-07 carry no material and show nothing.</Path>
+            <Path name="Line 2 of 5" goes="a multi-line order says which lines a work order covers">One work order still covers every line of
+            the order in its finish. Its card says which — <b>Lines 1–3 of 5</b> — the shop's cut list is grouped under
+            <b>Line 2 of 5 · Living Room</b> (the Line Tag / Room typed in CPQ), and each cut's label prints its line. An Order Entry
+            order uses its own line numbers. A one-line order says nothing.</Path>
             <Path name="The staging scan">Scan the small-parts label and the shop's label; both must name the same order. The scan also accepts the <b>NetSuite work-order number shown on the card</b> (WO11578) and the short key printed under the barcode, typed by hand when there is no scanner.</Path>
             <Path name="Spin | Booth">The station chosen at set-up shows on the pick so the right fixtures go out. Managers can change it here; operators read it.</Path>
             <Path name="A kit code is never picked">A kit is what was sold; you pick its parts. A pick never lists the kit itself.</Path>
