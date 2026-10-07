@@ -271,6 +271,7 @@ const FlowStockTab = ({ activeBrand, onNavigateToLibrary }) => {
                         : row.code}
                     {lead && fam.hidden && <span style={chip('#eee', theme.inkSoft)} title="Built and billed, never shown to the customer">BOM only</span>}
                     {row.kind === 'MILL' && <span style={chip(theme.paper2, theme.inkSoft)}>mill</span>}
+                    {row.twinOf && <span style={chip(theme.paper2, theme.inkSoft)} title={`${row.twinOf} is made as this item in this finish - its own part number, price and stock`}>own item</span>}
                     {row.finishes.length > 0 && <div style={{ fontSize: '10px', color: theme.inkSoft, marginTop: '2px' }}>{row.kind === 'MILL' ? 'billed as the mill code for ' : ''}{row.finishes.join(' · ')}</div>}
                     {lead && (fam.name || row.name) && <div style={{ fontFamily: theme.sans, fontSize: '11px', color: theme.inkSoft, fontWeight: 400, marginTop: '2px' }}>{row.name || fam.name}</div>}
                 </td>

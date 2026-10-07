@@ -7,8 +7,10 @@
 //   • which parts a flow carries   → partLookup.buildLookupIndex — the SAME pin index the CPQ part
 //                                    lookup reads (one row per pin; parked pins dropped here).
 //   • which finishes a part wears  → the flow's offered finishes (HardwareConfigurator's rule) ×
-//                                    hardwareModel.finishesFor (the material gate) × finishLabel.
-//                                    takesNoFinish (the item tag).
+//                                    hardwareModel.finishesFor (the material gate) OR materialTwin.
+//                                    wearsAsTwin (a part made as its own item in the finish's material —
+//                                    the 1" brass: HardwareConfigurator.wearsFinish, the same two tests) ×
+//                                    finishLabel.takesNoFinish (the item tag).
 //   • which SKU a finish is sold as, what it costs Fabricut, what Fabricut sells it at, and their
 //     pattern number → hardwarePricing.priceChoice, the function the quote itself calls. A board
 //     that re-derived any of these would be a second source of truth about what the quote says.
@@ -20,6 +22,7 @@ import { buildLookupIndex, ourCodeOf } from './partLookup.js';
 import { priceChoice, PRICE_SOURCES, isItemKit } from './hardwarePricing.js';
 import { finishesFor } from './hardwareModel.js';
 import { takesNoFinish } from './finishLabel.js';
+import { wearsAsTwin } from './materialTwin.js';
 
 const clean = (v) => String(v ?? '').trim();
 const U = (v) => clean(v).toUpperCase();
@@ -122,7 +125,7 @@ const NON_STOCK_CLASSES = new Set(['Fee', 'Kit']);
  *          family = { key, role, name, hidden, rows: [row] }
  *          row    = { key, code, name, part, kind: 'MILL'|'VARIANT'|'SOLE'|'MISSING', finishes: [codes],
  *                     fabCode, ourPrice: {value, source}|null, theirPrice: number|null,
- *                     internalId, stockable }
+ *                     internalId, stockable, twinOf: '' | the standard part's code (the row is its twin item) }
  */
 export function flowFamilies({ flow, assembly, pins = [], findPart, finishes = [], priceCtx = {} } = {}) {
     const rows = buildLookupIndex({
@@ -161,6 +164,7 @@ export function flowFamilies({ flow, assembly, pins = [], findPart, finishes = [
             finishes: finishCodes, fabCode: '', ourPrice: null, theirPrice: null,
             internalId: clean(part?.netSuiteInternalId),
             stockable: !!part && !NON_STOCK_CLASSES.has(part.partClass),
+            twinOf: '',         // the standard part this row stands in for (a part made as its own item in the finish's material)
         };
         if (priced) Object.assign(row, priced);
         if (!skus.has(U(code))) skus.set(U(code), row);
@@ -184,12 +188,17 @@ export function flowFamilies({ flow, assembly, pins = [], findPart, finishes = [
             const sell = priceChoice(fam.choice, base, { ...ctx, priceLevel: 'FAB_WHOLESALE' });
             return {
                 billedId: clean(cost.billedId) || baseCode,
+                twinOf: clean(cost.twinOf),
                 fabCode: clean(cost.sku || cost.aliasCode),
                 ourPrice: cost.source === PRICE_SOURCES.NONE ? null : { value: cost.price, source: cost.source },
                 theirPrice: sell.source === PRICE_SOURCES.LEVEL ? sell.price : null,
             };
         };
-        const wears = (takesNoFinish(base) || fam.choice?.noFinish) ? [] : finishesFor(fam.choice || {}, offered);
+        // A part wears a finish by the material rule, OR as its twin in that finish's material (LBR on a part
+        // with a brass twin) — HardwareConfigurator.wearsFinish. Without the second test the board never asked
+        // what solid brass sells as, and the brass items were on no tab.
+        const wears = (takesNoFinish(base) || fam.choice?.noFinish) ? []
+            : offered.filter(f => finishesFor(fam.choice || {}, [f]).length > 0 || wearsAsTwin(base, f, findPart));
         if (!wears.length) {
             // Sold as itself: no finish to resolve (joiner, clear acrylic, a part tagged unfinished).
             const p = price('');
@@ -214,7 +223,7 @@ export function flowFamilies({ flow, assembly, pins = [], findPart, finishes = [
         const variants = [...sold.values()]
             .filter(s => U(s.code) !== U(baseCode))
             .map(s => rowFor(typeof findPart === 'function' ? findPart(s.code) : null, s.code, 'VARIANT', s.finishes,
-                { fabCode: s.priced.fabCode, ourPrice: s.priced.ourPrice, theirPrice: s.priced.theirPrice }))
+                { fabCode: s.priced.fabCode, ourPrice: s.priced.ourPrice, theirPrice: s.priced.theirPrice, twinOf: s.priced.twinOf || '' }))
             .sort(byVariant);
         out.push({ ...fam, rows: [mill, ...variants] });
     });

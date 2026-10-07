@@ -98,6 +98,57 @@ eq('an empty flowFinishes offers everything', offeredFinishesOf({ flowFinishes: 
 const narrow = flowFamilies({ flow: { ...flow, flowFinishes: ['P01'] }, assembly, pins, findPart, finishes, priceCtx });
 ok('a finish the flow does not offer produces no SKU', !narrow.skus.some(r => r.code === 'H1-75DS/EP1'));
 
+// ── A PART MADE AS ITS OWN ITEM IN ANOTHER MATERIAL — the 1" brass (Stuart 2026-10-07: "align … 4.7 with brass") ──
+// LBR is a BRASS finish; the pins are metal. The part's record names its brass twin, and the QUOTE sells the twin
+// (priceChoice step 0·). The board has to ask the same question, or the brass items are on no tab.
+{
+    const asm1 = { id: 'ASM-1', itemId: 'CE-ASM-1', nodeClusters: [
+        { id: 'C-BKT', category: 'BRACKET', position: 'CENTER', nodes: ['bkt'] },
+        { id: 'C-FIN', category: 'FINIAL', position: 'LEFT', nodes: ['fin'] },
+    ] };
+    const pins1 = [
+        { id: 'Q1', assemblyId: 'ASM-1', clusterId: 'C-BKT', partId: 'CE-INV-BS', partName: 'H1-1BS', projInches: '3-5/8', targetNode: 'bkt' },
+        { id: 'Q2', assemblyId: 'ASM-1', clusterId: 'C-FIN', partId: 'CE-INV-KF', partName: 'H1-1KF', targetNode: 'fin' },
+    ];
+    const parts1 = [
+        { id: 'CE-INV-BS', itemId: 'CE-INV-BS', legacyErpId: 'H1-1BS', itemName: 'Basic Bracket (3-5/8" P)', partClass: 'Inventory', netSuiteInternalId: '500',
+          manufacturingSpecs: { fabricut: { paintedCost: 12, paintedWholesale: 24, paintedRetail: 48, fabCodePainted: 'H3568F' }, customData: { materialTwins: [{ material: 'BRASS', code: 'H1-1BBS' }] } } },
+        { id: 'CE-INV-BSP', itemId: 'CE-INV-BSP', legacyErpId: 'H1-1BS/P', partClass: 'Assembly', netSuiteInternalId: '501', manufacturingSpecs: { fabricut: { cost: 12, wholesale: 24, retail: 48 } } },
+        { id: 'CE-INV-62563', itemId: 'CE-INV-62563', legacyErpId: 'H1-1BBS', itemName: '1" Brushed Brass Basic Bracket (3-5/8" P)', partClass: 'Inventory', netSuiteInternalId: '62563',
+          manufacturingSpecs: { fabricut: { fabCodePainted: 'H3654F', cost: 35, wholesale: 64, retail: 128 } } },
+        { id: 'CE-INV-KF', itemId: 'CE-INV-KF', legacyErpId: 'H1-1KF', itemName: 'Knob Finial', partClass: 'Inventory', netSuiteInternalId: '600',
+          manufacturingSpecs: { fabricut: { paintedCost: 21, paintedWholesale: 40, paintedRetail: 80, fabCodePainted: 'H1542F' } } },
+    ];
+    const find1 = (key) => parts1.find(p => p.id === key || p.itemId === key || p.legacyErpId === key) || null;
+    const LBR = { id: 'FIN-UBP', code: 'LBR', name: 'LIVE SOLID BRASS', material: 'BRASS' };
+    const fins1 = [{ code: 'P01', material: 'METAL' }, LBR];
+    const ctx1 = { customerId: 'CUST-FAB', customer: { id: 'CUST-FAB', name: 'FABRICUT' }, outsourceCodes: ['LBR'], findByCode: find1,
+        finishObjOf: (c) => fins1.find(f => f.code === String(c || '').toUpperCase()) || null };
+    const flow1 = { id: 'F1', name: 'H1-1 — GENERATED', linkedAssemblyId: 'ASM-1', flowFinishes: [] };
+    const b = flowFamilies({ flow: flow1, assembly: asm1, pins: pins1, findPart: find1, finishes: fins1, priceCtx: ctx1 });
+    const fam1 = (code) => b.sections.flatMap(s => s.families).find(f => f.rows[0].code === code);
+    const row1 = (code) => b.skus.find(r => r.code === code);
+
+    eq('the bracket family lists its brass item after the mill row and /P', fam1('H1-1BS').rows.map(r => [r.code, r.kind, r.finishes]),
+        [['H1-1BS', 'MILL', []], ['H1-1BS/P', 'VARIANT', ['P01']], ['H1-1BBS', 'VARIANT', ['LBR']]]);
+    const q = (lvl) => priceChoice({ id: 'Q1', partId: 'CE-INV-BS', role: 'BRACKET' }, find1('CE-INV-BS'), { ...ctx1, finishCode: 'LBR', priceLevel: lvl, levelIsDefault: false });
+    eq('the quote sells the brass item under LBR (what the board must repeat)', [q('FAB_COST').billedId, q('FAB_COST').twinOf], ['H1-1BBS', 'H1-1BS']);
+    eq('brass row: our price to Fabricut and Fabricut\'s price are the quote\'s, from the brass item\'s own price', [row1('H1-1BBS').ourPrice.value, row1('H1-1BBS').theirPrice],
+        [q('FAB_COST').price, q('FAB_WHOLESALE').price]);
+    eq('…35 and 64, not the steel bracket\'s tiers', [row1('H1-1BBS').ourPrice.value, row1('H1-1BBS').theirPrice], [35, 64]);
+    eq('brass row: the brass item\'s Fabricut number, name, NetSuite id for the stock read — and what it stands in for',
+        [row1('H1-1BBS').fabCode, row1('H1-1BBS').name, row1('H1-1BBS').internalId, row1('H1-1BBS').stockable, row1('H1-1BBS').twinOf],
+        ['H3654F', '1" Brushed Brass Basic Bracket (3-5/8" P)', '62563', true, 'H1-1BS']);
+    eq('the standard rows are untouched and stand in for nothing', [row1('H1-1BS/P').ourPrice.value, row1('H1-1BS/P').theirPrice, row1('H1-1BS/P').twinOf, row1('H1-1BS').twinOf], [12, 24, '', '']);
+    eq('a part with no brass twin never wears LBR: no brass row, LBR on no row of it', fam1('H1-1KF').rows.map(r => [r.code, r.finishes]), [['H1-1KF', ['P01']]]);
+    // The twin's own record is gone, or the flow does not offer the finish: no row is invented.
+    const gone = flowFamilies({ flow: flow1, assembly: asm1, pins: pins1, findPart: (k) => (find1(k)?.legacyErpId === 'H1-1BBS' ? null : find1(k)), finishes: fins1,
+        priceCtx: { ...ctx1, findByCode: (k) => (find1(k)?.legacyErpId === 'H1-1BBS' ? null : find1(k)) } });
+    ok('a twin tag whose item is not in the library adds nothing', !gone.skus.some(r => r.code === 'H1-1BBS' || r.finishes.includes('LBR')));
+    const notOffered = flowFamilies({ flow: { ...flow1, flowFinishes: ['P01'] }, assembly: asm1, pins: pins1, findPart: find1, finishes: fins1, priceCtx: ctx1 });
+    ok('a flow that does not offer LBR lists no brass item', !notOffered.skus.some(r => r.code === 'H1-1BBS'));
+}
+
 // ── TABS ─────────────────────────────────────────────────────────────────────────────────────
 eq('the generator tail is dropped from the label', flowLabelOf({ name: 'H1-138 — GENERATED' }), 'H1-138');
 const asm = (f) => (f.linkedAssemblyId ? { id: f.linkedAssemblyId } : null);
