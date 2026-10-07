@@ -30,6 +30,19 @@ export const isReleaseByCount = (so) => !!so && so.releaseByCount === true;
 /** What an order is stamped with when it goes on the row route: released by count, of this many displays. */
 export const releaseByCountPatch = (displays) => (Math.floor(N(displays)) > 0 ? { releaseByCount: true, releaseOf: Math.floor(N(displays)) } : {});
 
+/**
+ * What the 10.5 ANCHOR adds for the count. An order nothing has been started or gathered on goes onto counts; one
+ * already in motion keeps the whole-row rules it began under. An order BORN parked as a display (Shared/
+ * salesOrderHeader.displayParkOf) is already by count and only lacks how many displays it is — the build says.
+ */
+export const anchorCountPatchOf = (so, displays) => {
+    if (!so) return {};
+    if (isReleaseByCount(so)) return Math.floor(N(so.releaseOf)) > 0 ? {} : releaseByCountPatch(displays);
+    const started = Object.keys(so.oeGen || {}).length > 0;
+    const gathered = Object.values(so.committedQty || {}).some(v => Number(v) > 0);
+    return (!started && !gathered) ? releaseByCountPatch(displays) : {};
+};
+
 /** The release key of a line: its row's, or the order's own. */
 export const releaseRowKeyOf = (line) => ((line && line.orderLevel === true) ? ORDER_ROW_KEY : rowKeyOf(rowOfLine(line)));
 

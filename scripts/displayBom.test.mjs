@@ -1,6 +1,6 @@
 // Harness for Shared/displayBom.js — the bill of a sales display board.
 //   node scripts/displayBom.test.mjs
-import { orderDemandLines, displayDemandAmountOf } from '../src/components/Shared/displayBom.js';
+import { orderDemandLines, displayDemandAmountOf, displayDemandNewOf } from '../src/components/Shared/displayBom.js';
 import { newDisplay, chipLines, chipGroupOf, chipFaceLayout, rowBomLines, boardBom, orderBom, bomCsv, rowConfigFromCartItem, UNITS_PER_INCH, buildLinesFrom, resnapshotLines, displayDemandFrom, shipPlanFill, openBoards, displayFromTracker, seededRowsLayout, flowFinishKeys, chipsForDisplay, fitRowToLength, raisePlan, targetCodeOf, SAMPLE_BIN_BY_STYLE, cpqEntryRows, cpqEntryCsv, floorLinksByLine } from '../src/components/Shared/displayBom.js';
 
 let pass = 0, fail = 0;
@@ -425,6 +425,28 @@ const cartBaseFront3 = {
     eq('a record published before each build carried feet shares them by pieces', displayDemandAmountOf({ perFoot: true, qty: 50, feet: 100 }, { id: 'B', qty: 20 }), 40);
     eq('a per-foot entry with no feet on it is counted in pieces, never lost', displayDemandAmountOf({ perFoot: true, qty: 12, feet: 0 }), 12);
     eq('nothing → 0', displayDemandAmountOf(null), 0);
+
+    // NETSUITE ALREADY HOLDS A DISPLAY ORDER THAT IS IN IT (Stuart 2026-10-07): only the rest is added to a suggested quantity.
+    ok('the wall as tested above has no NetSuite id on its order → nothing is marked', !dem.byItem['H1-75SPF/P|P06'].builds[0].ns && displayDemandNewOf(cap) === 99);
+    const soNs = { ...so, nsInternalId: '921062' };
+    const inNs = displayDemandFrom([build], { ordersByBuild: { 'B-WALL': [soNs] } });
+    eq('every order of the build in NetSuite → its share is marked', inNs.byItem['H1-75SPF/P|P06'].builds, [{ id: 'B-WALL', name: 'Wall × 35', qty: 99, feet: 0, ns: true }]);
+    eq('…the column still shows all of it, the suggested quantity adds none', [displayDemandAmountOf(inNs.byItem['H1-75SPF/P|P06']), displayDemandNewOf(inNs.byItem['H1-75SPF/P|P06'])], [99, 0]);
+    eq('a rod likewise, in feet', [displayDemandAmountOf(inNs.byItem['H1-75SR/P|P06']), displayDemandNewOf(inNs.byItem['H1-75SR/P|P06'])], [66, 0]);
+    ok('chips are on no order — never marked, always counted', !inNs.byItem['CHIP|P06'].builds[0].ns && displayDemandNewOf(inNs.byItem['CHIP|P06']) === 35);
+    const half = displayDemandFrom([build], { ordersByBuild: { 'B-WALL': [soNs, { id: 'SO-B', releaseByCount: true, releaseOf: 35, lines: [{ erp: 'H1-75SPF', qty: 35, finishCode: 'P06', billedErp: 'H1-75SPF/P' }] }] } });
+    ok('one order of the build still waiting on NetSuite → the build is not marked', !half.byItem['H1-75SPF/P|P06'].builds[0].ns);
+    // a NEW build order with no sales order yet (the quote under review) beside the wall that is in NetSuite
+    const fresh = { id: 'B-TT100', name: 'Tabletop × 100', qty: 100, built: 0, status: 'PLANNED', lines: { parts: [{ key: 'H1-75SPF/P|P06', code: 'H1-75SPF/P', billedId: '', finishCode: 'P06', qtyPerBoard: 1, feetPerBoard: 0 }], chips: [] } };
+    const both = displayDemandFrom([build, fresh], { ordersByBuild: { 'B-WALL': [soNs] } });
+    eq('two build orders on one item: 99 NetSuite already holds + 100 it cannot see', [both.byItem['H1-75SPF/P|P06'].qty, displayDemandAmountOf(both.byItem['H1-75SPF/P|P06']), displayDemandNewOf(both.byItem['H1-75SPF/P|P06'])], [199, 199, 100]);
+    eq('…each named, each marked or not', both.byItem['H1-75SPF/P|P06'].builds.map(b => [b.id, b.qty, !!b.ns]), [['B-WALL', 99, true], ['B-TT100', 100, false]]);
+    const oldWay = { id: 'B-TT50', name: 'Tabletop × 50', qty: 50, built: 0, status: 'IN_PRODUCTION', lines: { parts: [{ key: 'H1-1BR/EP4|EP4', code: 'H1-1BR/EP4', billedId: '', finishCode: 'EP4', qtyPerBoard: 1 }], chips: [] } };
+    const ow = displayDemandFrom([oldWay], { ordersByBuild: { 'B-TT50': [{ id: 'SO-OLD', nsInternalId: '918825', lines: [] }] } });
+    eq('an order started the old way that is in NetSuite: its bill is shown, and not added', [displayDemandAmountOf(ow.byItem['H1-1BR/EP4|EP4']), displayDemandNewOf(ow.byItem['H1-1BR/EP4|EP4'])], [50, 0]);
+    eq('a record published before the mark counts in full, as it always did', displayDemandNewOf({ qty: 66, feet: 0, perFoot: false, builds: [{ id: 'B', qty: 66 }] }), 66);
+    eq('…and an entry with no builds listed', displayDemandNewOf({ qty: 12, feet: 24, perFoot: true }), 24);
+    eq('nothing → 0', displayDemandNewOf(null), 0);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

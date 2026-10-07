@@ -229,6 +229,8 @@ export const reopenQuoteInCpq = (job) => {
                 // existed reopens blank — never with an invented date.
                 needBy: job.needBy || '',
                 productionNotes: job.productionNotes || '',
+                // The display mark comes back ticked — a re-save writes it every time (Shared/salesOrderHeader).
+                displayOrder: job.displayOrder || null,
                 // Portal checkout add-ons → CPQ's AddOnPicker selections (keyed by part doc id,
                 // the same key addOnSel uses), so staff land at checkout with the customer's
                 // picks already ticked instead of re-reading them from the request panel.

@@ -4,7 +4,7 @@ import BufferedInput from '../Shared/BufferedInput';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, addDoc, serverTimestamp } from "firebase/firestore";
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
-import { displayDemandAmountOf } from '../Shared/displayBom';
+import { displayDemandAmountOf, displayDemandNewOf } from '../Shared/displayBom';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { SOURCING, sourcingOf, orderRouteFor, ORDER_ROUTE } from '../Shared/sourcing';
@@ -214,21 +214,25 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const displayDemandFor = (erpId) => {
         const up = String(erpId || '').toUpperCase();
         const isVariant = /\/(P|EP[1-6]|MEP|P25)$/i.test(up);
-        let qty = 0, pieces = 0, feet = false; const builds = new Map();
+        let qty = 0, extra = 0, pieces = 0, feet = false; const builds = new Map();
         Object.values(displayDemand.byItem || {}).forEach(e => {
             if (!e) return;
             const billed = String(e.billedId || '').toUpperCase(), code = String(e.code || '').toUpperCase();
-            const hit = billed === up || (!e.billedId && code === up) || (!isVariant && billed.startsWith(`${up}/`));
+            // The RAW item's row shows what its finished variants will pull — whichever of the two names carries the
+            // finished SKU (an order's line names the base beside it; a build's bill carries the SKU as its code).
+            const hit = billed === up || (!e.billedId && code === up) || (!isVariant && (billed || code).startsWith(`${up}/`));
             if (!hit) return;
             qty += displayDemandAmountOf(e);
+            extra += displayDemandNewOf(e);
             pieces += Number(e.qty) || 0;
             if (e.perFoot) feet = true;
             (e.builds || []).forEach(b => {
                 const cur = builds.get(b.id || b.name) || { name: b.name || b.id, qty: 0, pieces: 0 };
-                builds.set(b.id || b.name, { ...cur, qty: cur.qty + displayDemandAmountOf(e, b), pieces: cur.pieces + (Number(b.qty) || 0), feet: cur.feet || !!e.perFoot });
+                builds.set(b.id || b.name, { ...cur, qty: cur.qty + displayDemandAmountOf(e, b), pieces: cur.pieces + (Number(b.qty) || 0), feet: cur.feet || !!e.perFoot, ns: !!b.ns });
             });
         });
-        return { qty: Math.round(qty * 100) / 100, pieces, feet, builds: [...builds.values()].map(b => ({ ...b, qty: Math.round(b.qty * 100) / 100 })) };
+        const r2 = (n) => Math.round(n * 100) / 100;
+        return { qty: r2(qty), extra: r2(extra), pieces, feet, builds: [...builds.values()].map(b => ({ ...b, qty: r2(b.qty) })) };
     };
     useEffect(() => onSnapshot(doc(db, 'system', 'retired_items'),
         s => setRetiredDoc(s.exists() ? { internalIds: s.data().internalIds || [], items: s.data().items || [] } : { internalIds: [], items: [] }),
@@ -530,7 +534,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const suggestedQtyFor = (item) => {
         const avail = item.stock?.available || 0;
         const onOrder = item.stock?.onOrder || 0;
-        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0) + (item.stock?.displayDemand || 0);
+        // Display demand NetSuite already holds is in Committed / Backorder — only the rest is added (Shared/displayBom.displayDemandNewOf).
+        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0) + (item.stock?.displayDemandNew || 0);
         const rop = item.rop || 0;
         const moq = item.moq || 0;
         const topUp = Math.max(0, rop - avail);
@@ -550,7 +555,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (!specs.isStocked || !cap) return null; // only stocked, paint-sized assemblies get a recommendation
         const avail = item.stock?.available || 0;
         const onOrder = item.stock?.onOrder || 0;
-        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0) + (item.stock?.displayDemand || 0);
+        // Display demand NetSuite already holds is in Committed / Backorder — only the rest is added (Shared/displayBom.displayDemandNewOf).
+        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0) + (item.stock?.displayDemandNew || 0);
         const shortfall = Math.max(item.rop - avail, demand - avail - onOrder);
         if (shortfall <= 0) return 0; // at/above ROP and demand covered → nothing to run
         return Math.ceil(shortfall / cap) * cap;
@@ -2700,7 +2706,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const display = displayDemandFor(erpId);
         return {
             ...part,
-            stock: { ...stock, aggregatedCommitted, aggregatedBackorder, displayDemand: display.qty, displayBuilds: display.builds, displayDemandFeet: display.feet },
+            stock: { ...stock, aggregatedCommitted, aggregatedBackorder, displayDemand: display.qty, displayDemandNew: display.extra, displayBuilds: display.builds, displayDemandFeet: display.feet },
             wip: wipByErp[erpId] || { qty: 0, lines: [] }, // in-progress plating for this item
             rop, moq, leadTime,
             isLowStock: stock.available <= rop && rop > 0
@@ -3294,7 +3300,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <th style={monthTh}>Orders</th>
                                                 <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title="NetSuite quantity available">Avail</th>
                                                 <th style={{ ...monthTh, color: '#d9534f' }} title="BACKORDERED — pieces on open sales orders that nothing on the shelf can make. This is OUR record, the one with customers behind it, not NetSuite's quantitybackordered. Click a number for the orders and who is waiting.">BO</th>
-                                                <th style={{ ...monthTh, color: '#7a5cc4' }} title="DISPLAY — open sales display board orders that will pull this item (S5's build-order panel keeps it current); counted in Rec like backorder. Hover a number for the orders behind it.">Display</th>
+                                                <th style={{ ...monthTh, color: '#7a5cc4' }} title="DISPLAY — what the open sales display orders still call for and nothing has been released against (rods in feet). Hover a number for the build orders behind it. A display order already in NetSuite has lowered Avail, so Rec here already allows for it; one that is still a quote is shown but not in Rec.">Display</th>
                                                 <th style={{ ...monthTh, color: '#3f7fc4' }} title="Inbound: open purchase orders + work orders in production — click a number for the orders behind it">On Ord</th>
                                                 <th style={monthTh} title="Calculated minimum: OUTSOURCED = 6 months of demand · ASSEMBLY = 6 weeks (3wk finishing lead + 3wk safety) · else legacy 4-weeks rule. A re-order point acts as the FLOOR — a new item with no history shows its ROP (brass) until demand grows past it. Hover a value for its rule.">Min OH</th>
                                                 <th style={{ ...monthTh, color: 'var(--brass)' }} title="Re-order point — editable; ⬆ Save pushes to the Master Library (manufacturingSpecs.reorderPoint). Acts as the FLOOR under the calculated Min OH: it holds a new item up until real demand exceeds it.">ROP</th>
@@ -3337,6 +3343,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                             <button onClick={loadBackorders} title={`${bo.qty} on backorder — ${bo.orders.join(' · ')}\n\nClick for the full board: who is waiting, what covers it, and what nobody has ordered.`}
                                                                 style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#d9534f', textDecoration: 'underline', fontWeight: 700 }}>{bo.qty}</button>
                                                         );
+                                                    })()}</td>
+                                                    {/* DISPLAY — the cell this table's header has had since 09-12 (the cell was put in the main grid and the
+                                                        header here, so every column right of BO read one header off in both). */}
+                                                    <td style={{ ...numTd }}>{(() => {
+                                                        const dd = displayDemandFor(r.itemid);
+                                                        if (!(dd.qty > 0)) return <span style={{ color: 'var(--line)' }}>·</span>;
+                                                        return <span title={[dd.feet ? 'Open display demand, in FEET (rod stock is kept by the foot)' : 'Open display demand', ...dd.builds.map(b => `${b.name}: ${b.qty}${b.feet ? ` ft (${b.pieces} rods)` : ''}${b.ns ? ' - in NetSuite: already out of Avail' : ' - not in NetSuite yet'}`)].join('\n')} style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: '#7a5cc4', cursor: 'help', fontWeight: 700 }}>{dd.qty}</span>;
                                                     })()}</td>
                                                     <td style={{ ...numTd }}>{r.onOrd > 0 ? <button onClick={() => setOnOrdModal(r)} title="Open POs / work orders — click for detail" style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{Math.round(r.onOrd)}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                     <td style={{ ...numTd, color: info.rop && info.rop > info.minCalc ? 'var(--brass)' : 'var(--ink-soft)' }} title={info.minRule}>{info.minOnHand || '·'}</td>
@@ -4239,17 +4252,18 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Agg. Commit</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>On Order</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Agg. BO</th>
+                                    <th title="DISPLAY - what the open sales display orders still call for and nothing has been released against (rods in feet). Hover a number for the build orders behind it and whether NetSuite already holds it. Only display demand NetSuite cannot see yet is added to the suggested quantities - the rest is already in Agg. Commit / Agg. BO." style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#7a5cc4' }}>Display</th>
                                     <th style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>ROP</th>
                                     <th title="Recommended production batch for stocked, paint-sized finished assemblies — ROP/demand shortfall rounded up to the paint machine's per-section unit." style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Rec. Prod.</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {displayItems.length === 0 && <tr><td colSpan="11" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>
+                                {displayItems.length === 0 && <tr><td colSpan="12" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>
                                     {activeBuilder === 'WO' && (woHiddenNotStocked > 0 || woHiddenOutsourced > 0)
                                         ? `No items in the Production queue — ${woHiddenNotStocked} matching in-house item(s) are hidden because they aren't flagged Stocked${woHiddenOutsourced > 0 ? ` (${woHiddenOutsourced} outsourced belong on the PO side)` : ''}. Tick "show not-stocked too" above to plan WOs for them anyway — or flag them Stocked (4.5 Mass Update / Master Library) to make them permanent queue members.`
                                         : 'No inventory items matched.'}
                                 </td></tr>}
-                                {activeBuilder === 'PO' && activeVendor && <tr><td colSpan="11" style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
+                                {activeBuilder === 'PO' && activeVendor && <tr><td colSpan="12" style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
                                 {!(activeBuilder === 'PO' && activeVendor) && displayItems.map(item => (
                                     <tr key={item.id} style={{ borderBottom: '1px solid var(--line)', background: item.isLowStock ? '#fdf2f2' : '#fff' }}>
                                         <td style={{ padding: '16px 20px', fontFamily: 'var(--mono)', fontSize: '11px', color: item.isLowStock ? '#d9534f' : 'var(--ink)' }}>
@@ -4309,7 +4323,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             );
                                         })()}
                                         <td style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.aggregatedBackorder > 0 ? '#d9534f' : 'var(--ink-soft)' }}>{item.stock.aggregatedBackorder}</td>
-                                        <td title={item.stock.displayDemand > 0 ? [item.stock.displayDemandFeet ? 'Open display demand, in FEET (rod stock is kept by the foot)' : 'Open display demand', ...(item.stock.displayBuilds || []).map(b => `${b.name}: ${b.qty}${b.feet ? ` ft (${b.pieces} rods)` : ''}`)].join('\n') : ''} style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.displayDemand > 0 ? '#7a5cc4' : 'var(--ink-soft)', cursor: item.stock.displayDemand > 0 ? 'help' : 'default' }}>{item.stock.displayDemand || '-'}</td>
+                                        <td title={item.stock.displayDemand > 0 ? [item.stock.displayDemandFeet ? 'Open display demand, in FEET (rod stock is kept by the foot)' : 'Open display demand', ...(item.stock.displayBuilds || []).map(b => `${b.name}: ${b.qty}${b.feet ? ` ft (${b.pieces} rods)` : ''}${b.ns ? ' - in NetSuite: already in Agg. Commit / Agg. BO' : ' - not in NetSuite yet: added to the suggested quantity'}`)].join('\n') : ''} style={{ padding: '16px 20px', textAlign: 'center', fontSize: '1rem', color: item.stock.displayDemand > 0 ? '#7a5cc4' : 'var(--ink-soft)', cursor: item.stock.displayDemand > 0 ? 'help' : 'default' }}>{item.stock.displayDemand || '-'}</td>
                                         <td style={{ padding: '16px 20px', textAlign: 'center', color: 'var(--ink-soft)' }}>{item.rop || '-'}</td>
                                         {(() => {
                                             const rec = recommendedProductionFor(item);

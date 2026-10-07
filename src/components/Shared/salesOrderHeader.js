@@ -194,6 +194,31 @@ export const leadText = ({ leadBasis, leadWeeks, readyDate, rushApplied }) => {
     return `Ready ${readyDate} (${leadWeeks} weeks, ${cls}${rushApplied ? ', rush' : ''})${alt}.`;
 };
 
+// ── A DISPLAY ORDER IS BORN PARKED FOR 10.5 (Stuart 2026-10-07: "while these display orders stay parked and await us
+// releasing from 10.5 … i really would like to put the auto release back on to cover the day to day orders") ─────────
+// A display order's rows are started from 10.5 (Display Management), one at a time and by count. Until now the order
+// only became one when somebody ANCHORED it there — and in the minute between its approval and that anchor it was an
+// ordinary order: with ⚡ auto-release on, RTG split a CPQ one WHOLE the moment NetSuite accepted it (the first tabletop,
+// SO60551, and the wall, SO60585 — both later retired by hand) and started every to-be-finished line of an Order Entry
+// one. The mark now rides the QUOTE (CPQ checkout's tick, set by 10.5's ⧉ Duplicate) or the tab-7 header (its tick),
+// and the one header stamps the sales order with it AT BIRTH, whichever door:
+//   displayRelease  — the field RTG's split, RTG's Order Entry start and Stock View's Order Entry review already stand
+//                     down for (Shared/displayRelease); nothing new for them to learn;
+//   releaseByCount  — the WMS offers nothing until a row is released (Shared/rowRelease: no count, nothing released);
+//   displayOrder    — { buildId, displays }: which build order it was made for, so 10.5 offers it for its anchor.
+// The ANCHOR still does the rest, exactly as before — lines, class, the build's id and the display count. These three
+// only ever say yes: a header rebuilt later (the CRM's edit) re-says the same thing and never un-anchors an order.
+export const displayOrderOf = (v) => {
+    if (!v) return null;
+    const o = (typeof v === 'object') ? v : {};
+    const n = Math.floor(Number(o.displays));
+    return { buildId: str(o.buildId), displays: Number.isFinite(n) && n > 0 ? n : 0 };
+};
+export const displayParkOf = (v) => {
+    const d = displayOrderOf(v);
+    return d ? { displayOrder: d, displayRelease: true, releaseByCount: true } : {};
+};
+
 // ── THE ADDRESS LINES ────────────────────────────────────────────────────────────────────────
 
 // A custom drop-ship carries attention + addressee (both print); a saved NetSuite address-book
@@ -233,6 +258,8 @@ export function shipToLinesOf({ shippingMethod, shippingAddressId, customShippin
 export function soHeaderOf({ door, job = null, form = null, customer = null, by = '', finishes = [], outsourceFinishes = [], now = Date.now() } = {}) {
     const d = up(door) || 'CPQ';
     let h;
+    // The display mark: the tab-7 header's tick, or the quote's (CPQ checkout / 10.5's ⧉ Duplicate).
+    const display = d === 'QUICKSHIP' ? ((form && form.soExtras && form.soExtras.displayOrder) || null) : ((job && job.displayOrder) || null);
     if (d === 'QUICKSHIP') {
         const ex = (form && form.soExtras) || {};
         const ship = (form && form.ship) || {};
@@ -292,6 +319,7 @@ export function soHeaderOf({ door, job = null, form = null, customer = null, by 
         // Aliases for one release — see the header comment. Readers switch, then these go.
         reqDate: h.needBy, needByDate: h.needBy,
         createdBy: by || '',
+        ...displayParkOf(display),
     };
 }
 

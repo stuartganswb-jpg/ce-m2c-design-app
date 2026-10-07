@@ -40,7 +40,7 @@ import { finishSuffixOf } from '../Shared/finishRouting.js';
 import { quoteDoorOf, quoteCopyOf, confirmCartReplace, openQuoteCopyInCpq } from '../Shared/reopenQuote';
 import { duplicateText, ORDER_ROW_LABEL, stalePackCardsOf, packCardCloseStamp, lineCodeFixesOf, lineCodeFixText, rereadLinesPatchOf, rereadLinesText, lineQtyEditOf, kitFinishEditOf, kitQtyEditOf, rodLineEditOf, rowUndoBlockersOf, rowReleaseText, rowReleaseCountOf, countSwitchText, rowRestartPlanOf, rowRestartText, soIsClosed, reopenForRowsCheck, reopenForRowsText, reopenForRowsSoPatch, splitRetiredStamp, rowKeyOf, rowOfLine, rowLinesFromBreakdown, soRowsOf, rowStateOf, displayAnchorPatch, soNeedsLines, rowStartText, ROW_STATE, wholeOrderDocsOf, wholeOrderText, retireBlockersOf, retireText, splitRetiredOf, packagingIdsOf, needsPackCard, packCardToRemove } from '../Shared/displayRelease';
 import { runOeAuto, oeInventoryOf, loadOeLinks } from '../Shared/oeGenerate';
-import { isReleaseByCount, releaseByCountPatch, releaseRowKeyOf, rowTargetOf, rowReleaseOf, nextRowReleaseOf, releaseRunOf, releaseLabelOf, releasesOf, stampWithoutRunOf, rowReleasePlanOf, countSwitchOf, isWholeStamp, ORDER_ROW_KEY } from '../Shared/rowRelease';
+import { isReleaseByCount, anchorCountPatchOf, releaseRowKeyOf, rowTargetOf, rowReleaseOf, nextRowReleaseOf, releaseRunOf, releaseLabelOf, releasesOf, stampWithoutRunOf, rowReleasePlanOf, countSwitchOf, isWholeStamp, ORDER_ROW_KEY } from '../Shared/rowRelease';
 import { soLineCodeOf, soCodeReleasedOf } from '../Shared/pickLines';
 import { finishedCodeOf } from '../Shared/subFinish';
 
@@ -223,6 +223,8 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             setBusy('Opening the new order…');
             await setDoc(doc(db, 'system', 'displays', 'builds', b.id), b);
             await writeDemand([...builds.filter(x => x.id !== b.id), b]);
+            // The new quote says what it is for — its sales order is then BORN parked for 10.5 (RTG never splits it).
+            copy.header.jobData.displayOrder = { buildId: b.id, displays: to };
             openQuoteCopyInCpq(copy, { brand: activeBrand || '' });
         } catch (e) { alert('Duplicate failed: ' + (e?.message || e)); }
         setBusy('');
@@ -288,7 +290,16 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     const loadFloor = async (build) => {
         const ids = anchoredIdsOf(build);
         const typed = String(build?.soNumber || '').trim();
-        if (!ids.length && !typed) { setFloor(null); return; }
+        // THE ORDER BORN FOR THIS BUILD (Shared/salesOrderHeader.displayParkOf): a sales order whose quote was made by
+        // ⧉ Duplicate names the build order it is for — offered for its anchor without anybody typing its number.
+        let born = null;
+        if (build?.id) {
+            try {
+                const qs = await getDocs(query(collection(db, 'hq_sales_orders'), where('displayOrder.buildId', '==', build.id)));
+                born = qs.docs.map(d => ({ id: d.id, ...d.data() })).find(o => !o.deleted && !ids.includes(o.id)) || null;
+            } catch (e) { /* the typed number still finds it */ }
+        }
+        if (!ids.length && !typed && !born) { setFloor(null); return; }
         setFloor({ loading: true, sos: [], lookup: null, fin: [], shop: [], plating: [] });
         try {
             const sos = [];
@@ -303,6 +314,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
                 if (!so) lookup = { error: `No sales order found for "${typed}" — type the SO number as RTG shows it.` };
                 else if (!ids.includes(so.id)) lookup = await readSo(so);
             }
+            if (!lookup && born) lookup = { ...(await readSo(born)), born: true };
             setFloor({
                 loading: false, sos, lookup,
                 fin: sos.flatMap(s => s.fin), shop: sos.flatMap(s => s.shop), plating: sos.flatMap(s => s.plating),
@@ -324,8 +336,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
     // AN ORDER PUT ON THE ROW ROUTE FROM NOW ON IS RELEASED BY COUNT (Stuart 2026-10-05, Shared/rowRelease): its rows
     // start for as many displays as are asked ("10 of 35"), its stocked lines follow each row's count at SO Pack. Only an
     // order nothing has been started or gathered on — one already in motion keeps the whole-row rules it began under.
-    const countPatchFor = (so) => ((so && !isReleaseByCount(so) && !Object.keys(so.oeGen || {}).length && !Object.values(so.committedQty || {}).some(v => Number(v) > 0))
-        ? releaseByCountPatch(N(draft?.qty)) : {});
+    const countPatchFor = (so) => anchorCountPatchOf(so, N(draft?.qty));
     const anchor = async (entry) => {
         const so = entry?.so;
         if (!so || !draft) return;
@@ -1259,7 +1270,7 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             </div>
 
             {/* the orders on the floor — several per build; anchored ones read, the typed one offered */}
-            {(draft.soNumber || anchoredIdsOf(draft).length > 0) && (
+            {(draft.soNumber || anchoredIdsOf(draft).length > 0 || floor?.lookup) && (
                 <div style={{ border: '1px solid var(--line)', background: 'var(--paper-2)', padding: '10px 14px', marginBottom: '16px' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
                         <span style={mono}>On the floor</span>

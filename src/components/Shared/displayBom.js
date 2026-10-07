@@ -504,14 +504,20 @@ const orderIsClosed = (so) => !!so && (U(so.status) === 'CLOSED' || U(so.status)
  */
 export function displayDemandFrom(builds = [], { ordersByBuild = null } = {}) {
     const byItem = {};
-    const add = (key, seed, qty, feet, b) => {
+    // `ns`: NETSUITE ALREADY HOLDS THIS DEMAND (Stuart 2026-10-07). A display order goes to NetSuite with its item lines
+    // (the wall's SO60585 posted 31 of them), so NetSuite's own Committed / Backorder count every open piece of it —
+    // and the Display figure counted them a second time in the suggested quantities (H1-138TRVSBA/P: 70 committed AND
+    // 66 display, for one wall). A build's share is marked `ns` when every sales order anchored to it has its NetSuite
+    // id; a build with no order yet (a quote under review — an estimate commits nothing) is not. The column still
+    // shows all of it; Stock View's suggested quantities add only what NetSuite cannot see (displayDemandNewOf).
+    const add = (key, seed, qty, feet, b, ns = false) => {
         if (!(qty > 0)) return;
         const cur = byItem[key] || { ...seed, qty: 0, feet: 0, builds: [] };
         cur.qty += qty; cur.feet += feet;
         // One entry per build order, however many of its lines carry the item.
         const mine = cur.builds.find(x => x.id === b.id);
         if (mine) { mine.qty += qty; mine.feet = (mine.feet || 0) + feet; }
-        else cur.builds.push({ id: b.id, name: b.name || b.displayName || b.id, qty, feet });
+        else cur.builds.push({ id: b.id, name: b.name || b.displayName || b.id, qty, feet, ...(ns ? { ns: true } : {}) });
         byItem[key] = cur;
     };
     builds.forEach(b => {
@@ -520,6 +526,7 @@ export function displayDemandFrom(builds = [], { ordersByBuild = null } = {}) {
         if (!open) return;
         const orders = ((ordersByBuild && ordersByBuild[b.id]) || []).filter(Boolean);
         const fromOrders = orders.length > 0 && orders.every(isReleaseByCount);
+        const inNs = orders.length > 0 && orders.every(o => !!o.nsInternalId);
         // A STARTED ROW HAS LEFT THE DEMAND (Stuart 2026-09-22, Shared/displayRelease). Its parts are
         // now committed by work orders on RTG — counting them here as well would show the same
         // pieces twice on the Sales Snapshot. Per row, from the per-row split each line carries.
@@ -541,15 +548,15 @@ export function displayDemandFrom(builds = [], { ordersByBuild = null } = {}) {
         const demandOf = (l, field) => ((byCount && Array.isArray(l.byRow) && l.byRow.length)
             ? l.byRow.reduce((s, r) => s + N(r[field]) * leftOf(r.row), 0)
             : perBoardOf(l, field) * open);
-        if (fromOrders) orders.filter(so => !orderIsClosed(so)).forEach(so => orderDemandLines(so).forEach(e => add(e.key, e.seed, e.qty, e.feet, b)));
+        if (fromOrders) orders.filter(so => !orderIsClosed(so)).forEach(so => orderDemandLines(so).forEach(e => add(e.key, e.seed, e.qty, e.feet, b, inNs)));
         else (b.lines?.parts || []).forEach(l => {
             if (l.done) return;
             const key = `${l.billedId || l.code}|${l.finishCode || ''}`;
-            add(key, { code: l.code, billedId: l.billedId || '', partId: l.partId || '', finishCode: l.finishCode || '', name: l.name || '', perFoot: !!l.perFoot }, demandOf(l, 'qtyPerBoard'), demandOf(l, 'feetPerBoard'), b);
+            add(key, { code: l.code, billedId: l.billedId || '', partId: l.partId || '', finishCode: l.finishCode || '', name: l.name || '', perFoot: !!l.perFoot }, demandOf(l, 'qtyPerBoard'), demandOf(l, 'feetPerBoard'), b, inNs);
         });
         (b.lines?.chips || []).forEach(c => {
             if (c.done) return;
-            add(`CHIP|${c.code}`, { code: `CHIP ${c.code}`, billedId: '', partId: '', finishCode: c.code, name: c.name || '', perFoot: false, chip: true }, N(c.qtyPerBoard) * open, 0, b);
+            add(`CHIP|${c.code}`, { code: `CHIP ${c.code}`, billedId: '', partId: '', finishCode: c.code, name: c.name || '', perFoot: false, chip: true }, N(c.qtyPerBoard) * open, 0, b);   // chips are on no order
         });
     });
     return { byItem, openBoards: builds.reduce((s, b) => s + ((b && b.status !== 'COMPLETE' && b.status !== 'CANCELLED') ? openBoards(b) : 0), 0), builds: builds.filter(b => b && b.status !== 'COMPLETE' && b.status !== 'CANCELLED' && openBoards(b) > 0).map(b => ({ id: b.id, name: b.name || b.id, open: openBoards(b) })) };
@@ -567,6 +574,18 @@ export const displayDemandAmountOf = (e, b = null) => {
     if (!b) return feet;
     if (b.feet != null) return N(b.feet);
     return N(e.qty) > 0 ? feet * N(b.qty) / N(e.qty) : 0;
+};
+
+/**
+ * The part of a demand entry NetSuite cannot see yet — what a suggested order / build quantity adds on top of
+ * NetSuite's own Committed and Backorder. A build's share marked `ns` is already in those; a record published before
+ * the mark existed counts in full, as it always did.
+ */
+export const displayDemandNewOf = (e) => {
+    if (!e) return 0;
+    const builds = Array.isArray(e.builds) ? e.builds : [];
+    if (!builds.length) return displayDemandAmountOf(e);
+    return builds.filter(b => b && !b.ns).reduce((a, b) => a + displayDemandAmountOf(e, b), 0);
 };
 
 /** A ship plan: `perShip` boards every `everyDays` from `start` until `qty` is covered. Dates as YYYY-MM-DD. */

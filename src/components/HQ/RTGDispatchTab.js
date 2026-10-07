@@ -1329,6 +1329,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         const selfAuthorized = !!(o.autoFlow || o.orderClass === 'ORDER_ENTRY');
         if (kind === 'sales') {
             if (o.autoSplit) return { text: 'auto-split ✓', tone: 'ok' };
+            if (o.displayRelease) return { text: 'display order — its rows are released from 10.5', tone: 'wait' };
             if (!o.hqJobId) return { text: 'no CPQ job linked — cannot split; release from View', tone: 'red' };
             if (o.appCreated && !o.nsInternalId) return { text: 'awaiting NetSuite SO accept', tone: 'wait' };
         } else {
@@ -1441,6 +1442,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // document, built from a quote's printed breakdown (no part id, no cut length, no bin).
         const oeRefusal = (why) => { addLog(`⛔ SO ${so.soId || so.id} is an Order Entry order (${why}) — never split whole. Its lines start through the Order Entry route.`, 'warn'); if (!opts.skipConfirm) alert(`⛔ ${so.soId || so.id} is an ORDER ENTRY order (${why}).\n\nIt is never split whole: its lines start one at a time through the Order Entry route, and the WMS packs its stocked lines off the order itself. Nothing was written.`); };
         if (isOrderEntryOrder(so)) return oeRefusal(isQuickShip(so) ? `orderClass ${ORDER_ENTRY_CLASS}` : `approved from quote ${so.hqJobId}`);
+        // …AND A DISPLAY ORDER IS NEVER SPLIT WHOLE EITHER (Stuart 2026-10-07): its rows are released from 10.5, by count.
+        // The engine already stands down for it; this is the same guard at the cause, so ↻ Re-dispatch and the
+        // supervisor override cannot put every row of every display on the floors as one document.
+        if (so.displayRelease) {
+            addLog(`⛔ SO ${so.soId || so.id} is a display order — its rows are released from 10.5 (Display Management), never split whole.`, 'warn');
+            if (!opts.skipConfirm) alert(`⛔ ${so.soId || so.id} is a display order.\n\nIts rows are released from 10.5 (Display Management), one at a time and by count — RTG never splits it whole. Open its build order there and start the rows you want.`);
+            return;
+        }
         const isRedispatch = so.status === 'Dispatched';
         if (!opts.skipConfirm && !window.confirm(isRedispatch
             ? `RE-DISPATCH SO ${so.soId || so.id}?\n\nThe split re-runs with the current routing rules and OVERWRITES the existing floor work orders (same ids) — any progress already logged against them is reset.`

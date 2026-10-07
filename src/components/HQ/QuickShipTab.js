@@ -2351,6 +2351,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 card — the manufacturing side reads them everywhere the order goes. */}
                             <div><span style={lbl}>Need-by date (production)</span><input type="date" value={soExtras.needBy} onChange={e => setSoExtras(p2 => ({ ...p2, needBy: e.target.value }))} style={{ ...inp, width: '100%' }} /></div>
                             <div><span style={lbl}>Production notes (rides to the floor)</span><input value={soExtras.prodNotes} onChange={e => setSoExtras(p2 => ({ ...p2, prodNotes: e.target.value }))} placeholder="e.g. match sample on file · ship complete" style={{ ...inp, width: '100%' }} /></div>
+                            {/* A DISPLAY ORDER IS BORN PARKED FOR 10.5 (Stuart 2026-10-07, Shared/salesOrderHeader.displayParkOf) — the
+                                same tick CPQ's checkout carries: RTG does not start its to-be-finished lines by itself and the
+                                WMS offers nothing until a row is released on 10.5 Display Management. */}
+                            <label style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', border: `1px solid ${soExtras.displayOrder ? 'var(--brass)' : 'var(--line)'}`, background: soExtras.displayOrder ? '#fdf8ef' : '#fff', cursor: 'pointer' }}>
+                                <input type="checkbox" checked={!!soExtras.displayOrder} onChange={e => setSoExtras(p2 => ({ ...p2, displayOrder: e.target.checked }))} />
+                                <span style={{ fontSize: '0.85rem' }}><b>Display order</b> — its rows are released from 10.5 Display Management, by count. Nothing starts by itself and the warehouse is offered nothing until a row is released.</span>
+                            </label>
                             {/* A SET % FOR THE WHOLE ORDER (Stuart 2026-09-11): every item line's rate,
                                 fees untouched — the same field CPQ's checkout writes (orderDiscount). */}
                             <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '10px' }}>

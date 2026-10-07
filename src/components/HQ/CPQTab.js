@@ -19,7 +19,7 @@ import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDoc, getDocs, updateDoc, serverTimestamp, query, where, deleteField } from "firebase/firestore";
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
-import { soHeaderOf, stampLineFinishRouting, readyDateOf, leadText, isRushFeeItem } from '../Shared/salesOrderHeader';
+import { soHeaderOf, stampLineFinishRouting, readyDateOf, leadText, isRushFeeItem, displayOrderOf } from '../Shared/salesOrderHeader';
 import { draftFromCartLine, cartLineForDraft } from '../Shared/visionHandoff';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
@@ -1121,6 +1121,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                       internalMemo: reopen.internalMemo || '',
                       needBy: reopen.needBy || '',
                       productionNotes: reopen.productionNotes || '',
+                      displayOrder: reopen.displayOrder || null,
                       shippingMethod: reopen.shippingMethod || 'SAVED',
                       shippingAddressId: reopen.shippingAddressId || '',
                       shippingAmount: reopen.shippingAmount || '',
@@ -3583,6 +3584,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           // 2026-09-03). Written every save — a cleared date is a cleared date.
           needBy: needByTyped,
           productionNotes: String(jobData.productionNotes || '').trim(),
+          // A DISPLAY ORDER (Stuart 2026-10-07, Shared/salesOrderHeader.displayParkOf): the checkout's tick — set by 10.5's
+          // ⧉ Duplicate — rides the quote, and its sales order is born parked for 10.5 whichever door approves it. Written
+          // every save: an unticked box is a quote that is not one.
+          displayOrder: displayOrderOf(jobData.displayOrder),
           leadBasis: lead.leadBasis, leadWeeks: lead.leadWeeks, readyDate: lead.readyDate, rushApplied,
 
           // fsSafe hardens the whole blob — Vision-derived fields can carry undefined / NaN / nested
@@ -6046,6 +6051,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                                 style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
                         </div>
                     </div>
+                    {/* A DISPLAY ORDER IS BORN PARKED FOR 10.5 (Stuart 2026-10-07): ticked, the sales order this quote becomes
+                        is never split by RTG — its rows are released from 10.5 Display Management, by count. 10.5's
+                        ⧉ Duplicate ticks it and names the build order; a display quoted by hand is ticked here. */}
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginTop: '12px', padding: '10px 12px', border: `1px solid ${jobData.displayOrder ? 'var(--brass)' : 'var(--line)'}`, background: jobData.displayOrder ? '#fdf8ef' : '#fff', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={!!jobData.displayOrder} style={{ marginTop: '3px' }}
+                            onChange={e => setJobData({ ...jobData, displayOrder: e.target.checked ? (displayOrderOf(jobData.displayOrder) || { buildId: '', displays: 0 }) : null })} />
+                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', lineHeight: 1.4 }}>
+                            <b>Display order</b> — its rows are released from 10.5 Display Management, by count. RTG will not split it and nothing starts by itself.
+                            {jobData.displayOrder && (jobData.displayOrder.buildId || jobData.displayOrder.displays > 0) && (
+                                <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.04em', color: 'var(--ink-soft)', marginTop: '4px' }}>
+                                    {jobData.displayOrder.displays > 0 ? `${jobData.displayOrder.displays} displays` : ''}{jobData.displayOrder.buildId ? `${jobData.displayOrder.displays > 0 ? ' · ' : ''}build order ${jobData.displayOrder.buildId}` : ''}
+                                </span>
+                            )}
+                        </span>
+                    </label>
                     <div style={{ marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.03em', color: leadPreview.leadBasis ? 'var(--ink)' : 'var(--ink-soft)' }}>
                         🗓 {leadText(leadPreview)}
                         {jobData.needBy && leadPreview.readyDate && jobData.needBy < leadPreview.readyDate && !leadPreview.rushApplied ? <span style={{ color: '#d9534f' }}> ⚠ Need-by {jobData.needBy} is before the ready date.</span> : null}
