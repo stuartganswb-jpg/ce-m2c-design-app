@@ -433,6 +433,20 @@ const AppWorkGuide = () => (
             catches more than the names you meant.
         </div>
 
+        <h2 style={S.h2}>Deleting an item for good <span style={S.tabno}>(4.5 Mass Update — admins)</span></h2>
+        <p style={S.p}>An item NetSuite sends again is matched to the record the app already has, and the app's own work on it
+        (its name, prices, tags) is never overwritten. So to start an item over, its record has to be gone. <b>True delete</b>,
+        under the mass-update button, does that for the ticked records.</p>
+        <Screen title="True delete" tag="4.5 → tick the records → True delete">
+            <Path name="It looks first" goes="a list, before anything happens">Every bill of materials, every CPQ flow and every item is read. A record still used — on another assembly's bill of materials, in a flow, as a kit component, as an alias target, as another item's brass twin or wood species item — is <b>not deleted</b>, and the window says what uses it. Take it off there first.</Path>
+            <Path name="An assembly" goes="its own bill of materials goes with it">An assembly that nothing uses can be deleted, and its own bill-of-materials lines are deleted with it — the window counts them. The parts on those lines stay unless they are ticked too.</Path>
+            <Path name="A duplicate may go" goes="the record that stays answers for the number">Where two records carry the same item number and something names that number, one of them can be deleted. Both cannot.</Path>
+            <Path name="What goes with it" goes="an item that comes back recalls nothing">The record itself, an assembly's own bill-of-materials lines, its “NetSuite differs” rows on this tab, its entry on the locked OLD list, and its link from gallery pictures (the pictures stay in the gallery).</Path>
+            <Path name="Type DELETE" goes="checked once more, then deleted">The check is run again at that moment. If anything changed, nothing is deleted and the window shows the new list.</Path>
+            <Path name="The ledger" goes="RTG → Deletion Ledger, and the Audit Log">A copy of each record is kept, with who and when. It is a record only — nothing reads it back into an item.</Path>
+        </Screen>
+        <div style={S.note}><b>NetSuite is not touched, and orders are not checked.</b> An item NetSuite still offers to the app comes back on the next item sync, as a new item. Quotes and orders already written keep their lines as text; a screen that looks the item up again will not find it. Finish variants (<em>H1-1BS/P</em>) are their own records — tick them too, or the window names the ones that stay.</div>
+
         <h2 style={S.h2}>Refusing well</h2>
         <div style={S.rule}>
             Refuse only on complete knowledge. Warn when you might be wrong. Never block someone who

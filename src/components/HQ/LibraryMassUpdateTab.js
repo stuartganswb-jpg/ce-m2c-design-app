@@ -12,7 +12,7 @@ import { isStreamVariantCode } from '../Shared/finishingTime';
 import { packSizeOf, rushFeeAmountOf, rushFeeLabelOf } from '../Shared/quickShipUom';
 import { SOURCING, sourcingPatch } from '../Shared/sourcing';
 import NetSuiteDiffsPanel from './NetSuiteDiffsPanel';
-import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where, getDocs, getDocsFromServer, getDocFromServer } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
 import { sceneNodeNames, renderThumbnails, sceneSubtree, releaseScene } from '../Shared/hardwareThumbs';
 import { planNodeThumbs, planModelThumbs, slotReportText, modelReportText, NODE_READY } from '../Shared/nodeThumbs';
@@ -23,6 +23,8 @@ import { splitNodes } from '../Shared/nodeList';
 import { canonicalCollection, canonicalCollections } from '../Shared/collectionName';
 import { finishCodeOf, missingMaterialOf, duplicateCodesOf, duplicateRemovalText, withoutIds, withMaterial, finishSaveRefusal, materialKnownFromCode, finishLine } from '../Shared/finishLibrary';
 import { parseQuestions, questionsText } from '../Shared/finishQuestions';
+import { planItemDelete, residualsOf, samePlan, applyItemDelete, itemLabelOf, lineCountOf } from '../Shared/itemDelete';
+import { recordDeletion } from '../Shared/orderLifecycle';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -113,7 +115,7 @@ const NodeTagsPanel = ({ lists }) => {
     );
 };
 
-const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
+const LibraryMassUpdateTab = ({ currentUser, activeBrand, canDelete = false }) => {
     // --- MASS UPDATE STATE ---
     const [inventory, setInventory] = useState([]);
     const [searchTerm, setSearchTerm] = useState("");
@@ -1306,6 +1308,67 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         setProgress(0);
     };
 
+    // ── 🗑 TRUE DELETE (Stuart 2026-10-06: "a true delete so that it totally removes the item from the database so that
+    // when we resync later if the same netsuite internal id is used, it will be like a new item in the app" · a used
+    // item: "refuse" · the ledger copy: "be sure it is isolated so if we bring back an item it does not trigger old
+    // residuals" · "can delete assembly but as always ask to confirm if used anywhere in cpq flow"). Shared/itemDelete
+    // decides what may go and what is keyed to the record; this reads, shows, and — on a
+    // typed DELETE — looks once more and then commits each record's ledger copy, its delete and everything keyed to it
+    // in ONE batch. Nothing reads the ledger back into an item.
+    const [del, setDel] = useState(null);   // null | { busy, plan, residuals, typed, reason, changed, progress, result, error }
+    const rowsOf = (snap) => snap.docs.map(d => ({ ...d.data(), id: d.id }));
+    // Read from the SERVER, never this browser's cache: a check for a delete has to see what is there now, and a
+    // read that cannot reach the server fails (and nothing is deleted) rather than answering from memory.
+    const readDeletePlan = async () => {
+        const [items, pins, flows] = await Promise.all([
+            getDocsFromServer(collection(db, 'Approved_Designs')), getDocsFromServer(collection(db, 'assembly_pins')), getDocsFromServer(collection(db, 'cpq_flows'))]);
+        return planItemDelete({ selectedIds: Array.from(selectedIds), items: rowsOf(items), pins: rowsOf(pins), flows: rowsOf(flows) });
+    };
+    const readDeleteResiduals = async () => {
+        const [diffs, retired, assets] = await Promise.all([
+            getDocsFromServer(collection(db, 'system', 'ns_import_diffs', 'items')), getDocFromServer(doc(db, 'system', 'retired_items')), getDocsFromServer(collection(db, 'global_assets'))]);
+        return {
+            diffIds: diffs.docs.map(d => d.id),
+            retiredIds: (retired.exists() && Array.isArray(retired.data().internalIds)) ? retired.data().internalIds : [],
+            assets: assets.docs.map(d => ({ id: d.id, associatedParts: d.data().associatedParts })),
+        };
+    };
+    const openDelete = async () => {
+        if (!canDelete || selectedIds.size === 0 || isUpdating || (del && del.busy)) return;
+        setDel({ busy: 'CHECK' });
+        try {
+            const plan = await readDeletePlan();
+            const residuals = residualsOf({ parts: plan.deletable, ...(await readDeleteResiduals()) });
+            setDel({ busy: '', plan, residuals, typed: '', reason: '' });
+        } catch (e) {
+            console.error(e);
+            setDel({ busy: '', error: `The check could not be completed, so nothing can be deleted: ${e?.message || e}` });
+        }
+    };
+    const runDelete = async () => {
+        if (!canDelete || !del || del.busy || !del.plan || del.typed !== 'DELETE' || !del.plan.deletable.length) return;
+        const first = del.plan, reason = String(del.reason || '').trim();
+        setDel(d => ({ ...d, busy: 'DELETE', progress: 0 }));
+        try {
+            // The second look — the same check on what the database holds NOW. A different answer deletes nothing.
+            const plan = await readDeletePlan();
+            const store = await readDeleteResiduals();
+            if (!samePlan(first, plan)) {
+                setDel({ busy: '', plan, residuals: residualsOf({ parts: plan.deletable, ...store }), typed: '', reason, changed: true });
+                return;
+            }
+            // Each group in ONE batch — ledger copy, delete, and everything keyed to the record (Shared/itemDelete).
+            const done = await applyItemDelete({ db, doc, writeBatch, recordDeletion }, { parts: plan.deletable, lines: plan.lines, store, by: currentUser, reason,
+                onProgress: (n, of) => setDel(d => (d ? { ...d, progress: Math.round((n / of) * 100) } : d)) });
+            setSelectedIds(prev => { const next = new Set(prev); done.deleted.forEach(p => next.delete(p.id)); return next; });
+            setDel({ busy: '', result: { deleted: done.deleted, lines: done.lines, failed: done.failed, left: plan.deletable.length - done.deleted.length,
+                cleared: residualsOf({ parts: done.deleted, ...store }), refused: plan.refused.length } });
+        } catch (e) {
+            console.error('True delete:', e);
+            setDel({ busy: '', error: `Nothing was deleted — the check could not be completed: ${e?.message || e}` });
+        }
+    };
+
     // --- DICTIONARY MANAGERS ---
     const handleAddNewListCategory = async () => {
         const name = window.prompt("Enter the name for the new List Category (e.g., 'Packaging Types'):");
@@ -2231,6 +2294,22 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 EXECUTE MASS UPDATE ON {selectedIds.size} RECORD(S)
                             </button>
                         )}
+                        {/* 🗑 TRUE DELETE (Stuart 2026-10-06) — apart from the update button, and it opens a list before it does anything. */}
+                        {canDelete && (
+                            <div style={{ marginTop: '28px', paddingTop: '16px', borderTop: `1px dashed ${theme.line}` }}>
+                                <button
+                                    onClick={openDelete}
+                                    disabled={selectedIds.size === 0 || isUpdating || !!del}
+                                    title="Removes the ticked records from the database, so a later NetSuite sync brings them back as new items. Checks first where each one is used, and lists everything before anything is deleted."
+                                    style={{ width: '100%', padding: '12px', background: 'transparent', color: selectedIds.size > 0 ? '#b02d20' : theme.inkSoft, border: `1px solid ${selectedIds.size > 0 ? '#b02d20' : theme.line}`, cursor: (selectedIds.size > 0 && !isUpdating && !del) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}
+                                >
+                                    True delete — {selectedIds.size} selected record(s)…
+                                </button>
+                                <div style={{ fontSize: '0.78rem', color: theme.inkSoft, marginTop: '6px', lineHeight: 1.45 }}>
+                                    Takes the ticked records out of the database for good. It checks where each one is used and shows the list first; nothing is deleted until you type DELETE.
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                 </div>
@@ -2775,6 +2854,129 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     </div>
                 </div>
             )}
+
+            {/* 🗑 TRUE DELETE — the list, the typed DELETE, the result (Shared/itemDelete) */}
+            {del && (() => {
+                const red = '#b02d20';
+                const plan = del.plan, res = del.residuals;
+                const n = plan ? plan.deletable.length : 0;
+                const bomLines = plan ? lineCountOf(plan) : 0;
+                const close = () => { if (!del.busy) setDel(null); };
+                const cap = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, margin: '18px 0 6px' };
+                const list = { border: `1px solid ${theme.line}`, maxHeight: '190px', overflowY: 'auto', background: '#fff' };
+                const row = { padding: '7px 12px', borderBottom: `1px solid ${theme.paper2}`, fontSize: '0.85rem', color: theme.ink };
+                const note = { fontSize: '0.85rem', color: theme.ink, lineHeight: 1.5, margin: '0 0 8px', paddingLeft: '14px', textIndent: '-14px' };
+                const cleared = res ? [
+                    res.diffIds.length ? `${res.diffIds.length} "NetSuite differs" record${res.diffIds.length === 1 ? '' : 's'}` : '',
+                    res.retired ? `${res.retired.removed.length} entr${res.retired.removed.length === 1 ? 'y' : 'ies'} on the locked OLD list` : '',
+                    res.assets.length ? `the link from ${res.assets.length} gallery picture${res.assets.length === 1 ? '' : 's'} (the pictures stay)` : '',
+                ].filter(Boolean) : [];
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.55)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                        <div style={{ background: theme.paper, width: 'min(760px, 100%)', maxHeight: '92vh', overflowY: 'auto', border: `1px solid ${red}`, padding: '26px 30px', boxShadow: '0 12px 40px rgba(0,0,0,.25)' }}>
+                            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', fontWeight: 500, color: theme.ink }}>True delete</div>
+
+                            {del.busy === 'CHECK' && <div style={{ ...note, marginTop: '16px', paddingLeft: 0, textIndent: 0 }}>Checking where the ticked records are used — every bill of materials, every CPQ flow, every item…</div>}
+
+                            {del.error && (
+                                <>
+                                    <div style={{ ...note, marginTop: '16px', paddingLeft: 0, textIndent: 0, color: red }}>{del.error}</div>
+                                    <button onClick={close} style={{ marginTop: '10px', padding: '10px 22px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Close</button>
+                                </>
+                            )}
+
+                            {del.result && (
+                                <>
+                                    <div style={{ ...note, marginTop: '16px', paddingLeft: 0, textIndent: 0, color: del.result.failed ? red : '#1e8449', fontWeight: 600 }}>
+                                        {del.result.deleted.length} record{del.result.deleted.length === 1 ? '' : 's'} deleted{del.result.lines ? `, with ${del.result.lines} bill-of-materials line${del.result.lines === 1 ? '' : 's'}` : ''}{del.result.failed ? ` — then it stopped. ${del.result.left} still in the library, untouched.` : '.'}
+                                    </div>
+                                    {del.result.failed && <div style={{ ...note, paddingLeft: 0, textIndent: 0, color: red }}>{del.result.failed}</div>}
+                                    {del.result.deleted.length > 0 && (
+                                        <>
+                                            <div style={list}>{del.result.deleted.map(p => <div key={p.id} style={row}>{itemLabelOf(p)}</div>)}</div>
+                                            <div style={{ ...note, marginTop: '10px', paddingLeft: 0, textIndent: 0 }}>A copy of each is in the deletion ledger (RTG → Deletion Ledger, and the Audit Log).</div>
+                                        </>
+                                    )}
+                                    {(() => {
+                                        const c = del.result.cleared;
+                                        const also = c ? [
+                                            c.diffIds.length ? `${c.diffIds.length} "NetSuite differs" record${c.diffIds.length === 1 ? '' : 's'}` : '',
+                                            c.retired ? `${c.retired.removed.length} entr${c.retired.removed.length === 1 ? 'y' : 'ies'} on the locked OLD list` : '',
+                                            c.assets.length ? `the link from ${c.assets.length} gallery picture${c.assets.length === 1 ? '' : 's'}` : '',
+                                        ].filter(Boolean) : [];
+                                        return also.length ? <div style={{ ...note, paddingLeft: 0, textIndent: 0 }}>Cleared with them: {also.join(', ')}.</div> : null;
+                                    })()}
+                                    {!!del.result.refused && <div style={{ ...note, paddingLeft: 0, textIndent: 0 }}>{del.result.refused} ticked record{del.result.refused === 1 ? ' is' : 's are'} still in use and stayed.</div>}
+                                    <button onClick={close} style={{ marginTop: '10px', padding: '10px 22px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Close</button>
+                                </>
+                            )}
+
+                            {plan && !del.result && (
+                                <>
+                                    {del.changed && <div style={{ ...note, marginTop: '14px', paddingLeft: 0, textIndent: 0, color: red, fontWeight: 600 }}>Something changed between the first check and the delete, so nothing was deleted. This is the list as it stands now — read it again.</div>}
+
+                                    {plan.refused.length > 0 && (
+                                        <>
+                                            <div style={{ ...cap, color: red }}>Not deleted — still in use ({plan.refused.length})</div>
+                                            <div style={{ ...list, borderColor: red }}>
+                                                {plan.refused.map(r => (
+                                                    <div key={r.part.id} style={row}>
+                                                        <b>{itemLabelOf(r.part)}</b>
+                                                        {r.uses.map(u => <div key={u} style={{ color: theme.inkSoft, fontSize: '0.8rem', marginTop: '2px' }}>· {u}</div>)}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </>
+                                    )}
+                                    {plan.missing.length > 0 && <div style={{ ...note, marginTop: '10px', paddingLeft: 0, textIndent: 0 }}>{plan.missing.length} ticked record{plan.missing.length === 1 ? ' is' : 's are'} no longer in the library.</div>}
+
+                                    <div style={cap}>Will be deleted ({n}{bomLines ? ` · and ${bomLines} bill-of-materials line${bomLines === 1 ? '' : 's'}` : ''})</div>
+                                    {n === 0
+                                        ? <div style={{ ...note, paddingLeft: 0, textIndent: 0 }}>Nothing. Take the records above off what uses them, then try again.</div>
+                                        : <div style={list}>{plan.deletable.map(p => (
+                                            <div key={p.id} style={row}>
+                                                {itemLabelOf(p)}
+                                                {(plan.lines[p.id] || []).length > 0 && <b style={{ color: red, fontSize: '0.78rem' }}> · with its {plan.lines[p.id].length} bill-of-materials line{plan.lines[p.id].length === 1 ? '' : 's'}</b>}
+                                                {p.netSuiteInternalId ? <span style={{ color: theme.inkSoft, fontSize: '0.78rem' }}> · NetSuite id {String(p.netSuiteInternalId)}</span> : <span style={{ color: theme.inkSoft, fontSize: '0.78rem' }}> · not in NetSuite — it cannot come back</span>}
+                                                {Array.isArray(p.sharedBrands) && p.sharedBrands.length > 0 && <span style={{ color: red, fontSize: '0.78rem' }}> · shared with {p.sharedBrands.join(', ').toUpperCase()}</span>}
+                                            </div>
+                                        ))}</div>}
+
+                                    {n > 0 && (
+                                        <>
+                                            <div style={cap}>What this does</div>
+                                            <div style={note}>• Everything the app holds on these records goes with them: prices, customer numbers, tags, twins, pictures. An item NetSuite still sends comes back on the next item sync as a new item, with NetSuite's own data only.</div>
+                                            {bomLines > 0 && <div style={{ ...note, color: red }}>• An assembly's own bill of materials goes with it: {bomLines} line{bomLines === 1 ? '' : 's'} in all. The parts on those lines are not deleted unless they are ticked too.</div>}
+                                            {cleared.length > 0 && <div style={note}>• Cleared with them, so nothing old meets an item that comes back: {cleared.join(', ')}.</div>}
+                                            {plan.variantsLeft.length > 0 && <div style={{ ...note, color: red }}>• Finish variants that are not ticked and will stay: {plan.variantsLeft.map(v => `${itemLabelOf(v.part).split(' — ')[0]} → ${v.variants.map(x => itemLabelOf(x).split(' — ')[0]).join(', ')}`).join(' · ')}.</div>}
+                                            <div style={note}>• NetSuite is not touched.</div>
+                                            <div style={note}>• Not checked: quotes, sales orders, work orders and saved carts. Lines already written keep their text; a screen that looks the item up again will not find it.</div>
+                                            <div style={note}>• A copy of each record is kept in the deletion ledger. Nothing reads it back into an item.</div>
+
+                                            <div style={cap}>Why (optional — kept in the ledger)</div>
+                                            <input value={del.reason || ''} onChange={(e) => { const v = e.target.value; setDel(d => ({ ...d, reason: v })); }} disabled={!!del.busy} placeholder="e.g. loaded twice" style={{ ...fieldStyle, background: '#fff' }} />
+                                            <div style={cap}>Type DELETE to go ahead</div>
+                                            <input value={del.typed || ''} onChange={(e) => { const v = e.target.value; setDel(d => ({ ...d, typed: v })); }} disabled={!!del.busy} autoComplete="off" spellCheck={false} style={{ ...fieldStyle, background: '#fff', fontFamily: 'var(--mono)', letterSpacing: '.1em' }} />
+                                        </>
+                                    )}
+
+                                    <div style={{ display: 'flex', gap: '12px', marginTop: '20px', alignItems: 'center' }}>
+                                        {n > 0 && (
+                                            <button onClick={runDelete} disabled={del.typed !== 'DELETE' || !!del.busy}
+                                                style={{ padding: '12px 22px', background: (del.typed === 'DELETE' && !del.busy) ? red : theme.paper2, color: (del.typed === 'DELETE' && !del.busy) ? '#fff' : theme.inkSoft, border: 'none', cursor: (del.typed === 'DELETE' && !del.busy) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                {del.busy === 'DELETE' ? `Deleting… ${del.progress || 0}%` : `Delete ${n} record${n === 1 ? '' : 's'}`}
+                                            </button>
+                                        )}
+                                        <button onClick={close} disabled={!!del.busy} style={{ padding: '12px 22px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.ink}`, cursor: del.busy ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                            {n > 0 ? 'Cancel — delete nothing' : 'Close'}
+                                        </button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                );
+            })()}
 
         </div>
     );
