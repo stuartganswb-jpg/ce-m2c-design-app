@@ -457,7 +457,7 @@ function HQ() {
             </div>
           }>
             {activeTab === '1. Inception & Validation' && <InceptionTab currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === '1.2 Control Sheets' && <ControlSheetsTab currentUser={user.name} activeBrand={activeBrand.id} userRole={safeUserRole} isSuperAdmin={user?.superAdmin === true || safeUserRole === 'superadmin'} writeLog={logHqAction} />}
+            {activeTab === '1.2 Control Sheets' && <ControlSheetsTab currentUser={user.name} activeBrand={activeBrand.id} userRole={safeUserRole} isSuperAdmin={user?.superAdmin === true || safeUserRole === 'superadmin'} writeLog={logHqAction} onNavigateToLibrary={(itemId) => { setLibraryFocusItemId(itemId); setActiveTab('4. Master Library'); }} />}
             {activeTab === '1.5 Node Grouping' && <NodeClusterTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '1.6 Assembly Builder' && <AssemblyBuilderTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '2. Visual Assembly' && <VisualAssemblyTab currentUser={user.name} activeBrand={activeBrand.id} onProceed={() => setActiveTab('3. BOM Engine')} />}

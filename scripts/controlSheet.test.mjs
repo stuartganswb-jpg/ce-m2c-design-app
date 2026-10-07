@@ -17,6 +17,7 @@ import {
     projectNameKey, projectIdOf, tab1ProjectsOf, blankLine, blankProject,
     readBundle, planImport, finishImport,
     CURRENCIES, SOURCING_CHOICES, cellRawOf, sheetGroupsFor, libraryTargetOf, pushStateOf, noLibraryFieldText,
+    PUSH_CLASSES, requiredFor, columnsWithoutField, readinessOf, existingByCode, libraryIdFor, pushPlanOf, pushedStamp, unlockStamp,
     REF_KEY, OUR_MONEY, exportColumnsFor, startsInDownload, exportValueOf, backValueOf, planReimport, startsTicked, patchForCells, lineFromNewRow,
 } from '../src/components/Shared/controlSheet.js';
 import { isoOf, rateUrlFor, readRate, usdRateFor, forgetRates, usdOf, hasOriginPrice, originPricePatch, fxNoteOf, currenciesToRefresh, refreshPlan } from '../src/components/Shared/fxRates.js';
@@ -325,6 +326,72 @@ const planBare = planReimport({ ...bare, lines: lines3, projectId: 'ce__H3_CONTO
 ok('…and the same differences are found (less the sheet\'s own balloon and quantity, which need the hidden sheet)', planBare.changes.find(c => c.lineId === 'L1').cells.map(c => c.key).join() === 'priceOrigin,currency,leadTime' && !planBare.changes.some(c => c.cells.some(x => x.key === '__qty')));
 const dupHead = await readControlSheetXlsx(await (async () => { const w = new ExcelJS.Workbook(); const sh = w.addWorksheet('s'); ['Ref (do not change)', 'Category', 'Description'].forEach((h, i) => { sh.getCell(1, i + 1).value = h; }); ['L1', 'FINIAL', 'x'].forEach((h, i) => { sh.getCell(2, i + 1).value = h; }); return w.xlsx.writeBuffer(); })(), allCols);
 ok('a heading two columns share (Category) is not guessed at', dupHead.columns[1].key === null && dupHead.columns[2].key === 'name');
+
+// ── THE PUSH: A LINE BECOMES A MASTER LIBRARY RECORD ────────────────────────────────────────────────────
+const LISTS = { prodTypes: ['FINIAL', 'BRACKET', 'POLE'], uom: ['EA', 'FT'], partHandling: ['Custom', 'Small Parts'], materials: ['METAL', 'WOOD', 'BRASS'], collections: ['H3 CONTOURS'], bins: ['A-01'], watchLists: [], projections: [], bracketMounts: [], outsourceActions: [], feeTypes: [], routingTypes: ['STANDARD'] };
+const hw = sheetGroupsFor('HARDWARE', []).flatMap(g => g.fields);
+const finial = { id: 'L1', status: 'READY', itemCode: 'h3-75df ', name: ' 0.75in Drum Finial', recordClass: 'Inventory', productType: 'Finial', uom: 'ea', partHandling: 'Small Parts', sourcing: 'Outsourced',
+    pictureUrl: 'https://s/p1.png', size: '1.48in L x 1.24in Diam.', material: 'BRASS', weight: '0.4', vendor: 'Dong Li', vendorSku: 'DF-75', priceOrigin: 66, currency: 'RMB', priceUsd: 9.8439, dutyPct: 0.65, basePrice: 28, collection: 'h3  contours', binLocation: 'A-01',
+    isStocked: true, unfinished: false, paintSize: 'S', leadTime: '45 days', quotes: [{ label: 'Price 1 · BRASS', price: 66, currency: 'RMB', qty: '100' }], rawStock: 'bar', tags: { category: 'FINIAL', position: 'LEFT' }, notes: 'sample approved' };
+const ctx = (over = {}) => ({ fields: hw, pushColumns: {}, customSchema: [], lists: LISTS, lines: [finial], ...over });
+const R = (line, over) => readinessOf(line, ctx(over));
+ok('this step pushes a part, a fee and a $-holder', PUSH_CLASSES.join() === 'Inventory,Fee,Non-Inventory');
+ok('a part needs the seven; a fee and a $-holder are not asked how they are routed or sourced', requiredFor('Inventory').join() === 'itemCode,name,recordClass,uom,productType,partHandling,sourcing' && requiredFor('Fee').join() === 'itemCode,name,recordClass,uom' && requiredFor('Non-Inventory').length === 4);
+ok('a worked-out line is ready', R(finial).ok && R(finial).blocks.length === 0, JSON.stringify(R(finial)));
+for (const [key, label] of [['itemCode', 'Item #'], ['name', 'Description'], ['recordClass', 'Class'], ['productType', 'Category'], ['uom', 'UOM'], ['partHandling', 'Part handling'], ['sourcing', 'Sourcing']]) {
+    const r = R({ ...finial, [key]: '' });
+    ok(`…without its ${label} it is refused, and told which`, !r.ok && r.blocks.some(b => b.startsWith(`${label} is empty`)), JSON.stringify(r.blocks));
+}
+ok('a needed column that is unticked for the Library stops the push', R(finial, { pushColumns: { uom: false } }).blocks.some(b => b.includes('UOM is needed by the Master Library, but its column is not ticked')));
+ok('a category, unit or handling the Library does not list is refused — it would mis-route the part', R({ ...finial, productType: 'Knob' }).blocks.some(b => b.includes('Category "Knob" is not on the Master Library\'s list')) && R({ ...finial, uom: 'FOOT' }).blocks.length === 1 && R({ ...finial, partHandling: 'small' }).blocks.length === 1);
+ok('…case does not matter', R({ ...finial, productType: 'finial', partHandling: 'small parts' }).ok);
+ok('…and an EMPTY list refuses no one — it warns', R(finial, { lists: { ...LISTS, uom: [] } }).ok && R(finial, { lists: { ...LISTS, uom: [] } }).warnings.some(w => w.includes('could not be checked')));
+ok('a column ticked for the Library with no field there stops every push, by name', R(finial, { pushColumns: { size: true } }).blocks.some(b => b.includes('Size / dimensions') && b.includes('4.5')) && columnsWithoutField(hw, { size: true, color: true }, []).map(fd => fd.key).join() === 'size,color');
+ok('…until the attribute exists', R(finial, { pushColumns: { size: true }, customSchema: [{ key: 'size', label: 'Size / dimensions', type: 'text' }] }).ok);
+ok('two lines with one item # cannot both go', R(finial, { lines: [finial, { id: 'L2', itemCode: 'H3-75DF' }] }).blocks.some(b => b.includes('same item # (H3-75DF)')) && R(finial, { lines: [finial, { id: 'L2', itemCode: 'H3-1DF' }] }).ok);
+ok('an assembly and a kit wait for their parts', R({ ...finial, recordClass: 'Assembly' }).blocks.some(b => b.includes('pushed together with its parts')) && R({ ...finial, recordClass: 'Kit' }).blocks.some(b => b.startsWith('A kit')));
+ok('a pushed line is not pushed again', !R({ ...finial, status: 'PUSHED' }).ok);
+const fee = { id: 'F1', itemCode: 'CE-FEE-9001', name: 'Rush fee', recordClass: 'Fee', uom: 'EA', basePrice: 25 };
+ok('a fee is ready on its number, words, class and unit', R(fee, { lines: [fee] }).ok && R({ ...fee, uom: '' }, { lines: [fee] }).blocks.join() === 'UOM is empty.');
+const bareLine = { ...finial, vendor: '', basePrice: null, binLocation: '', material: 'Zamak', pictureUrl: '', priceUsd: null, priceOrigin: null };
+ok('what is merely empty or off a list warns and does not stop', R(bareLine).ok && ['Base price is empty.', 'Bin is empty.', 'Picture is empty.', 'It is bought, and no vendor is named.', 'It has no cost — no USD on the line.'].every(w => R(bareLine).warnings.includes(w)) && R(bareLine).warnings.some(w => w.includes('Material "Zamak" is not on the Master Library\'s list — it goes in as typed')));
+ok('a part made here with no paint size is told so', R({ ...finial, sourcing: 'In-House', paintSize: '' }).warnings.includes('It is made here, and has no paint size.') && !R(finial).warnings.some(w => w.includes('paint size')));
+ok('a column that is not going to the Library is not warned about', !R({ ...bareLine }, { pushColumns: { basePrice: false, binLocation: false, material: false, pictureUrl: false } }).warnings.some(w => /Base price|Bin is|Material|Picture/.test(w)));
+
+const lib = [{ id: 'CE-INV-62502', itemId: 'CE-INV-62502', legacyErpId: 'H1-138TRVEBA' }, { id: 'CE-INV-1', itemId: 'h3-75df', legacyErpId: 'PENDING' }, { id: 'CE-INV-2', legacyErpId: 'H3-1DF ' }];
+ok('the Library already has the item when a record answers to its number — by ERP id or its own id, any case', existingByCode(lib, 'h1-138trveba').id === 'CE-INV-62502' && existingByCode(lib, 'H3-75DF').id === 'CE-INV-1' && existingByCode(lib, ' h3-1df').id === 'CE-INV-2' && existingByCode(lib, 'ce-inv-62502').id === 'CE-INV-62502');
+ok('…and not otherwise', existingByCode(lib, 'H3-138DF') === null && existingByCode(lib, '') === null && existingByCode([], 'X') === null && existingByCode(null, 'X') === null);
+ok('a new record takes the Library\'s own prefix and the clock, not four random digits', libraryIdFor('ce', 'Inventory', 1791400000000) === 'CE-INV-1791400000000' && libraryIdFor('m2c', 'Fee', 5) === 'M2C-FEE-5' && libraryIdFor('ce', 'Non-Inventory', 5) === 'CE-NIV-5');
+
+const proj = { id: 'ce__H3_CONTOURS', name: 'H3 CONTOURS' };
+const planP = pushPlanOf(finial, { project: proj, brandId: 'ce', fields: hw, pushColumns: {}, customSchema: [], user: 'Stuart', nowIso: '2026-10-07T20:00:00.000Z', id: 'CE-INV-1791400000000' });
+const rec = planP.record, ms = rec.manufacturingSpecs;
+ok('the record is a Library record: identity on top, the rest under manufacturingSpecs', rec.id === 'CE-INV-1791400000000' && rec.itemId === rec.id && rec.brandId === 'ce' && rec.sharedBrands.join() === 'ce' && rec.partClass === 'Inventory' && Array.isArray(rec.clientPricing) && rec.createdAt === '2026-10-07T20:00:00.000Z' && rec.updatedAt === rec.createdAt);
+ok('its number upper-cased and trimmed, its words as typed', rec.legacyErpId === 'H3-75DF' && rec.itemName === '0.75in Drum Finial');
+ok('its category in both places the Library keeps it, upper-cased; its unit upper-cased', rec.productType === 'FINIAL' && ms.productType === 'FINIAL' && ms.uom === 'EA');
+ok('its collection under the one name', JSON.stringify(ms.collections) === '["H3 CONTOURS"]');
+ok('sourcing as the Library\'s two fields, together', ms.isInHouse === false && ms.sourcingMode === 'OUT');
+ok('its cost is the landed cost; its price, vendor, bin, lead time each in the Library\'s own field', Math.abs(ms.cost - 16.2424) < 1e-9 && ms.basePrice === 28 && ms.vendorName === 'Dong Li' && ms.vendorId === 'DF-75' && ms.binLocation === 'A-01' && ms.leadTime === '45 days' && ms.material === 'BRASS' && ms.weight === '0.4' && ms.partHandling === 'Small Parts' && ms.paintSize === 'S' && ms.isStocked === true);
+ok('its picture is its picture', rec.finalImageUrl === 'https://s/p1.png' && rec.imageSource === undefined);
+ok('it is filed under the sheet\'s project and remembers the line it came from', rec.project === 'H3 CONTOURS' && rec.controlSheet.lineId === 'L1' && rec.controlSheet.projectId === 'ce__H3_CONTOURS' && rec.controlSheet.pushedBy === 'Stuart' && rec.createdBy === 'Stuart');
+ok('nothing held for 1.6 or for milling travels', !JSON.stringify(rec).includes('LEFT') && !JSON.stringify(rec).includes('bar') && rec.tags === undefined && ms.rawStock === undefined);
+ok('nor the working detail: the size, the vendor\'s price, the duty, the quotes, the notes', ms.size === undefined && ms.priceOrigin === undefined && ms.dutyPct === undefined && ms.quotes === undefined && ms.notes === undefined && !('priceUsd' in ms));
+ok('an unticked box writes nothing — the Library\'s own default stands', !('unfinished' in ms.customData) && ms.customOverrideFee === undefined);
+ok('the record carries the keys the Library\'s readers expect, even when the line said nothing', ms.watchList === 'NONE' && ms.parametric.isCutToSize === false && typeof ms.customData === 'object');
+ok('what a person is shown: each column, the Library\'s name for where it lands, the value', planP.written.find(w => w.label === 'Landed each').to === 'Base Cost ($)' && planP.written.find(w => w.label === 'Landed each').text === '16.2424' && planP.written.find(w => w.label === 'Collection').text === 'H3 CONTOURS' && planP.written.find(w => w.label === 'Sourcing').to === 'In-House / Outsourced / Both' && planP.written.find(w => w.label === 'Picture').text === 'the picture' && !planP.written.some(w => w.label === 'Unfinished'));
+ok('…and what stays on the sheet', ['Size / dimensions', 'Quotes', 'Price', 'Currency', 'USD', 'Duty / ship', 'Notes', 'Raw stock material', 'Category', 'Position'].every(k => planP.kept.includes(k)) && !planP.kept.includes('Material'));
+const planOff = pushPlanOf(finial, { project: proj, brandId: 'ce', fields: hw, pushColumns: { basePrice: false, landed: false, size: true }, customSchema: [{ key: 'sizeDimensions', label: 'Size / dimensions', type: 'text' }], user: 'S', nowIso: 'n', id: 'X' });
+ok('an unticked column stays behind; a column given a custom attribute goes to it', planOff.record.manufacturingSpecs.basePrice === undefined && planOff.record.manufacturingSpecs.cost === undefined && planOff.kept.includes('Base price') && planOff.record.manufacturingSpecs.customData.sizeDimensions === '1.48in L x 1.24in Diam.' && planOff.written.find(w => w.label === 'Size / dimensions').to === 'Size / Dimensions (Custom)'.replace('Dimensions', 'dimensions'));
+const feeRec = pushPlanOf(fee, { project: proj, brandId: 'ce', fields: hw, pushColumns: {}, customSchema: [], user: 'S', nowIso: 'n', id: 'CE-FEE-5' }).record;
+ok('a fee is a FEE in the Library\'s own way, and in-house by its default', feeRec.partClass === 'Fee' && feeRec.productType === 'FEE' && feeRec.manufacturingSpecs.productType === 'FEE' && feeRec.manufacturingSpecs.basePrice === 25 && feeRec.manufacturingSpecs.isInHouse === true);
+const bracket = { id: 'B1', itemCode: 'H9-1BE', name: 'Bracket', recordClass: 'Inventory', productType: 'BRACKET', uom: 'EA', partHandling: 'Small Parts', sourcing: 'Both', projection: '4.625', bpLength: 3.5, isCutToSize: true, wallMountPart: 'H1-BPWP5', unfinished: true };
+const brRec = pushPlanOf(bracket, { project: proj, brandId: 'ce', fields: hw, pushColumns: {}, customSchema: [], user: 'S', nowIso: 'n', id: 'X' }).record.manufacturingSpecs;
+ok('the bracket facts land where the Library reads them', brRec.customData.projection === '4.625' && brRec.customData.unfinished === true && brRec.parametric.length === 3.5 && brRec.parametric.isCutToSize === true && brRec.parametric.width === '' && brRec.wallMount.partId === 'H1-BPWP5' && brRec.isInHouse === true && brRec.sourcingMode === 'BOTH');
+
+const stampP = pushedStamp(rec, { user: 'Stuart', nowIso: 'T1' });
+ok('the line is stamped with the record it became', stampP.status === 'PUSHED' && stampP.pushedTo.docId === 'CE-INV-1791400000000' && stampP.pushedTo.code === 'H3-75DF' && stampP.pushedTo.linked === false && pushedStamp(lib[0], { user: 'S', nowIso: 'T', linked: true }).pushedTo.linked === true);
+const un = unlockStamp({ ...finial, ...stampP }, { user: 'Leyla', nowIso: 'T2' });
+ok('an unlock returns it to Ready and keeps what happened', un.status === 'READY' && un.pushedTo === null && un.lastPush.docId === 'CE-INV-1791400000000' && un.lastPush.undoneBy === 'Leyla' && un.lastPush.undoneAt === 'T2');
 
 // ── THE REAL FILES, when they are on this machine ───────────────────────────────────────────────────────
 const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'Inception', 'import');

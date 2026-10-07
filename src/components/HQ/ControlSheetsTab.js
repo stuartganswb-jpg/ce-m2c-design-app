@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, doc, onSnapshot, query, where, setDoc, updateDoc, deleteDoc, writeBatch, deleteField, getDocFromServer } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, where, setDoc, updateDoc, deleteDoc, writeBatch, deleteField, getDocFromServer, getDocsFromServer } from 'firebase/firestore';
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { canLineDiscount } from '../Shared/lineDiscount';   // the app's ONE manager-or-higher rule (admin · superadmin · manager · executive)
 import { canonicalCollection } from '../Shared/collectionName';
@@ -12,6 +12,7 @@ import {
     projectNameKey, tab1ProjectsOf, blankLine, blankProject,
     readBundle, planImport, finishImport,
     exportColumnsFor, startsInDownload, planReimport, startsTicked, patchForCells, lineFromNewRow,
+    readinessOf, existingByCode, libraryIdFor, pushPlanOf, pushedStamp, unlockStamp,
 } from '../Shared/controlSheet';
 import { usdRateFor, originPricePatch, fxNoteOf, currenciesToRefresh, refreshPlan } from '../Shared/fxRates';
 
@@ -25,8 +26,9 @@ import { usdRateFor, originPricePatch, fxNoteOf, currenciesToRefresh, refreshPla
 // rolled into the product. The rules and every field are in Shared/controlSheet.
 //
 // NOTHING ELSE IN THE APP READS THIS STORE (system/control_sheets/…): an item reaches CPQ, Order Entry, the
-// floors, WMS and NetSuite only when its line is pushed into the Master Library, and the push is the next
-// step — it is not on this page yet. Until then this tab writes nothing outside its own store.
+// floors, WMS and NetSuite only when its line is PUSHED into the Master Library — the one write this tab makes
+// outside its own store (runPush: one Approved_Designs record, set once, after looking). Everything else here
+// is the sheet's own.
 //
 // His calls: the tab is 1.2 · tab 1 only NAMES the project, the project is the sheet's name · the 1.6 tags are
 // HELD here and put in their actual place at the 1.6 upload · pictures come from tab 1 going forward (the
@@ -137,7 +139,7 @@ const Cell = ({ field, line, lists, locked, onCommit, onOpen }) => {
     return box;
 };
 
-const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, writeLog }) => {
+const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, writeLog, onNavigateToLibrary }) => {
     const canManage = canLineDiscount(userRole, isSuperAdmin);
     const [projects, setProjects] = useState([]);
     const [tab1Records, setTab1Records] = useState([]);
@@ -158,6 +160,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
     const [downloader, setDownloader] = useState(null);     // the download window
     const [reimporter, setReimporter] = useState(null);     // the bring-back window
     const [ratesBusy, setRatesBusy] = useState(false);
+    const [pusher, setPusher] = useState(null);             // the push window
 
     const log = (msg) => { try { if (writeLog) writeLog(currentUser, '1.2 Control Sheets', msg); } catch (_) { /* a log line never stops the work */ } };
     const stamp = () => ({ updatedAt: new Date().toISOString(), updatedBy: currentUser || '' });
@@ -216,6 +219,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
         section ? { key: 'COST', label: 'Cost here', width: 96, right: true } : { key: 'ON', label: 'On sheets', width: 220 },
         ...(section ? [{ key: 'NOTE', label: 'Note on this sheet', width: 240 }] : []),
         { key: 'STATUS', label: 'Status', width: 112 },
+        { key: 'PUSH', label: 'Master Library', width: 156 },
         { key: 'ACT', label: '', width: 44 },
     ];
     let stuck = 0;
@@ -442,6 +446,80 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
     const removeChild = (childId) => patchSection(section.id, { children: (section.children || []).filter(c => c.section !== childId) });
     const removeDrawing = (url) => { if (window.confirm('Take this drawing off the sheet? (The picture itself is not deleted.)')) patchSection(section.id, { drawings: (section.drawings || []).filter(d => d.url !== url) }); };
 
+    // ── THE PUSH: a line becomes a Master Library record (Shared/controlSheet decides whether it may, whether the
+    // Library already has it, and exactly what is written). The ONLY writes this tab makes outside its own store
+    // are the one record set here; the line is stamped in the same batch, so the two cannot disagree.
+    const pushContext = { fields: allFields, pushColumns, customSchema, lists, lines };
+    const readLibrary = async () => {
+        // The division's records and those shared into it, FROM THE SERVER — never the cache: this is the look
+        // that decides whether an item is new.
+        const col = collection(db, 'Approved_Designs');
+        const [own, shared] = await Promise.all([getDocsFromServer(query(col, where('brandId', '==', activeBrand))), getDocsFromServer(query(col, where('sharedBrands', 'array-contains', activeBrand)))]);
+        const byId = new Map();
+        [...own.docs, ...shared.docs].forEach(d => { const x = d.data(); byId.set(d.id, { id: d.id, legacyErpId: x.legacyErpId, itemId: x.itemId, itemName: x.itemName, partClass: x.partClass }); });
+        return [...byId.values()];
+    };
+    const openPush = async (line) => {
+        const ready = readinessOf(line, pushContext);
+        if (!ready.ok) return setPusher({ lineId: line.id, ready });
+        setPusher({ lineId: line.id, ready, looking: true });
+        try {
+            const existing = existingByCode(await readLibrary(), line.itemCode);
+            return setPusher({ lineId: line.id, ready, looked: true, existing: existing || null });
+        } catch (err) { console.error('library read failed', err); return setPusher({ lineId: line.id, ready, error: `The Master Library could not be read (${(err && err.message) || err}). Nothing was written.` }); }
+    };
+    const runPush = async () => {
+        const line = lines.find(l => l.id === pusher.lineId);
+        if (!line) return;
+        setPusher(x => ({ ...x, busy: true }));
+        try {
+            // Looked at AGAIN at the moment of writing: the line may have been edited, and the item may have been
+            // made in the Library, since the window opened.
+            const ready = readinessOf(line, pushContext);
+            if (!ready.ok) { setPusher({ lineId: line.id, ready }); return; }
+            const code = String(line.itemCode).trim().toUpperCase();
+            const col = collection(db, 'Approved_Designs');
+            const again = await Promise.all([getDocsFromServer(query(col, where('legacyErpId', '==', code))), getDocsFromServer(query(col, where('itemId', '==', code)))]);
+            const hit = [...again[0].docs, ...again[1].docs].map(d => ({ ...d.data(), id: d.id })).find(r => r.brandId === activeBrand || (r.sharedBrands || []).includes(activeBrand));
+            if (hit) { setPusher({ lineId: line.id, ready, looked: true, existing: { id: hit.id, legacyErpId: hit.legacyErpId, itemId: hit.itemId, itemName: hit.itemName, partClass: hit.partClass } }); return; }
+            const now = new Date();
+            const id = libraryIdFor(activeBrand, line.recordClass, now.getTime());
+            if ((await getDocFromServer(doc(db, 'Approved_Designs', id))).exists()) throw new Error('a record took that id in the same instant — press Push again');
+            const plan = pushPlanOf(line, { project, brandId: activeBrand, fields: allFields, pushColumns, customSchema, user: currentUser, nowIso: now.toISOString(), id });
+            const batch = writeBatch(db);
+            batch.set(doc(db, 'Approved_Designs', id), plan.record);
+            batch.update(lineRef(projectId, line.id), { ...pushedStamp(plan.record, { user: currentUser, nowIso: now.toISOString() }), ...stamp() });
+            await batch.commit();
+            log(`Pushed ${code} from ${project.name} to the Master Library as ${id} (${plan.written.length} fields)`);
+            setPusher({ lineId: line.id, finished: { code, id, fields: plan.written.length } });
+        } catch (err) { setPusher(x => (x ? { ...x, busy: false } : x)); say('Could not push the line', err); }
+    };
+    const linkExisting = async () => {
+        const line = lines.find(l => l.id === pusher.lineId);
+        const existing = pusher.existing;
+        if (!line || !existing) return;
+        setPusher(x => ({ ...x, busy: true }));
+        try {
+            await updateDoc(lineRef(projectId, line.id), { ...pushedStamp(existing, { user: currentUser, nowIso: new Date().toISOString(), linked: true }), ...stamp() });
+            log(`Linked ${lineLabelOf(line)} of ${project.name} to the Master Library record ${existing.id} (nothing written to the Library)`);
+            setPusher({ lineId: line.id, finished: { code: String(line.itemCode).trim().toUpperCase(), id: existing.id, linked: true } });
+        } catch (err) { setPusher(x => (x ? { ...x, busy: false } : x)); say('Could not link the line', err); }
+    };
+    // A pushed line belongs to the Library. It comes back to the sheet only when its record is GONE from there
+    // (removed with 4.5 → True delete) — checked on the server, never assumed.
+    const unlockLine = async (line) => {
+        const to = line.pushedTo || {};
+        const what = to.code || lineLabelOf(line);
+        try {
+            const snap = to.docId ? await getDocFromServer(doc(db, 'Approved_Designs', to.docId)) : null;
+            if (snap && snap.exists()) return alert(`${what} is in the Master Library (${to.docId}). The Library owns it now — change it there.\n\nTo push this line again, the record has to be removed from the Library first (4.5 → True delete).`);
+            if (!window.confirm(`The Master Library no longer has ${what}.\n\nUnlock this line so it can be worked on and pushed again?`)) return undefined;
+            await updateDoc(lineRef(projectId, line.id), { ...unlockStamp(line, { user: currentUser, nowIso: new Date().toISOString() }), ...stamp() });
+            log(`Unlocked ${what} of ${project.name} — its Master Library record ${to.docId || ''} is gone`);
+        } catch (err) { say('Could not check the Master Library', err); }
+        return undefined;
+    };
+
     const choosePicture = async (pic) => {
         if (!open) return;
         if (open.kind === 'DRAWING') {
@@ -666,6 +744,77 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
             </div>
         </div>
     );
+
+    const pushWindow = () => {
+        const x = pusher;
+        const line = lines.find(l => l.id === x.lineId);
+        if (!line) return null;
+        const label = String(line.itemCode || '').trim().toUpperCase() || lineLabelOf(line);
+        const plan = x.looked && !x.existing ? pushPlanOf(line, { project, brandId: activeBrand, fields: allFields, pushColumns, customSchema, user: currentUser, nowIso: '', id: '' }) : null;
+        const warn = { margin: '6px 0 0 0', paddingLeft: '18px', fontFamily: 'var(--sans)', fontSize: '0.86rem' };
+        const red = { padding: '12px 14px', background: '#fdf3f2', border: '1px solid #e9c4c1', color: '#8a2a25', fontFamily: 'var(--sans)', fontSize: '0.9rem' };
+        return (
+            <div style={S.overlay}>
+                <div style={{ ...S.modal, width: 'min(820px, 100%)' }}>
+                    <h3 style={S.h3}>{x.finished ? `${x.finished.code} is in the Master Library` : `Push ${label} to the Master Library`}</h3>
+                    {x.finished && (
+                        <p style={{ ...S.note, color: 'var(--ink)', fontSize: '0.95rem' }}>
+                            {x.finished.linked
+                                ? <>The line is linked to the record the Library already had (<code>{x.finished.id}</code>). Nothing was written to the Library.</>
+                                : <>Written as <code>{x.finished.id}</code> — {x.finished.fields} fields. The Library owns the item from here; the line stays on the sheet as the record of how it got there. It is app-only until it is created in NetSuite from tab 11.</>}
+                        </p>
+                    )}
+                    {!x.finished && !x.ready.ok && (
+                        <>
+                            <p style={S.note}>Before this line can be pushed:</p>
+                            <ul style={warn}>{x.ready.blocks.map((b, i) => <li key={i} style={{ color: '#8a2a25' }}>{b}</li>)}</ul>
+                            {x.ready.warnings.length > 0 && <><p style={{ ...S.note, marginTop: '12px' }}>Worth a look, though they would not stop it:</p><ul style={warn}>{x.ready.warnings.map((w, i) => <li key={i} style={{ color: 'var(--ink-soft)' }}>{w}</li>)}</ul></>}
+                        </>
+                    )}
+                    {x.looking && <p style={S.note}>Looking in the Master Library for {label}…</p>}
+                    {x.error && <div style={red}>{x.error}</div>}
+                    {!x.finished && x.looked && x.existing && (
+                        <>
+                            <div style={red}>The Master Library already has <b>{label}</b>: {x.existing.itemName || '(no name)'} — {x.existing.partClass || 'record'} <code>{x.existing.id}</code>. Nothing was written.</div>
+                            <p style={{ ...S.note, marginTop: '12px' }}>If that record IS this part, link the line to it: the line is marked as in the Library and points at that record, and nothing is written to the Library. If it is a different part, give this line its own item #.</p>
+                        </>
+                    )}
+                    {plan && (
+                        <>
+                            <p style={S.note}>The Library has no <b>{label}</b>. This is exactly what will be written — one new record. Only the columns ticked "Library" travel.</p>
+                            <div style={{ maxHeight: '40vh', overflowY: 'auto', border: '1px solid var(--line)', marginTop: '12px' }}>
+                                <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                                    <thead><tr>{['On the sheet', 'In the Master Library', 'Value'].map(h => <th key={h} style={{ ...S.th, position: 'sticky', top: 0 }}>{h}</th>)}</tr></thead>
+                                    <tbody>
+                                        {plan.written.map(w => (
+                                            <tr key={w.label}>
+                                                <td style={{ ...S.td, padding: '6px 8px', color: 'var(--ink-soft)' }}>{w.label}</td>
+                                                <td style={{ ...S.td, padding: '6px 8px' }}>{w.to}</td>
+                                                <td style={{ ...S.td, padding: '6px 8px', fontWeight: 500, borderRight: 'none', wordBreak: 'break-word' }}>{w.text}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p style={{ ...S.note, marginTop: '10px', fontSize: '0.8rem' }}>Also on the record: the project ({project.name}), this division, and the line it came from. {plan.kept.length > 0 && <>Stays on the sheet: {plan.kept.join(' · ')}.</>}</p>
+                            {x.ready.warnings.length > 0 && (
+                                <div style={{ marginTop: '10px', padding: '10px 14px', background: '#fff8ec', border: '1px solid var(--brass)' }}>
+                                    <div style={S.label}>Worth a look before you push</div>
+                                    <ul style={warn}>{x.ready.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+                                </div>
+                            )}
+                        </>
+                    )}
+                    <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                        {x.finished && onNavigateToLibrary && <button style={S.btn} onClick={() => { const id = x.finished.id; setPusher(null); onNavigateToLibrary(id); }}>Open in Master Library ↗</button>}
+                        <button style={S.btn} disabled={!!x.busy} onClick={() => setPusher(null)}>{x.finished || !x.ready.ok || x.error ? 'Close' : 'Cancel'}</button>
+                        {!x.finished && x.looked && x.existing && <button style={{ ...S.btnDark, opacity: x.busy ? 0.6 : 1 }} disabled={!!x.busy} onClick={linkExisting}>{x.busy ? 'Linking…' : 'Link this line to that record'}</button>}
+                        {plan && <button style={{ ...S.btnDark, background: 'var(--brass)', opacity: x.busy ? 0.6 : 1 }} disabled={!!x.busy} onClick={runPush}>{x.busy ? 'Pushing…' : 'Push to the Master Library'}</button>}
+                    </div>
+                </div>
+            </div>
+        );
+    };
 
     const downloadWindow = () => {
         const d = downloader;
@@ -940,10 +1089,30 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                                             if (c.key === 'STATUS') return (
                                                 <td key={c.key} style={style}>
                                                     {locked
-                                                        ? <span style={{ ...S.label, color: 'var(--brass)', padding: '0 6px' }}>Pushed</span>
+                                                        ? <span style={{ ...S.label, color: 'var(--brass)', padding: '0 6px' }}>{line.pushedTo && line.pushedTo.linked ? 'In library' : 'Pushed'}</span>
                                                         : <select value={LINE_STATUSES.includes(line.status) ? line.status : 'DRAFT'} onChange={e => patchLine(line, { status: e.target.value })} style={{ ...S.input, cursor: 'pointer' }}>{LINE_STATUSES.map(s => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}</select>}
                                                 </td>
                                             );
+                                            if (c.key === 'PUSH') {
+                                                if (locked) {
+                                                    const to = line.pushedTo || {};
+                                                    return (
+                                                        <td key={c.key} style={{ ...style, padding: '4px 8px' }}>
+                                                            <button onClick={() => (onNavigateToLibrary && to.docId ? onNavigateToLibrary(to.docId) : alert(`${to.code || lineLabelOf(line)} is in the Master Library as ${to.docId || '(no record noted)'}.`))} title={`Open ${to.code || ''} in the Master Library${to.by ? ` — ${to.linked ? 'linked' : 'pushed'} by ${to.by} ${String(to.at || '').slice(0, 10)}` : ''}`} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em' }}>Open in Library ↗</button>
+                                                            {canManage && <button onClick={() => unlockLine(line)} title="If this record was removed from the Master Library, bring the line back to the sheet" style={{ display: 'block', background: 'none', border: 'none', padding: 0, marginTop: '3px', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--sans)', fontSize: '0.7rem', textDecoration: 'underline' }}>unlock</button>}
+                                                        </td>
+                                                    );
+                                                }
+                                                const ready = readinessOf(line, pushContext);
+                                                const word = ready.ok ? 'Push \u2192' : `${ready.blocks.length} to fix`;
+                                                return (
+                                                    <td key={c.key} style={{ ...style, padding: '4px 8px' }}>
+                                                        {canManage
+                                                            ? <button onClick={() => openPush(line)} title={ready.ok ? 'Push this line into the Master Library — you are shown exactly what is written first' : `Not ready to push:\n${ready.blocks.join('\n')}`} style={{ ...S.btn, padding: '6px 10px', width: '100%', ...(ready.ok ? { background: 'var(--brass)', color: '#fff', borderColor: 'var(--brass)' } : { color: 'var(--ink-soft)' }) }}>{word}</button>
+                                                            : <span title={ready.ok ? 'A manager pushes it' : ready.blocks.join('\n')} style={{ ...S.label, color: ready.ok ? 'var(--brass)' : 'var(--ink-soft)' }}>{ready.ok ? 'Ready to push' : word}</span>}
+                                                    </td>
+                                                );
+                                            }
                                             if (c.key === 'ACT') return (
                                                 <td key={c.key} style={style}>
                                                     {section
@@ -998,6 +1167,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
             {importer && importWindow()}
             {downloader && downloadWindow()}
             {reimporter && reimportWindow()}
+            {pusher && pushWindow()}
         </div>
     );
 };

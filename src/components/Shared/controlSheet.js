@@ -5,7 +5,7 @@
 // final/approved"). A project named in tab 1 has ONE control sheet here; the sheet holds LINES (a part,
 // entered once) and SHEETS (an assembly: which lines it uses, how many of each, the balloon number on its
 // drawing). Nothing in the app reads this store — an item exists for CPQ, Order Entry, the floors, WMS and
-// NetSuite only once its line is pushed into the Master Library, and that push is not in this file yet.
+// NetSuite only once its line is pushed into the Master Library (the last section of this file).
 //
 // What lives here: the ONE table of fields the grid is drawn from, the cost arithmetic of the Excel sheets
 // (landed cost each, cost per assembly, sub-assemblies rolled into their parent), which project names tab 1
@@ -17,7 +17,8 @@
 
 import { TAG_CATEGORIES, TAG_POSITIONS, TAG_LOCATIONS, END_TREATMENTS } from './assemblyTags.js';
 import { TRAVERSE_ROLES, DRIVE_TYPES, TRV_SETUPS, FRONT_LAYERS } from './traverseTags.js';
-import { SOURCING_LABEL } from './sourcing.js';
+import { SOURCING, SOURCING_LABEL, sourcingPatch } from './sourcing.js';
+import { canonicalCollection } from './collectionName.js';
 
 export const BUNDLE_FORMAT = 'control-sheet-bundle/1';
 export const SHEET_KINDS = ['LIGHTING', 'HARDWARE'];
@@ -678,4 +679,151 @@ export function lineFromNewRow(cells, { id, projectId, brandId, order, user, now
     if (sectionId) line.uses = { [sectionId]: place };
     return line;
 }
+
+// ── THE PUSH: A LINE BECOMES A MASTER LIBRARY RECORD ────────────────────────────────────────────────────
+// Stuart 2026-10-07: "once the actual parts are worked out, then we would have a button on the right of each
+// line and once all is aligned and correct we push the button and it pushes the item from this working/holding
+// spreadsheet form into the master library."
+//
+// This is the first thing on the sheet that writes OUTSIDE its own store, so everything about it is decided
+// here, pure, before the tab touches the database: whether a line may be pushed (readinessOf — it REFUSES on
+// what it knows is wrong and only WARNS on what is merely empty), whether the Library already has the item
+// (existingByCode), and exactly what is written (pushPlanOf — the record, and beside it the list a person
+// reads before saying yes). Only the columns ticked "Library" travel; the 1.6 tags and the milling facts
+// never do. After the push the Master Library owns the item and the line is the record of how it got there.
+//
+// His calls: required before a push — item #, description, class, category, UOM, part handling, sourcing;
+// everything else warns · this step pushes Inventory, Fee and Non-Inventory; an Assembly and a Kit wait for
+// their parts · an item # the Library already has is refused, and the line may be LINKED to that record
+// instead · manager or above.
+export const PUSH_CLASSES = ['Inventory', 'Fee', 'Non-Inventory'];
+// What every line needs, and what a part that is made or bought needs besides — a fee and a $-holder are
+// never routed to a floor or sourced, so they are not asked how.
+const REQUIRED_ALWAYS = ['itemCode', 'name', 'recordClass', 'uom'];
+const REQUIRED_FOR_A_PART = ['productType', 'partHandling', 'sourcing'];
+export const requiredFor = (recordClass) => (recordClass === 'Inventory' ? [...REQUIRED_ALWAYS, ...REQUIRED_FOR_A_PART] : REQUIRED_ALWAYS);
+// A wrong word here mis-routes a part on a floor, so it must be one of the Library's own.
+const MUST_BE_LISTED = ['productType', 'uom', 'partHandling'];
+// Worth saying when empty; never a reason to refuse.
+const WORTH_HAVING = ['basePrice', 'binLocation', 'material', 'pictureUrl'];
+
+const codeKey = (v) => str(v).trim().toUpperCase();
+const onList = (list, v) => (Array.isArray(list) ? list : []).some(o => str(o).trim().toUpperCase() === str(v).trim().toUpperCase());
+const blankCell = (field, raw) => (field.type === 'bool' ? raw !== true : field.type === 'quotes' ? !(Array.isArray(raw) && raw.length) : raw === null || raw === undefined || str(raw).trim() === '');
+const valueForLibrary = (field, line) => (field.type === 'landed' ? landedEachOf(line) : cellRawOf(field, line));
+const textForLibrary = (field, raw) => (field.type === 'quotes' ? (raw || []).map(quoteTextOf).filter(Boolean).join(' · ') : field.type === 'bool' ? (raw === true ? 'Yes' : 'No') : field.type === 'landed' ? str(Math.round(raw * 1e4) / 1e4) : cellTextOf(field, raw) + (field.type === 'pct' ? '%' : ''));
+
+// The ticked columns of the sheet that the Library has nowhere to put — set up before any push.
+export const columnsWithoutField = (fields, pushColumns, customSchema) => (fields || []).filter(fd => pushStateOf(fd, pushColumns, customSchema).missing);
+
+// { ok, blocks: [text], warnings: [text] } — may this line be pushed?
+//   fields  the sheet's fields (sheetGroupsFor(kind, customSchema), flattened)
+//   lists   the 4.5 dictionary lists by the names the fields use; an EMPTY list cannot refuse anyone
+//           (a validator refuses only on what it knows) — it warns instead
+//   lines   every line of the sheet, to catch a second line with the same item #
+export function readinessOf(line, { fields, pushColumns, customSchema, lists, lines }) {
+    const blocks = [], warnings = [];
+    const byKey = new Map((fields || []).map(fd => [fd.key, fd]));
+    const state = (fd) => pushStateOf(fd, pushColumns, customSchema);
+    if (line.status === PUSHED) return { ok: false, blocks: ['This line has already been pushed.'], warnings };
+    const cls = str(line.recordClass).trim();
+    if (cls && !PUSH_CLASSES.includes(cls)) blocks.push(`${cls === 'Assembly' || cls === 'Kit' ? `${cls === 'Kit' ? 'A kit' : 'An assembly'} is pushed together with its parts — that step is not built yet.` : `"${cls}" is not a class a line can be pushed as.`}`);
+    for (const key of requiredFor(cls)) {
+        const fd = byKey.get(key);
+        if (!fd) continue;
+        const raw = cellRawOf(fd, line);
+        if (blankCell(fd, raw)) { blocks.push(`${fd.label} is empty.`); continue; }
+        if (!state(fd).on) { blocks.push(`${fd.label} is needed by the Master Library, but its column is not ticked for the Library.`); continue; }
+        if (MUST_BE_LISTED.includes(key)) {
+            const list = (lists && lists[fd.list]) || [];
+            if (!list.length) warnings.push(`${fd.label} "${str(raw)}" could not be checked — the Library's list for it is empty.`);
+            else if (!onList(list, raw)) blocks.push(`${fd.label} "${str(raw)}" is not on the Master Library's list.`);
+        }
+    }
+    const noField = columnsWithoutField(fields, pushColumns, customSchema);
+    if (noField.length) blocks.push(`${noField.length === 1 ? 'A column is' : `${noField.length} columns are`} ticked for the Library with no Library field to go to: ${noField.map(fd => fd.label).join(', ')}. Untick ${noField.length === 1 ? 'it' : 'them'}, or add the attribute in 4.5 first.`);
+    const code = codeKey(line.itemCode);
+    const twin = code ? (lines || []).find(l => l.id !== line.id && codeKey(l.itemCode) === code) : null;
+    if (twin) blocks.push(`Another line on this sheet carries the same item # (${code}).`);
+
+    for (const fd of (fields || [])) {
+        const st = state(fd);
+        if (!st.offered || !st.on || !st.target || requiredFor(cls).includes(fd.key)) continue;
+        const raw = valueForLibrary(fd, line);
+        if (WORTH_HAVING.includes(fd.key) && blankCell(fd, raw) && cls === 'Inventory') warnings.push(`${fd.label} is empty.`);
+        if (fd.type === 'list' && !blankCell(fd, raw) && ((lists && lists[fd.list]) || []).length && !onList(lists[fd.list], raw)) warnings.push(`${fd.label} "${str(raw)}" is not on the Master Library's list — it goes in as typed.`);
+    }
+    const sourcing = str(cellRawOf(byKey.get('sourcing') || { key: 'sourcing' }, line));
+    if (cls === 'Inventory' && (sourcing === SOURCING_LABEL.OUT || sourcing === SOURCING_LABEL.BOTH) && !str(line.vendor).trim()) warnings.push('It is bought, and no vendor is named.');
+    if (cls === 'Inventory' && (sourcing === SOURCING_LABEL.IN || sourcing === SOURCING_LABEL.BOTH) && !str(line.paintSize).trim()) warnings.push('It is made here, and has no paint size.');
+    if (cls === 'Inventory' && landedEachOf(line) === null) warnings.push('It has no cost — no USD on the line.');
+    return { ok: blocks.length === 0, blocks, warnings };
+}
+
+// The record in the Library that already answers to this item # — by its ERP id or its own id, whatever the
+// case. `records` are the division's records (and those shared into it) as read FROM THE SERVER.
+export const existingByCode = (records, code) => {
+    const key = codeKey(code);
+    if (!key) return null;
+    return (records || []).find(r => codeKey(r.legacyErpId) === key || codeKey(r.itemId) === key || codeKey(r.id) === key) || null;
+};
+
+const setPath = (obj, path, value) => {
+    const parts = path.split('.');
+    let at = obj;
+    for (let i = 0; i < parts.length - 1; i++) { if (!at[parts[i]] || typeof at[parts[i]] !== 'object') at[parts[i]] = {}; at = at[parts[i]]; }
+    at[parts[parts.length - 1]] = value;
+};
+const ID_PREFIX = { Inventory: 'INV', Fee: 'FEE', 'Non-Inventory': 'NIV' };
+// <DIVISION>-<INV|FEE|NIV>-<the clock> — the Library's own prefixes, and a number that cannot meet an
+// existing record's (the four random digits "+ New Record" draws can).
+export const libraryIdFor = (brandId, recordClass, nowMs) => `${str(brandId).toUpperCase()}-${ID_PREFIX[recordClass] || 'INV'}-${nowMs}`;
+
+// { record, written: [{ label, to, text }], kept: [label] }
+//   record   the Master Library document, in the shape its own "+ New Record" saves: the identity at the top,
+//            everything else under manufacturingSpecs, the dates as ISO text — plus where it came from
+//   written  what a person is shown before saying yes: each column that travels, the Library's name for the
+//            field it lands in, and the value
+//   kept     the columns of this line that hold something and stay on the sheet
+// Only a TICKED column with a Library field travels, and only when it holds something (a blank never
+// overwrites the Library's own default). A value is written the way the Library keeps it: the item # and the
+// category upper-cased, the collection under its one name, sourcing as the Library's two fields together.
+export function pushPlanOf(line, { project, brandId, fields, pushColumns, customSchema, user, nowIso, id }) {
+    const cls = str(line.recordClass).trim();
+    const record = {
+        id, itemId: id, brandId, sharedBrands: [brandId], partClass: cls,
+        itemName: str(line.name).trim(), legacyErpId: codeKey(line.itemCode),
+        clientPricing: [], project: str(project && project.name), routingType: '', productType: cls === 'Fee' ? 'FEE' : '',
+        manufacturingSpecs: { uom: 'EA', productType: cls === 'Fee' ? 'FEE' : '', collections: [], watchList: 'NONE', binLocation: '', customData: {}, parametric: { isCutToSize: false, fixedDiameter: '', length: '', width: '', height: '' } },
+        createdAt: nowIso, updatedAt: nowIso, createdBy: str(user),
+        controlSheet: { projectId: str(project && project.id), projectName: str(project && project.name), lineId: str(line.id), pushedAt: nowIso, pushedBy: str(user) },
+    };
+    const written = [], kept = [];
+    for (const fd of (fields || [])) {
+        const raw = valueForLibrary(fd, line);
+        if (blankCell(fd, raw)) continue;                     // an unticked box is the Library's own default too
+        const st = pushStateOf(fd, pushColumns, customSchema);
+        if (!st.offered || !st.on || !st.target) { kept.push(fd.label); continue; }
+        const path = st.target.path;
+        let value = raw;
+        if (fd.key === 'itemCode') value = codeKey(raw);
+        else if (fd.key === 'name' || fd.key === 'recordClass') value = str(raw).trim();
+        else if (fd.key === 'collection') value = [canonicalCollection(raw)].filter(Boolean);
+        else if (fd.key === 'productType' || fd.key === 'uom' || fd.key === 'routingType') value = str(raw).trim().toUpperCase();
+        else if (fd.type === 'landed') value = Math.round(raw * 1e4) / 1e4;
+        else if (st.target.custom || fd.type === 'quotes') value = textForLibrary(fd, raw);
+        if (fd.key === 'sourcing') {
+            const mode = Object.keys(SOURCING_LABEL).find(k => SOURCING_LABEL[k] === str(raw)) || SOURCING.IN;
+            Object.assign(record.manufacturingSpecs, sourcingPatch(mode));
+        } else if (fd.key === 'productType') { record.productType = value; record.manufacturingSpecs.productType = value; }
+        else setPath(record, path, value);
+        written.push({ label: fd.label, to: st.target.label, text: fd.key === 'collection' ? value.join(', ') : fd.type === 'picture' ? 'the picture' : textForLibrary(fd, fd.type === 'landed' ? value : raw) });
+    }
+    if (record.manufacturingSpecs.isInHouse === undefined) Object.assign(record.manufacturingSpecs, sourcingPatch(SOURCING.IN));
+    return { record, written, kept };
+}
+
+// What is stamped on the line by a push, by a link to a record the Library already had, and by an unlock.
+export const pushedStamp = (record, { user, nowIso, linked = false }) => ({ status: PUSHED, pushedTo: { docId: str(record.id), code: codeKey(record.legacyErpId || record.itemId), at: nowIso, by: str(user), linked: !!linked } });
+export const unlockStamp = (line, { user, nowIso }) => ({ status: 'READY', pushedTo: null, lastPush: { ...(line.pushedTo || {}), undoneAt: nowIso, undoneBy: str(user) } });
 
