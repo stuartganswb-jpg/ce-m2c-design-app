@@ -5,13 +5,15 @@ import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { canLineDiscount } from '../Shared/lineDiscount';   // the app's ONE manager-or-higher rule (admin · superadmin · manager · executive)
 import { canonicalCollection } from '../Shared/collectionName';
 import {
-    LINE_STATUSES, PUSHED, SHEET_KINDS, groupsFor, defaultGroupsFor,
-    valueAt, cellValueOf, cellTextOf, moneyText, numOf,
+    LINE_STATUSES, PUSHED, SHEET_KINDS, CURRENCIES, defaultGroupsFor, sheetGroupsFor, libraryTargetOf, pushStateOf, noLibraryFieldText,
+    cellRawOf, cellValueOf, cellTextOf, moneyText, numOf,
     landedEachOf, lineCostIn, sectionTotalOf, childChoicesFor, usesListOf, linesOn, placeOf,
     sortLines, sortOnSection, nextOrder, lineLabelOf, quoteTextOf, matchesSearch,
     projectNameKey, tab1ProjectsOf, blankLine, blankProject,
     readBundle, planImport, finishImport,
+    exportColumnsFor, startsInDownload, planReimport, startsTicked, patchForCells, lineFromNewRow,
 } from '../Shared/controlSheet';
+import { usdRateFor, originPricePatch, fxNoteOf, currenciesToRefresh, refreshPlan } from '../Shared/fxRates';
 
 // ── 1.2 CONTROL SHEETS (Stuart 2026-10-07) ──────────────────────────────────────────────────────────────
 // "create a tab/page in the app that replaces the excel spreadsheet … a true working center where we store
@@ -38,7 +40,7 @@ const lineRef = (pid, id) => doc(db, ...STORE, pid, 'lines', id);
 const newId = (prefix) => `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`.toUpperCase();
 
 const KIND_LABEL = { LIGHTING: 'Lighting', HARDWARE: 'Hardware' };
-const STAYS_PUT = ['#', 'QTY', 'pictureUrl', 'itemCode', 'name'];   // the columns that do not scroll away
+const STAYS_PUT = ['SEL', '#', 'QTY', 'pictureUrl', 'itemCode', 'name'];   // the columns that do not scroll away
 const STATUS_LABEL = { DRAFT: 'Draft', SOURCING: 'Sourcing', SAMPLED: 'Sampled', READY: 'Ready', PUSHED: 'Pushed' };
 
 const S = {
@@ -76,7 +78,7 @@ class SheetBoundary extends React.Component {
 // One box of the grid. Text boxes hold what is typed until the cursor leaves, then save — the key is the
 // stored text, so a save from another screen redraws the box with what is now there.
 const Cell = ({ field, line, lists, locked, onCommit, onOpen }) => {
-    const value = valueAt(line, field.key);
+    const value = cellRawOf(field, line);
     const type = field.type;
     if (type === 'picture') {
         return (
@@ -88,6 +90,13 @@ const Cell = ({ field, line, lists, locked, onCommit, onOpen }) => {
     if (type === 'landed') {
         const each = landedEachOf(line);
         return <div style={{ padding: '6px 4px', textAlign: 'right', color: each === null ? 'var(--ink-soft)' : 'var(--ink)' }}>{each === null ? '—' : moneyText(each, each < 1 ? 3 : 2)}</div>;
+    }
+    // THE USD IS WORKED OUT once the line carries an origin price (price × the rate of the day it was entered —
+    // Shared/fxRates); the box says what it was made from. A line with no origin price keeps a typed USD.
+    if (type === 'usd' && numOf(line.priceOrigin) !== null) {
+        const usd = numOf(value);
+        const note = fxNoteOf(line);
+        return <div title={note} style={{ padding: '6px 4px', textAlign: 'right', color: usd === null ? 'var(--brass)' : 'var(--ink)', cursor: 'help' }}>{usd === null ? (line.currency ? 'no rate' : 'currency?') : moneyText(usd, usd < 1 ? 4 : 2)}</div>;
     }
     if (type === 'quotes') {
         const quotes = Array.isArray(value) ? value : [];
@@ -115,7 +124,7 @@ const Cell = ({ field, line, lists, locked, onCommit, onOpen }) => {
         );
     }
     const text = cellTextOf(field, value);
-    const numeric = ['num', 'money', 'pct'].includes(type);
+    const numeric = ['num', 'money', 'pct', 'usd'].includes(type);
     const box = (
         <input key={text} defaultValue={text} disabled={locked} title={text.length > 24 ? text : undefined}
             list={field.datalist ? `cs-${field.datalist}` : undefined}
@@ -144,6 +153,11 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
     const [starter, setStarter] = useState(null);           // { name, kind } — starting a sheet for a tab-1 project
     const [importer, setImporter] = useState(null);         // the import window's state
     const [useExisting, setUseExisting] = useState('');
+    const [customSchema, setCustomSchema] = useState([]);  // 4.5's custom Library attributes (system/master_schema)
+    const [selected, setSelected] = useState([]);           // line ids ticked on the left
+    const [downloader, setDownloader] = useState(null);     // the download window
+    const [reimporter, setReimporter] = useState(null);     // the bring-back window
+    const [ratesBusy, setRatesBusy] = useState(false);
 
     const log = (msg) => { try { if (writeLog) writeLog(currentUser, '1.2 Control Sheets', msg); } catch (_) { /* a log line never stops the work */ } };
     const stamp = () => ({ updatedAt: new Date().toISOString(), updatedBy: currentUser || '' });
@@ -158,7 +172,8 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
         const unsubLists = onSnapshot(doc(db, 'system', 'master_lists'), snap => setMasterLists(snap.exists() ? snap.data() : {}));
         const unsubCollections = onSnapshot(collection(db, 'hq_collections'), snap => setCollectionsData(snap.docs.map(d => d.data())));
         const unsubVendors = onSnapshot(query(collection(db, 'crm_records'), where('type', '==', 'VENDOR')), snap => setVendors(snap.docs.map(d => d.data())));
-        return () => { unsubProjects(); unsubTab1(); unsubLists(); unsubCollections(); unsubVendors(); };
+        const unsubSchema = onSnapshot(doc(db, 'system', 'master_schema'), snap => setCustomSchema((snap.exists() && snap.data().inventoryFields) || []));
+        return () => { unsubProjects(); unsubTab1(); unsubLists(); unsubCollections(); unsubVendors(); unsubSchema(); };
     }, [activeBrand]);
 
     useEffect(() => {
@@ -169,6 +184,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
     const project = projects.find(p => p.id === projectId) || null;
     const kind = project ? project.kind : '';
     useEffect(() => { setSectionId(''); setSearch(''); setShown(defaultGroupsFor(kind)); }, [projectId, kind]);
+    useEffect(() => { setSelected([]); }, [projectId, sectionId]);
 
     const sections = useMemo(() => (project && Array.isArray(project.sections) ? project.sections : []), [project]);
     const section = sections.find(s => s.id === sectionId) || null;
@@ -182,15 +198,19 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
         uom: masterLists.uom || [], prodTypes: masterLists.prodTypes || [], partHandling: masterLists.partHandling || [],
         watchLists: masterLists.watchLists || [], materials: masterLists.materials || [], projections: masterLists.projections || [],
         bracketMounts: masterLists.bracketMounts || [], bins: masterLists.bins || [], outsourceActions: masterLists.outsourceActions || [],
+        feeTypes: masterLists.feeTypes || [], routingTypes: [...new Set([...(masterLists.inventoryTypes || []), ...(masterLists.assemblyTypes || [])])],
         collections: [...new Set(collectionsData.filter(c => c.brandId === activeBrand).map(c => canonicalCollection(c.name)).filter(Boolean))].sort(),
     }), [masterLists, collectionsData, activeBrand]);
     const vendorNames = useMemo(() => [...new Set(vendors.map(v => String(v.name || v.companyName || '').trim()).filter(Boolean))].sort(), [vendors]);
 
-    const groups = groupsFor(kind);
+    const groups = useMemo(() => sheetGroupsFor(kind, customSchema), [kind, customSchema]);
+    const allFields = groups.flatMap(g => g.fields);
     const fields = groups.filter(g => g.always || shown.includes(g.key)).flatMap(g => g.fields);
+    const pushColumns = (project && project.pushColumns) || {};
     // THE GRID'S COLUMNS, in order, each a fixed width — a sheet, not a page that reflows. The first few (balloon,
     // quantity, picture, item #, description) stay put while the rest scroll sideways.
     const columns = [
+        { key: 'SEL', label: '', width: 34 },
         ...(section ? [{ key: '#', label: '#', width: 52 }, { key: 'QTY', label: 'Qty', width: 64 }] : []),
         ...fields.map(fd => ({ key: fd.key, label: fd.label, width: fd.width, field: fd })),
         section ? { key: 'COST', label: 'Cost here', width: 96, right: true } : { key: 'ON', label: 'On sheets', width: 220 },
@@ -220,6 +240,157 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
         catch (err) { say('Could not save the sheet', err); return false; }
     };
     const patchSection = (id, patch) => saveSections(sections.map(s => (s.id === id ? { ...s, ...patch } : s)));
+
+    // THE ORIGIN PRICE (Shared/fxRates). The price or the currency changing works the USD out again at TODAY'S
+    // rate and keeps the rate and its date on the line; after that only Update rates moves it. A currency
+    // chosen on a line that has no origin price yet leaves a typed USD exactly as it is.
+    const setOrigin = async (line, next) => {
+        const price = numOf(next.priceOrigin);
+        if (price === null && numOf(line.priceOrigin) === null) return patchLine(line, { currency: String(next.currency || '') });
+        const rate = price !== null && next.currency ? await usdRateFor(next.currency) : null;
+        const patch = originPricePatch(next, rate);
+        await patchLine(line, patch);
+        if (patch.fxSource === 'PENDING') alert(`Today's ${patch.currency} rate could not be had, so the USD of ${lineLabelOf(line)} is blank.\n\nPress Update rates when the connection is back.`);
+        return undefined;
+    };
+    const commitCell = (line, field, value) => {
+        if (field.key === 'priceOrigin') return setOrigin(line, { priceOrigin: value, currency: line.currency });
+        if (field.key === 'currency') return setOrigin(line, { priceOrigin: line.priceOrigin, currency: value });
+        return patchLine(line, { [field.key]: value });
+    };
+
+    // UPDATE RATES — the one thing that moves a USD after the day its price was entered. It asks for today's
+    // rates afresh, says how far each assembly's cost moves, and writes only on a yes.
+    const updateRates = async () => {
+        const open_ = lines.filter(l => l.status !== PUSHED);
+        const need = currenciesToRefresh(open_);
+        if (!need.length) return alert('No line on this sheet is priced in RMB or euros, so there is no rate to update.');
+        setRatesBusy(true);
+        try {
+            const rates = {}, failed = [];
+            for (const cur of need) { const r = await usdRateFor(cur, { fresh: true }); if (r) rates[cur] = r; else failed.push(cur); }
+            const plan = refreshPlan(lines, rates, l => l.status === PUSHED);
+            const failText = failed.length ? `\n\n${failed.join(' and ')}: today's rate could not be had — those lines are left as they are.` : '';
+            const rateText = Object.entries(rates).map(([c, r]) => `${c} ${r.rate} (${r.source}, ${r.date})`).join(' · ');
+            if (!plan.length) return alert(`${rateText ? `Every line is already at today's rate.\n\n${rateText}` : 'Nothing was updated.'}${failText}`);
+            const after = lines.map(l => { const m = plan.find(x => x.line.id === l.id); return m ? { ...l, ...m.patch } : l; });
+            const moves = sections.map(sec => ({ name: sec.name, was: sectionTotalOf(sec.id, sections, lines).total, now: sectionTotalOf(sec.id, sections, after).total })).filter(m => Math.abs(m.was - m.now) >= 0.005);
+            const detail = moves.length
+                ? moves.map(m => `${m.name}: ${moneyText(m.was)} → ${moneyText(m.now)}`).join('\n')
+                : plan.slice(0, 10).map(m => `${lineLabelOf(m.line)}: ${m.before === null ? '(blank)' : moneyText(m.before, 4)} → ${moneyText(m.after, 4)}`).join('\n') + (plan.length > 10 ? `\n…and ${plan.length - 10} more` : '');
+            if (!window.confirm(`Update ${plan.length} line${plan.length === 1 ? '' : 's'} to today's rate?\n\n${rateText}\n\n${detail}${failText}`)) return undefined;
+            for (let i = 0; i < plan.length; i += 300) {
+                const batch = writeBatch(db);
+                plan.slice(i, i + 300).forEach(m => batch.update(lineRef(projectId, m.line.id), { ...m.patch, ...stamp() }));
+                await batch.commit();
+            }
+            log(`Updated rates on ${plan.length} line(s) of ${project.name}: ${rateText}`);
+        } catch (err) { say('Could not update the rates', err); }
+        finally { setRatesBusy(false); }
+        return undefined;
+    };
+
+    // THE "PUSH TO LIBRARY" TICK of a column — a choice kept on the sheet (project.pushColumns); it pushes
+    // nothing. Ticking a column the Library has no field for says so, and how to set one up before the push.
+    const setPush = async (field, on) => {
+        if (on && !libraryTargetOf(field, customSchema)) alert(noLibraryFieldText(field));
+        try { await updateDoc(projectRef(projectId), { [`pushColumns.${field.key}`]: on, ...stamp() }); }
+        catch (err) { say('Could not save the Push to Library tick', err); }
+    };
+    const pushTitle = (field, ps) => {
+        const who = canManage ? '' : ' A manager sets these.';
+        if (ps.locked) return `Always pushed with the line — the Master Library's ${ps.target.label}.`;
+        if (ps.missing) return `Ticked, but the Master Library has no field for "${field.label}" yet. Add it in 4.5 → Static Part Attributes before the push.${who}`;
+        if (ps.on) return `Goes to the Master Library as: ${ps.target.label}.${who}`;
+        return (ps.target ? `Not pushed. (The Library's field for it: ${ps.target.label}.)` : `Not pushed — the Master Library has no field for "${field.label}".`) + who;
+    };
+
+    // DOWNLOAD the ticked lines as an Excel file to send out, and BRING BACK what returns (Shared/controlSheet
+    // decides what is in the file and what may come back; Shared/controlSheetXlsx writes and reads it — loaded
+    // only when asked for, it carries the spreadsheet library).
+    const picked = () => rows.filter(l => selected.includes(l.id));
+    const openDownload = () => {
+        if (!picked().length) return alert('Tick the lines to download first — the box at the left of each row, or the one in the heading for every line shown.');
+        const cols = exportColumnsFor(fields, section).map(c => ({ ...c, on: !!c.fixed || startsInDownload(c) }));
+        return setDownloader({ columns: cols, pictures: true, busy: false, progress: '' });
+    };
+    const runDownload = async () => {
+        const cols = downloader.columns.filter(c => c.on);
+        const sel = picked();
+        setDownloader(d => ({ ...d, busy: true, progress: 'Preparing…' }));
+        try {
+            const xlsx = await import('../Shared/controlSheetXlsx');
+            const pictures = {};
+            if (downloader.pictures && cols.some(c => c.field && c.field.type === 'picture')) {
+                for (let i = 0; i < sel.length; i++) {
+                    if (!sel[i].pictureUrl) continue;
+                    setDownloader(d => ({ ...d, progress: `Pictures ${i + 1} of ${sel.length}…` }));
+                    const pic = await xlsx.fetchPicture(sel[i].pictureUrl);
+                    if (pic) pictures[sel[i].id] = pic;
+                }
+            }
+            const meta = { projectId, projectName: project.name, sectionId: section ? section.id : '', sectionName: section ? section.name : '', exportedAt: new Date().toISOString() };
+            const bytes = await xlsx.buildControlSheetXlsx({ columns: cols, lines: sel, sectionId: meta.sectionId, meta, pictures });
+            xlsx.saveXlsx(bytes, `${project.name}${section ? ` - ${section.name}` : ''} - ${meta.exportedAt.slice(0, 10)}.xlsx`.replace(/[\\/:*?"<>|]+/g, ' '));
+            log(`Downloaded ${sel.length} line(s) of ${project.name}${section ? ` / ${section.name}` : ''} as .xlsx`);
+            setDownloader(null);
+        } catch (err) { setDownloader(d => (d ? { ...d, busy: false, progress: '' } : d)); say('Could not make the file', err); }
+    };
+    const readReimport = async (file) => {
+        if (!file) return;
+        setReimporter({ reading: true, fileName: file.name });
+        try {
+            const xlsx = await import('../Shared/controlSheetXlsx');
+            // Every column a download of this sheet could have carried — whatever was showing when it was made.
+            const known = exportColumnsFor(allFields, { id: '_' });
+            const read = await xlsx.readControlSheetXlsx(await file.arrayBuffer(), known);
+            const plan = planReimport({ ...read, lines, projectId, sections, knownColumns: known });
+            const ticks = {};
+            plan.changes.forEach(ch => ch.cells.forEach(c => { ticks[`${ch.lineId}|${c.key}`] = startsTicked(c); }));
+            setReimporter({ fileName: file.name, plan, ticks, newTicks: {}, exportedAt: read.meta ? read.meta.exportedAt : '' });
+        } catch (err) { console.error('re-import read failed', err); setReimporter({ fileName: file.name, error: `This file could not be read as a control sheet (${(err && err.message) || err}). Nothing was changed.` }); }
+    };
+    const applyReimport = async () => {
+        const { plan, ticks, newTicks } = reimporter;
+        const work = plan.changes.map(ch => ({ ch, cells: ch.cells.filter(c => ticks[`${ch.lineId}|${c.key}`]) })).filter(w => w.cells.length);
+        const adds = plan.newRows.filter(r => newTicks[r.index]);
+        if (!work.length && !adds.length) return;
+        setReimporter(r => ({ ...r, busy: true }));
+        try {
+            const now = new Date().toISOString();
+            const writes = [], noRate = [];
+            // A price or a currency that came back is worked into USD exactly as a typed one is.
+            const withUsd = async (base, patch, label) => {
+                if (!('priceOrigin' in patch) && !('currency' in patch)) return patch;
+                const next = { priceOrigin: 'priceOrigin' in patch ? patch.priceOrigin : base.priceOrigin, currency: 'currency' in patch ? patch.currency : base.currency };
+                if (numOf(next.priceOrigin) === null && numOf(base.priceOrigin) === null) return patch;
+                const rate = numOf(next.priceOrigin) !== null && next.currency ? await usdRateFor(next.currency) : null;
+                const fx = originPricePatch(next, rate);
+                if (fx.fxSource === 'PENDING') noRate.push(label);
+                return { ...patch, ...fx };
+            };
+            for (const { ch, cells } of work) {
+                const line = lines.find(l => l.id === ch.lineId);
+                if (!line || line.status === PUSHED) continue;
+                writes.push({ ref: lineRef(projectId, line.id), data: { ...(await withUsd(line, patchForCells(cells, plan.sectionId), ch.label)), ...stamp() }, isNew: false });
+            }
+            let order = nextOrder(lines);
+            for (const row of adds) {
+                const made = lineFromNewRow(row.cells, { id: newId('L'), projectId, brandId: activeBrand, order, user: currentUser, nowIso: now, sectionId: plan.sectionId });
+                order += 10;
+                Object.assign(made, await withUsd({}, { priceOrigin: made.priceOrigin, currency: made.currency || '' }, row.label));
+                writes.push({ ref: lineRef(projectId, made.id), data: made, isNew: true });
+            }
+            for (let i = 0; i < writes.length; i += 300) {
+                const batch = writeBatch(db);
+                writes.slice(i, i + 300).forEach(w => (w.isNew ? batch.set(w.ref, w.data) : batch.update(w.ref, w.data)));
+                await batch.commit();
+            }
+            const cells = work.reduce((n, w) => n + w.cells.length, 0);
+            log(`Brought back ${reimporter.fileName} into ${project.name}: ${cells} change(s) on ${work.length} line(s), ${adds.length} line(s) added`);
+            setReimporter({ fileName: reimporter.fileName, finished: { lines: work.length, cells, added: adds.length, noRate } });
+        } catch (err) { setReimporter(r => (r ? { ...r, busy: false } : r)); say('Could not bring the file back', err); }
+    };
 
     const addLine = async () => {
         const now = new Date().toISOString();
@@ -397,15 +568,16 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
             <div style={S.overlay} onClick={() => setOpen(null)}>
                 <div style={{ ...S.modal, width: 'min(720px, 100%)' }} onClick={e => e.stopPropagation()}>
                     <h3 style={S.h3}>Quotes — {lineLabelOf(line)}</h3>
-                    <p style={S.note}>What the vendor quoted, as it was quoted: a price in its own currency at a quantity. The sheet costs the part from its <b>USD</b> box — a quote is the record behind that number, never the number itself.</p>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 0.8fr 1fr 34px', gap: '8px', marginTop: '14px', alignItems: 'center' }}>
-                        {['What (material, price break)', 'Price', 'Currency', 'At quantity', ''].map(h => <span key={h} style={S.label}>{h}</span>)}
+                    <p style={S.note}>What the vendor quoted, as it was quoted: a price in its own currency at a quantity. <b>Use</b> makes a quote the line's <b>Price</b>; its USD is then worked out at the day's rate. A quote that is not in use changes nothing.</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 0.8fr 1fr 64px 34px', gap: '8px', marginTop: '14px', alignItems: 'center' }}>
+                        {['What (material, price break)', 'Price', 'Currency', 'At quantity', '', ''].map((h, i) => <span key={`${h}${i}`} style={S.label}>{h}</span>)}
                         {quotes.map((q, i) => (
                             <React.Fragment key={`${i}-${q.label}-${q.price}-${q.currency}-${q.qty}`}>
                                 <input defaultValue={q.label || ''} disabled={locked} onBlur={e => { if (e.target.value !== (q.label || '')) edit(i, 'label', e.target.value); }} style={box} />
                                 <input defaultValue={q.price === null || q.price === undefined ? '' : String(q.price)} disabled={locked} onBlur={e => { if (numOf(e.target.value) !== numOf(q.price)) edit(i, 'price', e.target.value); }} style={{ ...box, textAlign: 'right' }} />
                                 <input defaultValue={q.currency || ''} disabled={locked} placeholder="RMB / USD" onBlur={e => { if (e.target.value.trim().toUpperCase() !== (q.currency || '')) edit(i, 'currency', e.target.value.toUpperCase()); }} style={box} />
                                 <input defaultValue={q.qty || ''} disabled={locked} onBlur={e => { if (e.target.value !== (q.qty || '')) edit(i, 'qty', e.target.value); }} style={box} />
+                                <button disabled={locked || numOf(q.price) === null} title="Make this quote the line's price — the USD is worked out from it at today's rate" onClick={() => setOrigin(line, { priceOrigin: q.price, currency: CURRENCIES.includes(String(q.currency || '').toUpperCase()) ? String(q.currency).toUpperCase() : line.currency })} style={{ ...S.btn, padding: '6px 8px', borderColor: numOf(q.price) !== null && numOf(line.priceOrigin) === numOf(q.price) ? 'var(--brass)' : 'var(--line)' }}>{numOf(q.price) !== null && numOf(line.priceOrigin) === numOf(q.price) ? 'In use' : 'Use'}</button>
                                 <button disabled={locked} title="Remove this quote" onClick={() => save(quotes.filter((_, n) => n !== i))} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1.1rem' }}>×</button>
                             </React.Fragment>
                         ))}
@@ -494,6 +666,110 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
             </div>
         </div>
     );
+
+    const downloadWindow = () => {
+        const d = downloader;
+        const sel = picked();
+        const toggle = (key) => setDownloader(x => ({ ...x, columns: x.columns.map(c => (c.key === key && !c.fixed ? { ...c, on: !c.on } : c)) }));
+        const hasPicture = d.columns.some(c => c.on && c.field && c.field.type === 'picture');
+        return (
+            <div style={S.overlay}>
+                <div style={S.modal}>
+                    <h3 style={S.h3}>Download {sel.length} line{sel.length === 1 ? '' : 's'} as .xlsx</h3>
+                    <p style={S.note}>The columns showing on the sheet, in its order — untick what should not leave. <b>Our own figures</b> (USD, duty, landed, base price) start unticked: tick them only for a file that stays in-house. To send a column that is not listed, switch its group on first.</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '6px 14px', margin: '16px 0' }}>
+                        {d.columns.map(c => (
+                            <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--sans)', fontSize: '0.86rem', color: c.on ? 'var(--ink)' : 'var(--ink-soft)', cursor: c.fixed ? 'default' : 'pointer' }}>
+                                <input type="checkbox" checked={c.on} disabled={!!c.fixed || d.busy} onChange={() => toggle(c.key)} />
+                                {c.label}{c.fixed ? ' — how a row finds its line' : c.back ? '' : ' (read only)'}
+                            </label>
+                        ))}
+                    </div>
+                    {hasPicture && <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--sans)', fontSize: '0.86rem' }}><input type="checkbox" checked={d.pictures} disabled={d.busy} onChange={e => setDownloader(x => ({ ...x, pictures: e.target.checked }))} /> Put each line's picture in the file</label>}
+                    <p style={{ ...S.note, marginTop: '12px', fontSize: '0.8rem' }}>What comes back is never applied by itself: <b>Bring back a returned file</b> lists every difference first. "(read only)" columns are worked out here and are not read back.</p>
+                    {d.busy && <div style={{ ...S.label, color: 'var(--brass)', marginTop: '10px' }}>{d.progress}</div>}
+                    <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                        <button style={S.btn} disabled={d.busy} onClick={() => setDownloader(null)}>Cancel</button>
+                        <button style={{ ...S.btnDark, opacity: d.busy ? 0.6 : 1 }} disabled={d.busy} onClick={runDownload}>{d.busy ? 'Making the file…' : 'Download'}</button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const reimportWindow = () => {
+        const r = reimporter;
+        const plan = r.plan;
+        const setTick = (key, on) => setReimporter(x => ({ ...x, ticks: { ...x.ticks, [key]: on } }));
+        const tickAll = (on) => setReimporter(x => ({ ...x, ticks: Object.fromEntries(Object.keys(x.ticks).map(k => [k, on])) }));
+        const nTicked = plan ? Object.values(r.ticks).filter(Boolean).length + Object.values(r.newTicks).filter(Boolean).length : 0;
+        const list = { margin: '6px 0 0 0', paddingLeft: '18px', fontFamily: 'var(--sans)', fontSize: '0.84rem', color: 'var(--ink-soft)' };
+        return (
+            <div style={S.overlay}>
+                <div style={{ ...S.modal, width: 'min(980px, 100%)' }}>
+                    <h3 style={S.h3}>Bring back — {r.fileName}</h3>
+                    {r.reading && <p style={S.note}>Reading the file…</p>}
+                    {r.error && <div style={{ padding: '12px', background: '#fdf3f2', border: '1px solid #e9c4c1', color: '#8a2a25', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>{r.error}</div>}
+                    {plan && plan.refused && <div style={{ padding: '12px', background: '#fdf3f2', border: '1px solid #e9c4c1', color: '#8a2a25', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>{plan.refused} Nothing was changed.</div>}
+                    {r.finished && <p style={{ ...S.note, color: 'var(--ink)', fontSize: '0.95rem' }}>{r.finished.cells} change{r.finished.cells === 1 ? '' : 's'} taken on {r.finished.lines} line{r.finished.lines === 1 ? '' : 's'}{r.finished.added ? `, and ${r.finished.added} line${r.finished.added === 1 ? '' : 's'} added` : ''}.{r.finished.noRate.length ? ` Today's rate could not be had for ${r.finished.noRate.join(', ')} — their USD is blank until Update rates is pressed.` : ''}</p>}
+                    {plan && !plan.refused && !r.finished && (
+                        <>
+                            <p style={S.note}>Every difference between the file and the sheet, as <b>what is here → what the file says</b>. Only what is ticked is taken. A blank in the file never clears a value unless you tick it; a price or currency taken is worked into USD at today's rate.{r.exportedAt ? ` The file was downloaded ${r.exportedAt.slice(0, 16).replace('T', ' at ')}.` : ' This file has lost the note of which sheet it came from, so its rows were matched by their Ref alone.'}</p>
+                            {plan.changes.length === 0 && plan.newRows.length === 0 && <div style={{ ...S.note, padding: '20px', border: '1px dashed var(--line)', textAlign: 'center', margin: '14px 0' }}>The file says what the sheet already says — {plan.unchanged} line{plan.unchanged === 1 ? '' : 's'} read, nothing to take.</div>}
+                            {plan.changes.length > 0 && (
+                                <div style={{ margin: '14px 0 6px 0', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                    <span style={S.label}>{plan.changes.length} line{plan.changes.length === 1 ? '' : 's'} differ · {plan.unchanged} the same</span>
+                                    <button style={{ ...S.btn, padding: '5px 10px' }} onClick={() => tickAll(true)}>Tick all</button>
+                                    <button style={{ ...S.btn, padding: '5px 10px' }} onClick={() => tickAll(false)}>Untick all</button>
+                                </div>
+                            )}
+                            <div style={{ maxHeight: '44vh', overflowY: 'auto', border: plan.changes.length ? '1px solid var(--line)' : 'none' }}>
+                                {plan.changes.map(ch => (
+                                    <div key={ch.lineId} style={{ padding: '10px 14px', borderBottom: '1px solid var(--line)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', color: 'var(--ink)' }}>{ch.label}{ch.stale && <span style={{ marginLeft: '10px', color: '#b5651d', fontFamily: 'var(--sans)' }}>edited here{ch.staleBy ? ` by ${ch.staleBy}` : ''} after the file was downloaded — check before taking</span>}</div>
+                                        {ch.cells.map(c => (
+                                            <label key={c.key} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '6px', fontFamily: 'var(--sans)', fontSize: '0.86rem', cursor: 'pointer' }}>
+                                                <input type="checkbox" checked={!!r.ticks[`${ch.lineId}|${c.key}`]} disabled={r.busy} onChange={e => setTick(`${ch.lineId}|${c.key}`, e.target.checked)} />
+                                                <span style={{ ...S.label, minWidth: '130px' }}>{c.label}</span>
+                                                <span style={{ color: 'var(--ink-soft)' }}>{c.fromText}</span><span style={{ color: 'var(--brass)' }}>→</span><span style={{ color: 'var(--ink)', fontWeight: 500 }}>{c.toText}</span>
+                                                {c.clears && <span style={{ color: '#b5651d', fontSize: '0.78rem' }}>blank in the file — would clear it</span>}
+                                            </label>
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
+                            {plan.newRows.length > 0 && (
+                                <div style={{ marginTop: '14px' }}>
+                                    <div style={S.label}>Rows the file adds (no Ref) — taken only if ticked, as new draft lines</div>
+                                    {plan.newRows.map(row => (
+                                        <label key={row.index} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '6px', fontFamily: 'var(--sans)', fontSize: '0.86rem', cursor: 'pointer' }}>
+                                            <input type="checkbox" checked={!!r.newTicks[row.index]} disabled={r.busy} onChange={e => setReimporter(x => ({ ...x, newTicks: { ...x.newTicks, [row.index]: e.target.checked } }))} />
+                                            <span style={{ fontWeight: 500 }}>{row.label}</span>
+                                            <span style={{ color: 'var(--ink-soft)' }}>{row.cells.map(c => `${c.label}: ${c.toText}`).join(' · ')}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            )}
+                            {(plan.locked.length > 0 || plan.unknownRefs.length > 0 || plan.ignored.length > 0) && (
+                                <details style={{ marginTop: '14px' }}>
+                                    <summary style={{ ...S.label, cursor: 'pointer' }}>Left alone ({plan.locked.length + plan.unknownRefs.length + plan.ignored.length})</summary>
+                                    <ul style={list}>
+                                        {plan.locked.map(t => <li key={`k${t}`}>{t} — already pushed to the Master Library; the file cannot change it</li>)}
+                                        {plan.unknownRefs.map(t => <li key={`u${t}`}>Ref {t} — no such line on this sheet (deleted since, or the Ref was changed)</li>)}
+                                        {plan.ignored.map(t => <li key={`i${t}`}>Column {t}</li>)}
+                                    </ul>
+                                </details>
+                            )}
+                        </>
+                    )}
+                    <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                        <button style={S.btn} disabled={!!r.busy} onClick={() => setReimporter(null)}>{r.finished || r.error || (plan && plan.refused) ? 'Close' : 'Cancel'}</button>
+                        {plan && !plan.refused && !r.finished && (plan.changes.length > 0 || plan.newRows.length > 0) && <button style={{ ...S.btnDark, opacity: r.busy || !nTicked ? 0.6 : 1 }} disabled={!!r.busy || !nTicked} onClick={applyReimport}>{r.busy ? 'Taking…' : `Take ${nTicked} ticked`}</button>}
+                    </div>
+                </div>
+            </div>
+        );
+    };
 
     // ── the page ──
     const header = (
@@ -626,7 +902,22 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                     <table style={{ borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', width: `${tableWidth}px` }}>
                         <colgroup>{columns.map(c => <col key={c.key} style={{ width: `${c.width}px` }} />)}</colgroup>
                         <thead>
-                            <tr>{columns.map(c => <th key={c.key} title={c.label} style={thStyle(c)}>{c.label}</th>)}</tr>
+                            <tr>{columns.map(c => {
+                                if (c.key === 'SEL') return <th key={c.key} style={{ ...thStyle(c), textAlign: 'center', padding: '8px 0' }}><input type="checkbox" title="Select every line shown" checked={rows.length > 0 && rows.every(l => selected.includes(l.id))} onChange={e => setSelected(e.target.checked ? rows.map(l => l.id) : [])} style={{ cursor: 'pointer' }} /></th>;
+                                const ps = c.field ? pushStateOf(c.field, pushColumns, customSchema) : null;
+                                return (
+                                    <th key={c.key} title={c.label} style={{ ...thStyle(c), verticalAlign: 'top' }}>
+                                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.label || '\u00a0'}</div>
+                                        {ps && ps.offered && (
+                                            <label title={pushTitle(c.field, ps)} style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '5px', fontSize: '8px', letterSpacing: '.04em', color: ps.missing ? '#b5651d' : ps.on ? 'var(--brass)' : 'var(--ink-soft)', cursor: ps.locked || !canManage ? 'default' : 'pointer', opacity: ps.on ? 1 : 0.75 }}>
+                                                <input type="checkbox" checked={ps.on} disabled={ps.locked || !canManage} onChange={e => setPush(c.field, e.target.checked)} style={{ margin: 0, width: '11px', height: '11px' }} />
+                                                {ps.missing ? (c.width < 84 ? '\u26a0' : '\u26a0 no field') : (c.width < 84 ? 'Lib' : 'Library')}
+                                            </label>
+                                        )}
+                                        {ps && !ps.offered && <div title="Held on the sheet — never pushed to the Master Library" style={{ marginTop: '5px', fontSize: '8px', letterSpacing: '.04em', opacity: 0.6 }}>sheet only</div>}
+                                    </th>
+                                );
+                            })}</tr>
                         </thead>
                         <tbody>
                             {rows.length === 0 && <tr><td colSpan={columns.length} style={{ ...S.td, ...S.note, padding: '34px', borderRight: 'none' }}>{search ? 'No line matches the search.' : section ? 'No parts on this sheet yet.' : 'No lines yet.'}</td></tr>}
@@ -640,6 +931,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                                     <tr key={line.id} style={{ background: bg }}>
                                         {columns.map(c => {
                                             const style = tdStyle(c, bg);
+                                            if (c.key === 'SEL') return <td key={c.key} style={{ ...style, textAlign: 'center', padding: 0 }}><input type="checkbox" title="Select this line" checked={selected.includes(line.id)} onChange={e => setSelected(prev => (e.target.checked ? [...prev, line.id] : prev.filter(id => id !== line.id)))} style={{ cursor: 'pointer' }} /></td>;
                                             if (c.key === '#') return <td key={c.key} style={style}><input key={`b-${use.balloon || ''}`} defaultValue={use.balloon || ''} disabled={locked} title="Balloon number on the drawing" onBlur={e => { if (e.target.value.trim() !== (use.balloon || '')) patchLine(line, { [`uses.${section.id}.balloon`]: e.target.value.trim() }); }} onKeyDown={enter} style={{ ...S.input, textAlign: 'center', fontWeight: 500 }} /></td>;
                                             if (c.key === 'QTY') return <td key={c.key} style={style}><input key={`q-${use.qty}`} defaultValue={use.qty === null || use.qty === undefined ? '' : String(use.qty)} disabled={locked} title="How many of this part the assembly takes" onBlur={e => { const q = numOf(e.target.value); if (q !== numOf(use.qty)) patchLine(line, { [`uses.${section.id}.qty`]: q }); }} onKeyDown={enter} style={{ ...S.input, textAlign: 'right' }} /></td>;
                                             if (c.key === 'COST') return <td key={c.key} style={{ ...style, textAlign: 'right', padding: '6px 8px', color: cost === null ? 'var(--ink-soft)' : 'var(--ink)' }}>{cost === null ? '—' : moneyText(cost, cost < 1 ? 3 : 2)}</td>;
@@ -662,7 +954,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                                             return (
                                                 <td key={c.key} style={{ ...style, ...(c.field.type === 'picture' ? { padding: '4px 6px' } : {}) }}>
                                                     <Cell field={c.field} line={line} lists={lists} locked={locked}
-                                                        onCommit={v => patchLine(line, { [c.key]: v })}
+                                                        onCommit={v => commitCell(line, c.field, v)}
                                                         onOpen={k => setOpen({ kind: k, lineId: line.id })} />
                                                 </td>
                                             );
@@ -683,6 +975,15 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                     )}
                     <span style={{ ...S.note, fontSize: '0.8rem', marginLeft: 'auto' }}>A box saves when the cursor leaves it.</span>
                 </div>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', padding: '12px 20px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
+                    <span style={S.label}>{selected.length ? `${picked().length} selected` : 'To send out'}</span>
+                    <button style={S.btn} onClick={openDownload} title="An Excel file of the ticked lines, with their pictures, to send to a vendor">⤓ Download selected as .xlsx</button>
+                    <label style={{ ...S.btn, display: 'inline-block' }} title="Read a file that came back, see every difference, and choose what to take">
+                        ⤒ Bring back a returned file
+                        <input type="file" accept=".xlsx" style={{ display: 'none' }} onChange={e => { const fl = e.target.files && e.target.files[0]; e.target.value = ''; readReimport(fl); }} />
+                    </label>
+                    <button style={{ ...S.btn, marginLeft: 'auto', opacity: ratesBusy ? 0.6 : 1 }} disabled={ratesBusy} onClick={updateRates} title="Work every RMB and euro price out again at today's rate. A USD does not move until this is pressed.">{ratesBusy ? 'Asking for rates…' : '↻ Update rates'}</button>
+                </div>
             </div>
         </>
     );
@@ -695,6 +996,8 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
             {open && (open.kind === 'QUOTES' ? quotesWindow() : pictureWindow())}
             {starter && starterWindow()}
             {importer && importWindow()}
+            {downloader && downloadWindow()}
+            {reimporter && reimportWindow()}
         </div>
     );
 };

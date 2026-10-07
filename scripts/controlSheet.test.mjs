@@ -16,7 +16,11 @@ import {
     lineLabelOf, quoteTextOf, matchesSearch,
     projectNameKey, projectIdOf, tab1ProjectsOf, blankLine, blankProject,
     readBundle, planImport, finishImport,
+    CURRENCIES, SOURCING_CHOICES, cellRawOf, sheetGroupsFor, libraryTargetOf, pushStateOf, noLibraryFieldText,
+    REF_KEY, OUR_MONEY, exportColumnsFor, startsInDownload, exportValueOf, backValueOf, planReimport, startsTicked, patchForCells, lineFromNewRow,
 } from '../src/components/Shared/controlSheet.js';
+import { isoOf, rateUrlFor, readRate, usdRateFor, forgetRates, usdOf, hasOriginPrice, originPricePatch, fxNoteOf, currenciesToRefresh, refreshPlan } from '../src/components/Shared/fxRates.js';
+import { buildControlSheetXlsx, readControlSheetXlsx } from '../src/components/Shared/controlSheetXlsx.js';
 import { TAG_CATEGORIES } from '../src/components/Shared/assemblyTags.js';
 import { TRAVERSE_ROLES } from '../src/components/Shared/traverseTags.js';
 
@@ -31,7 +35,7 @@ ok('a fixed-choice field carries its choices', ALL_FIELDS.filter(f => f.type ===
 ok('a dictionary field names its list', ALL_FIELDS.filter(f => f.type === 'list').every(f => !!f.list));
 ok('the 1.6 tags are 1.6\'s own lists, not a copy', fieldByKey('tags.category').options === TAG_CATEGORIES && fieldByKey('tags.traverseRole').options === TRAVERSE_ROLES);
 ok('the tags and the milling facts stay on the sheet', FIELD_GROUPS.filter(g => g.sheetOnly).map(g => g.key).join() === 'MAKE,TAGS');
-ok('what the Master Library needs is all here', ['collection', 'productType', 'uom', 'partHandling', 'paintSize', 'watchList', 'isInHouse', 'isStocked', 'binLocation', 'unfinished'].every(k => !!fieldByKey(k)));
+ok('what the Master Library needs is all here', ['collection', 'productType', 'uom', 'partHandling', 'paintSize', 'watchList', 'sourcing', 'isStocked', 'binLocation', 'unfinished'].every(k => !!fieldByKey(k)));
 ok('a light is not shown the hardware tags', !groupsFor('LIGHTING').some(g => g.key === 'TAGS' || g.key === 'MAKE'));
 ok('…nor the plate fields inside a group it does show', !groupsFor('LIGHTING').find(g => g.key === 'LIBRARY').fields.some(f => f.key === 'bpOrientation'));
 ok('hardware is shown everything', groupsFor('HARDWARE').length === FIELD_GROUPS.length && groupsFor('HARDWARE').find(g => g.key === 'LIBRARY').fields.some(f => f.key === 'bpOrientation'));
@@ -169,6 +173,158 @@ ok('a picture that went up is on its line; one that did not leaves the cell empt
 ok('…the working keys are not written', done.lines.every(l => !('pictureKey' in l)) && done.project.sections.every(s => !('drawingKeys' in s)));
 ok('a sheet keeps its drawing, its sub-assemblies and the workbook\'s own total', done.project.sections[0].drawings[0].url === 'https://s/d1' && done.project.sections[1].children[0].section === 'S1' && done.project.sections[1].importedTotal === 120.4775);
 near('the imported sheet adds up as the workbook did', sectionTotalOf('S6', done.project.sections, done.lines).total, 71.55 * 1.65 + (0.05 * 1.1 * 3 + 2.05 * 1.1));
+
+// ── A COLUMN FOR EVERY LIBRARY FIELD, AND WHERE EACH GOES ──────────────────────────────────────────────
+// The single-value fields of the Master Library's drawer, by the name the record stores them under.
+const LIBRARY_PATHS = ['legacyErpId', 'itemName', 'partClass', 'finalImageUrl', 'routingType',
+    ...['material', 'weight', 'programNum', 'vendorName', 'vendorId', 'vendorUrl', 'altVendorUrl', 'cost', 'moq', 'leadTime', 'basePrice', 'collections', 'productType', 'uom',
+        'partHandling', 'finishStream', 'paintSize', 'watchList', 'sourcingMode', 'outsourceAction', 'isStocked', 'binLocation', 'reorderPoint', 'bomRevision', 'shopInstruction',
+        'customOverrideFee', 'plateRole', 'plateUpgradeOf', 'plateUpcharge', 'plateUpchargePremium', 'wallMount.partId', 'wallMount.desc', 'parametric.length', 'parametric.width',
+        'parametric.height', 'parametric.isCutToSize', 'layeringSequence'].map(n => `manufacturingSpecs.${n}`),
+    ...['unfinished', 'feeType', 'trackLoaded', 'projection', 'bracketType', 'isReturnBracket', 'armThickness', 'bpOrientation'].map(n => `manufacturingSpecs.customData.${n}`)];
+const paths = ALL_FIELDS.filter(x => x.lib).map(x => x.lib.path);
+ok('there is a column for every single-value field the Library drawer carries', LIBRARY_PATHS.every(pth => paths.includes(pth)), LIBRARY_PATHS.filter(pth => !paths.includes(pth)).join(', '));
+ok('…and no two columns go to one Library field', new Set(paths).size === paths.length);
+ok('nothing held for 1.6 or for milling has a Library field', ALL_FIELDS.filter(x => x.sheetOnly).every(x => !x.lib) && ALL_FIELDS.filter(x => x.sheetOnly).length === 32);
+ok('the three facts that make a record are always pushed', ALL_FIELDS.filter(x => x.always).map(x => x.key).join() === 'itemCode,name,recordClass');
+ok('sourcing is the Library\'s three-way answer, in its own words', SOURCING_CHOICES.join() === 'In-House,Outsourced,Both');
+ok('…and a line that carried the older in-house tick still reads', cellRawOf(F('sourcing'), { isInHouse: false }) === 'Outsourced' && cellRawOf(F('sourcing'), { isInHouse: true }) === 'In-House' && cellRawOf(F('sourcing'), { sourcing: 'Both', isInHouse: true }) === 'Both' && cellRawOf(F('sourcing'), {}) === '');
+ok('a light keeps the general Library fields and none of the bracket ones', ['routingType', 'finishStream', 'bomRevision', 'shopInstruction', 'feeType', 'moq'].every(k => groupsFor('LIGHTING').some(g => g.fields.some(x => x.key === k))) && !groupsFor('LIGHTING').some(g => g.fields.some(x => ['plateRole', 'wallMountPart', 'isCutToSize'].includes(x.key))));
+
+const sizeF = F('size'), weightF = F('weight'), tagF = F('tags.category');
+ok('a column the Library has a field for goes there', libraryTargetOf(weightF, []).path === 'manufacturingSpecs.weight' && libraryTargetOf(weightF, []).label === 'Weight (lbs)' && libraryTargetOf(weightF, []).custom === false);
+ok('a column it has none for goes nowhere', libraryTargetOf(sizeF, []) === null && libraryTargetOf(sizeF, null) === null);
+const attrs = [{ key: 'sizeDimensions', label: 'Size / Dimensions', type: 'text' }, { key: 'countryOfOrigin', label: 'Country of origin', type: 'dropdown', options: 'China, USA , Italy' }, { key: 'testReport', label: 'Test report', type: 'file' }, { key: 'bad key', label: 'Bad', type: 'text' }, { key: 'uom', label: 'Unit', type: 'text' }];
+ok('…until 4.5 adds an attribute under its name — then it takes it', libraryTargetOf(sizeF, attrs).path === 'manufacturingSpecs.customData.sizeDimensions' && libraryTargetOf(sizeF, attrs).custom === true && libraryTargetOf(sizeF, attrs).label === 'Size / Dimensions (Custom)');
+ok('a built-in field is never re-pointed by an attribute of the same name', libraryTargetOf(F('uom'), attrs).path === 'manufacturingSpecs.uom');
+ok('a 1.6 tag has no Library field whatever is added', libraryTargetOf(tagF, [{ key: 'category', label: 'Category', type: 'text' }]) === null);
+const hwLib = sheetGroupsFor('HARDWARE', attrs).find(g => g.key === 'LIBRARY').fields;
+ok('an attribute no column answers to is a column of its own', hwLib.some(x => x.key === 'custom.countryOfOrigin' && x.type === 'pick' && x.options.join('|') === 'China|USA|Italy' && x.lib.path === 'manufacturingSpecs.customData.countryOfOrigin'));
+ok('…one a column already answers to is not doubled; a file attribute and a bad key are left out', !hwLib.some(x => ['custom.sizeDimensions', 'custom.testReport', 'custom.bad key', 'custom.uom'].includes(x.key)));
+ok('no attributes, no change', sheetGroupsFor('HARDWARE', []).find(g => g.key === 'LIBRARY').fields.length === groupsFor('HARDWARE').find(g => g.key === 'LIBRARY').fields.length);
+
+const PS = (field, cols, a = []) => pushStateOf(field, cols, a);
+ok('a column with a Library field starts ticked', PS(weightF, {}).on && PS(weightF, {}).offered && !PS(weightF, {}).locked && !PS(weightF, {}).missing);
+ok('a column without one starts unticked', !PS(sizeF, {}).on && PS(sizeF, {}).offered && PS(sizeF, {}).target === null);
+ok('the sheet\'s own choice wins either way', !PS(weightF, { weight: false }).on && PS(sizeF, { size: true }).on);
+ok('ticked with nowhere to go is MISSING — to be set up before the push', PS(sizeF, { size: true }).missing && !PS(sizeF, { size: true }, attrs).missing && PS(sizeF, { size: true }, attrs).target.custom);
+ok('item #, description and class cannot be unticked', PS(F('itemCode'), { itemCode: false }).on && PS(F('itemCode'), {}).locked && PS(F('recordClass'), { recordClass: false }).on);
+ok('the 1.6 tags and milling carry no tick at all', !PS(tagF, { tags: { category: true } }).offered && !PS(tagF, {}).on && !PS(F('rawStock'), { rawStock: true }).offered);
+ok('a custom column\'s choice is read at its own place', !PS(hwLib.find(x => x.key === 'custom.countryOfOrigin'), { custom: { countryOfOrigin: false } }, attrs).on && PS(hwLib.find(x => x.key === 'custom.countryOfOrigin'), {}, attrs).on);
+ok('the prompt names the column and where to set it up', noLibraryFieldText(sizeF).includes('no field for "Size / dimensions"') && noLibraryFieldText(sizeF).includes('Static Part Attributes'));
+
+// ── THE ORIGIN PRICE AND ITS RATE ───────────────────────────────────────────────────────────────────────
+ok('the currencies are dollars, RMB and euros', CURRENCIES.join() === 'USD,RMB,EUR' && isoOf('rmb') === 'CNY' && isoOf('EUR') === 'EUR' && isoOf('usd') === 'USD' && isoOf('GBP') === '' && isoOf('') === '');
+ok('the rate is asked for by currency code and nothing else', rateUrlFor('RMB') === 'https://api.frankfurter.dev/v1/latest?base=CNY&symbols=USD' && rateUrlFor('USD') === '' && rateUrlFor('XYZ') === '');
+ok('an answer is read only when it answers THIS currency', readRate({ base: 'CNY', date: '2026-10-07', rates: { USD: 0.14915 } }, 'RMB').rate === 0.14915 && readRate({ base: 'EUR', date: '2026-10-07', rates: { USD: 1.1 } }, 'RMB') === null && readRate({ base: 'CNY', rates: { USD: 0 } }, 'RMB') === null && readRate(null, 'RMB') === null && readRate({ base: 'CNY', rates: {} }, 'RMB') === null);
+const fakeFetch = (answers, log = []) => async (url) => { log.push(url); const a = answers[url]; if (a === 'throw') throw new Error('offline'); return a ? { ok: true, json: async () => a } : { ok: false }; };
+forgetRates();
+const asked = [];
+const net = fakeFetch({ [rateUrlFor('RMB')]: { base: 'CNY', date: '2026-10-07', rates: { USD: 0.14915 } }, [rateUrlFor('EUR')]: 'throw' }, asked);
+const rmb = await usdRateFor('RMB', { fetchImpl: net, now: () => 1000 });
+ok('today\'s rate comes with its date and its source', rmb.rate === 0.14915 && rmb.date === '2026-10-07' && rmb.source === 'ECB');
+await usdRateFor('RMB', { fetchImpl: net, now: () => 2000 });
+ok('…and is asked for once, not per line', asked.length === 1);
+await usdRateFor('RMB', { fetchImpl: net, now: () => 2000, fresh: true });
+ok('…unless Update rates asks afresh', asked.length === 2);
+ok('dollars need no rate', (await usdRateFor('USD', { fetchImpl: net, now: () => Date.UTC(2026, 9, 7) })).rate === 1 && asked.length === 2);
+ok('a rate that cannot be had is no rate — never a guess', (await usdRateFor('EUR', { fetchImpl: net })) === null && (await usdRateFor('GBP', { fetchImpl: net })) === null);
+
+const p73 = originPricePatch({ priceOrigin: 73, currency: 'rmb' }, rmb);
+ok('USD = the price × the day\'s rate, with the rate kept beside it', p73.priceUsd === 10.888 && p73.fxRate === 0.14915 && p73.fxDate === '2026-10-07' && p73.fxSource === 'ECB' && p73.currency === 'RMB' && usdOf(73, 0.14915) === 10.888);
+ok('a price with no currency yet waits — the USD is blank, not kept from before', originPricePatch({ priceOrigin: 73, currency: '' }, null).priceUsd === null && originPricePatch({ priceOrigin: 73, currency: '' }, null).priceOrigin === 73);
+ok('a price whose rate could not be had is PENDING, blank', originPricePatch({ priceOrigin: 73, currency: 'RMB' }, null).priceUsd === null && originPricePatch({ priceOrigin: 73, currency: 'RMB' }, null).fxSource === 'PENDING');
+ok('clearing the price clears the dollars made from it', originPricePatch({ priceOrigin: '', currency: 'RMB' }, rmb).priceUsd === null && originPricePatch({ priceOrigin: null, currency: 'RMB' }, rmb).priceOrigin === null);
+ok('a dollar quote is its own USD', originPricePatch({ priceOrigin: 8.25, currency: 'USD' }, { rate: 1, date: '2026-10-07', source: 'USD' }).priceUsd === 8.25);
+ok('a line has an origin price only with both halves', hasOriginPrice({ priceOrigin: 73, currency: 'RMB' }) && !hasOriginPrice({ priceOrigin: 73, currency: '' }) && !hasOriginPrice({ priceOrigin: null, currency: 'RMB' }) && !hasOriginPrice({ priceUsd: 5 }));
+ok('the note under the USD says what it was made from', fxNoteOf({ priceOrigin: 73, currency: 'RMB', ...p73 }) === 'RMB 73 × 0.14915 — ECB rate of 2026-10-07' && fxNoteOf({ priceOrigin: 73, currency: 'RMB', fxRate: 0.149041, fxSource: 'WORKBOOK' }).includes('the rate the workbook used') && fxNoteOf({ priceOrigin: 73, currency: '' }).startsWith('Choose the currency') && fxNoteOf({ priceUsd: 5 }) === '' && fxNoteOf({ priceOrigin: 73, currency: 'RMB', fxSource: 'PENDING', fxRate: null }).includes('could not be had'));
+
+const sheetLines = [
+    { id: 'A', priceOrigin: 73, currency: 'RMB', priceUsd: 10.88, fxRate: 10.88 / 73, fxSource: 'WORKBOOK', fxDate: '' },
+    { id: 'B', priceOrigin: 20, currency: 'EUR', priceUsd: 21, fxRate: 1.05, fxSource: 'ECB', fxDate: '2026-09-01' },
+    { id: 'C', priceOrigin: 8.25, currency: 'USD', priceUsd: 8.25 },
+    { id: 'D', priceUsd: 5 },
+    { id: 'E', priceOrigin: 10, currency: 'RMB', priceUsd: 1.4915, fxRate: 0.14915, fxSource: 'ECB', fxDate: '2026-10-07' },
+    { id: 'P', priceOrigin: 73, currency: 'RMB', priceUsd: 10.88, status: 'PUSHED' },
+];
+ok('Update rates asks only for what is priced in something other than dollars', currenciesToRefresh(sheetLines).sort().join() === 'EUR,RMB');
+const moved = refreshPlan(sheetLines, { RMB: rmb }, l => l.status === 'PUSHED');
+ok('…moves each such line to today, and says from what to what', moved.length === 1 && moved[0].line.id === 'A' && moved[0].before === 10.88 && moved[0].after === 10.888 && moved[0].patch.fxSource === 'ECB');
+ok('…leaves a line whose rate could not be had exactly as it is', !moved.some(m => m.line.id === 'B'));
+ok('…and never a pushed line, a dollar line, a typed USD, or one already at today\'s rate', !moved.some(m => ['P', 'C', 'D', 'E'].includes(m.line.id)));
+
+const withRmb = finishImport(planImport(bundle, { brandId: 'm2c', projectName: '', user: 'x', nowIso: stamp.nowIso }), {}).lines;
+ok('a workbook row quoted in RMB comes in at the rate the workbook itself used', withRmb[2].priceOrigin === 480 && withRmb[2].currency === 'RMB' && Math.abs(withRmb[2].fxRate - 71.55 / 480) < 1e-12 && withRmb[2].fxSource === 'WORKBOOK' && withRmb[2].priceUsd === 71.55);
+ok('…a row with only a USD figure was quoted in dollars', withRmb[0].priceOrigin === 0.05 && withRmb[0].currency === 'USD' && withRmb[0].fxRate === 1);
+ok('…and a row with several quotes and no USD is left for a person to choose', planImport({ ...bundle, lines: [{ key: 'L9', name: 'finial', quotes: [{ label: 'Price 1 · BRASS', price: 66, currency: '', qty: '100' }, { label: 'Price 2 · BRASS', price: 64, currency: '', qty: '200' }], uses: {} }] }, { brandId: 'ce', projectName: 'X', user: '', nowIso: '' }).lines[0].priceOrigin === undefined);
+
+// ── DOWNLOADING A SHEET AND BRINGING IT BACK ────────────────────────────────────────────────────────────
+const hwFields = sheetGroupsFor('HARDWARE', attrs).flatMap(g => g.fields);
+const secX = { id: 'SX', name: 'Bracket set' };
+const allCols = exportColumnsFor(hwFields, secX);
+ok('a download leads with the Ref, and on an assembly sheet carries its balloon, quantity and note', allCols[0].key === REF_KEY && allCols[1].key === '__balloon' && allCols[2].key === '__qty' && allCols[allCols.length - 1].key === '__note' && !exportColumnsFor(hwFields, null).some(c => c.use));
+ok('our own money columns start out of the file; the vendor\'s price and currency start in', OUR_MONEY.every(k => !startsInDownload({ key: k })) && startsInDownload(allCols.find(c => c.key === 'priceOrigin')) && startsInDownload(allCols.find(c => c.key === 'currency')) && !startsInDownload(allCols.find(c => c.key === 'priceUsd')));
+ok('what is worked out here is sent for reading and never read back', ['pictureUrl', 'quotes', 'priceUsd', 'landed', REF_KEY].every(k => allCols.find(c => c.key === k).back === false) && allCols.find(c => c.key === 'leadTime').back === true);
+const colOf = (k) => allCols.find(c => c.key === k);
+const L1 = { id: 'L1', itemCode: 'H3-75DF', name: '0.75IN DRUM FINIAL', size: '1.48in L', priceOrigin: 29, currency: 'RMB', priceUsd: 4.3254, dutyPct: 0.65, isStocked: true, leadTime: '', quotes: [{ label: 'Price 1 · ALUMINUM', price: 29, currency: '', qty: '100' }, { label: 'Price 2 · ALUMINUM', price: 27.5, currency: '', qty: '200' }], uses: { SX: { qty: 2, balloon: '4', note: 'left and right' } }, tags: { category: 'FINIAL' }, updatedAt: '2026-10-07T10:00:00.000Z', updatedBy: 'Stuart', status: 'DRAFT' };
+ok('a cell goes out as a number where it is a number, a percentage as a percentage, a tick as Yes', exportValueOf(colOf('priceOrigin'), L1, 'SX') === 29 && exportValueOf(colOf('dutyPct'), L1, 'SX') === 65 && exportValueOf(colOf('isStocked'), L1, 'SX') === 'Yes' && exportValueOf(colOf('unfinished'), L1, 'SX') === '' && exportValueOf(colOf(REF_KEY), L1, 'SX') === 'L1');
+ok('…its place on the sheet, its landed cost and its quotes as text', exportValueOf(colOf('__qty'), L1, 'SX') === 2 && exportValueOf(colOf('__balloon'), L1, 'SX') === '4' && exportValueOf(colOf('__note'), L1, 'SX') === 'left and right' && Math.abs(exportValueOf(colOf('landed'), L1, 'SX') - 4.3254 * 1.65) < 1e-9 && exportValueOf(colOf('quotes'), L1, 'SX').split('\n').length === 2 && exportValueOf(colOf('tags.category'), L1, 'SX') === 'FINIAL');
+ok('a returned cell is read as a typed box is', backValueOf(colOf('dutyPct'), 65) === 0.65 && backValueOf(colOf('priceOrigin'), '31.5') === 31.5 && backValueOf(colOf('isStocked'), 'yes') === true && backValueOf(colOf('isStocked'), '') === false && backValueOf(colOf('__qty'), '3') === 3 && backValueOf(colOf('leadTime'), ' 30 days ') === '30 days');
+
+const L2 = { id: 'L2', itemCode: 'H3-1DF', name: '1IN DRUM FINIAL', leadTime: '45 days', uses: { SX: { qty: 2, balloon: '5', note: '' } }, updatedAt: '2026-10-07T15:00:00.000Z', updatedBy: 'Leyla', status: 'DRAFT' };
+const L3 = { id: 'L3', itemCode: 'H3-138DF', name: 'PUSHED ONE', status: 'PUSHED', uses: { SX: { qty: 1, balloon: '6', note: '' } } };
+const lines3 = [L1, L2, L3];
+const sent = ['__ref', '__balloon', '__qty', 'itemCode', 'name', 'size', 'priceOrigin', 'currency', 'priceUsd', 'leadTime', 'isStocked', '__note'].map(colOf);
+const metaX = { projectId: 'ce__H3_CONTOURS', projectName: 'H3 CONTOURS', sectionId: 'SX', sectionName: 'Bracket set', exportedAt: '2026-10-07T12:00:00.000Z' };
+const bytes = await buildControlSheetXlsx({ columns: sent, lines: lines3, sectionId: 'SX', meta: metaX, pictures: {} });
+const backSame = await readControlSheetXlsx(bytes, allCols);
+ok('the file says which sheet it came from, when, and which column is which', backSame.meta.projectId === 'ce__H3_CONTOURS' && backSame.meta.sectionId === 'SX' && backSame.meta.exportedAt === metaX.exportedAt && backSame.columns.map(c => c.key).join() === sent.map(c => c.key).join() && backSame.rows.length === 3);
+const planSame = planReimport({ ...backSame, lines: lines3, projectId: 'ce__H3_CONTOURS', sections: [secX], knownColumns: allCols });
+ok('a file sent back untouched changes nothing', !planSame.refused && planSame.changes.length === 0 && planSame.unchanged === 2 && planSame.locked.join() === 'H3-138DF' && planSame.newRows.length === 0);
+
+// the vendor's reply: a price and currency on L1, its lead time; L2's lead time blanked and qty changed; L3 (pushed) edited; a row added; a column moved and one they made up
+const ExcelJS = (await import('exceljs/dist/exceljs.min.js')).default;
+const wbV = new ExcelJS.Workbook(); await wbV.xlsx.load(bytes);
+const wsV = wbV.worksheets.find(w => w.name !== '_control_sheet');
+const at = (k) => sent.findIndex(c => c.key === k) + 1;
+wsV.getCell(4, at('priceOrigin')).value = 31.5; wsV.getCell(4, at('currency')).value = 'EUR'; wsV.getCell(4, at('leadTime')).value = '30 days'; wsV.getCell(4, at('priceUsd')).value = 999;
+wsV.getCell(5, at('leadTime')).value = null; wsV.getCell(5, at('__qty')).value = 4;
+wsV.getCell(6, at('name')).value = 'RENAMED BY VENDOR';
+wsV.getCell(7, at('itemCode')).value = 'H3-NEW'; wsV.getCell(7, at('name')).value = 'A finial we also make'; wsV.getCell(7, at('priceOrigin')).value = 12;
+wsV.getCell(3, sent.length + 1).value = 'Our internal code'; wsV.getCell(4, sent.length + 1).value = 'ZZ-1';
+const reply = await readControlSheetXlsx(await wbV.xlsx.writeBuffer(), allCols);
+const planV = planReimport({ ...reply, lines: lines3, projectId: 'ce__H3_CONTOURS', sections: [secX], knownColumns: allCols });
+const c1 = planV.changes.find(c => c.lineId === 'L1'), c2 = planV.changes.find(c => c.lineId === 'L2');
+ok('each difference is listed as what is here → what the file says', c1.cells.map(c => `${c.key}:${c.fromText}→${c.toText}`).join(' | ') === 'priceOrigin:29→31.5 | currency:RMB→EUR | leadTime:(blank)→30 days');
+ok('a USD typed into the file is not read back — it is worked out here', !c1.cells.some(c => c.key === 'priceUsd') && planV.ignored.some(t => t.startsWith('USD')));
+ok('a blank in the file is shown but does not clear a value by itself', c2.cells.find(c => c.key === 'leadTime').clears && !startsTicked(c2.cells.find(c => c.key === 'leadTime')) && startsTicked(c2.cells.find(c => c.key === '__qty')) && c2.cells.find(c => c.key === '__qty').to === 4);
+ok('a line edited here after the download is flagged, with who', c2.stale && c2.staleBy === 'Leyla' && !c1.stale);
+ok('a pushed line is never changed', planV.locked.join() === 'H3-138DF' && !planV.changes.some(c => c.lineId === 'L3'));
+ok('a row the vendor added is offered as a new line, not applied', planV.newRows.length === 1 && planV.newRows[0].label === 'H3-NEW' && planV.newRows[0].cells.map(c => c.key).join() === 'itemCode,name,priceOrigin');
+ok('a column the sheet does not know is ignored, and named', planV.ignored.some(t => t.startsWith('Our internal code')));
+const patch1 = patchForCells(c1.cells.filter(startsTicked), planV.sectionId), patch2 = patchForCells(c2.cells.filter(startsTicked), planV.sectionId);
+ok('only what is ticked is written, each cell at its own place on the line', JSON.stringify(patch1) === JSON.stringify({ priceOrigin: 31.5, currency: 'EUR', leadTime: '30 days' }) && JSON.stringify(patch2) === JSON.stringify({ 'uses.SX.qty': 4 }));
+const added = lineFromNewRow([...planV.newRows[0].cells, { key: '__qty', to: 2 }, { key: 'tags.category', to: 'FINIAL' }], { id: 'LNEW', projectId: 'ce__H3_CONTOURS', brandId: 'ce', order: 40, user: 'Stuart', nowIso: stamp.nowIso, sectionId: 'SX' });
+ok('a new row becomes a draft line on the sheet it was sent from', added.status === 'DRAFT' && added.itemCode === 'H3-NEW' && added.priceOrigin === 12 && added.uses.SX.qty === 2 && added.tags.category === 'FINIAL' && added.createdBy === 'Stuart');
+
+ok('a file from another sheet is refused', planReimport({ ...reply, lines: lines3, projectId: 'm2c__STRATA_LIGHT', sections: [secX], knownColumns: allCols }).refused.includes('another sheet'));
+ok('a file with no Ref column is refused', planReimport({ meta: null, columns: [{ key: 'name', label: 'Description' }], rows: [['x']], lines: lines3, projectId: 'p', sections: [], knownColumns: allCols }).refused.includes('no Ref column'));
+ok('a file none of whose rows are ours is refused', planReimport({ meta: null, columns: [{ key: REF_KEY, label: 'Ref' }, { key: 'name', label: 'Description' }], rows: [['ZZ9', 'x']], lines: lines3, projectId: 'p', sections: [], knownColumns: allCols }).refused.includes('None of the rows'));
+const noSheet = planReimport({ ...reply, lines: lines3, projectId: 'ce__H3_CONTOURS', sections: [], knownColumns: allCols });
+ok('when the assembly sheet has gone, its balloon / quantity / note are left alone and that is said', !noSheet.changes.some(c => c.cells.some(x => x.key.startsWith('__'))) && noSheet.ignored.some(t => t.includes('no longer here')));
+
+// a vendor's program that drops the hidden sheet, moves a column and leaves the headings
+const wbN = new ExcelJS.Workbook(); await wbN.xlsx.load(await wbV.xlsx.writeBuffer());
+wbN.removeWorksheet(wbN.getWorksheet('_control_sheet').id);
+const wsN = wbN.worksheets[0];
+const lt = at('leadTime'), st = at('isStocked');
+for (let r = 3; r <= 7; r++) { const a = wsN.getCell(r, lt).value, b = wsN.getCell(r, st).value; wsN.getCell(r, lt).value = b; wsN.getCell(r, st).value = a; }
+const bare = await readControlSheetXlsx(await wbN.xlsx.writeBuffer(), allCols);
+ok('without the hidden sheet the columns are still known by their headings, wherever they were moved', bare.meta === null && bare.columns[lt - 1].key === 'isStocked' && bare.columns[st - 1].key === 'leadTime' && bare.columns[0].key === REF_KEY);
+const planBare = planReimport({ ...bare, lines: lines3, projectId: 'ce__H3_CONTOURS', sections: [secX], knownColumns: allCols });
+ok('…and the same differences are found (less the sheet\'s own balloon and quantity, which need the hidden sheet)', planBare.changes.find(c => c.lineId === 'L1').cells.map(c => c.key).join() === 'priceOrigin,currency,leadTime' && !planBare.changes.some(c => c.cells.some(x => x.key === '__qty')));
+const dupHead = await readControlSheetXlsx(await (async () => { const w = new ExcelJS.Workbook(); const sh = w.addWorksheet('s'); ['Ref (do not change)', 'Category', 'Description'].forEach((h, i) => { sh.getCell(1, i + 1).value = h; }); ['L1', 'FINIAL', 'x'].forEach((h, i) => { sh.getCell(2, i + 1).value = h; }); return w.xlsx.writeBuffer(); })(), allCols);
+ok('a heading two columns share (Category) is not guessed at', dupHead.columns[1].key === null && dupHead.columns[2].key === 'name');
 
 // ── THE REAL FILES, when they are on this machine ───────────────────────────────────────────────────────
 const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'Inception', 'import');
