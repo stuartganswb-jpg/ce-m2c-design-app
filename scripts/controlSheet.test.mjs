@@ -17,11 +17,14 @@ import {
     projectNameKey, projectIdOf, tab1ProjectsOf, blankLine, blankProject,
     readBundle, planImport, finishImport,
     CURRENCIES, SOURCING_CHOICES, cellRawOf, sheetGroupsFor, libraryTargetOf, pushStateOf, noLibraryFieldText,
-    PUSH_CLASSES, requiredFor, columnsWithoutField, readinessOf, existingByCode, libraryIdFor, pushPlanOf, pushedStamp, unlockStamp,
+    PUSH_CLASSES, HAS_PARTS, requiredFor, sheetOfLine, componentsOf, columnsWithoutField, readinessOf, existingByCode, libraryIdFor, pushPlanOf, pushedStamp, unlockStamp,
     REF_KEY, OUR_MONEY, exportColumnsFor, startsInDownload, exportValueOf, backValueOf, planReimport, startsTicked, patchForCells, lineFromNewRow,
 } from '../src/components/Shared/controlSheet.js';
 import { isoOf, rateUrlFor, readRate, usdRateFor, forgetRates, usdOf, hasOriginPrice, originPricePatch, fxNoteOf, currenciesToRefresh, refreshPlan } from '../src/components/Shared/fxRates.js';
 import { buildControlSheetXlsx, readControlSheetXlsx } from '../src/components/Shared/controlSheetXlsx.js';
+import { sheetPinId, sheetPinFor, yieldsToNetSuiteBom } from '../src/components/Shared/sheetPins.js';
+import { planFinishedRun, usablePin } from '../src/components/Shared/finishedGoodsRun.js';
+import { isItemKit, kitComponentsOf } from '../src/components/Shared/itemKit.js';
 import { TAG_CATEGORIES } from '../src/components/Shared/assemblyTags.js';
 import { TRAVERSE_ROLES } from '../src/components/Shared/traverseTags.js';
 
@@ -335,7 +338,7 @@ const finial = { id: 'L1', status: 'READY', itemCode: 'h3-75df ', name: ' 0.75in
     isStocked: true, unfinished: false, paintSize: 'S', leadTime: '45 days', quotes: [{ label: 'Price 1 · BRASS', price: 66, currency: 'RMB', qty: '100' }], rawStock: 'bar', tags: { category: 'FINIAL', position: 'LEFT' }, notes: 'sample approved' };
 const ctx = (over = {}) => ({ fields: hw, pushColumns: {}, customSchema: [], lists: LISTS, lines: [finial], ...over });
 const R = (line, over) => readinessOf(line, ctx(over));
-ok('this step pushes a part, a fee and a $-holder', PUSH_CLASSES.join() === 'Inventory,Fee,Non-Inventory');
+ok('the sheet pushes a part, a fee, a $-holder — and a kit and an assembly, with their parts', PUSH_CLASSES.join() === 'Inventory,Fee,Non-Inventory,Kit,Assembly' && HAS_PARTS.join() === 'Kit,Assembly');
 ok('a part needs the seven; a fee and a $-holder are not asked how they are routed or sourced', requiredFor('Inventory').join() === 'itemCode,name,recordClass,uom,productType,partHandling,sourcing' && requiredFor('Fee').join() === 'itemCode,name,recordClass,uom' && requiredFor('Non-Inventory').length === 4);
 ok('a worked-out line is ready', R(finial).ok && R(finial).blocks.length === 0, JSON.stringify(R(finial)));
 for (const [key, label] of [['itemCode', 'Item #'], ['name', 'Description'], ['recordClass', 'Class'], ['productType', 'Category'], ['uom', 'UOM'], ['partHandling', 'Part handling'], ['sourcing', 'Sourcing']]) {
@@ -349,7 +352,7 @@ ok('…and an EMPTY list refuses no one — it warns', R(finial, { lists: { ...L
 ok('a column ticked for the Library with no field there stops every push, by name', R(finial, { pushColumns: { size: true } }).blocks.some(b => b.includes('Size / dimensions') && b.includes('4.5')) && columnsWithoutField(hw, { size: true, color: true }, []).map(fd => fd.key).join() === 'size,color');
 ok('…until the attribute exists', R(finial, { pushColumns: { size: true }, customSchema: [{ key: 'size', label: 'Size / dimensions', type: 'text' }] }).ok);
 ok('two lines with one item # cannot both go', R(finial, { lines: [finial, { id: 'L2', itemCode: 'H3-75DF' }] }).blocks.some(b => b.includes('same item # (H3-75DF)')) && R(finial, { lines: [finial, { id: 'L2', itemCode: 'H3-1DF' }] }).ok);
-ok('an assembly and a kit wait for their parts', R({ ...finial, recordClass: 'Assembly' }).blocks.some(b => b.includes('pushed together with its parts')) && R({ ...finial, recordClass: 'Kit' }).blocks.some(b => b.startsWith('A kit')));
+ok('an assembly and a kit are not pushed without a sheet of their parts', R({ ...finial, recordClass: 'Assembly' }).blocks.some(b => b.includes('no sheet listing its parts')) && R({ ...finial, recordClass: 'Kit' }).blocks.some(b => b.includes('no sheet listing its parts')) && !R({ ...finial, recordClass: 'Master Assembly' }).ok);
 ok('a pushed line is not pushed again', !R({ ...finial, status: 'PUSHED' }).ok);
 const fee = { id: 'F1', itemCode: 'CE-FEE-9001', name: 'Rush fee', recordClass: 'Fee', uom: 'EA', basePrice: 25 };
 ok('a fee is ready on its number, words, class and unit', R(fee, { lines: [fee] }).ok && R({ ...fee, uom: '' }, { lines: [fee] }).blocks.join() === 'UOM is empty.');
@@ -392,6 +395,62 @@ const stampP = pushedStamp(rec, { user: 'Stuart', nowIso: 'T1' });
 ok('the line is stamped with the record it became', stampP.status === 'PUSHED' && stampP.pushedTo.docId === 'CE-INV-1791400000000' && stampP.pushedTo.code === 'H3-75DF' && stampP.pushedTo.linked === false && pushedStamp(lib[0], { user: 'S', nowIso: 'T', linked: true }).pushedTo.linked === true);
 const un = unlockStamp({ ...finial, ...stampP }, { user: 'Leyla', nowIso: 'T2' });
 ok('an unlock returns it to Ready and keeps what happened', un.status === 'READY' && un.pushedTo === null && un.lastPush.docId === 'CE-INV-1791400000000' && un.lastPush.undoneBy === 'Leyla' && un.lastPush.undoneAt === 'T2');
+
+// ── A KIT AND AN ASSEMBLY GO WITH THEIR PARTS ───────────────────────────────────────────────────────────
+ok('an assembly is asked everything a part is; a kit only its number, words, class and unit', requiredFor('Assembly').length === 7 && requiredFor('Kit').join() === 'itemCode,name,recordClass,uom');
+const inLib = (id, code, more = {}) => ({ id, itemCode: code, name: `${code} part`, recordClass: 'Inventory', status: 'PUSHED', pushedTo: { docId: `CE-INV-${id}`, code }, ...more });
+const arm = inLib('A', 'H9-ARM', { uses: { KS: { qty: 1, balloon: '1' }, AS: { qty: 2, balloon: '1' } } });
+const plate = inLib('B', 'H9-PLT', { uses: { KS: { qty: 1, balloon: '2' }, AS: { qty: 1, balloon: '2' } } });
+const screw = { id: 'C', itemCode: 'H9-SCR', name: 'screw', recordClass: 'Inventory', status: 'DRAFT', uses: { AS: { qty: 4, balloon: '3' } } };
+const kitLine = { id: 'K', itemCode: 'H9-BRK-KIT', name: 'Bracket kit', recordClass: 'Kit', uom: 'EA', basePrice: 60, collection: 'H3 CONTOURS', status: 'READY', uses: {} };
+const asmLine = { id: 'S', itemCode: 'H9-BRK', name: 'Bracket assembly', recordClass: 'Assembly', uom: 'EA', productType: 'BRACKET', partHandling: 'Small Parts', sourcing: 'In-House', paintSize: 'M', status: 'READY', uses: {} };
+const subLine = inLib('U', 'H9-SUB', { recordClass: 'Assembly', uses: {} });
+const secs = [
+    { id: 'KS', name: 'Bracket kit', kind: 'ASSEMBLY', itemLineId: 'K', children: [] },
+    { id: 'AS', name: 'Bracket assembly', kind: 'ASSEMBLY', itemLineId: 'S', children: [{ section: 'US', qty: 1, balloon: '9' }] },
+    { id: 'US', name: 'Sub', kind: 'ASSEMBLY', itemLineId: 'U', children: [] },
+];
+const all = [arm, plate, screw, kitLine, asmLine, subLine];
+const RP = (line, over = {}) => readinessOf(line, { fields: hw, pushColumns: {}, customSchema: [], lists: LISTS, lines: all, sections: secs, ...over });
+ok('a kit or an assembly owns the sheet that lists its parts', sheetOfLine(kitLine, secs).id === 'KS' && sheetOfLine(arm, secs) === null && sheetOfLine(kitLine, []) === null);
+ok('its parts are the lines on that sheet — and the line of each sub-assembly sheet it takes', componentsOf(kitLine, { sections: secs, lines: all }).map(c => `${c.line.itemCode}×${c.qty}`).join() === 'H9-ARM×1,H9-PLT×1' && componentsOf(asmLine, { sections: secs, lines: all }).map(c => `${c.line.itemCode}×${c.qty}`).join() === 'H9-ARM×2,H9-PLT×1,H9-SCR×4,H9-SUB×1');
+ok('a kit whose parts are all in the Library is ready', RP(kitLine).ok, JSON.stringify(RP(kitLine).blocks));
+ok('an assembly with one part still on the sheet is told which', !RP(asmLine).ok && RP(asmLine).blocks.some(b => b.includes('1 of its parts is not in the Master Library yet') && b.includes('H9-SCR')));
+const screwIn = { ...screw, status: 'PUSHED', pushedTo: { docId: 'CE-INV-C', code: 'H9-SCR' } };
+const allIn = [arm, plate, screwIn, kitLine, asmLine, subLine];
+ok('…and is ready once that part is in', RP(asmLine, { lines: allIn }).ok, JSON.stringify(RP(asmLine, { lines: allIn }).blocks));
+const withQty = (q) => allIn.map(l => (l.id === 'C' ? { ...l, uses: { AS: { qty: q, balloon: '3' } } } : l));
+ok('a parts list takes whole numbers of 1 or more — a half, a nought and a blank are refused', [0.5, 0, null, 2.5].every(q => RP(asmLine, { lines: withQty(q) }).blocks.some(b => b.includes('whole numbers') && b.includes('H9-SCR'))) && RP(asmLine, { lines: withQty(3) }).ok);
+ok('a sheet with nothing on it is not a parts list', RP(kitLine, { lines: [kitLine] }).blocks.some(b => b.includes('lists no parts')));
+ok('a line cannot be a part of itself', RP({ ...kitLine, uses: { KS: { qty: 1 } } }).blocks.some(b => b.includes('on its own sheet')));
+ok('a kit is never a part of something else', RP(asmLine, { lines: allIn.map(l => (l.id === 'B' ? { ...l, recordClass: 'Kit' } : l)) }).blocks.some(b => b.includes('A kit cannot be a part of something else') && b.includes('H9-PLT')));
+ok('a kit holds real items only — a fee in it is refused; in an assembly it is not', RP(kitLine, { lines: all.map(l => (l.id === 'B' ? { ...l, recordClass: 'Fee' } : l)) }).blocks.some(b => b.includes('real items only')) && !RP(asmLine, { lines: allIn.map(l => (l.id === 'B' ? { ...l, recordClass: 'Fee' } : l)) }).blocks.some(b => b.includes('real items only')));
+ok('a sub-assembly sheet with no line of its own stops the assembly that takes it', RP(asmLine, { lines: allIn, sections: secs.map(x => (x.id === 'US' ? { ...x, itemLineId: '' } : x)) }).blocks.some(b => b.includes('Sub-assembly sheet with no line of its own: Sub')));
+ok('an assembly is still asked for its category, handling and sourcing', RP({ ...asmLine, partHandling: '' }, { lines: allIn }).blocks.includes('Part handling is empty.'));
+
+const ctxP = { project: proj, brandId: 'ce', fields: hw, pushColumns: {}, customSchema: [], user: 'Stuart', nowIso: 'T', sections: secs, lines: allIn };
+const kitPlan = pushPlanOf(kitLine, { ...ctxP, id: libraryIdFor('ce', 'Kit', 7) });
+ok('a kit is a Kit record with its contents, by library record — the shape the kit rule reads', kitPlan.record.id === 'CE-KIT-7' && kitPlan.record.partClass === 'Kit' && kitPlan.record.routingType === '' && JSON.stringify(kitPlan.record.manufacturingSpecs.kitComponents) === '[{"partId":"CE-INV-A","qty":1},{"partId":"CE-INV-B","qty":1}]' && kitPlan.record.manufacturingSpecs.kitAlign === undefined);
+ok('…which the app\'s own kit rule takes as an item kit', isItemKit(kitPlan.record) && kitComponentsOf(kitPlan.record).map(c => `${c.partId}×${c.per}`).join() === 'CE-INV-A×1,CE-INV-B×1');
+ok('…with its price and collection like any item, and no parts-list lines of its own', kitPlan.record.manufacturingSpecs.basePrice === 60 && kitPlan.record.manufacturingSpecs.collections.join() === 'H3 CONTOURS' && kitPlan.pins.length === 0 && kitPlan.parts.map(c => `${c.code}×${c.qty}`).join() === 'H9-ARM×1,H9-PLT×1');
+const asmPlan = pushPlanOf(asmLine, { ...ctxP, id: libraryIdFor('ce', 'Assembly', 8) });
+ok('an assembly is an Assembly record — not the mainline a flow is built from', asmPlan.record.id === 'CE-ASM-8' && asmPlan.record.partClass === 'Assembly' && asmPlan.record.routingType === '' && asmPlan.record.recordType === undefined && asmPlan.record.approvals === undefined && asmPlan.record.manufacturingSpecs.kitComponents === undefined);
+ok('…with one parts-list line per part, findable again', asmPlan.pins.map(p => `${p.id}|${p.legacyErpId}×${p.defaultQty}`).join(' ') === 'PIN-CE-ASM-8-CS-CE-INV-A|H9-ARM×2 PIN-CE-ASM-8-CS-CE-INV-B|H9-PLT×1 PIN-CE-ASM-8-CS-CE-INV-C|H9-SCR×4 PIN-CE-ASM-8-CS-CE-INV-U|H9-SUB×1' && sheetPinId('X', 'Y') === 'PIN-X-CS-Y');
+const pin0 = asmPlan.pins[0];
+ok('…each in the linked shape the parts-list readers resolve a part by, and marked as the sheet\'s', pin0.assemblyId === 'CE-ASM-8' && pin0.partId === 'CE-INV-A' && pin0.isExistingLibraryPart === true && pin0.status === 'SPECS_LOCKED' && pin0.fromControlSheet === true && pin0.controlSheet.lineId === 'S' && pin0.controlSheet.sectionId === 'AS' && pin0.author === 'Stuart' && usablePin(pin0));
+// what a work order would pull for 10 of the assembly, from the lines the sheet wrote
+const libraryNow = [{ id: 'CE-INV-A', legacyErpId: 'H9-ARM' }, { id: 'CE-INV-B', legacyErpId: 'H9-PLT' }, { id: 'CE-INV-C', legacyErpId: 'H9-SCR' }, { id: 'CE-INV-U', legacyErpId: 'H9-SUB' }, { ...asmPlan.record }];
+const run = planFinishedRun({ part: asmPlan.record, qty: 10, pins: asmPlan.pins, inventory: libraryNow });
+const pulled = run.lines.map(r => `${r.legacyErpId}×${r.quantity}`).sort().join();
+ok('a work order for 10 pulls exactly the sheet\'s parts × 10', run.exploded && pulled === 'H9-ARM×20,H9-PLT×10,H9-SCR×40,H9-SUB×10', pulled);
+// …and why the lines must step aside: NetSuite's own lines beside the sheet's would double it
+const nsPins = [{ id: 'PIN-CE-ASM-8-501', assemblyId: 'CE-ASM-8', partId: 'H9-ARM', defaultQty: 2, syncedFromErp: true }, { id: 'PIN-CE-ASM-8-502', assemblyId: 'CE-ASM-8', partId: 'H9-PLT', defaultQty: 1, syncedFromErp: true }];
+const doubled = planFinishedRun({ part: asmPlan.record, qty: 10, pins: [...asmPlan.pins, ...nsPins], inventory: libraryNow }).lines.find(r => r.legacyErpId === 'H9-ARM').quantity;
+ok('left beside NetSuite\'s own lines the sheet\'s would double the pull (the reason for the rule)', doubled === 40);
+const afterSync = [...asmPlan.pins, ...nsPins].filter(p => !yieldsToNetSuiteBom(p));
+ok('so a sheet line steps aside when NetSuite sends the parts list — and only a sheet line', asmPlan.pins.every(yieldsToNetSuiteBom) && !nsPins.some(yieldsToNetSuiteBom) && !yieldsToNetSuiteBom({ id: 'hand', assemblyId: 'CE-ASM-8', partId: 'X' }) && !yieldsToNetSuiteBom(null) && planFinishedRun({ part: asmPlan.record, qty: 10, pins: afterSync, inventory: libraryNow }).lines.find(r => r.legacyErpId === 'H9-ARM').quantity === 20);
+ok('a part line carries no parts', pushPlanOf(finial, { ...ctxP, id: 'X', lines: [finial] }).pins.length === 0 && pushPlanOf(finial, { ...ctxP, id: 'X', lines: [finial] }).parts.length === 0);
+ok('the line of a parts list remembers where it came from', JSON.stringify(sheetPinFor({ assemblyId: 'A1', component: { docId: 'P1', code: 'x-1', name: 'n' }, qty: 3, origin: { projectId: 'pr', sectionId: 'se', lineId: 'li' }, user: 'u', nowIso: 't' }).controlSheet) === '{"projectId":"pr","sectionId":"se","lineId":"li"}');
 
 // ── THE REAL FILES, when they are on this machine ───────────────────────────────────────────────────────
 const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'Inception', 'import');

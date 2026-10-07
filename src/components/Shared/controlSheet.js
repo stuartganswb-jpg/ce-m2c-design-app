@@ -19,6 +19,7 @@ import { TAG_CATEGORIES, TAG_POSITIONS, TAG_LOCATIONS, END_TREATMENTS } from './
 import { TRAVERSE_ROLES, DRIVE_TYPES, TRV_SETUPS, FRONT_LAYERS } from './traverseTags.js';
 import { SOURCING, SOURCING_LABEL, sourcingPatch } from './sourcing.js';
 import { canonicalCollection } from './collectionName.js';
+import { sheetPinFor } from './sheetPins.js';
 
 export const BUNDLE_FORMAT = 'control-sheet-bundle/1';
 export const SHEET_KINDS = ['LIGHTING', 'HARDWARE'];
@@ -693,15 +694,27 @@ export function lineFromNewRow(cells, { id, projectId, brandId, order, user, now
 // never do. After the push the Master Library owns the item and the line is the record of how it got there.
 //
 // His calls: required before a push — item #, description, class, category, UOM, part handling, sourcing;
-// everything else warns · this step pushes Inventory, Fee and Non-Inventory; an Assembly and a Kit wait for
-// their parts · an item # the Library already has is refused, and the line may be LINKED to that record
-// instead · manager or above.
-export const PUSH_CLASSES = ['Inventory', 'Fee', 'Non-Inventory'];
-// What every line needs, and what a part that is made or bought needs besides — a fee and a $-holder are
-// never routed to a floor or sourced, so they are not asked how.
+// everything else warns · an item # the Library already has is refused, and the line may be LINKED to that
+// record instead · manager or above · fees: "yes fees are good as we may need them".
+//
+// WHAT HAS PARTS (Stuart 2026-10-07: a simple assembly is "both an assembly with less than 5 parts and/or a
+// kit"; "a complex assembly to me is what we call the file that we ultimately create a cpq flow from … we will
+// load an fbx on 1.6, tag it and create the full flow"). So the sheet pushes a KIT and an ASSEMBLY — each
+// with its parts, in one press, once those parts are in the Library — and never the thing a flow is built
+// from: that is born in 1.6. A kit or an assembly is a LINE like any other (its number, price, picture) that
+// OWNS A SHEET (section.itemLineId) listing its parts and how many of each.
+//   Kit       → a Kit record with kit contents (manufacturingSpecs.kitComponents [{ partId, qty }], the shape
+//               Shared/itemKit reads): sold as one number, made and picked as its parts, no NetSuite item.
+//               Real items only — never a fee, never another kit (the Library's own rule for kit contents).
+//   Assembly  → an Assembly record and one parts-list line per part (Shared/sheetPins): what the Library's
+//               file cabinet shows and a work order pulls.
+export const PUSH_CLASSES = ['Inventory', 'Fee', 'Non-Inventory', 'Kit', 'Assembly'];
+export const HAS_PARTS = ['Kit', 'Assembly'];
+// What every line needs, and what a thing that is made, stocked or bought needs besides — a fee, a $-holder
+// and a kit are never routed to a floor or sourced as themselves, so they are not asked how.
 const REQUIRED_ALWAYS = ['itemCode', 'name', 'recordClass', 'uom'];
 const REQUIRED_FOR_A_PART = ['productType', 'partHandling', 'sourcing'];
-export const requiredFor = (recordClass) => (recordClass === 'Inventory' ? [...REQUIRED_ALWAYS, ...REQUIRED_FOR_A_PART] : REQUIRED_ALWAYS);
+export const requiredFor = (recordClass) => (recordClass === 'Inventory' || recordClass === 'Assembly' ? [...REQUIRED_ALWAYS, ...REQUIRED_FOR_A_PART] : REQUIRED_ALWAYS);
 // A wrong word here mis-routes a part on a floor, so it must be one of the Library's own.
 const MUST_BE_LISTED = ['productType', 'uom', 'partHandling'];
 // Worth saying when empty; never a reason to refuse.
@@ -716,18 +729,60 @@ const textForLibrary = (field, raw) => (field.type === 'quotes' ? (raw || []).ma
 // The ticked columns of the sheet that the Library has nowhere to put — set up before any push.
 export const columnsWithoutField = (fields, pushColumns, customSchema) => (fields || []).filter(fd => pushStateOf(fd, pushColumns, customSchema).missing);
 
+// The sheet that lists this line's parts — a kit's or an assembly's own sheet.
+export const sheetOfLine = (line, sections) => (sections || []).find(sec => sec.itemLineId && line && sec.itemLineId === line.id) || null;
+
+// [{ line, qty, balloon, sheet? }] — what a kit or an assembly is made of: every part on its sheet, and the
+// item line of every sub-assembly sheet its sheet takes (`sheet` names it; `line` is null when that sheet has
+// no line of its own yet). The line itself is never one of its own parts.
+export function componentsOf(line, { sections, lines }) {
+    const sheet = sheetOfLine(line, sections);
+    if (!sheet) return [];
+    const out = linesOn(lines, sheet.id).filter(l => l.id !== line.id).map(l => ({ line: l, qty: placeOf(l, sheet.id).qty, balloon: str(placeOf(l, sheet.id).balloon) }));
+    for (const child of (sheet.children || [])) {
+        const sub = (sections || []).find(sec => sec.id === child.section);
+        if (!sub) continue;
+        out.push({ line: (lines || []).find(l => l.id === sub.itemLineId) || null, qty: child.qty, balloon: str(child.balloon), sheet: sub.name });
+    }
+    return out;
+}
+const wholeQty = (q) => { const n = numOf(q); return n !== null && n >= 1 && Math.abs(n - Math.round(n)) < 1e-9; };
+
 // { ok, blocks: [text], warnings: [text] } — may this line be pushed?
 //   fields  the sheet's fields (sheetGroupsFor(kind, customSchema), flattened)
 //   lists   the 4.5 dictionary lists by the names the fields use; an EMPTY list cannot refuse anyone
 //           (a validator refuses only on what it knows) — it warns instead
 //   lines   every line of the sheet, to catch a second line with the same item #
-export function readinessOf(line, { fields, pushColumns, customSchema, lists, lines }) {
+export function readinessOf(line, { fields, pushColumns, customSchema, lists, lines, sections }) {
     const blocks = [], warnings = [];
     const byKey = new Map((fields || []).map(fd => [fd.key, fd]));
     const state = (fd) => pushStateOf(fd, pushColumns, customSchema);
     if (line.status === PUSHED) return { ok: false, blocks: ['This line has already been pushed.'], warnings };
     const cls = str(line.recordClass).trim();
-    if (cls && !PUSH_CLASSES.includes(cls)) blocks.push(`${cls === 'Assembly' || cls === 'Kit' ? `${cls === 'Kit' ? 'A kit' : 'An assembly'} is pushed together with its parts — that step is not built yet.` : `"${cls}" is not a class a line can be pushed as.`}`);
+    if (cls && !PUSH_CLASSES.includes(cls)) blocks.push(`"${cls}" is not a class a line can be pushed as.`);
+    // A KIT OR AN ASSEMBLY GOES WITH ITS PARTS: it needs its sheet, every part on it already in the Library,
+    // and a whole number of each (a parts list is read in whole pieces — a 0.5 would be pulled as 1).
+    if (HAS_PARTS.includes(cls)) {
+        const what = cls === 'Kit' ? 'kit' : 'assembly';
+        const sheet = sheetOfLine(line, sections);
+        if (!sheet) blocks.push(`It has no sheet listing its parts — open the ${what}'s sheet (or add one) and choose this line under "Parts list of".`);
+        else {
+            if (placeOf(line, sheet.id)) blocks.push('It is listed as a part on its own sheet.');
+            const parts = componentsOf(line, { sections, lines });
+            if (!parts.length) blocks.push(`Its sheet "${sheet.name}" lists no parts.`);
+            const noLine = parts.filter(c => !c.line).map(c => c.sheet);
+            if (noLine.length) blocks.push(`Sub-assembly sheet${noLine.length === 1 ? '' : 's'} with no line of ${noLine.length === 1 ? 'its' : 'their'} own: ${noLine.join(', ')}.`);
+            const real = parts.filter(c => c.line);
+            const notIn = real.filter(c => !(c.line.status === PUSHED && c.line.pushedTo && c.line.pushedTo.docId)).map(c => lineLabelOf(c.line));
+            if (notIn.length) blocks.push(`${notIn.length} of its parts ${notIn.length === 1 ? 'is' : 'are'} not in the Master Library yet — push ${notIn.length === 1 ? 'it' : 'them'} first: ${notIn.slice(0, 8).join(', ')}${notIn.length > 8 ? ` …and ${notIn.length - 8} more` : ''}.`);
+            const badQty = real.filter(c => !wholeQty(c.qty)).map(c => `${lineLabelOf(c.line)} (${numOf(c.qty) === null ? 'blank' : numOf(c.qty)})`);
+            if (badQty.length) blocks.push(`A parts list takes whole numbers of 1 or more — fix the quantity of: ${badQty.slice(0, 8).join(', ')}.`);
+            const kits = real.filter(c => str(c.line.recordClass) === 'Kit').map(c => lineLabelOf(c.line));
+            if (kits.length) blocks.push(`A kit cannot be a part of something else — list its parts instead: ${kits.join(', ')}.`);
+            const fees = cls === 'Kit' ? real.filter(c => ['Fee', 'Non-Inventory'].includes(str(c.line.recordClass))).map(c => lineLabelOf(c.line)) : [];
+            if (fees.length) blocks.push(`A kit holds real items only — not a fee or a non-inventory item: ${fees.join(', ')}.`);
+        }
+    }
     for (const key of requiredFor(cls)) {
         const fd = byKey.get(key);
         if (!fd) continue;
@@ -774,9 +829,10 @@ const setPath = (obj, path, value) => {
     for (let i = 0; i < parts.length - 1; i++) { if (!at[parts[i]] || typeof at[parts[i]] !== 'object') at[parts[i]] = {}; at = at[parts[i]]; }
     at[parts[parts.length - 1]] = value;
 };
-const ID_PREFIX = { Inventory: 'INV', Fee: 'FEE', 'Non-Inventory': 'NIV' };
-// <DIVISION>-<INV|FEE|NIV>-<the clock> — the Library's own prefixes, and a number that cannot meet an
-// existing record's (the four random digits "+ New Record" draws can).
+const ID_PREFIX = { Inventory: 'INV', Fee: 'FEE', 'Non-Inventory': 'NIV', Kit: 'KIT', Assembly: 'ASM' };
+// <DIVISION>-<INV|FEE|NIV|KIT|ASM>-<the clock> — the Library's own prefixes (an assembly the item sync brings
+// in is an -ASM- record too), and a number that cannot meet an existing record's (the four random digits
+// "+ New Record" draws can).
 export const libraryIdFor = (brandId, recordClass, nowMs) => `${str(brandId).toUpperCase()}-${ID_PREFIX[recordClass] || 'INV'}-${nowMs}`;
 
 // { record, written: [{ label, to, text }], kept: [label] }
@@ -788,7 +844,9 @@ export const libraryIdFor = (brandId, recordClass, nowMs) => `${str(brandId).toU
 // Only a TICKED column with a Library field travels, and only when it holds something (a blank never
 // overwrites the Library's own default). A value is written the way the Library keeps it: the item # and the
 // category upper-cased, the collection under its one name, sourcing as the Library's two fields together.
-export function pushPlanOf(line, { project, brandId, fields, pushColumns, customSchema, user, nowIso, id }) {
+// For a kit or an assembly the plan also carries its parts: `parts` (what a person is shown), and either the
+// kit's contents ON the record or `pins` — the assembly's parts-list lines, written beside it.
+export function pushPlanOf(line, { project, brandId, fields, pushColumns, customSchema, user, nowIso, id, sections, lines }) {
     const cls = str(line.recordClass).trim();
     const record = {
         id, itemId: id, brandId, sharedBrands: [brandId], partClass: cls,
@@ -820,7 +878,15 @@ export function pushPlanOf(line, { project, brandId, fields, pushColumns, custom
         written.push({ label: fd.label, to: st.target.label, text: fd.key === 'collection' ? value.join(', ') : fd.type === 'picture' ? 'the picture' : textForLibrary(fd, fd.type === 'landed' ? value : raw) });
     }
     if (record.manufacturingSpecs.isInHouse === undefined) Object.assign(record.manufacturingSpecs, sourcingPatch(SOURCING.IN));
-    return { record, written, kept };
+    let parts = [], pins = [];
+    if (HAS_PARTS.includes(cls)) {
+        const sheet = sheetOfLine(line, sections);
+        const made = componentsOf(line, { sections, lines }).filter(c => c.line && c.line.pushedTo && c.line.pushedTo.docId);
+        parts = made.map(c => ({ docId: str(c.line.pushedTo.docId), code: codeKey(c.line.pushedTo.code || c.line.itemCode), name: str(c.line.name).trim(), qty: Math.round(numOf(c.qty) || 0) }));
+        if (cls === 'Kit') record.manufacturingSpecs.kitComponents = parts.map(c => ({ partId: c.docId, qty: c.qty }));
+        else pins = parts.map(c => sheetPinFor({ assemblyId: id, component: c, qty: c.qty, origin: { projectId: project && project.id, sectionId: sheet && sheet.id, lineId: line.id }, user, nowIso }));
+    }
+    return { record, written, kept, parts, pins };
 }
 
 // What is stamped on the line by a push, by a link to a record the Library already had, and by an unlock.

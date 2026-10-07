@@ -11,6 +11,7 @@ import { usablePin, pinErpOf, isAssemblyPart } from "../Shared/finishedGoodsRun"
 import { woItemCodeOf } from "../Shared/workOrderContract";
 import { SOURCING, sourcingOf } from "../Shared/sourcing";
 import { guardImportSpecs, diffRecordOf } from "../Shared/nsImportGuard";
+import { yieldsToNetSuiteBom } from "../Shared/sheetPins";
 
 // ONE copy now — Shared/brandNetsuite.js (2026-08-25).
 
@@ -1299,11 +1300,16 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                             const existingPins = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', docId)));
                             existingPins.forEach(d => {
                                 const pin = d.data() || {};
-                                if (!pin.syncedFromErp) return;          // hand-added — leave it alone
+                                // …except a line a Control Sheet push wrote (tab 1.2): it STANDS IN for NetSuite's until
+                                // NetSuite sends this assembly a real parts list — which is now — and steps aside for it,
+                                // or the assembly would carry every part twice and a work order would pull double
+                                // (Shared/sheetPins; Stuart 2026-10-07: "align not duplicate"). Its id is never one of
+                                // NetSuite's, so it falls through `keep` to the delete below.
+                                if (!pin.syncedFromErp && !yieldsToNetSuiteBom(pin)) return;   // hand-added — leave it alone
                                 if (keep.has(d.id)) return;              // still in NetSuite's BOM
                                 batch.delete(d.ref);
                                 prunedPins++;
-                                prunedDetail.push(`${item.itemid}: ${pin.partId || d.id}`);
+                                prunedDetail.push(`${item.itemid}: ${pin.legacyErpId || pin.partId || d.id}${yieldsToNetSuiteBom(pin) ? ' (the control sheet’s line — NetSuite’s parts list takes its place)' : ''}`);
                             });
                         } catch (pruneErr) {
                             addLog(`⚠ Could not check ${item.itemid} for dropped BOM lines (${pruneErr.message || pruneErr}) — its components were updated, but stale ones may remain.`, 'warn');

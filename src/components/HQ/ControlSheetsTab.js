@@ -12,7 +12,7 @@ import {
     projectNameKey, tab1ProjectsOf, blankLine, blankProject,
     readBundle, planImport, finishImport,
     exportColumnsFor, startsInDownload, planReimport, startsTicked, patchForCells, lineFromNewRow,
-    readinessOf, existingByCode, libraryIdFor, pushPlanOf, pushedStamp, unlockStamp,
+    readinessOf, existingByCode, libraryIdFor, pushPlanOf, pushedStamp, unlockStamp, HAS_PARTS, sheetOfLine,
 } from '../Shared/controlSheet';
 import { usdRateFor, originPricePatch, fxNoteOf, currenciesToRefresh, refreshPlan } from '../Shared/fxRates';
 
@@ -415,6 +415,8 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
     };
     const deleteLine = async (line) => {
         if (line.status === PUSHED) return alert(`${lineLabelOf(line)} has been pushed to the Master Library — it is kept here as the record of that.`);
+        const owns = sheetOfLine(line, sections);
+        if (owns) return alert(`${lineLabelOf(line)} is the item of the sheet "${owns.name}" — that sheet is its parts list.\n\nOn that sheet, choose another line (or none) under "Parts list of" before deleting this one.`);
         const on = usesListOf(line, sections);
         if (!window.confirm(`Delete ${lineLabelOf(line)} from this project?${on.length ? `\n\nIt is on ${on.length} sheet(s): ${on.map(u => u.section.name).join(', ')} — it leaves those too.` : ''}\n\nThis cannot be undone.`)) return;
         try { await deleteDoc(lineRef(projectId, line.id)); log(`Deleted line ${lineLabelOf(line)} from ${project.name}`); }
@@ -449,7 +451,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
     // ── THE PUSH: a line becomes a Master Library record (Shared/controlSheet decides whether it may, whether the
     // Library already has it, and exactly what is written). The ONLY writes this tab makes outside its own store
     // are the one record set here; the line is stamped in the same batch, so the two cannot disagree.
-    const pushContext = { fields: allFields, pushColumns, customSchema, lists, lines };
+    const pushContext = { fields: allFields, pushColumns, customSchema, lists, lines, sections };
     const readLibrary = async () => {
         // The division's records and those shared into it, FROM THE SERVER — never the cache: this is the look
         // that decides whether an item is new.
@@ -485,13 +487,16 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
             const now = new Date();
             const id = libraryIdFor(activeBrand, line.recordClass, now.getTime());
             if ((await getDocFromServer(doc(db, 'Approved_Designs', id))).exists()) throw new Error('a record took that id in the same instant — press Push again');
-            const plan = pushPlanOf(line, { project, brandId: activeBrand, fields: allFields, pushColumns, customSchema, user: currentUser, nowIso: now.toISOString(), id });
+            const plan = pushPlanOf(line, { project, brandId: activeBrand, fields: allFields, pushColumns, customSchema, user: currentUser, nowIso: now.toISOString(), id, sections, lines });
+            // The record, its parts-list lines when it is an assembly (a kit carries its contents on the record),
+            // and the line's stamp — one batch: all of it or none of it.
             const batch = writeBatch(db);
             batch.set(doc(db, 'Approved_Designs', id), plan.record);
+            plan.pins.forEach(pin => batch.set(doc(db, 'assembly_pins', pin.id), pin));
             batch.update(lineRef(projectId, line.id), { ...pushedStamp(plan.record, { user: currentUser, nowIso: now.toISOString() }), ...stamp() });
             await batch.commit();
-            log(`Pushed ${code} from ${project.name} to the Master Library as ${id} (${plan.written.length} fields)`);
-            setPusher({ lineId: line.id, finished: { code, id, fields: plan.written.length } });
+            log(`Pushed ${code} from ${project.name} to the Master Library as ${id} (${plan.written.length} fields${plan.parts.length ? `, ${plan.parts.length} part${plan.parts.length === 1 ? '' : 's'}` : ''})`);
+            setPusher({ lineId: line.id, finished: { code, id, fields: plan.written.length, parts: plan.parts.length, cls: line.recordClass } });
         } catch (err) { setPusher(x => (x ? { ...x, busy: false } : x)); say('Could not push the line', err); }
     };
     const linkExisting = async () => {
@@ -750,7 +755,8 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
         const line = lines.find(l => l.id === x.lineId);
         if (!line) return null;
         const label = String(line.itemCode || '').trim().toUpperCase() || lineLabelOf(line);
-        const plan = x.looked && !x.existing ? pushPlanOf(line, { project, brandId: activeBrand, fields: allFields, pushColumns, customSchema, user: currentUser, nowIso: '', id: '' }) : null;
+        const plan = x.looked && !x.existing ? pushPlanOf(line, { project, brandId: activeBrand, fields: allFields, pushColumns, customSchema, user: currentUser, nowIso: '', id: '', sections, lines }) : null;
+        const isKit = line.recordClass === 'Kit';
         const warn = { margin: '6px 0 0 0', paddingLeft: '18px', fontFamily: 'var(--sans)', fontSize: '0.86rem' };
         const red = { padding: '12px 14px', background: '#fdf3f2', border: '1px solid #e9c4c1', color: '#8a2a25', fontFamily: 'var(--sans)', fontSize: '0.9rem' };
         return (
@@ -761,7 +767,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                         <p style={{ ...S.note, color: 'var(--ink)', fontSize: '0.95rem' }}>
                             {x.finished.linked
                                 ? <>The line is linked to the record the Library already had (<code>{x.finished.id}</code>). Nothing was written to the Library.</>
-                                : <>Written as <code>{x.finished.id}</code> — {x.finished.fields} fields. The Library owns the item from here; the line stays on the sheet as the record of how it got there. It is app-only until it is created in NetSuite from tab 11.</>}
+                                : <>Written as <code>{x.finished.id}</code> — {x.finished.fields} fields{x.finished.parts ? ` and ${x.finished.parts} part${x.finished.parts === 1 ? '' : 's'}` : ''}. The Library owns the item from here; the line stays on the sheet as the record of how it got there. It is app-only until it is created in NetSuite from tab 11.</>}
                         </p>
                     )}
                     {!x.finished && !x.ready.ok && (
@@ -796,6 +802,25 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                                     </tbody>
                                 </table>
                             </div>
+                            {plan.parts.length > 0 && (
+                                <div style={{ marginTop: '12px' }}>
+                                    <div style={S.label}>{isKit ? `Kit contents — ${plan.parts.length} part${plan.parts.length === 1 ? '' : 's'}, written on the kit's record` : `Its parts list — ${plan.parts.length} line${plan.parts.length === 1 ? '' : 's'}, written beside the record`}</div>
+                                    <div style={{ maxHeight: '22vh', overflowY: 'auto', border: '1px solid var(--line)', marginTop: '6px' }}>
+                                        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                                            <tbody>
+                                                {plan.parts.map(c => (
+                                                    <tr key={c.docId}>
+                                                        <td style={{ ...S.td, padding: '5px 8px', width: '70px', textAlign: 'right', fontWeight: 500 }}>{c.qty} ×</td>
+                                                        <td style={{ ...S.td, padding: '5px 8px', fontFamily: 'var(--mono)', fontSize: '0.75rem', width: '190px' }}>{c.code}</td>
+                                                        <td style={{ ...S.td, padding: '5px 8px', borderRight: 'none', color: 'var(--ink-soft)' }}>{c.name}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <p style={{ ...S.note, marginTop: '6px', fontSize: '0.8rem' }}>{isKit ? 'A kit is sold as one number and made and picked as these parts. It has no NetSuite item.' : 'This is what a work order for the assembly pulls. When NetSuite later sends its own parts list for this item, that list takes the place of these lines.'}</p>
+                                </div>
+                            )}
                             <p style={{ ...S.note, marginTop: '10px', fontSize: '0.8rem' }}>Also on the record: the project ({project.name}), this division, and the line it came from. {plan.kept.length > 0 && <>Stays on the sheet: {plan.kept.join(' · ')}.</>}</p>
                             {x.ready.warnings.length > 0 && (
                                 <div style={{ marginTop: '10px', padding: '10px 14px', background: '#fff8ec', border: '1px solid var(--brass)' }}>
@@ -974,6 +999,22 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                         <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>{project.name}</span>
                         <span style={{ ...S.label, marginLeft: '14px' }}>{KIND_LABEL[kind] || kind} · {lines.length} line{lines.length === 1 ? '' : 's'}{counts.length ? ` · ${counts.map(c => `${c.n} ${STATUS_LABEL[c.s].toLowerCase()}`).join(' · ')}` : ''}{tab1Here ? '' : ' · not named in tab 1 yet'}</span>
                     </div>
+                    {(() => {
+                        // THE SEQUENCE (Stuart 2026-10-07: "for a complex light (project) it will need to be a sequence of
+                        // events"): the parts, then each kit and assembly with its parts, then — in 1.6, not here — the
+                        // thing a CPQ flow is built from.
+                        const made = lines.filter(l => HAS_PARTS.includes(l.recordClass));
+                        const parts = lines.filter(l => !HAS_PARTS.includes(l.recordClass));
+                        const inLib = (list) => list.filter(l => l.status === PUSHED).length;
+                        const step = (n, text, done, total) => <span style={{ ...S.label, padding: '5px 9px', border: `1px solid ${total && done === total ? 'var(--brass)' : 'var(--line)'}`, color: total && done === total ? 'var(--brass)' : 'var(--ink-soft)' }}>{n} · {text}{total !== undefined ? ` ${done}/${total}` : ''}</span>;
+                        return (
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }} title="The order things are pushed in: every part first, then each kit and assembly with its parts. The model a CPQ flow is built from is loaded and tagged in 1.6.">
+                                {step(1, 'parts in the Library', inLib(parts), parts.length)}
+                                {step(2, 'kits and assemblies', inLib(made), made.length)}
+                                {step(3, 'the flow is built in 1.6')}
+                            </div>
+                        );
+                    })()}
                     <input placeholder="Search item #, words, vendor…" value={search} onChange={e => setSearch(e.target.value)} style={{ padding: '9px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.88rem', width: '240px', outline: 'none' }} />
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', overflowX: 'auto', padding: '0 12px', borderBottom: '1px solid var(--line)' }}>
@@ -1011,6 +1052,24 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                                 <option value="ASSEMBLY">An assembly</option>
                                 <option value="PRODUCT">The product</option>
                             </select>
+                            {(() => {
+                                // WHOSE PARTS LIST THIS SHEET IS — a line classed Kit or Assembly. That line is pushed
+                                // WITH these parts; a sheet with no line of its own is costing only.
+                                const taken = new Set(sections.filter(sec => sec.id !== section.id && sec.itemLineId).map(sec => sec.itemLineId));
+                                const choices = sortLines(lines).filter(l => HAS_PARTS.includes(l.recordClass) && !taken.has(l.id));
+                                const mine = lines.find(l => l.id === section.itemLineId) || null;
+                                return (
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }} title="The kit or assembly these parts make. Give a line the class Kit or Assembly on Every part, then choose it here — it is then pushed with this sheet's parts.">
+                                        <span style={S.label}>Parts list of</span>
+                                        <select value={mine ? mine.id : ''} disabled={!!mine && mine.status === PUSHED} onChange={e => patchSection(section.id, { itemLineId: e.target.value })} style={{ padding: '6px 8px', border: `1px solid ${mine ? 'var(--brass)' : 'var(--line)'}`, fontFamily: 'var(--sans)', fontSize: '0.82rem', maxWidth: '260px' }}>
+                                            <option value="">— no line (costing only) —</option>
+                                            {mine && !choices.some(l => l.id === mine.id) && <option value={mine.id}>{lineLabelOf(mine)}{HAS_PARTS.includes(mine.recordClass) ? '' : ' (not a Kit or Assembly now)'}</option>}
+                                            {choices.map(l => <option key={l.id} value={l.id}>{lineLabelOf(l)} — {l.recordClass}</option>)}
+                                        </select>
+                                        {mine && <span style={{ ...S.label, color: mine.status === PUSHED ? 'var(--brass)' : 'var(--ink-soft)' }}>{mine.status === PUSHED ? 'pushed' : mine.recordClass}</span>}
+                                    </label>
+                                );
+                            })()}
                             <button style={S.btn} onClick={renameSection}>Rename</button>
                             <button style={{ ...S.btn, color: '#d9534f' }} onClick={deleteSection}>Remove sheet</button>
                         </div>
@@ -1084,7 +1143,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                                             if (c.key === '#') return <td key={c.key} style={style}><input key={`b-${use.balloon || ''}`} defaultValue={use.balloon || ''} disabled={locked} title="Balloon number on the drawing" onBlur={e => { if (e.target.value.trim() !== (use.balloon || '')) patchLine(line, { [`uses.${section.id}.balloon`]: e.target.value.trim() }); }} onKeyDown={enter} style={{ ...S.input, textAlign: 'center', fontWeight: 500 }} /></td>;
                                             if (c.key === 'QTY') return <td key={c.key} style={style}><input key={`q-${use.qty}`} defaultValue={use.qty === null || use.qty === undefined ? '' : String(use.qty)} disabled={locked} title="How many of this part the assembly takes" onBlur={e => { const q = numOf(e.target.value); if (q !== numOf(use.qty)) patchLine(line, { [`uses.${section.id}.qty`]: q }); }} onKeyDown={enter} style={{ ...S.input, textAlign: 'right' }} /></td>;
                                             if (c.key === 'COST') return <td key={c.key} style={{ ...style, textAlign: 'right', padding: '6px 8px', color: cost === null ? 'var(--ink-soft)' : 'var(--ink)' }}>{cost === null ? '—' : moneyText(cost, cost < 1 ? 3 : 2)}</td>;
-                                            if (c.key === 'ON') { const on = usesListOf(line, sections).map(u => `${u.section.name}${numOf(u.use.qty) === null ? '' : ` ×${numOf(u.use.qty)}`}`).join(' · '); return <td key={c.key} title={on || undefined} style={{ ...style, padding: '6px 8px', color: 'var(--ink-soft)', fontSize: '0.76rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{on || '—'}</td>; }
+                                            if (c.key === 'ON') { const own = sheetOfLine(line, sections); const on = [own ? `its parts: ${own.name}` : '', ...usesListOf(line, sections).map(u => `${u.section.name}${numOf(u.use.qty) === null ? '' : ` ×${numOf(u.use.qty)}`}`)].filter(Boolean).join(' · '); return <td key={c.key} title={on || undefined} style={{ ...style, padding: '6px 8px', color: 'var(--ink-soft)', fontSize: '0.76rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{on || '—'}</td>; }
                                             if (c.key === 'NOTE') return <td key={c.key} style={style}><input key={`n-${use.note || ''}`} defaultValue={use.note || ''} disabled={locked} title={use.note || undefined} onBlur={e => { if (e.target.value.trim() !== (use.note || '')) patchLine(line, { [`uses.${section.id}.note`]: e.target.value.trim() }); }} onKeyDown={enter} style={S.input} /></td>;
                                             if (c.key === 'STATUS') return (
                                                 <td key={c.key} style={style}>
@@ -1104,7 +1163,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
                                                     );
                                                 }
                                                 const ready = readinessOf(line, pushContext);
-                                                const word = ready.ok ? 'Push \u2192' : `${ready.blocks.length} to fix`;
+                                                const word = ready.ok ? (HAS_PARTS.includes(line.recordClass) ? 'Push with parts \u2192' : 'Push \u2192') : `${ready.blocks.length} to fix`;
                                                 return (
                                                     <td key={c.key} style={{ ...style, padding: '4px 8px' }}>
                                                         {canManage
