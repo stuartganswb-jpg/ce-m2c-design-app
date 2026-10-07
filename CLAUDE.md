@@ -4,7 +4,7 @@ React + Firebase manufacturing PLM/WMS for Classical Elements & M2C Studio. Live
 
 ## ⛔ WORKING AGREEMENT — read before touching anything (Stuart, 2026-08-31)
 
-These four rules bind every session, every time. They are not style preferences; each one was
+These five rules bind every session, every time. They are not style preferences; each one was
 written after a change that cost real money or real trust.
 
 1. **Plan first, always.** State the plan and WAIT for approval before editing code, shipping, or
@@ -33,6 +33,15 @@ written after a change that cost real money or real trust.
    - what reaches NETSUITE — item identity, quantities, rates, the rollup?
    State that trace in the plan. **No change may break the RTG linkage.** If a change would fork
    the spine or leave a screen reading its own copy of the truth, it is the wrong change.
+
+5. **Order Entry and CPQ align.** Whatever a change does for an order that came through CPQ, it
+   does for one that came through Order Entry (tab 7, the 10.5 rows) — and the reverse: the same
+   rules, the same gates, the same screens. Check BOTH doors in every plan (measure production to
+   see which door the affected orders actually use). Where the two cannot be made to align, say so
+   to Stuart explicitly BEFORE building — never ship one door and leave the other quietly behind.
+   (Stuart 2026-10-07: "we always want order entry and cpq to align when possible and when it does
+   not bring it to my attention." The traverse-station plan had been drawn for the CPQ split; every
+   traverse order of the previous 45 days turned out to be an Order Entry order.)
 
 ## Build / verify
 - Lint a file before committing: `npx --no-install eslint <path>` — **0 errors required** (pre-existing warnings are fine).

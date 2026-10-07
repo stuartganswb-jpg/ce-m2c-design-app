@@ -3,6 +3,8 @@ import { setAuditPage, auditPageOf } from '../Shared/auditContext';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import PartFactsStrip from '../Shared/PartFactsStrip';
+import TraverseStationTab from './TraverseStationTab';
+import { isTrackLoadedPart, traverseWaitOf, oeStationOf, oeTraverseGateOf, loadRefusal, loadedPatchOf, finishingDoneOf, cpqStationOf, loadedDocStampOf } from '../Shared/traverseStation';
 import { materialLabelText, lineSpanText } from '../Shared/partFacts';
 import MaterialGridCard from '../Shared/MaterialGridCard';
 import { coverArrival } from '../Shared/backorderCover';
@@ -938,6 +940,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // A FEE IS NEVER PICKED OR PACKED (Shared/pickLines.soLineIsFee): the flag, the start's rider stamp, or the
     // library's own Fee record (tab 7 stores fees with no flag).
     const isFeeCode = (code) => isFeePart(findPartByErpCode(code));
+    // LOADED ONTO THE TRACK — the item's Library tick (Shared/traverseStation, Stuart 2026-10-07): the traverse station
+    // picks such a part after finishing, loads the tracks and confirms; SO Pack leaves it alone and waits for that.
+    // The ticked items' codes, once (a Set — this is asked per line of every open order on every render).
+    const trackCodes = useMemo(() => new Set(hqParts.filter(isTrackLoadedPart).map(p => String(p.legacyErpId || p.itemId || '').toUpperCase()).filter(Boolean)), [hqParts]);
+    const isTrackCode = (code) => trackCodes.has(String(code || '').toUpperCase());
+    const hasTrackLine = (so) => trackCodes.size > 0 && ((so && so.lines) || []).some(l => l && trackCodes.has(soLineCodeOf(l)));
+    // One unit basis everywhere: the displays of an order released by count, else the order is one unit. An order with
+    // no track part costs nothing here and reads exactly as it did.
+    const NO_TRV_GATE = { has: false, shipCap: Infinity, wait: '', station: null };
+    const trvGateOf = (so) => (hasTrackLine(so) ? oeTraverseGateOf({ so, isTrackCode, isFeeCode, boards: isReleaseByCount(so) ? so.releaseOf : 0 }) : NO_TRV_GATE);
     const feeLine = (o, l, i) => soLineIsFee(o, l, i, isFeeCode);
     const packLinesFor = (job) => packLinesOf(job, { poleRows: poleRowsForPack(job), isFeeCode });
     const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : woRefOf(j);
@@ -1037,6 +1049,59 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         try { await updateDoc(packDocOf(job), patch); }
         catch (e) { alert('Could not box them: ' + (e.message || e)); }
     };
+    // ── THE TRAVERSE STATION'S ORDERS (Shared/traverseStation, Stuart 2026-10-07) ─────────────────────────────────────
+    // ORDER ENTRY: the track parts are lines of the sales order (picked into the order's bin, displays confirmed loaded).
+    // CPQ: they are on the finishing documents, which carry the gate. READY = finishing is complete for what is in motion.
+    const traverseOrders = useMemo(() => {
+        const out = [];
+        const openOe = (o) => o && !o.deleted && o.closed !== true && !['Shipped', 'Closed', 'CANCELLED', 'Cancelled', 'Deleted'].includes(String(o.status || ''));
+        quickShipOrders.filter(o => openOe(o) && hasTrackLine(o)).forEach(o => {
+            const st = oeStationOf({ so: o, isTrackCode, isFeeCode, boards: isReleaseByCount(o) ? o.releaseOf : 0 });
+            if (!st.lines.length || !(st.releasedUnits > 0)) return;            // nothing of it is in motion yet
+            if (st.loaded >= st.releasedUnits && st.toPick === 0) return;       // every unit in motion is loaded
+            const fin = finishingDoneOf(finAll.filter(d => { const so = oeOrderOfDoc(d); return !!so && so.id === o.id; }));
+            out.push({ kind: 'OE', id: o.id, so: o, ref: `SO ${o.soId || o.id}`, customer: o.customer || '', jobName: o.jobName || '', needBy: o.needBy || o.needByDate || '', bin: committedBinOf(o) || '',
+                ready: fin.done, waitingDocs: fin.open.map(d => woRefOf(d)), st, tracks: st.tracks });
+        });
+        const keyOf = (d) => String(d.orderKey || d.salesOrderId || d.id);
+        [...new Set(finAll.filter(d => d && d.traverseGate === 'WAITING' && !oeOrderOfDoc(d)).map(keyOf))].forEach(k => {
+            const docs = finAll.filter(d => d && keyOf(d) === k && !oeOrderOfDoc(d));
+            const cs = cpqStationOf(docs);
+            if (!cs.waiting.length) return;
+            const fin = finishingDoneOf(docs);
+            const so = soIndex[k] || null;
+            const tracks = docs.flatMap(d => (poleInfoOf(d).rows || []).map(r => ({ code: r.code || '', name: r.name || '', qty: r.qty, display: r.display || '' })));
+            out.push({ kind: 'CPQ', id: k, so, ref: `SO ${k}`, customer: (docs[0] && (docs[0].customerName || docs[0].clientName)) || (so && so.customer) || '', needBy: (so && (so.needBy || so.needByDate)) || '', bin: '',
+                ready: fin.done, waitingDocs: fin.open.map(d => woRefOf(d)), lines: cs.lines, tracks, docs: cs.gated.map(d => ({ id: d.id, ref: woRefOf(d) })) });
+        });
+        return out.sort((a, b) => Number(b.ready) - Number(a.ready) || String(a.needBy || '\uffff').localeCompare(String(b.needBy || '\uffff')));
+    }, [quickShipOrders, finAll, trackCodes, soIndex, shopSibs]); // eslint-disable-line react-hooks/exhaustive-deps
+    // ORDER ENTRY: the station says how many displays (or the order) are LOADED — SO Pack ships and packs up to that.
+    const confirmTraverseLoaded = async (order, units) => {
+        const o = quickShipOrders.find(x => x.id === order.id) || order.so;
+        const st = oeStationOf({ so: o, isTrackCode, isFeeCode, boards: isReleaseByCount(o) ? o.releaseOf : 0 });
+        const refusal = loadRefusal(st, units);
+        if (refusal) return alert(refusal);
+        const word = st.units > 1 ? `${units} of ${st.units} displays` : 'this order';
+        if (!window.confirm(`Confirm the tracks are LOADED for ${word} — ${packRef(o)}?\n\n${st.lines.map(r => `  • ${r.code} — ${r.have} in ${committedBinOf(o) || 'the bin'}`).join('\n')}\n\nSO Pack will ${st.units > 1 ? 'ship displays up to this count' : 'let the order be packed'}.`)) return;
+        try {
+            await updateDoc(doc(db, 'hq_sales_orders', o.id), { traverseStation: loadedPatchOf(o, units, { by: operator?.name || '' }) });
+            writeLog(`Traverse station: ${st.units > 1 ? `${units} of ${st.units} displays` : 'tracks'} confirmed loaded — ${packRef(o)} (was ${st.loaded})`, 'wms');
+        } catch (e) { alert('Could not record it: ' + (e.message || e)); }
+    };
+    // CPQ: the station confirms the tracks loaded — the gate on every finishing document of the order lifts.
+    const confirmTraverseCpq = async (order) => {
+        const docs = finAll.filter(d => (order.docs || []).some(x => x.id === d.id) && d.traverseGate === 'WAITING');
+        if (!docs.length) return alert('Nothing of this order is waiting on the traverse station any more.');
+        if (!window.confirm(`Confirm the tracks are LOADED for ${order.ref}?\n\n${(order.lines || []).map(r => `  • ${r.qty} × ${r.code}`).join('\n')}\n\n${docs.length} work order${docs.length === 1 ? '' : 's'} can then be packed: ${docs.map(d => woRefOf(d)).join(', ')}.`)) return;
+        const stamp = loadedDocStampOf({ by: operator?.name || '' });
+        try {
+            for (const d of docs) await updateDoc(doc(db, 'fin_workorders', d.id), stamp);
+            if (order.so && order.so.id) await updateDoc(doc(db, 'hq_sales_orders', order.so.id), { traverseStation: loadedPatchOf(order.so, 1, { by: operator?.name || '' }) }).catch(() => {});
+            writeLog(`Traverse station: tracks confirmed loaded — ${order.ref} (${docs.map(d => woRefOf(d)).join(', ')}; ${(order.lines || []).map(r => `${r.qty} × ${r.code}`).join(', ')})`, 'wms');
+        } catch (e) { alert('Could not record it: ' + (e.message || e)); }
+    };
+
     // The box label: the sales-order label (its barcode is the ORDER NUMBER) + BOX n of N, the box type, what is in it.
     const printOrderBoxLabelsFor = (job, onlyNo = null) => {
         const home = boxHomeOf(job), so = home.so;
@@ -2042,6 +2107,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const n = (so.displayShipments || []).length + 1;
             if (!boards) return alert(`The build ${so.displayBuildId} does not say how many displays it is.`);
             if (n > boards) return alert(`All ${boards} displays of ${packRef(so)} have shipped.`);
+            // ONLY A LOADED DISPLAY SHIPS (Shared/traverseStation, 2026-10-07): the traverse station confirms the tracks loaded.
+            { const tg = trvGateOf(so); if (tg.has && (isReleaseByCount(so) ? tg.shipCap < 1 : !!tg.wait)) return alert(`${packRef(so)} waits on the TRAVERSE STATION.\n\n${tg.station.loaded} display${tg.station.loaded === 1 ? '' : 's'} confirmed loaded, ${tg.station.shipped} shipped — the next one's tracks are not confirmed loaded yet.\n\nWMS → Traverse station: pick the track parts, load the tracks, confirm.`); }
             const pending = nsBinPlanOf({ so, isFeeCode }).filter(r => r.qty > 0);
             if (pending.length) return alert(`${pending.length} item${pending.length === 1 ? ' is' : 's are'} not yet in ${so.committedBin} in NetSuite (${pending.slice(0, 4).map(r => r.code).join(', ')}${pending.length > 4 ? '…' : ''}).\n\nPress ⇄ Into ${so.committedBin} in NetSuite first — the showroom's fulfilment takes the pieces from that bin.`);
             const share = displayShareOf({ so, boards, isFeeCode });
@@ -2176,7 +2243,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // need, from its live bins (Shared/orderBinPick.shelfPickPlanOf): a NetSuite bin transfer shelf → the order's bin, and
     // only once NetSuite has moved it, the order's count. What NetSuite moved is kept per item (nsBinQty) so a release
     // moves it back.
-    const pickShelfIntoOrder = async (o, only = null) => {
+    // `opts.station` — the TRAVERSE STATION's pick: only the parts loaded onto the track. Without it (SO Pack) those are
+    // left out: they are the station's, after finishing (Shared/traverseStation, 2026-10-07). Same transfer either way.
+    const pickShelfIntoOrder = async (o, only = null, opts = {}) => {
+        const forStation = !!(opts && opts.station);
         let bin = committedBinOf(o);
         if (!bin) {
             const typed = window.prompt(`Scan the committed bin for ${packRef(o)} — every piece of the order goes into it before it packs:`, '');
@@ -2189,11 +2259,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         // Released by count: every item with a shelf share released (a line picked for one release and made for the next
         // reads "from the floor", but its shelf share is still a pick).
         const codes = [...new Set((o.lines || []).map((l, i) => ({ l, i })).filter(x => !feeLine(o, x.l, x.i) && (isReleaseByCount(o) ? soCodeReleasedOf(o, lineCodeOf(x.l), isFeeCode).shelf > 0 : soLineIsShelfPick(o, x.l, x.i))).map(x => lineCodeOf(x.l)))]
-            .filter(c => !only || c === String(only).toUpperCase());
+            .filter(c => !only || c === String(only).toUpperCase())
+            .filter(c => (forStation ? isTrackCode(c) : !isTrackCode(c)));
         let live = {};
         setIsSyncing(true);
         try { live = (await fetchLiveBins(codes)) || {}; } finally { setIsSyncing(false); }
-        const plan = shelfPickPlanOf({ so: o, binsOf: (c) => (live[c] && live[c].bins) || [], toBin: bin, only, isFeeCode });
+        const plan = shelfPickPlanOf({ so: o, binsOf: (c) => (live[c] && live[c].bins) || [], toBin: bin, only, isFeeCode, ...(forStation ? { onlyCodes: isTrackCode } : { skip: isTrackCode }) });
         if (!plan.length) return alert(isReleaseByCount(o) ? `Nothing to pick for ${packRef(o)} right now — every shelf piece of the displays RELEASED is already in ${bin}. More is offered as rows are released on 10.5.` : `Nothing left to pick for ${packRef(o)} — every shelf line is already in ${bin}.`);
         const noId = plan.filter(p => p.ok && !((findPartByErpCode(p.code) || {}).netSuiteInternalId));
         const go = plan.filter(p => p.ok && !noId.includes(p)), bad = plan.filter(p => !p.ok);
@@ -2843,6 +2914,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (isPaintOnlyOrder(job) && (job.jfpAdjQueued || job.jfpAdjPosted)) {
             return alert(`${packRef(job)} already ${job.jfpAdjPosted ? 'posted' : 'queued'} its NetSuite adjustment${job.jfpAdjTran ? ` (${job.jfpAdjTran})` : ''}.\n\nNothing to put away again — a second scan would double the stock.${job.jfpAdjPosted ? '' : ' Watch it land in HQ 11.1 → NetSuite Sync Queue.'}`);
         }
+        // AN ORDER WITH TRACK PARTS PACKS ONLY ONCE THE TRAVERSE STATION HAS LOADED ITS TRACKS (Shared/traverseStation,
+        // Stuart 2026-10-07) — a CPQ document by the gate it carries, an Order Entry order by the station's count. An
+        // Order Entry floor document still GATHERS into its order: the track has to be in the bin to be loaded.
+        { const wait = isQsOrder(job) ? trvGateOf(job).wait : (oeOrderOfDoc(job) ? '' : traverseWaitOf(job));
+          if (wait) return alert(`${packRef(job)} cannot be packed yet — ${wait}.\n\nWMS → Traverse station: pick the track parts, load the tracks, confirm.`); }
         const lines = packLinesFor(job).filter(l => !l.rider);   // riders tick with their pole
         const left = lines.filter(l => !(job.packedLines && job.packedLines[l.key]));
         if (left.length) return alert(`Every piece must be physically packed and confirmed first — ${left.length} line${left.length === 1 ? '' : 's'} still on the TO PACK side.`);
@@ -5756,7 +5832,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     {/* 'APP IMP' is force-included — feedback stays reachable by every role. */}
                     {TABS.filter(t => myTabs.includes(t) || t === 'APP IMP').map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 16px', background: 'transparent', color: activeTab === tab ? theme.ink : theme.inkSoft, borderBottom: activeTab === tab ? `2px solid ${theme.brass}` : '2px solid transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
-                            {t(pickTabLabel(tab))}
+                            {t(pickTabLabel(tab))}{tab === 'TRAVERSE' && traverseOrders.some(x => x.ready) ? ` (${traverseOrders.filter(x => x.ready).length})` : ''}
                         </button>
                     ))}
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
@@ -6100,6 +6176,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         return { size: parseInt(m[2]), singleErp };
                     };
                     const setQSStatus = async (o, status) => {
+                        // The traverse station first (Shared/traverseStation, 2026-10-07): an order with parts loaded onto the
+                        // track moves on only once its tracks are confirmed loaded.
+                        { const tg = trvGateOf(o); if (tg.wait) return alert(`SO ${o.soId || o.id} waits on the TRAVERSE STATION — ${tg.wait}.\n\nWMS → Traverse station: pick the track parts, load the tracks, confirm.`); }
                         // Flow discipline: Pick (here) → Pack (PACKING tab, photo required) → Ship.
                         // TO-BE-FINISHED LINES HOLD (Stuart 2026-08-30): production may still be
                         // running — this SO's completed work MEETS it here; marking it moved with
@@ -6186,12 +6265,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     const Card = ({ o }) => {
                     // THREE STAGES (Shared/orderBinPick, Stuart 2026-09-30): WAITING on parts · PICK the shelf lines into the
                     // order's bin · PACK — every piece in the bin, and the card shows only what is in it.
-                    const gs = soGatherStageOf({ so: o, statOf: (c) => ((soStats[o.id] && soStats[o.id].codes[c]) || null), isFeeCode });
-                    const ready = gs.stage === 'PACK';
+                    const gs = soGatherStageOf({ so: o, statOf: (c) => ((soStats[o.id] && soStats[o.id].codes[c]) || null), isFeeCode, stationCode: isTrackCode });
+                    // THE TRAVERSE STATION (Shared/traverseStation, 2026-10-07): parts loaded onto the track are ITS pick, and
+                    // the order is ready — a display shippable — only as far as it has confirmed the tracks loaded.
+                    const trv = trvGateOf(o);
+                    const atStation = trv.has && (gs.stage === 'STATION' || (gs.stage === 'PACK' && !!trv.wait));
+                    const ready = gs.stage === 'PACK' && !trv.wait;
                     // RELEASED BY COUNT (Shared/rowRelease, Stuart 2026-10-05): the card speaks of what is RELEASED, and a
                     // display ships once a display's worth of EVERY row is in the bin — the scarcest row decides how many.
                     const byCount = isReleaseByCount(o);
-                    const canShip = (byCount && o.displayBuildId) ? shippableDisplaysOf({ so: o, boards: o.releaseOf, isFeeCode }) : 0;
+                    const canShip = (byCount && o.displayBuildId) ? Math.min(shippableDisplaysOf({ so: o, boards: o.releaseOf, isFeeCode }), trv.shipCap) : 0;
                     const loaded = !!soStats[o.id];
                     const cBin = committedBinOf(o) || 'the order\'s bin';
                     const showLines = !!expandedSo[o.id] || ready || !loaded;
@@ -6232,7 +6315,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 {committedBinOf(o) && <span title={`${totalGathered(o)} piece(s) gathered for this order. App-only — NetSuite still shows them in their shelf bin.`} style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.06em', color: '#2e7d32', marginRight: '12px' }}>📦 {t('BIN')} {committedBinOf(o)} · {totalGathered(o)}</span>}
                                 {loaded && gs.byCount && !gs.anyReleased
                                     ? <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.08em', color: theme.inkSoft, marginRight: '12px' }}>{t('nothing released yet — rows start on 10.5')}</span>
-                                    : loaded && (ready
+                                    : loaded && (atStation
+                                    ? <span title={trv.wait} style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.08em', color: theme.brass, marginRight: '12px' }}>🧵 {t('AT THE TRAVERSE STATION')} · {trv.station.loaded} {t('of')} {trv.station.releasedUnits} {t('loaded')}</span>
+                                    : ready
                                     ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#2e7d32', marginRight: '12px' }}>✓ {byCount && gs.partial ? `${t('RELEASED PIECES ALL IN')} ${cBin}` : t('READY TO PACK')}</span>
                                     : gs.stage === 'SHIPPED' ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#2e7d32', marginRight: '12px' }}>✓ {t('ALL SHIPPED')}</span> : (gs.stage === 'PICK'
                                         ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.08em', color: theme.brass, marginRight: '12px' }}>⤓ {t('READY TO PICK INTO')} {cBin}</span>
@@ -6281,6 +6366,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {/* A made-to-order line: the pieces ARRIVE from the finishing floor (in-house)
                                                     or the plater (outsourced) — do NOT pull the raw off the shelf for it
                                                     (its WO / plating demand carries the pull lines). */}
+                                                {!feeLine(o, l, i) && isTrackCode(lineCodeOf(l)) && <div style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🧵 {t('loaded onto the track — the Traverse station picks and loads it')}</div>}
                                                 {feeLine(o, l, i) ? <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>{isKitLine(l) ? '🧰 kit — sold as one; its parts, beneath it, are what is picked or made' : `🔧 ${(o.oeGen && o.oeGen[i] && o.oeGen[i].rider) ? 'rides the pole — fabrication on the shop cut list, not picked' : 'fee — billed on the order, not picked'}`}</div>
                                                 : (l.toBeFinished || (l.stockColour && o.oeGen && o.oeGen[i] && o.oeGen[i].kind === 'WO')) && (soLineIsShelfPick(o, l, i)
                                                     ? <div style={{ color: '#3a7d44', fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>📦 {lineCodeOf(l)} IN STOCK — pick it from the shelf into this order</div>
@@ -6437,6 +6523,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                 {/* 📦 TAB: PACKING STATION */}
                 {/* FULFILMENT (S4's module, mounted once here — BRIEF_S4 §1): packed orders ship. */}
+                {/* 🧵 TAB: TRAVERSE STATION (Shared/traverseStation, Stuart 2026-10-07) */}
+                {activeTab === 'TRAVERSE' && (
+                    <TraverseStationTab orders={traverseOrders} theme={theme} t={t} busy={isSyncing}
+                        anyTagged={hqParts.some(isTrackLoadedPart)}
+                        onPick={(o, code) => pickShelfIntoOrder(o.so, code, { station: true })}
+                        onConfirmLoaded={confirmTraverseLoaded} onConfirmCpq={confirmTraverseCpq} />
+                )}
+
                 {activeTab === 'FULFILMENT' && (
                     <FulfilmentPanel operator={operator} activeBrand={activeBrand} docs={[...finAll, ...quickShipOrders]}
                         soIndex={soIndex} stdBoxes={stdBoxes} isQsOrder={isQsOrder} packRefOf={packRef} writeLog={writeLog} />

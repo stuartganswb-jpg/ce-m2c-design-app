@@ -2546,6 +2546,17 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>CPQ and Order Entry never apply the configuration's finish to this part; it prices and pulls as the plain item and the floor sheet reads "no finish". Splices, joiners, connectors, hidden hardware. (Bulk: 4.5 Mass Update → Unfinished.)</div>
                           </div>
                       </div>
+                      {/* LOADED ONTO THE TRACK (Stuart 2026-10-07 · Shared/traverseStation): "the traverse components should be kept
+                          in their own bucket … alert the traverse station … load the tracks with the components and confirm".
+                          The ITEM says which parts those are — nothing reads a name or a code. Read through
+                          Shared/trackLoaded.isTrackLoadedPart by the split, SO Pack and the WMS Traverse tab. */}
+                      <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '6px 0' }}>
+                          <input type="checkbox" checked={!!editSpecs.customData?.trackLoaded} onChange={(e) => handleCustomFieldChange("trackLoaded", e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '2px', flexShrink: 0 }} />
+                          <div>
+                              <label style={labelStyle}>Loaded onto the track — traverse station</label>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>Carriers, master carriers, end stops, pulleys, batons — a part fitted ONTO a track or rod before it is packed (not a bracket). The warehouse no longer picks it with the order: the WMS Traverse station picks it after finishing, loads the tracks and confirms, and the order cannot pack or ship until it has.</div>
+                          </div>
+                      </div>
                       {/* ALSO MADE IN ANOTHER MATERIAL (Stuart 2026-10-06, the 1" brass · Shared/materialTwin): "the brass
                           items have their own part# … ideally in the cpq we just tag it as in the .glb the brass items are
                           identical to their steel counter parts". The STANDARD part names the item it is made as in that

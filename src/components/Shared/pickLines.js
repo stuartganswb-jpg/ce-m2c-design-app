@@ -1,3 +1,4 @@
+import { isStationPickLine } from './trackLoaded.js';
 import { committedQtyOf } from './committedBins.js';
 import { isKitLine, isOffOrderLine } from './itemKit.js';
 import { parseKitCode } from './kitCode.js';
@@ -84,7 +85,10 @@ export const isQuickShip = (job) => !!job && String(job.orderClass || '').trim()
 export function pickableLinesOf(job, { isFeeCode = null } = {}) {
     if (!job) return [];
     if (isQuickShip(job)) return (job.lines || []).filter((l, i) => !soLineIsFee(job, l, i, isFeeCode));
-    return (job.partsList || []).filter(l => !lineIsFeeish(l) && !isOwnCustomPole(job, l) && !isKitHolderLine(l));
+    // A PART LOADED ONTO THE TRACK that comes off the shelf as it is — is the traverse station's pick, AFTER finishing,
+    // never part of this one (Shared/traverseStation, Stuart 2026-10-07: "the traverse components should be kept in
+    // their own bucket"). One that is painted here is still pulled now: it has to be on the floor to be painted.
+    return (job.partsList || []).filter(l => !lineIsFeeish(l) && !isOwnCustomPole(job, l) && !isKitHolderLine(l) && !isStationPickLine(l));
 }
 
 // ── A KIT IS SOLD, NEVER PICKED — whichever door wrote the document (Stuart 2026-09-30, SO60432: "this is the kit

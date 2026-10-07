@@ -1,5 +1,6 @@
 import { isQuickShip, pickableLinesOf, isKitHolderLine } from './pickLines.js';
 import { poleCoatIndexOf } from './floorActivity.js';
+import { isStationPickLine, traverseWaitOf } from './trackLoaded.js';
 // WHERE IS IT? — the one answer, derived (Stuart 2026-08-03: "of utmost importance is the clarity
 // on the status of an item, my team is confused and i want them to see clearly each stage exactly
 // where something is at… from the time an order hits the custom or finishing floor till the time
@@ -182,7 +183,8 @@ export function pickGateOf(wo) {
         return { blocked: true, reason: 'the parts pick is still OPEN in the WMS pick queue — pick it there (or clear it) before this step starts' };
     }
     // A kit holder is never a pull line (Shared/pickLines.isKitHolderLine, 2026-09-30).
-    const pickable = Array.isArray(wo.partsList) && wo.partsList.some(l => l && !l.isFee && !l.lineIsFee && !isKitHolderLine(l) && String(l.legacyErpId || l.partId || ''));
+    // …nor is a part loaded onto the track — the traverse station picks it, after finishing (Shared/traverseStation, 2026-10-07).
+    const pickable = Array.isArray(wo.partsList) && wo.partsList.some(l => l && !l.isFee && !l.lineIsFee && !isKitHolderLine(l) && !isStationPickLine(l) && String(l.legacyErpId || l.partId || ''));
     if (pickable && !wo.sentToPickPack) {
         return { blocked: true, reason: 'the parts pull has not been released to the WMS pick queue yet — Start Setup releases it' };
     }
@@ -254,6 +256,8 @@ export function packReadinessOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
     if (wo.packStatus === 'Gathered') return { ready: false, done: true, word: 'GATHERED', reason: 'gathered into its order at Packaging Prep', waits: [] };
     const waits = [];
     if (wo.held) waits.push(`on hold${wo.heldReason ? ` — ${String(wo.heldReason).slice(0, 120)}` : ''}`);
+    // AN ORDER WITH TRACK PARTS PACKS ONLY ONCE THE TRAVERSE STATION HAS LOADED ITS TRACKS (Shared/traverseStation, 2026-10-07).
+    if (traverseWaitOf(wo)) waits.push(traverseWaitOf(wo));
     if (wo.hasCustomSibling && !customPartsReady(wo)) waits.push(`custom shop: ${String(customFabLabel(wo)).toLowerCase()}`);
     const ps = String(wo.pickStatus || '');
     if (wo.sentToPickPack && (ps === '' || ps === 'Pending')) waits.push('parts pick: still open in the WMS pick queue');

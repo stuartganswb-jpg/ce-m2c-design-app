@@ -44,22 +44,28 @@ export const lineBinShareOf = (so, idx, isFeeCode = null) => {
  * Where the order stands. `statOf(code)` is SO Pack's stock read for a shelf line ({ avail, held, prod }).
  * @returns { stage: 'WAITING' | 'PICK' | 'PACK', waiting: [code], toPick: [code] }
  */
-export const soGatherStageOf = ({ so, statOf = () => null, isFeeCode = null } = {}) => {
+// `stationCode` (Shared/traverseStation, Stuart 2026-10-07): an item LOADED ONTO THE TRACK is picked by the traverse
+// station, after finishing — never by SO Pack. Such an item still missing from the bin is listed under `station`, and
+// when nothing else is missing the stage is STATION: the order waits on the station, not on a floor or on this pick.
+export const soGatherStageOf = ({ so, statOf = () => null, isFeeCode = null, stationCode = null } = {}) => {
     const lines = pieceLinesOf(so, isFeeCode);
     if (!lines.length) return { stage: 'WAITING', waiting: [], toPick: [] };
     // EVERYTHING HAS SHIPPED (a display order's last display gone): nothing is needed in the bin any more.
     if (lines.every(({ l }) => soCodeNeedOf(so, soLineCodeOf(l), isFeeCode) === 0) && Object.keys((so && so.shippedQty) || {}).length) return { stage: 'SHIPPED', waiting: [], toPick: [] };
-    if (isReleaseByCount(so)) return releasedStageOf({ so, statOf, isFeeCode, lines });
-    const waiting = new Set(), toPick = new Set();
+    const isStation = (code) => typeof stationCode === 'function' && !!stationCode(code);
+    if (isReleaseByCount(so)) return releasedStageOf({ so, statOf, isFeeCode, lines, isStation });
+    const waiting = new Set(), toPick = new Set(), station = new Set();
     lines.forEach(({ l, idx }) => {
         const code = soLineCodeOf(l);
         if (committedQtyOf(so, code) >= soCodeNeedOf(so, code, isFeeCode)) return;
         const st = soPackLineStateOf({ so, line: l, idx, stat: statOf(code), isFeeCode });
-        if (!st.fromFloor && st.state === 'READY') toPick.add(code);
+        if (!st.fromFloor && isStation(code)) station.add(code);
+        else if (!st.fromFloor && st.state === 'READY') toPick.add(code);
         else waiting.add(code);
     });
-    const stage = waiting.size ? 'WAITING' : (toPick.size ? 'PICK' : 'PACK');
-    return { stage, waiting: [...waiting], toPick: [...toPick] };
+    const stage = waiting.size ? 'WAITING' : (toPick.size ? 'PICK' : (station.size ? 'STATION' : 'PACK'));
+    // `station` is present only when the station has something to pick — an order with no track part reads exactly as before.
+    return { stage, waiting: [...waiting], toPick: [...toPick], ...(station.size ? { station: [...station] } : {}) };
 };
 
 // ── THE SAME THREE STAGES, AGAINST WHAT IS RELEASED (Stuart 2026-10-05, Shared/rowRelease) ───────────────────────────
@@ -67,8 +73,8 @@ export const soGatherStageOf = ({ so, statOf = () => null, isFeeCode = null } = 
 // waited for nor picked. WAITING = a released piece is still coming (a floor document not gathered, or the shelf cannot
 // cover a released pick); PICK = the shelf covers what is released and not yet in the bin; PACK = every released piece
 // is in the bin. `partial` says more of the order is still to release; `anyReleased` false = nothing is in motion yet.
-const releasedStageOf = ({ so, statOf, isFeeCode, lines }) => {
-    const waiting = new Set(), toPick = new Set();
+const releasedStageOf = ({ so, statOf, isFeeCode, lines, isStation = () => false }) => {
+    const waiting = new Set(), toPick = new Set(), station = new Set();
     let anyReleased = false, partial = false;
     [...new Set(lines.map(({ l }) => soLineCodeOf(l)))].forEach(code => {
         const rel = soCodeReleasedOf(so, code, isFeeCode);
@@ -81,6 +87,7 @@ const releasedStageOf = ({ so, statOf, isFeeCode, lines }) => {
         if (!out) return;
         const pick = Math.min(soShelfToPickOf(so, code, isFeeCode), out);
         if (out - pick > 0) waiting.add(code);          // the rest comes off a floor
+        if (pick > 0 && isStation(code)) { station.add(code); return; }   // the traverse station's pick, not SO Pack's
         if (pick > 0) {
             const st = statOf(code);
             const free = st && st.avail != null ? Math.max(0, N(st.avail)) : null;
@@ -88,8 +95,8 @@ const releasedStageOf = ({ so, statOf, isFeeCode, lines }) => {
             if (free != null && covered >= have + pick) toPick.add(code); else waiting.add(code);
         }
     });
-    const stage = (!anyReleased || waiting.size) ? 'WAITING' : (toPick.size ? 'PICK' : 'PACK');
-    return { stage, waiting: [...waiting], toPick: [...toPick], byCount: true, anyReleased, partial };
+    const stage = (!anyReleased || waiting.size) ? 'WAITING' : (toPick.size ? 'PICK' : (station.size ? 'STATION' : 'PACK'));
+    return { stage, waiting: [...waiting], toPick: [...toPick], ...(station.size ? { station: [...station] } : {}), byCount: true, anyReleased, partial };
 };
 
 /**
@@ -119,14 +126,17 @@ export const shippableDisplaysOf = ({ so, boards, isFeeCode = null } = {}) => {
  * item's live bins largest first (the order's own bin is never a source). A need no bins cover is named, not picked.
  * @param binsOf  code → [{ bin, name, qty }] (the WMS live read)
  * @param only    one code, or all
+ * @param skip       (code) → leave this item out — SO Pack leaves the track-loaded parts to the traverse station
+ * @param onlyCodes  (code) → take only these — the station's own pick (Shared/traverseStation, 2026-10-07)
  * @returns [{ code, need, have, qty, from: [{ bin, qty }], ok, why }]
  */
-export const shelfPickPlanOf = ({ so, binsOf = () => [], toBin = '', only = null, isFeeCode = null } = {}) => {
+export const shelfPickPlanOf = ({ so, binsOf = () => [], toBin = '', only = null, isFeeCode = null, skip = null, onlyCodes = null } = {}) => {
     const seen = new Set();
     const out = [];
     pieceLinesOf(so, isFeeCode).forEach(({ l, idx }) => {
         const code = soLineCodeOf(l);
         if (seen.has(code) || (only && U(only) !== code)) return;
+        if ((typeof skip === 'function' && skip(code)) || (typeof onlyCodes === 'function' && !onlyCodes(code))) return;
         // Released by count: every item with a shelf share released and not yet picked — whichever of its lines says so.
         const byCount = isReleaseByCount(so);
         if (!byCount && !soLineIsShelfPick(so, l, idx)) return;

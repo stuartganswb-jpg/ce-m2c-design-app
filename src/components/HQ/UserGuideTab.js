@@ -703,6 +703,27 @@ const WmsGuide = () => (
             document that is <i>gathered</i> into its order use no boxes — the order is boxed when the order itself is
             packed.</p>
         </Screen>
+        <Screen title="The traverse station" tag="WMS → Traverse station">
+            <p style={S.p}>The parts that are <b>loaded onto a track</b> — carriers, master carriers, end stops, pulleys,
+            batons — are kept out of the ordinary pick. They belong to the <b>Traverse station</b>, which works an order
+            <i>after</i> its finishing is complete: pick the parts, load the tracks, confirm. Until it confirms, the order
+            cannot be packed and its displays cannot ship.</p>
+            <p style={S.p}><b>Which parts.</b> The item says so: the tick <b>Loaded onto the track — traverse station</b> in
+            the Master Library's item drawer. Nothing is guessed from a name; until an item is ticked, nothing changes.
+            Brackets are not ticked.</p>
+            <p style={S.p}><b>An Order Entry order</b> (tab 7, a 10.5 display). SO Pack no longer offers those lines for
+            picking — the line reads "the Traverse station picks and loads it". On the Traverse tab the order shows what the
+            displays <i>released</i> need, what is in its bin and what is still to pick. <b>⤓ Pick</b> moves the parts into
+            the order's bin (the same NetSuite bin transfer SO Pack makes). Then enter how many displays are loaded <i>in
+            all</i> and <b>Confirm loaded</b> — never more than the bin holds the parts for. SO Pack ships displays up to that
+            count, and an order that is not a display is packed once its one confirmation is made.</p>
+            <p style={S.p}><b>A CPQ order.</b> The same parts are kept off the pick before finishing; every work order of the
+            order waits. On the Traverse tab tick each part as you have it, then <b>Tracks loaded — release to packing</b> —
+            its work orders can then be packed. A track part that is painted here is still pulled before finishing (it has to
+            be painted) and reaches the station off the floor.</p>
+            <p style={S.p}>An order appears under <b>Coming</b> while it is still in finishing, and the tab shows the count of
+            orders ready. The tab is granted per role in HQ → Admin (administrators see it already).</p>
+        </Screen>
         <Screen title="A box ships once" tag="WMS → Fulfillment">
             <p style={S.p}>The Fulfillment tab ships one packed document at a time, and offers <b>one package per
             numbered box</b> holding that document's pieces — Box 1, Box 3 — each starting from its standard box's

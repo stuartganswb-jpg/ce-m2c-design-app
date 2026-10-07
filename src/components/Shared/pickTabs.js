@@ -10,7 +10,9 @@
 // renaming one silently revokes that tab for every role. Rename the LABEL below instead.
 // 'FULFILMENT' (S4, 2026-09-16): packed orders ship here — UPS rate, label, tracking to NetSuite.
 // 'BUILD' (2026-09-30): stock an assembly by an ASSEMBLY BUILD — components consumed, the assembly received.
-export const PICK_TABS = ['QUEUE', 'STOCK', 'FULFILMENT', 'PACKING', 'COUNT', 'BUILD', 'CONVERT', 'RECEIVING', 'ROD CUTS', 'TRANSFER', 'PLATING', 'LABELS', 'CHIPS', 'GALLERY', 'MESSAGING', 'APP IMP'];
+// 'TRAVERSE' (2026-10-07): the traverse station — picks the parts loaded onto the track AFTER finishing, loads the
+// tracks, confirms; an order with such parts cannot pack or ship until it has (Shared/traverseStation). Granted per role.
+export const PICK_TABS = ['QUEUE', 'STOCK', 'TRAVERSE', 'FULFILMENT', 'PACKING', 'COUNT', 'BUILD', 'CONVERT', 'RECEIVING', 'ROD CUTS', 'TRANSFER', 'PLATING', 'LABELS', 'CHIPS', 'GALLERY', 'MESSAGING', 'APP IMP'];
 
 // Display name for a tab key — used by the WMS nav and by the permission matrix, so an admin
 // ticking a row sees exactly the words the operator sees on the floor.
@@ -26,6 +28,7 @@ export const pickTabLabel = (tab) => String(tab || '')
     .replace('GALLERY', 'ASSET GALLERY')
     .replace('COUNT', 'BIN COUNT')
     .replace('BUILD', 'ASSEMBLY BUILD')
+    .replace('TRAVERSE', 'TRAVERSE STATION')
     .replace('ROD CUTS', 'ROD CUTS & RING PACKS')
     // The vendor dock: a purchase order arrives, its lines are received onto a cart, labelled, and
     // put away — and any order that was waiting on those pieces is offered them before they vanish

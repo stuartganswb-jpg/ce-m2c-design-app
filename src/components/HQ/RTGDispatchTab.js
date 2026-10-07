@@ -42,6 +42,7 @@ import { woRecipeCode } from '../Shared/finishingTime';
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
 import { isPoleCategory } from '../Shared/poleCut';
 import { withCartLines, lineFactsOf, pairFactsOf } from '../Shared/partFacts';
+import { trackStampOf, isTrackLoadedPart, TRAVERSE_GATE } from '../Shared/trackLoaded';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
@@ -1070,6 +1071,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // WHAT IT IS MADE OF, AND WHICH LINE OF THE ORDER IT IS FOR (Shared/partFacts, 2026-10-07) — the item's own
             // Raw Mat, and the quote line the split stamped on the row. Cards and labels read these; nothing routes by them.
             ...lineFactsOf(line, part),
+            // LOADED ONTO THE TRACK (the item's Library tick — Shared/traverseStation, 2026-10-07): the traverse station's part.
+            ...trackStampOf(part),
             assetUrl: (line.partId && assetMap.get(line.partId)) || null
         };
     });
@@ -1488,6 +1491,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             trvRules.notes.forEach(n => addLog(`⚠ SO ${orderKey}: ${n}`, 'warn'));
             const lines = trvRules.lines.length === lines0.length ? trvRules.lines : lines0;
 
+            // AN ORDER WITH TRACK PARTS WAITS ON THE TRAVERSE STATION (Shared/traverseStation, Stuart 2026-10-07): every
+            // finishing document of it carries the gate, and none may be packed until the station confirms the tracks loaded.
+            const orderHasTrackParts = lines.some(l => isTrackLoadedPart(l.partId ? partCache.get(l.partId) : null));
+            if (orderHasTrackParts) addLog(`🧵 SO ${orderKey}: parts loaded onto the track — the traverse station picks them after finishing; the order packs once it confirms the tracks loaded.`, 'info');
             const smallLines = [];
             const customLines = [];
             // THE CUT FACTS DECIDE A WOOD ROD (A d8d45e7, Stuart 2026-09-08: "wood is enough as a tag,
@@ -1692,6 +1699,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                         needBy: so.needBy || '', cutSheetMissing, visionUsed,
                         ...materialStamp,
                         ...pairFacts,
+                        ...(orderHasTrackParts ? { traverseGate: TRAVERSE_GATE.WAITING } : {}),
                         ...(finHold || {}),
                     },
                 }));
