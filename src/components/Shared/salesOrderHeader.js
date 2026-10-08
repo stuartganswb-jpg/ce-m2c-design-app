@@ -21,9 +21,10 @@
 //   leadBasis, rushApplied        when the order carries no applied finish (mill, small parts).
 //   shipTo[]                      resolved address lines, both doors
 //   shippingMethod, shippingAddressId, customShippingAddress, shippingAmount
-//   packingListStandard           the CRM's override of the BLIND packing list (Shared/blindShip): a custom
-//                                 drop address prints blind unless this is true. Carried from the job when
-//                                 the job says either way; an Order Entry order has it on the sales order only.
+//   packingListStandard,          the CRM's choice for the packing list (Shared/blindShip): a custom drop
+//   packingListBlind              address prints BLIND unless Standard is true; any address prints blind when
+//                                 Blind is true. Carried from the job when the job says either way; an Order
+//                                 Entry order has them on the sales order only.
 //   productionNotes, internalMemo
 //   recipe, recipeLabel,          THE FINISH, STAMPED AT SAVE (Q10). recipe is a CODE (P01, EP3),
 //   recipeSource, recipes[]       recipeLabel the words, recipeSource names which of the five
@@ -299,6 +300,7 @@ export function soHeaderOf({ door, job = null, form = null, customer = null, by 
             customShippingAddress: j.shippingMethod === 'CUSTOM' ? (j.customShippingAddress || null) : null,
             shippingAmount: parseFloat(j.shippingAmount) || 0,
             ...(typeof j.packingListStandard === 'boolean' ? { packingListStandard: j.packingListStandard } : {}),
+            ...(typeof j.packingListBlind === 'boolean' ? { packingListBlind: j.packingListBlind } : {}),
             productionNotes: str(j.productionNotes), internalMemo: str(j.internalMemo),
             ...rec,
             // The job already carries the promise it was saved with; recompute only when it has none.

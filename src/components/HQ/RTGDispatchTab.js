@@ -45,6 +45,7 @@ import { withCartLines, lineFactsOf, pairFactsOf } from '../Shared/partFacts';
 import { trackStampOf, isTrackLoadedPart, TRAVERSE_GATE } from '../Shared/trackLoaded';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
+import { isBlindShipment, withBlindPacking } from '../Shared/blindShip';
 import { printForm } from '../Shared/printForm';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
@@ -3335,6 +3336,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
         // first, configuration-level fallback) — ONE place, so no form can disagree.
         const lines = customerDocLines(job?.cpqData?.breakdown || [], formType, cartFinishLabelOf(job?.cpqData)).map(l => ({
             item: l.legacyErpId || l.partId || '',
+            custItem: l.clientSku || '',     // the customer's own number — a blind packing list prints it (printDoc)
             desc: String(l.name || '').replace(/^\s*[-▶]\s*/, '').trim(),
             qty: l.qty,
             cut: l.cutLength || null,
@@ -3354,14 +3356,27 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
 
     // Print a branded doc for the order currently open in the View modal. The NetSuite SO# is the
     // doc number (printed + barcoded); header/footer/terms come from the Admin form templates.
-    const printDoc = (formType) => {
+    const printDoc = async (formType) => {
         const order = activeViewOrder, job = activeJobDetails;
         if (!order) return;
         const tpl = formTemplates[formType] || {};
         const brand = order.brand || activeBrand;
         const docNumber = order.soId || order.woId || order.id;
+        let data = buildFormData(order, job, formType);
+        // ── A DROP SHIPMENT'S PACKING LIST PRINTS BLIND HERE TOO (Stuart 2026-10-08: "go ahead and patch rtg") ──
+        // The one rule (Shared/blindShip): a custom drop address on the sales order or its job — or the CRM's
+        // choice on the order — prints the list in the CUSTOMER'S name, as the pack station and the CRM card do.
+        // Their record is read only then (logo, address); if it cannot be read the list is still blind, in their
+        // name alone. Every other document, and a packing list that is not blind, prints exactly as before.
+        if (formType === 'PACKING_SLIP' && isBlindShipment(order, job)) {
+            const custName = job?.customer?.name || (typeof order.customer === 'string' ? order.customer : '') || '';
+            const custId = String(order.customerId || job?.customer?.id || '');
+            let custRec = null;
+            try { const c = custId ? await getDoc(doc(db, 'crm_records', custId)) : null; custRec = c && c.exists() ? c.data() : null; } catch (e) { /* blind in their name alone */ }
+            data = withBlindPacking({ ...data, lines: (data.lines || []).map(l => (l.custItem ? { ...l, item: l.custItem } : l)) }, { docs: [order, job], customer: custRec, name: custName });
+        }
         printForm(
-            <FormPreview type={formType} brand={brand} logoUrl={brandLogos[brand]} header={tpl.header} footer={tpl.footer} terms={tpl.terms} docNumber={docNumber} data={buildFormData(order, job, formType)} />,
+            <FormPreview type={formType} brand={brand} logoUrl={brandLogos[brand]} header={tpl.header} footer={tpl.footer} terms={tpl.terms} docNumber={docNumber} data={data} />,
             `${formType.replace('_', ' ')} ${docNumber}`
         );
     };

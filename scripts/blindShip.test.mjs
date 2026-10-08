@@ -1,7 +1,7 @@
 // Harness for Shared/blindShip.js — the blind packing list (Stuart 2026-10-08): a custom drop address prints the
 // packing list in the customer's name, at every door and every printer, unless the CRM set the order to standard.
 //   node scripts/blindShip.test.mjs
-import { isCustomDrop, wantsStandardList, isBlindShipment, standardListPatch, blindPartyOf, withBlindPacking, blindItemNoOf } from '../src/components/Shared/blindShip.js';
+import { isCustomDrop, wantsStandardList, wantsBlindList, packingModeOf, isBlindShipment, packingListPatch, blindPartyOf, withBlindPacking, blindItemNoOf } from '../src/components/Shared/blindShip.js';
 import { soHeaderOf, jobHeaderPatchOf } from '../src/components/Shared/salesOrderHeader.js';
 import { packingListOf } from '../src/components/Shared/packingList.js';
 
@@ -39,8 +39,31 @@ const BRIMAR = { id: 'CUST-4572', name: 'BRIMAR', portalLogoUrl: 'https://storag
     ok('…from whichever document carries it', !isBlindShipment(job, { packingListStandard: true }) && wantsStandardList(null, { packingListStandard: true }));
     ok('the override taken off again is blind again', isBlindShipment({ ...job, packingListStandard: false }));
     ok('only a true flag overrides', isBlindShipment({ ...job, packingListStandard: 'yes' }));
-    eq('what the override writes', standardListPatch(true, ' Stuart ', 123), { packingListStandard: true, packingListStandardAt: 123, packingListStandardBy: 'Stuart' });
-    eq('…and when it is taken off', standardListPatch(false, '', 5), { packingListStandard: false, packingListStandardAt: 5, packingListStandardBy: '' });
+}
+// ── THE CRM'S CHOICE GOES BOTH WAYS, ON ANY ORDER ("print standard or blind on crm") ──────────────
+{
+    const drop = { shippingMethod: 'CUSTOM', customShippingAddress: DROP };
+    const saved = { shippingMethod: 'SAVED', shippingAddressId: '2' };
+    eq('nothing chosen: the address decides', [packingModeOf(drop), packingModeOf(saved), isBlindShipment(drop), isBlindShipment(saved)], ['AUTO', 'AUTO', true, false]);
+    eq('BLIND chosen: a saved address prints blind too', [packingModeOf({ ...saved, packingListBlind: true }), isBlindShipment({ ...saved, packingListBlind: true })], ['BLIND', true]);
+    eq('…and an order with no header at all', isBlindShipment({ soId: 'SO60106', packingListBlind: true }), true);
+    eq('STANDARD chosen: a drop address prints standard', [packingModeOf({ ...drop, packingListStandard: true }), isBlindShipment({ ...drop, packingListStandard: true })], ['STANDARD', false]);
+    eq('the choice is read from whichever document carries it', [isBlindShipment(saved, { packingListBlind: true }), isBlindShipment(drop, { packingListStandard: true }), wantsBlindList(null, { packingListBlind: true })], [true, false, true]);
+    eq('two copies that disagree (one stale): blind wins', [packingModeOf({ packingListBlind: true }, { packingListStandard: true }), isBlindShipment({ ...saved, packingListStandard: true }, { packingListBlind: true })], ['BLIND', true]);
+    ok('only a true flag counts', !isBlindShipment({ ...saved, packingListBlind: 'yes' }) && packingModeOf({ packingListBlind: 1 }) === 'AUTO');
+    eq('what the CRM writes: both flags, together, with who and when', [packingListPatch('BLIND', ' Stuart ', 123), packingListPatch('standard', '', 5), packingListPatch('AUTO', 'x', 7)], [
+        { packingListBlind: true, packingListStandard: false, packingListSetAt: 123, packingListSetBy: 'Stuart' },
+        { packingListBlind: false, packingListStandard: true, packingListSetAt: 5, packingListSetBy: '' },
+        { packingListBlind: false, packingListStandard: false, packingListSetAt: 7, packingListSetBy: 'x' },
+    ]);
+    eq('an unknown choice is the address rule', packingModeOf(packingListPatch('whatever')), 'AUTO');
+    // Each choice written over the other leaves exactly one in force — on the job, then on the header built from it.
+    const afterBlind = { ...drop, ...packingListPatch('STANDARD'), ...packingListPatch('BLIND') };
+    const afterAuto = { ...saved, ...packingListPatch('BLIND'), ...packingListPatch('AUTO') };
+    eq('STANDARD then BLIND is blind; BLIND then back to the address is the address', [packingModeOf(afterBlind), packingModeOf(afterAuto), isBlindShipment(afterAuto)], ['BLIND', 'AUTO', false]);
+    const hdr = soHeaderOf({ door: 'CRM', job: { id: 'J1', ...saved, ...packingListPatch('BLIND') }, customer: BRIMAR });
+    eq('both flags ride the header from the job, so a sales order made after the choice has it', [hdr.packingListBlind, hdr.packingListStandard, isBlindShipment(hdr)], [true, false, true]);
+    ok('forced blind builds the same form data', withBlindPacking({ billTo: ['BRIMAR'], packing: { lines: [] } }, { docs: [{ ...saved, packingListBlind: true }], customer: BRIMAR }).blind.from.length === 3);
 }
 // ── BOTH DOORS WRITE THE SAME KEYS — the header module's own output is what the rule reads ──────
 {

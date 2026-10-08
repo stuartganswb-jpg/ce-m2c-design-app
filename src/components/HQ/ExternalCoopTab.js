@@ -19,7 +19,7 @@ import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUo
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction, canReopenPostedOrder, netSuiteOrderNoOf } from '../Shared/orderStatus';
 import { packingListOf } from '../Shared/packingList';
-import { isCustomDrop, isBlindShipment, withBlindPacking, standardListPatch } from '../Shared/blindShip';
+import { isCustomDrop, isBlindShipment, withBlindPacking, packingListPatch, packingModeOf } from '../Shared/blindShip';
 import { invoiceDocOf } from '../Shared/invoiceMath';
 import { coatCountsOf } from '../Shared/floorActivity';
 import PayLinkPanel from '../Shared/PayLinkPanel';
@@ -1154,18 +1154,18 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       }
   };
 
-  // ── THE BLIND PACKING LIST'S OVERRIDE (Stuart 2026-10-08, Shared/blindShip) ──────────────────────────
-  // One tick, written where every packing-list printer reads the order: an Order Entry order IS its sales order;
+  // ── BLIND OR STANDARD — THE CRM'S CHOICE (Stuart 2026-10-08, Shared/blindShip) ───────────────────────
+  // One choice, written where every packing-list printer reads the order: an Order Entry order IS its sales order;
   // a CPQ order's header lives on its job and is copied to the sales order on the board (the same id rule as the
   // header edit above), so both are written — the pack station and RTG then print what the CRM shows. Nothing
   // else on the order changes; NetSuite is not told (a packing list is ours).
   const [packingFlagBusy, setPackingFlagBusy] = useState(false);
-  const setPackingListStandard = async (standard) => {
+  const setPackingListMode = async (mode) => {
       const job = activeDocJob;
       if (!job || packingFlagBusy) return;
       setPackingFlagBusy(true);
       try {
-          const patch = standardListPatch(standard, currentUser || '');
+          const patch = packingListPatch(mode, currentUser || '');
           if (isQuickShip(job)) {
               await updateDoc(doc(db, 'hq_sales_orders', job.id), patch);
           } else {
@@ -1176,7 +1176,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
           }
           setActiveDocJob(prev => (prev && prev.id === job.id ? { ...prev, ...patch } : prev));
       } catch (err) {
-          console.error('packing list flag:', err);
+          console.error('packing list choice:', err);
           alert('Could not save the packing list choice: ' + (err.message || err));
       }
       setPackingFlagBusy(false);
@@ -1512,7 +1512,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       const packingList = (activeDocType === 'PACKING_SLIP' || activeDocType === 'INVOICE') ? packingListOf({ ordered: orderedLines, packDocs }) : null;
       // A DROP SHIPMENT PRINTS BLIND (Stuart 2026-10-08, Shared/blindShip): a custom drop address on the order puts the
       // customer's logo, name and address on the packing list in place of ours — the same list the pack station
-      // prints — unless the order was set to print the standard one (the tick beside Print, below).
+      // prints — unless the order was set to one or the other (the choice beside Print, below).
       const packingFormData = packingList ? withBlindPacking({
           billTo: quoteFormData.billTo, shipTo: quoteFormData.shipTo, date: quoteFormData.date, po: quoteFormData.po, termsLabel: quoteFormData.termsLabel, lines: [],
           packing: { shipDate: packingList.shipDate, tracking: packingList.tracking, lines: packingList.lines, flagged: packingList.flagged, packed: packingList.packed },
@@ -1731,25 +1731,31 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
               <div style={{ position: 'relative' }}>
                   <div className="no-print" style={{ position: 'absolute', top: 0, right: '-160px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                       <button onClick={() => printForm(printableDoc, `${String(activeDocType || 'QUOTE').replace(/_/g, ' ')} ${quoteDisplayNo(activeDocJob)}`, { pageCss: '@page { size: Letter portrait; margin: 0; }' })} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>Print PDF</button>
-                      {/* THE BLIND PACKING LIST'S OVERRIDE (Stuart 2026-10-08: "an override flag available on crm if we want
-                          to print standard packing list"). Shown on the packing list of an order with a custom drop address;
-                          the choice is kept ON THE ORDER, so the pack station and RTG print what this shows. */}
-                      {activeDocType === 'PACKING_SLIP' && isCustomDrop(activeDocJob) && (
-                          <div style={{ width: '150px', padding: '12px', background: '#fff', border: '1px solid var(--line)', fontSize: '11px', lineHeight: 1.45, color: 'var(--ink)' }}>
-                              <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: isBlindShipment(activeDocJob) ? 'var(--brass)' : 'var(--ink-soft)', marginBottom: '6px' }}>
-                                  {isBlindShipment(activeDocJob) ? 'Blind packing list' : 'Standard packing list'}
-                              </div>
-                              <div style={{ marginBottom: '8px' }}>
-                                  {isBlindShipment(activeDocJob)
-                                      ? `Drop shipment: prints as shipped from ${activeDocJob.customer?.name || activeDocJob.clientName || 'the customer'}, with their logo and item numbers.`
-                                      : 'Drop shipment, set to print with our name and logo.'}
-                              </div>
-                              <label style={{ display: 'flex', gap: '6px', alignItems: 'flex-start', cursor: packingFlagBusy ? 'wait' : 'pointer' }}>
-                                  <input type="checkbox" checked={activeDocJob.packingListStandard === true} disabled={packingFlagBusy} onChange={(e) => setPackingListStandard(e.target.checked)} style={{ marginTop: '2px' }} />
-                                  <span>Print the standard list instead</span>
+                      {/* BLIND OR STANDARD — THE CRM'S CHOICE (Stuart 2026-10-08: "an override flag available on crm" · "add the flag
+                          option to print standard or blind on crm"). On every order's packing list: by the ship-to address (a
+                          custom drop address prints blind), or always one or the other. Kept ON THE ORDER, so the pack
+                          station and RTG print what this shows. */}
+                      {activeDocType === 'PACKING_SLIP' && (() => {
+                          const mode = packingModeOf(activeDocJob), blindNow = isBlindShipment(activeDocJob), drop = isCustomDrop(activeDocJob);
+                          const who = activeDocJob.customer?.name || activeDocJob.clientName || 'the customer';
+                          const opt = (value, text, sub) => (
+                              <label key={value} style={{ display: 'flex', gap: '6px', alignItems: 'flex-start', marginTop: '6px', cursor: packingFlagBusy ? 'wait' : 'pointer' }}>
+                                  <input type="radio" name="packing-list-mode" checked={mode === value} disabled={packingFlagBusy} onChange={() => setPackingListMode(value)} style={{ marginTop: '2px' }} />
+                                  <span>{text}{sub ? <span style={{ display: 'block', color: 'var(--ink-soft)', fontSize: '10px' }}>{sub}</span> : null}</span>
                               </label>
-                          </div>
-                      )}
+                          );
+                          return (
+                              <div style={{ width: '150px', padding: '12px', background: '#fff', border: '1px solid var(--line)', fontSize: '11px', lineHeight: 1.4, color: 'var(--ink)' }}>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: blindNow ? 'var(--brass)' : 'var(--ink-soft)', marginBottom: '4px' }}>
+                                      {blindNow ? 'Blind packing list' : 'Standard packing list'}
+                                  </div>
+                                  <div>{blindNow ? `Prints as shipped from ${who}, with their logo and item numbers.` : 'Prints with our name and logo.'}</div>
+                                  {opt('AUTO', 'By the ship-to address', drop ? 'a drop address: blind' : 'a saved address: standard')}
+                                  {opt('BLIND', 'Blind')}
+                                  {opt('STANDARD', 'Standard')}
+                              </div>
+                          );
+                      })()}
                       <button onClick={() => setActiveDocJob(null)} style={{ padding: '16px 24px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>Close</button>
                   </div>
 
