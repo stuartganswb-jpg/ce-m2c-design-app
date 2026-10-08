@@ -28,6 +28,7 @@ import { SOURCING, SOURCING_LABEL, sourcingOf, sourcingPatch } from '../Shared/s
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { canonicalCollection } from '../Shared/collectionName';
 import { materialTwinsOf, withTwin, twinRefusal } from '../Shared/materialTwin';
+import { packagingOf, packagingImagesIn, withPackagingImage, withoutPackagingImage, packagingImageRefusal, PACKAGING_IMAGES_KEY, PACKAGING_NOTE_KEY, PACKAGING_IMAGES_MAX } from '../Shared/productPackaging';
 
 
 const AVAILABLE_BRANDS = [
@@ -746,6 +747,44 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               handleCustomFieldChange(key, downloadURL); setDynamicUploadProgress(prev => ({ ...prev, [key]: 0 }));
           }
       );
+  };
+
+  // ── PRODUCT PACKAGING PICTURES (Stuart 2026-10-08 · Shared/productPackaging) ──────────────────────────────────
+  // Added to the item's list in the editor; written with the record's own Save like every field of this drawer.
+  // A phone picture is 3–5 MB and the packing bench opens it on a tablet, so it is brought down to 1600 px first
+  // (the WMS does the same to its packing photos); a picture the browser cannot read is uploaded as it is.
+  const handlePackagingImageUpload = async (files) => {
+      const picked = Array.from(files || []);
+      if (!picked.length || !activePart) return;
+      const room = PACKAGING_IMAGES_MAX - packagingImagesIn(editSpecs.customData).length;
+      if (room <= 0) return alert(packagingImageRefusal(packagingImagesIn(editSpecs.customData)));
+      if (picked.length > room) alert(`An item carries at most ${PACKAGING_IMAGES_MAX} packaging pictures — the first ${room} of the ${picked.length} chosen ${room === 1 ? 'is' : 'are'} added.`);
+      const smaller = (file) => new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+              const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+              const c = document.createElement('canvas'); c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+              c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+              URL.revokeObjectURL(img.src);
+              c.toBlob(b => resolve(b || file), 'image/jpeg', 0.85);
+          };
+          img.onerror = () => { URL.revokeObjectURL(img.src); resolve(file); };
+          img.src = URL.createObjectURL(file);
+      });
+      const safeId = String(activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId).replace(/[^A-Za-z0-9_-]+/g, '_');
+      try {
+          for (let i = 0; i < Math.min(room, picked.length); i++) {
+              const blob = await smaller(picked[i]);
+              const task = uploadBytesResumable(ref(storage, `dynamic_assets/${activeBrand}_${safeId}_packaging_${Date.now()}_${i}`), blob);
+              const url = await new Promise((resolve, reject) => task.on("state_changed",
+                  (snap) => setDynamicUploadProgress(prev => ({ ...prev, [PACKAGING_IMAGES_KEY]: Math.max(1, Math.round((snap.bytesTransferred / snap.totalBytes) * 100)) })),
+                  reject,
+                  async () => { try { resolve(await getDownloadURL(task.snapshot.ref)); } catch (e) { reject(e); } }));
+              // From the editor's CURRENT list — two pictures chosen together must both land.
+              setEditSpecs(prev => ({ ...prev, customData: { ...(prev.customData || {}), [PACKAGING_IMAGES_KEY]: withPackagingImage(packagingImagesIn(prev.customData), url) } }));
+          }
+      } catch (err) { console.error(err); alert(`Picture upload failed: ${err?.message || err}`); }
+      finally { setDynamicUploadProgress(prev => ({ ...prev, [PACKAGING_IMAGES_KEY]: 0 })); }
   };
 
   // ── SYNC THUMBNAILS — pull every real photograph out of the Asset Gallery onto its part ─────
@@ -2557,6 +2596,38 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>Carriers, master carriers, end stops, pulleys, batons — a part fitted ONTO a track or rod before it is packed (not a bracket). The warehouse no longer picks it with the order: the WMS Traverse station picks it after finishing, loads the tracks and confirms, and the order cannot pack or ship until it has.</div>
                           </div>
                       </div>
+                      {/* PRODUCT PACKAGING (Stuart 2026-10-08 · Shared/productPackaging): "packaging prep is really where the
+                          finished products are wrapped and placed in their individual product packaging … (we will add images
+                          of proper packaging for each product)". The picture(s) and a note of how THIS product is packaged,
+                          shown to the packer at WMS → Packaging Prep. A finish variant with none of its own shows its base
+                          item's, so it is entered once per product. Written with the record's own Save. */}
+                      {(() => {
+                          const pkImages = packagingImagesIn(editSpecs.customData);
+                          const shown = packagingOf({ ...activePart, manufacturingSpecs: { customData: editSpecs.customData || {} } }, findByCode);
+                          const borrowed = [shown.imagesFrom ? `picture${shown.images.length === 1 ? '' : 's'} of ${shown.imagesFrom}` : '', shown.noteFrom ? `note of ${shown.noteFrom}` : ''].filter(Boolean);
+                          const pct = dynamicUploadProgress[PACKAGING_IMAGES_KEY] || 0;
+                          return (
+                              <div style={{ gridColumn: 'span 2', padding: '6px 0', borderTop: '1px solid var(--line)' }}>
+                                  <label style={labelStyle}>Product packaging — how this product is packed</label>
+                                  <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', margin: '-2px 0 8px' }}>What the packer is shown at WMS → Packaging Prep: the bag, the box, the insert, how many to a pack. Enter it once on the product — a finish of it (/P, /EP1 …) with none of its own shows this one. Kept in the app; not sent to NetSuite.</div>
+                                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                                      {pkImages.map(u => (
+                                          <div key={u} style={{ position: 'relative', width: '110px', height: '110px', border: '1px solid var(--line)', background: '#fff' }}>
+                                              <img src={u} alt="Product packaging" title="Open full size" onClick={() => window.open(u, '_blank')} style={{ width: '100%', height: '100%', objectFit: 'cover', cursor: 'zoom-in' }} />
+                                              <button type="button" onClick={() => handleCustomFieldChange(PACKAGING_IMAGES_KEY, withoutPackagingImage(pkImages, u))} title="Remove this picture — written when the record is saved" style={{ position: 'absolute', top: '2px', right: '2px', border: '1px solid var(--line)', background: '#fff', cursor: 'pointer', padding: '0 6px', fontSize: '0.8rem', lineHeight: '18px' }}>✕</button>
+                                          </div>
+                                      ))}
+                                      <label style={{ width: '110px', height: '110px', border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', cursor: pct ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.06em', color: 'var(--ink-soft)', background: '#fff' }}>
+                                          {pct ? `Uploading… ${pct}%` : '+ Add picture'}
+                                          <input type="file" accept="image/*" multiple disabled={!!pct} style={{ display: 'none' }} onChange={(e) => { handlePackagingImageUpload(e.target.files); e.target.value = ''; }} />
+                                      </label>
+                                  </div>
+                                  {borrowed.length > 0 && <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px' }}>Until this item has its own, the packer is shown the {borrowed.join(' and the ')}.</div>}
+                                  <textarea value={editSpecs.customData?.[PACKAGING_NOTE_KEY] || ''} onChange={(e) => handleCustomFieldChange(PACKAGING_NOTE_KEY, e.target.value)} placeholder="e.g. Bag of 7, bag into the small white box, label on the lid" rows={2} style={{ ...fieldStyle, marginTop: '8px', width: '100%', boxSizing: 'border-box', resize: 'vertical' }} />
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Added or removed here, written when the record is saved.</div>
+                              </div>
+                          );
+                      })()}
                       {/* ALSO MADE IN ANOTHER MATERIAL (Stuart 2026-10-06, the 1" brass · Shared/materialTwin): "the brass
                           items have their own part# … ideally in the cpq we just tag it as in the .glb the brass items are
                           identical to their steel counter parts". The STANDARD part names the item it is made as in that

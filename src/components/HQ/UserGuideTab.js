@@ -709,6 +709,33 @@ const WmsGuide = () => (
             <Path name="A kit code is never picked">A kit is what was sold; you pick its parts. A pick never lists the kit itself.</Path>
         </Screen>
 
+        <h2 style={S.h2}>Packaging Prep <span style={S.tabno}>(a stock run — package it, then scan it into its bin)</span></h2>
+        <p style={S.p}>Packaging Prep is where a finished product goes into <b>its own packaging</b> — the bag, the box, the
+        insert. For a <b>stock run</b> (finished goods going back to the shelf, a paint run included) the card works in the
+        order you do.</p>
+        <Screen title="1 · Package" tag="the picture, the note, ✓ Packaging finished">
+            <p style={S.p}>The top of the card shows <b>how this product is packaged</b>: its picture(s) — tap one to
+            enlarge — and a note. Pack every piece as shown, then tick the line: <b>✓ Packaging finished</b>. That is your
+            name and the time against the run. No photo is needed for stock.</p>
+            <p style={S.p}>The picture and the note are kept on the <b>item</b>: Master Library → the item's drawer →
+            <b> Product packaging</b>. Enter them once on the product — a finish of it (/P, /EP1 …) with none of its own
+            shows the product's. An item with none says so on the card, and says where to add one.</p>
+        </Screen>
+        <Screen title="2 · Put away" tag="scan the item label, then the bin label">
+            <p style={S.p}>The two scan boxes open once the packaging is finished. <b>Scan the item label</b> on the
+            packaged product: it must be this run's item — another item, or another finish of the same part, is refused by
+            name. A pack label (a 7-pack) reads as its item. Then <b>scan the label of the shelf bin</b> you put it in.</p>
+            <p style={S.p}>The bin box is <b>empty until you scan</b>; where the item is expected is written beside it
+            ("NetSuite holds it in: U S19-E2L-R4 ×120"). A bin that does not exist is refused, as before. A real bin that is
+            not one the item is known to live in is <b>asked about</b> — "Are you sure you want to put it in this bin?" —
+            and goes ahead on your yes. A run goes into <b>one bin</b>; to split it, put it away and move the rest on the
+            Transfer tab.</p>
+            <p style={S.p}><b>✓ Put Away</b> stays grey until all three are done, and says what it is waiting for. Pressing
+            it does what it always did: NetSuite receives the run into the bin you scanned, orders waiting on the item are
+            offered it, and a run that came out short closes short. With no scanner, type what is printed under the
+            barcode.</p>
+        </Screen>
+
         <h2 style={S.h2}>SO Pack <span style={S.tabno}>(customer orders)</span></h2>
         <p style={S.p}>Every order for a customer, from either door: typed on Order Entry, or configured in CPQ.
         This is the <b>view</b> — the packing happens on Packaging Prep.</p>
