@@ -34,7 +34,7 @@ import { holdSplitGroups } from '../Shared/rowPairShape';
 import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf, oeLinePlansOf, oeStartsLine } from '../Shared/oeGenerate';
 import { isReleaseByCount, lineDueOf } from '../Shared/rowRelease';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
-import { runChunked, fetchAvailableById, fetchInboundById, backorderTallyOf } from '../Shared/stockPosition';
+import { runChunked, fetchPositionById, fetchInboundById, backorderTallyOf, uncoveredOf, suggestedOf, shortfallToFloorOf, uncoveredWords } from '../Shared/stockPosition';
 import { buildSkippedAtForceComplete } from '../Shared/skippedBuild';
 
 const NS_SUITEQL_URL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
@@ -528,21 +528,30 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         setIsSyncing(false);
     };
 
-    // Suggested order/build qty = GREATER OF: top-up-to-ROP (ROP − available) and cover-demand
-    // ((committed + backorder, incl. variant rollup) − available − on-order), then rounded UP to MOQ.
-    // Same formula for PO and WO; the builder just shows different item sets.
+    // Suggested order/build qty = GREATER OF: top-up-to-ROP (ROP − available) and COVER — what the item's open demand
+    // still lacks (Shared/stockPosition.uncoveredOf, the ONE rule every recommendation on this tab now uses) — then
+    // rounded UP to MOQ. Same formula for PO and WO; the builder just shows different item sets.
+    // ⚠ COMMITTED IS NOT DEMAND TO COVER (Stuart 2026-10-08): NetSuite's Available is on hand less committed already.
+    // The old cover added committed and then took available off — every committed piece counted against the shelf
+    // twice — and on a raw item's row added its finished variants' committed too, which is finished stock already
+    // reserved. What is short is what NetSuite could not commit (Backordered), what a display still at quote stage
+    // will need, and — on a raw row — what each finished variant still lacks after ITS OWN stock and inbound.
+    const demandOf = (item) => ({
+        available: item.stock?.available || 0, onOrder: item.stock?.onOrder || 0,
+        backorder: item.stock?.backorder || 0, displayNew: item.stock?.displayOwnNew || 0, fromVariants: item.stock?.variantUncovered || 0,
+    });
     const suggestedQtyFor = (item) => {
-        const avail = item.stock?.available || 0;
-        const onOrder = item.stock?.onOrder || 0;
-        // Display demand NetSuite already holds is in Committed / Backorder — only the rest is added (Shared/displayBom.displayDemandNewOf).
-        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0) + (item.stock?.displayDemandNew || 0);
-        const rop = item.rop || 0;
         const moq = item.moq || 0;
-        const topUp = Math.max(0, rop - avail);
-        const coverDemand = Math.max(0, demand - avail - onOrder);
-        let qty = Math.max(topUp, coverDemand);
+        let qty = suggestedOf({ rop: item.rop || 0, ...demandOf(item) });
         if (moq > 0 && qty > 0) qty = Math.ceil(qty / moq) * moq;
         return qty;
+    };
+    const suggestedWhy = (item) => {
+        const d = demandOf(item), rop = item.rop || 0;
+        const cover = uncoveredOf(d), top = Math.max(0, rop - d.available);
+        return [`Top-up to the reorder point: ${rop} − ${d.available} available = ${top}`,
+            `Cover: ${uncoveredWords(d)} = ${cover}`,
+            `The greater of the two${(item.moq || 0) > 0 ? `, rounded up to the MOQ of ${item.moq}` : ''}. Committed is not added — Available is already net of it.`].join('\n');
     };
 
     // Recommended Production (finishing): for STOCKED finished assemblies with a paint size, take the same
@@ -554,10 +563,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const cap = PAINT_SECTION[(specs.paintSize || '').toUpperCase()];
         if (!specs.isStocked || !cap) return null; // only stocked, paint-sized assemblies get a recommendation
         const avail = item.stock?.available || 0;
-        const onOrder = item.stock?.onOrder || 0;
-        // Display demand NetSuite already holds is in Committed / Backorder — only the rest is added (Shared/displayBom.displayDemandNewOf).
-        const demand = (item.stock?.aggregatedCommitted || 0) + (item.stock?.aggregatedBackorder || 0) + (item.stock?.displayDemandNew || 0);
-        const shortfall = Math.max(item.rop - avail, demand - avail - onOrder);
+        // The same cover as the suggested quantity above (Shared/stockPosition.uncoveredOf) — committed is never added.
+        const shortfall = Math.max(item.rop - avail, uncoveredOf(demandOf(item)));
         if (shortfall <= 0) return 0; // at/above ROP and demand covered → nothing to run
         return Math.ceil(shortfall / cap) * cap;
     };
@@ -1107,7 +1114,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // column empty, it never breaks the report.
             // Both are the ONE stock reader (Shared/stockPosition) the 4.7 Flow Stock board reads too.
             const loc = (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17';
-            const availById = await fetchAvailableById(allIds, loc, runSql);
+            const { availById, backorderedById } = await fetchPositionById(allIds, loc, runSql);
             const { byId: inboundById } = await fetchInboundById(stocked.map(x => x.internalId), runSql);
             // 3) One row per stocked item; pair to the OLD history item: "STD-<SKU>" first (the
             // 2026-07 realignment), then the legacy "<base>-N" → "<base>" scheme for stragglers.
@@ -1126,7 +1133,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 });
                 const total = cells.reduce((a, c) => a + c.v, 0);
                 const newTotal = months.reduce((a, mo) => a + (newRec.m[mo.key] || 0), 0);
-                return { itemid: s.itemid, base: s.itemid, internalId: s.internalId, available: availById[s.internalId] || 0, onOrd: (inboundById[s.internalId] || {}).qty || 0, onOrdLines: (inboundById[s.internalId] || {}).lines || [], oldInternalId: oldSib ? oldSib.internalId : null, oldItemId: oldSib ? oldSib.itemid : null, cells, total, newTotal, avg: total / 12, orders: (newRec.orders || 0) + (oldRec.orders || 0), hasOld: !!oldSib };
+                return { itemid: s.itemid, base: s.itemid, internalId: s.internalId, available: availById[s.internalId] || 0, nsBackordered: backorderedById[s.internalId] || 0, onOrd: (inboundById[s.internalId] || {}).qty || 0, onOrdLines: (inboundById[s.internalId] || {}).lines || [], oldInternalId: oldSib ? oldSib.internalId : null, oldItemId: oldSib ? oldSib.itemid : null, cells, total, newTotal, avg: total / 12, orders: (newRec.orders || 0) + (oldRec.orders || 0), hasOld: !!oldSib };
             }).sort((a, b2) => String(a.itemid).localeCompare(String(b2.itemid), undefined, { numeric: true, sensitivity: 'base' }));
             loadBackorderTally();      // who is waiting, alongside the report
             setSalesHist(s => (s ? { ...s, loading: false, note: null, rows, withOld: rows.filter(r => r.hasOld).length,
@@ -1272,9 +1279,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (rop !== null && rop > minCalc) minRule = `Re-order point ${rop} — it exceeds the demand rule (${minCalc}). ${minRule}`;
         const threshold = minOnHand;
         const cap = isPole ? POLE_RACK : (lookupCapacity(capacityMatrix, size, ptype) || SIZE_CAPACITY[size] || 0);
-        const shortfall = Math.max(0, threshold - (available + onOrd));
+        // THE OPEN DEMAND IS OWED BEFORE THE SHELF IS REFILLED (Stuart 2026-10-08, Shared/stockPosition): Available
+        // stops at zero, so what NetSuite could not commit (its Backordered, at this location) and what a display
+        // still at quote stage will need are added to the floor — 100 plated finials short for SO60992 read Rec 35.
+        const need = { backorder: Math.round(Number(r.nsBackordered) || 0), displayNew: displayDemandFor(r.itemid).extra, available, onOrder: onOrd };
+        const shortfall = shortfallToFloorOf({ floor: threshold, ...need });
         const recommended = shortfall > 0 ? (cap > 0 ? Math.ceil(shortfall / cap) * cap : shortfall) : 0;
-        return { part, size, ptype, isPole, isAssembly, isOutsourced, isSingleAgg: !!(pk && pk.isSingle), packCount: pk && pk.isSingle ? pk.packItemIds.length : 0, available, onOrd, minOnHand, minCalc, minRule, rop, threshold, cap, recommended };
+        const recWhy = `Minimum on hand ${threshold} + ${uncoveredWords(need)} = ${shortfall}${cap > 0 && recommended !== shortfall ? ` → ${recommended} (batches of ${cap})` : ''}`;
+        return { part, size, ptype, isPole, isAssembly, isOutsourced, isSingleAgg: !!(pk && pk.isSingle), packCount: pk && pk.isSingle ? pk.packItemIds.length : 0, available, onOrd, minOnHand, minCalc, minRule, rop, threshold, cap, recommended, shortBy: shortfall, recWhy, nsBackordered: need.backorder, displayNew: need.displayNew };
     };
 
     // Push edited ROPs → Master Library (manufacturingSpecs.reorderPoint). Keyed by ERP code so
@@ -1313,11 +1325,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b).slice(0, 300) : String(b));
                 return b.items || [];
             };
-            const availById = {};
+            const availById = {}, backorderedById = {};
             for (let i = 0; i < ids.length; i += 200) {
                 const ch = ids.slice(i, i + 200);
-                (await runSql(`SELECT ail.item AS internal_id, SUM(ail.quantityavailable) AS avail FROM AggregateItemLocation ail WHERE ail.item IN (${ch.join(',')}) AND ail.location = ${loc} GROUP BY ail.item`))
-                    .forEach(row => { availById[String(row.internal_id)] = Math.round(Number(row.avail) || 0); });
+                (await runSql(`SELECT ail.item AS internal_id, SUM(ail.quantityavailable) AS avail, SUM(ail.quantitybackordered) AS backordered FROM AggregateItemLocation ail WHERE ail.item IN (${ch.join(',')}) AND ail.location = ${loc} GROUP BY ail.item`))
+                    .forEach(row => { availById[String(row.internal_id)] = Math.round(Number(row.avail) || 0); backorderedById[String(row.internal_id)] = Math.max(0, Math.round(Number(row.backordered) || 0)); });
             }
             const inboundById = {};
             const pushInb = (row, kind, source, expected) => {
@@ -1337,7 +1349,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 (await runSql(`SELECT tl.item AS internal_id, t.tranid AS tranid, t.duedate AS duedate, BUILTIN.DF(t.status) AS statusname, ABS(NVL(tl.quantity,0)) AS ordered, NVL(tl.quantityshiprecv,0) AS done FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'WorkOrd' AND tl.item IN (${ch.join(',')}) AND BUILTIN.DF(t.status) NOT LIKE '%Closed%' AND BUILTIN.DF(t.status) NOT LIKE '%Built%'`))
                     .forEach(row => pushInb(row, 'WO', 'Production', row.duedate));
             }
-            setRawStock({ loading: false, availById, inboundById });
+            setRawStock({ loading: false, availById, backorderedById, inboundById });
         } catch (e) {
             setRawStock({ loading: false, error: e.message || String(e), availById: {}, inboundById: {} });
         }
@@ -1809,6 +1821,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     };
     // Core default Min OH = 6 MONTHS of combined variant demand — this screen's whole purpose is
     // that the cores feeding finishing never run dry. An explicit ROP overrides it.
+    // One lookup of the Snapshot's rows by item code, built the first time a render asks for it.
+    let snapRowMap = null;
+    const snapRowOf = (id) => {
+        if (!snapRowMap) snapRowMap = new Map(((salesHist && salesHist.rows) || []).map(r => [String(r.itemid).toUpperCase(), r]));
+        return snapRowMap.get(String(id || '').toUpperCase()) || null;
+    };
     const rawInfoOf = (g) => {
         const part = partByKey['erp:' + g.base];
         const iid = part?.netSuiteInternalId ? String(part.netSuiteInternalId) : null;
@@ -1823,8 +1841,17 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         // combined variant demand grows past it.
         const minOnHand = Math.max(minCalc, rop || 0);
         const threshold = minOnHand;
-        const shortfall = Math.max(0, threshold - (available + onOrd));
-        return { part, iid, available, onOrd, onOrdLines: inb ? inb.lines : [], minOnHand, minCalc, rop, threshold, shortfall, vendored: !!String(specs.vendorName || '').trim() };
+        // A CORE SUPPLIES WHAT ITS FINISHED VARIANTS STILL LACK (Stuart 2026-10-08, Shared/stockPosition): each variant
+        // netted against its own stock and inbound, then the core's own NetSuite backorder and any quote-stage display
+        // demand on the core itself — all owed before the floor.
+        const vRows = (g.variants || []).map(id => snapRowOf(id)).filter(Boolean);
+        const vNeeds = vRows.map(v => ({ backorder: Math.round(Number(v.nsBackordered) || 0), displayNew: displayDemandFor(v.itemid).extra, available: Math.round(Number(v.available) || 0), onOrder: Math.round(Number(v.onOrd) || 0) }));
+        const fromVariants = vNeeds.reduce((a, v) => a + uncoveredOf(v), 0);
+        const ownNew = Math.max(0, Math.round((displayDemandFor(g.base).extra - vNeeds.reduce((a, v) => a + v.displayNew, 0)) * 100) / 100);
+        const need = { backorder: (iid && rawStock?.backorderedById) ? Math.round(rawStock.backorderedById[iid] || 0) : 0, displayNew: ownNew, fromVariants, available, onOrder: onOrd };
+        const shortfall = shortfallToFloorOf({ floor: threshold, ...need });
+        const recWhy = `Minimum on hand ${threshold} + ${uncoveredWords(need)} = ${shortfall}`;
+        return { part, iid, available, onOrd, onOrdLines: inb ? inb.lines : [], minOnHand, minCalc, rop, threshold, shortfall, recWhy, vendored: !!String(specs.vendorName || '').trim() };
     };
     // Order-generator shape: matches the Finished view's {r, info, qty} so createStockPOs is reused
     // verbatim (r.internalId becomes the PO line's NetSuite item id).
@@ -2687,6 +2714,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         
         let aggregatedCommitted = stock.committed;
         let aggregatedBackorder = stock.backorder;
+        // What each finished variant still lacks after its OWN stock and inbound — that, not its committed, is what
+        // the raw item must supply (Shared/stockPosition). `variantDisplayNew` is the quote-stage display demand
+        // already counted inside it, so the raw row does not add the same pieces a second time below.
+        let variantUncovered = 0, variantDisplayNew = 0;
 
         const isVariant = /\/(P|EP[1-6])$/i.test(erpId);
         if (!isVariant) {
@@ -2695,6 +2726,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 if (nsId !== erpId && variantMatcher.test(nsId)) {
                     aggregatedCommitted += (variantStock.committed || 0);
                     aggregatedBackorder += (variantStock.backorder || 0);
+                    const dv = displayDemandFor(nsId).extra;
+                    variantDisplayNew += dv;
+                    variantUncovered += uncoveredOf({ backorder: variantStock.backorder, displayNew: dv, available: variantStock.available, onOrder: variantStock.onOrder });
                 }
             });
         }
@@ -2706,7 +2740,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const display = displayDemandFor(erpId);
         return {
             ...part,
-            stock: { ...stock, aggregatedCommitted, aggregatedBackorder, displayDemand: display.qty, displayDemandNew: display.extra, displayBuilds: display.builds, displayDemandFeet: display.feet },
+            stock: { ...stock, aggregatedCommitted, aggregatedBackorder, variantUncovered, displayOwnNew: Math.max(0, Math.round((display.extra - variantDisplayNew) * 100) / 100),
+                displayDemand: display.qty, displayDemandNew: display.extra, displayBuilds: display.builds, displayDemandFeet: display.feet },
             wip: wipByErp[erpId] || { qty: 0, lines: [] }, // in-progress plating for this item
             rop, moq, leadTime,
             isLowStock: stock.available <= rop && rop > 0
@@ -3176,7 +3211,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                                     <td style={{ ...numTd, fontWeight: 700, color: bi.available <= bi.threshold ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }}>{bi.iid ? bi.available : '—'}</td>
                                                                     <td style={{ ...numTd }}>{bi.onOrd > 0 ? <button onClick={() => setOnOrdModal({ itemid: g.base, onOrd: bi.onOrd, onOrdLines: bi.onOrdLines })} style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{bi.onOrd}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                                     <td style={{ ...numTd, color: bi.rop && bi.rop > bi.minCalc ? 'var(--brass)' : 'var(--ink-soft)' }} title={bi.rop && bi.rop > bi.minCalc ? `Re-order point ${bi.rop} — it's above the demand rule (6 months of the family's combined demand = ${bi.minCalc}), so it holds the floor until demand grows past it` : "6 months of the family's combined demand"}>{bi.minOnHand || '·'}</td>
-                                                                    <td style={{ ...numTd, fontWeight: 600, color: bi.shortfall > 0 ? '#d9534f' : 'var(--line)' }}>{bi.shortfall || '·'}</td>
+                                                                    <td title={bi.recWhy} style={{ ...numTd, fontWeight: 600, color: bi.shortfall > 0 ? '#d9534f' : 'var(--line)', cursor: 'help' }}>{bi.shortfall || '·'}</td>
                                                                     {qtyCell(g.base, !!bp, bBoth ? 'Sourced both ways — ordering asks vendor-or-shop, defaulted to the work order' : (bAsm || !bBuy ? 'Raw core → shop-floor work order (staged in RTG)' : 'Bought core → vendor confirmation, then one PO per vendor'))}
                                                                     {bBoth ? routeTd('⚖ BOTH → ASK', 'var(--brass)', 'Flagged BOTH in the Master Library — we make it and we buy it. Ordering asks which, defaulted to the work order.')
                                                                         : bAsm ? routeTd('⚒ SHOP WO', '#3a7d44', 'Assembly — we build it here, so an order becomes a shop-floor work order')
@@ -3268,7 +3303,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                             <td style={{ ...numTd }}>{ri.onOrd > 0 ? <button onClick={() => setOnOrdModal({ itemid: g.base, onOrd: ri.onOrd, onOrdLines: ri.onOrdLines })} style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{ri.onOrd}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                             <td style={{ ...numTd, color: ri.rop && ri.rop > ri.minCalc ? 'var(--brass)' : 'var(--ink-soft)' }} title={ri.rop && ri.rop > ri.minCalc ? `Re-order point ${ri.rop} — above the demand rule (${ri.minCalc}), so it holds the floor until demand grows past it` : '6 months of combined variant demand'}>{ri.minOnHand || '·'}</td>
                                                             <td style={{ ...numTd }}><BufferedInput type="number" min="0" delay={250} value={ropEdits[g.base] ?? (ri.rop ?? '')} placeholder="—" disabled={!ri.part} title={ri.part ? 'Core re-order point — ⬆ Save pushes to the Master Library' : 'No matching Master Library part'} onCommit={v => setRopEdits(prev => ({ ...prev, [g.base]: v }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[g.base] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: ri.part ? '#fff' : 'var(--paper-2)' }} /></td>
-                                                            <td style={{ ...numTd, fontWeight: 600, color: ri.shortfall > 0 ? '#d9534f' : 'var(--line)' }}>{ri.shortfall || '·'}</td>
+                                                            <td title={ri.recWhy} style={{ ...numTd, fontWeight: 600, color: ri.shortfall > 0 ? '#d9534f' : 'var(--line)', cursor: 'help' }}>{ri.shortfall || '·'}</td>
                                                             <td style={{ ...numTd, borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>
                                                                 <BufferedInput type="number" min="0" delay={250} value={rawOrderQty[g.base] ?? ''} placeholder="0" disabled={!ri.part}
                                                                     title={!ri.part ? 'No Master Library part — link it before ordering' : (ri.part.manufacturingSpecs?.isInHouse === false || ri.vendored ? 'Bought core → vendor confirmation, then one PO per vendor' : 'In-house core → shop-floor work order')}
@@ -3300,7 +3335,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <th style={monthTh}>Orders</th>
                                                 <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title="NetSuite quantity available">Avail</th>
                                                 <th style={{ ...monthTh, color: '#d9534f' }} title="BACKORDERED — pieces on open sales orders that nothing on the shelf can make. This is OUR record, the one with customers behind it, not NetSuite's quantitybackordered. Click a number for the orders and who is waiting.">BO</th>
-                                                <th style={{ ...monthTh, color: '#7a5cc4' }} title="DISPLAY — what the open sales display orders still call for and nothing has been released against (rods in feet). Hover a number for the build orders behind it. Rec in this table is the minimum on hand less Avail and On Ord — it does NOT add this figure, nor what NetSuite has backordered for a display order.">Display</th>
+                                                <th style={{ ...monthTh, color: '#7a5cc4' }} title="DISPLAY — what the open sales display orders still call for and nothing has been released against (rods in feet). Hover a number for the build orders behind it. Rec adds what NetSuite has BACKORDERED for an order already in it, and the Display of an order that is still a quote — hover a Rec figure for its sum.">Display</th>
                                                 <th style={{ ...monthTh, color: '#3f7fc4' }} title="Inbound: open purchase orders + work orders in production — click a number for the orders behind it">On Ord</th>
                                                 <th style={monthTh} title="Calculated minimum: OUTSOURCED = 6 months of demand · ASSEMBLY = 6 weeks (3wk finishing lead + 3wk safety) · else legacy 4-weeks rule. A re-order point acts as the FLOOR — a new item with no history shows its ROP (brass) until demand grows past it. Hover a value for its rule.">Min OH</th>
                                                 <th style={{ ...monthTh, color: 'var(--brass)' }} title="Re-order point — editable; ⬆ Save pushes to the Master Library (manufacturingSpecs.reorderPoint). Acts as the FLOOR under the calculated Min OH: it holds a new item up until real demand exceeds it.">ROP</th>
@@ -3354,7 +3389,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <td style={{ ...numTd }}>{r.onOrd > 0 ? <button onClick={() => setOnOrdModal(r)} title="Open POs / work orders — click for detail" style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{Math.round(r.onOrd)}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                     <td style={{ ...numTd, color: info.rop && info.rop > info.minCalc ? 'var(--brass)' : 'var(--ink-soft)' }} title={info.minRule}>{info.minOnHand || '·'}</td>
                                                     <td style={{ ...numTd }}><input type="number" min="0" value={ropEdits[String(r.itemid).toUpperCase()] ?? (info.rop ?? '')} placeholder={info.isPack ? '·' : '—'} disabled={!info.part || info.isPack} title={info.isPack ? `Pack assembly — set the ROP on ${info.packSingle}` : (info.part ? 'Re-order point — ⬆ Save pushes to the Master Library; overrides Min OH' : 'No matching Master Library part — sync the item first')} onChange={e => setRopEdits(prev => ({ ...prev, [String(r.itemid).toUpperCase()]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[String(r.itemid).toUpperCase()] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: (info.part && !info.isPack) ? '#fff' : 'var(--paper-2)' }} /></td>
-                                                    <td style={{ ...numTd, fontWeight: 600, color: info.recommended > 0 ? '#3a7d44' : 'var(--line)' }}>{info.isPack ? <span title={`Packs build from singles at pick — order ${info.packSingle}`} style={{ color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 400 }}>→ EA</span> : (info.recommended || '·')}</td>
+                                                    <td title={info.isPack ? undefined : info.recWhy} style={{ ...numTd, fontWeight: 600, color: info.recommended > 0 ? '#3a7d44' : 'var(--line)', cursor: info.isPack ? 'default' : 'help' }}>{info.isPack ? <span title={`Packs build from singles at pick — order ${info.packSingle}`} style={{ color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 400 }}>→ EA</span> : (info.recommended || '·')}</td>
                                                     <td style={{ ...numTd }}><BufferedInput type="number" min="0" delay={250} value={ov} placeholder={info.isPack ? '·' : '0'} disabled={!!info.isPack} title={info.isPack ? `Packs are built from ${info.packSingle} at pick — order the single row` : undefined} onCommit={v => setOrderQty(prev => ({ ...prev, [r.internalId]: v }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none', background: info.isPack ? 'var(--paper-2)' : '#fff' }} /></td>
                                                     <td style={{ ...numTd }}>{/* THE CODE SAYS IT IS AN 8 FT ROD — the CLASSIFICATION does not have to (Eric 2026-08-21:
                                                         "rod cut option not available for raw rods in Stock View"). This also required
@@ -4408,7 +4443,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                                                 <div style={{ flex: 1 }}>
                                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '6px' }}>Suggested {activeBuilder === 'PO' ? 'Order' : 'Build'}</div>
-                                                    <div style={{ fontSize: '1.2rem', fontWeight: 500, color: suggested > 0 ? 'var(--ink)' : 'var(--ink-soft)' }}>{suggested} units</div>
+                                                    <div title={suggestedWhy(item)} style={{ fontSize: '1.2rem', fontWeight: 500, color: suggested > 0 ? 'var(--ink)' : 'var(--ink-soft)', cursor: 'help' }}>{suggested} units</div>
                                                 </div>
                                                 <div style={{ flex: 1.5 }}>
                                                     <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Required {activeBuilder === 'PO' ? 'Order' : 'Build'} Qty</label>

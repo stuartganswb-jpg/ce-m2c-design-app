@@ -66,6 +66,61 @@ export async function fetchAvailableById(ids, locationId, runSql) {
 }
 
 /**
+ * The same read with NetSuite's own BACKORDERED beside Available — what its open orders could not commit at that
+ * location. One row per id, one query; the recommendation math below needs both from the SAME moment.
+ * @returns {Promise<{ availById: Object<string, number>, backorderedById: Object<string, number> }>}
+ */
+export async function fetchPositionById(ids, locationId, runSql) {
+    const availById = {}, backorderedById = {};
+    await runChunked(ids, 900,
+        (chunk) => runSql(`SELECT ail.item AS internal_id, SUM(ail.quantityavailable) AS avail, SUM(ail.quantitybackordered) AS backordered FROM AggregateItemLocation ail WHERE ail.item IN (${chunk.join(',')}) AND ail.location = ${locationId} GROUP BY ail.item`),
+        (arows) => arows.forEach(row => {
+            availById[String(row.internal_id)] = Math.round(Number(row.avail) || 0);
+            backorderedById[String(row.internal_id)] = Math.max(0, Math.round(Number(row.backordered) || 0));
+        }));
+    return { availById, backorderedById };
+}
+
+// ── WHAT IS STILL UNCOVERED — ONE RULE FOR EVERY RECOMMENDATION IN STOCK VIEW (Stuart 2026-10-08: "go on with the stock
+// view formulas … it is of key importance we get the stockview screens aligned 100% to reality") ───────────────────────
+// Three screens recommended a quantity, each its own way, and none of them right once a display order was on the books:
+//   · the main grid added NetSuite's COMMITTED to its demand and then took AVAILABLE off — but Available is on hand LESS
+//     committed already, so every committed piece was counted against the shelf twice (H1-138TRVSBA/P: 118 on hand, 70
+//     committed to the wall, nothing short — and it asked for 22). On a raw item's row it also added its finished
+//     variants' committed, which is finished stock already reserved and needs no raw at all;
+//   · the Sales Snapshot and its Raw Cores view worked from Available and On Order alone — and Available stops at zero.
+//     What NetSuite could NOT commit sits in its Backordered figure, which neither looked at: 100 plated finials short
+//     for SO60992 read "Rec 35", the minimum on hand and nothing more.
+// NetSuite's four numbers are one consistent set: on hand − committed = available; what could not be committed is
+// backordered; on order is on its way. So what an item's open demand still lacks is
+//     backordered + display demand NetSuite cannot see yet (a quote under review) + what its finished variants still
+//     lack and must be made from it − available − on order
+// and nothing else. Committed never appears: it is already inside Available. Each screen keeps its own way of
+// combining that with its floor (the grid takes the greater of the top-up and the cover; the Snapshot keeps its
+// minimum on hand on top) — what changed is only what "demand" means, and that it means the same thing on all three.
+// Pure.
+const qn = (v) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
+/** What this item's open demand still lacks after the stock on hand and the stock on its way. Never negative. */
+export const uncoveredOf = ({ backorder = 0, displayNew = 0, fromVariants = 0, available = 0, onOrder = 0 } = {}) =>
+    Math.max(0, qn(backorder) + qn(displayNew) + qn(fromVariants) - qn(available) - qn(onOrder));
+/** What an item's finished variants still lack — each netted against ITS OWN stock and inbound first; the rest is for the raw item to supply. */
+export const variantsUncoveredOf = (variants = []) => (variants || []).reduce((a, v) => a + uncoveredOf(v || {}), 0);
+/** THE MAIN GRID: the greater of topping Available up to the reorder point and covering what is uncovered. */
+export const suggestedOf = ({ rop = 0, available = 0, ...demand } = {}) =>
+    Math.max(Math.max(0, qn(rop) - qn(available)), uncoveredOf({ available, ...demand }));
+/** THE SNAPSHOT (finished and raw cores): what brings Available + On Order, less the open demand, back up to the floor. */
+export const shortfallToFloorOf = ({ floor = 0, backorder = 0, displayNew = 0, fromVariants = 0, available = 0, onOrder = 0 } = {}) =>
+    Math.max(0, qn(floor) + qn(backorder) + qn(displayNew) + qn(fromVariants) - qn(available) - qn(onOrder));
+/** The words behind a number, for the hover: only the parts that are not zero. */
+export const uncoveredWords = ({ backorder = 0, displayNew = 0, fromVariants = 0, available = 0, onOrder = 0 } = {}) => [
+    qn(backorder) > 0 ? `${qn(backorder)} backordered in NetSuite` : '',
+    qn(displayNew) > 0 ? `${qn(displayNew)} for a display not in NetSuite yet` : '',
+    qn(fromVariants) > 0 ? `${qn(fromVariants)} its finished variants still lack` : '',
+    `less ${qn(available)} available`,
+    qn(onOrder) > 0 ? `less ${qn(onOrder)} on order` : '',
+].filter(Boolean).join(' · ');
+
+/**
  * INBOUND SUPPLY: open purchase-order lines (on order from a vendor) + open work orders (in
  * production), per item. No location filter — this is the Snapshot's On Ord, all locations.
  *

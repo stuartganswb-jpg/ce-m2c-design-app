@@ -1,9 +1,11 @@
 // The one stock reader (Shared/stockPosition) against a fake NetSuite.   node scripts/stockPosition.test.mjs
 // What a screen can never show: the 1000-row split, the latched enddate fallback, best-effort On Ord.
 import { runChunked, fetchAvailableById, fetchInboundById, backorderTallyOf, ROW_CAP } from '../src/components/Shared/stockPosition.js';
+import { fetchPositionById, uncoveredOf, variantsUncoveredOf, suggestedOf, shortfallToFloorOf, uncoveredWords } from '../src/components/Shared/stockPosition.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
+const ok = (n, cond) => { if (cond) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 const idsIn = (q) => ((q.match(/IN \(([^)]*)\)/) || [])[1] || '').split(',').filter(Boolean);
 const origWarn = console.warn; console.warn = () => {};
 
@@ -105,6 +107,61 @@ const enddateRefused = (woCalls) => async (q) => {
     eq('closed / deleted / cancelled orders never count', Object.keys(t), ['H1-75DS/P']);
     eq('who is waiting is named', t['H1-75DS/P'].orders, ['2 × SO1 (Fabricut)', '3 × SO2']);
     eq('no orders → empty tally', backorderTallyOf(null), {});
+}
+
+// ── Position: Available AND NetSuite's Backordered, one query, the brand's location ─────────────────────
+{
+    let q0 = '';
+    const runSql = async (q) => { q0 = q; return idsIn(q).filter(id => id !== '3').map(id => ({ internal_id: id, avail: id === '1' ? '4.6' : '0', backordered: id === '2' ? '100' : (id === '1' ? '-3' : null) })); };
+    const p = await fetchPositionById(['1', '2', '3'], '17', runSql);
+    eq('available as before', p.availById, { 1: 5, 2: 0 });
+    eq('backordered beside it — never negative, absent ids stay absent', p.backorderedById, { 1: 0, 2: 100 });
+    ok('both in ONE query, at the brand location', /quantityavailable/.test(q0) && /quantitybackordered/.test(q0) && /location = 17/.test(q0));
+}
+
+// ── WHAT IS STILL UNCOVERED — the one rule (Stuart 2026-10-08), on the numbers read live 10-07 ───────────
+{
+    // H1-138TRVSBA/P: 118 on hand, 70 committed to the wall → 48 available, nothing backordered. The old grid
+    // rule (committed + backorder + display − available − on order) asked for 22, and 88 with the display added.
+    eq('committed is already inside Available — a fully covered item lacks nothing', uncoveredOf({ backorder: 0, available: 48, onOrder: 0 }), 0);
+    eq('…and the grid suggests nothing while it sits above its reorder point', suggestedOf({ rop: 36, available: 48, backorder: 0 }), 0);
+    // H1-TTB1: 50 on hand all committed to the first order, 100 backordered for SO60992.
+    eq('what NetSuite could not commit is what is short', uncoveredOf({ backorder: 100, available: 0, onOrder: 0 }), 100);
+    eq('stock on its way covers it', uncoveredOf({ backorder: 100, available: 0, onOrder: 60 }), 40);
+    eq('…and so does stock at another location', uncoveredOf({ backorder: 100, available: 30, onOrder: 60 }), 10);
+    eq('never negative', uncoveredOf({ backorder: 5, available: 500, onOrder: 0 }), 0);
+    eq('a display still at quote stage is in nobody\'s numbers — it is added', uncoveredOf({ backorder: 0, displayNew: 100, available: 30 }), 70);
+    eq('nothing known, nothing asked', [uncoveredOf(), uncoveredOf({}), uncoveredOf({ backorder: 'x', available: null })], [0, 0, 0]);
+
+    // A RAW item's row: its finished variants are netted against THEIR OWN stock first.
+    const variants = [
+        { backorder: 0, available: 48, onOrder: 0 },            // /P: 70 committed, all on the shelf → needs no raw
+        { backorder: 200, available: 0, onOrder: 0 },           // /EP4: 200 short → 200 to make
+        { backorder: 70, available: 0, onOrder: 70 },           // /EP2: short, but a work order for all 70 is open
+        { backorder: 0, displayNew: 100, available: 20 },       // /EP1: a quote-stage display, 20 on the shelf → 80
+    ];
+    eq('variants: each against its own stock and inbound', variantsUncoveredOf(variants), 280);
+    eq('the raw item must cover that, less its own stock and what is on order', uncoveredOf({ backorder: 0, fromVariants: 280, available: 150, onOrder: 50 }), 80);
+    eq('no variants, nothing rolled up', [variantsUncoveredOf([]), variantsUncoveredOf(null), variantsUncoveredOf([null])], [0, 0, 0]);
+
+    // THE GRID: greater of the top-up and the cover.
+    eq('below the reorder point with nothing short → the top-up', suggestedOf({ rop: 36, available: 10, backorder: 0 }), 26);
+    eq('short by more than the top-up → the cover', suggestedOf({ rop: 36, available: 0, backorder: 100 }), 100);
+    eq('the top-up when it is the greater', suggestedOf({ rop: 150, available: 0, backorder: 100 }), 150);
+    eq('raw: variants\' need counts in the cover', suggestedOf({ rop: 0, available: 150, onOrder: 50, fromVariants: 280 }), 80);
+
+    // THE SNAPSHOT: the minimum on hand ON TOP of the open demand. H1-1BF/EP2: min 17, 0 available, 100 backordered
+    // for SO60992 — it read 17 (rounded to a batch of 35).
+    eq('the old Snapshot number, when nothing is backordered', shortfallToFloorOf({ floor: 17, available: 0, onOrder: 0 }), 17);
+    eq('backordered pieces are owed BEFORE the shelf is refilled', shortfallToFloorOf({ floor: 17, backorder: 100, available: 0, onOrder: 0 }), 117);
+    eq('on order counts once', shortfallToFloorOf({ floor: 17, backorder: 100, available: 0, onOrder: 60 }), 57);
+    eq('a shelf above the floor with nothing short asks for nothing', shortfallToFloorOf({ floor: 17, available: 30 }), 0);
+    eq('HTSLNTCAR: 11,664 available, the displays already committed inside it', shortfallToFloorOf({ floor: 2000, backorder: 0, available: 11664 }), 0);
+    eq('a quote-stage display on a stocked item', shortfallToFloorOf({ floor: 17, displayNew: 100, available: 40 }), 77);
+    eq('raw core: its variants\' need on top of its own floor', shortfallToFloorOf({ floor: 300, backorder: 0, fromVariants: 280, available: 150, onOrder: 50 }), 380);
+
+    ok('the words name only what is there', uncoveredWords({ backorder: 100, available: 0 }) === '100 backordered in NetSuite · less 0 available');
+    ok('…every part when every part is there', /100 backordered in NetSuite · 40 for a display not in NetSuite yet · 280 its finished variants still lack · less 150 available · less 50 on order/.test(uncoveredWords({ backorder: 100, displayNew: 40, fromVariants: 280, available: 150, onOrder: 50 })));
 }
 
 console.warn = origWarn;
