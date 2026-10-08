@@ -27,7 +27,7 @@ function PaySettings() {
     const [cfg, setCfg] = useState(null);
     const [saving, setSaving] = useState(false);
     const [key, setKey] = useState('');
-    const [form, setForm] = useState({ docType: 'SALES_ORDER', reference: '', customerName: '', totalAmount: '', depositPct: '50', collection: '', docId: '' });
+    const [form, setForm] = useState({ docType: 'SALES_ORDER', brand: 'ce', reference: '', customerName: '', totalAmount: '', depositPct: '50', collection: '', docId: '' });
     const [link, setLink] = useState(null);
     const [err, setErr] = useState('');
 
@@ -63,7 +63,11 @@ function PaySettings() {
             const res = await httpsCallable(functions, 'payLinkCreate')({
                 docType: form.docType, reference: form.reference, customerName: form.customerName,
                 totalAmount: Number(form.totalAmount), depositPct: Number(form.depositPct),
-                collection: form.collection, docId: form.docId, brand: 'ce',
+                // THE LINK IS MINTED FOR A BRAND, and the brand decides which merchant account the
+                // card is charged into. This said 'ce' whatever the maker intended — harmless while
+                // CE was the only account, and a way to bill the wrong company the moment there
+                // were two (Stuart 2026-10-08, caught before the first live link).
+                collection: form.collection, docId: form.docId, brand: form.brand,
             });
             setLink(res.data);
         } catch (e) { setErr(e.message || String(e)); }
@@ -101,6 +105,14 @@ function PaySettings() {
             <div style={{ borderTop: '1px solid var(--line)', paddingTop: '12px' }}>
                 <span style={label}>Make a pay link (until the buttons land on the documents)</span>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '8px 0' }}>
+                    {/* WHICH COMPANY GETS PAID — first, because it is the one field here that
+                        cannot be put right afterwards. */}
+                    <select style={input} value={form.brand} onChange={(e) => setForm({ ...form, brand: e.target.value })}>
+                        <option value="ce">Classical Elements</option>
+                        <option value="uniquity">Uniq'uity (MC America)</option>
+                        <option value="m2c">M2C Studio</option>
+                        <option value="leyla">Leyla</option>
+                    </select>
                     <select style={input} value={form.docType} onChange={(e) => setForm({ ...form, docType: e.target.value })}>
                         <option value="SALES_ORDER">Sales order (deposit)</option>
                         <option value="QUOTE">Quote (deposit)</option>
@@ -117,7 +129,9 @@ function PaySettings() {
                 {err && <div style={{ fontSize: '13px', color: '#9b2c2c' }}>✗ {err}</div>}
                 {link && (
                     <div style={{ fontSize: '13px', marginTop: '6px' }}>
-                        <div style={{ color: '#3a7d44' }}>✓ {Number(link.amountDue).toFixed(2)} due of {Number(link.totalAmount).toFixed(2)} · expires {new Date(link.expiresAt).toLocaleDateString()}</div>
+                        {/* Name the company on the receipt, so a wrong pick is caught here rather
+                            than in someone's bank reconciliation. */}
+                        <div style={{ color: '#3a7d44' }}>✓ {Number(link.amountDue).toFixed(2)} due of {Number(link.totalAmount).toFixed(2)} · pays <strong>{String(form.brand).toUpperCase()}</strong> · expires {new Date(link.expiresAt).toLocaleDateString()}</div>
                         <input style={{ ...input, width: '100%', marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '12px' }} readOnly value={link.url} onFocus={(e) => e.target.select()} />
                     </div>
                 )}
