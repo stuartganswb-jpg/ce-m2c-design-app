@@ -227,7 +227,9 @@ const DisplayBuildsPanel = ({ currentUser, activeBrand, embedded = false }) => {
             copy.header.jobData.displayOrder = { buildId: b.id, displays: to };
             openQuoteCopyInCpq(copy, { brand: activeBrand || '' });
         } catch (e) { alert('Duplicate failed: ' + (e?.message || e)); }
-        setBusy('');
+        // EVERY way out clears the busy word (2026-10-07, found on the first live run): a declined confirmation
+        // returned from inside the try and left the panel reading "Reading the quote…" with its buttons greyed.
+        finally { setBusy(''); }
     };
 
     // ── THE ORDER ON THE FLOOR (Stuart 2026-09-17: "the work order#s should just appear there") ──
