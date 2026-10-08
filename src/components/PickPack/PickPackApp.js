@@ -60,6 +60,7 @@ import { encodeUomScan, uomDisplay } from '../Shared/labelScan';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
 import { packingListOf, packedQtyOf } from '../Shared/packingList';
+import { isBlindShipment, withBlindPacking } from '../Shared/blindShip';
 import { soPackBoardOf, lineBoxOf, LINE_STATE, ORDER_VERDICT } from '../Shared/soPackBoard';
 import { boxHomeFor, boxOpenRefusal, isBoxShipped, spreadTrackingOf, orderBoxesOf, withNewBox, newBoxRefusal, boxOf, boxName, tickBoxesOf, tickIntoBox, moveIntoBox, unboxedQtyOf, boxSpreadLabel, boxContentsOf, boxRemovalRefusal, unboxedLinesOf, boxCompleteBlocker, packBoxesOfTicks, docBoxLinesOf } from '../Shared/orderBoxes';
 import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
@@ -1137,8 +1138,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const logoUrl = logoSnap && logoSnap.exists() ? (logoSnap.data() || {})[activeBrand] : undefined;
             const so = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || soIndex[String(job.orderKey || '')] || null);
             let ordered, packDocs, docNumber, customerName, poRef;
+            let cpqJob = null;      // a CPQ order's own header (its jobs document) — read below, with its lines
             if (isQsOrder(job)) {
-                ordered = (job.lines || []).filter(l => !isOffOrderLine(l)).map(l => ({ erp: l.erp, legacyErpId: l.erp, name: l.name, qty: l.qty, finishLabel: l.finishCode || '' }));
+                // clientSku = the customer's own number for the line (Order Entry keeps it as aliasErp) — a blind list prints it.
+                ordered = (job.lines || []).filter(l => !isOffOrderLine(l)).map(l => ({ erp: l.erp, legacyErpId: l.erp, clientSku: l.aliasErp || '', name: l.name, qty: l.qty, finishLabel: l.finishCode || '' }));
                 packDocs = [job];
                 docNumber = job.soId || job.id;
                 customerName = job.customer || job.customerName || '';
@@ -1148,6 +1151,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 const jSnap = jobId ? await getDoc(doc(db, 'jobs', String(jobId))).catch(() => null) : null;
                 const j = jSnap && jSnap.exists() ? { id: jSnap.id, ...jSnap.data() } : null;
                 if (!j) return alert(`The packing list needs the order's sales lines, and no CPQ job was found for ${packRef(job)} (quote id ${jobId || 'none on the document'}). Print it from the CRM card, and tell Stuart.`);
+                cpqJob = j;
                 const idx = new Map();
                 hqParts.forEach(p => {
                     const slim = { itemName: p.itemName, clientPricing: p.clientPricing };
@@ -1165,12 +1169,25 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             }
             const pl = packingListOf({ ordered, packDocs });
             const shipTo = (so && Array.isArray(so.shipTo) && so.shipTo.length) ? so.shipTo : [customerName || '—'];
-            const data = {
+            // ── A DROP SHIPMENT PRINTS BLIND (Stuart 2026-10-08, Shared/blindShip) ────────────────────────
+            // A custom drop address on the order — either door: the sales order's header, or the CPQ job's — puts
+            // the CUSTOMER'S logo, name and address on the list in place of ours, unless the CRM set the order to
+            // print the standard one. The customer's record is read only then; if it cannot be read the list is
+            // still blind, in their name alone — it never falls back to our logo.
+            const headerDocs = [so, cpqJob];
+            const blindNow = isBlindShipment(...headerDocs);
+            let custRec = null;
+            if (blindNow) {
+                const custId = String((so && so.customerId) || (cpqJob && cpqJob.customer && cpqJob.customer.id) || job.customerId || '');
+                const cSnap = custId ? await getDoc(doc(db, 'crm_records', custId)).catch(() => null) : null;
+                custRec = cSnap && cSnap.exists() ? cSnap.data() : null;
+            }
+            const data = withBlindPacking({
                 billTo: [customerName || '—'], shipTo, date: new Date().toLocaleDateString(), po: poRef || '—', termsLabel: '', lines: [],
                 packing: { shipDate: pl.shipDate, tracking: pl.tracking, lines: pl.lines, flagged: pl.flagged, packed: pl.packed },
-            };
+            }, { docs: headerDocs, customer: custRec, name: customerName });
             printForm(<FormPreview type="PACKING_SLIP" brand={activeBrand} logoUrl={logoUrl} header={tpl.header} footer={tpl.footer} terms={tpl.terms} docNumber={String(docNumber)} data={data} />, `Packing List — ${docNumber}`);
-            writeLog(`Packing list printed for ${packRef(job)} from the WMS (${pl.lines.length} line${pl.lines.length === 1 ? '' : 's'}${pl.flagged ? `, ${pl.flagged} flagged` : ''}).`, 'wms');
+            writeLog(`Packing list printed for ${packRef(job)} from the WMS (${pl.lines.length} line${pl.lines.length === 1 ? '' : 's'}${pl.flagged ? `, ${pl.flagged} flagged` : ''}${blindNow ? `, BLIND — as shipped from ${customerName || 'the customer'}` : ''}).`, 'wms');
         } catch (e) {
             alert('Could not build the packing list: ' + (e.message || e));
         } finally { setIsSyncing(false); }

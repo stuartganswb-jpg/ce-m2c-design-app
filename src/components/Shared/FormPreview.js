@@ -1,6 +1,7 @@
 import React from 'react';
 import { cutText } from './configQty';
 import Barcode from './Barcode';
+import { blindItemNoOf } from './blindShip';
 
 // Live, print-style preview of a branded document (Sales Order / Packing List / Invoice / Quote …).
 // Serif headings, mono labels, sans body, light-grey shaded header blocks, and the document number
@@ -37,8 +38,15 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
   const isSample = !data;
   const d = data || {};
   const title = (TITLES[type] || type.replace(/_/g, ' ')).toUpperCase();
-  const company = d.company || BRAND_NAMES[brand] || (brand ? brand.toUpperCase() : 'Company');
   const isPacking = type === 'PACKING_SLIP';
+  // ── THE BLIND PACKING LIST (Stuart 2026-10-08, Shared/blindShip) ──────────────────────────────
+  // A drop shipment goes out in the CUSTOMER'S name: `data.blind` = { name, logoUrl, from[] } puts their logo
+  // (or their name in type) at the top, "Ship From" with their address where "Bill To" was, their item numbers
+  // on the lines — and prints none of our name, address, site, phone, terms or form wording. Only a packing
+  // list is ever blind; without `blind` every document prints exactly as it always has.
+  const blind = isPacking && d.blind && typeof d.blind === 'object' ? d.blind : null;
+  const company = blind ? (blind.name || '') : (d.company || BRAND_NAMES[brand] || (brand ? brand.toUpperCase() : 'Company'));
+  const mastLogo = blind ? (blind.logoUrl || '') : logoUrl;
   // `unpriced` = a request awaiting pricing: line quantities are real, money is not invented —
   // no Unit/Amount columns, no totals block, a banner says why (matches the portal's own
   // "SENT — AWAITING PRICING" card for the same quote).
@@ -91,8 +99,8 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
       {/* Masthead */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', borderBottom: '2px solid var(--ink)', paddingBottom: '18px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          {logoUrl
-            ? <img src={logoUrl} alt={company} style={{ height: '52px', maxWidth: '220px', objectFit: 'contain' }} />
+          {mastLogo
+            ? <img src={mastLogo} alt={company} style={{ height: '52px', maxWidth: '220px', objectFit: 'contain' }} />
             : <div style={{ fontFamily: 'var(--serif)', fontSize: '1.7rem', fontWeight: 500, letterSpacing: '.02em' }}>{company}</div>}
         </div>
         <div style={{ textAlign: 'right' }}>
@@ -101,13 +109,13 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
         </div>
       </div>
 
-      {header ? <div style={{ fontFamily: 'var(--sans)', fontSize: '12px', fontStyle: 'italic', color: 'var(--ink-soft)', margin: '16px 0 0' }}>{header}</div> : null}
+      {header && !blind ? <div style={{ fontFamily: 'var(--sans)', fontSize: '12px', fontStyle: 'italic', color: 'var(--ink-soft)', margin: '16px 0 0' }}>{header}</div> : null}
 
       {/* Shaded header metadata blocks */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', margin: '22px 0' }}>
         <div style={shaded}>
-          <span style={label}>Bill To</span>
-          <div style={{ fontSize: '12px', lineHeight: 1.5 }}>{billTo.map((l, i) => <div key={i}>{l}</div>)}</div>
+          <span style={label}>{blind ? 'Ship From' : 'Bill To'}</span>
+          <div style={{ fontSize: '12px', lineHeight: 1.5 }}>{(blind ? (blind.from && blind.from.length ? blind.from : [company || '—']) : billTo).map((l, i) => <div key={i}>{l}</div>)}</div>
         </div>
         <div style={shaded}>
           <span style={label}>Ship To</span>
@@ -120,7 +128,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
             <div><span style={{ color: 'var(--ink-soft)' }}>DATE</span> {date}</div>
             <div><span style={{ color: 'var(--ink-soft)' }}>P.O.</span> {po}</div>
             {d.sidemark ? <div><span style={{ color: 'var(--ink-soft)' }}>SIDEMARK</span> {d.sidemark}</div> : null}
-            <div><span style={{ color: 'var(--ink-soft)' }}>TERMS</span> {termsLabel}</div>
+            {!blind && <div><span style={{ color: 'var(--ink-soft)' }}>TERMS</span> {termsLabel}</div>}
             {packing && <div><span style={{ color: 'var(--ink-soft)' }}>SHIP DATE</span> {fmtDate(packing.shipDate)}</div>}
             {packing && <div><span style={{ color: 'var(--ink-soft)' }}>TRACKING</span> {(packing.tracking || []).length ? packing.tracking.join(', ') : '—'}</div>}
           </div>
@@ -160,7 +168,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
                 const off = l.status && l.status !== 'MATCH';
                 return (
                   <tr key={i} style={{ borderBottom: '1px solid var(--line)', background: off ? '#fbeeee' : 'transparent' }}>
-                    <td style={{ ...cell, fontFamily: 'var(--mono)', fontSize: '11px', color: off ? '#a33' : 'var(--ink)' }}>{off ? '● ' : ''}{l.code}</td>
+                    <td style={{ ...cell, fontFamily: 'var(--mono)', fontSize: '11px', color: off ? '#a33' : 'var(--ink)' }}>{off ? '● ' : ''}{blind ? blindItemNoOf(l) : l.code}</td>
                     <td style={cell}>{l.name}{off && STATUS_WORD[l.status] ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', color: '#a33', marginLeft: '8px' }}>{STATUS_WORD[l.status]}</span> : null}</td>
                     <td style={{ ...cell, fontSize: '11px' }}>{l.finish || ''}</td>
                     <td style={{ ...cell, textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.qtyOrdered}</td>
@@ -262,7 +270,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
         </div>
       )}
 
-      {(footer || terms) && (
+      {(footer || terms) && !blind && (
         <div style={{ marginTop: '26px', borderTop: '1px solid var(--line)', paddingTop: '16px' }}>
           {footer ? <div style={{ fontSize: '12px', color: 'var(--ink)', marginBottom: terms ? '10px' : 0 }}>{footer}</div> : null}
           {terms ? <div style={{ fontSize: '9px', lineHeight: 1.6, color: 'var(--ink-soft)', fontFamily: 'var(--sans)' }}>{terms}</div> : null}
@@ -288,11 +296,16 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
         </div>
       </div>
 
-      {/* Company footer — shared address + this brand's site/phone, on every form */}
+      {/* Company footer — shared address + this brand's site/phone, on every form. A blind packing list
+          names the customer it ships from and nothing of ours. */}
       <div style={{ marginTop: '12px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '8.5px', letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>
-        {company} · {COMPANY_ADDRESS}
-        {BRAND_CONTACT[brand]?.web ? ` · ${BRAND_CONTACT[brand].web}` : ''}
-        {BRAND_CONTACT[brand]?.phone ? ` · ${BRAND_CONTACT[brand].phone}` : ''}
+        {blind ? (blind.from && blind.from.length ? blind.from : [company]).filter(Boolean).join(' · ') : (
+          <>
+            {company} · {COMPANY_ADDRESS}
+            {BRAND_CONTACT[brand]?.web ? ` · ${BRAND_CONTACT[brand].web}` : ''}
+            {BRAND_CONTACT[brand]?.phone ? ` · ${BRAND_CONTACT[brand].phone}` : ''}
+          </>
+        )}
       </div>
     </div>
   );

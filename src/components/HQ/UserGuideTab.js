@@ -794,6 +794,22 @@ const WmsGuide = () => (
             have stock, the pattern is the diagnosis and it points at the order, not the parts.
         </Path>
 
+        <h2 style={S.h2}>The blind packing list <span style={S.tabno}>(a drop shipment goes out in the customer's name)</span></h2>
+        <p style={S.p}>When an order ships to a <b>custom drop address</b> — typed at CPQ's checkout, in the CRM's header edit, on
+        Order Entry, or for one display in the WMS — its packing list prints <b>blind</b>: it reads as shipped by our customer
+        to their customer. Nothing has to be ticked; the address is the switch.</p>
+        <Screen title="What the blind list shows" tag="WMS pack station · CRM card → Packing List">
+            <Path name="Top" goes="the customer's logo">The <i>Client logo</i> uploaded for them in the CRM. With none on file, their name prints in type — never our logo.</Path>
+            <Path name="Ship From" goes="where Bill To was">The customer's name and their default saved address.</Path>
+            <Path name="Item numbers" goes="theirs, where the line has one">Fabricut's H3654F rather than our H1-1BBS; a line with no number of theirs prints ours.</Path>
+            <Path name="Not printed" goes="anything that names us">Our name, address, website and phone, the payment terms, and the form's own wording.</Path>
+            <Path name="Unchanged" goes="the count">Ordered beside shipped, the PO, the sidemark, the ship date, tracking, and the order number with its barcode.</Path>
+        </Screen>
+        <div style={S.note}><b>To print the standard list for a drop shipment</b> — the address is the customer's own showroom, say — open the
+        order's <b>Packing List</b> on the CRM card and tick <b>Print the standard list instead</b>, beside Print. The choice is kept on the
+        order, so the pack station prints the same. Only the packing list is ever blind: quotes, sales orders and invoices are not, and the
+        carrier's label still names us.</div>
+
         <h2 style={S.h2}>Committed bins — where an order's parts wait for each other</h2>
         <p style={S.p}>Some orders arrive in pieces over days: the small parts are on the shelf, the poles are at the
         plater. Rather than leave the early parts loose in stock, where the next order takes them, they wait together

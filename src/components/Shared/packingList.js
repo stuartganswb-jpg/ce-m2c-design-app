@@ -77,7 +77,11 @@ export function packingListOf({ ordered = [], packDocs = [], shipDate = null, tr
         const qtyShipped = Math.min(avail, qtyOrdered);
         if (code) pool.set(code, Math.max(0, avail - qtyShipped));
         const status = qtyShipped === 0 ? LINE_STATUS.NOT_PACKED : (qtyShipped < qtyOrdered ? LINE_STATUS.SHORT : LINE_STATUS.MATCH);
-        lines.push({ code, name: l.name || l.partName || code, finish: l.finishLabel || l.finish || '', qtyOrdered, qtyShipped, status });
+        // THEIR number beside ours (Stuart 2026-10-08, the blind packing list — Shared/blindShip): the ordered line's
+        // clientSku, the one a money document prints. The match with what was packed is still by OUR code.
+        const theirs = String(l.clientSku || '').trim();
+        // Only on a line that HAS one — every other line is exactly the shape it always was.
+        lines.push({ code, ...(theirs && up(theirs) !== code ? { custCode: theirs } : {}), name: l.name || l.partName || code, finish: l.finishLabel || l.finish || '', qtyOrdered, qtyShipped, status });
     });
     // Whatever is left in the pool was packed beyond the order — an OVER on a known code, or a
     // line nothing ordered. Both are listed; neither is hidden.
