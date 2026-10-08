@@ -31,17 +31,26 @@ function PaySettings() {
     const [link, setLink] = useState(null);
     const [err, setErr] = useState('');
 
+    // ONE KEY PER BRAND. Each brand is its own merchant account, so its own tokenization key — the
+    // panel edits one brand at a time rather than pretending CE's key serves all three
+    // (Stuart 2026-10-08, Uniq'uity going live first).
+    const [keyBrand, setKeyBrand] = useState('ce');
     useEffect(() => onSnapshot(doc(db, 'system', 'nmi_config'),
         (s) => {
             const c = { environment: 'SANDBOX', tokenizationKeys: {}, ...(s.exists() ? s.data() : {}) };
-            setCfg(c); setKey(c.tokenizationKeys.ce || '');
+            setCfg(c);
         }, () => setCfg({ environment: 'SANDBOX', tokenizationKeys: {} })), []);
+    // Follow the chosen brand, and never let a half-typed key for one brand be saved onto another.
+    useEffect(() => { setKey(((cfg && cfg.tokenizationKeys) || {})[keyBrand] || ''); }, [cfg, keyBrand]);
 
     if (!cfg) return null;
     const isLive = cfg.environment === 'PRODUCTION';
 
     const save = async (patch) => {
-        if (patch.environment === 'PRODUCTION' && !window.confirm('Switch payments to LIVE?\n\nPay links will charge real cards from then on.')) return;
+        // The switch is ONE switch for every brand. Say so plainly: a brand with no live key on
+        // file refuses to charge rather than taking money into the wrong account, which is the
+        // safe failure — but it IS a failure, and staff should hear it here, not from a customer.
+        if (patch.environment === 'PRODUCTION' && !window.confirm('Switch payments to LIVE?\n\nReal cards will be charged, for EVERY brand — this is one switch, not one per brand.\n\nA brand with no live key on file will refuse payments until its key is added. Test each brand below before taking an order.')) return;
         setSaving(true);
         try { await setDoc(doc(db, 'system', 'nmi_config'), patch, { merge: true }); }
         catch (e) { alert(`Could not save: ${e.message || e}`); }
@@ -75,9 +84,18 @@ function PaySettings() {
             </div>
 
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '14px' }}>
-                <span style={{ fontSize: '12px', color: 'var(--ink-soft)' }}>CE public tokenization key</span>
+                <span style={{ fontSize: '12px', color: 'var(--ink-soft)' }}>Public tokenization key</span>
+                <select style={input} value={keyBrand} onChange={(e) => setKeyBrand(e.target.value)}>
+                    <option value="ce">Classical Elements</option>
+                    <option value="uniquity">Uniq'uity (MC America)</option>
+                    <option value="m2c">M2C Studio</option>
+                    <option value="leyla">Leyla</option>
+                </select>
                 <input style={{ ...input, minWidth: '280px' }} value={key} onChange={(e) => setKey(e.target.value)} placeholder="e.g. hYW9bd-c6E952-Z4tCVb-kQk6c2" />
-                <button style={btn(false, saving)} disabled={saving} onClick={() => save({ tokenizationKeys: { ...(cfg.tokenizationKeys || {}), ce: key.trim() } })}>Save key</button>
+                <button style={btn(false, saving)} disabled={saving} onClick={() => save({ tokenizationKeys: { ...(cfg.tokenizationKeys || {}), [keyBrand]: key.trim() } })}>Save key</button>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>
+                    {Object.keys(cfg.tokenizationKeys || {}).filter((b) => (cfg.tokenizationKeys || {})[b]).join(' · ').toUpperCase() || 'none saved yet'}
+                </span>
             </div>
 
             <div style={{ borderTop: '1px solid var(--line)', paddingTop: '12px' }}>
@@ -255,6 +273,9 @@ export default function IntegrationsPanel() {
     const [withInvoice, setWithInvoice] = useState(false);
     const [email, setEmail] = useState('');
     const [amount, setAmount] = useState('1.00');
+    // Which merchant account to prove — each brand is its own, so "does the key work" is a question
+    // you ask of ONE of them (Stuart 2026-10-08).
+    const [probeBrand, setProbeBrand] = useState('ce');
 
     const run = async () => {
         if (withInvoice && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
@@ -264,7 +285,7 @@ export default function IntegrationsPanel() {
         setBusy(true); setResult(null);
         try {
             const res = await httpsCallable(functions, 'nmiProbe')({
-                testInvoice: withInvoice, email: email.trim(), amount,
+                testInvoice: withInvoice, email: email.trim(), amount, brand: probeBrand,
             });
             setResult(res.data);
         } catch (e) {
@@ -283,10 +304,19 @@ export default function IntegrationsPanel() {
             <div style={card}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
                     <span style={{ ...label, color: 'var(--brass)' }}>NMI · Payments</span>
-                    <span style={{ padding: '3px 8px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', background: '#9b6a2c', color: '#fff' }}>SANDBOX</span>
+                    {/* No fixed SANDBOX badge: it would go on saying "sandbox" the day we went live,
+                        which is the worst moment to be told the wrong thing. The result header below
+                        reports the mode and the account the test actually reached. */}
+                    <select style={input} value={probeBrand} onChange={(e) => setProbeBrand(e.target.value)}>
+                        <option value="ce">Classical Elements</option>
+                        <option value="uniquity">Uniq'uity (MC America)</option>
+                        <option value="m2c">M2C Studio</option>
+                        <option value="leyla">Leyla</option>
+                    </select>
                 </div>
                 <p style={{ fontSize: '13px', color: 'var(--ink-soft)', margin: '0 0 12px' }}>
-                    Checks the gateway key and connection for the sandbox merchant. No card data is sent.
+                    Checks that brand's gateway key and connection, in whichever mode Pay links is set to above.
+                    No card data is sent and nothing is charged.
                 </p>
 
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '10px' }}>

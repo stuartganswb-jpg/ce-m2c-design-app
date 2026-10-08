@@ -2570,15 +2570,20 @@ exports.upsProbe = onCall({
 // Sandbox merchant 1347136 ("Classical Elements Test Merchant"). Nothing is charged; the key never
 // leaves the server; card data never touches our systems (that is the whole point of the design).
 const NMI_SANDBOX_KEY_CE = defineSecret("NMI_SANDBOX_KEY_CE");
+// LIVE KEYS, ONE PER BRAND. Each brand is its own merchant account and its own NetSuite
+// subsidiary, so the key decides whose bank account the money lands in — it is never a detail to
+// default. Uniq'uity (MC America LLC) goes live first (Stuart 2026-10-08); CE and M2C get theirs
+// when their keys exist, as one more line each plus a deploy.
+const NMI_LIVE_KEY_UNIQUITY = defineSecret("NMI_LIVE_KEY_UNIQUITY");
 // A SANDBOX key is refused by the production host ("Sandbox accounts must use a sandbox domain",
 // seen 2026-09-23) — the environment decides the host, exactly as UPS_HOSTS does for shipping.
 const NMI_HOSTS = { SANDBOX: 'https://sandbox.nmi.com', PRODUCTION: 'https://secure.nmi.com' };
-const NMI_HOST = NMI_HOSTS.SANDBOX;
+const nmiHostOf = (environment) => (environment === 'PRODUCTION' ? NMI_HOSTS.PRODUCTION : NMI_HOSTS.SANDBOX);
 
 // The Payment API answers in querystring form (response=1&responsetext=...), not JSON.
 const nmiParse = (text) => Object.fromEntries(new URLSearchParams(String(text || '')));
-const nmiPost = async (path, fields) => {
-    const r = await fetch(`${NMI_HOST}${path}`, {
+const nmiPost = async (path, fields, environment) => {
+    const r = await fetch(`${nmiHostOf(environment)}${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(fields).toString(),
@@ -2594,18 +2599,23 @@ const nmiFindPayUrl = (text) => {
 
 exports.nmiProbe = onCall({
     enforceAppCheck: true,
-    secrets: [NMI_SANDBOX_KEY_CE],
+    secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY],
 }, async (request) => {
     assertStaffAdmin(request);
-    const { testInvoice, email, amount } = request.data || {};
-    const key = NMI_SANDBOX_KEY_CE.value().trim();
-    const out = { environment: 'NMI SANDBOX (merchant 1347136)', steps: [] };
+    const { testInvoice, email, amount, brand } = request.data || {};
+    // THE PROBE FOLLOWS THE SWITCH. It was pinned to the sandbox, which meant a live key could not
+    // be tested at all — the first proof it worked would have been a customer's card in front of
+    // them (Stuart 2026-10-08). Now it asks the same question of whichever account is configured.
+    const cfg = await nmiConfig();
+    const b = String(brand || 'ce').toLowerCase();
+    const key = nmiKeyFor(b, cfg.environment);
+    const out = { environment: `NMI ${cfg.environment} · ${b.toUpperCase()}`, steps: [] };
 
-    // 1) Credentials — the query API returns this merchant's (empty) transaction list. ANY error
-    //    document counts as a failure: matching only "authentication failed" once let the
-    //    wrong-host refusal read as a pass (2026-09-23).
+    // 1) Credentials — the query API returns this merchant's transaction list. ANY error document
+    //    counts as a failure: matching only "authentication failed" once let the wrong-host
+    //    refusal read as a pass (2026-09-23).
     try {
-        const r = await nmiPost('/api/query.php', { security_key: key, report_type: 'transaction' });
+        const r = await nmiPost('/api/query.php', { security_key: key, report_type: 'transaction' }, cfg.environment);
         const body = String(r.text || '');
         const errText = (body.match(/<error_response>([\s\S]*?)<\/error_response>/i) || [])[1]
             || (/Authentication Failed|Invalid Security Key|must use a sandbox domain/i.test(body) ? body.slice(0, 200) : '');
@@ -2623,6 +2633,12 @@ exports.nmiProbe = onCall({
     // 2) One test invoice — ONLY when asked. This is how we learn whether a per-invoice pay URL
     //    comes back to us (the link we want on the quote/SO PDF) or whether NMI only emails it.
     if (testInvoice === true) {
+        // NOT against a live account: there, "test invoice" means a real invoice, emailed to a real
+        // person, on the real merchant's letterhead.
+        if (cfg.environment === 'PRODUCTION') {
+            out.steps.push({ step: 'invoice', ok: false, detail: 'Payments are LIVE — a test invoice here would be a real invoice sent to a real customer. Switch to Test first.' });
+            return out;
+        }
         const to = cleanStr(email, 120);
         if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
             out.steps.push({ step: 'invoice', ok: false, detail: 'Enter a valid email address to send the test invoice to.' });
@@ -2634,7 +2650,7 @@ exports.nmiProbe = onCall({
                 security_key: key, invoicing: 'add_invoice', amount: amt, email: to,
                 order_description: 'CE integration probe (sandbox test invoice)',
                 payment_terms: 'upon_receipt',
-            });
+            }, cfg.environment);
             const res = nmiParse(r.text);
             const okay = res.response === '1';
             out.steps.push({
@@ -2729,7 +2745,18 @@ const nmiConfig = async () => {
 const nmiKeyFor = (brand, environment) => {
     const b = String(brand || '').toLowerCase();
     if (environment === 'SANDBOX' && b === 'ce') return NMI_SANDBOX_KEY_CE.value().trim();
+    if (environment === 'PRODUCTION' && b === 'uniquity') return NMI_LIVE_KEY_UNIQUITY.value().trim();
     throw new HttpsError('failed-precondition', `NO_NMI_ACCOUNT_FOR_BRAND: no ${environment} gateway key is on file for "${brand}".`);
+};
+// WHICH BRAND OWNS THIS DOCUMENT. The two collections spell it differently — a CPQ job carries
+// `brandId`, an Order Entry sales order carries `brand` — and reading only one of them is how a
+// Uniq'uity order would quietly be charged to Classical Elements' merchant account. An unmarked
+// document REFUSES: a default here is money in the wrong company's bank, which no error message
+// afterwards can undo.
+const brandOfDoc = (d, what = 'this order') => {
+    const b = String((d && (d.brandId || d.brand)) || '').toLowerCase();
+    if (!b) throw new HttpsError('failed-precondition', `NO_BRAND_ON_DOCUMENT: ${what} does not say which brand it belongs to, so there is no way to know which merchant account to charge.`);
+    return b;
 };
 const money = (v) => Math.round(Number(v) * 100) / 100;
 
@@ -2837,7 +2864,7 @@ exports.payIntent = onCall({ cors: true }, async (request) => {
 
 // The charge. The amount is re-checked against the link's own bounds; the browser's number is never
 // trusted on its own. The link is claimed in a transaction so a double-click cannot pay twice.
-exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET] }, async (request) => {
+exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET] }, async (request) => {
     const { token, paymentToken, amount, payerName, email } = request.data || {};
     const link = await payLinkOf(token);
     const cfg = await nmiConfig();
@@ -3162,7 +3189,7 @@ const payNsInvoices = async ({ brand, customerId, invoiceIds, paymentToken, vaul
 
 exports.portalPayInvoices = onCall({
     cors: true,
-    secrets: [NMI_SANDBOX_KEY_CE, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
+    secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
 }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const { invoiceIds, vaultId, paymentToken, saveCard } = request.data || {};
@@ -3175,7 +3202,7 @@ exports.portalPayInvoices = onCall({
         const ok = (((crm.exists && crm.data()) || {}).vaultCards || []).some((c) => String(c.vaultId) === useVault);
         if (!ok) throw new HttpsError('permission-denied', 'That card is not on your account.');
     } else if (saveCard === true) {
-        useVault = (await vaultAddCard({ customerId, paymentToken, cfg })).vaultId;
+        useVault = (await vaultAddCard({ customerId, paymentToken, cfg, brand })).vaultId;
     }
     return payNsInvoices({
         brand, customerId, invoiceIds, environment: cfg.environment,
@@ -3248,9 +3275,12 @@ exports.portalPayables = onCall({ cors: true }, async (request) => {
     const cards = (((crmSnap.exists && crmSnap.data()) || {}).vaultCards || [])
         .map((c) => ({ vaultId: c.vaultId, brand: c.brand || 'Card', last4: c.last4 || '', exp: c.exp || '', addedAt: c.addedAt || 0 }));
 
+    // The card fields belong to the customer's OWN brand's gateway — a CE tokenization key would
+    // hand Uniq'uity's cards to the wrong merchant account.
+    const custBrand = brandOfDoc((crmSnap.exists && crmSnap.data()) || {}, 'your account');
     return {
         environment: cfg.environment,
-        tokenizationKey: cfg.tokenizationKeys.ce || '',
+        tokenizationKey: cfg.tokenizationKeys[custBrand] || '',
         collectJsUrl: cfg.environment === 'PRODUCTION' ? 'https://secure.nmi.com/token/Collect.js' : 'https://sandbox.nmi.com/token/Collect.js',
         payables: out.sort((a, b) => String(a.reference).localeCompare(String(b.reference))),
         cards,
@@ -3259,12 +3289,14 @@ exports.portalPayables = onCall({ cors: true }, async (request) => {
 
 // Keep a card for next time. The PAN never reaches us: the browser tokenises with NMI, and NMI
 // stores the card in its vault. We keep the vault id and the last four — not card data.
-const vaultAddCard = async ({ customerId, paymentToken, cfg }) => {
+// The vault belongs to a MERCHANT ACCOUNT, so a card is stored against the customer's own brand —
+// a card vaulted under the wrong key cannot be charged by the right one later.
+const vaultAddCard = async ({ customerId, paymentToken, cfg, brand }) => {
     if (!String(paymentToken || '').trim()) throw new HttpsError('invalid-argument', 'Card details were not completed.');
     const host = cfg.environment === 'PRODUCTION' ? NMI_HOSTS.PRODUCTION : NMI_HOSTS.SANDBOX;
     const r = await fetch(`${host}/api/transact.php`, {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ security_key: nmiKeyFor('ce', cfg.environment), customer_vault: 'add_customer', payment_token: String(paymentToken) }).toString(),
+        body: new URLSearchParams({ security_key: nmiKeyFor(brand, cfg.environment), customer_vault: 'add_customer', payment_token: String(paymentToken) }).toString(),
     });
     const res = nmiParse(await r.text());
     if (res.response !== '1' || !res.customer_vault_id) throw new HttpsError('failed-precondition', res.responsetext || 'The card could not be saved.');
@@ -3280,14 +3312,22 @@ const vaultAddCard = async ({ customerId, paymentToken, cfg }) => {
     return card;
 };
 
-exports.portalSaveCard = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async (request) => {
+// A customer belongs to a brand (crm_records.brandId, stamped at creation) — that is the merchant
+// account their saved cards live in.
+const customerBrandOf = async (customerId) => {
+    const snap = await admin.firestore().collection('crm_records').doc(String(customerId)).get();
+    return brandOfDoc((snap.exists && snap.data()) || {}, 'your account');
+};
+
+exports.portalSaveCard = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY] }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const cfg = await nmiConfig();
-    const card = await vaultAddCard({ customerId, paymentToken: (request.data || {}).paymentToken, cfg });
+    const brand = await customerBrandOf(customerId);
+    const card = await vaultAddCard({ customerId, paymentToken: (request.data || {}).paymentToken, cfg, brand });
     return { card };
 });
 
-exports.portalDeleteCard = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] }, async (request) => {
+exports.portalDeleteCard = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY] }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const vaultId = String((request.data || {}).vaultId || '');
     const db = admin.firestore();
@@ -3300,14 +3340,14 @@ exports.portalDeleteCard = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE] },
     const host = cfg.environment === 'PRODUCTION' ? NMI_HOSTS.PRODUCTION : NMI_HOSTS.SANDBOX;
     await fetch(`${host}/api/transact.php`, {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ security_key: nmiKeyFor('ce', cfg.environment), customer_vault: 'delete_customer', customer_vault_id: vaultId }).toString(),
+        body: new URLSearchParams({ security_key: nmiKeyFor(await customerBrandOf(customerId), cfg.environment), customer_vault: 'delete_customer', customer_vault_id: vaultId }).toString(),
     }).catch(() => {});   // the card leaves OUR list either way; a vault orphan is harmless
     await ref.set({ vaultCards: cards.filter((c) => String(c.vaultId) !== vaultId) }, { merge: true });
     return { ok: true };
 });
 
 // Pay one of your own documents, with a saved card or a new one.
-exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET] }, async (request) => {
+exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET] }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const { collection, docId, amount, vaultId, paymentToken, saveCard } = request.data || {};
     const db = admin.firestore();
@@ -3329,7 +3369,9 @@ exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NS_ACC
     if (!(amt > 0 && amt <= balance)) throw new HttpsError('invalid-argument', `The amount must be between $0.01 and $${balance.toFixed(2)}.`);
 
     const cfg = await nmiConfig();
-    const brand = String(d.brand || 'ce').toLowerCase();
+    // The DOCUMENT's brand, read under both spellings — `d.brand` alone missed every CPQ job,
+    // which carries `brandId`, and sent them to whichever account was the default.
+    const brand = brandOfDoc(d, collection === 'jobs' ? 'that quote' : 'that sales order');
     const reference = collection === 'jobs' ? String(d.quoteNo || d.jobId || d.id) : `SO ${d.soId || d.id}`;
 
     let useVault = String(vaultId || '');
@@ -3339,7 +3381,7 @@ exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NS_ACC
         if (!ok) throw new HttpsError('permission-denied', 'That card is not on your account.');
     } else if (saveCard === true) {
         // Save first, then charge the saved card, so one card entry does both.
-        const saved = await vaultAddCard({ customerId, paymentToken, cfg: await nmiConfig() });
+        const saved = await vaultAddCard({ customerId, paymentToken, cfg, brand });
         useVault = saved.vaultId;
     }
 
