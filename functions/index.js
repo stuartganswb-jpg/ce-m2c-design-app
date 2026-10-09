@@ -2846,6 +2846,19 @@ const payLinkOf = async (token) => {
 
 // What the pay page shows. Public by design (the token IS the credential) — it returns only what a
 // payer must see: who it is for, which document, and what is owed.
+// THE MERCHANT OF RECORD, per brand — the company whose merchant account takes the money, and so
+// the name that appears on the cardholder's statement. The pay page must say the SAME name: a page
+// headed "Classical Elements" against a statement line reading MC America is how a customer decides
+// they do not recognise a charge, and a chargeback follows (Stuart 2026-10-08, MC America dba
+// Uniq'uity going live). This is deliberately the LEGAL entity, not the trading name the packing
+// lists use.
+const PAY_MERCHANT_NAME = {
+    ce: 'Classical Elements',
+    uniquity: "MC America dba Uniq'uity",
+    m2c: 'M2C Studio',
+    leyla: 'Leyla Gans LLC',
+};
+
 exports.payIntent = onCall({ cors: true }, async (request) => {
     const link = await payLinkOf((request.data || {}).token);
     const cfg = await nmiConfig();
@@ -2854,6 +2867,7 @@ exports.payIntent = onCall({ cors: true }, async (request) => {
     return {
         environment: cfg.environment,
         tokenizationKey,
+        merchantName: PAY_MERCHANT_NAME[link.brand] || String(link.brand || '').toUpperCase(),
         collectJsUrl: cfg.environment === 'PRODUCTION' ? 'https://secure.nmi.com/token/Collect.js' : 'https://sandbox.nmi.com/token/Collect.js',
         docType: link.docType, reference: link.reference, customerName: link.customerName,
         totalAmount: link.totalAmount, amountDue: link.amountDue, minAmount: link.minAmount, maxAmount: link.maxAmount,

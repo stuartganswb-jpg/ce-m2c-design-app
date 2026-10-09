@@ -95,19 +95,25 @@ export default function Pay() {
     window.CollectJS.startPaymentRequest();
   };
 
+  // WHOSE PAGE THIS IS. The link carries the brand, and the brand is the merchant of record whose
+  // name the cardholder will see on their statement — so the page says that name and no other.
+  // Hardcoding one company's name here worked until there were two merchant accounts, and would
+  // have shown Classical Elements to a customer paying MC America (Stuart 2026-10-08).
+  const merchant = (intent && intent.merchantName) || '';
+
   // ── States ────────────────────────────────────────────────────────────────────────────────
   if (done) {
     return (
       <div className="gate">
         <div className="gate-card" style={{ textAlign: 'center' }}>
-          <span className="eyebrow">Classical Elements</span>
+          <span className="eyebrow">{merchant}</span>
           <h1 style={{ marginBottom: 6 }}>Thank you</h1>
           <p className="sub">
             {fmt(done.amount)} received for {done.reference || 'your order'}.<br />
             Confirmation number {done.transactionId}.
           </p>
           <p style={{ fontSize: 13, color: 'var(--ink-soft)' }}>
-            A receipt is on its way. Your Classical Elements team has been notified.
+            A receipt is on its way. Your {merchant} team has been notified.
           </p>
           {done.environment !== 'PRODUCTION' && (
             <p style={{ fontSize: 12, color: '#9b6a2c' }}>TEST MODE — no money moved.</p>
@@ -120,12 +126,15 @@ export default function Pay() {
   if (err && !intent) {
     return (
       <div className="gate">
+        {/* THE ONE STATE THAT CANNOT KNOW THE BRAND: the link itself failed to open, so there is
+            no brand to read. It names no company rather than guessing at one — a customer of
+            Uniq'uity should not be told to ring Classical Elements. */}
         <div className="gate-card" style={{ textAlign: 'center' }}>
-          <span className="eyebrow">Classical Elements</span>
+          <span className="eyebrow">Payment</span>
           <h1 style={{ marginBottom: 6 }}>Payment link</h1>
           <p className="sub">{err}</p>
           <p style={{ fontSize: 13, color: 'var(--ink-soft)' }}>
-            Please contact us at info@classicalelements.com or 1 (336) 967-3313 and we will send a new link.
+            Please reply to the message this link came from, or contact the company that sent it, and they will send a new one.
           </p>
         </div>
       </div>
@@ -140,7 +149,7 @@ export default function Pay() {
   return (
     <div className="gate">
       <div className="gate-card" style={{ maxWidth: 460 }}>
-        <span className="eyebrow">Classical Elements</span>
+        <span className="eyebrow">{merchant}</span>
         <h1 style={{ marginBottom: 4 }}>Payment</h1>
         <p className="sub">
           {DOC_WORDS[intent.docType] || 'Document'} {intent.reference}
@@ -195,7 +204,7 @@ export default function Pay() {
 
         <p style={{ marginTop: 18, fontSize: 12, color: 'var(--ink-soft)', textAlign: 'center' }}>
           Card details are entered directly with our payment provider over an encrypted connection —
-          Classical Elements never receives or stores your card number.
+          {merchant} never receives or stores your card number.
           <br />
           <a href="#/policies/security">Payments &amp; Security</a> · <a href="#/policies/terms">Terms</a> · <a href="#/policies/returns">Returns</a>
         </p>
