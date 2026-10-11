@@ -1139,6 +1139,62 @@ const FinishingGuide = () => (
     </div>
 );
 
+// ── UNIQUITY · CUSTOM PILLOWS (2026-10-11: the whole program, team level) ──────────────────────────
+const UniquityGuide = () => (
+    <div>
+        <h2 style={S.h2}>The idea in one minute</h2>
+        <p style={S.p}>A custom pillow is drawn on the Vision board, priced from one table (the size at the fabric's
+        price group, plus labour per seam and the details), sent straight to <b>Order Entry</b> — never through CPQ —
+        and sold on the same order as any stocked pillow, throw or sample. When the order is saved, RTG starts it,
+        the warehouse picks the fabric and the inserts, and the <b>Stitch &amp; Sew</b> app runs it through Cut, Sew,
+        Stuff and Pack. The remainder of every fabric goes back on the shelf as a labelled cut, and the next pillow
+        takes a shelf cut before the roll.</p>
+        <div style={S.rule}>Order Entry only. A pillow is a tab 7 line; it is never saved from CPQ. Whatever the order
+        also carries (a throw, a swatch) rides the same order, the same pick and the same card.</div>
+
+        <h2 style={S.h2}>Setting up — <span style={S.tabno}>6.5 Tools, brand Uniquity, manager or higher</span></h2>
+        <Screen title="Pillow Pricing" tag="the one price table">
+            <Path name="The chart" goes="drop the Pillow Size Price Chart">One row per fabric group (A, B, C…), one column per standard size, one price per cell. Apply replaces the table and sets the board's size list to the chart's sizes — a size that is not on the chart cannot be quoted.</Path>
+            <Path name="Minimum cut per size" goes="one side">The rectangle one side of each size takes off the roll. Blank = the pillow plus the seam allowance each way. A standard pillow takes two; a custom pillow may take a different fabric per side. Every cut on the shelf is labelled with the largest size that fits inside it.</Path>
+            <Path name="Labour and details">Labour per custom seam, and a list of details with a price each or per yard — flange, welt, trim on the edges, fringe on a seam, and any new kind you add. A blank price means the detail is not offered; a pillow that needs it refuses to price and says so.</Path>
+            <Path name="Fabrics" goes="download → the office fills → drop back">The fabric sheet is pre-filled with every fabric and trim in the library — code, the throw it is converted from, group, bolt width, railroad — and one column per size with the cut length that fabric needs for one side ("—" when it is too narrow). A known code updates the item; a new code creates it. Base prices and NetSuite ids are never touched.</Path>
+        </Screen>
+        <Screen title="Fabric Cut Stock" tag="the shelf, by fabric">
+            <Path name="The drill-down">Per fabric: its throw, width, the cuts on the shelf with the largest pillow each still makes, the cut yards, and the roll yards once <b>Read NetSuite yards</b> is pressed.</Path>
+            <Path name="Add a cut" goes="a clean cut off the roll that is not going into a pillow today">Length and width; the label prints. <b>Scrap</b> posts the yards out of NetSuite. <b>Convert throws → yardage</b> builds the fabric-yardage item from the throw in NetSuite — a throw is typically two yards at the fabric's width; XL throws are longer.</Path>
+        </Screen>
+
+        <h2 style={S.h2}>Designing — <span style={S.tabno}>9. Client Vision · Custom Pillow Assembly</span></h2>
+        <Screen title="The board" tag="draw · tag · price · send">
+            <Path name="Size, fill, edge">The sizes are the chart's. The edge choices are the details the table prices.</Path>
+            <Path name="Panels and seams" goes="draw a seam, drop a tag">Draw seams across the face; each panel gets a letter and its fabric. A back fabric can differ from the front. The price panel at the bottom reads live: the size at the highest group among the panels, the seams, the details — and every refusal by name, with the cut each panel takes in yards.</Path>
+            <Path name="📷 Photo a fabric" goes="a fabric that is not in the library">At a trade show: take the photo, type the pattern id and colour, pick the price group and the width. It files in the Asset Gallery and lists as a fabric on the board. The pillow prices at the group you picked; the order reads <b>TO BE SOURCED</b> for that fabric and nothing is pulled for it.</Path>
+            <Path name="Send to Order Entry" goes="7. Quick Ship → Custom pillows awaiting entry">Pick a customer in the header, say how many, press it. The request shows on the customer's CRM pipeline, priced.</Path>
+        </Screen>
+
+        <h2 style={S.h2}>Selling — <span style={S.tabno}>7. Quick Ship</span></h2>
+        <Screen title="The pillow on the order" tag="load · add the rest · save">
+            <Path name="Load into cart">The pillow lands as one priced line on the CUSTOM PILLOW item with its fabric, inserts and zipper beneath it at $0, in yards. Add the stocked pillows, throws and samples; save as a quote or a sales order. The card is charged here.</Path>
+            <Path name="🖼 A picture on a line" goes="samples">Any line can carry a picture from the Asset Gallery — a sample's swatch photo lands on it by itself when the item has one. The pictures print on the quote beside the lines.</Path>
+            <Path name="Ready date">A custom pillow promises three weeks, two on rush, unless something slower is on the same order.</Path>
+        </Screen>
+        <div style={S.note}><b>Before the first pillow:</b> the CUSTOM PILLOW item must exist in the Uniquity library with its NetSuite id (the load refuses by name without it), and NetSuite must know the Uniquity form and class. Until then the push refuses by name, as every non-CE brand does.</div>
+
+        <h2 style={S.h2}>Making — <span style={S.tabno}>RTG · the warehouse · Stitch &amp; Sew</span></h2>
+        <Screen title="From the saved order to the floor" tag="the same spine as every order">
+            <Path name="RTG" goes="auto-release on">The order lists on the board as an Order Entry record; its pillow lines start by themselves as ONE sewing document per row. If a fabric is short, the line waits for a person on the review, like any short part.</Path>
+            <Path name="A shelf cut first">When the document is born it takes any cut on the shelf that makes the panel, and names the piece on the pull line; the roll is pulled only for what is left.</Path>
+            <Path name="The warehouse" goes="pick → staging bin → scan the label">The picker pulls the fabric by the yard (or the labelled cut), the inserts and the zippers into the staging bin and scans the document's label. That scan is what lets the sewing floor take it.</Path>
+        </Screen>
+        <Screen title="Stitch & Sew" tag="the hub's tile 05 · your PIN">
+            <Path name="Queue">Every pillow document not yet on the floor: the pillows (picture, size, group, the cut per side), the pulls, and where the warehouse is with it. ▶ Start, then <b>To the floor</b> once the staging label matched. 🖨 reprints the label.</Path>
+            <Path name="Floor" goes="Cut · Sew · Stuff · Pack, one at a time">Start and Complete each zone with your PIN. <b>Completing Cut asks what fabric is left and its usable size</b> — a length and width, or none. Each remainder gets a cut label and goes back on the shelf under Cut Stock. Completing Pack finishes the pillows: the order goes to SO Pack as any order does.</Path>
+            <Path name="Done · Cut Stock">The last seven days, and the same shelf drill-down 6.5 shows.</Path>
+        </Screen>
+        <div style={S.note}><b>NetSuite.</b> No work order opens for a pillow. The throw-to-yardage convert is a build; the fabric, inserts and zippers are the $0 lines on the sales order, relieved when it ships; the pillow itself is non-inventory.</div>
+    </div>
+);
+
 const SECTIONS = [
     { key: 'WO', label: 'Work Orders', comp: WorkOrdersGuide },
     { key: 'OC', label: 'Orders & Customers', comp: OrdersCustomersGuide },
@@ -1149,6 +1205,7 @@ const SECTIONS = [
     { key: 'RP', label: 'Rod Pieces', comp: RodPiecesGuide },
     { key: 'APP', label: 'Working on the App', comp: AppWorkGuide },
     { key: 'AU', label: '1.6 / 1.5 Authoring', comp: AuthoringGuide },
+    { key: 'UNQ', label: 'Uniquity · Custom Pillows', comp: UniquityGuide },
 ];
 
 const UserGuideTab = () => {

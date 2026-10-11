@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { lineImageStripOf } from '../Shared/lineImage';   // 🖼 line pictures on the documents (S7 step 7)
 import { poEmailDraft, markPoSent, acknowledgePurchaseOrder, hasNsNumber, poRef } from '../Shared/purchaseOrders';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -1488,9 +1489,13 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
           total: isUnpricedRequest ? undefined : (activeDocJob.cpqData?.totalPrice || 0) + shippingAmt,
           unpriced: isUnpricedRequest,
           // The pictures CPQ took as each line was added — the customer sees what they are ordering.
-          images: (activeDocJob.cpqData?.cartItems || [])
-              .filter(it => it && typeof it.renderSnapshot === 'string' && it.renderSnapshot.startsWith('data:image'))
-              .map(it => ({ src: it.renderSnapshot, caption: it.sidemark || it.memo || it.assemblyName || '' })),
+          images: [
+              ...(activeDocJob.cpqData?.cartItems || [])
+                  .filter(it => it && typeof it.renderSnapshot === 'string' && it.renderSnapshot.startsWith('data:image'))
+                  .map(it => ({ src: it.renderSnapshot, caption: it.sidemark || it.memo || it.assemblyName || '' })),
+              // 🖼 pictures on Order Entry lines — samples from the Asset Gallery (Shared/lineImage, S7 step 7)
+              ...lineImageStripOf(activeDocJob.cpqData?.lineImages || []),
+          ],
       };
 
       // ── PACKING LIST + INVOICE (S2's design, Stuart approved 2026-09-11) ─────────────────────

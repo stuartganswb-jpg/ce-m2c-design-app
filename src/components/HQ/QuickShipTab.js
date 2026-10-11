@@ -6,6 +6,8 @@ import { resolveShipMethod } from '../Shared/nsTransmit';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { quickShipPullLines, quickShipCoverCodes, quickShipBackorderLines } from '../Shared/quickShipBackorder';
 import { pillowCartPlanOf, PILLOW_REQUEST_STATUS } from '../Shared/pillowRequest';   // 🧵 Uniquity custom pillows from the Vision board (S7 step 3c) — ONE guarded mount
+import { lineImageForItem, lineImageOfAsset, lineImagesOf } from '../Shared/lineImage';   // 🖼 a picture on a line — samples from the Asset Gallery (S7 step 7)
+import AssetImagePicker from '../Shared/AssetImagePicker';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
@@ -887,6 +889,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             ...(opts && opts.pillow ? { pillow: opts.pillow, madeToOrder: opts.pillow.madeToOrder || 'SEW' } : {}),
             ...(opts && opts.pillowKey ? { pillowKey: opts.pillowKey } : {}),
             ...(opts && opts.unitWord ? { unitWord: opts.unitWord } : {}),
+            ...(lineImageForItem(it) ? { lineImage: lineImageForItem(it) } : {}),
             // Kit lines carry their kit identity so pricedCart can apply KIT pricing live.
             kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null, kitFinish: kitMeta?.kitFinish || ''
         }]);
@@ -1211,6 +1214,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // line's NetSuite Tag (custcol3 — the header sidemark stays the fallback), and is stored on
     // the sales-order line so the floor and the packing station read the same room.
     const setLineMemo = (key, v) => setCart(prev => prev.map(l => l.key === key ? { ...l, lineMemo: String(v || '').slice(0, 120) } : l));
+    // 🖼 A PICTURE ON A LINE (Stuart 2026-09-13: "the samples can be sold thru sales order entry. we can attach an image
+    // from asset gallery to them"): picked from the Asset Gallery, or the item's own photograph when it has one
+    // (Shared/lineImage — never a render). Prints on the quote's picture strip beside CPQ's render snapshots.
+    const [imagePickFor, setImagePickFor] = useState(null);   // the cart line key being pictured
+    const setLineImage = (key, img) => setCart(prev => prev.map(l => l.key === key ? { ...l, lineImage: img || null } : l));
 
     // ── A SAVED ORDER LEAVES NOTHING BEHIND (Stuart 2026-08-31) ─────────────────────────────
     // The cart emptied on save but the HEADER did not: the PO, the sidemark, the internal memo,
@@ -1549,6 +1557,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     createdBy: { name: currentUser || '', via: 'QUICKSHIP' },
                     orderDiscount,
                     cpqData: {
+                        lineImages: lineImagesOf(lines),   // 🖼 the pictures on the lines (Shared/lineImage) — the CRM's documents print them
                         totalPrice: lines.reduce((sum, l) => sum + l.rate * l.eachQty, 0) + trvPushLines.reduce((sum, t) => sum + ((t.rate || 0) * (t.quantity || 1)), 0),
                         // ── WHAT THE CLIENT HAS TO BE ABLE TO CHECK (Stuart 2026-08-31) ─────────
                         // The kit prints as ONE priced line under the code they ordered, and every
@@ -1688,7 +1697,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // NetSuite ($0 lines) and prints them on the documents, but they never reached lines[] — so the SO Pack
                 // never listed the track, fascia and brackets to pick. Each goes on as the item NetSuite consumes, in
                 // NetSuite's unit, a shelf pick of its kit (trvComponent) — exactly what leaves the shelf.
-                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
+                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}), ...(l.lineImage && l.lineImage.url ? { lineImage: l.lineImage } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -1846,6 +1855,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             )}
 
             {/* PORTAL QUOTE REQUESTS — customer-built stock quotes awaiting review */}
+            {imagePickFor && (
+                <AssetImagePicker brandId={activeBrand} title="Picture for this line — from the Asset Gallery" onClose={() => setImagePickFor(null)}
+                    onPick={(a) => { const img = lineImageOfAsset(a); if (!img) { addLog('That gallery asset has no usable picture.', 'warn'); return; } setLineImage(imagePickFor, img); setImagePickFor(null); }} />
+            )}
             {pillowReqs.length > 0 && (
                 <div style={{ ...card, padding: '14px 16px', borderLeft: '4px solid var(--brass)' }}>
                     <span style={{ ...lbl, color: 'var(--brass)' }}>🧵 Custom pillows awaiting entry · {pillowReqs.length} from the Vision board</span>
@@ -2394,6 +2407,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--ink)' }}>{l.aliasErp || l.erp || '—'} {!l.nsId && <span style={{ color: '#d9534f' }} title="No NetSuite ID — will be skipped on push">⚠</span>}</div>
                                     {l.aliasErp && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>ships as {l.erp}</div>}
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.packUom && <span style={{ color: 'var(--brass)' }}> · {l.qty} × {l.packUom} = {l.eachQty} ea</span>}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}{l.kitFinish ? ` · ${l.kitFinish}` : ''}</span>}</div>
+                                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '4px' }}>
+                                        {l.lineImage && l.lineImage.url ? <img src={l.lineImage.url} alt="" title={l.lineImage.name || ''} style={{ width: '34px', height: '34px', objectFit: 'cover', border: '1px solid var(--line)' }} /> : null}
+                                        <button onClick={() => setImagePickFor(l.key)} title="Pick a picture from the Asset Gallery for this line (prints on the quote)" style={{ background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontSize: '12px', padding: '3px 6px' }}>🖼</button>
+                                        {l.lineImage ? <button onClick={() => setLineImage(l.key, null)} title="Remove the picture" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '11px', color: 'var(--ink-soft)' }}>✕</button> : null}
+                                    </div>
                                     <input value={l.lineMemo || ''} onChange={e => setLineMemo(l.key, e.target.value)} placeholder="Memo / room — e.g. LIVING ROOM LEFT" title="Prints on the customer's quote beside this line, and rides the line's NetSuite Tag" style={{ width: '100%', marginTop: '4px', padding: '4px 6px', border: '1px solid var(--line)', background: l.lineMemo ? '#fffdf5' : '#fff', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }} />
                                 </div>
                                 <input type="number" min="1" value={l.qty} onChange={e => setQty(l.key, e.target.value)} style={qtyInp} title={l.packUom ? `Packs of ${l.packSize}` : 'Quantity'} />
