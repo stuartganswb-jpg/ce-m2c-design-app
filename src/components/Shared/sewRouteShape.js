@@ -17,8 +17,9 @@
 //
 // Pure — proven by scripts/sewRoute.test.mjs.
 
-import { PILLOW_DIVISION } from './pillowPricing.js';
-import { minCutOf } from './pillowCuts.js';
+import { PILLOW_DIVISION, dimsOf } from './pillowPricing.js';
+import { minCutOf, allowanceOf, isRailroad, sizesFor } from './pillowCuts.js';
+import { isLivePiece } from './fabricPieces.js';
 
 export const SEW_DIVISION = PILLOW_DIVISION;   // 'SEW'
 export const SEW_FINISH = 'SEW';               // the group's "finish" on the Order Entry route — one sewing document per row
@@ -76,12 +77,87 @@ export const sewPillowOf = ({ job, config = null } = {}) => {
     };
 };
 
+// ── A SHELF CUT BEFORE THE ROLL (Stuart 2026-10-11: "assign automatically when applicable") ─────────────
+// Every pull line of a pillow is ONE panel's cut × the pillows ordered (the back is a cut of the pillow's size).
+// Before the roll is pulled, the ledger's live cuts of that fabric are offered to each required cut: the
+// smallest cut that fits wins (least waste), one cut per required piece, biggest requirement first. The pull
+// line's yards shrink by what the cuts cover and each allocated cut becomes its own pull line — the picker
+// pulls the labelled piece by its id. Pure; the writer consumes the pieces it allocated.
+
+/** The rectangle one pull line's cut needs (before the seam allowance): the panel's, or the pillow's for the back. */
+export const panelCutOf = (pillow, panelLabel) => {
+    const label = U(panelLabel);
+    if (!pillow) return null;
+    if (label === 'BACK' || !label) { const d = dimsOf(pillow.sizeKey); return d ? { widthIn: d.w, heightIn: d.h } : null; }
+    const p = (pillow.panels || []).find(x => U(x.label) === label);
+    if (p && N(p.widthIn) > 0 && N(p.heightIn) > 0) return { widthIn: N(p.widthIn), heightIn: N(p.heightIn) };
+    const d = dimsOf(pillow.sizeKey);
+    return d ? { widthIn: d.w, heightIn: d.h } : null;
+};
+
+/** Does a live cut fit a needed rectangle (length along the roll × width), in the fabric's orientation? */
+export const cutFits = (piece, need, { railroad = false, allowanceIn = 0.5 } = {}) => {
+    if (!piece || !need) return false;
+    const L = railroad ? need.widthIn + 2 * allowanceIn : need.heightIn + 2 * allowanceIn;
+    const W = railroad ? need.heightIn + 2 * allowanceIn : need.widthIn + 2 * allowanceIn;
+    return N(piece.lengthIn) + 1e-9 >= L && N(piece.widthIn) + 1e-9 >= W;
+};
+
+/**
+ * pulls   the document's YARD pull lines [{ legacyErpId, quantity (yards for every pillow), panel, pillowLineIdx, … }]
+ * pillows the pillows by their line index { [lineIdx]: pillow } (sizeKey, panels, qty)
+ * pieces  live `fabric_pieces` [{ id, itemCode, lengthIn, widthIn, status }]
+ * fabrics { [code]: item } (railroad flag)
+ * → { pulls: the adjusted pull lines (+ one per allocated cut), allocations: [{ pieceId, itemCode, panel, pillowLineIdx, lengthIn, widthIn, yards }], notes }
+ */
+export const allocateCutsOf = ({ pulls = [], pillows = {}, pieces = [], fabrics = {}, config = null } = {}) => {
+    const allow = allowanceOf(config || {});
+    const live = (pieces || []).filter(isLivePiece).map(p => ({ ...p }));
+    const used = new Set();
+    const allocations = [], notes = [];
+    const out = [];
+    // biggest requirement first, so a large panel never loses its only fitting cut to a small one
+    const reqs = (pulls || []).map((pl, i) => {
+        const pillow = pillows[pl.pillowLineIdx] || null;
+        const need = U(pl.uom) === 'YARD' ? panelCutOf(pillow, pl.panel) : null;
+        return { i, pl, pillow, need, area: need ? need.widthIn * need.heightIn : 0 };
+    });
+    [...reqs].sort((a, b) => b.area - a.area).forEach(r => {
+        const { pl, pillow, need } = r;
+        if (!need || !pillow) { out[r.i] = pl; return; }
+        const code = U(pl.legacyErpId);
+        const fabric = fabrics[code] || null;
+        const rr = isRailroad(fabric);
+        const count = Math.max(1, Math.floor(N(pillow.qty) || 1));
+        const perCutYards = N(pl.quantity) / count;
+        let covered = 0;
+        for (let k = 0; k < count; k++) {
+            const fit = live.filter(p => !used.has(p.id) && U(p.itemCode) === code && cutFits(p, need, { railroad: rr, allowanceIn: allow }))
+                .sort((a, b) => (N(a.lengthIn) * N(a.widthIn)) - (N(b.lengthIn) * N(b.widthIn)))[0];
+            if (!fit) break;
+            used.add(fit.id); covered++;
+            const yards = Math.round((N(fit.lengthIn) / 36) * 1000) / 1000;
+            allocations.push({ pieceId: fit.id, itemCode: code, panel: U(pl.panel) || '', pillowLineIdx: pl.pillowLineIdx, lengthIn: N(fit.lengthIn), widthIn: N(fit.widthIn), yards, makes: (sizesFor({ cut: fit, railroad: rr, config: config || {} })[0] || {}).key || '' });
+        }
+        if (!covered) { out[r.i] = pl; return; }
+        const left = Math.round(Math.max(0, N(pl.quantity) - covered * perCutYards) * 1000) / 1000;
+        notes.push(`${code} · panel ${U(pl.panel) || '?'}: ${covered} of ${count} cut(s) from the shelf${left > 0 ? `, ${left} yd off the roll` : ''}`);
+        out[r.i] = left > 0 ? { ...pl, quantity: left, fromRollAfterCuts: true } : null;
+    });
+    const pulls2 = out.filter(Boolean);
+    allocations.forEach(a => pulls2.push({
+        legacyErpId: a.itemCode, partId: a.itemCode, partName: `CUT ${a.pieceId} — ${a.lengthIn}" × ${a.widthIn}"${a.makes ? ` (up to ${a.makes})` : ''}`,
+        quantity: a.yards, uom: 'YARD', panel: a.panel, pillowLineIdx: a.pillowLineIdx, pieceId: a.pieceId, pickByPiece: true,
+    }));
+    return { pulls: pulls2, allocations, notes };
+};
+
 /**
  * The RTG record + the finishing payload for a sewing group — the pair shape (Shared/rowPairShape.pairShapeOf)
  * with no shop half and the sewing facts in place of the recipe. `partsList` = every job's pull lines (yards /
  * each), each carrying the uom stamp the caller computed (`uomOf(part, qty)`), the bin and the line number.
  */
-export const sewDocShapeOf = ({ group, so, brand, createdBy = '', now = Date.now(), inventory = [], gate = {}, materialStamp = {}, woId, note = '', config = null, uomOf = () => ({}), factsOf = () => ({}) } = {}) => {
+export const sewDocShapeOf = ({ group, so, brand, createdBy = '', now = Date.now(), inventory = [], gate = {}, materialStamp = {}, woId, note = '', config = null, uomOf = () => ({}), factsOf = () => ({}), pieces = [] } = {}) => {
     const jobs = (group && group.jobs) || [];
     const rowLabel = (group && group.rowLabel) || '';
     const needBy = String((so && (so.needBy || so.reqDate)) || '');
@@ -108,12 +184,16 @@ export const sewDocShapeOf = ({ group, so, brand, createdBy = '', now = Date.now
             });
         });
     });
-    const pillows = jobs.map(job => sewPillowOf({ job, config }));
+    const pillows0 = jobs.map(job => sewPillowOf({ job, config }));
+    // a shelf cut before the roll — when the caller handed over the ledger's live cuts
+    const alloc = allocateCutsOf({ pulls: partsList, pillows: Object.fromEntries(pillows0.map(p => [p.soLineIdx, p])), pieces: pieces || [], fabrics: Object.fromEntries((inventory || []).map(f => [U(f.legacyErpId || f.itemId), f])), config });
+    const partsListFinal = alloc.allocations.length ? alloc.pulls.map(pl => (pl.pickByPiece ? { ...pl, finishCode: SEW_FINISH, finishLabel: 'Sew', binLocation: ((partByCode(pl.legacyErpId) || {}).manufacturingSpecs || {}).homeBin || 'UNASSIGNED', soLineIdx: pl.pillowLineIdx, ...uomOf(partByCode(pl.legacyErpId) || pl, pl.quantity) } : pl)) : partsList;
+    const pillows = pillows0;
     const totalPillows = pillows.reduce((s, p) => s + p.qty, 0);
     const lineIdxs = jobs.map(j => j.lineIdx).filter(i => Number.isInteger(i) && i >= 0);
     const label = `${rowLabel ? `${rowLabel} · ` : ''}Stitch & Sew`;
     const itemName = `${rowLabel || `Order ${soRef}`} · Stitch & Sew · ${totalPillows} custom pillow${totalPillows === 1 ? '' : 's'}${pillows.some(p => p.sourced.length) ? ' · fabric to be sourced' : ''}`;
-    const facts = factsOf({ partsList, cutList: [], lineCount: ((so && so.lines) || []).length });
+    const facts = factsOf({ partsList: partsListFinal, cutList: [], lineCount: ((so && so.lines) || []).length });
     const salesHeader = {
         orderClass: 'ORDER_ENTRY', soAppId: so && so.id, soId: soRef, customerId: (so && so.customerId) || null, customer: cust,
         soAccepted: !!(so && so.nsInternalId), soLineIdxs: lineIdxs,
@@ -136,7 +216,8 @@ export const sewDocShapeOf = ({ group, so, brand, createdBy = '', now = Date.now
         reqDate: needBy, needBy,
         cpqSpecs: {}, imageUrl: pillows.find(p => p.snapshot) ? pillows.find(p => p.snapshot).snapshot : null,
         dimensions: { length: 10, width: 5, height: 2 },
-        partsList, bomExploded: false,
+        partsList: partsListFinal, bomExploded: false,
+        ...(alloc.allocations.length ? { cutAllocations: alloc.allocations, cutAllocationNotes: alloc.notes } : {}),
         currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
         tasks: {}, machineAssigned: null, redlineAlert: false,
         // no shop half: to the pick at once (rule 6 of 09-23)
@@ -155,9 +236,9 @@ export const sewDocShapeOf = ({ group, so, brand, createdBy = '', now = Date.now
         recipe: SEW_FINISH,
         qty: totalPillows, totalParts: totalPillows, reqDate: needBy, ...(needBy ? { needBy } : {}),
         note: note || label, memo: note || label,
-        ...(partsList.length ? { partsList, bomExploded: false } : {}),
+        ...(partsListFinal.length ? { partsList: partsListFinal, bomExploded: false } : {}),
         ...gate, ...facts, ...(materialStamp || {}),
         finPayload, createdAt: now, createdBy,
     };
-    return { hq, finPayload, partsList, pillows };
+    return { hq, finPayload, partsList: partsListFinal, pillows, allocations: alloc.allocations, allocationNotes: alloc.notes };
 };

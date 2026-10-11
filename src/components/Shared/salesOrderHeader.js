@@ -156,21 +156,28 @@ export const LEAD_WEEKS = {
     // wood ROUTES by the line: wood + miter → Custom via the per-line override, wood + straight →
     // finishing). Lead time and routing are two questions; this file answers only the first.
     STAIN:  { std: 4, rush: 2 },   // wood stain: S01…S12
+    // ── STITCH & SEW (Stuart 2026-10-11: "3 weeks, 2 weeks rush") — a custom pillow carries no finish code; the
+    // class is keyed off a made-to-order SEW line (tab 7's pillow holder) and wins only when nothing slower is on
+    // the order. The sewing floor's own time, not a finish's.
+    SEW:    { std: 3, rush: 2 },
 };
 
 /** The finish class the order's lead time follows: 'PLATED' beats 'PAINT'; null = no promise. */
-export const leadBasisOf = (codes = []) => {
+export const leadBasisOf = (codes = [], { sew = false } = {}) => {
     const cs = (codes || []).filter(Boolean).map(up);
     // Longest promise first: a mixed order is only as quick as its slowest finish.
     if (cs.some(isOutsourcedFinishCode)) return 'PLATED';
     if (cs.some(c => isAppliedFinishCode(c))) return 'PAINT';
     if (cs.some(isWoodStainCode)) return 'STAIN';
+    if (sew) return 'SEW';
     return null;
 };
+/** A line that is a custom pillow (tab 7's holder: madeToOrder SEW / the pillow design) — the SEW class's key. */
+export const isSewLine = (l) => !!l && (up(l.madeToOrder) === 'SEW' || !!l.pillow);
 
 /** { leadBasis, leadWeeks, readyDate, rushApplied } for the codes on an order. */
-export function readyDateOf({ codes = [], rush = false, from = Date.now() } = {}) {
-    const basis = leadBasisOf(codes);
+export function readyDateOf({ codes = [], rush = false, from = Date.now(), sew = false } = {}) {
+    const basis = leadBasisOf(codes, { sew });
     if (!basis) return { leadBasis: null, leadWeeks: null, readyDate: '', rushApplied: !!rush };
     const weeks = rush ? LEAD_WEEKS[basis].rush : LEAD_WEEKS[basis].std;
     const d = new Date(typeof from === 'number' ? from : Date.parse(from) || Date.now());
@@ -190,7 +197,7 @@ export const isRushFeeItem = (part) => {
 };
 
 /** Words for the checkout panel and the documents. */
-const LEAD_WORDS = { PLATED: 'plated finish', PAINT: 'painted finish', STAIN: 'stained finish' };
+const LEAD_WORDS = { PLATED: 'plated finish', PAINT: 'painted finish', STAIN: 'stained finish', SEW: 'custom pillows (Stitch & Sew)' };
 export const leadText = ({ leadBasis, leadWeeks, readyDate, rushApplied }) => {
     if (!leadBasis) return 'No ready-date promise — nothing on this order carries an applied (painted, plated or stained) finish.';
     const cls = LEAD_WORDS[leadBasis] || 'applied finish';
@@ -269,6 +276,7 @@ export function soHeaderOf({ door, job = null, form = null, customer = null, by 
         const ship = (form && form.ship) || {};
         const lines = (form && form.lines) || [];
         const codes = [...new Set(lines.filter(l => l && l.toBeFinished && l.finishCode).map(l => up(l.finishCode)))];
+        const sew = lines.some(isSewLine);
         const rush = !!(form && form.rush);
         h = {
             customerPo: str(ex.po), sidemark: str(ex.sidemark), jobName: str(form && form.jobName),
@@ -282,7 +290,7 @@ export function soHeaderOf({ door, job = null, form = null, customer = null, by 
             recipeLabel: codes.length === 1 ? (labelOf((finishes || []).find(f => f && up(f.code) === codes[0])) || codes[0]) : '',
             recipeSource: codes.length === 1 ? 'lineCode' : (codes.length ? 'mixed' : 'none'),
             recipes: codes,
-            ...readyDateOf({ codes, rush, from: now }),
+            ...readyDateOf({ codes, rush, from: now, sew }),
             // ONE FIELD, BOTH DOORS (Stuart 2026-09-11, S5's display orders): how this order was
             // discounted. Tab 7 knows only a set % at checkout, applied to the item rates.
             orderDiscount: orderDiscountStamp({ mode: (parseFloat(ex.orderDiscountPercent) || 0) > 0 ? 'ORDER_PERCENT' : 'NONE', percent: ex.orderDiscountPercent, by }),

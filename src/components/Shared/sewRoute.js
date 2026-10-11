@@ -6,7 +6,7 @@
 // 09-23: the sales order is the record). The release is the route's own (`releaseFinWoToFloor`), exactly
 // as a pair's.
 import { db } from '../../firebase';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, getDocs, query, collection, where, updateDoc, arrayUnion } from 'firebase/firestore';
 import { withItemCode } from './workOrderContract';
 import { receiptGateFields, ParkRefusal } from './workOrderCreate';
 import { materialRowsOf, materialStampOf } from './materialGrid.js';
@@ -46,7 +46,23 @@ export const parkSewDoc = async ({ group, so, brand, user = '', inventory = [], 
     const planLines = (group.jobs || []).flatMap(j => j.__planLines || j.sewParts || []);
     const materialStamp = materialStampOf(materialRowsOf({ components, planLines, gate, poleChoice: null, backOrder: '', shopWoIds: [], unitsKnown: !(group.jobs || []).some(j => j.unitsKnown === false) }), now);
     const note = `Order Entry ${soRef} · ${(so && so.customer) || ''} · ${group.rowLabel ? `${group.rowLabel} · ` : ''}Stitch & Sew${so && so.sidemark ? ` · ${so.sidemark}` : ''}`;
-    const shape = sewDocShapeOf({ group, so, brand, createdBy: user, now, inventory, gate, materialStamp, woId, note, config, uomOf: uomStampOf, factsOf: pairFactsOf });
+    // A SHELF CUT BEFORE THE ROLL (Stuart 2026-10-11): the live cuts of every fabric this document pulls, read once;
+    // the shape allocates; what it allocated is consumed below, named for this work order.
+    let pieces = [];
+    try {
+        const codes = [...new Set(planLines.map(pl => U(pl.legacyErpId)).filter(Boolean))];
+        for (let i = 0; i < codes.length; i += 10) {
+            const snap = await getDocs(query(collection(db, 'fabric_pieces'), where('itemCode', 'in', codes.slice(i, i + 10)), where('status', '==', 'CUT')));
+            pieces.push(...snap.docs.map(d => d.data()));
+        }
+    } catch (e) { console.warn('sew route: cut ledger read failed — the roll is pulled', e); pieces = []; }
+    const shape = sewDocShapeOf({ group, so, brand, createdBy: user, now, inventory, gate, materialStamp, woId, note, config, uomOf: uomStampOf, factsOf: pairFactsOf, pieces });
+    for (const a of shape.allocations || []) {
+        try {
+            await updateDoc(doc(db, 'fabric_pieces', a.pieceId), { status: 'CONSUMED', updatedAt: now, consumedFor: woId, history: arrayUnion({ orderRef: woId, outcome: `allocated to ${woId} · panel ${a.panel || '?'}`, by: user || '', at: now }) });
+        } catch (e) { console.warn('sew route: could not consume piece', a.pieceId, e); }
+    }
+    (shape.allocationNotes || []).forEach(n => made.push(`🧶 shelf cut — ${n}`));
     const hq = withItemCode({ ...shape.hq, finPayload: withItemCode(shape.finPayload) });
     await setDoc(doc(db, 'hq_work_orders', woId), hq, { merge: true });
     const sourced = shape.pillows.flatMap(p => p.sourced || []);
