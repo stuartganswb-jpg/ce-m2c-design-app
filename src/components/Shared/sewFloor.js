@@ -127,5 +127,5 @@ export const sewDoneOf = (docs = [], now = Date.now(), days = 7) => (docs || [])
 export const sewLabelOf = (wo) => ({
     kind: 'STITCH & SEW · PILLOWS', woRef: wo && (wo.woNum || wo.displayId || wo.id), orderKey: wo && wo.id,
     item: wo && wo.itemName, qtyLabel: `${N(wo && wo.totalPillows) || N(wo && wo.totalParts)} pillow(s)`, customer: wo && wo.customer,
-    facts: (wo && wo.pillows || []).map(p => `${p.qty} × ${p.sizeKey}${p.group ? ` ${p.group}` : ''}`).join(' · '),
+    facts: ((wo && wo.pillows) || []).map(p => `${p.qty} × ${p.sizeKey}${p.group ? ` ${p.group}` : ''}`).join(' · '),
 });
