@@ -5,6 +5,7 @@ import { nsTransactionHeader, withLineLocations } from '../Shared/nsHeader';
 import { resolveShipMethod } from '../Shared/nsTransmit';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { quickShipPullLines, quickShipCoverCodes, quickShipBackorderLines } from '../Shared/quickShipBackorder';
+import { pillowCartPlanOf, PILLOW_REQUEST_STATUS } from '../Shared/pillowRequest';   // 🧵 Uniquity custom pillows from the Vision board (S7 step 3c) — ONE guarded mount
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
@@ -475,6 +476,41 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             e => { console.warn('Quick Ship portal request listen failed', e); setPortalReqs([]); });
         return unsub;
     }, [activeBrand]);
+    // ── 🧵 CUSTOM PILLOWS AWAITING ENTRY (S7 step 3c, Stuart 2026-09-13: the board sends "right to the
+    // sales order entry"). A jobs PILLOW_REQUEST written by 9. Client Vision; Load into cart = the priced
+    // holder (the non-inventory CUSTOM PILLOW item, made to order SEW) + each consumed library item at $0
+    // beneath it (inKit / kitOf, the item-kit shape) with its yards riding the per-foot mechanism under the
+    // word 'yd'. A photographed fabric is no item: it rides the holder's note. Uniquity only; nothing else
+    // on this tab changes.
+    const [pillowReqs, setPillowReqs] = useState([]);
+    useEffect(() => {
+        if (activeBrand !== 'uniquity') { setPillowReqs([]); return; }
+        const unsub = onSnapshot(query(collection(db, 'jobs'), where('brandId', '==', activeBrand), where('status', '==', PILLOW_REQUEST_STATUS)),
+            (snap) => setPillowReqs(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))),
+            e => { console.warn('pillow request listen failed', e); setPillowReqs([]); });
+        return unsub;
+    }, [activeBrand]);
+    const loadPillowReq = async (job) => {
+        const lines = ((job.pillowRequest || {}).lines) || [];
+        const byCode = (code) => allItems.find(x => erpOf(x) === String(code || '').toUpperCase()) || null;
+        const plans = lines.map(l => pillowCartPlanOf({ line: l, findByCode: byCode }));
+        const bad = plans.find(p => !p.ok);
+        if (bad) { addLog(`⛔ Pillow request ${job.jobId || job.id} not loaded — ${bad.errors.map(e => e.message).join(' ')}`, 'error'); return; }
+        setCustomerId(job.customer?.id || '');
+        setCustSearch(job.customer ? `${job.customer.name || ''} (${job.customer.id})` : '');
+        setJobName(job.jobName || '');
+        plans.forEach((plan, i) => {
+            const holderKey = `pillow-${job.id}-${i}`;
+            pushLine(plan.holder.item, plan.holder.qty, plan.holder.note, null, { rateOverride: plan.holder.rate, noPack: true, pillow: { requestId: job.id, line: i, madeToOrder: plan.holder.madeToOrder, summary: lines[i].summary || '', sizeKey: lines[i].sizeKey || '', group: lines[i].group || '', design: lines[i].design || null, panels: lines[i].panels || [], sourced: plan.sourced, capturedFabrics: lines[i].capturedFabrics || [], snapshot: lines[i].snapshot || '' }, pillowKey: holderKey });
+            plan.parts.forEach(part => pushLine(part.item, 1, part.note, null, part.uom === 'YARD'
+                ? { rateOverride: 0, noPack: true, inKit: true, kitOf: holderKey, perFoot: true, feetPer: part.yards, unitWord: 'yd' }
+                : { rateOverride: 0, noPack: true, inKit: true, kitOf: holderKey }));
+        });
+        try {
+            await updateDoc(doc(db, 'jobs', job.id), { status: 'QUICKSHIP_REVIEW', 'pillowRequest.loadedBy': currentUser || 'staff', 'pillowRequest.loadedAt': new Date().toISOString() });
+        } catch (e) { console.warn('pillow request stamp failed', e); }
+        addLog(`🧵 Loaded pillow request ${job.jobId || job.id} — ${lines.length} pillow line(s) for ${job.customer?.name || '?'}${plans.some(p => p.sourced.length) ? ' · a fabric to be sourced rides the note' : ''}`, 'success');
+    };
     const loadPortalReq = async (job) => {
         const pr = job.portalRequest || {};
         const lines = Array.isArray(pr.lines) ? pr.lines : [];
@@ -847,6 +883,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             ...(opts && opts.perFoot ? { perFoot: true, feetPer: parseFloat(opts.feetPer) || 1 } : {}),
             // THE CUT, in inches (S5, 2026-09-17): rides the SO line to Order Entry Needs → the work order → the shop card.
             ...(opts && Number(opts.cutLength) > 0 ? { cutLength: Number(opts.cutLength) } : {}),
+            // 🧵 A custom pillow (S7 step 3c): the holder carries the design; its yardage parts say 'yd' instead of 'ft'.
+            ...(opts && opts.pillow ? { pillow: opts.pillow, madeToOrder: opts.pillow.madeToOrder || 'SEW' } : {}),
+            ...(opts && opts.pillowKey ? { pillowKey: opts.pillowKey } : {}),
+            ...(opts && opts.unitWord ? { unitWord: opts.unitWord } : {}),
             // Kit lines carry their kit identity so pricedCart can apply KIT pricing live.
             kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null, kitFinish: kitMeta?.kitFinish || ''
         }]);
@@ -1519,7 +1559,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         breakdown: (() => {
                             const memoOf = (m) => String(m || '').trim() ? ` · 📍 ${String(m).trim()}` : '';
                             const cartRow = (l, indent) => ({
-                                name: `${indent}${l.aliasErp || l.erp} — ${l.name}${l.perFoot ? ` [${l.qty} pc × ${l.feetPer} ft]` : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : ''}${memoOf(l.lineMemo)}`,
+                                name: `${indent}${l.aliasErp || l.erp} — ${l.name}${l.perFoot ? ` [${l.qty} pc × ${l.feetPer} ${l.unitWord || 'ft'}]` : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : ''}${memoOf(l.lineMemo)}`,
                                 qty: l.eachQty, price: l.rate, total: l.rate * l.eachQty, legacyErpId: l.erp,
                                 ...(indent ? { inKit: true } : {}),
                                 ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}),
@@ -1648,7 +1688,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // NetSuite ($0 lines) and prints them on the documents, but they never reached lines[] — so the SO Pack
                 // never listed the track, fascia and brackets to pick. Each goes on as the item NetSuite consumes, in
                 // NetSuite's unit, a shelf pick of its kit (trvComponent) — exactly what leaves the shelf.
-                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
+                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -1806,6 +1846,27 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             )}
 
             {/* PORTAL QUOTE REQUESTS — customer-built stock quotes awaiting review */}
+            {pillowReqs.length > 0 && (
+                <div style={{ ...card, padding: '14px 16px', borderLeft: '4px solid var(--brass)' }}>
+                    <span style={{ ...lbl, color: 'var(--brass)' }}>🧵 Custom pillows awaiting entry · {pillowReqs.length} from the Vision board</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
+                        {pillowReqs.map(j => {
+                            const L = ((j.pillowRequest || {}).lines || [])[0] || {};
+                            return (
+                                <div key={j.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 12px', border: '1px solid var(--line)', background: '#fff', flexWrap: 'wrap' }}>
+                                    {L.snapshot ? <img src={L.snapshot} alt="pillow" style={{ width: '90px', height: '54px', objectFit: 'cover', border: '1px solid var(--line)' }} /> : null}
+                                    <div style={{ flex: 1, minWidth: '220px' }}>
+                                        <div style={{ fontWeight: 600 }}>{j.customer?.name || j.customer?.id || '?'}{j.jobName ? ` · ${j.jobName}` : ''}</div>
+                                        <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>{L.qty || 1} × {L.summary || 'custom pillow'} · ${Number(L.holder?.price || 0).toLocaleString()} each{(L.sourced || []).length ? ` · ${L.sourced.length} fabric(s) to be sourced` : ''}</div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--ink-soft)', fontFamily: 'var(--mono)' }}>{j.jobId || j.id} · {j.createdAt ? new Date(j.createdAt).toLocaleString() : ''} · {j.pillowRequest?.createdBy || ''}</div>
+                                    </div>
+                                    <button onClick={() => loadPillowReq(j)} style={{ padding: '8px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Load into cart</button>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
             {portalReqs.length > 0 && (
                 <div style={{ ...card, padding: '20px 24px', border: '1px solid var(--brass)' }}>
                     <span style={{ ...lbl, color: 'var(--brass)' }}>Portal Quote Requests · {portalReqs.length} awaiting review</span>

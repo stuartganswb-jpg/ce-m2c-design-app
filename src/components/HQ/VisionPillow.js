@@ -12,8 +12,9 @@ import { panelsOf } from '../Shared/pillowPanels';
 import { isFabricItem, isTrimItem } from '../Shared/pillowFabricSheet';
 import { isRailroad, fabricWidthOf } from '../Shared/pillowCuts';
 import { saveGuideCapture } from '../Shared/guideCapture';   // the ONE Asset Gallery writer — a photographed fabric files as kind FABRIC
+import { pillowRequestOf } from '../Shared/pillowRequest';   // step 3c: the board → Order Entry (tab 7) as a jobs PILLOW_REQUEST
 
-const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, globalLists, activeSession }) => {
+const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, globalLists, activeSession, customerName = '' }) => {
   const [viewMode, setViewMode] = useState('ENGINEERING');
   const [isPushingToCPQ, setIsPushingToCPQ] = useState(false);
   
@@ -301,6 +302,47 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
 
   const removeSeam = (id) => {
       setPillowData(prev => ({ ...prev, seams: prev.seams.filter(s => s.id !== id) }));
+  };
+
+  // ── SEND TO ORDER ENTRY (S7 step 3c, Stuart 2026-09-13: "right to the sales order entry") ──────
+  // The board's SVG → a PNG (CSS variables resolved to colours so the picture stands alone), then the
+  // request document (Shared/pillowRequest, pure) → jobs/PILLOWREQ-… — tab 7 lists it under "Custom
+  // pillows awaiting entry" and loads it into the cart. Nothing else is written; the CRM shows the
+  // request priced on the customer's pipeline. No native alert (it freezes the browser tools).
+  const [sendState, setSendState] = useState({ busy: false, msg: '', tone: 'info', qty: '1' });
+  const boardSnapshot = async () => {
+      try {
+          const svg = svgRef.current;
+          if (!svg) return '';
+          const xml = new XMLSerializer().serializeToString(svg)
+              .replace(/var\(--ink-soft\)/g, '#777777').replace(/var\(--ink\)/g, '#1a1a1a').replace(/var\(--paper-2\)/g, '#f4f1ec')
+              .replace(/var\(--paper\)/g, '#faf8f5').replace(/var\(--line\)/g, '#dddddd').replace(/var\(--brass\)/g, '#b08d57')
+              .replace(/var\(--(sans|mono|serif)\)/g, 'Arial, Helvetica, sans-serif');
+          const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }));
+          const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+          const c = document.createElement('canvas'); c.width = 900; c.height = 540;
+          const ctx = c.getContext('2d'); ctx.fillStyle = '#faf8f5'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0, c.width, c.height);
+          URL.revokeObjectURL(url);
+          return c.toDataURL('image/jpeg', 0.8);
+      } catch (e) { return ''; }
+  };
+  const handleSendToOrderEntry = async () => {
+      if (!activeSession?.customerId) { setSendState(p => ({ ...p, msg: 'Pick a customer in the header first.', tone: 'err' })); return; }
+      if (!priced || !priced.ok) { setSendState(p => ({ ...p, msg: 'The pillow is not priced — fix the refusals above first.', tone: 'err' })); return; }
+      setSendState(p => ({ ...p, busy: true, msg: '' }));
+      try {
+          const qty = Math.max(1, parseInt(sendState.qty) || 1);
+          const design = { ...designFromPillowData(pillowData, { pxPerIn: S * 2 }), panels: geometry.panels };
+          const pricedQ = pricePillow({ design, findPart, config: pricing, qty });
+          const snapshot = await boardSnapshot();
+          const capturedUsed = capturedFabrics.filter(f => pricedQ.rows.some(r => r.captured && r.assetId === f.assetId)).map(f => ({ id: f.id, assetId: f.assetId, code: f.legacyErpId, name: f.itemName, thumbnailUrl: f.thumbnailUrl || '', priceGroup: f.manufacturingSpecs.priceGroup, widthIn: f.manufacturingSpecs.width, railroad: !!f.manufacturingSpecs.customData.railroad, patternId: f.manufacturingSpecs.customData.patternId, color: f.manufacturingSpecs.customData.color }));
+          const req = pillowRequestOf({ session: { ...activeSession, customerName }, priced: pricedQ, geometry, design, capturedFabrics: capturedUsed, snapshot, qty, by: currentUser, brandId: activeBrand });
+          if (!req.ok) { setSendState(p => ({ ...p, busy: false, msg: req.errors.map(e => e.message).join(' '), tone: 'err' })); return; }
+          await setDoc(doc(db, 'jobs', req.doc.jobId), { ...req.doc, createdAtServer: serverTimestamp() });
+          setSendState({ busy: false, qty: '1', tone: 'ok', msg: `Sent ${req.doc.jobId} to Order Entry — ${qty} × ${req.doc.pillowRequest.lines[0].summary} at $${pricedQ.unitPrice}. Open 7. Quick Ship → Custom pillows awaiting entry → Load into cart.` });
+      } catch (e) {
+          setSendState(p => ({ ...p, busy: false, msg: `Could not send: ${e.message || e}`, tone: 'err' }));
+      }
   };
 
   const handlePushToCPQ = async () => {
@@ -665,7 +707,15 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted var(--line)', paddingBottom: '8px' }}><span>Face / Back Cut (inc. seam):</span><strong style={{ fontWeight: 500 }}>{getPillowDimensions().w + 1}" x {getPillowDimensions().h + 1}"</strong></div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted var(--line)', paddingBottom: '8px' }}><span>Insert / Fill Required:</span><strong style={{ fontWeight: 500 }}>{pillowData.size} ({pillowData.fill})</strong></div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dotted var(--line)', paddingBottom: '8px' }}><span>Total Trim Yardage Req:</span><strong style={{ fontWeight: 500 }}>{calculateTrimYards()} Yds</strong></div>
-                        <div style={{ marginTop: '16px' }}>
+                        <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <label style={labelStyle}>How many</label>
+                                <input value={sendState.qty} onChange={e => setSendState(p => ({ ...p, qty: e.target.value }))} style={{ ...fieldStyle, width: '90px', padding: '8px' }} />
+                            </div>
+                            <button onClick={handleSendToOrderEntry} disabled={sendState.busy || !activeSession?.customerId || !priced || !priced.ok} style={{ width: '100%', padding: '16px', background: (sendState.busy || !activeSession?.customerId || !priced || !priced.ok) ? 'var(--paper-2)' : 'var(--ink)', color: (sendState.busy || !activeSession?.customerId || !priced || !priced.ok) ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                {sendState.busy ? 'Sending…' : 'Send to Order Entry'}
+                            </button>
+                            {sendState.msg && <div style={{ fontSize: '0.8rem', color: sendState.tone === 'err' ? '#d9534f' : (sendState.tone === 'ok' ? '#2e7d32' : 'var(--ink-soft)') }}>{sendState.msg}</div>}
                             <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeSession?.quoteId} style={{ width: '100%', padding: '16px', background: (isPushingToCPQ || !activeSession?.quoteId) ? 'var(--paper-2)' : 'var(--ink)', color: (isPushingToCPQ || !activeSession?.quoteId) ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: (isPushingToCPQ || !activeSession?.quoteId) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
                                 {isPushingToCPQ ? "Saving..." : "Push Config to CPQ"}
                             </button>

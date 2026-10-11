@@ -242,6 +242,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
               libraryParts={libraryParts} 
               globalLists={globalLists} 
               activeSession={activeSession}
+              customerName={(liveCustomers.find(c => c.id === sessionCustomerId) || {}).name || ''}
           />
       )}
 
