@@ -6,6 +6,7 @@ import LandingPage from './LandingPage';
 import HQ from './components/HQ/HQ';
 import ShopFloor from './components/ShopFloor/ShopFloor';
 import FinishingFloor from './components/FinishingFloor/FinishingFloor';
+import StitchSew from './components/StitchSew/StitchSew';   // 🪡 the Uniquity sewing floor (S7, 2026-10-11)
 import PickPackApp from './components/PickPack/PickPackApp'; // 🚀 NEW: Import Pick & Pack App
 import OuterGate from './components/Shared/OuterGate';
 import UpdateBanner from './components/Shared/UpdateBanner';
@@ -27,6 +28,7 @@ const App = () => {
         {/* The Factory Apps */}
         <Route path="/shop-floor" element={<ShopFloor />} />
         <Route path="/finishing-floor" element={<FinishingFloor />} />
+        <Route path="/stitch-sew" element={<StitchSew />} />
         
         {/* 🚀 NEW: The Warehouse Routing */}
         <Route path="/pick-pack" element={<PickPackApp />} />

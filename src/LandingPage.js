@@ -72,6 +72,14 @@ const LandingPage = () => {
             onClick={() => navigate('/pick-pack')}
           />
 
+          <HubButton 
+            theme={theme}
+            number="05"
+            title="Stitch & Sew"
+            subtitle="Uniquity custom pillows"
+            onClick={() => navigate('/stitch-sew')}
+          />
+
         </div>
 
         {/* FOOTER — signed-in identity + daily sign-out */}
