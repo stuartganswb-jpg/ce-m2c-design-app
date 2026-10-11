@@ -302,6 +302,9 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
 
 export const DIVISION_SMALL = 'small';
 export const DIVISION_CUSTOM = 'custom';
+// STITCH & SEW (Uniquity custom pillows — S7, 2026-10-11): a line tab 7 marked made-to-order SEW (the pillow
+// holder) is neither a shelf pick nor the shop's; it is the sewing floor's. Same classifier, every door.
+export const DIVISION_SEW = 'sew';
 
 // Normalize any free-text handling value ('Small Parts', 'SMALL', 'Custom',
 // 'Custom Fabrication', ...) to a division, or null if it isn't a handling value.
@@ -351,6 +354,10 @@ const hasFabWork = (fab) => !!fab && ((Number(fab.qtyMiters) || 0) > 0 || (Numbe
  *                       qtyMiterReturns }. OMIT IT and the wood rule stays dormant.
  */
 export function classifyLine(line, part, fab) {
+  // -2. A CUSTOM PILLOW (madeToOrder SEW / the `pillow` design on the line) is the sewing floor's — before
+  //     every other signal, since its holder is a non-inventory item with no handling tag of its own.
+  if (line && (String(line.madeToOrder || '').toUpperCase() === 'SEW' || line.pillow)) return DIVISION_SEW;
+
   // -1. OPERATOR OVERRIDE (CPQ "custom work on this step"): the chosen fee item's Part Handling
   //     wins over every other signal, including the fee rule below — a Custom FINISH fee is
   //     meant to reach the finishing floor, and a Custom LABOR fee the shop.

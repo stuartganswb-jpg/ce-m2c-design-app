@@ -17,7 +17,7 @@
 // sub finish 4.5 aligns to the rod's (Shared/subFinish.rowRestampOf, applied before this reads the row). Nothing
 // else is given a finish it was not quoted in (2026-09-27: the "no finish takes the rod's" rule was this module's
 // own invention — CPQ has none — and it stained SO60551's track S04). Pure.
-import { classifyLine, DIVISION_CUSTOM, DIVISION_SMALL } from './lineClassification.js';
+import { classifyLine, DIVISION_CUSTOM, DIVISION_SMALL, DIVISION_SEW } from './lineClassification.js';
 import { isPoleCategory } from './poleCut.js';
 import { handlingForErp } from './finishRouting.js';
 import { UNFINISHED } from './subFinish.js';   // the group a part that wears nothing is made in
@@ -27,7 +27,7 @@ const specsOf = (p) => (p && p.manufacturingSpecs) || {};
 const typeOf = (p) => String(specsOf(p).productType || (p && p.productType) || '');
 export const isFeePart = (p) => !!p && (p.partClass === 'Fee' || U(typeOf(p)) === 'FEE');
 const isWoodPart = (p) => /\bWOOD\b/i.test(String(specsOf(p).material || ''));
-export { DIVISION_CUSTOM, DIVISION_SMALL };
+export { DIVISION_CUSTOM, DIVISION_SMALL, DIVISION_SEW };
 
 /** Which fabrication a fee names — the words CPQ's own fee rule reads (lineClassification, rule 0). */
 export const fabKindOf = (text) => {

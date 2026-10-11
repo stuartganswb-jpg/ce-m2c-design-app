@@ -206,6 +206,10 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         // A RIDER (a fee / return / miter cut into its pole — Shared/oeClassify) is fabrication, not material:
         // nothing to pull, nothing to stock-check, nothing to order. It rides the pole's shop cut list.
         if (j.rider) return { ...j, finishedErp: `${erp}/${String(j.finish || '').toUpperCase()}`, plan: { erp, exploded: false, lines: [] } };
+        // A CUSTOM PILLOW (j.sew — Shared/sewRouteShape, 2026-10-11): the holder is non-inventory; what is pulled is the fabric,
+        // trim, insert and zipper lines beneath it on the sales order, in yards or each — read by the one availability read
+        // below like any pull. Nothing is sourced for the pillow itself (no pins, no convert, no PO).
+        if (j.sew) return { ...j, finishedErp: erp, finishedLabel: erp, plan: { erp, exploded: false, lines: (j.sewParts || []).map(p => ({ legacyErpId: p.legacyErpId, partId: p.legacyErpId, partName: p.partName, quantity: p.quantity, uom: p.uom, soLineIdx: p.soLineIdx })) } };
         if (j.stock) {
             const finishedErp = finishedCodeOf(erp, j.finish);
             const fp = partOf(finishedErp);

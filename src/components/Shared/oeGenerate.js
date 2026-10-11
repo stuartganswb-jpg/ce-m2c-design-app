@@ -31,9 +31,11 @@ import { buildOeReviewPlan, actionsOfReviewedJob } from './oeReviewPlan';
 import { createDraftPurchaseOrders } from './purchaseOrders';
 import { isAssemblyPart } from './finishedGoodsRun';
 import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig, rowBackorderPatchOf } from './oeLines';
+import { sewPartsOf, isSewGroup, SEW_FINISH } from './sewRouteShape.js';   // the Stitch & Sew route (S7, 2026-10-11)
+import { parkSewDoc } from './sewRoute.js';
 import { floorGroupsOf, parkRowPair } from './rowPair.js';
 import { holdSplitGroups } from './rowPairShape.js';
-import { oeDivisionOf, rowFabOf, rowFinishesOf, fabKindOf, DIVISION_CUSTOM } from './oeClassify.js';
+import { oeDivisionOf, rowFabOf, rowFinishesOf, fabKindOf, DIVISION_CUSTOM, DIVISION_SEW } from './oeClassify.js';
 import { rowKeyOf, rowOfLine } from './displayRelease.js';
 import { rowRestampOf, trvRoleOfCode, isUnfinishedFinish, isStockColourCode } from './subFinish.js';
 import { isKitLine, itemKitOfCode, isOffOrderLine } from './itemKit.js';
@@ -210,6 +212,9 @@ export const oeLinePlansOf = ({ so, inventory = [], finishes = [] }) => {
             // its shop cut list; a row lists only what is cut into a pole.)
             // A line taken off the order (Shared/itemKit.isOffOrderLine) is never started either.
             const billingOnly = kitLine || isOffOrderLine(c.line) || (!!c.fee && !fabKindOf(`${(c.part && c.part.itemName) || ''} ${(c.line && c.line.name) || ''} ${c.erp}`));
+            // A CUSTOM PILLOW (division SEW — the ONE classifier, Shared/lineClassification) is the sewing floor's: its
+            // 'finish' on this route is SEW, so every pillow of a row starts as ONE sewing document (Shared/sewRouteShape).
+            if (c.division === DIVISION_SEW) { out.push({ ...c, finish: SEW_FINISH, finishWhy: 'custom pillow — Stitch & Sew', door: 'SEW', billingOnly: false }); return; }
             out.push({ ...c, finish, finishWhy: f.why || noteOf(c.lineIdx), door: billingOnly ? '' : door, billingOnly, ...(kitUnexploded ? { kitUnexploded: true } : {}) });
         });
     });
@@ -218,7 +223,7 @@ export const oeLinePlansOf = ({ so, inventory = [], finishes = [] }) => {
 // The lines a start considers: to-be-finished lines, and every line the classifier sends to the shop
 // (a cut rod quoted with no finish, a fee that rides a pole) — a shelf pick is not a start's business.
 // A stock colour is the start's business too (its shelf-or-paint decision); an unexploded kit is named by it.
-export const oeStartsLine = (plan) => !!plan && !plan.billingOnly && (oeIsTbf(plan.eff || plan.line) || plan.division === DIVISION_CUSTOM || plan.door === 'STOCK_FIRST' || plan.door === 'KIT');
+export const oeStartsLine = (plan) => !!plan && !plan.billingOnly && (oeIsTbf(plan.eff || plan.line) || plan.division === DIVISION_CUSTOM || plan.division === DIVISION_SEW || plan.door === 'STOCK_FIRST' || plan.door === 'KIT');
 
 // items: [{ so, l, buy }] → the review jobs buildOeReviewPlan takes (pins loaded for assemblies).
 export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }) => {
@@ -256,6 +261,7 @@ export const buildOeJobs = async ({ items = [], inventory = [], log = () => {} }
         jobs.push({
             key: i, so, line: l, lineIdx, ...(linePatch ? { linePatch } : {}), part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy, stock: !!stock, ...(stockFirst ? { stockFirst: true } : {}),
             ...(division ? { division } : {}), ...(rider ? { rider: true } : {}), ...(release ? { release } : {}),
+            ...(items[i].sew ? { sew: true, sewParts: sewPartsOf(so, l, lineIdx) } : {}),
             // A per-foot line NEEDS feet from the vendor (the SO stored pieces + billedFeet).
             ...(l.perFoot ? { buyQty: Number(l.billedFeet) || (Number(l.qty) || 0) * (Number(l.feetPer) || 1) } : {}),
         });
@@ -412,11 +418,13 @@ export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inve
             const receiptRefs = group.jobs.flatMap(j => j.__rcptRefs || []);
             let res;
             try {
-                res = await parkRowPair({
-                    group, so, brand, user, inventory,
-                    poleCutsOf: (j) => ({ poleCut: j.__poleCut, backOrder: j.__backOrder }),
-                    receiptRefs, makeupActions: group.jobs.flatMap(j => j.__makeup || []), nsIdOf, custKeys,
-                });
+                res = isSewGroup(group)
+                    ? await parkSewDoc({ group, so, brand, user, inventory, receiptRefs })
+                    : await parkRowPair({
+                        group, so, brand, user, inventory,
+                        poleCutsOf: (j) => ({ poleCut: j.__poleCut, backOrder: j.__backOrder }),
+                        receiptRefs, makeupActions: group.jobs.flatMap(j => j.__makeup || []), nsIdOf, custKeys,
+                    });
             } catch (e) {
                 if (e instanceof ParkRefusal) { log(`⛔ ${group.rowLabel || 'order'} · ${group.finish} (SO ${so.soId || so.id}): ${e.message}`, 'error'); continue; }
                 throw e;
@@ -562,6 +570,8 @@ export const runOeAuto = async ({ so, brand, user = '', inventory = [], finishes
             if (door === 'ASK') named([`${erp} is flagged BOTH (make and buy) — a person chooses`]);
             // A RIDER (a fee, a return, a miter) is fabrication ON its pole: the pair's cut list, nothing to plan.
             else if (door === 'RIDER') planItems.push({ so, l: line, lineIdx, rider: true, division: pl.division, finish: fin });
+            // A CUSTOM PILLOW: planned from the parts beneath its holder (Shared/sewRouteShape.sewPartsOf) — nothing to source for the pillow itself.
+            else if (door === 'SEW') planItems.push({ so, l: line, lineIdx, sew: true, division: pl.division, finish: fin });
             // A BOUGHT LINE IS PLANNED, NOT PRE-REFUSED (Stuart 2026-09-22, SO60565: "why is it asking
             // for the review and decision? the stock is clearly enough for the order"). The 09-20
             // rule sent every bought item to review before the plan had looked at the shelf, so a

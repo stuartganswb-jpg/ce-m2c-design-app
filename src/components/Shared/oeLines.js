@@ -14,6 +14,7 @@ export const oeIsTbf = (l) => !!(l && (l.toBeFinished || /TO BE FINISHED/i.test(
 // decides with CPQ's classifier (Shared/oeGenerate.oeLinePlansOf); this is the board's reading of the same
 // facts (Stuart 2026-09-27 — SO60551's wood track was quoted with no finish and read as a shelf pick).
 export const oeIsFloorLine = (l) => !!l && (oeIsTbf(l) || Number(l.cutLength) > 0 || !!l.isFee || !!l.shopOnly
+    || String(l.madeToOrder || '').toUpperCase() === 'SEW' || !!l.pillow   // a custom pillow (Stitch & Sew, S7 2026-10-11)
     || /custom/i.test(String(l.customOverrideHandling || '')) || /custom/i.test(String(l.partHandling || '')));
 export const oeLineFinish = (l) => (l && (l.finishCode || (String(l.note || '').match(/TO BE FINISHED\s*·\s*([A-Z0-9-]+)/i) || [])[1])) || '';
 // The need-by a sales order states, whichever door wrote it (Brief E's alias window, eb5cb6b).

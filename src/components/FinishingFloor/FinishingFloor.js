@@ -54,9 +54,12 @@ const FinishingFloor = () => {
     // the difference between a stated finish and a rescued one.
     return { ...w, recipe: code, recipeDerived: isPendingRecipe(w.recipe) };
   };
+  // A STITCH & SEW document (division SEW — the Uniquity pillows, S7 2026-10-11) lives in the same collection but is the
+  // Stitch & Sew app's: never a finishing queue's, whatever the division switcher says.
+  const notSew = (w) => String(w?.division || '').toUpperCase() !== 'SEW';
   const workOrders = (floorBrand === 'all'
-    ? workOrdersRaw
-    : workOrdersRaw.filter(w => { const b = String(w?.brand || w?.brandId || '').toLowerCase(); return !b || b === floorBrand; })
+    ? workOrdersRaw.filter(notSew)
+    : workOrdersRaw.filter(notSew).filter(w => { const b = String(w?.brand || w?.brandId || '').toLowerCase(); return !b || b === floorBrand; })
   ).map(withRecipe);
   const [recipes, setRecipes] = useState({});
   const [paintProfiles, setPaintProfiles] = useState({});
