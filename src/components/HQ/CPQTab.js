@@ -28,12 +28,12 @@ import { StudioRig, ensureFinishPbr, pbrForTexture, woodRepeatFor, ensureWoodUv 
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf, customerPriceLevel } from '../Shared/priceLevels';
 import { priceChoice, isItemKit } from '../Shared/hardwarePricing';
-import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, checkoutAssignmentOf } from '../Shared/feeRules';
+import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, checkoutAssignmentOf, isFeeItemRecord } from '../Shared/feeRules';
 import { searchStockedItems, pickedItemEntries, isSearchableStockedItem } from '../Shared/checkoutSearch';
 import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, keepLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
 import { extrasFromSavedItem } from '../Shared/extrasRestore';
 import { readWorkspace, writeWorkspace, restorableWorkspace, workspaceSeedOf, workHasProgress, cleanStartOf, CLEAN_FLOW, CLEAN_ALL } from '../Shared/cpqWorkspace';
-import { shippingPlanOf, shippingChargeOf, FLAT_RATE_BOXES, TRAVERSE_PACK_FEE_CODE } from '../Shared/flatRateShipping';
+import { shippingPlanOf, shippingChargeOf, FLAT_RATE_BOXES, packagingPlanOf, PACK_FEE_CODES } from '../Shared/flatRateShipping';
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
@@ -1403,6 +1403,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   // counted into small and pole boxes by Stuart's rule, each box priced for this customer by the one chain,
   // and the total is offered as the quote's SHIPPING CHARGE — which the push writes to NetSuite's
   // shippingcost. Never a line, never a fee. null = this customer has no flat-rate boxes.
+  // WHICH ROWS OF A CART LINE ARE FEES — asked of the library, because the tags engine writes a walked-in return fee
+  // with no `isFee` on its row (Shared/flatRateShipping: the box count and the packaging fee both read returns).
+  const isFeeRow = useMemo(() => {
+      const ids = new Set(), codes = new Set();
+      (libraryParts || []).forEach(p => {
+          if (!isFeeItemRecord(p)) return;
+          ids.add(p.id);
+          [p.itemId, p.legacyErpId].forEach(c => { const k = String(c || '').trim().toUpperCase(); if (k && k !== 'PENDING') codes.add(k); });
+      });
+      return (l) => !!l && (ids.has(l.partId) || codes.has(String(l.legacyErpId || '').trim().toUpperCase()));
+  }, [libraryParts]);
   const flatRate = useMemo(() => {
       const universe = [...(libraryParts || []), ...(liveAssemblies || [])];
       const up = (v) => String(v || '').trim().toUpperCase();
@@ -1416,21 +1427,28 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       const lvl = customerPriceLevel(addOnCustomer, priceLevel);
       const findByCode = (c) => { const k = up(c); return k ? universe.find(p => [p.id, p.itemId, p.legacyErpId].some(x => up(x) === k)) || null : null; };
       const ctx = { customerId: jobData.customerId, customer: addOnCustomer, priceLevel: lvl.level, levelIsDefault: lvl.isDefault, outsourceCodes: outsourceFinishes, findByCode };
-      const plan = shippingPlanOf(cart);
+      const plan = shippingPlanOf(cart, { isFee: isFeeRow });
       const charge = shippingChargeOf(plan, (code) => (boxParts[code] ? (priceChoice({ partId: boxParts[code].id }, boxParts[code], ctx).price || 0) : null));
       return { plan, ...charge };
-  }, [libraryParts, liveAssemblies, jobData.customerId, addOnCustomer, priceLevel, outsourceFinishes, cart]);
+  }, [libraryParts, liveAssemblies, jobData.customerId, addOnCustomer, priceLevel, outsourceFinishes, cart, isFeeRow]);
   // Opening checkout: a blank shipping charge takes the flat-rate total (the operator can change it — a typed
-  // figure is never overwritten), and each traverse configuration ticks the larger-systems packaging fee
-  // (Stuart 2026-09-30: "traverse poles automatically select the H1-PCKF2 fee") unless it has been set by hand.
+  // figure is never overwritten), and each pole or system ticks ITS packaging fee unless it has been set by hand.
+  // Which fee is the customer's own sheet (Stuart 2026-10-12, Shared/flatRateShipping.packagingPlanOf): $25
+  // (H1-PCKF2) with returns of any kind, motorized, curved or bay, or over 16 ft — else the standard $12
+  // (H1-PCKF1). It was $25 on every traverse and the $12 by hand (2026-09-30). Ticked only where the fee is
+  // ASSIGNED TO THIS CUSTOMER in 4.6 (`via: 'CUSTOMER'`): "they only apply on these screens when the applicable
+  // customer is logged in".
   useEffect(() => {
       if (!showCheckoutModal) return;
       if (flatRate && flatRate.total > 0) {
           setJobData(prev => (String(prev.shippingAmount ?? '').trim() === '' ? { ...prev, shippingAmount: flatRate.total.toFixed(2) } : prev));
       }
-      const traverseConfigs = shippingPlanOf(cart).traverseConfigs;
-      const packFee = traverseConfigs > 0 ? addOnCatalog.find(e => e.code === TRAVERSE_PACK_FEE_CODE) : null;
-      if (packFee) setAddOnSel(prev => (prev[packFee.id] === undefined ? { ...prev, [packFee.id]: traverseConfigs } : prev));
+      const pack = packagingPlanOf(cart, { isFee: isFeeRow });
+      PACK_FEE_CODES.forEach(code => {
+          const qty = pack.counts[code];
+          const fee = qty > 0 ? addOnCatalog.find(e => e.code === code && e.via === 'CUSTOMER') : null;
+          if (fee) setAddOnSel(prev => (prev[fee.id] === undefined ? { ...prev, [fee.id]: qty } : prev));
+      });
       // Once per opening — what the operator does inside the window is theirs.
       // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCheckoutModal]);

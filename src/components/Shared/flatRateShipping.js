@@ -36,6 +36,18 @@ export const WINDOWS_PER_SMALL_BOX = 2;
 export const POLE_BOX_FROM_IN = 48;       // shorter rides in a small box
 export const LONGEST_SHIPPABLE_IN = 120;  // longer must be spliced (the length step already insists)
 export const TRAVERSE_PACK_FEE_CODE = 'H1-PCKF2';
+// ── 📦 THE PACKAGING FEE, BY THE CUSTOMER'S OWN FEE SHEET (Stuart 2026-10-12) ───────────────────────────────────
+// Fabricut's "Fee Pricing Final 8.24.26": POLE PACKAGING FEE, PCKGFEE, $12 — and the $25 one, H1-PCKF2, for
+// "curved, arched, bay windows, poles with returns, motorized traverse systems, poles and systems over 16 ft".
+// Stuart: "$25 is for all returns french, miter, motorized." The first rule here ticked $25 on EVERY traverse and
+// left the $12 to be ticked by hand, so a manual traverse quoted $25 where Fabricut's order carries $12, and a pole
+// with returns quoted $12 (the twelve test orders of 2026-09-28). ONE fee per pole or system — a double is one
+// system — and which one is decided here, for CPQ checkout and for tab 7 alike. Both screens tick it for the
+// operator and leave it theirs to change, and only for a customer these fees are assigned to in 4.6.
+export const STANDARD_PACK_FEE_CODE = 'H1-PCKF1';
+export const LARGE_PACK_FEE_CODE = TRAVERSE_PACK_FEE_CODE;
+export const OVERSIZE_PACK_OVER_IN = 192;   // "over 16 ft"
+export const PACK_FEE_CODES = Object.freeze([STANDARD_PACK_FEE_CODE, LARGE_PACK_FEE_CODE]);
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -57,7 +69,19 @@ const boxOf = (key) => FLAT_RATE_BOXES.find(b => b.key === key);
 
 const SPLICE_RE = /SPLICE|JOINER|JNR|SPLC/;
 const isSpliceRow = (l) => !!l && !l.isFee && SPLICE_RE.test(U(`${l.legacyErpId || ''} ${l.name || ''}`));
-const isReturnFeeRow = (l) => !!l && !!l.isFee && !l.isKit && /RETURN/.test(U(l.name));
+// ⚠ A FEE ROW IS NOT ALWAYS FLAGGED (2026-10-12). The tags engine prices a walked-in return fee like any part and
+// writes no `isFee` on its row (the old engine and tab 7 do), so every pole with returns from the current
+// configurator counted here as a plain pole — four to a box where the sheet says two. The caller that knows the
+// library says which rows are fees (`opts.isFee(row)` — Shared/feeRules.isFeeItemRecord on the row's part); the
+// flag still reads where it is set. The flag is NOT stamped onto the saved line to fix this: nsTransmit keeps
+// `isFee` rows off the NetSuite line list, and that is a different decision.
+const rowIsFee = (l, isFee) => !!l && !l.isKit && (!!l.isFee || (typeof isFee === 'function' && !!isFee(l)));
+// What the fee's NAME says it is. A return: bent / French or mitered ("2\" Rectangular Traverse Miter" is one —
+// a miter that is not a bay CUT). Any other shaping of the pole: a bay cut, a bend, a bow, an arch.
+const isReturnName = (n) => /RETURN|FRENCH/.test(n) || (/MIT(?:ER|RE)/.test(n) && !/\bCUT\b|\bBAY\b/.test(n));
+const isShapeName = (n) => /RETURN|FRENCH|MIT(?:ER|RE)|\bBENT\b|\bBEND\b|\bBOW\b|ARCH|CURV/.test(n);
+const isReturnFeeRow = (l, isFee) => rowIsFee(l, isFee) && isReturnName(U(l.name));
+const isShapedFeeRow = (l, isFee) => rowIsFee(l, isFee) && isShapeName(U(l.name)) && !isReturnName(U(l.name));
 const isLinearRow = (l) => !!l && !l.isFee && (l.perFoot === true || N(l.cutLength) > 0);
 export const isTraverseLine = (item) => {
     const ec = (item && item.engineConfig) || {};
@@ -97,7 +121,7 @@ export function cutPiecesOf(lengthIn, splices, note = '') {
  * Runs: two for a double. Splices are shared out across the runs (the first runs take any odd one); returns go
  * two to a run, on its end pieces. The line's qty is NOT applied here (shippingPlanOf does that).
  */
-export function polePiecesOf(item) {
+export function polePiecesOf(item, opts = {}) {
     const pb = (item && Array.isArray(item.pricingBreakdown)) ? item.pricingBreakdown : [];
     const linear = pb.filter(isLinearRow);
     if (!linear.length) return [];
@@ -108,7 +132,7 @@ export function polePiecesOf(item) {
     const spliceRows = pb.filter(isSpliceRow);
     const splices = spliceRows.reduce((s, l) => s + (N(l.qty) || 1), 0);
     const note = runs === 1 ? spliceRows.map(l => l.customNote || '').filter(Boolean).join(' · ') : '';
-    const returns = pb.filter(isReturnFeeRow).reduce((s, l) => s + (N(l.qty) || 1), 0);
+    const returns = pb.filter(l => isReturnFeeRow(l, opts.isFee)).reduce((s, l) => s + (N(l.qty) || 1), 0);
     const traverse = isTraverseLine(item);
     const out = [];
     for (let r = 0; r < runs; r++) {
@@ -129,14 +153,14 @@ export function polePiecesOf(item) {
  * boxes = the pole boxes, each { key, code, pieces: [lengthIn…], plain, returns } — packed longest first, each
  * pole into the first box with room (a shorter pole rides in a longer box; the box is billed as its longest).
  */
-export function shippingPlanOf(items) {
+export function shippingPlanOf(items, opts = {}) {
     const lines = (Array.isArray(items) ? items : []).filter(it => it && !it.isFee && !it.isAddOn);
     const windows = lines.reduce((s, it) => s + configQtyOf(it), 0);
     const all = [];
     let traverseConfigs = 0;
     lines.forEach(it => {
         const q = configQtyOf(it);
-        const pieces = polePiecesOf(it);
+        const pieces = polePiecesOf(it, opts);
         if (isTraverseLine(it) && pieces.length) traverseConfigs += q;
         for (let k = 0; k < q; k++) pieces.forEach(p => all.push(p));
     });
@@ -175,4 +199,74 @@ export function shippingChargeOf(plan, priceOf) {
         rows.push({ key: b.key, code: b.code, label: b.label, qty, unit: N(unit), total: Math.round(qty * N(unit) * 100) / 100 });
     });
     return { rows, total: Math.round(rows.reduce((s, r) => s + r.total, 0) * 100) / 100, missing };
+}
+
+// ── which packaging fee ────────────────────────────────────────────────────────────────────────────────────
+/** One pole or system → { code, why }. `why` is empty for the standard fee. */
+export function packFeeFor({ motorized = false, returns = 0, shaped = false, lengthIn = 0 } = {}) {
+    const why = [];
+    if (motorized) why.push('motorized');
+    if (N(returns) > 0) why.push('returns');
+    if (shaped) why.push('curved or bay');
+    if (N(lengthIn) > OVERSIZE_PACK_OVER_IN) why.push('over 16 ft');
+    return { code: why.length ? LARGE_PACK_FEE_CODE : STANDARD_PACK_FEE_CODE, why };
+}
+
+/**
+ * A configured cart line (CPQ) → the fee ONE of its configurations takes, or null when nothing on it is packed as a
+ * pole (a line of brackets and rings rides in the small box). Read off the saved line: its drive answer or its
+ * per-motor kit, its return / bend / bay fee rows, its sold length.
+ */
+export function packagingFeeOf(item, opts = {}) {
+    if (!item || item.isFee || item.isAddOn) return null;
+    const pb = Array.isArray(item.pricingBreakdown) ? item.pricingBreakdown : [];
+    if (!polePiecesOf(item, opts).length && !isTraverseLine(item)) return null;
+    const ec = item.engineConfig || {};
+    const lengthIn = N(ec.lengthInches) > 0 ? N(ec.lengthInches) : Math.max(0, ...pb.filter(isLinearRow).map(l => N(l.cutLength)));
+    return packFeeFor({
+        motorized: /MOTOR/.test(U((ec.answers || {}).drive)) || !!U(ec.kitMotor),
+        returns: pb.filter(l => isReturnFeeRow(l, opts.isFee)).reduce((s, l) => s + (N(l.qty) || 1), 0),
+        shaped: pb.some(l => isShapedFeeRow(l, opts.isFee)),
+        lengthIn,
+    });
+}
+
+/** A CPQ cart → { counts: { 'H1-PCKF1': n, 'H1-PCKF2': n }, lines: [{ code, why, qty }] } — one fee a configuration. */
+export function packagingPlanOf(items, opts = {}) {
+    const counts = { [STANDARD_PACK_FEE_CODE]: 0, [LARGE_PACK_FEE_CODE]: 0 }, lines = [];
+    (Array.isArray(items) ? items : []).forEach(it => {
+        const f = packagingFeeOf(it, opts);
+        if (!f) return;
+        const qty = configQtyOf(it);
+        counts[f.code] += qty; lines.push({ code: f.code, why: f.why, qty });
+    });
+    return { counts, lines };
+}
+
+/**
+ * A FLAT order (tab 7) → the same answer. Its poles and systems are lines of their own and its return / bend fees
+ * are lines beside them, tied to no pole — so they are shared out the way the boxes share them: returns two to a
+ * pole, a bend or bay cut one to a pole, and first to the poles that would otherwise take the standard fee.
+ * `systems` = [{ qty, lengthIn, motorized }] · `returnQty` / `shapedQty` = the fee lines' quantities · `feeNames` may
+ * be given instead ([{ name, qty }]) and is read by the same words the CPQ rows are.
+ */
+export function orderPackagingPlanOf({ systems = [], returnQty = 0, shapedQty = 0, feeNames = null } = {}) {
+    let r = N(returnQty), sh = N(shapedQty);
+    (Array.isArray(feeNames) ? feeNames : []).forEach(f => {
+        const n = U(f && f.name), q = N(f && f.qty) || 1;
+        if (isReturnName(n)) r += q; else if (isShapeName(n)) sh += q;
+    });
+    const units = [];
+    (Array.isArray(systems) ? systems : []).forEach(sy => {
+        const q = Math.max(0, Math.floor(N(sy && sy.qty) || 0));
+        for (let k = 0; k < q; k++) units.push({ motorized: !!sy.motorized, lengthIn: N(sy.lengthIn), returns: 0, shaped: false });
+    });
+    const plainFirst = units.slice().sort((a, b) => packFeeFor(a).why.length - packFeeFor(b).why.length);
+    plainFirst.forEach(u => {
+        if (r > 0) { u.returns = Math.min(2, r); r -= u.returns; }
+        else if (sh > 0) { u.shaped = true; sh -= 1; }
+    });
+    const counts = { [STANDARD_PACK_FEE_CODE]: 0, [LARGE_PACK_FEE_CODE]: 0 }, lines = [];
+    units.forEach(u => { const f = packFeeFor(u); counts[f.code] += 1; lines.push({ code: f.code, why: f.why, qty: 1 }); });
+    return { counts, lines };
 }

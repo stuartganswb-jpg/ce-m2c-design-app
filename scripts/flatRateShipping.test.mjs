@@ -1,6 +1,7 @@
 // 📦 Flat-rate shipping, counted in boxes (Eric 2026-09-29 · Stuart 2026-09-30).   node scripts/flatRateShipping.test.mjs
 import {
     boxKeyFor, cutPiecesOf, splicePositionsOf, polePiecesOf, shippingPlanOf, shippingChargeOf, isShippingItem, isTraverseLine, FLAT_RATE_BOXES,
+    packFeeFor, packagingFeeOf, packagingPlanOf, orderPackagingPlanOf, STANDARD_PACK_FEE_CODE, LARGE_PACK_FEE_CODE, TRAVERSE_PACK_FEE_CODE, PACK_FEE_CODES,
 } from '../src/components/Shared/flatRateShipping.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -84,6 +85,52 @@ eq('a box this customer has no price for is named, not guessed', [c.total, c.mis
 ok('each box item is shipping', FLAT_RATE_BOXES.every(b => isShippingItem({ legacyErpId: b.code })));
 ok('the packaging fees and PENDING records are not', !isShippingItem({ legacyErpId: 'H1-PCKF2' }) && !isShippingItem({ legacyErpId: 'PENDING', itemId: 'CE-INV-2535' }));
 ok('a record known by its itemId only is still recognised', isShippingItem({ legacyErpId: 'PENDING', itemId: 'h1-ship-m' }));
+
+// ── a fee row the engine did not flag (2026-10-12) ─────────────────────────────────────────────────────────
+// The tags engine writes a walked-in return fee with NO isFee; the caller that knows the library says it is one.
+const unflag = (it) => ({ ...it, pricingBreakdown: it.pricingBreakdown.map(l => { const { isFee, ...rest } = l; return rest; }) });
+const FEES = new Set(['H1-MRPF', 'H1-FRPF', 'H1-2TRMR', 'H1-BOWF', 'H1-MRBAYF', '138TRVMTR']);
+const isFee = (l) => FEES.has(String(l.legacyErpId || '').toUpperCase());
+const bare = unflag(line({ len: 100, returns: 2 }));
+eq('an unflagged return row counts for nothing without the library…', polePiecesOf(bare).map(x => x.withReturn), [false]);
+eq('…and as a return with it', polePiecesOf(bare, { isFee }).map(x => x.withReturn), [true]);
+eq('three poles with returns: two boxes once the returns are seen, one while they are not',
+    [shippingPlanOf([unflag(line({ len: 100, returns: 2, qty: 3 }))]).counts.L, shippingPlanOf([unflag(line({ len: 100, returns: 2, qty: 3 }))], { isFee }).counts.L], [1, 2]);
+ok('a cover plate FOR returns and a return ARM are parts, not returns',
+    !polePiecesOf({ ...line({ len: 100 }), pricingBreakdown: [...line({ len: 100 }).pricingBreakdown, { legacyErpId: 'H1-75RCP-R/P', name: 'Round Cover Plate for Returns', qty: 2 }, { legacyErpId: 'H1-2TRVSRA', name: 'Traverse End Return Arm (3-5/8" P)', qty: 2 }] }, { isFee })[0].withReturn);
+
+// ── 📦 the packaging fee (Stuart 2026-10-12) ───────────────────────────────────────────────────────────────
+const S12 = STANDARD_PACK_FEE_CODE, L25 = LARGE_PACK_FEE_CODE;
+eq('the two fees, and the traverse constant still names the $25 one', [S12, L25, TRAVERSE_PACK_FEE_CODE, [...PACK_FEE_CODES]], ['H1-PCKF1', 'H1-PCKF2', 'H1-PCKF2', ['H1-PCKF1', 'H1-PCKF2']]);
+eq('a plain pole takes the standard fee', packFeeFor({ lengthIn: 96 }), { code: S12, why: [] });
+eq('motorized, returns, a bend, over 16 ft — each alone is the $25 fee, and it says why',
+    [packFeeFor({ motorized: true }), packFeeFor({ returns: 1 }), packFeeFor({ shaped: true }), packFeeFor({ lengthIn: 193 })].map(f => [f.code, f.why.join()]),
+    [[L25, 'motorized'], [L25, 'returns'], [L25, 'curved or bay'], [L25, 'over 16 ft']]);
+eq('16 ft exactly is not over 16 ft', packFeeFor({ lengthIn: 192 }).code, S12);
+const withRow = (it, row) => ({ ...it, pricingBreakdown: [...it.pricingBreakdown, row] });
+const manualTrv = line({ len: 60, rodKind: 'TRAVERSE', code: 'H1-2RCTWR-W' });
+const motorTrv = { ...manualTrv, engineConfig: { ...manualTrv.engineConfig, answers: { ...manualTrv.engineConfig.answers, drive: 'MOTORIZED' } } };
+const kitMotor = { ...manualTrv, engineConfig: { ...manualTrv.engineConfig, kitMotor: 'H1-2TRV-4M/W-60W' } };
+eq('a manual traverse is the standard fee — it was $25 on every traverse (QUO201 / 202 / 204)', packagingFeeOf(manualTrv).code, S12);
+eq('a motorized one is $25, by its drive answer or by its per-motor kit', [packagingFeeOf(motorTrv).code, packagingFeeOf(kitMotor).code], [L25, L25]);
+eq('a pole with a miter return is $25 — flagged or not, once the library is asked', [packagingFeeOf(line({ len: 60, returns: 2 })).code, packagingFeeOf(unflag(line({ len: 60, returns: 2 }))).code, packagingFeeOf(unflag(line({ len: 60, returns: 2 })), { isFee }).code], [L25, S12, L25]);
+eq('French, a traverse miter and a bay cut read by their names', [
+    packagingFeeOf(withRow(line({ len: 60 }), { legacyErpId: 'H1-FRPF', name: 'FRENCH RETURN', qty: 1 }), { isFee }).why.join(),
+    packagingFeeOf(withRow(manualTrv, { legacyErpId: 'H1-2TRMR', name: '2" Rectangular Traverse Miter', qty: 2 }), { isFee }).why.join(),
+    packagingFeeOf(withRow(line({ len: 60 }), { legacyErpId: 'H1-MRBAYF', name: 'Miter Cut Less than 90d', qty: 1 }), { isFee }).why.join(),
+    packagingFeeOf(withRow(line({ len: 60 }), { legacyErpId: 'H1-BOWF', name: 'Bay Window Bend Fee', qty: 1 }), { isFee }).why.join(),
+], ['returns', 'returns', 'curved or bay', 'curved or bay']);
+eq('a pole over 16 ft is $25 by its sold length, spliced or not', [packagingFeeOf(line({ len: 200, splices: 1 })).why.join(), packagingFeeOf(line({ len: 192 })).code], ['over 16 ft', S12]);
+eq('a line with no pole takes no packaging fee, and neither does a fee or an add-on line', [packagingFeeOf(line({ len: 0, noRod: true })), packagingFeeOf({ ...line({ len: 60 }), isFee: true }), packagingFeeOf({ ...line({ len: 60 }), isAddOn: true }), packagingFeeOf(null)], [null, null, null, null]);
+let pk = packagingPlanOf([line({ len: 60, qty: 2 }), motorTrv, line({ len: 60, returns: 1 }), line({ len: 0, noRod: true })]);
+eq('a cart: one fee a configuration — two standard, two $25, the parts-only line none', [pk.counts[S12], pk.counts[L25], pk.lines.length], [2, 2, 3]);
+eq('a double is ONE system', packagingPlanOf([line({ len: 90, setup: 'DOUBLE' })]).counts, { [S12]: 1, [L25]: 0 });
+// tab 7: a flat order — the fee lines are shared out to the poles
+eq('tab 7: two poles and a motorized system, no fees', orderPackagingPlanOf({ systems: [{ qty: 2, lengthIn: 60 }, { qty: 1, lengthIn: 60, motorized: true }] }).counts, { [S12]: 2, [L25]: 1 });
+eq('tab 7: two return fees go to ONE pole — the plain one first, not the motorized one', orderPackagingPlanOf({ systems: [{ qty: 1, lengthIn: 60, motorized: true }, { qty: 2, lengthIn: 60 }], returnQty: 2 }).counts, { [S12]: 1, [L25]: 2 });
+eq('tab 7: three return fees reach two poles; a bend reaches one more', [orderPackagingPlanOf({ systems: [{ qty: 3, lengthIn: 60 }], returnQty: 3 }).counts, orderPackagingPlanOf({ systems: [{ qty: 3, lengthIn: 60 }], returnQty: 2, shapedQty: 1 }).counts], [{ [S12]: 1, [L25]: 2 }, { [S12]: 1, [L25]: 2 }]);
+eq('tab 7: the fee lines can be given by name', orderPackagingPlanOf({ systems: [{ qty: 2, lengthIn: 60 }], feeNames: [{ name: 'MITER RETURN', qty: 2 }, { name: 'Rush Order Fee', qty: 1 }, { name: 'Pole Pack Standard', qty: 1 }] }).counts, { [S12]: 1, [L25]: 1 });
+eq('tab 7: no pole, no fee — whatever fee lines the order carries', orderPackagingPlanOf({ systems: [], returnQty: 2 }).counts, { [S12]: 0, [L25]: 0 });
 
 console.log(`flatRateShipping: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
