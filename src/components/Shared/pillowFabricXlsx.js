@@ -31,7 +31,7 @@ const cutCellsFor = (rowValues, config) => {
  * items  = the Uniquity library (the caller's one read); config = system/pillow_pricing.
  * Triggers the browser download.
  */
-export async function downloadFabricTemplate({ items = [], config = null } = {}) {
+export async function downloadFabricTemplate({ items = [], config = null, missingYardage = [] } = {}) {
     const cfg = config || {};
     const sizes = sizeKeysOf(cfg);
     const wb = new ExcelJS.Workbook();
@@ -85,6 +85,22 @@ export async function downloadFabricTemplate({ items = [], config = null } = {})
     mc.addRow([]);
     mc.addRow(['Length runs along the roll (the pillow\'s height); a railroad fabric takes the cut turned. Edit on 6.5 Tools → Pillow Pricing.']).font = { italic: true, color: { argb: 'FF777777' } };
 
+    // YARDAGE TO CREATE (S7 step 1, 2026-10-12): the colourways whose pillows / throw exist in the library
+    // and whose fabric yardage item does not — proposed rows in the Fabrics columns, width left for the
+    // office. The importer reads ONLY the Fabrics sheet: copy a row across once its width is known.
+    if (missingYardage && missingYardage.length) {
+        const my = wb.addWorksheet('Yardage to create');
+        my.columns = FABRIC_COLS.map(c => ({ header: c.header, key: c.key, width: c.width }));
+        my.getRow(1).font = { bold: true, size: 10, color: { argb: 'FFFFFFFF' } };
+        my.getRow(1).alignment = { wrapText: true, vertical: 'middle' };
+        my.getRow(1).height = 44;
+        for (let c = 1; c <= FABRIC_COLS.length; c++) my.getCell(1, c).fill = HEAD_FILL;
+        missingYardage.forEach(r => { const row = my.addRow(r); row.getCell(6).fill = REQ_FILL; });
+        my.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
+        my.addRow([]);
+        my.addRow(['Proposed from the catalog: these colourways have pillows or a throw in the library and NO fabric yardage item. Type the Width (in), then copy the row onto the Fabrics sheet and drop the file back — the importer ignores this sheet.']).font = { italic: true, color: { argb: 'FF777777' } };
+    }
+
     const pg = wb.addWorksheet('Price Groups (reference)');
     const gs = Object.entries(cfg.fabricGroups || {}).sort((a, b) => (a[1].rank || 0) - (b[1].rank || 0));
     if (gs.length) {
@@ -104,7 +120,7 @@ export async function downloadFabricTemplate({ items = [], config = null } = {})
     a.href = url; a.download = FABRIC_TEMPLATE_NAME;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
-    return { rows: live.length, fabrics: items.filter(isFabricItem).length, sizes: sizes.length };
+    return { rows: live.length, fabrics: items.filter(isFabricItem).length, sizes: sizes.length, missing: (missingYardage || []).length };
 }
 
 /** File → [{ name, grid }] through the shared loader. */

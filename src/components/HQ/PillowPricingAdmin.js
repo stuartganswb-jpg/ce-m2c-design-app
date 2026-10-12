@@ -26,6 +26,7 @@ import {
 import { parseFabricSheet, planFabricRows, fabricUpdatePatchOf, fabricCreateDocOf, newFabricItemId, fabricPlanSummary } from '../Shared/pillowFabricSheet';
 import { downloadFabricTemplate, readFabricWorkbook, FABRIC_TEMPLATE_NAME } from '../Shared/pillowFabricXlsx';
 import { sizeCutTableOf, minCutPatchOf, sizesWithMinCuts, allowanceOf } from '../Shared/pillowCuts';
+import { catalogTagPlanOf, catalogTagPatchesOf, sizesWithFillItems, missingYardageRowsOf } from '../Shared/pillowCatalog';   // the catalog tags itself (S7 step 1, 2026-10-12)
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
 const card = { background: '#fff', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' };
@@ -60,6 +61,11 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
     // the minimum cut per size (ONE side) — follows the served document until the operator types
     const [cutRows, setCutRows] = useState([]);
     const [cutDirty, setCutDirty] = useState(false);
+    // THE CATALOG TAGS ITSELF (Stuart 2026-10-12): read once, preview per pattern, two-press Apply.
+    const [catPlan, setCatPlan] = useState(null);
+    const [catArmed, setCatArmed] = useState(false);
+    const [fillArmed, setFillArmed] = useState(false);
+    const [catOpen, setCatOpen] = useState({});
 
     useEffect(() => {
         const u1 = onSnapshot(doc(db, 'system', PILLOW_PRICING_DOC), (s) => setLive(s.exists() ? { ...DEFAULT_PILLOW_PRICING, ...s.data() } : { ...DEFAULT_PILLOW_PRICING }));
@@ -188,9 +194,50 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
         setBusy(true);
         try {
             const items = await readLibrary();
-            const r = await downloadFabricTemplate({ items, config: cfg });
-            say(`${FABRIC_TEMPLATE_NAME} downloaded — ${r.rows} fabric / trim row(s) from the library, ${r.sizes} cut column(s). The office edits it and sends it back.`, 'ok');
+            // the sheet also carries the colourways with no yardage item, proposed from the catalog's own codes
+            const missing = missingYardageRowsOf(catalogTagPlanOf({ items, config: cfg }).missing);
+            const r = await downloadFabricTemplate({ items, config: cfg, missingYardage: missing });
+            say(`${FABRIC_TEMPLATE_NAME} downloaded — ${r.rows} fabric / trim row(s) from the library, ${r.sizes} cut column(s), ${r.missing} colourway(s) on the Yardage to create sheet. The office edits it and sends it back.`, 'ok');
         } catch (err) { say(`Download failed: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
+    const readCatalog = async () => {
+        setBusy(true); setCatArmed(false); setFillArmed(false);
+        try {
+            const items = await readLibrary();
+            const plan = catalogTagPlanOf({ items, config: cfg });
+            setCatPlan(plan);
+            const c = plan.counts;
+            say(`Catalog read: ${c.patterns} patterns, ${c.colourways} colourways — ${c.derived} price a group from their pillows, ${c.writes} library write(s) to make, ${c.missing} colourway(s) with no yardage item, ${c.fill} fill insert(s) proposed (${items.length} Uniquity items).`, 'ok');
+        } catch (err) { setCatPlan(null); say(`Could not read the catalog: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
+    const applyCatalogTags = async () => {
+        if (!catPlan || !catPlan.writes.length) return;
+        if (!catArmed) { setCatArmed(true); return; }
+        setBusy(true);
+        try {
+            const at = Date.now();
+            const patches = catalogTagPatchesOf(catPlan.writes, { by: currentUser || '', at });
+            for (let i = 0; i < patches.length; i += 400) {
+                const batch = writeBatch(db);
+                patches.slice(i, i + 400).forEach(p => batch.update(doc(db, 'Approved_Designs', p.id), p.patch));
+                await batch.commit();
+            }
+            say(`Tagged: ${patches.length} item(s) written (${catPlan.writes.filter(w => w.path.endsWith('priceGroup')).length} price group(s), ${catPlan.writes.filter(w => w.path.endsWith('convertedFrom')).length} throw link(s)). Read the catalog again to see it clean.`, 'ok');
+            setCatPlan(null); setCatArmed(false);
+        } catch (err) { say(`Tagging failed: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
+    const applyFillInserts = async () => {
+        if (!catPlan || !catPlan.fill.length) return;
+        if (!fillArmed) { setFillArmed(true); return; }
+        setBusy(true);
+        try {
+            await updateDoc(doc(db, 'system', PILLOW_PRICING_DOC), { sizes: sizesWithFillItems(live, catPlan.fill), fillSavedAt: Date.now(), fillSavedBy: currentUser || '' });
+            say(`Fill inserts set: ${catPlan.fill.map(f => `${f.sizeKey} → ${f.code}`).join(', ')}.`, 'ok');
+            setCatPlan(prev => (prev ? { ...prev, fill: [] } : prev)); setFillArmed(false);
+        } catch (err) { say(`Save failed: ${err.message || err}`, 'err'); }
         setBusy(false);
     };
     const saveMinCuts = async () => {
@@ -338,6 +385,68 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
                     <button onClick={saveMinCuts} disabled={busy || !cutDirty} style={btn(true, busy || !cutDirty)}>Save minimum cuts</button>
                     {cutDirty && <span style={{ ...mono, color: '#a86b00' }}>unsaved edits</span>}
                 </div>
+            </div>
+
+            <div style={card}>
+                <h3 style={h}>Tag the catalog from itself</h3>
+                <p style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
+                    Every pattern's pillows are already priced by the chart (Bell/10P19x19 at $500 is group C at 19x19, and only C). Read the catalog and it derives each colourway's group from those prices,
+                    writes it onto the fabric yardage item and the throws (the field the fabric sheet writes), links a fabric to its throw by code, proposes the fill insert per size from the inserts in the library,
+                    and names the colourways whose yardage item does not exist yet (they ride the fabric sheet download as <b>Yardage to create</b>). Nothing else on an item is touched.
+                </p>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button onClick={readCatalog} disabled={busy || liveSizes.length === 0} style={btn(false, busy || liveSizes.length === 0)}>⟳ Read the catalog</button>
+                    {liveSizes.length === 0 && <span style={{ ...mono, color: '#a86b00' }}>apply the price chart first — the groups come from it</span>}
+                    {catPlan && <span style={mono}>{catPlan.counts.patterns} patterns · {catPlan.counts.colourways} colourways · {catPlan.counts.derived} priced to a group · {catPlan.counts.tagged} tagged today · {catPlan.counts.missing} with no yardage item</span>}
+                </div>
+                {catPlan && (
+                    <div style={{ marginTop: '16px' }}>
+                        <div style={{ overflowX: 'auto', maxHeight: '420px', overflowY: 'auto', border: '1px solid var(--line)' }}>
+                            <table style={{ borderCollapse: 'collapse', width: '100%', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                                <thead><tr>{['Pattern', 'Colourways', 'Group', 'From the prices', 'Writes', 'No yardage item'].map(t => <th key={t} style={{ ...mono, textAlign: 'left', padding: '6px 6px', borderBottom: '1px solid var(--line)', position: 'sticky', top: 0, background: '#fff' }}>{t}</th>)}</tr></thead>
+                                <tbody>
+                                    {catPlan.rows.map(r => {
+                                        const open = !!catOpen[r.pattern];
+                                        const nWrites = r.colourways.reduce((s2, c) => s2 + c.writes.length, 0);
+                                        const nMissing = r.colourways.filter(c => catPlan.missing.some(m => m.key === c.cw.key)).length;
+                                        const mism = r.colourways.reduce((s2, c) => s2 + c.derived.mismatches.length, 0);
+                                        const tone = r.agree === 'ALL' ? '#2e7d32' : (r.agree === 'SPLIT' ? '#a86b00' : '#d9534f');
+                                        return (
+                                            <React.Fragment key={r.pattern}>
+                                                <tr onClick={() => setCatOpen(prev => ({ ...prev, [r.pattern]: !open }))} style={{ cursor: 'pointer', borderBottom: '1px solid var(--paper-2)' }}>
+                                                    <td style={{ padding: '5px 6px', fontWeight: 600 }}>{open ? '▾' : '▸'} {r.label}</td>
+                                                    <td style={{ padding: '5px 6px' }}>{r.colourways.length}</td>
+                                                    <td style={{ padding: '5px 6px', fontWeight: 700, color: tone }}>{r.agree === 'SPLIT' ? r.groups.join(' / ') : (r.group || '—')}</td>
+                                                    <td style={{ padding: '5px 6px', color: 'var(--ink-soft)' }}>{r.agree === 'ALL' ? 'every colourway agrees' : (r.agree === 'SPLIT' ? 'colourways differ — written per colourway' : 'no group can be read')}{mism ? ` · ${mism} price(s) off the column` : ''}</td>
+                                                    <td style={{ padding: '5px 6px' }}>{nWrites || '—'}</td>
+                                                    <td style={{ padding: '5px 6px', color: nMissing ? '#a86b00' : 'var(--ink-soft)' }}>{nMissing || '—'}</td>
+                                                </tr>
+                                                {open && r.colourways.map(c => (
+                                                    <tr key={c.cw.key} style={{ background: 'var(--paper)', borderBottom: '1px solid var(--paper-2)' }}>
+                                                        <td style={{ padding: '4px 6px 4px 24px', fontFamily: 'var(--mono)', fontSize: '11px' }}>{c.cw.key}{c.cw.colourName ? <span style={{ color: 'var(--ink-soft)' }}> · {c.cw.colourName}</span> : null}</td>
+                                                        <td style={{ padding: '4px 6px', color: 'var(--ink-soft)' }}>{Object.keys(c.cw.pillows).length} pillow(s){c.cw.throws.STD ? ' · throw' : ''}{c.cw.throws.XL ? ' · XL' : ''}{c.cw.fabric ? ' · fabric' : ''}</td>
+                                                        <td style={{ padding: '4px 6px', fontWeight: 600 }}>{c.derived.group || '—'}{c.cw.group && c.cw.group !== c.derived.group ? <span style={{ color: '#a86b00', fontWeight: 400 }}> (was {c.cw.group})</span> : null}</td>
+                                                        <td style={{ padding: '4px 6px', color: 'var(--ink-soft)' }}>
+                                                            {c.derived.reason === 'ONE' ? `${c.derived.agree} of ${c.derived.priced} prices in column ${c.derived.group}` : c.derived.reason === 'MOST' ? `${c.derived.agree} of ${c.derived.priced} in ${c.derived.group} — off: ${c.derived.mismatches.map(m => `${m.sizeKey} ${money(m.price)} (chart ${money(m.expected)})`).join(', ')}` : c.derived.reason === 'TIE' ? `tie between ${Object.keys(c.derived.candidates).join(' / ')} — nothing chosen` : c.derived.reason === 'NO_FIT' ? 'prices fit no column' : 'no priced pillow'}
+                                                        </td>
+                                                        <td style={{ padding: '4px 6px', color: 'var(--ink-soft)' }}>{c.writes.length ? c.writes.map(w => `${w.code}: ${w.path.endsWith('priceGroup') ? 'group' : 'throw'} ${w.from || '—'} → ${w.to}`).join(' · ') : '—'}</td>
+                                                        <td style={{ padding: '4px 6px', color: '#a86b00' }}>{catPlan.missing.some(m => m.key === c.cw.key) ? 'no yardage item' : ''}</td>
+                                                    </tr>
+                                                ))}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                        {catPlan.fill.length > 0 && <div style={{ marginTop: '10px', fontSize: '0.85rem' }}>Fill inserts proposed: {catPlan.fill.map(f => <span key={f.sizeKey}><b>{f.sizeKey}</b> → {f.code} &nbsp;</span>)}</div>}
+                        <div style={{ marginTop: '12px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <button onClick={applyCatalogTags} disabled={busy || !catPlan.writes.length} style={btn(true, busy || !catPlan.writes.length)}>{catArmed ? `Press again to write ${catPlan.writes.length} field(s)` : `Apply the tags (${catPlan.writes.length})`}</button>
+                            {catPlan.fill.length > 0 && <button onClick={applyFillInserts} disabled={busy} style={btn(false, busy)}>{fillArmed ? 'Press again to set the fill inserts' : `Set the fill inserts (${catPlan.fill.length})`}</button>}
+                            <button onClick={() => { setCatPlan(null); setCatArmed(false); setFillArmed(false); }} disabled={busy} style={btn(false, busy)}>Discard</button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             <div style={card}>
