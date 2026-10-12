@@ -39,16 +39,33 @@ test('a 12ft motorized double wood ceiling set — every axis flips', { skip }, 
     assert.equal(q(r, 'H1-2TRVTRK/C'), 24);    // two tracks × 12ft
     assert.equal(q(r, 'H1-2TRV-CB'), 5);       // ceiling brackets, count from the standard table at 12ft
     assert.equal(q(r, 'HSOM-20'), 1);          // the chosen motor, not the base
+    assert.equal(q(r, 'HSOM-04'), 4);          // a drive pulley at each end of BOTH tracks
     assert.equal(q(r, 'H1-2TRVPLUG'), undefined);
     assert.equal(q(r, 'H1-2TRVSPLC'), 1);      // one splice at 12ft per the table
 });
 
-test('front-as-ring: ONE track, the front ring pole, the DRT bracket', { skip }, () => {
+test('front-as-ring: ONE track, the fascia as the front pole, the DRT bracket — and NO ring (Stuart 2026-10-12)', { skip }, () => {
     const r = explodeTraverse({ align: A({ setup: 'DOUBLE', frontRail: 'RING' }), feet: 6, rules });
     assert.equal(q(r, 'H1-2TRVTRK/C'), 6);     // rear track only
-    assert.equal(q(r, 'H1-2RCTPR'), 1);        // front ring pole
+    assert.equal(q(r, 'H1-2RCTAR'), 6);        // the front pole is the fascia
+    assert.equal(q(r, 'H1-2RCTPR'), undefined); // "no rings included in any kits" — H1-2RCTPR is the passing ring
     assert.equal(q(r, 'H1-2TRV-DRTWB'), 3);    // the front-ring bracket at 6ft
-    assert.ok(r.skipped.some(s => /ring COUNT/.test(s)));
+    assert.ok(r.skipped.some(s => /rings are not in the kit/.test(s)));
+});
+
+// ── THE MOTORIZED TRACK END (Stuart 2026-10-12: "yes 2 pulleys for track same at tab 7") ──────
+test('a motorized kit lists a drive pulley at each end of each track; a manual one lists none', { skip }, () => {
+    const single = explodeTraverse({ align: A({ drive: 'MOTORIZED' }), feet: 5, motorItem: 'HSOM-20', rules });
+    assert.equal(q(single, 'HSOM-04'), 2);
+    assert.equal(single.lines.find(l => l.code === 'HSOM-04').role, 'driveEnd');
+    assert.equal(single.lines.find(l => l.code === 'HSOM-04').subFinish, false);   // a bought part: no base colour
+    assert.equal(q(single, 'HSOM-20'), 1);     // the motor is still one
+    assert.equal(q(single, 'H1-2TRVPLUG'), undefined);
+    assert.equal(q(explodeTraverse({ align: A({ setup: 'DOUBLE', drive: 'MOTORIZED' }), feet: 5, rules }), 'HSOM-04'), 4);                       // two tracks
+    assert.equal(q(explodeTraverse({ align: A({ setup: 'DOUBLE', frontRail: 'RING', drive: 'MOTORIZED' }), feet: 5, rules }), 'HSOM-04'), 2);    // ring front: one track
+    const manual = explodeTraverse({ align: A(), feet: 5, rules });
+    assert.equal(q(manual, 'HSOM-04'), undefined);
+    assert.equal(q(manual, 'H1-2TRVPLUG'), 2);
 });
 
 test('below the minimum still consumes the 4ft set', { skip }, () => {
@@ -114,7 +131,7 @@ test('every bracket shape carries the base-colour fact, not just the single', { 
     assert.equal(ceil.lines.find(l => l.code === 'H1-2TRV-CB').subFinish, true);
     const ring = explodeTraverse({ align: A({ setup: 'DOUBLE', frontRail: 'RING' }), feet: 6, rules });
     assert.equal(ring.lines.find(l => l.code === 'H1-2TRV-DRTWB').subFinish, true);
-    assert.equal(ring.lines.find(l => l.code === 'H1-2RCTPR').subFinish, false);   // the front ring pole is visible
+    assert.equal(ring.lines.find(l => l.code === 'H1-2RCTAR').subFinish, false);   // the front pole (the fascia) is visible
 });
 
 test('a splice below the chart\'s first length is not consumed — optional up to 10 ft (Stuart 2026-09-09)', () => {

@@ -5,8 +5,9 @@
 //
 // The explosion covers what the sheet DEFINES for a bare system: fascia, track(s), brackets by the
 // per-length count table, splices by the same table, and the ends (plugs manual / the chosen motor
-// motorized). Carriers and the configurator items land when the configurator does (step 4) — every
-// caller should surface `skipped` so nobody mistakes a partial consumption for a complete one.
+// and its drive pulleys motorized). Carriers and the configurator items land when the configurator
+// does (step 4) — every caller should surface `skipped` so nobody mistakes a partial consumption
+// for a complete one. NO RING IS IN ANY KIT (Stuart 2026-10-12) — rings are their own line.
 
 const U = (v) => String(v ?? '').trim().toUpperCase();
 
@@ -26,6 +27,13 @@ export const TRAVERSE_FAMILY_PARTS = {
         fclip: 'H1-2TRVCLP',
         plug: 'H1-2TRVPLUG',
         baseMotor: 'HSOM-21',
+        // THE MOTORIZED TRACK END (Stuart 2026-10-12: "yes 2 pulleys for track same at tab 7"). A manual track is
+        // closed by a plug at each end; a motorized one carries a Somfy drive pulley at each end — HSOM-04, the part
+        // the flow pins on both end slots of every track. It comes WITH the kit, as the plugs do: Fabricut's kit
+        // price already includes it (their POs carry no pulley line), and until it was listed here CPQ billed each
+        // one on top of the kit ($25.88 × 2 on a single, × 4 on a double — QUO191 / 195 / 203) while tab 7, which
+        // consumes this list, never picked one at all.
+        driveEnd: 'HSOM-04',
         // ⚠ A SINGLE'S BRACKET IS THREE ITEMS, ONE PER PROJECTION (Stuart 2026-08-22, refining tab
         // 7). The sheet has said so all along — H1-2TRV-WB "STANDARD" 3.625, H1-2TRV-EWB "EXTENDED"
         // 4.625, H1-2TRV-6WB "EXTENDED 6" — and the Carrier Usage chart carries a separate count row
@@ -48,7 +56,10 @@ export const TRAVERSE_FAMILY_PARTS = {
         // on every bracket item in the library having had a checkbox ticked.
         subFinishRoles: ['track', 'bracket', 'fclip'],
         splice: 'H1-2TRVSPLC',
-        frontRingPole: 'H1-2RCTPR',
+        // (There was a `frontRingPole: 'H1-2RCTPR'` here, consumed × 1 on a ring-front kit. H1-2RCTPR is the PASSING
+        //  RING, not a pole — the front pole is the fascia above — so one ring rode in every stationary-front kit:
+        //  free on a CPQ quote (QUO204: 15 rings, 14 billed) and picked unasked on a tab 7 order. Stuart 2026-10-12:
+        //  "no rings included in any kits.")
     },
     // ── THE 1-3/8" TRAVERSE (Stuart 2026-09-10, via S5's kit hand-off) ──────────────────────
     // "the exact same carrier usage and carrier options as the H1-2TRV … so just the rod and
@@ -76,7 +87,7 @@ export const TRAVERSE_FAMILY_PARTS = {
         // H1-2trv manual, it will need to be updated but for placement sake it is better than
         // nothing." Not the 1-3/8" part — swap the code here when it exists.
         plug: 'H1-2TRVPLUG',
-        // No motorised kits on the sheet (no baseMotor); no ring-front double (no frontRingPole).
+        // No motorised kits on the sheet (no baseMotor, no driveEnd); no ring-front double.
         // Returns are NOT in the kit and are not exploded (Stuart 2026-09-10): "only miter and
         // french returns as fees are available … as an additional charge with the fee items
         // 138TRVFR or 138TRVMTR as usual on the end treatment selections." No returnArms here.
@@ -172,7 +183,9 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
         // THE F-CLIP RUNS WITH ITS TRACK (Stuart 2026-09-28: "fclip is same usage as track, by foot") — one run per
         // track, consumed by the foot, cut and finished with it (Shared/subFinish.traverseOrderLinesOf).
         if (P.fclip) add(P.fclip, ft * (setup === 'DOUBLE' && !ring ? 2 : 1), setup === 'DOUBLE' && !ring ? 'two F-clip runs (per ft)' : 'F-clip (per ft)', 'fclip');
-        if (ring) { add(P.frontRingPole, 1, 'front ring pole', 'ringPole'); skipped.push('ring COUNT rides the configurator — front pole consumed, rings not yet'); }
+        // A ring-front kit's front pole is its fascia (above). Its rings are NOT in the kit — they are ordered,
+        // billed and picked as their own line, at the count the customer wants.
+        if (ring) skipped.push('rings are not in the kit — they bill and ship as their own line');
     }
 
     // The single's bracket follows the PROJECTION sold. No projection given = the standard depth,
@@ -221,6 +234,10 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
     if (U(align.drive) === 'MOTORIZED') {
         if (U(motorItem) || P.baseMotor) add(U(motorItem) || P.baseMotor, 1, 'motor', 'motor');
         else skipped.push('motorised — this family has no base motor on its sheet; nothing consumed');
+        // …and a drive pulley at each end of each track: two on a single or a ring-front double (one track), four
+        // on a track-front double.
+        const tracks = setup === 'DOUBLE' && !ring ? 2 : 1;
+        if (P.driveEnd) add(P.driveEnd, 2 * tracks, tracks > 1 ? 'drive pulleys (motorized, both ends of both tracks)' : 'drive pulleys (motorized, both ends)', 'driveEnd');
     } else add(P.plug, 2, 'end plugs (manual, both ends)', 'plug');
 
     skipped.push('carriers + configurator items consume when the configurator ships');
