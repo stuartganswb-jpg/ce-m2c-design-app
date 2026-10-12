@@ -23,9 +23,12 @@
 // Harness: scripts/hardwareSession.test.mjs.
 
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter.js';
-import { resolve, reseatPicks } from './hardwareModel.js';
+import { resolve, reseatPicks, recommendedQty, bearingEnds, centreBracketsFor } from './hardwareModel.js';
 import { autoPicksOf } from './hardwareAutoPicks.js';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, projInchesOfSel } from './sizeMatrix.js';
+import { bracketAdviceFor, DEFAULT_DROP_FT } from './bracketSpan.js';
+import { carrierRows } from './traverseConfigurator.js';
+import { usageAt } from './traverseExplode.js';
 
 // ── THE PARTS, AND HOW ONE IS FOUND ──────────────────────────────────────────────────────────
 // A pin can be tagged with the library record's id, its itemId or OUR number, so every one of them
@@ -126,15 +129,107 @@ export function settle({ choices, answers, picks, modelNodes }) {
     return m;
 }
 
+// ── LENGTH, AND WHAT IT IMPLIES ──────────────────────────────────────────────────────────────
+// Typed the way an installer measures — whole inches and a fraction — and the FOOT figure is
+// derived, because feet is what prices. One typed number, one shown consequence, no chance of
+// the two disagreeing.
+export function lengthInchesOf(poleIn, poleFrac) {
+    const whole = parseFloat(poleIn);
+    const m = String(poleFrac).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+    const frac = m ? Number(m[1]) / Number(m[2]) : (parseFloat(poleFrac) || 0);
+    const total = (Number.isFinite(whole) ? whole : 0) + (Number.isFinite(frac) ? frac : 0);
+    return total > 0 ? total : null;
+}
+// ⚠ WE BILL IN FULL FEET, ROUNDED UP (Stuart 2026-08-17: "even if .25\" over we bill next foot
+// size"). A pole is cut from stock in whole feet, so 90 1/2" is eight feet of material however
+// the arithmetic reads. Showing the exact figure beside it keeps the operator honest about what
+// was measured versus what is being charged.
+export const lengthFeetExactOf = (lengthInches) => (lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null);
+export const lengthFeetOf = (lengthInches) => (lengthInches ? Math.ceil(lengthInches / 12) : null);
+// A SAVED length goes back into the two fields it was typed in — whole inches, and the fraction in
+// sixteenths. That is the length a reopened line is then worked from, so it is the length every
+// caller starts from (a saved 96.3" is 96 5/16").
+export function lengthFieldsOf(lengthInches) {
+    if (Number(lengthInches) > 0) {
+        const whole = Math.floor(Number(lengthInches));
+        const frac = Number(lengthInches) - whole;
+        return { poleIn: String(whole), poleFrac: frac > 0.001 ? `${Math.round(frac * 16)}/16` : '' };
+    }
+    return { poleIn: '', poleFrac: '' };
+}
+
+// ── THE BRACKET RECOMMENDATION, from the engineering in 6.5 rather than a number in a file ────────
+// ⚠ 6.5 IS KEYED ON OUR ITEM CODE, AND A PIN CARRIES THE LIBRARY DOC ID (Stuart 2026-08-20:
+// "the fabric weight for bracket span states nothing is set up, but it is set up"). It IS set
+// up — `H1-1.375 → H1-138R` — but this asked for `CE-INV-61954`, which no family claims, so
+// every rod reported itself unlisted. ourId() is the same resolver the cards and the quote
+// lines use, so what we look up is what he typed in 6.5.
+export function bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, fabricId, ourId }) {
+    // ⚠ READS `model`, NOT `resolved` (2026-08-20). The centre-bracket recommendation feeds
+    // the quantities, which feed resolve — so taking the rod from the RESOLVED model would
+    // close the loop: advice → quantities → resolved → advice. The pre-quantity model already
+    // knows which rod was chosen, and a count never changes that.
+    const ids = new Set(Object.values(livePicks));
+    const rod = model.choices.find(c => ids.has(c.id) && ['ROD', 'FASCIA', 'TRACK'].includes(c.role));
+    if (!rod || !lengthInches) return null;
+    return bracketAdviceFor({ itemCode: ourId(rod.partId) || rod.name || rod.partId, map: spanMap, caps: spanCaps, rodInches: lengthInches, fabricId, dropFt: DEFAULT_DROP_FT });
+}
+
+// ── HOW MANY OF EACH (Stuart 2026-08-20) ─────────────────────────────────────────────────────
+// Rings and carriers are spaced along the pole, so their count follows its length: four a foot
+// plus the pair at the ends. That is a RECOMMENDATION — it seeds the field so the ordinary
+// order needs no typing, and anything typed wins and is never overwritten.
+//
+// Carriers are riders: never offered, always built. They still need the right count, so they
+// are seeded here rather than at a step that does not exist.
+// How many the ENGINEERING wants for a step, or null where nothing decides it. Rings and
+// carriers come from the length; the centre bracket comes from the span less whatever the ends
+// are already carrying. Read by both the seeding below and the field's placeholder, so what is
+// billed and what is shown can never drift apart.
+export function recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet }) {
+    if (!slot) return null;
+    if (slot.kind === 'BRACKET' && String(slot.position || '').toUpperCase() === 'CENTER') {
+        return advice ? centreBracketsFor(advice.brackets, bearingEnds(model.choices, Object.values(livePicks), model.slots)) : null;
+    }
+    return recommendedQty(choice, lengthFeet);
+}
+export function quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId }) {
+    const q = {};
+    model.slots.forEach(sl => {
+        const id = livePicks[sl.key];
+        if (!id) return;
+        const typed = Number(stepQty[sl.key]);
+        if (typed > 0) { q[id] = typed; return; }
+        const rec = recommendFor(sl, sl.options.find(o => o.id === id));
+        if (rec != null && rec > 0) q[id] = rec;
+    });
+    (model.riders || []).forEach(r => {
+        // ONE CARRIER COUNT (Stuart 2026-09-19): where the collection's chart has a row for this
+        // carrier, the chart IS the count at the length ordered (pinch pleat 4 a foot — 8 at 18") —
+        // the same number the Traverse components step and the kit cover read. The old four-a-foot-
+        // plus-two stays for a collection with no chart.
+        const row = (r.role === 'CARRIER' && lengthFeet > 0 && trvRules)
+            ? carrierRows(trvRules).find(u => String(u.itemId || '').trim().toUpperCase() === String(ourId(r.partId) || '').trim().toUpperCase()) : null;
+        const rec = row ? usageAt(row, Math.max(lengthFeet, 2)) : recommendedQty(r, lengthFeet);
+        if (rec) q[r.id] = rec;
+    });
+    return q;
+}
+// The configuration with its counts — what is rendered, priced and handed to the cart.
+export const resolvedOf = ({ choices, answers, livePicks, modelNodes, quantities }) => resolve({ choices, answers, selectedIds: Object.values(livePicks), modelNodes, quantities });
+
 /**
  * The configuration, in one call — for a caller that is not a React screen (the portal's server, a
  * harness). The CPQ screen makes these SAME calls one memo at a time, so a keystroke re-works only
  * what it touched; this makes them in the same order, with the same arguments.
  *
- * @param data   { assembly, pins, parts, flow } — what the screen is handed
- * @param state  { answers, picks, sizePick }    — what the operator has answered
+ * @param data   { assembly, pins, parts, flow, spanMap, spanCaps, trvRules } — what the screen is handed
+ * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId } — what the operator has
+ *               answered, as a cart line saves it (engineConfig); a saved length is read back through
+ *               the two fields it was typed in, exactly as Edit restores it
  */
-export function sessionOf({ assembly, pins = [], parts = [], flow = null } = {}, { answers = {}, picks = {}, sizePick = {} } = {}) {
+export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMap = {}, spanCaps = {}, trvRules = null } = {},
+    { answers = {}, picks = {}, sizePick = {}, lengthInches: savedLength = null, stepQty = {}, fabricId = 'PRINT' } = {}) {
     const partIndex = partIndexOf(parts);
     const findPart = (id) => partIn(partIndex, id);
     const ourId = (id) => ourNumberOf(findPart(id), id);
@@ -148,5 +243,14 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null } = {},
     const model = settle({ choices, answers: effAnswers, picks, modelNodes });
     // The picks made on the operator's behalf (Shared/hardwareAutoPicks) — read from the answers AS GIVEN.
     const { settledKeys, livePicks } = autoPicksOf({ model, answers, operatorPicks: reseatPicks(model, picks) });
-    return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks };
+    const fields = lengthFieldsOf(savedLength);
+    const lengthInches = lengthInchesOf(fields.poleIn, fields.poleFrac);
+    const lengthFeetExact = lengthFeetExactOf(lengthInches);
+    const lengthFeet = lengthFeetOf(lengthInches);
+    const advice = bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, fabricId, ourId });
+    const recommendFor = (slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet });
+    const quantities = quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId });
+    const resolved = resolvedOf({ choices, answers: effAnswers, livePicks, modelNodes, quantities });
+    return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks,
+        lengthInches, lengthFeetExact, lengthFeet, advice, recommendFor, quantities, resolved };
 }

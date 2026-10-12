@@ -16,7 +16,7 @@
 //  · "Finish track to match the fascia" is an add-on FEE handled by the caller (it changes finish
 //    routing, not components) — not a configurator line.
 
-import { usageAt, usageFromFirst } from './traverseExplode';
+import { usageAt, usageFromFirst } from './traverseExplode.js';
 
 const U = (v) => String(v ?? '').trim().toUpperCase();
 

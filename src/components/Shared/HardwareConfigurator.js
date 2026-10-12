@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel, ViewCapturer } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
-import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor, companionsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
+import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, companionsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
 import { configuratorLines, configuratorTotal, defaultPicks, carrierRows } from './traverseConfigurator';
 import { traverseAnswersMissing, drawLabel } from './traverseDraw';
@@ -21,7 +21,8 @@ import { workIsPristine } from './cpqWorkspace';
 import { parseKitCode } from './kitCode';
 import { renderScaleOf } from './sizeMatrix';
 import { modelNodesOf } from './hardwareAdapter';
-import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle } from './hardwareSession';
+import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle,
+    lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf } from './hardwareSession';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort, customerPriceLevel } from './priceLevels';
 import { findClientPriceRow, customerKeys } from './clientPricing';
@@ -30,7 +31,7 @@ import { handoffItem, customerLines } from './hardwareHandoff';
 import { finishLabelOf, takesNoFinish } from './finishLabel';
 import { wearsAsTwin } from './materialTwin';
 import { questionsOf, unansweredOf } from './finishQuestions';
-import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
+import { ftIn, FABRIC_CLASSES } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 import { captureTransparentPng, saveGuideCapture } from './guideCapture';
 import { subFinishOfFinish } from './subFinish';
@@ -225,19 +226,10 @@ function HardwareConfiguratorInner({
     // Typed the way an installer measures — whole inches and a fraction — and the FOOT figure is
     // derived, because feet is what prices. One typed number, one shown consequence, no chance of
     // the two disagreeing.
-    const lengthInches = useMemo(() => {
-        const whole = parseFloat(poleIn);
-        const m = String(poleFrac).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
-        const frac = m ? Number(m[1]) / Number(m[2]) : (parseFloat(poleFrac) || 0);
-        const total = (Number.isFinite(whole) ? whole : 0) + (Number.isFinite(frac) ? frac : 0);
-        return total > 0 ? total : null;
-    }, [poleIn, poleFrac]);
-    // ⚠ WE BILL IN FULL FEET, ROUNDED UP (Stuart 2026-08-17: "even if .25\" over we bill next foot
-    // size"). A pole is cut from stock in whole feet, so 90 1/2" is eight feet of material however
-    // the arithmetic reads. Showing the exact figure beside it keeps the operator honest about what
-    // was measured versus what is being charged.
-    const lengthFeetExact = lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null;
-    const lengthFeet = lengthInches ? Math.ceil(lengthInches / 12) : null;
+    // (How the two fields become inches, and inches the billed feet — rounded UP — is hardwareSession's.)
+    const lengthInches = useMemo(() => lengthInchesOf(poleIn, poleFrac), [poleIn, poleFrac]);
+    const lengthFeetExact = lengthFeetExactOf(lengthInches);
+    const lengthFeet = lengthFeetOf(lengthInches);
 
 
     // ── OUR PART NUMBER, RESOLVED ─────────────────────────────────────────────────────────────
@@ -523,65 +515,16 @@ function HardwareConfiguratorInner({
         setKitSource({ code: name, name: chosen.itemName || name, baseFeet: Number(chosen.manufacturingSpecs.kitAlign.minFeet) || 4, record: chosen });
     };
 
-    // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
-    //
-    // ⚠ 6.5 IS KEYED ON OUR ITEM CODE, AND A PIN CARRIES THE LIBRARY DOC ID (Stuart 2026-08-20:
-    // "the fabric weight for bracket span states nothing is set up, but it is set up"). It IS set
-    // up — `H1-1.375 → H1-138R` — but this asked for `CE-INV-61954`, which no family claims, so
-    // every rod reported itself unlisted. ourId() is the same resolver the cards and the quote
-    // lines use, so what we look up is now what he typed in 6.5.
-    const advice = useMemo(() => {
-        // ⚠ READS `model`, NOT `resolved` (2026-08-20). The centre-bracket recommendation feeds
-        // the quantities, which feed resolve — so taking the rod from the RESOLVED model would
-        // close the loop: advice → quantities → resolved → advice. The pre-quantity model already
-        // knows which rod was chosen, and a count never changes that.
-        const ids = new Set(Object.values(livePicks));
-        const rod = model.choices.find(c => ids.has(c.id) && ['ROD', 'FASCIA', 'TRACK'].includes(c.role));
-        if (!rod || !lengthInches) return null;
-        return bracketAdviceFor({ itemCode: ourId(rod.partId) || rod.name || rod.partId, map: spanMap, caps: spanCaps, rodInches: lengthInches, fabricId, dropFt: DEFAULT_DROP_FT });
-    }, [model, livePicks, lengthInches, spanMap, spanCaps, fabricId, ourId]);
-
-    // ── HOW MANY OF EACH (Stuart 2026-08-20) ─────────────────────────────────────────────────
-    // Rings and carriers are spaced along the pole, so their count follows its length: four a foot
-    // plus the pair at the ends. That is a RECOMMENDATION — it seeds the field so the ordinary
-    // order needs no typing, and anything typed wins and is never overwritten.
-    //
-    // Carriers are riders: never offered, always built. They still need the right count, so they
-    // are seeded here rather than at a step that does not exist.
-    // How many the ENGINEERING wants for a step, or null where nothing decides it. Rings and
-    // carriers come from the length; the centre bracket comes from the span less whatever the ends
-    // are already carrying. Read by both the seeding below and the field's placeholder, so what is
-    // billed and what is shown can never drift apart.
-    const recommendFor = useCallback((slot, choice) => {
-        if (!slot) return null;
-        if (slot.kind === 'BRACKET' && String(slot.position || '').toUpperCase() === 'CENTER') {
-            return advice ? centreBracketsFor(advice.brackets, bearingEnds(model.choices, Object.values(livePicks), model.slots)) : null;
-        }
-        return recommendedQty(choice, lengthFeet);
-    }, [advice, model, livePicks, lengthFeet]);
-
-    const quantities = useMemo(() => {
-        const q = {};
-        model.slots.forEach(sl => {
-            const id = livePicks[sl.key];
-            if (!id) return;
-            const typed = Number(stepQty[sl.key]);
-            if (typed > 0) { q[id] = typed; return; }
-            const rec = recommendFor(sl, sl.options.find(o => o.id === id));
-            if (rec != null && rec > 0) q[id] = rec;
-        });
-        (model.riders || []).forEach(r => {
-            // ONE CARRIER COUNT (Stuart 2026-09-19): where the collection's chart has a row for this
-            // carrier, the chart IS the count at the length ordered (pinch pleat 4 a foot — 8 at 18") —
-            // the same number the Traverse components step and the kit cover read. The old four-a-foot-
-            // plus-two stays for a collection with no chart.
-            const row = (r.role === 'CARRIER' && lengthFeet > 0 && trvRules)
-                ? carrierRows(trvRules).find(u => String(u.itemId || '').trim().toUpperCase() === String(ourId(r.partId) || '').trim().toUpperCase()) : null;
-            const rec = row ? usageAt(row, Math.max(lengthFeet, 2)) : recommendedQty(r, lengthFeet);
-            if (rec) q[r.id] = rec;
-        });
-        return q;
-    }, [model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId]);
+    // The bracket recommendation from 6.5's engineering, how many of each the length asks for, and the
+    // counts the operator typed over them — hardwareSession (bracketAdviceOf / recommendedFor / quantitiesOf).
+    const advice = useMemo(() => bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, fabricId, ourId }),
+        [model, livePicks, lengthInches, spanMap, spanCaps, fabricId, ourId]);
+    // Read by both the seeding below and the field's placeholder, so what is billed and what is shown
+    // can never drift apart.
+    const recommendFor = useCallback((slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet }),
+        [advice, model, livePicks, lengthFeet]);
+    const quantities = useMemo(() => quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId }),
+        [model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId]);
 
     // ── THE KIT'S BRACKETS, PICKED AS THEY BECOME ANSWERABLE (Stuart 2026-10-01: "it should prepopulate
     // ideally the steps … with the bracket selections in the kit … i had to manually select vertical
@@ -604,7 +547,7 @@ function HardwareConfiguratorInner({
     }, [kitSource, model, effAnswers, livePicks, ourId, recommendFor]);
 
     const resolved = useMemo(
-        () => resolveHardware({ choices, answers: effAnswers, selectedIds: Object.values(livePicks), modelNodes, quantities }),
+        () => resolvedOf({ choices, answers: effAnswers, livePicks, modelNodes, quantities }),
         [choices, effAnswers, livePicks, modelNodes, quantities]);
     const visibleOverrides = useMemo(() => {
         const o = {};
@@ -1401,12 +1344,7 @@ function HardwareConfiguratorInner({
         setFinishAnswers((s.finishAnswers && typeof s.finishAnswers === 'object') ? JSON.parse(JSON.stringify(s.finishAnswers)) : {});
         if (s.globalFinishes && typeof s.globalFinishes === 'object') setGlobalFinishes({ ...s.globalFinishes });
         else if (s.globalFinish) setGlobalFinish(s.globalFinish);
-        if (Number(s.lengthInches) > 0) {
-            const whole = Math.floor(Number(s.lengthInches));
-            const frac = Number(s.lengthInches) - whole;
-            setPoleIn(String(whole));
-            setPoleFrac(frac > 0.001 ? `${Math.round(frac * 16)}/16` : '');
-        } else { setPoleIn(''); setPoleFrac(''); }
+        { const typed = lengthFieldsOf(s.lengthInches); setPoleIn(typed.poleIn); setPoleFrac(typed.poleFrac); }   // whole inches + sixteenths
         setTrvSel(s.trvSel && typeof s.trvSel === 'object' ? { ...s.trvSel } : null);
         setConfigMemo(s.memo || s.sidemark || '');
         setCfgQty(String(parseInt(s.qty, 10) > 0 ? parseInt(s.qty, 10) : 1));
