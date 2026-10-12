@@ -71,6 +71,9 @@ const sourcingOfLine = (line) => str(line && line.sourcing) || (line && line.isI
 export const FIELD_GROUPS = [
     { key: 'IDENTITY', label: 'Identity', always: true, fields: [
         f('pictureUrl', 'Picture', 'picture', { width: 64, ...lib('finalImageUrl', 'Picture') }),
+        // NOTES SIT BESIDE THE PICTURE (Liesl 2026-10-08, App Imp: "add notes column to the right of images") — it was
+        // the last column of the sheet, in a group that is off by default. The column itself is as it was.
+        f('notes', 'Notes', 'long', { width: 230 }),
         f('itemCode', 'Item #', 'text', { width: 130, mono: true, always: true, ...lib('legacyErpId', 'ERP Legacy ID') }),
         f('name', 'Description', 'long', { width: 280, always: true, ...lib('itemName', 'Record Name / Description') }),
         f('recordClass', 'Class', 'pick', { options: RECORD_CLASSES, width: 118, always: true, ...lib('partClass', 'Record Class') }),
@@ -188,9 +191,6 @@ export const FIELD_GROUPS = [
         f('tags.isHidden', 'Hidden', 'bool', { width: 68 }),
         f('tags.ridesWith', 'Rides with', 'pick', { options: ['RETURN', 'BRACKET'], width: 104 }),
         f('tags.note', 'Tag note', 'long', { width: 220 }),
-    ] },
-    { key: 'NOTES', label: 'Notes', fields: [
-        f('notes', 'Notes', 'long', { width: 320 }),
     ] },
 ];
 
@@ -404,20 +404,47 @@ export function tab1ProjectsOf(records) {
     for (const rec of (records || [])) {
         const group = str(rec.project).trim();
         const own = str(rec.recordType).toUpperCase() === 'PROJECT' ? str(rec.itemName).trim() : '';
-        const proj = bucket(group || own);
-        if (!proj) continue;
-        proj.records.push(rec);
-        const seen = new Set(proj.pictures.map(p => p.url));
-        const add = (url, label) => {
-            if (!url || is3dUrl(url) || seen.has(url)) return;
-            seen.add(url);
-            proj.pictures.push({ url, label: [str(rec.itemName).trim(), label].filter(Boolean).join(' · '), recordId: rec.id });
-        };
-        add(rec.finalImageUrl, 'current');
-        for (const rev of (rec.revisions || [])) { if (rev && !rev.is3D) add(rev.url, str(rev.name).trim()); }
+        // A PROJECT RECORD FILED UNDER A MASTER PROJECT IS BOTH (Liesl 2026-10-09, App Imp): "CAPA FLOOR LAMP", a
+        // PROJECT record under the Master Project "CAPA", was read as "CAPA" alone — so the sheet named CAPA FLOOR LAMP
+        // said "Tab 1 has no project named CAPA FLOOR LAMP yet" and offered none of its pictures. The record is named
+        // under the project it belongs to AND under its own name; its pictures are offered to both.
+        const names = [...new Set([group, own].map(projectNameKey).filter(Boolean))];
+        for (const name of names) {
+            const proj = bucket(name);
+            if (!proj) continue;
+            proj.records.push(rec);
+            const seen = new Set(proj.pictures.map(p => p.url));
+            const add = (url, label) => {
+                if (!url || is3dUrl(url) || seen.has(url)) return;
+                seen.add(url);
+                proj.pictures.push({ url, label: [str(rec.itemName).trim(), label].filter(Boolean).join(' · '), recordId: rec.id });
+            };
+            add(rec.finalImageUrl, 'current');
+            for (const rev of (rec.revisions || [])) { if (rev && !rev.is3D) add(rev.url, str(rev.name).trim()); }
+        }
     }
     return [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
+
+// ── A PICTURE UPLOADED ONTO A LINE (Stuart 2026-10-12: "yes an upload button is best answer") ──────────────────────
+// Pictures came from tab 1 only (his 10-07 ruling) — right for a product's drawings, wrong for a screw, a bushing or
+// a base cover, which have no place among them. A part's own photograph is uploaded on its line and is stored with
+// the sheet's pictures (where an imported workbook's already live). Tab 1's pictures are still offered beside it.
+export const UPLOAD_PICTURE_MAX_BYTES = 15 * 1024 * 1024;
+const PICTURE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+/** Why a file cannot be a line's picture — '' when it can. */
+export const uploadPictureRefusal = (file) => {
+    if (!file) return 'no file was chosen';
+    const ext = (str(file.name).match(/\.([a-z0-9]{2,5})$/i) || [])[1] || '';
+    if (!/^image\//i.test(str(file.type)) && !PICTURE_EXT.includes(ext.toLowerCase())) return `"${str(file.name)}" is not a picture — choose a .jpg, .png or .webp`;
+    if (numOf(file.size) > UPLOAD_PICTURE_MAX_BYTES) return `"${str(file.name)}" is ${(numOf(file.size) / 1048576).toFixed(1)} MB — a picture on a line is at most 15 MB`;
+    return '';
+};
+/** Where an uploaded line picture is stored: beside the sheet's other pictures, named for its line and the moment. */
+export const uploadedPicturePathOf = ({ brandId, projectId, lineId, fileName = '', now = Date.now() }) => {
+    const ext = ((str(fileName).match(/\.([a-z0-9]{2,5})$/i) || [])[1] || 'png').toLowerCase();
+    return `control_sheets/${str(brandId).toLowerCase()}/${projectId}/line-${str(lineId).replace(/[^A-Za-z0-9_-]+/g, '_')}-${now}.${PICTURE_EXT.includes(ext) ? ext : 'png'}`;
+};
 
 // ── A NEW LINE, A NEW SHEET ─────────────────────────────────────────────────────────────────────────────
 export const blankLine = ({ id, projectId, brandId, order, user, nowIso }) => ({

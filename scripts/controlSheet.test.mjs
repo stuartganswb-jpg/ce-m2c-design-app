@@ -471,5 +471,32 @@ for (const name of files) {
     }
 }
 
+// ── LIESL'S THREE CARDS (App Imp 2026-10-08 / 10-09; Stuart 2026-10-12: "go. yes an upload button is best answer") ──
+{
+    const { tab1ProjectsOf: t1, ALL_FIELDS: AF, FIELD_GROUPS: FG, uploadPictureRefusal, uploadedPicturePathOf, UPLOAD_PICTURE_MAX_BYTES } = await import('../src/components/Shared/controlSheet.js');
+    // M2C-ASM-4280 as it is live: a PROJECT record named CAPA FLOOR LAMP, filed under the Master Project CAPA.
+    const capa = { id: 'M2C-ASM-4280', itemName: 'CAPA FLOOR LAMP', project: 'CAPA', recordType: 'PROJECT', finalImageUrl: 'https://x/now.png', revisions: [{ url: 'https://x/a.png', name: 'Initial 2D Sketch' }, { url: 'https://x/b.png', name: '2D Sketch Revision' }, { url: 'https://x/m.glb', name: 'model', is3D: true }] };
+    const shade = { id: 'M2C-ASM-4281', itemName: 'Capa shade', project: 'CAPA', recordType: 'PRODUCT', finalImageUrl: 'https://x/shade.png' };
+    const lone = { id: 'M2C-ASM-9', itemName: 'Strata Light', project: '', recordType: 'PROJECT', finalImageUrl: 'https://x/s.png' };
+    const got = t1([capa, shade, lone]);
+    ok('a project record filed under a master project is named under BOTH — the sheet named CAPA FLOOR LAMP finds it', got.map(p => p.key).join() === 'CAPA,CAPA FLOOR LAMP,STRATA LIGHT', got.map(p => p.key).join());
+    const own = got.find(p => p.key === 'CAPA FLOOR LAMP'), master = got.find(p => p.key === 'CAPA');
+    ok('…with its three 2D pictures offered (the .glb is not one)', own.pictures.map(p => p.url).join() === 'https://x/now.png,https://x/a.png,https://x/b.png' && own.records.length === 1, JSON.stringify(own.pictures.map(p => p.url)));
+    ok('…and the master project still lists every record filed under it, exactly as before', master.records.map(r => r.id).join() === 'M2C-ASM-4280,M2C-ASM-4281' && master.pictures.length === 4);
+    ok('a design that is not a project record is named only under its master project', !got.some(p => p.key === 'CAPA SHADE'));
+    ok('a project record with no master project is one name, once', got.find(p => p.key === 'STRATA LIGHT').records.length === 1 && got.filter(p => p.key === 'STRATA LIGHT').length === 1);
+    ok('a record whose own name IS its master project is listed once, not twice', t1([{ id: 'A', itemName: 'capa', project: 'CAPA', recordType: 'PROJECT', finalImageUrl: 'https://x/1.png' }])[0].records.length === 1);
+    // Notes beside the picture.
+    const idKeys = FG.find(g => g.key === 'IDENTITY').fields.map(x => x.key);
+    ok('Notes sits immediately right of the picture, in the columns that are always on the sheet', idKeys.slice(0, 4).join() === 'pictureUrl,notes,itemCode,name', idKeys.join());
+    ok('…it is one column, not two, and the group it used to be alone in is gone', AF.filter(x => x.key === 'notes').length === 1 && !FG.some(g => g.key === 'NOTES'));
+    ok('…and it is still not one of the three facts that make a record', AF.filter(x => x.always).map(x => x.key).join() === 'itemCode,name,recordClass');
+    // A picture uploaded onto a line.
+    ok('a picture file is accepted by its type or its ending', uploadPictureRefusal({ name: 'pan head.JPG', type: 'image/jpeg', size: 400000 }) === '' && uploadPictureRefusal({ name: 'bushing.png', type: '', size: 10 }) === '');
+    ok('a file that is not a picture, one over 15 MB, and no file are refused in words', /is not a picture/.test(uploadPictureRefusal({ name: 'spec.pdf', type: 'application/pdf', size: 10 })) && /at most 15 MB/.test(uploadPictureRefusal({ name: 'huge.png', type: 'image/png', size: UPLOAD_PICTURE_MAX_BYTES + 1 })) && uploadPictureRefusal(null) === 'no file was chosen');
+    ok('it is stored beside the sheet\'s other pictures, named for its line and the moment', uploadedPicturePathOf({ brandId: 'M2C', projectId: 'm2c__CAPA_FLOOR_LAMP', lineId: 'L-17 a', fileName: 'Pan Head.JPG', now: 5 }) === 'control_sheets/m2c/m2c__CAPA_FLOOR_LAMP/line-L-17_a-5.jpg', uploadedPicturePathOf({ brandId: 'M2C', projectId: 'm2c__CAPA_FLOOR_LAMP', lineId: 'L-17 a', fileName: 'Pan Head.JPG', now: 5 }));
+    ok('…a file with no usable ending is stored as a .png', /-9\.png$/.test(uploadedPicturePathOf({ brandId: 'm2c', projectId: 'p', lineId: 'L1', fileName: 'photo', now: 9 })) && /-9\.png$/.test(uploadedPicturePathOf({ brandId: 'm2c', projectId: 'p', lineId: 'L1', fileName: 'x.heic', now: 9 })));
+}
+
 console.log(`controlSheet: ${pass} passed, ${fail} failed${files.length ? ` · ${files.length} prepared file(s), ${checked} sheet total(s) checked against the workbooks` : ' · no prepared files on this machine (the workbook totals were not re-checked)'}`);
 process.exit(fail ? 1 : 0);

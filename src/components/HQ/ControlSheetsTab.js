@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, doc, onSnapshot, query, where, setDoc, updateDoc, deleteDoc, writeBatch, deleteField, getDocFromServer, getDocsFromServer } from 'firebase/firestore';
-import { ref, uploadString, getDownloadURL } from 'firebase/storage';
+import { ref, uploadString, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { canLineDiscount } from '../Shared/lineDiscount';   // the app's ONE manager-or-higher rule (admin · superadmin · manager · executive)
 import { canonicalCollection } from '../Shared/collectionName';
 import {
@@ -9,7 +9,7 @@ import {
     cellRawOf, cellValueOf, cellTextOf, moneyText, numOf,
     landedEachOf, lineCostIn, sectionTotalOf, childChoicesFor, usesListOf, linesOn, placeOf,
     sortLines, sortOnSection, nextOrder, lineLabelOf, quoteTextOf, matchesSearch,
-    projectNameKey, tab1ProjectsOf, blankLine, blankProject,
+    projectNameKey, tab1ProjectsOf, blankLine, blankProject, uploadPictureRefusal, uploadedPicturePathOf,
     readBundle, planImport, finishImport,
     exportColumnsFor, startsInDownload, planReimport, startsTicked, patchForCells, lineFromNewRow,
     readinessOf, existingByCode, libraryIdFor, pushPlanOf, pushedStamp, unlockStamp, HAS_PARTS, sheetOfLine,
@@ -42,7 +42,7 @@ const lineRef = (pid, id) => doc(db, ...STORE, pid, 'lines', id);
 const newId = (prefix) => `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`.toUpperCase();
 
 const KIND_LABEL = { LIGHTING: 'Lighting', HARDWARE: 'Hardware' };
-const STAYS_PUT = ['SEL', '#', 'QTY', 'pictureUrl', 'itemCode', 'name'];   // the columns that do not scroll away
+const STAYS_PUT = ['SEL', '#', 'QTY', 'pictureUrl', 'notes', 'itemCode', 'name'];   // the columns that do not scroll away (Notes beside the picture — Liesl 2026-10-08)
 const STATUS_LABEL = { DRAFT: 'Draft', SOURCING: 'Sourcing', SAMPLED: 'Sampled', READY: 'Ready', PUSHED: 'Pushed' };
 
 const S = {
@@ -84,7 +84,7 @@ const Cell = ({ field, line, lists, locked, onCommit, onOpen }) => {
     const type = field.type;
     if (type === 'picture') {
         return (
-            <button onClick={() => onOpen('PICTURE')} title={value ? 'Change the picture' : 'Choose a picture from tab 1'} style={{ width: '52px', height: '52px', padding: 0, border: value ? '1px solid var(--line)' : '1px dashed var(--line)', background: 'var(--paper)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-soft)', fontSize: '1.1rem' }}>
+            <button onClick={() => onOpen('PICTURE')} title={value ? 'Change the picture' : 'Choose a picture from tab 1, or upload one'} style={{ width: '52px', height: '52px', padding: 0, border: value ? '1px solid var(--line)' : '1px dashed var(--line)', background: 'var(--paper)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-soft)', fontSize: '1.1rem' }}>
                 {value ? <img src={value} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} /> : '+'}
             </button>
         );
@@ -152,6 +152,7 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
     const [shown, setShown] = useState([]);                 // field groups ticked on
     const [search, setSearch] = useState('');
     const [open, setOpen] = useState(null);                 // { kind: 'PICTURE' | 'QUOTES' | 'DRAWING', lineId?, sectionId? }
+    const [picBusy, setPicBusy] = useState(false);          // a picture is being uploaded onto a line
     const [starter, setStarter] = useState(null);           // { name, kind } — starting a sheet for a tab-1 project
     const [importer, setImporter] = useState(null);         // the import window's state
     const [useExisting, setUseExisting] = useState('');
@@ -537,6 +538,28 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
         setOpen(null);
     };
 
+    // A PART'S OWN PICTURE, UPLOADED ONTO ITS LINE (Liesl's card 2026-10-09; Stuart 2026-10-12: "yes an upload button is
+    // best answer") — a screw, a bushing, a base cover have no place among tab 1's product drawings. Stored with the
+    // sheet's pictures (Shared/controlSheet.uploadedPicturePathOf); a line the Master Library owns is not changed here.
+    const uploadPicture = async (file) => {
+        if (!open || open.kind !== 'PICTURE' || picBusy) return;
+        const line = lines.find(l => l.id === open.lineId);
+        if (!line) return;
+        if (line.status === PUSHED) { alert(`${lineLabelOf(line)} has been pushed — the Master Library owns it now. Change its picture on the Library record.`); return; }
+        const refusal = uploadPictureRefusal(file);
+        if (refusal) { alert(`${refusal}.\n\nNothing was changed.`); return; }
+        setPicBusy(true);
+        try {
+            const r = ref(storage, uploadedPicturePathOf({ brandId: activeBrand, projectId, lineId: line.id, fileName: file.name }));
+            await uploadBytes(r, file, { contentType: file.type || 'image/png' });
+            const url = await getDownloadURL(r);
+            await patchLine(line, { pictureUrl: url, pictureFrom: { kind: 'UPLOAD', name: String(file.name || ''), by: currentUser || '', at: new Date().toISOString() } });
+            log(`Picture uploaded onto ${lineLabelOf(line)} (${project ? project.name : projectId}): ${file.name}`);
+            setOpen(null);
+        } catch (err) { say(`Could not upload the picture for ${lineLabelOf(line)}`, err); }
+        finally { setPicBusy(false); }
+    };
+
     // ── starting a sheet for a project tab 1 has named ──
     const startSheet = async () => {
         if (!starter || !starter.name) return;
@@ -613,14 +636,25 @@ const ControlSheetsInner = ({ currentUser, activeBrand, userRole, isSuperAdmin, 
             <div style={S.overlay} onClick={() => setOpen(null)}>
                 <div style={S.modal} onClick={e => e.stopPropagation()}>
                     <h3 style={S.h3}>{isDrawing ? 'Add a drawing from tab 1' : `Picture — ${lineLabelOf(line)}`}</h3>
-                    <p style={S.note}>Pictures come from tab 1: every drawing and image filed under <b>{project.name}</b> there is offered here. Add or replace one in tab 1 and it appears in this list.</p>
+                    <p style={S.note}>{isDrawing
+                        ? <>Drawings come from tab 1: every drawing and image filed under <b>{project.name}</b> there is offered here. Add or replace one in tab 1 and it appears in this list.</>
+                        : <>Pick one of the pictures filed under <b>{project.name}</b> in tab 1 — or <b>upload</b> the part's own picture from your computer (a Dropbox folder on it works the same).</>}</p>
                     {!isDrawing && line && line.pictureUrl && (
                         <div style={{ display: 'flex', gap: '16px', alignItems: 'center', margin: '14px 0', padding: '12px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                             <img src={line.pictureUrl} alt="" style={{ maxWidth: '180px', maxHeight: '140px', objectFit: 'contain', background: '#fff' }} />
                             <div>
-                                <div style={S.label}>On the line now{line.pictureFrom && line.pictureFrom.kind === 'IMPORT' ? ' · came in with the workbook' : ''}</div>
+                                <div style={S.label}>On the line now{line.pictureFrom && line.pictureFrom.kind === 'IMPORT' ? ' · came in with the workbook' : (line.pictureFrom && line.pictureFrom.kind === 'UPLOAD' ? ` · uploaded${line.pictureFrom.by ? ` by ${line.pictureFrom.by}` : ''}` : '')}</div>
                                 <button style={{ ...S.btn, marginTop: '10px' }} onClick={async () => { await patchLine(line, { pictureUrl: '', pictureFrom: deleteField() }); setOpen(null); }}>Remove from the line</button>
                             </div>
+                        </div>
+                    )}
+                    {!isDrawing && line && (
+                        <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', margin: '14px 0', padding: '12px', border: '1px solid var(--line)', background: '#fff' }}>
+                            <label style={{ ...S.btn, cursor: picBusy ? 'wait' : 'pointer', opacity: picBusy ? 0.6 : 1, display: 'inline-block' }}>
+                                {picBusy ? 'Uploading…' : `⤒ Upload a picture${line.pictureUrl ? ' (replaces the one on the line)' : ''}`}
+                                <input type="file" accept="image/*" disabled={picBusy} style={{ display: 'none' }} onChange={e => { const file = e.target.files && e.target.files[0]; e.target.value = ''; if (file) uploadPicture(file); }} />
+                            </label>
+                            <span style={S.note}>.jpg, .png or .webp, up to 15 MB — kept with this sheet's pictures.</span>
                         </div>
                     )}
                     {pics.length === 0
