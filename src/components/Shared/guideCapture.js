@@ -65,10 +65,15 @@ async function thumbOf(dataUrl, maxPx = 420) {
 // files here too — pattern id + colour + the pillow facts (price group, width, railroad) in `fabric`
 // — "just as if it was already in the asset gallery" (Stuart). Flag `fabricCapture`, product type
 // FABRIC CAPTURE, so the gallery can tell it from a render and the board can list it as a fabric.
-export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '', collection = '', user = '', kind = 'GUIDE', finishId = '', fabric = null, notes = '' }) {
+// `kind: 'SWATCH'` (2026-10-12, M2C curtains — 6.5 Tools → Curtain Pricing): a curtain fabric's swatch, or a
+// pleat style's own picture, files here too — pattern = the fabric (or the style), finish = the colour, and
+// the chart's own words in `curtain` ({ fabric, colour } or { style }). Flag `curtainSwatch`; the product
+// type is the library's own curtain type when the caller passes it (`productType`), else CURTAIN SWATCH.
+export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '', collection = '', user = '', kind = 'GUIDE', finishId = '', fabric = null, notes = '', productType = '', curtain = null }) {
     const isDisplay = String(kind).toUpperCase() === 'DISPLAY';
     const isFabric = String(kind).toUpperCase() === 'FABRIC';
-    const tag = isDisplay ? 'DISPLAY' : (isFabric ? 'FABRIC' : 'GUIDE');
+    const isSwatch = String(kind).toUpperCase() === 'SWATCH';
+    const tag = isDisplay ? 'DISPLAY' : (isFabric ? 'FABRIC' : (isSwatch ? 'SWATCH' : 'GUIDE'));
     const safe = String(code || name || 'CAPTURE').toUpperCase().replace(/[^A-Z0-9-]/g, '') || 'CAPTURE';
     const brandFolder = brandId ? String(brandId) : 'global';
     const ts = Date.now();
@@ -85,13 +90,13 @@ export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '',
         id,
         name: String(name || safe).toUpperCase(),
         collection: collection || '',
-        productType: isDisplay ? 'DISPLAY CAPTURE' : (isFabric ? 'FABRIC CAPTURE' : 'GUIDE CAPTURE'),
+        productType: isDisplay ? 'DISPLAY CAPTURE' : (isFabric ? 'FABRIC CAPTURE' : (isSwatch ? (productType || 'CURTAIN SWATCH') : 'GUIDE CAPTURE')),
         patternId: String(code || '').toUpperCase(),
         finishId: String(finishId || '').toUpperCase(),
-        customerId: '', clientSku: '', notes: notes || (isDisplay ? 'Captured from CPQ for a sales display board' : (isFabric ? 'Fabric photographed on the pillow board' : 'Captured from CPQ for guide books')),
+        customerId: '', clientSku: '', notes: notes || (isDisplay ? 'Captured from CPQ for a sales display board' : (isFabric ? 'Fabric photographed on the pillow board' : (isSwatch ? 'Curtain swatch loaded on Curtain Pricing' : 'Captured from CPQ for guide books'))),
         associatedParts: [], associatedFinishes: [],
         originalUrl, thumbnailUrl, url: thumbnailUrl,
-        ...(isDisplay ? { displayCapture: true } : (isFabric ? { fabricCapture: true, fabric: fabric || {} } : { guideCapture: true })),
+        ...(isDisplay ? { displayCapture: true } : (isFabric ? { fabricCapture: true, fabric: fabric || {} } : (isSwatch ? { curtainSwatch: true, curtain: curtain || {} } : { guideCapture: true }))),
         brandId: brandId || 'ALL',
         uploadedBy: user || 'Unknown',
         createdAt: serverTimestamp(),

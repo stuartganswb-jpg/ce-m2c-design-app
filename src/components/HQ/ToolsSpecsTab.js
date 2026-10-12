@@ -8,6 +8,7 @@ import {
 import RodPieceInventory from '../Shared/RodPieceInventory';
 import FabricCutStock from '../Shared/FabricCutStock';   // 🧵 Uniquity: replaces Rod Piece Stock (S7 2026-09-24)
 import PillowPricingAdmin from './PillowPricingAdmin';   // 🧵 Uniquity: the pillow price table + the fabric sheet (moved here from 11 — Stuart 2026-09-24: manager level and above)
+import CurtainPricingAdmin from './CurtainPricingAdmin';   // 🪟 M2C: the workroom's curtain chart + the swatches (2026-10-12, manager level and above)
 import { canLineDiscount } from '../Shared/lineDiscount';   // the app's ONE manager-or-higher rule (admin · superadmin · manager · executive)
 
 // TOOLS, SPECS & FAQs (HQ 6.5) — the staff-side twin of the portal's Tools page. Same engineering
@@ -271,6 +272,9 @@ const TOOLS = [
     // the minimum cut per size, labour + details, the fabric sheet. Brand Uniquity; role manager+.
     { id: 'pillowpricing', label: 'Pillow Pricing', blurb: 'Size × fabric-group prices, minimum cuts, labour + details, the fabric sheet', brands: ['uniquity'], managerUp: true, render: (p) => <PillowPricingAdmin activeBrand={p.activeBrand} currentUser={p.currentUser || 'HQ'} /> },
     { id: 'fabriccuts', label: 'Fabric Cut Stock', blurb: 'Cuts on the shelf by fabric + the throw → yardage convert', brands: ['uniquity'], render: (p) => <FabricCutStock activeBrand={p.activeBrand} currentUser={p.currentUser || 'HQ'} /> },
+    // CURTAIN PRICING (Stuart 2026-10-12, M2C Studio custom curtains): the workroom's chart — fabric · top style ·
+    // lining · width group · length band, each line with its sheet and row — and the fabric swatches. Brand M2C; manager+.
+    { id: 'curtainpricing', label: 'Curtain Pricing', blurb: 'The workroom chart by fabric, style, lining, width and length + the swatches', brands: ['m2c'], managerUp: true, render: (p) => <CurtainPricingAdmin activeBrand={p.activeBrand} currentUser={p.currentUser || 'HQ'} /> },
 ];
 
 const toolFitsBrand = (t, brand) => {

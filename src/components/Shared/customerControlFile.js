@@ -114,7 +114,15 @@ export function parseControlWorkbookFromSheets(sheets) {
 // File → [{ name, grid }] — exported so other sheet importers (traverseKitImport) read workbooks
 // through the SAME cell normalization (formula results unwrapped, rich text flattened) instead of
 // growing a second, slightly different loader.
-export async function workbookFileToSheets(file) {
+//
+// `cachedResults` (the curtain chart, 2026-10-12) — OPT-IN, so every importer already reading through
+// here sees exactly what it did: exceljs leaves `result` off `cell.value` when a formula's stored
+// result is 0, false or '' (FormulaValue._copyModel copies truthy fields only), so such a cell came
+// back as the formula OBJECT where the sheet shows 0. The chart's LOW WIDTH column is a formula and is
+// 0 on every half-width line (224 of them on the pinch-pleat sheet). With the flag a formula cell
+// hands over `cell.result` — the stored value itself, 0 included; null when the workbook stores none;
+// an error (#REF!) as its text.
+export async function workbookFileToSheets(file, { cachedResults = false } = {}) {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(await file.arrayBuffer());
     return wb.worksheets.map(ws => {
@@ -122,7 +130,13 @@ export async function workbookFileToSheets(file) {
         ws.eachRow({ includeEmpty: true }, (row) => {
             const vals = [];
             for (let c = 1; c <= ws.columnCount; c++) {
-                const v = row.getCell(c).value;
+                const cell = row.getCell(c);
+                const v = cell.value;
+                if (cachedResults && cell.type === ExcelJS.ValueType.Formula) {
+                    const res = cell.result;
+                    vals.push(res === undefined ? null : (res && typeof res === 'object' && res.error ? String(res.error) : res));
+                    continue;
+                }
                 vals.push(v && typeof v === 'object' && v.result !== undefined ? v.result : (v && v.richText ? v.richText.map(t => t.text).join('') : v));
             }
             grid.push(vals);
