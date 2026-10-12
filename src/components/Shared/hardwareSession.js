@@ -29,6 +29,8 @@ import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAl
 import { bracketAdviceFor, DEFAULT_DROP_FT } from './bracketSpan.js';
 import { carrierRows } from './traverseConfigurator.js';
 import { usageAt } from './traverseExplode.js';
+import { rodMaterialsOf, extrasForRod, liveExtrasOf } from './flowExtras.js';
+import { normalizeExtras } from './extrasRestore.js';
 
 // ── THE PARTS, AND HOW ONE IS FOUND ──────────────────────────────────────────────────────────
 // A pin can be tagged with the library record's id, its itemId or OUR number, so every one of them
@@ -218,18 +220,61 @@ export function quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendF
 // The configuration with its counts — what is rendered, priced and handed to the cart.
 export const resolvedOf = ({ choices, answers, livePicks, modelNodes, quantities }) => resolve({ choices, answers, selectedIds: Object.values(livePicks), modelNodes, quantities });
 
+// ── IS A SPLICE NECESSARY? (Stuart 2026-08-24) ───────────────────────────────────────────────
+// "add the splice ability [to] the rod length step on the cpq — is splice necessary and
+//  default is center, explain if otherwise. this should help align it with the vision tool
+//  which is where we actually draw the splice location."
+// The splice among a flow's add-by-hand items is found the way tab 7 finds its splice
+// slot — by what the ITEM says it is (splice/joiner in its name, product type or fee type).
+// ⚠ AVAILABLE AT ANY LENGTH, MANDATORY OVER THE LIMIT (Stuart 2026-08-24: "a lot of times
+// customers order one before it is needed to save on shipping or for convenience. so it
+// needs to be mandatory over 120\" but can be available at any length"). The extras list
+// offers the splice at every length; over the flow's `spliceOverInches` (tab 11, blank =
+// 120") it is REQUIRED — added automatically at the default, CENTER of the run, and re-added
+// if removed, because a pole that long does not ship in one piece. The note carries the
+// exact location only when it differs, which is precisely what Vision reads to draw it.
+// Joiners are DIAMETER-SPECIFIC, and a multi-size flow derives several candidates — the
+// step must never guess a diameter, so with ONE candidate it adds it itself and with more
+// it requires the operator to add the right one (the banner says so).
+// Only the items offered with the chosen rod are candidates — a wood rod's joiner is not a
+// steel rod's candidate — so H1-138 with one joiner per material still has ONE to auto-add.
+export function spliceCodesAmong(items, findPart) {
+    const out = [];
+    for (const it of (items || [])) {
+        const part = findPart(it.code);
+        const hay = `${it.code || ''} ${it.label || ''} ${part?.itemName || ''} ${part?.manufacturingSpecs?.productType || ''} ${part?.customData?.feeType || ''}`.toUpperCase();
+        if (/SPLICE|JOINER|JNR|SPLC/.test(hay)) out.push(it.code);
+    }
+    return out;
+}
+export const singleSpliceOf = (spliceCodes) => (spliceCodes.length === 1 ? spliceCodes[0] : null);
+export const spliceLimitOf = (flow) => (Number(flow?.spliceOverInches) > 0 ? Number(flow.spliceOverInches) : 120);
+export const spliceIsNeeded = (spliceCodes, lengthInches, spliceOverIn) => spliceCodes.length > 0 && !!lengthInches && lengthInches > spliceOverIn;
+// The same ITEM under any of its names (our number, the doc id) — never a string compare alone,
+// which is what let a doc-id row and a code row both stand for one joiner (QUO147).
+export function sameItem(a, b, findPart) {
+    if (String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase()) return true;
+    const pa = findPart(a), pb = findPart(b);
+    return !!(pa && pb && pa.id && pa.id === pb.id);
+}
+export const spliceIsSatisfied = (spliceCodes, extras, sameItemCode) => spliceCodes.some(c => extras.some(x => sameItemCode(x.code, c) && Number(x.qty) > 0));
+// The row the length step adds on its own, once: the list as it stands when the joiner is already on it
+// (the SAME list — nothing to re-render), else the list with the one joiner at 1.
+export const withRequiredSplice = (typedExtras, spliceCode, sameItemCode) =>
+    (typedExtras.some(x => sameItemCode(x.code, spliceCode) && Number(x.qty) > 0) ? typedExtras : [...typedExtras.filter(x => !sameItemCode(x.code, spliceCode)), { code: spliceCode, qty: '1', note: '' }]);
+
 /**
  * The configuration, in one call — for a caller that is not a React screen (the portal's server, a
  * harness). The CPQ screen makes these SAME calls one memo at a time, so a keystroke re-works only
  * what it touched; this makes them in the same order, with the same arguments.
  *
- * @param data   { assembly, pins, parts, flow, spanMap, spanCaps, trvRules } — what the screen is handed
- * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId } — what the operator has
- *               answered, as a cart line saves it (engineConfig); a saved length is read back through
- *               the two fields it was typed in, exactly as Edit restores it
+ * @param data   { assembly, pins, parts, flow, spanMap, spanCaps, trvRules, extraItems } — what the screen is handed
+ * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId, extras, spliceWaived } — what
+ *               the operator has answered, as a cart line saves it (engineConfig); a saved length and the
+ *               saved add-by-hand rows are read back exactly as Edit restores them
  */
-export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMap = {}, spanCaps = {}, trvRules = null } = {},
-    { answers = {}, picks = {}, sizePick = {}, lengthInches: savedLength = null, stepQty = {}, fabricId = 'PRINT' } = {}) {
+export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMap = {}, spanCaps = {}, trvRules = null, extraItems = [] } = {},
+    { answers = {}, picks = {}, sizePick = {}, lengthInches: savedLength = null, stepQty = {}, fabricId = 'PRINT', extras: savedExtras = [], spliceWaived = false } = {}) {
     const partIndex = partIndexOf(parts);
     const findPart = (id) => partIn(partIndex, id);
     const ourId = (id) => ourNumberOf(findPart(id), id);
@@ -251,6 +296,20 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const recommendFor = (slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet });
     const quantities = quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId });
     const resolved = resolvedOf({ choices, answers: effAnswers, livePicks, modelNodes, quantities });
+    // The add-by-hand rows: restored as Edit restores them, offered for the rod chosen, and — over the flow's
+    // limit, with ONE joiner to choose from, unless the operator declined it — the joiner the length step adds itself.
+    const sameItemCode = (a, b) => sameItem(a, b, findPart);
+    const rodMats = rodMaterialsOf(model.choices, Object.values(livePicks));
+    const offeredExtraItems = extrasForRod(extraItems, rodMats);
+    const spliceCodes = spliceCodesAmong(offeredExtraItems, findPart);
+    const spliceCode = singleSpliceOf(spliceCodes);
+    const spliceOverIn = spliceLimitOf(flow);
+    const spliceNeeded = spliceIsNeeded(spliceCodes, lengthInches, spliceOverIn);
+    let typedExtras = normalizeExtras(Array.isArray(savedExtras) ? savedExtras : [], extraItems, findPart);
+    if (spliceNeeded && spliceCode && !spliceWaived) typedExtras = withRequiredSplice(typedExtras, spliceCode, sameItemCode);
+    const extras = liveExtrasOf(typedExtras, extraItems, rodMats);
+    const spliceSatisfied = spliceIsSatisfied(spliceCodes, extras, sameItemCode);
     return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks,
-        lengthInches, lengthFeetExact, lengthFeet, advice, recommendFor, quantities, resolved };
+        lengthInches, lengthFeetExact, lengthFeet, advice, recommendFor, quantities, resolved,
+        sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied };
 }

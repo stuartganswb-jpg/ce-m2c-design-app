@@ -22,7 +22,8 @@ import { parseKitCode } from './kitCode';
 import { renderScaleOf } from './sizeMatrix';
 import { modelNodesOf } from './hardwareAdapter';
 import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle,
-    lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf } from './hardwareSession';
+    lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf,
+    spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice } from './hardwareSession';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort, customerPriceLevel } from './priceLevels';
 import { findClientPriceRow, customerKeys } from './clientPricing';
@@ -297,48 +298,18 @@ function HardwareConfiguratorInner({
     const rodMats = useMemo(() => rodMaterialsOf(model.choices, Object.values(livePicks)), [model, livePicks]);
     const offeredExtraItems = useMemo(() => extrasForRod(extraItems, rodMats), [extraItems, rodMats]);
     const extras = useMemo(() => liveExtrasOf(typedExtras, extraItems, rodMats), [typedExtras, extraItems, rodMats]);
-    // ── IS A SPLICE NECESSARY? (Stuart 2026-08-24) ───────────────────────────────────────────
-    // "add the splice ability [to] the rod length step on the cpq — is splice necessary and
-    //  default is center, explain if otherwise. this should help align it with the vision tool
-    //  which is where we actually draw the splice location."
-    // The splice among this flow's add-by-hand items is found the way tab 7 finds its splice
-    // slot — by what the ITEM says it is (splice/joiner in its name, product type or fee type).
-    // ⚠ AVAILABLE AT ANY LENGTH, MANDATORY OVER THE LIMIT (Stuart 2026-08-24: "a lot of times
-    // customers order one before it is needed to save on shipping or for convenience. so it
-    // needs to be mandatory over 120\" but can be available at any length"). The extras list
-    // offers the splice at every length; over the flow's `spliceOverInches` (tab 11, blank =
-    // 120") it is REQUIRED — added automatically at the default, CENTER of the run, and re-added
-    // if removed, because a pole that long does not ship in one piece. The note carries the
-    // exact location only when it differs, which is precisely what Vision reads to draw it.
-    // Joiners are DIAMETER-SPECIFIC, and a multi-size flow derives several candidates — the
-    // step must never guess a diameter, so with ONE candidate it adds it itself and with more
-    // it requires the operator to add the right one (the banner says so).
-    // Only the items offered with the chosen rod are candidates — a wood rod's joiner is not a
-    // steel rod's candidate — so H1-138 with one joiner per material still has ONE to auto-add.
-    const spliceCodesIn = useCallback((items) => {
-        const out = [];
-        for (const it of (items || [])) {
-            const part = findPart(it.code);
-            const hay = `${it.code || ''} ${it.label || ''} ${part?.itemName || ''} ${part?.manufacturingSpecs?.productType || ''} ${part?.customData?.feeType || ''}`.toUpperCase();
-            if (/SPLICE|JOINER|JNR|SPLC/.test(hay)) out.push(it.code);
-        }
-        return out;
-    }, [findPart]);
+    // IS A SPLICE NECESSARY? Available at any length, mandatory over the flow's limit, added by the length
+    // step itself only when there is ONE joiner to choose from — the rule and his words are hardwareSession's.
+    const spliceCodesIn = useCallback((items) => spliceCodesAmong(items, findPart), [findPart]);
     const spliceCodes = useMemo(() => spliceCodesIn(offeredExtraItems), [spliceCodesIn, offeredExtraItems]);
-    const spliceCode = spliceCodes.length === 1 ? spliceCodes[0] : null;
-    const spliceOverIn = Number(flow?.spliceOverInches) > 0 ? Number(flow.spliceOverInches) : 120;
-    const spliceNeeded = spliceCodes.length > 0 && !!lengthInches && lengthInches > spliceOverIn;
-    // The same ITEM under any of its names (our number, the doc id) — never a string compare alone,
-    // which is what let a doc-id row and a code row both stand for one joiner (QUO147).
-    const sameItemCode = useCallback((a, b) => {
-        if (String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase()) return true;
-        const pa = findPart(a), pb = findPart(b);
-        return !!(pa && pb && pa.id && pa.id === pb.id);
-    }, [findPart]);
-    const spliceSatisfied = spliceCodes.some(c => extras.some(x => sameItemCode(x.code, c) && Number(x.qty) > 0));
+    const spliceCode = singleSpliceOf(spliceCodes);
+    const spliceOverIn = spliceLimitOf(flow);
+    const spliceNeeded = spliceIsNeeded(spliceCodes, lengthInches, spliceOverIn);
+    const sameItemCode = useCallback((a, b) => sameItem(a, b, findPart), [findPart]);
+    const spliceSatisfied = spliceIsSatisfied(spliceCodes, extras, sameItemCode);
     useEffect(() => {
         if (!spliceNeeded || !spliceCode || spliceWaived) return;   // several candidates → the operator picks · declined → it stays off
-        setExtras(a => (a.some(x => sameItemCode(x.code, spliceCode) && Number(x.qty) > 0) ? a : [...a.filter(x => !sameItemCode(x.code, spliceCode)), { code: spliceCode, qty: '1', note: '' }]));
+        setExtras(a => withRequiredSplice(a, spliceCode, sameItemCode));
     }, [spliceNeeded, spliceCode, spliceWaived, extras, sameItemCode]);
     // The one sentence every refusal says — the same words on the button and in the strip.
     const dropRefusal = pendingDrops.length

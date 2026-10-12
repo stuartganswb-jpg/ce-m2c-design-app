@@ -14,6 +14,8 @@ import { autoPicksOf } from '../src/components/Shared/hardwareAutoPicks.js';
 import { bracketAdviceFor, DEFAULT_DROP_FT } from '../src/components/Shared/bracketSpan.js';
 import { carrierRows } from '../src/components/Shared/traverseConfigurator.js';
 import { usageAt } from '../src/components/Shared/traverseExplode.js';
+import { rodMaterialsOf, extrasForRod, liveExtrasOf } from '../src/components/Shared/flowExtras.js';
+import { normalizeExtras } from '../src/components/Shared/extrasRestore.js';
 import { settleVision } from '../src/components/Shared/visionEngine.js';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, projInchesOfSel, buildSizeSteps } from '../src/components/Shared/sizeMatrix.js';
 import { ENGINE_DOORS, engineClosure } from './sync-engine.mjs';
@@ -21,7 +23,8 @@ import { ASSEMBLY, PINS } from './hardwareAutoPicks.fixture.mjs';
 
 const S = await import(process.env.SESSION_MODULE || new URL('../src/components/Shared/hardwareSession.js', import.meta.url).href);
 const { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle, sessionOf,
-    lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf } = S;
+    lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf,
+    spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice } = S;
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => {
@@ -145,6 +148,39 @@ const oldCounts = ({ model, livePicks, lengthInches, lengthFeet, spanMap, spanCa
     })();
     const resolved = resolve({ choices: chs, answers: effAnswers, selectedIds: Object.values(livePicks), modelNodes: nodes, quantities });
     return { advice, quantities, resolved, recommendFor };
+};
+
+// move 3 — the splice rule (spliceCodesIn / spliceCode / spliceOverIn / spliceNeeded / sameItemCode / spliceSatisfied and the
+// one row the length step adds itself), with the screen's effect run to rest the way React runs it.
+const oldSplice = ({ offeredExtraItems, typedExtras, extraItems, rodMats, flow, lengthInches, findPart, spliceWaived }) => {
+    const spliceCodesIn = (items) => {
+        const out = [];
+        for (const it of (items || [])) {
+            const part = findPart(it.code);
+            const hay = `${it.code || ''} ${it.label || ''} ${part?.itemName || ''} ${part?.manufacturingSpecs?.productType || ''} ${part?.customData?.feeType || ''}`.toUpperCase();
+            if (/SPLICE|JOINER|JNR|SPLC/.test(hay)) out.push(it.code);
+        }
+        return out;
+    };
+    const spliceCodes = spliceCodesIn(offeredExtraItems);
+    const spliceCode = spliceCodes.length === 1 ? spliceCodes[0] : null;
+    const spliceOverIn = Number(flow?.spliceOverInches) > 0 ? Number(flow.spliceOverInches) : 120;
+    const spliceNeeded = spliceCodes.length > 0 && !!lengthInches && lengthInches > spliceOverIn;
+    const sameItemCode = (a, b) => {
+        if (String(a || '').trim().toUpperCase() === String(b || '').trim().toUpperCase()) return true;
+        const pa = findPart(a), pb = findPart(b);
+        return !!(pa && pb && pa.id && pa.id === pb.id);
+    };
+    let typed = typedExtras, renders = 0;
+    for (; renders < 5; renders++) {                    // the effect, until it changes nothing (it must rest after one add)
+        if (!spliceNeeded || !spliceCode || spliceWaived) break;
+        const next = ((a) => (a.some(x => sameItemCode(x.code, spliceCode) && Number(x.qty) > 0) ? a : [...a.filter(x => !sameItemCode(x.code, spliceCode)), { code: spliceCode, qty: '1', note: '' }]))(typed);
+        if (next === typed) break;
+        typed = next;
+    }
+    const extras = liveExtrasOf(typed, extraItems, rodMats);
+    const spliceSatisfied = spliceCodes.some(c => extras.some(x => sameItemCode(x.code, c) && Number(x.qty) > 0));
+    return { spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied, typed, extras, renders };
 };
 
 // ── THE RULES: how a part is found ────────────────────────────────────────────────────────────
@@ -357,6 +393,55 @@ const picksFor = (answers, seed) => {
     eq('a centre bracket with no span to go on is not guessed', recommendedFor({ slot: { kind: 'BRACKET', position: 'center' }, choice: {}, advice: null, model, livePicks: {}, lengthFeet: 8 }), null);
 }
 
+// ── THE RULES + THE MOVE, the splice: one joiner, several, none; under and over the limit; typed, doubled, declined ──
+{
+    const lib = [
+        { id: 'CE-INV-900', itemId: 'CE-INV-900', legacyErpId: 'H1-138JNR', itemName: 'Joiner for 1-3/8" round' },
+        { id: 'CE-INV-901', itemId: 'CE-INV-901', legacyErpId: 'H1-1JNR', itemName: 'Connector 1"', manufacturingSpecs: { productType: 'Splice' } },
+        { id: 'CE-FEE-7', itemId: 'CE-FEE-7', legacyErpId: 'CE-FEE-7', itemName: 'Cut charge', customData: { feeType: 'splc' } },
+        { id: 'CE-INV-902', itemId: 'CE-INV-902', legacyErpId: 'H1-RNGX', itemName: 'Extra rings' },
+    ];
+    const ix = partIndexOf(lib); const find = (id) => partIn(ix, id);
+    eq('a splice is found by what the ITEM says it is — its name, its product type, its fee type, its label or code', spliceCodesAmong([{ code: 'H1-138JNR' }, { code: 'H1-1JNR' }, { code: 'CE-FEE-7' }, { code: 'H1-RNGX' }, { code: 'X1', label: 'Pole splice' }, { code: 'ZJNR9' }], find), ['H1-138JNR', 'H1-1JNR', 'CE-FEE-7', 'X1', 'ZJNR9']);
+    eq('no items, no splice', [spliceCodesAmong([], find), spliceCodesAmong(null, find)], [[], []]);
+    eq('ONE candidate is added by the step; several are the operator\'s to choose', [singleSpliceOf(['A']), singleSpliceOf(['A', 'B']), singleSpliceOf([])], ['A', null, null]);
+    eq('the limit is the flow\'s, 120" where it names none', [spliceLimitOf({ spliceOverInches: 96 }), spliceLimitOf({ spliceOverInches: '108' }), spliceLimitOf({}), spliceLimitOf(null), spliceLimitOf({ spliceOverInches: 0 })], [96, 108, 120, 120, 120]);
+    eq('needed only OVER the limit, and only when a joiner is offered', [spliceIsNeeded(['A'], 120, 120), spliceIsNeeded(['A'], 120.25, 120), spliceIsNeeded([], 180, 120), spliceIsNeeded(['A'], null, 120)], [false, true, false, false]);
+    ok('the same item under either of its names — our number or the record id, in any case', sameItem('h1-138jnr', 'CE-INV-900', find) && sameItem(' H1-138JNR ', 'H1-138JNR', find) && !sameItem('H1-138JNR', 'H1-1JNR', find) && !sameItem('NOPE', 'ALSO-NOPE', find) && sameItem('nope', 'NOPE', find));
+    const same = (a, b) => sameItem(a, b, find);
+    const has = [{ code: 'CE-INV-900', qty: '1', note: 'left' }];
+    ok('a joiner already on the list is left alone — the SAME list, nothing to re-render', withRequiredSplice(has, 'H1-138JNR', same) === has);
+    eq('none on the list → one, at 1, last', withRequiredSplice([{ code: 'H1-RNGX', qty: '4', note: '' }], 'H1-138JNR', same), [{ code: 'H1-RNGX', qty: '4', note: '' }, { code: 'H1-138JNR', qty: '1', note: '' }]);
+    eq('taken off at 0 → put back at 1, once (its old row goes)', withRequiredSplice([{ code: 'CE-INV-900', qty: '0', note: 'x' }], 'H1-138JNR', same), [{ code: 'H1-138JNR', qty: '1', note: '' }]);
+    ok('satisfied by any of the candidates, under any of its names, at a count above 0', spliceIsSatisfied(['H1-138JNR', 'H1-1JNR'], [{ code: 'CE-INV-901', qty: '2' }], same) && !spliceIsSatisfied(['H1-138JNR'], [{ code: 'CE-INV-900', qty: '0' }], same) && !spliceIsSatisfied([], has, same));
+
+    let compared = 0, differ = 0, added = 0, rested = 0, waived = 0, several = 0;
+    const itemSets = [[], [{ code: 'H1-138JNR', label: 'Joiner' }], [{ code: 'H1-138JNR', label: 'Joiner' }, { code: 'H1-1JNR', label: 'Joiner 1"' }], [{ code: 'H1-RNGX', label: 'Extra rings' }], [{ code: 'H1-138JNR', label: 'Wood joiner', rodMaterials: ['WOOD'] }, { code: 'H1-RNGX', label: 'Rings' }]];
+    const typedSets = [[], [{ code: 'H1-138JNR', qty: '1', note: '18 in from left' }], [{ code: 'CE-INV-900', qty: '2', note: '' }], [{ code: 'H1-138JNR', qty: '0', note: '' }], [{ code: 'H1-RNGX', qty: '6', note: '' }, { code: 'h1-138jnr', qty: '1', note: '' }]];
+    for (const extraItems of itemSets) for (const typed0 of typedSets) for (const L of [null, 96, 120, 120.0625, 180]) for (const flow of [null, {}, { spliceOverInches: 96 }]) for (const rodMats of [[], ['METAL'], ['WOOD']]) for (const spliceWaived of [false, true]) {
+        const offeredExtraItems = extrasForRod(extraItems, rodMats);
+        const typedExtras = normalizeExtras(typed0, extraItems, find);
+        const o = oldSplice({ offeredExtraItems, typedExtras, extraItems, rodMats, flow, lengthInches: L, findPart: find, spliceWaived });
+        const spliceCodes = spliceCodesAmong(offeredExtraItems, find);
+        const spliceCode = singleSpliceOf(spliceCodes);
+        const spliceOverIn = spliceLimitOf(flow);
+        const spliceNeeded = spliceIsNeeded(spliceCodes, L, spliceOverIn);
+        let typed = typedExtras;
+        if (spliceNeeded && spliceCode && !spliceWaived) typed = withRequiredSplice(typed, spliceCode, same);
+        const extras = liveExtrasOf(typed, extraItems, rodMats);
+        const n = { spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied: spliceIsSatisfied(spliceCodes, extras, same), typed, extras };
+        compared++;
+        if (canon({ ...o, renders: 0 }) !== canon({ ...n, renders: 0 })) differ++;
+        if (typed !== typedExtras) added++;
+        if (o.renders <= 1) rested++;
+        if (spliceNeeded && spliceCode && spliceWaived && !n.spliceSatisfied) waived++;
+        if (spliceNeeded && !spliceCode) several++;
+    }
+    eq(`the splice: the module agrees with the old inline code, effect and all (${compared} compared)`, differ, 0);
+    ok(`the set-ups reach the rule: the step added a joiner in ${added}, a declined one stayed off in ${waived}, several candidates left to the operator in ${several}`, added > 20 && waived > 5 && several > 5);
+    eq('the effect rests after ONE add — it can never loop', rested, compared);
+}
+
 // ── THE WHOLE CALL: what a caller that is not a screen gets ───────────────────────────────────────────────
 {
     let compared = 0, differ = 0;
@@ -376,6 +461,10 @@ const picksFor = (answers, seed) => {
     const withLength = sessionOf({ assembly: ASSEMBLY, pins: PINS, parts: [] }, { answers: framings[0], picks: picksFor(framings[0], 'len'), lengthInches: 96.3, stepQty: {}, fabricId: 'BLACKOUT' });
     eq('sessionOf reads a saved length the way Edit restores it — 96.3" is 96 5/16", nine feet billed', [withLength.lengthInches, withLength.lengthFeet, withLength.lengthFeetExact], [96.3125, 9, 8.03]);
     ok('…and the counts are on the resolved configuration', Object.keys(withLength.quantities).length > 0 && canon(withLength.resolved) === canon(resolvedOf({ choices: withLength.choices, answers: withLength.effAnswers, livePicks: withLength.livePicks, modelNodes: withLength.modelNodes, quantities: withLength.quantities })));
+    const jn = { id: 'CE-INV-900', itemId: 'CE-INV-900', legacyErpId: 'H1-2JNR', itemName: 'Joiner 2"' };
+    const long = (state) => sessionOf({ assembly: ASSEMBLY, pins: PINS, parts: [jn], flow: { spliceOverInches: 96 }, extraItems: [{ code: 'H1-2JNR', label: 'Joiner' }] }, { answers: framings[0], picks: picksFor(framings[0], 'len'), ...state });
+    eq('sessionOf adds the joiner a long pole needs, as the length step does', [long({ lengthInches: 144 }).extras.map(x => `${x.code}×${x.qty}`), long({ lengthInches: 144 }).spliceSatisfied], [['H1-2JNR×1'], true]);
+    eq('…not under the limit, not when declined, and a saved row under the record id is the same joiner (never a second)', [long({ lengthInches: 96 }).extras.length, long({ lengthInches: 144, spliceWaived: true }).extras.length, long({ lengthInches: 144, extras: [{ code: 'CE-INV-900', qty: '2', note: 'at 5 ft' }] }).extras.map(x => `${x.code}×${x.qty}`)], [0, 0, ['H1-2JNR×2']]);
     const empty = sessionOf();
     ok('called with nothing it answers with nothing, not a crash', Array.isArray(empty.choices) && empty.choices.length === 0 && Object.keys(empty.livePicks).length === 0);
 }
