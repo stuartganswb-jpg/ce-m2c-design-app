@@ -5,8 +5,11 @@
 import {
     parseUniquityCode, colourwaysOf, groupFromPillowPrices, catalogTagPlanOf, catalogTagPatchesOf,
     sizesWithFillItems, insertForSize, missingYardageRowsOf, pillowCodeOf, fabricCodeOf, KINDS,
+    fabricStockAliasOf, fabricNsLineOf, fabricAliasesOf, withFabricAliases,
 } from '../src/components/Shared/pillowCatalog.js';
 import { DEFAULT_PILLOW_PRICING } from '../src/components/Shared/pillowPricing.js';
+import { fabricCreatePlanOf, DEFAULT_FABRIC_WIDTH_IN, DEFAULT_YARDS_PER_THROW } from '../src/components/Shared/pillowCatalog.js';
+import { fabricCreateDocOf } from '../src/components/Shared/pillowFabricSheet.js';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { if (cond) { pass++; } else { fail++; console.error('  ✗', name, extra); } };
@@ -100,5 +103,50 @@ ok('the fill proposals land beside the stored min cut and never overwrite a set 
 const rows = missingYardageRowsOf(plan.missing);
 ok('the yardage-to-create rows follow the fabric sheet columns: code, throw, name, FABRIC, group, width blank, pattern, colour', rows[0][0] === 'Bell/22F' && rows[0][1] === 'Bell/22T' && rows[0][3] === 'FABRIC' && rows[0][4] === 'C' && rows[0][5] === '' && rows[0][7] === 'Bell' && rows[0][8] === 'Natural & Yellow' && rows[1][0] === 'Tie/01F' && rows[2][0] === 'Winters/90F');
 
+
+// ── the fabric items from the throws (Stuart 2026-10-12) ─────────────────────────────────────
+{
+    const lib2 = [
+        ...lib.filter(x => x.legacyErpId !== 'Bell/22T'),   // the fixture's Bell/22T, re-stated below as the tagging left it
+        item('Bell/22T', { name: 'Bell color 22 Natural & Yellow 71" x 51"', specs: { priceGroup: 'C', homeBin: 'M E3R-N16-R3' } }),   // tagged throw, no fabric
+        item('Nash/01T'),   // already in lib (no bin, no group on it — the fabric carries A)
+        item('Only/07T-XL', { name: 'Only XL color 07 Grey' }),   // XL only, no pillows priced
+    ];
+    const plan = fabricCreatePlanOf({ items: lib2, config });
+    const bell22 = plan.creates.find(c => c.key === 'BELL/22');
+    ok('Bell/22: a fabric item is created from its throw — code, 54" wide, group C from the throw, linked, the throw\'s bin, app-only', bell22 && bell22.code === 'Bell/22F' && bell22.row.width === DEFAULT_FABRIC_WIDTH_IN && bell22.row.priceGroup === 'C' && bell22.row.convertedFrom === 'Bell/22T' && bell22.row.homeBin === 'M E3R-N16-R3' && bell22.row.nsId === '' && bell22.row.patternId === 'Bell' && bell22.row.color === 'Natural & Yellow');
+    ok('Winters/90 (throw, no pillows, no tag) is created with no group — counted', plan.creates.find(c => c.key === 'WINTERS/90').group === '' && plan.counts.noGroup >= 1);
+    ok('Only/07 (XL throw only) converts from the XL throw', plan.creates.find(c => c.key === 'ONLY/07').throwCode === 'Only/07T-XL');
+    ok('Bell/10, Nash/01, Savery/05 already have a fabric → not created; Tie/01 (pillows, no throw) is skipped by name', !plan.creates.find(c => c.key === 'BELL/10') && plan.skipped.length === 1 && plan.skipped[0].key === 'TIE/01');
+    ok('the three existing fabrics have no width → set to 54', plan.widths.length === 3 && plan.widths.every(w => w.to === 54) && plan.widths.find(w => w.code === 'Bell/10F'));
+    ok('standard throws with no yards-per-throw get 2; the XL-only colourway\'s throw is not stamped', plan.throws.every(t => t.to === DEFAULT_YARDS_PER_THROW) && plan.throws.find(t => t.code === 'Bell/10T') && !plan.throws.find(t => t.code === 'Only/07T-XL'));
+    const docu = fabricCreateDocOf(bell22.row, { id: 'UNIQUITY-INV-1-0', brandId: 'uniquity', by: 'stuart', at: 5 });
+    ok('the create row is the fabric sheet\'s shape: FABRIC, RY, width, group, link, bin, no NetSuite id', docu.manufacturingSpecs.productType === 'FABRIC' && docu.manufacturingSpecs.uom === 'RY' && docu.manufacturingSpecs.width === 54 && docu.manufacturingSpecs.priceGroup === 'C' && docu.manufacturingSpecs.customData.convertedFrom === 'Bell/22T' && docu.manufacturingSpecs.homeBin === 'M E3R-N16-R3' && !docu.netSuiteInternalId && docu.legacyErpId === 'Bell/22F');
+}
+
+
+// ── the stock alias: an app-only fabric is a fraction of its throw, to NetSuite ──────────────
+{
+    const fab = item('Bell/22F', { specs: { productType: 'FABRIC', width: 54, customData: { convertedFrom: 'Bell/22T' } } });
+    const thr = item('Bell/22T', { top: { netSuiteInternalId: '48877' } });
+    const xlFab = item('Only/07F', { specs: { productType: 'FABRIC', customData: { convertedFrom: 'Only/07T-XL' } } });
+    const xl = item('Only/07T-XL', { top: { netSuiteInternalId: '50001' }, specs: { customData: { yardsPerThrow: 3 } } });
+    const own = item('Savery/05F', { top: { netSuiteInternalId: '777' }, specs: { productType: 'FABRIC', customData: { convertedFrom: 'Savery/05T' } } });
+    const orphan = item('Lost/01F', { specs: { productType: 'FABRIC', customData: { convertedFrom: 'Lost/01T' } } });
+    const noNs = item('Lost/01T');
+    const by = (c) => [fab, thr, xlFab, xl, own, orphan, noNs].find(x => x.legacyErpId.toUpperCase() === String(c).toUpperCase()) || null;
+    const a = fabricStockAliasOf(fab, by);
+    ok('an app-only fabric aliases to its throw: code, NetSuite id, 2 yd per throw, factor ½', a && a.code === 'BELL/22T' && a.nsId === '48877' && a.yardsPerThrow === 2 && a.factor === 0.5);
+    ok('an XL throw stamped 3 yd gives factor ⅓', fabricStockAliasOf(xlFab, by).yardsPerThrow === 3 && fabricStockAliasOf(xlFab, by).factor === 0.3333);
+    ok('a fabric with its own NetSuite id stands for itself; a fabric whose throw has no id (or no throw) has no alias', fabricStockAliasOf(own, by) === null && fabricStockAliasOf(orphan, by) === null && fabricStockAliasOf(item('X/1F'), by) === null);
+    const l = fabricNsLineOf({ fabric: fab, yards: 1.25, findByCode: by });
+    ok('1.25 yd of Bell/22F pushes as 0.625 × the throw, said on the line', l.nsId === '48877' && l.quantity === 0.625 && l.via === '1.25 yd of Bell/22F = 0.625 × Bell/22T');
+    ok('1.25 yd of a fabric with its own id pushes as 1.25 of itself', fabricNsLineOf({ fabric: own, yards: 1.25, findByCode: by }).nsId === '777' && fabricNsLineOf({ fabric: own, yards: 1.25, findByCode: by }).quantity === 1.25);
+    const al = fabricAliasesOf(['Bell/22F', 'Savery/05F', 'INSERT-PC-19X19'], by);
+    ok('the aliases for a read: only the app-only fabric, pointing at its throw', al.length === 1 && al[0].code === 'BELL/22F' && al[0].via === 'BELL/22T' && al[0].yardsPerThrow === 2);
+    const folded = withFabricAliases({ 'BELL/22T': { available: 3, onOrder: 2, unit: 'EA' }, 'SAVERY/05F': { available: 9, onOrder: 0, unit: 'YD' } }, al);
+    ok('the fold: the fabric answers from its throw in yards (3 throws = 6 yd, 2 on order = 4 yd); the throw row stays; an answered fabric is left alone', folded['BELL/22F'].available === 6 && folded['BELL/22F'].onOrder === 4 && folded['BELL/22F'].unit === 'YD' && folded['BELL/22F'].viaThrow === 'BELL/22T' && folded['BELL/22T'].available === 3 && folded['SAVERY/05F'].available === 9);
+    ok('a throw NetSuite did not answer leaves the fabric unanswered (short, honestly)', withFabricAliases({}, al)['BELL/22F'] === undefined);
+}
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

@@ -37,6 +37,7 @@ import { finishedCodeOf, isUnfinishedFinish } from './subFinish.js';
 import { SOURCING, sourcingOf } from './sourcing.js';
 import { isPoleCategory, poleLengthOf, sourcesForLength, targetCodeFor, poleOptionsWithStock } from './poleCut.js';
 import { fetchOpenPoLines } from './purchaseOrders.js';
+import { fabricAliasesOf, withFabricAliases } from './pillowCatalog.js';   // an app-only fabric reads its shelf from its throw (Stuart 2026-10-12)
 
 // ── AVAILABILITY WITH UNITS ────────────────────────────────────────────────────────────────────
 // One SuiteQL read: per-item available qty AND the item's stock unit label. BUILTIN.DF on the
@@ -281,11 +282,15 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         p.poleInfo.options.forEach(o => codes.add(String(o.sourceErp).toUpperCase()));
     });
 
+    // AN APP-ONLY FABRIC (a pillow's yardage with no NetSuite item of its own) is read from its THROW: the throw's
+    // code joins the one read, and its answer is folded back as yards (× yards-per-throw) under the fabric's code.
+    const fabricAliases = fabricAliasesOf([...codes], partOf);
+    fabricAliases.forEach(a => codes.add(a.via));
     let avail = {}, unitsKnown = true;
     if (codes.size) {
         try {
             const res = await fetchAvailabilityUnits([...codes], locationId);
-            avail = res.map; unitsKnown = res.unitsKnown;
+            avail = withFabricAliases(res.map, fabricAliases); unitsKnown = res.unitsKnown;
         } catch (e) {
             return { jobs: [], nsError: e.message || String(e), unitsKnown: false };
         }

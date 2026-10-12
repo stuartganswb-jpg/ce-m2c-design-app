@@ -88,7 +88,10 @@ export function quickSellPlanOf({ cw, mode = 'PILLOW', sizeKey = '', variant = '
         const v = up(variant) || 'STD';
         const item = (cw.throws || {})[v] || null;
         if (!item) return { ok: false, errors: [{ code: 'NO_THROW', message: `${cw.label} has no ${v === 'STD' ? 'standard' : v} throw in the library.` }], warnings, kind: 'THROW', why: '', qty: q, summary: '', note: '', chartPrice: null };
-        return { ok: true, errors, warnings, kind: 'THROW', why: 'THROW', qty: q, summary: `${cw.label}${v === 'STD' ? '' : ` ${v}`}`, note: '', throwItem: item, chartPrice: null };
+        // the honest shelf (whole throws: NetSuite minus the cut ledger's pieces, rounded down) — short is said, never refused
+        const whole = num(available);
+        if (whole !== null && whole < q) warnings.push(`${codeOf(item)}: ${whole} whole throw${whole === 1 ? '' : 's'} on the shelf for ${q} — sold short; NetSuite backorders the rest`);
+        return { ok: true, errors, warnings, kind: 'THROW', why: whole === null ? 'STOCK_UNKNOWN' : (whole >= q ? 'IN_STOCK' : 'SHORT'), qty: q, summary: `${cw.label}${v === 'STD' ? '' : ` ${v}`}`, note: '', throwItem: item, chartPrice: null, shelf: whole };
     }
 
     const key = sizeKeyOf(sizeKey);
@@ -167,4 +170,18 @@ export const quickSellTilesOf = (catalog, { q = '', group = '', mode = 'PILLOW' 
         .filter(cw => !g || up(cw.group) === g)
         .filter(cw => !t || [cw.key, cw.patternRaw, cw.label, cw.colourName, cw.colour].some(v => up(v).includes(t)))
         .sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
+};
+
+/**
+ * A throw's HONEST shelf: NetSuite's available minus the cut ledger's live pieces of its fabric (yards ÷
+ * yards-per-throw), rounded DOWN — two half throws are never one throw (Stuart 2026-10-12).
+ *   { whole, available, pieceYards, pieceThrows }   available null → whole null (unread is unread)
+ */
+export const honestThrowsOf = ({ available = null, pieces = [], yardsPerThrow = 2 } = {}) => {
+    const live = (pieces || []).filter(p => p && String(p.status || 'CUT').toUpperCase() === 'CUT');
+    const pieceYards = Math.round(live.reduce((s, p) => s + (num(p.lengthIn) || 0), 0) / 36 * 1000) / 1000;
+    const ypt = num(yardsPerThrow) || 2;
+    const pieceThrows = Math.round(pieceYards / ypt * 10000) / 10000;
+    const a = num(available);
+    return { whole: a === null ? null : Math.max(0, Math.floor(a - pieceThrows + 1e-9)), available: a, pieceYards, pieceThrows };
 };

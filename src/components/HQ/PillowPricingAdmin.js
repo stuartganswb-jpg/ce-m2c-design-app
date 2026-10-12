@@ -26,7 +26,7 @@ import {
 import { parseFabricSheet, planFabricRows, fabricUpdatePatchOf, fabricCreateDocOf, newFabricItemId, fabricPlanSummary } from '../Shared/pillowFabricSheet';
 import { downloadFabricTemplate, readFabricWorkbook, FABRIC_TEMPLATE_NAME } from '../Shared/pillowFabricXlsx';
 import { sizeCutTableOf, minCutPatchOf, sizesWithMinCuts, allowanceOf } from '../Shared/pillowCuts';
-import { catalogTagPlanOf, catalogTagPatchesOf, sizesWithFillItems, missingYardageRowsOf } from '../Shared/pillowCatalog';   // the catalog tags itself (S7 step 1, 2026-10-12)
+import { catalogTagPlanOf, catalogTagPatchesOf, sizesWithFillItems, missingYardageRowsOf, fabricCreatePlanOf, DEFAULT_FABRIC_WIDTH_IN, DEFAULT_YARDS_PER_THROW } from '../Shared/pillowCatalog';   // the catalog tags itself + the fabric items from the throws (S7, 2026-10-12)
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
 const card = { background: '#fff', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' };
@@ -66,6 +66,8 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
     const [catArmed, setCatArmed] = useState(false);
     const [fillArmed, setFillArmed] = useState(false);
     const [catOpen, setCatOpen] = useState({});
+    const [fabPlan, setFabPlan] = useState(null);     // the fabric items from the throws (Stuart 2026-10-12)
+    const [fabCreateArmed, setFabCreateArmed] = useState(false);
 
     useEffect(() => {
         const u1 = onSnapshot(doc(db, 'system', PILLOW_PRICING_DOC), (s) => setLive(s.exists() ? { ...DEFAULT_PILLOW_PRICING, ...s.data() } : { ...DEFAULT_PILLOW_PRICING }));
@@ -207,6 +209,7 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
             const items = await readLibrary();
             const plan = catalogTagPlanOf({ items, config: cfg });
             setCatPlan(plan);
+            setFabPlan(fabricCreatePlanOf({ items, config: cfg })); setFabCreateArmed(false);
             const c = plan.counts;
             say(`Catalog read: ${c.patterns} patterns, ${c.colourways} colourways — ${c.derived} price a group from their pillows, ${c.writes} library write(s) to make, ${c.missing} colourway(s) with no yardage item, ${c.fill} fill insert(s) proposed (${items.length} Uniquity items).`, 'ok');
         } catch (err) { setCatPlan(null); say(`Could not read the catalog: ${err.message || err}`, 'err'); }
@@ -227,6 +230,29 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
             say(`Tagged: ${patches.length} item(s) written (${catPlan.writes.filter(w => w.path.endsWith('priceGroup')).length} price group(s), ${catPlan.writes.filter(w => w.path.endsWith('convertedFrom')).length} throw link(s)). Read the catalog again to see it clean.`, 'ok');
             setCatPlan(null); setCatArmed(false);
         } catch (err) { say(`Tagging failed: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
+    // THE FABRIC ITEMS FROM THE THROWS (Stuart 2026-10-12): app-only yardage items — the throw stays the NetSuite
+    // item and a pillow relieves a fraction of it; 54" wide and 2 yd per throw for now; blank widths filled.
+    const createFabricsFromThrows = async () => {
+        if (!fabPlan || (!fabPlan.creates.length && !fabPlan.widths.length && !fabPlan.throws.length)) return;
+        if (!fabCreateArmed) { setFabCreateArmed(true); return; }
+        setBusy(true);
+        try {
+            const at = Date.now();
+            const ops = [
+                ...fabPlan.creates.map((c, i) => ({ kind: 'set', id: newFabricItemId('uniquity', i, at), data: fabricCreateDocOf(c.row, { id: newFabricItemId('uniquity', i, at), brandId: 'uniquity', by: currentUser || '', at }) })),
+                ...fabPlan.widths.map(w => ({ kind: 'update', id: w.id, data: { 'manufacturingSpecs.width': w.to, updatedAt: at, catalogTagAt: at, catalogTagBy: currentUser || '' } })),
+                ...fabPlan.throws.map(t => ({ kind: 'update', id: t.id, data: { 'manufacturingSpecs.customData.yardsPerThrow': t.to, updatedAt: at, catalogTagAt: at, catalogTagBy: currentUser || '' } })),
+            ];
+            for (let i = 0; i < ops.length; i += 400) {
+                const batch = writeBatch(db);
+                ops.slice(i, i + 400).forEach(op => { if (op.kind === 'set') batch.set(doc(db, 'Approved_Designs', op.id), op.data); else batch.update(doc(db, 'Approved_Designs', op.id), op.data); });
+                await batch.commit();
+            }
+            say(`Fabric items: ${fabPlan.creates.length} created from their throws (${DEFAULT_FABRIC_WIDTH_IN}" wide, ${DEFAULT_YARDS_PER_THROW} yd per throw, app-only), ${fabPlan.widths.length} blank width(s) set to ${DEFAULT_FABRIC_WIDTH_IN}", ${fabPlan.throws.length} throw(s) stamped ${DEFAULT_YARDS_PER_THROW} yd. Read the catalog again to see it clean.`, 'ok');
+            setFabPlan(null); setFabCreateArmed(false); setCatPlan(null); setCatArmed(false);
+        } catch (err) { say(`Create failed: ${err.message || err}`, 'err'); }
         setBusy(false);
     };
     const applyFillInserts = async () => {
@@ -440,10 +466,22 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
                             </table>
                         </div>
                         {catPlan.fill.length > 0 && <div style={{ marginTop: '10px', fontSize: '0.85rem' }}>Fill inserts proposed: {catPlan.fill.map(f => <span key={f.sizeKey}><b>{f.sizeKey}</b> → {f.code} &nbsp;</span>)}</div>}
+                        {fabPlan && (
+                            <div style={{ marginTop: '12px', padding: '12px', border: '1px solid var(--line)', background: 'var(--paper)', fontSize: '0.85rem' }}>
+                                <div style={{ ...mono, marginBottom: '6px' }}>Fabric items from the throws · app-only, {DEFAULT_FABRIC_WIDTH_IN}" wide, {DEFAULT_YARDS_PER_THROW} yd per throw</div>
+                                <div>{fabPlan.counts.creates} colourway(s) have a throw and no fabric yardage item → create <b>Pattern/NNF</b> for each (the throw's group, linked to the throw, the throw's bin, no NetSuite id — a pillow pushes as a fraction of the throw){fabPlan.counts.noGroup ? <span style={{ color: '#a86b00' }}> · {fabPlan.counts.noGroup} of them have no group yet (apply the tags first, or set it on the sheet)</span> : null}.
+                                    {fabPlan.counts.widths ? <> {fabPlan.counts.widths} existing fabric(s) with no width → {DEFAULT_FABRIC_WIDTH_IN}".</> : null}
+                                    {fabPlan.counts.throws ? <> {fabPlan.counts.throws} standard throw(s) stamped {DEFAULT_YARDS_PER_THROW} yd per throw.</> : null}
+                                    {fabPlan.counts.skipped ? <span style={{ color: 'var(--ink-soft)' }}> {fabPlan.counts.skipped} colourway(s) have pillows but no throw — bought by the yard, create on the sheet: {fabPlan.skipped.slice(0, 12).map(x => x.key).join(', ')}{fabPlan.skipped.length > 12 ? '…' : ''}.</span> : null}</div>
+                                <div style={{ marginTop: '8px' }}>
+                                    <button onClick={createFabricsFromThrows} disabled={busy || (!fabPlan.creates.length && !fabPlan.widths.length && !fabPlan.throws.length)} style={btn(true, busy || (!fabPlan.creates.length && !fabPlan.widths.length && !fabPlan.throws.length))}>{fabCreateArmed ? `Press again to create ${fabPlan.creates.length} + fix ${fabPlan.widths.length + fabPlan.throws.length}` : `Create the fabric items from the throws (${fabPlan.creates.length})`}</button>
+                                </div>
+                            </div>
+                        )}
                         <div style={{ marginTop: '12px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                             <button onClick={applyCatalogTags} disabled={busy || !catPlan.writes.length} style={btn(true, busy || !catPlan.writes.length)}>{catArmed ? `Press again to write ${catPlan.writes.length} field(s)` : `Apply the tags (${catPlan.writes.length})`}</button>
                             {catPlan.fill.length > 0 && <button onClick={applyFillInserts} disabled={busy} style={btn(false, busy)}>{fillArmed ? 'Press again to set the fill inserts' : `Set the fill inserts (${catPlan.fill.length})`}</button>}
-                            <button onClick={() => { setCatPlan(null); setCatArmed(false); setFillArmed(false); }} disabled={busy} style={btn(false, busy)}>Discard</button>
+                            <button onClick={() => { setCatPlan(null); setCatArmed(false); setFillArmed(false); setFabPlan(null); setFabCreateArmed(false); }} disabled={busy} style={btn(false, busy)}>Discard</button>
                         </div>
                     </div>
                 )}

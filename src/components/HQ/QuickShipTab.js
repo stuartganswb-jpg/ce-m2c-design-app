@@ -10,6 +10,7 @@ import { lineImageForItem, lineImageOfAsset, lineImagesOf } from '../Shared/line
 import AssetImagePicker from '../Shared/AssetImagePicker';
 import PillowQuickSell from './PillowQuickSell';   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
 import { QUICK_SELL_REQUEST_ID } from '../Shared/pillowQuickSell';
+import { fabricNsLineOf } from '../Shared/pillowCatalog';   // an app-only fabric pushes as a fraction of its throw (Stuart 2026-10-12)
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
@@ -505,9 +506,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const pushPillowPlan = ({ plan, line, requestId, index }) => {
         const holderKey = `pillow-${requestId}-${index}`;
         pushLine(plan.holder.item, plan.holder.qty, plan.holder.note, null, { rateOverride: plan.holder.rate, noPack: true, pillow: { requestId, line: index, madeToOrder: plan.holder.madeToOrder, summary: line.summary || '', sizeKey: line.sizeKey || '', group: line.group || '', design: line.design || null, panels: line.panels || [], sourced: plan.sourced, capturedFabrics: line.capturedFabrics || [], snapshot: line.snapshot || '', ...(line.standardSku ? { standardSku: line.standardSku } : {}) }, pillowKey: holderKey });
-        plan.parts.forEach(part => pushLine(part.item, 1, part.note, null, part.uom === 'YARD'
-            ? { rateOverride: 0, noPack: true, inKit: true, kitOf: holderKey, perFoot: true, feetPer: part.yards, unitWord: 'yd' }
-            : { rateOverride: 0, noPack: true, inKit: true, kitOf: holderKey }));
+        plan.parts.forEach(part => {
+            // a yardage part with no NetSuite item of its own goes to NetSuite as a fraction of its throw
+            const ns = part.uom === 'YARD' ? fabricNsLineOf({ fabric: part.item, yards: part.yards, findByCode: pillowByCode }) : null;
+            const alias = ns && ns.factor ? { nsId: ns.nsId, nsQtyFactor: ns.factor, nsVia: ns.via } : {};
+            pushLine(part.item, 1, part.note, null, part.uom === 'YARD'
+                ? { rateOverride: 0, noPack: true, inKit: true, kitOf: holderKey, perFoot: true, feetPer: part.yards, unitWord: 'yd', ...alias }
+                : { rateOverride: 0, noPack: true, inKit: true, kitOf: holderKey });
+        });
     };
     const loadPillowReq = async (job) => {
         const lines = ((job.pillowRequest || {}).lines) || [];
@@ -874,7 +880,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             // the kit is the sales face; NetSuite gets the exploded components via the CPQ-shaped
             // handoff). Without this, nsIdOf's legacyErpId fallback would push the kit CODE as an
             // item id and the SO line would 400.
-            itemId: it.id, erp: erpOf(it), nsId: opts?.noNs ? '' : nsIdOf(it), name: it.itemName || erpOf(it),
+            itemId: it.id, erp: erpOf(it), nsId: opts?.noNs ? '' : ((opts && opts.nsId) || nsIdOf(it)), name: it.itemName || erpOf(it),
+            // AN APP-ONLY FABRIC (Stuart 2026-10-12): the NetSuite line is its THROW × (yards ÷ yards-per-throw) — the
+            // app's documents keep the fabric in yards; only the NetSuite identity and quantity change.
+            ...(opts && opts.nsQtyFactor ? { nsQtyFactor: opts.nsQtyFactor, nsVia: opts.nsVia || '' } : {}),
             // Customer-facing alias: shown on the quote/SO/invoice and priced from. The REAL item
             // above is what we stock, pick, barcode and send to NetSuite.
             // opts.aliasErp: the customer's part# straight from a clientPricing row (traverse
@@ -1548,12 +1557,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     // still names it so the SO reads the way the customer ordered.
                     items: lines.filter(l => !l.isKit).map(l => ({
                         item: { id: l.nsId.toString() },
-                        quantity: l.eachQty,
+                        quantity: l.nsQtyFactor ? Math.round(l.eachQty * l.nsQtyFactor * 10000) / 10000 : l.eachQty,
                         rate: parseFloat((l.rate || 0).toFixed(2)),
                         price: { id: "-1" },
                         // The customer ordered the alias code — name it first so the SO reads the way
                         // they ordered, while the LINE ITEM stays the real stocked part.
-                        description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : l.feeRule ? ' [fee]' : ' [Quick Ship stock]'}`,
+                        description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''}${l.nsVia ? ' [' + l.nsVia + ']' : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : l.feeRule ? ' [fee]' : ' [Quick Ship stock]'}`,
                         ...((String(l.lineMemo || '').trim() || lineTag) ? { custcol3: String(l.lineMemo || '').trim().slice(0, 300) || lineTag } : {}),
                     })).concat(kitSold.map(l => ({
                         // THE KIT'S MONEY (Shared/itemKit): one rollup line per kit sold — its parts are the $0 lines above.
@@ -1733,7 +1742,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // NetSuite ($0 lines) and prints them on the documents, but they never reached lines[] — so the SO Pack
                 // never listed the track, fascia and brackets to pick. Each goes on as the item NetSuite consumes, in
                 // NetSuite's unit, a shelf pick of its kit (trvComponent) — exactly what leaves the shelf.
-                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}), ...(l.lineImage && l.lineImage.url ? { lineImage: l.lineImage } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
+                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}), ...(l.lineImage && l.lineImage.url ? { lineImage: l.lineImage } : {}), ...(l.nsQtyFactor ? { nsQtyFactor: l.nsQtyFactor, nsVia: l.nsVia || '' } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never

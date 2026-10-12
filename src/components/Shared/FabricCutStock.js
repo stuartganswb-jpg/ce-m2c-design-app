@@ -20,6 +20,7 @@ import { fabricRowsOf, pieceLabelOf, convertPlanOf, yardsPerThrowOf } from './fa
 import { createFabricPiece, scrapFabricPiece, retryFabricScrap, convertThrowsToYardage } from './fabricPieceLedger';
 import { isFabricItem } from './pillowFabricSheet';
 import { fetchAvailabilityUnits } from './oeReviewPlan';
+import { fabricAliasesOf, withFabricAliases } from './pillowCatalog';   // an app-only fabric reads its yards from its throw (Stuart 2026-10-12)
 import { printHtmlLabel, code128BSvg } from './labelPrint';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
@@ -86,9 +87,12 @@ const FabricCutStock = ({ activeBrand = 'uniquity', currentUser = 'HQ' }) => {
         if (!codes.length || !loc) return;
         setBusy(true);
         try {
-            const r = await fetchAvailabilityUnits(codes, loc);
+            // a fabric with no NetSuite item of its own answers from its throw, in yards
+            const findByCode = (c) => fabricByCode[String(c || '').toUpperCase()] || ((library && library.throwsByCode) || {})[String(c || '').toUpperCase()] || null;
+            const aliases = fabricAliasesOf(codes, findByCode);
+            const r = await fetchAvailabilityUnits([...new Set([...codes, ...aliases.map(a => a.via)])], loc);
             const m = {};
-            Object.entries(r.map || {}).forEach(([code, v]) => { m[code] = v.available; });
+            Object.entries(withFabricAliases(r.map || {}, aliases)).forEach(([code, v]) => { if (codes.includes(code)) m[code] = v.available; });
             setNsYards(m); setNsAt(Date.now());
             say(`NetSuite read: ${Object.keys(m).length} of ${codes.length} fabric(s) answered${r.unitsKnown === false ? ' (units unknown — read as yards)' : ''}.`, 'ok');
         } catch (e) { say(`NetSuite read failed: ${e.message || e}`, 'err'); }

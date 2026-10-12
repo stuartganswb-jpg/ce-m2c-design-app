@@ -1,7 +1,7 @@
 // The quick sell, pinned (S7 step 2, 2026-10-12): a plain pillow with a SKU in stock is the SKU at the
 // chart price (the mismatch said); an edge, a trim, a size with no SKU or a short shelf is made to order
 // in the custom shape with the SKU named; the throw is the throw; refusals by name.
-import { quickSellSizesOf, quickSellEdgesOf, quickSellDesignOf, quickSellPlanOf, quickSellTilesOf, EDGES } from '../src/components/Shared/pillowQuickSell.js';
+import { quickSellSizesOf, quickSellEdgesOf, quickSellDesignOf, quickSellPlanOf, quickSellTilesOf, honestThrowsOf, EDGES } from '../src/components/Shared/pillowQuickSell.js';
 import { colourwaysOf } from '../src/components/Shared/pillowCatalog.js';
 import { pillowCartPlanOf } from '../src/components/Shared/pillowRequest.js';
 import { DEFAULT_PILLOW_PRICING } from '../src/components/Shared/pillowPricing.js';
@@ -69,6 +69,7 @@ ok('the made-to-order line loads through tab 7\'s own cart plan: the holder with
 
 // ── the throw ────────────────────────────────────────────────────────────────────────────────
 const thr = quickSellPlanOf({ cw: bell10, mode: 'THROW', qty: 2 });
+ok('a throw short on the honest shelf is sold short and said; in stock says so; unread stays unknown', quickSellPlanOf({ cw: bell10, mode: 'THROW', qty: 3, available: 2 }).why === 'SHORT' && quickSellPlanOf({ cw: bell10, mode: 'THROW', qty: 3, available: 2 }).warnings.some(w => /2 whole throws on the shelf for 3/.test(w)) && quickSellPlanOf({ cw: bell10, mode: 'THROW', qty: 1, available: 2 }).why === 'IN_STOCK' && thr.why === 'STOCK_UNKNOWN');
 ok('the throw is the throw item; XL on request; a missing variant refuses', thr.ok && thr.kind === 'THROW' && thr.throwItem.legacyErpId === 'Bell/10T' && quickSellPlanOf({ cw: bell10, mode: 'THROW', variant: 'XL' }).throwItem.legacyErpId === 'Bell/10T-XL' && !quickSellPlanOf({ cw: bell10, mode: 'THROW', variant: 'XXL' }).ok);
 
 // ── refusals ─────────────────────────────────────────────────────────────────────────────────
@@ -85,5 +86,11 @@ ok('a fabric with no width refuses made-to-order by name', !nashMto.ok && nashMt
 ok('no size / no colourway refuse', quickSellPlanOf({ cw: bell10, config, findPart }).errors[0].code === 'NO_SIZE' && quickSellPlanOf({ config }).errors[0].code === 'NO_COLOURWAY');
 ok('a size the chart does not price refuses', quickSellPlanOf({ cw: bell10, sizeKey: '30x30', available: 1, config, findPart }).errors[0].code === 'NO_SIZE_PRICE');
 
+
+// ── the throw's honest shelf ─────────────────────────────────────────────────────────────────
+const pcs = [{ lengthIn: 27, status: 'CUT' }, { lengthIn: 45, status: 'CUT' }, { lengthIn: 60, status: 'CONSUMED' }];
+const h = honestThrowsOf({ available: 3.5, pieces: pcs, yardsPerThrow: 2 });
+ok('3.5 throws in NetSuite with 2 yd of live cuts on the shelf = 2 whole throws to sell (72" = 2 yd = 1 throw; consumed pieces ignored)', h.whole === 2 && h.pieceYards === 2 && h.pieceThrows === 1);
+ok('two half throws never make one; an unread shelf stays unread', honestThrowsOf({ available: 1, pieces: [{ lengthIn: 36 }, { lengthIn: 36 }] }).whole === 0 && honestThrowsOf({ available: 0.75, pieces: [] }).whole === 0 && honestThrowsOf({ available: null }).whole === null);
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

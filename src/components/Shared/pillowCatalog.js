@@ -20,6 +20,7 @@
 // Pure: no imports past the pricing module, no Firestore, no Date. Proven by scripts/pillowCatalog.test.mjs.
 
 import { sizeKeyOf, priceGroupOf, sizePriceOf } from './pillowPricing.js';
+import { yardsPerThrowOf } from './fabricPieces.js';
 
 const str = (v) => String(v == null ? '' : v).trim();
 const up = (v) => str(v).toUpperCase();
@@ -251,3 +252,105 @@ export const missingYardageRowsOf = (missing = []) => (missing || []).map(m => [
     m.fabricCode, m.throwCode || '', `${m.label} fabric yardage`.replace(/\s+(XL|XXL)\s+fabric yardage$/i, ' fabric yardage'), 'FABRIC',
     m.group || '', '', 'FALSE', m.patternRaw || m.pattern, m.colourName || m.colour, '', '', '', 'TRUE', '', `proposed from the catalog — ${m.pillows} pillow size(s) in the library`,
 ]);
+
+// ── THE FABRIC ITEMS FROM THE THROWS (Stuart 2026-10-12: "create an app item equal to the throw in
+// yardage … 1 throw is basically 2 yards long by the same width, for now 54 in wide for all") ─────
+//
+// App-only items (no NetSuite id): the throw stays the NetSuite inventory item and a pillow relieves a
+// FRACTION of it (the push rule); the fabric item is what the board, the quick sell, the sewing document,
+// the pick and the cut ledger name, in yards. When Eric later creates a NetSuite yardage item, the same
+// record takes the id through the fabric sheet and pushes as itself.
+
+export const DEFAULT_FABRIC_WIDTH_IN = 54;
+export const DEFAULT_YARDS_PER_THROW = 2;
+
+const binOf = (it) => str(it && it.manufacturingSpecs && (it.manufacturingSpecs.homeBin || it.manufacturingSpecs.binLocation)) || str(it && it.binLocation);
+
+/**
+ * items + config → what one press creates and fixes.
+ *   creates  [{ key, code, throwCode, group, row }]      row = the fabric sheet's row shape (fabricCreateDocOf takes it)
+ *   widths   [{ id, code, from, to }]                     existing fabric items with no width → widthIn
+ *   throws   [{ id, code, to }]                           standard throws with no yards-per-throw → DEFAULT_YARDS_PER_THROW
+ *   skipped  [{ key, reason }]                            colourways with pillows but no throw at all (nothing to convert)
+ */
+export function fabricCreatePlanOf({ items = [], config = {}, widthIn = DEFAULT_FABRIC_WIDTH_IN } = {}) {
+    const cat = colourwaysOf(items);
+    const creates = [], widths = [], throws = [], skipped = [];
+    cat.list.forEach(cw => {
+        const t = cw.throws.STD || cw.throws.XL || cw.throws.XXL || null;
+        if (cw.fabric) {
+            if (!num(cw.fabric.manufacturingSpecs && cw.fabric.manufacturingSpecs.width)) widths.push({ id: cw.fabric.id, code: codeOf(cw.fabric), from: '', to: widthIn });
+        } else if (t) {
+            const group = cw.group || groupFromPillowPrices({ pillows: cw.pillows, config }).group || '';
+            const code = fabricCodeOf(cw);
+            const name = `${str(t.itemName) || cw.key} — fabric yardage`;
+            creates.push({
+                key: cw.key, code, throwCode: codeOf(t), group,
+                row: { code, name, type: 'FABRIC', priceGroup: group, width: widthIn, railroad: false, patternId: cw.patternRaw || cw.pattern, color: cw.colourName || cw.colour, convertedFrom: codeOf(t), homeBin: binOf(t), stocked: true, notes: `app item from the throw ${codeOf(t)} (${DEFAULT_YARDS_PER_THROW} yd per throw, ${widthIn}" wide) — no NetSuite item: pushes as a fraction of the throw`, nsId: '' },
+            });
+        } else if (Object.keys(cw.pillows).length) {
+            skipped.push({ key: cw.key, reason: 'no throw in the library — nothing to convert; bought by the yard, create it on the fabric sheet' });
+        }
+        if (cw.throws.STD) {
+            const cd = (cw.throws.STD.manufacturingSpecs && cw.throws.STD.manufacturingSpecs.customData) || {};
+            if (!num(cd.yardsPerThrow) && !num(cw.throws.STD.manufacturingSpecs && cw.throws.STD.manufacturingSpecs.length)) throws.push({ id: cw.throws.STD.id, code: codeOf(cw.throws.STD), to: DEFAULT_YARDS_PER_THROW });
+        }
+    });
+    return { creates, widths, throws, skipped, counts: { creates: creates.length, widths: widths.length, throws: throws.length, skipped: skipped.length, noGroup: creates.filter(c => !c.group).length } };
+}
+
+// ── THE STOCK ALIAS: an app-only fabric IS a fraction of its throw, to NetSuite ─────────────────
+//
+// Stuart 2026-10-12: keep the fabrics in the app and "account for them with fractions of a throw (how we
+// do it now)". A fabric item with its OWN NetSuite id reads and pushes as itself, in yards. One without
+// reads and pushes as its throw: available yards = the throw's available × yards-per-throw; the sales
+// order line = the throw × (yards ÷ yards-per-throw). The app's documents (the sewing document, the pick,
+// the cut ledger) keep the fabric in yards — only the NetSuite identity changes.
+
+const r4 = (n) => Math.round(n * 10000) / 10000;
+
+/**
+ * fabric + findByCode → null (the fabric stands for itself, or nothing can stand for it) or
+ *   { code: THROWCODE, throwCode, nsId, yardsPerThrow, factor: 1 / yardsPerThrow }
+ */
+export const fabricStockAliasOf = (fabric, findByCode) => {
+    if (!fabric || str(fabric.netSuiteInternalId)) return null;
+    const cd = (fabric.manufacturingSpecs && fabric.manufacturingSpecs.customData) || {};
+    const throwCode = str(cd.convertedFrom);
+    if (!throwCode || typeof findByCode !== 'function') return null;
+    const t = findByCode(throwCode);
+    if (!t || !str(t.netSuiteInternalId)) return null;
+    const ypt = yardsPerThrowOf(t);
+    if (!(ypt > 0)) return null;
+    return { code: up(codeOf(t)), throwCode: codeOf(t), nsId: str(t.netSuiteInternalId), yardsPerThrow: ypt, factor: r4(1 / ypt) };
+};
+
+/** The NetSuite line for `yards` of a fabric: as itself, or as a fraction of its throw (null = no identity). */
+export const fabricNsLineOf = ({ fabric, yards, findByCode } = {}) => {
+    const y = num(yards) || 0;
+    if (!fabric) return null;
+    if (str(fabric.netSuiteInternalId)) return { nsId: str(fabric.netSuiteInternalId), quantity: r4(y), via: '' };
+    const a = fabricStockAliasOf(fabric, findByCode);
+    if (!a) return null;
+    const q = r4(y / a.yardsPerThrow);
+    return { nsId: a.nsId, quantity: q, factor: a.factor, via: `${r4(y)} yd of ${codeOf(fabric)} = ${q} × ${a.throwCode}` };
+};
+
+/** The codes an availability read must also fetch for these parts, and how to fold them back. */
+export const fabricAliasesOf = (codes = [], findByCode) => (codes || []).map(c => {
+    const f = typeof findByCode === 'function' ? findByCode(c) : null;
+    const a = f ? fabricStockAliasOf(f, findByCode) : null;
+    return a ? { code: up(c), via: a.code, yardsPerThrow: a.yardsPerThrow } : null;
+}).filter(Boolean);
+
+/** An availability map with each aliased fabric answered from its throw (only where the fabric itself had no row). */
+export const withFabricAliases = (avail = {}, aliases = []) => {
+    const out = { ...(avail || {}) };
+    (aliases || []).forEach(a => {
+        if (out[a.code]) return;
+        const t = out[a.via];
+        if (!t) return;
+        out[a.code] = { available: r4((Number(t.available) || 0) * a.yardsPerThrow), onOrder: r4((Number(t.onOrder) || 0) * a.yardsPerThrow), unit: 'YD', viaThrow: a.via };
+    });
+    return out;
+};

@@ -8,10 +8,12 @@
 // unread shelf is said, never assumed. Uniquity only; mounted by QuickShipTab under one guard.
 import React, { useEffect, useMemo, useState } from 'react';
 import { db } from '../../firebase';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 import { DEFAULT_PILLOW_PRICING, PILLOW_PRICING_DOC } from '../Shared/pillowPricing';
 import { colourwaysOf } from '../Shared/pillowCatalog';
-import { quickSellSizesOf, quickSellEdgesOf, quickSellPlanOf, quickSellTilesOf } from '../Shared/pillowQuickSell';
+import { quickSellSizesOf, quickSellEdgesOf, quickSellPlanOf, quickSellTilesOf, honestThrowsOf } from '../Shared/pillowQuickSell';
+import { yardsPerThrowOf } from '../Shared/fabricPieces';
+import { fabricCodeOf } from '../Shared/pillowCatalog';
 import { isTrimItem } from '../Shared/pillowFabricSheet';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
@@ -69,12 +71,27 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
                     available = hit ? hit.available : 0;
                 } catch (e) { addLog(`⚠ Shelf read failed for ${cw.pillows[sizeKey].legacyErpId} (${e.message || e}) — sold as the item, the shelf decides at review.`, 'warn'); }
             }
+            // A THROW's honest shelf (Stuart 2026-10-12): NetSuite's count minus the cut ledger's live pieces of its fabric,
+            // in throws, rounded down — a throw partly cut into pillows is never a whole throw for sale.
+            const throwItem = mode === 'THROW' ? cw.throws[variant] : null;
+            if (throwItem) {
+                try {
+                    const tCode = String(throwItem.legacyErpId || throwItem.itemId);
+                    const r = await fetchAvailabilityUnits([tCode], BRAND_NETSUITE_MAP.uniquity.location);
+                    const hit = r.map[tCode.toUpperCase()];
+                    const fCode = String((cw.fabric && (cw.fabric.legacyErpId || cw.fabric.itemId)) || fabricCodeOf(cw)).toUpperCase();
+                    const snap = await getDocs(query(collection(db, 'fabric_pieces'), where('itemCode', '==', fCode), where('status', '==', 'CUT')));
+                    const h = honestThrowsOf({ available: hit ? hit.available : 0, pieces: snap.docs.map(d => d.data()), yardsPerThrow: yardsPerThrowOf(throwItem) });
+                    available = h.whole;
+                    if (h.pieceYards > 0) addLog(`🧵 ${tCode}: NetSuite ${h.available} less ${h.pieceYards} yd of cuts on the shelf = ${h.whole} whole throw(s).`, 'info');
+                } catch (e) { addLog(`⚠ Shelf read failed for ${throwItem.legacyErpId} (${e.message || e}) — sold as the item, the shelf decides at review.`, 'warn'); }
+            }
             const plan = quickSellPlanOf({ cw, mode, sizeKey, variant, edge, trimId, fill, qty: qtyN, available, config: cfg, findPart });
             setLast(plan);
             if (!plan.ok) { plan.errors.forEach(e => addLog(`⛔ ${e.message}`, 'error')); setBusy(false); return; }
             plan.warnings.forEach(w => addLog(`⚠ ${w}`, 'warn'));
             onAdd(plan);
-            const what = plan.kind === 'THROW' ? `${plan.throwItem.legacyErpId} × ${plan.qty}` : plan.kind === 'SKU' ? `${plan.sku.code} × ${plan.qty} at ${money(plan.chartPrice)}${plan.sku.available !== null ? ` (${plan.sku.available} on the shelf)` : ''}` : `CUSTOM PILLOW × ${plan.qty} at ${money(plan.mto.unitPrice)} — made to order, ${plan.summary}`;
+            const what = plan.kind === 'THROW' ? `${plan.throwItem.legacyErpId} × ${plan.qty}${plan.shelf !== null && plan.shelf !== undefined ? ` (${plan.shelf} whole on the shelf)` : ''}` : plan.kind === 'SKU' ? `${plan.sku.code} × ${plan.qty} at ${money(plan.chartPrice)}${plan.sku.available !== null ? ` (${plan.sku.available} on the shelf)` : ''}` : `CUSTOM PILLOW × ${plan.qty} at ${money(plan.mto.unitPrice)} — made to order, ${plan.summary}`;
             addLog(`🛋 Added ${what}`, 'success');
         } catch (e) { addLog(`Add failed: ${e.message || e}`, 'error'); }
         setBusy(false);
