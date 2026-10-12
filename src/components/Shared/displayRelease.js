@@ -27,7 +27,7 @@ import { isDisplayOnlyLine, isParkedGeometryLine, headerSidemarkOf } from './lin
 import { oeIsFloorLine, oeLineFinish, oeCoverageOf, oeLineStateOf } from './oeLines.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
 import { rowRestampOf, isStockColourCode } from './subFinish.js';
-import { isKitLine, itemKitOrderLinesOf, isOffOrderLine } from './itemKit.js';
+import { isKitLine, itemKitOrderLinesOf, isOffOrderLine, KIT_PART_COUNT_FIELDS } from './itemKit.js';
 import { rowKeyOf, rowOfLine } from './rowKey.js';
 import { isReleaseByCount, releasesOf, lineDueOf, lineTargetOf, rowTargetOf, rowDisplaysOf, releaseRowKeyOf, releaseLabelOf } from './rowRelease.js';
 
@@ -787,6 +787,8 @@ export const kitFinishEditOf = ({ so, lineIdx, finishCode, inventory = [], by = 
         const keep = { ...old };
         KIT_PART_FINISH_FIELDS.forEach(key => { delete keep[key]; });
         next[i] = { ...keep, ...fresh, qty: old.qty, kitLineIdx: lineIdx };
+        // The quantity stays the line's own — so does how it is counted (a rod by the foot: Shared/itemKit.kitPartCountOf).
+        KIT_PART_COUNT_FIELDS.forEach(key => { if (old[key] !== undefined) next[i][key] = old[key]; else delete next[i][key]; });
         const label = (l) => `${soLineCodeOf(l)}${l.subFinishCode ? ` (shelf, else ${U(l.subFinishCode)})` : (l.noFinish ? ' · no finish' : '')}`;   // the code carries its finish
         parts.push({ idx: i, from: label(old), to: label(next[i]) });
     }

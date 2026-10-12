@@ -18,6 +18,7 @@ import { takesNoFinish } from './finishLabel.js';
 import { STOCK_COLOUR_SUFFIX } from './finishVariant.js';
 import { finishedCodeOf } from './subFinish.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
+import { isPoleCategory } from './poleCut.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -33,6 +34,28 @@ export const isItemKit = (part) => !!part && part.partClass === 'Kit'
 /** The kit's parts, each with how many go into ONE kit. */
 export const kitComponentsOf = (kitPart) => ((kitPart && kitPart.manufacturingSpecs && kitPart.manufacturingSpecs.kitComponents) || [])
     .map(c => ({ partId: c && c.partId, per: N(c && c.qty) > 0 ? N(c.qty) : 1 })).filter(c => c.partId);
+
+// ── A KIT'S ROD IS ONE ROD OF THAT LENGTH, PER KIT (Stuart 2026-10-12, SO60812) ─────────────────────────────────────
+// "always one rod of that length x qty on order." HRW-138TRAV12 is a 12 ft track: its part list says 12 × H1-138TRV,
+// and H1-138TRV is counted by the FOOT — twelve feet of rod, not twelve rods. Multiplied like every other part, 100
+// kits went on the order as "H1-138TRV × 1200" with no length: the automatic start stopped on it ("counts in feet and
+// this line carries no cut length"), and the floor read 1200 pieces. A rod counted by the foot is PIECES AT A LENGTH —
+// the shape a rod typed by hand in tab 7 has (qty = pieces, perFoot, feetPer, billedFeet): 100 rods × 12 ft, 1200 ft
+// billed. NetSuite's quantity is the same 1200 ft either way (pieces × feet).
+const FOOT_UOMS = ['FT', 'FOOT', 'FEET'];
+const round3 = (n) => Math.round(N(n) * 1000) / 1000;
+/** Is this item a rod counted by the FOOT (the Library's unit of measure; NetSuite's stock unit when that is blank)? */
+export const isFootCountedRod = (part) => {
+    const m = (part && part.manufacturingSpecs) || {};
+    return !!part && isPoleCategory(U(m.productType || part.productType)) && FOOT_UOMS.includes(U(m.uom || m.stockUnit));
+};
+/** How ONE part of a kit goes on the order for `kits` kits: { qty } — or, a rod by the foot, { qty, perFoot, feetPer, billedFeet }. */
+export const kitPartCountOf = (part, per, kits) => {
+    const p = N(per) > 0 ? N(per) : 1, q = N(kits);
+    return isFootCountedRod(part) ? { qty: q, perFoot: true, feetPer: p, billedFeet: round3(p * q) } : { qty: p * q };
+};
+/** The count fields a kit's rod line carries — a line edit that keeps the line's own quantity keeps these with it. */
+export const KIT_PART_COUNT_FIELDS = ['perFoot', 'feetPer', 'billedFeet'];
 
 /**
  * The finish ONE part of a kit wears: the kit's finish, else the kit's stock colour — nothing for a part tagged
@@ -100,7 +123,7 @@ export const itemKitOrderLinesOf = ({ line = {}, findByCode, findPart } = {}) =>
         const code = codeOf(part);
         const f = kitPartFinishOf(part, { finishCode, subFinishCode });
         const base = {
-            ...carry, name: part.itemName || code, partId: part.id || c.partId, qty: c.per * q, price: 0,
+            ...carry, name: part.itemName || code, partId: part.id || c.partId, ...kitPartCountOf(part, c.per, q), price: 0,
             inKit: true, kitOf: sold, hidden: true,
         };
         if (f.finishCode) {
@@ -115,6 +138,27 @@ export const itemKitOrderLinesOf = ({ line = {}, findByCode, findPart } = {}) =>
     });
     const kitLine = { ...line, isKit: true, itemKit: true, kitCode: hit.kitCode, toBeFinished: false };
     return { kitLine, parts, missing };
+};
+
+/**
+ * A KIT'S ROD SAVED BEFORE THE RULE ABOVE — feet in the quantity, no length (SO60812 line 4: H1-138TRV × 1200 under
+ * HRW-138TRAV12). Read by the same rule: the kit says how many feet ONE rod is, so 1200 ft is 100 rods × 12 ft. The patch
+ * is written on the line when its work is (re)planned (Shared/oeGenerate.oeLinePlansOf → stampLinePatch). null when the
+ * line is not such a line, already carries a length, or its feet do not divide into whole rods (a person looks).
+ * @returns { qty, perFoot, feetPer, billedFeet } | null
+ */
+export const kitRodLinePatchOf = ({ line = null, part = null, findByCode, findPart } = {}) => {
+    if (!line || line.inKit !== true || !line.kitOf || line.perFoot || N(line.feetPer) > 0 || N(line.cutLength) > 0) return null;
+    if (!isFootCountedRod(part)) return null;
+    const hit = itemKitOfCode(line.kitOf, findByCode);
+    if (!hit) return null;
+    const code = codeOf(part);
+    const comp = kitComponentsOf(hit.kit).find(c => { const p = typeof findPart === 'function' ? findPart(c.partId) : null; return (p && codeOf(p) === code) || String(c.partId) === String(part.id || ''); });
+    const feet = N(line.qty);
+    if (!comp || !(comp.per > 0) || !(feet > 0)) return null;
+    const pieces = feet / comp.per;
+    if (Math.abs(pieces - Math.round(pieces)) > 1e-9 || pieces < 1) return null;
+    return { qty: Math.round(pieces), perFoot: true, feetPer: comp.per, billedFeet: round3(feet) };
 };
 
 /** The kit line of an order — sold and billed, never made, picked or stocked. */

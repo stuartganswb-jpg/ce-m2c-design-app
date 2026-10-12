@@ -43,6 +43,8 @@ import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { resolveStagingScan, stagingKeyOf, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf, mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
 import { hardDeleteWithLedger, propagateFloorState, closeOrderEverywhere } from '../Shared/orderLifecycle';
+import { startReadyLinesOf, startReadyLinesText } from '../Shared/oeAsAvailable';
+import { oeInventoryOf } from '../Shared/oeGenerate';
 import { fulfilPlatingDemand } from '../Shared/platingDemand';
 import { clearConvertGate } from '../Shared/finishedRunPrecheck';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
@@ -83,6 +85,8 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
 import { soLinesSql, fulfilmentItemsOf, refusalText } from "../Shared/fulfilmentLines";
 import FulfilmentPanel from "../Shared/fulfilmentPanel";
+import { queueSoFulfilment } from "../Shared/fulfilmentQueue";
+import { useBinAsk } from "../Shared/BinChoiceModal";
 import { boxSizeLabel } from "../Shared/fulfilment";
 import { fetchNsPurchaseOrder, importNsPurchaseOrder, fetchNsPoLines, fetchPreferredBins, recordPoReceipt, openQtyOf, overRoomOf, maxReceivableOf, poRef } from "../Shared/purchaseOrders";
 import { itemReceiptItemsOf, receiptShortfallOf, receiptRefusalText, binTransferLineOf, followNsPoLines } from "../Shared/poReceiptLines";
@@ -2125,6 +2129,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // packed, a $0 NetSuite sales order to Fabricut with the custom ship-to; the fulfilment from the bin queues itself when
     // NetSuite accepts the order (the effect below), and the Fulfilment tab ships it.
     const [shipDisplay, setShipDisplay] = useState(null);
+    // "Confirm bins" (Shared/BinChoiceModal, 2026-10-12): the packer says which bin, when NetSuite holds an item in more than one.
+    const { askBins, binModal } = useBinAsk();
     const [shipBusy, setShipBusy] = useState(false);
     const openShipDisplay = async (o) => {
         try {
@@ -2420,6 +2426,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 finishAsAvailableReason: reason,
             });
             writeLog(`${!on ? 'Finish as available ON' : 'Finish as available OFF'} for ${packRef(o)}: ${reason}`, 'wms');
+            // THE START HALF (Stuart 2026-10-12 — Shared/oeAsAvailable, the same call RTG's switch makes): an Order Entry
+            // work order parked on a gate gives up its READY lines, which start as their own work order.
+            if (!on) {
+                try {
+                    const res = await startReadyLinesOf({ so: o, brand: activeBrand, user: operator?.name || '', inventory: oeInventoryOf(hqParts, activeBrand), log: (m) => writeLog(m, 'wms') });
+                    const text = startReadyLinesText(res);
+                    if (text) alert(`⚡ Finish as available — ${packRef(o)}\n\n${text}`);
+                } catch (e) { alert(`The switch is ON, but the ready lines of its parked work order could not be started: ${e.message || e}\n\nStart them from the RTG card (Review & start).`); }
+            }
         } catch (e) { alert('Could not change it: ' + (e.message || e)); }
     };
 
@@ -3128,35 +3143,35 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     // sales order line's OWN location — NetSuite refused the header-only transform
                     // with "Items list: Location". A shippable line with no location refuses the
                     // queue with the lines named; packing still stands.
-                    const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: soLinesSql(nsSoId) } });
-                    const jq = await rq.json();
-                    if (!rq.ok) throw new Error(`could not read the sales order lines — ${JSON.stringify(jq).slice(0, 200)}`);
-                    const ifItems = fulfilmentItemsOf(jq.items || []);
-                    if (!ifItems.ok) {
-                        nsNote = `\n\n⚠ ${refusalText(ifItems)}`;
-                        writeLog(`Fulfillment NOT queued for ${packRef(job)} — ${ifItems.reason}${ifItems.missing.length ? ` (lines ${ifItems.missing.map((m) => m.line).join(', ')})` : ''}`, 'packing');
-                    } else {
+                    // …AND ITS BIN, WHEN NETSUITE CANNOT KNOW IT (Stuart 2026-10-12, Shared/fulfilmentQueue — the ONE
+                    // queuer, shared with the Fulfilment tab's send / resend): an item held in more than one bin is
+                    // asked about here ("Confirm bins") and the choice rides the line. One fulfilment per sales order
+                    // in flight, as before — two tablets packing an order's last two documents cannot queue it twice.
                     const writeBack = [{ collection: isQsOrder(job) ? 'hq_sales_orders' : 'fin_workorders', docId: job.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }];
                     if (!isQsOrder(job) && soDoc && soDoc.id) writeBack.push({ collection: 'hq_sales_orders', docId: soDoc.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' });
-                    await enqueueNsWrite({
-                        kind: 'itemfulfillment',
-                        // One fulfilment per sales order in flight — two tablets packing an order's last two
-                        // documents at once must not queue it twice.
-                        dedupeKey: `if:${nsSoId}`,
+                    const sent = await queueSoFulfilment({
+                        nsSoId, ref: packRef(job),
                         label: `NS Fulfillment — ${packRef(job)} (${job.customerName || job.clientName || job.customer || ''})`,
-                        sourceApp: 'WMS', createdBy: operator?.name || '',
-                        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${nsSoId}/!transform/itemFulfillment`,
-                        method: 'POST',
-                        payload: { shipStatus: { id: 'B' }, memo: nsMemo(`Packed in app by ${operator?.name || 'Packer'}`), item: { items: ifItems.items } },
-                        writeBack
+                        memo: nsMemo(`Packed in app by ${operator?.name || 'Packer'}`),
+                        writeBack, createdBy: operator?.name || '',
+                        preferBin: (soDoc && soDoc.committedBin) || job.committedBin || '', askBins,
                     });
-                    await updateDoc(packDocOf(job), { nsFulfillQueued: true });
-                    nsNote = '\n\n📤 NetSuite Item Fulfillment queued (status: Packed). Shipping completes it in NetSuite — then hit ⤓ Tracking here to pull the tracking # back onto the sales order.';
+                    if (sent.ok) {
+                        await updateDoc(packDocOf(job), { nsFulfillQueued: true, nsFulfillNeedsBins: false, ...(sent.binText ? { nsFulfilBins: sent.binText, nsFulfilBinsBy: operator?.name || '', nsFulfilBinsAt: Date.now() } : {}) });
+                        if (sent.binText) writeLog(`Fulfilment bins confirmed for ${packRef(job)} — ${sent.binText}`, 'packing');
+                        nsNote = `\n\n📤 NetSuite Item Fulfillment queued (status: Packed).${sent.binText ? ` Taken from: ${sent.binText}.` : ''} Shipping completes it in NetSuite — then hit ⤓ Tracking here to pull the tracking # back onto the sales order.`;
+                    } else if (sent.reason === 'NOT_CHOSEN') {
+                        await updateDoc(packDocOf(job), { nsFulfillNeedsBins: true });
+                        nsNote = `\n\n⚠ ${sent.text}\n\nSend it from the FULFILMENT tab (📤 NetSuite fulfilment) once the bin is known.`;
+                        writeLog(`Fulfillment NOT sent for ${packRef(job)} — no bin chosen (${sent.choices.map(c => c.item).join(', ')})`, 'packing');
+                    } else {
+                        nsNote = `\n\n⚠ ${sent.text}`;
+                        writeLog(`Fulfillment NOT queued for ${packRef(job)} — ${sent.code}${sent.missing.length ? ` (lines ${sent.missing.map((m) => m.line).join(', ')})` : ''}`, 'packing');
                     }
                 } else if (!nsSoId) {
                     nsNote = '\n\n⚠ No NetSuite sales order linked to this order — fulfillment NOT queued. Fulfill it manually in NetSuite.';
                 }
-            } catch (obErr) { nsNote = `\n\n⚠ Could not queue the NetSuite fulfillment: ${obErr.message || obErr}. Packing stands — retry from 11.1 or fulfill manually.`; }
+            } catch (obErr) { nsNote = `\n\n⚠ Could not queue the NetSuite fulfillment: ${obErr.message || obErr}. Packing stands — send it from the FULFILMENT tab (📤 NetSuite fulfilment), or fulfill manually.`; }
             setPackOrderId(null);
             alert(`📦 ${packRef(job)} packed.${nsNote}`);
         } catch (e) { alert('Could not complete packing: ' + (e.message || e)); }
@@ -6964,6 +6979,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                 {/* 📋 TAB: BIN COUNT */}
                 {/* 📦 SHIP ONE DISPLAY (Stuart 2026-09-30) — opened from a ready display order's SO Pack card. */}
+                {binModal}
                 {shipDisplay && (
                     <DisplayShipModal theme={theme} t={t} order={shipDisplay.so} n={shipDisplay.n} boards={shipDisplay.boards} share={shipDisplay.share} shareWhy={shipDisplay.why}
                         saved={shipDisplay.saved} busy={shipBusy} onCancel={() => setShipDisplay(null)} onShip={shipOneDisplay}

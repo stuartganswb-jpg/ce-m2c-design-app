@@ -25,7 +25,7 @@ import { isPoleCategory, cutPlanFromSource } from './poleCut';
 import { isOutsourcedFinishCode, handlingForErp } from './finishRouting';
 import { orderRouteFor, ORDER_ROUTE, sourcingOf, SOURCING } from './sourcing';
 import { ParkRefusal, stampReceiptPo } from './workOrderCreate';
-import { isReleasable } from './orderStatus';
+import { isReleasable, wholeOrderWait } from './orderStatus';
 import { releaseFinWoToFloor } from './finishedRunPrecheck';
 import { buildOeReviewPlan, actionsOfReviewedJob } from './oeReviewPlan';
 import { createDraftPurchaseOrders } from './purchaseOrders';
@@ -38,7 +38,7 @@ import { holdSplitGroups } from './rowPairShape.js';
 import { oeDivisionOf, rowFabOf, rowFinishesOf, fabKindOf, DIVISION_CUSTOM, DIVISION_SEW } from './oeClassify.js';
 import { rowKeyOf, rowOfLine } from './displayRelease.js';
 import { rowRestampOf, trvRoleOfCode, isUnfinishedFinish, isStockColourCode } from './subFinish.js';
-import { isKitLine, itemKitOfCode, isOffOrderLine } from './itemKit.js';
+import { isKitLine, itemKitOfCode, isOffOrderLine, kitRodLinePatchOf } from './itemKit.js';
 import { STOCK_COLOUR_SUFFIX } from './finishVariant.js';
 import { isReleaseByCount, lineDueOf, releaseRunOf, releaseRowKeyOf, releaseStampOf } from './rowRelease.js';
 
@@ -165,6 +165,7 @@ export const oeLinePlansOf = ({ so, inventory = [], finishes = [] }) => {
         return hit;
     };
     const byCode = (c) => (inventory || []).find(p => U(p.legacyErpId || p.itemId) === U(c)) || null;
+    const byId = (id) => (inventory || []).find(p => String(p.id) === String(id)) || null;
     const base = lines.map((line, lineIdx) => {
         const erp = U(line && line.erp);
         const { part } = resolveOePart(erp, inventory);
@@ -178,7 +179,9 @@ export const oeLinePlansOf = ({ so, inventory = [], finishes = [] }) => {
         const rs = rowRestampOf({ rows: row0.map(b => ({ idx: b.lineIdx, line: b.line, part: b.part })), finishes, findByCode: byCode });
         const noteOf = (idx) => (rs.notes.find(n => n.idx === idx) || {}).text || '';
         const row = row0.map(b => {
-            const linePatch = rs.patches[b.lineIdx] || null;
+            // A kit's rod saved as feet with no length reads as the kit's rods (Shared/itemKit.kitRodLinePatchOf, 2026-10-12).
+            const rodPatch = kitRodLinePatchOf({ line: b.line, part: b.part, findByCode: byCode, findPart: byId });
+            const linePatch = (rs.patches[b.lineIdx] || rodPatch) ? { ...(rodPatch || {}), ...(rs.patches[b.lineIdx] || {}) } : null;
             const eff = linePatch ? { ...b.line, ...linePatch } : b.line;
             const ownFinish = U(oeLineFinish(eff));
             const trvCut = !!(trvRoleOfCode(b.erp) || trvRoleOfCode(U(b.part && (b.part.legacyErpId || b.part.itemId))));
@@ -412,6 +415,7 @@ export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inve
             const cs = so.customerId ? await getDoc(doc(db, 'crm_records', String(so.customerId))) : null;
             custKeys = customerKeys(so.customerId || null, cs && cs.exists() ? cs.data() : { name: so.customer || '' });
         } catch (e) { custKeys = customerKeys(so.customerId || null, { name: so.customer || '' }); }
+        const parkedOfSo = [];
         for (const group of floorGroupsOf(jobsOfSo, so)) {
             // A release by count names its pair and says what it carries of each line (Shared/rowPairShape.pairShapeOf).
             group.release = (group.jobs.find(j => j.release) || {}).release || null;
@@ -444,15 +448,43 @@ export const executeOeJobs = async ({ jobs: allJobs = [], brand, user = '', inve
                     job.release ? { ...job.release, qty: Number(job.qty) || 0 } : null);
                 if (!job.rider && job.linePatch) await stampLinePatch(so, job.lineIdx, job.linePatch);
             }
+            parkedOfSo.push({ res, group });
+        }
+        // ── THE RELEASE — ONCE EVERY PAIR OF THIS ORDER IS WRITTEN (Stuart 2026-10-12) ───────────────────────────────
+        // FINISH COMPLETE (the default, Shared/orderStatus.wholeOrderWait): a pair that is ready is released only when
+        // the order's other work orders are ready too — it used to leave the moment it was written, whatever its
+        // siblings were waiting for. FINISH AS AVAILABLE (and a display order's rows): each pair goes when its own
+        // gates are clear. The order and its work orders are read FRESH, so this run's own stamps and pairs count.
+        let soNow = so, sibs = parkedOfSo.map(({ res }) => ({ ...(res.hq || {}), id: res.woId }));
+        try {
+            const [soSnap, wSnap] = await Promise.all([
+                getDoc(doc(db, 'hq_sales_orders', so.id)),
+                getDocs(query(collection(db, 'hq_work_orders'), where('soAppId', '==', so.id))),
+            ]);
+            if (soSnap.exists()) soNow = { id: so.id, ...soSnap.data() };
+            sibs = wSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        } catch (e) { console.warn('fresh order read before release failed (this run\'s own pairs are used)', so.id, e); }
+        const thisRun = new Set(parkedOfSo.map(({ res }) => res.woId));
+        for (const { res, group } of parkedOfSo) {
             const g = res.gate || {};
             const waitingText = [g.awaitingConvert ? 'its phosphate convert' : '', g.awaitingComponents ? 'its component work orders' : '', g.awaitingRodCut ? 'its rod cut' : '', g.awaitingReceipt ? 'its purchased material' : ''].filter(Boolean).join(' + ');
-            if (isReleasable(g)) {
-                // The WHOLE record, as RTG's release passes it: urgent / held / NetSuite stamps reach the floor document.
-                await releaseFinWoToFloor({ ...(res.hq || {}), id: res.woId, finPayload: res.finPayload }, user || 'oe-review');
-                log(`✅ ${group.rowLabel ? `${group.rowLabel} · ` : ''}${group.finish} (SO ${so.soId || so.id}) — ${auto ? 'clean plan' : 'approved in review'} → RELEASED to the finishing floor (${res.woId})${res.shopWoId ? `; the shop job ${res.shopWoId} releases from RTG` : ''}.`, 'success');
-            } else {
-                log(`✅ ${res.woId} (SO ${so.soId || so.id}) — waiting on ${waitingText || 'its gates'}; RTG releases it when they clear.`, 'success');
-            }
+            const what = `${group.rowLabel ? `${group.rowLabel} · ` : ''}${group.finish}${group.wave === 'LATER' ? ' · the waiting lines' : ''} (SO ${so.soId || so.id})`;
+            if (!isReleasable(g)) { log(`✅ ${res.woId} — ${what} — waiting on ${waitingText || 'its gates'}; RTG releases it when they clear.`, 'success'); continue; }
+            const rec = sibs.find(x => x.id === res.woId) || { ...(res.hq || {}), id: res.woId };
+            // A START-NOW portion (Stuart 2026-08-31) is a person's own decision to begin with what is on the shelf: it
+            // goes now, whatever the order's choice — its remainder is the pair that waits for the material.
+            const w = group.tag === '-NOW' ? { wait: false, reason: '' } : wholeOrderWait(rec, sibs, soNow);
+            if (w.wait) { log(`⏸ ${res.woId} — ${what} — ready, and parked in RTG: ${w.reason}.`, 'warn'); continue; }
+            // The WHOLE record, as RTG's release passes it: urgent / held / NetSuite stamps reach the floor document.
+            await releaseFinWoToFloor({ ...(res.hq || {}), id: res.woId, finPayload: res.finPayload }, user || 'oe-review');
+            log(`✅ ${what} — ${auto ? 'clean plan' : 'approved in review'} → RELEASED to the finishing floor (${res.woId})${res.shopWoId ? `; the shop job ${res.shopWoId} releases from RTG` : ''}.`, 'success');
+        }
+        // …and a pair of this order parked EARLIER, waiting for the rest of it, goes with them once nothing waits.
+        for (const rec of sibs.filter(x => x && !thisRun.has(x.id) && x.status === 'Approved' && !x.deleted && x.source === 'ORDER_ENTRY' && x.routeTo === 'FINISHING' && x.finPayload && isReleasable(x))) {
+            if (wholeOrderWait(rec, sibs, soNow).wait) continue;
+            try {
+                if (await releaseFinWoToFloor(rec, user || 'oe-review')) log(`✅ ${rec.id} (SO ${so.soId || so.id}) — the rest of the order is ready → RELEASED to the finishing floor with it.`, 'success');
+            } catch (e) { log(`⚠ ${rec.id}: could not be released with the rest of its order (${e.message || e}) — release it from its RTG card.`, 'warn'); }
         }
     }
     // PO drafts — one per vendor per SO, exactly as reviewed (qtys already MOQ-adjusted). ONE PO WRITER

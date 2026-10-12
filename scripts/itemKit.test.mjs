@@ -1,7 +1,7 @@
 // node scripts/itemKit.test.mjs — an item kit is one thing sold and several things made, on every door (Stuart 2026-09-28:
 // "we will never stock these complete … for netsuite just push the 3 independent parts … correct and very important rule for
 // all screens"). The library records below are SO60551's, as they are live.
-import { isItemKit, itemKitOfCode, itemKitOrderLinesOf, kitPartFinishOf, isKitLine } from '../src/components/Shared/itemKit.js';
+import { isItemKit, itemKitOfCode, itemKitOrderLinesOf, kitPartFinishOf, isKitLine, isFootCountedRod, kitPartCountOf, kitRodLinePatchOf } from '../src/components/Shared/itemKit.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 const ok = (n, c) => { if (c) pass++; else { fail++; console.log(`✗ ${n}`); } };
@@ -48,4 +48,37 @@ eq('a part the library cannot find is named, never guessed', itemKitOrderLinesOf
 eq('an ordinary line is not a kit', itemKitOrderLinesOf({ line: { erp: 'H1-2TRVBP', qty: 1 }, findByCode: byCode, findPart: byId }), null);
 eq('a part\'s finish: the kit\'s, else its colour, never on an Unfinished part', [kitPartFinishOf(byCode('H1-2TRVBP'), { finishCode: 'P06' }), kitPartFinishOf(byCode('H1-2TRVBP'), { subFinishCode: 'TBR' }), kitPartFinishOf(byCode('H1-2RCTACEC'), { finishCode: 'EP1' })],
     [{ finishCode: 'P06', subFinishCode: '', noFinish: false }, { finishCode: '', subFinishCode: 'TBR', noFinish: false }, { finishCode: '', subFinishCode: '', noFinish: true }]);
+// ── A KIT'S ROD IS ONE ROD OF THAT LENGTH, PER KIT (Stuart 2026-10-12, SO60812: 100 × HRW-138TRAV12, RF1) ─────────
+// The records as they are live: the 12 ft track kit lists 12 × H1-138TRV, and H1-138TRV is a POLE counted by the FOOT.
+const rodLib = [
+    rec('CE-INV-1179', 'HRW-138TRAV12', { partClass: 'Kit', manufacturingSpecs: { productType: 'POLE', uom: 'EA', kitComponents: [{ partId: 'CE-INV-52989', qty: 12 }] } }),
+    rec('CE-INV-52989', 'H1-138TRV', { partClass: 'Inventory', manufacturingSpecs: { productType: 'POLE', uom: 'FOOT', stockUnit: 'FOOT' } }),
+    rec('CE-INV-7', 'HTAEC35', { partClass: 'Inventory', manufacturingSpecs: { productType: 'End Cap', uom: 'Each' } }),
+    rec('CE-INV-8', 'POLE-EA', { partClass: 'Inventory', manufacturingSpecs: { productType: 'POLE', uom: 'EA' } }),
+    rec('CE-INV-9', 'TAPE-FT', { partClass: 'Inventory', manufacturingSpecs: { productType: 'Tape', uom: 'FT' } }),
+];
+const rodByCode = (c) => rodLib.find(p => p.legacyErpId === String(c || '').toUpperCase()) || null;
+const rodById = (id) => rodLib.find(p => p.id === id) || null;
+eq('a rod counted by the foot: a POLE whose unit is the foot — never a pole by the each, never a non-pole by the foot',
+    ['H1-138TRV', 'POLE-EA', 'TAPE-FT', 'HTAEC35'].map(c => isFootCountedRod(rodByCode(c))), [true, false, false, false]);
+ok('…NetSuite\'s stock unit counts when the Library unit is blank', isFootCountedRod({ manufacturingSpecs: { productType: 'POLE', stockUnit: 'FOOT' } }));
+eq('100 kits × 12 ft of rod = 100 rods at 12 ft, 1200 ft billed', kitPartCountOf(rodByCode('H1-138TRV'), 12, 100), { qty: 100, perFoot: true, feetPer: 12, billedFeet: 1200 });
+eq('…every other part multiplies as it always has', [kitPartCountOf(rodByCode('HTAEC35'), 2, 100), kitPartCountOf(rodByCode('POLE-EA'), 1, 5), kitPartCountOf(null, 3, 2)], [{ qty: 200 }, { qty: 5 }, { qty: 6 }]);
+const trv = itemKitOrderLinesOf({ line: { erp: 'HRW-138TRAV12', qty: 100, finishCode: 'RF1' }, findByCode: rodByCode, findPart: rodById });
+eq('SO60812 entered today: the kit line, then ONE rod line — 100 pieces, by the foot, 12 ft each, 1200 ft billed, to be finished RF1',
+    trv.parts.map(p => [p.erp, p.qty, p.perFoot, p.feetPer, p.billedFeet, p.finishCode, p.toBeFinished, p.inKit, p.kitOf, p.hidden, p.price]),
+    [['H1-138TRV', 100, true, 12, 1200, 'RF1', true, true, 'HRW-138TRAV12', true, 0]]);
+// SO60812 as it was saved 2026-09-30: the rod as 1200 (feet), no length.
+const oldRod = { erp: 'H1-138TRV', qty: 1200, toBeFinished: true, finishCode: 'RF1', inKit: true, kitOf: 'HRW-138TRAV12', hidden: true };
+eq('a kit rod saved as feet with no length reads as the kit\'s rods: 1200 ft = 100 × 12 ft',
+    kitRodLinePatchOf({ line: oldRod, part: rodByCode('H1-138TRV'), findByCode: rodByCode, findPart: rodById }), { qty: 100, perFoot: true, feetPer: 12, billedFeet: 1200 });
+eq('…a line that already carries its length, a line that is not in a kit, a part that is not a foot rod, a kit that does not list it: left alone', [
+    kitRodLinePatchOf({ line: { ...oldRod, qty: 100, perFoot: true, feetPer: 12 }, part: rodByCode('H1-138TRV'), findByCode: rodByCode, findPart: rodById }),
+    kitRodLinePatchOf({ line: { ...oldRod, cutLength: 144 }, part: rodByCode('H1-138TRV'), findByCode: rodByCode, findPart: rodById }),
+    kitRodLinePatchOf({ line: { erp: 'H1-138TRV', qty: 1200 }, part: rodByCode('H1-138TRV'), findByCode: rodByCode, findPart: rodById }),
+    kitRodLinePatchOf({ line: { ...oldRod, erp: 'HTAEC35' }, part: rodByCode('HTAEC35'), findByCode: rodByCode, findPart: rodById }),
+    kitRodLinePatchOf({ line: { ...oldRod, kitOf: 'NOT-A-KIT' }, part: rodByCode('H1-138TRV'), findByCode: rodByCode, findPart: rodById }),
+], [null, null, null, null, null]);
+eq('…and feet that do not divide into whole rods are a person\'s to look at, never rounded', kitRodLinePatchOf({ line: { ...oldRod, qty: 1205 }, part: rodByCode('H1-138TRV'), findByCode: rodByCode, findPart: rodById }), null);
+
 console.log(`itemKit: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

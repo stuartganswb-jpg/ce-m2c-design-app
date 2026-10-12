@@ -17,7 +17,7 @@ export const FULFILLABLE_TYPES = [...LOCATION_REQUIRED_TYPES, 'NonInvtPart'];
 export const soLinesSql = (nsSoId) => {
   const id = String(nsSoId || '').trim();
   if (!/^\d+$/.test(id)) throw new Error(`Not a NetSuite sales order id: "${nsSoId}"`);
-  return `SELECT tl.id AS line, BUILTIN.DF(tl.item) AS item, tl.itemtype AS itemtype, tl.location AS location, `
+  return `SELECT tl.id AS line, tl.item AS itemid, BUILTIN.DF(tl.item) AS item, tl.itemtype AS itemtype, tl.location AS location, `
     + `BUILTIN.DF(tl.location) AS locationname, ABS(NVL(tl.quantity, 0)) AS qty, NVL(tl.quantityshiprecv, 0) AS shipped, `
     + `NVL(tl.isclosed, 'F') AS isclosed `
     + `FROM transactionline tl WHERE tl.transaction = ${id} AND tl.mainline = 'F' AND NVL(tl.taxline, 'F') = 'F' `

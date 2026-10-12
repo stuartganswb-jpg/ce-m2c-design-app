@@ -1,6 +1,8 @@
 import { isQuickShip, pickableLinesOf, isKitHolderLine } from './pickLines.js';
 import { poleCoatIndexOf } from './floorActivity.js';
 import { isStationPickLine, traverseWaitOf } from './trackLoaded.js';
+import { oeIsTbf } from './oeLines.js';
+import { isKitLine, isOffOrderLine } from './itemKit.js';
 // WHERE IS IT? — the one answer, derived (Stuart 2026-08-03: "of utmost importance is the clarity
 // on the status of an item, my team is confused and i want them to see clearly each stage exactly
 // where something is at… from the time an order hits the custom or finishing floor till the time
@@ -465,9 +467,35 @@ export const wholeOrderWait = (wo, siblings = [], so = null) => {
     const others = (siblings || []).filter(w => w && w.id !== wo.id && w.soAppId === wo.soAppId && !w.deleted
         && !['Closed', 'Deleted', 'CANCELLED', 'Completed', 'Dispatched'].includes(String(w.status || '')));
     const notReady = others.filter(w => !isReleasable(w));
-    if (!notReady.length) return { wait: false, reason: '' };
-    return { wait: true, reason: `waiting for the rest of the order — ${notReady.length} other line${notReady.length === 1 ? '' : 's'} not ready (${notReady.map(w => gateSummary(w) || 'not ready').join('; ')}); flag "Finish as available" on the sales order to send this line now` };
+    if (notReady.length) return { wait: true, reason: `waiting for the rest of the order — ${notReady.length} other line${notReady.length === 1 ? '' : 's'} not ready (${notReady.map(w => gateSummary(w) || 'not ready').join('; ')}); flag "Finish as available" on the sales order to send this line now` };
+    // AN ORDER THAT CHOSE "FINISH COMPLETE" AT ORDER ENTRY (2026-10-12) also waits for the lines nothing has been
+    // started for yet — a line still with a person's review has no work order to be "not ready".
+    const unstarted = choseFinishComplete(so) ? unstartedTbfLinesOf(so) : [];
+    if (unstarted.length) return { wait: true, reason: `waiting for the rest of the order — ${unstarted.length} line${unstarted.length === 1 ? '' : 's'} not started yet (${unstarted.map(u => u.erp).join(', ')}); flag "Finish as available" on the sales order to send this line now` };
+    return { wait: false, reason: '' };
 };
+
+// ── THE CHOICE, ASKED AT ORDER ENTRY (Stuart 2026-10-12) ─────────────────────────────────────────────────────────────
+// "there needs to be a flag/question asked at completion of order entry of whether to finish complete or as available."
+// Tab 7 asks when an order has two or more to-be-finished lines and writes the answer in the SAME four fields the RTG
+// card and the WMS SO Pack card write — plus `finishMode`, which records that the question was answered (a "complete"
+// that someone chose, as against an order nobody was asked about).
+export const FINISH_MODE = Object.freeze({ COMPLETE: 'COMPLETE', AS_AVAILABLE: 'AS_AVAILABLE' });
+export const finishModeStampOf = ({ mode, by = '', at = Date.now(), reason = 'chosen at order entry' } = {}) => (
+    (mode === FINISH_MODE.COMPLETE || mode === FINISH_MODE.AS_AVAILABLE) ? {
+        finishMode: mode, finishModeAt: at, finishModeBy: by || '',
+        finishAsAvailable: mode === FINISH_MODE.AS_AVAILABLE, finishAsAvailableAt: at, finishAsAvailableBy: by || '', finishAsAvailableReason: reason,
+    } : {});
+/** How an order finishes, in one word — the switch wins (it may have been flipped since order entry). */
+export const finishModeOf = (so) => (so && so.finishAsAvailable === true ? FINISH_MODE.AS_AVAILABLE : FINISH_MODE.COMPLETE);
+export const choseFinishComplete = (so) => !!so && !so.displayRelease && so.finishMode === FINISH_MODE.COMPLETE && so.finishAsAvailable !== true;
+/** The to-be-finished lines of an order nothing has been started for: [{ lineIdx, erp }]. A kit line is sold, never made. */
+export const unstartedTbfLinesOf = (so) => ((so && so.lines) || [])
+    .map((l, lineIdx) => ({ l, lineIdx }))
+    .filter(({ l, lineIdx }) => l && oeIsTbf(l) && !isKitLine(l) && !isOffOrderLine(l) && !((so.oeGen || {})[lineIdx]))
+    .map(({ l, lineIdx }) => ({ lineIdx, erp: String(l.erp || '').toUpperCase() }));
+/** How many to-be-finished lines an order carries — the question is asked at two or more. */
+export const tbfLineCountOf = (lines = []) => (lines || []).filter(l => l && oeIsTbf(l) && !isKitLine(l) && !isOffOrderLine(l)).length;
 
 // ── IN PRODUCTION · PACKED · WHO MAY REOPEN (Stuart 2026-09-11) ─────────────────────────────
 // "Once we start we start": from RTG's dispatch of a SALES ORDER (never a quote) the CRM card's

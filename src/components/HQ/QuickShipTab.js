@@ -27,6 +27,7 @@ import { sizeKeyOf, SIZE_FAMILIES, speciesVariantOf } from "../Shared/sizeMatrix
 import { materialTwinOf } from "../Shared/materialTwin";
 import { takesNoFinish } from "../Shared/finishLabel";
 import { isItemKit, itemKitOrderLinesOf } from "../Shared/itemKit";
+import { FINISH_MODE, finishModeStampOf, tbfLineCountOf } from "../Shared/orderStatus";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
 import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode, isAliasDoc, realPartOf, aliasTargetIdOf } from "../Shared/aliasIdentity";
 
@@ -218,6 +219,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [rushTypes, setRushTypes] = useState([]); // master list: "RUSH 3 DAY - 75"
 
     const [pushing, setPushing] = useState(false);
+    // FINISH COMPLETE, OR AS AVAILABLE — asked when the order is created (Stuart 2026-10-12): { count, resolve } while open.
+    const [finishAsk, setFinishAsk] = useState(null);
+    const askFinishMode = (count) => new Promise(resolve => setFinishAsk({ count, resolve }));
+    const answerFinishMode = (mode) => { const a = finishAsk; setFinishAsk(null); if (a && typeof a.resolve === 'function') a.resolve(mode); };
     const [log, setLog] = useState([]);
     const addLog = (msg, type = 'info') => setLog(prev => [{ time: new Date().toLocaleTimeString(), msg, type }, ...prev]);
 
@@ -908,14 +913,16 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         k.parts.forEach(pt => {
             const rec = kitCodeLookup(pt.erp) || itemById(pt.partId);
             if (!rec) return;
-            pushLine(rec, pt.qty, `in kit ${erpOf(it)}${pt.finishCode ? ` · TO BE FINISHED · ${pt.finishCode}` : (pt.subFinishCode ? ` · ${pt.subFinishCode} (shelf, else painted)` : '')}`, null, {
+            // A rod counted by the foot goes on as PIECES at the kit's length (Shared/itemKit.kitPartCountOf, 2026-10-12).
+            pushLine(rec, pt.qty, `in kit ${erpOf(it)}${pt.finishCode ? ` · TO BE FINISHED · ${pt.finishCode}` : (pt.subFinishCode ? ` · ${pt.subFinishCode} (shelf, else painted)` : '')}${pt.perFoot ? ` · Cut ${pt.feetPer} ft` : ''}`, null, {
                 noPack: true, rateOverride: 0, inKit: true, kitOf: erpOf(it),
+                ...(pt.perFoot ? { perFoot: true, feetPer: pt.feetPer } : {}),
                 ...(pt.finishCode ? { finishCode: pt.finishCode, toBeFinished: true } : {}),
                 ...(pt.subFinishCode ? { subFinishCode: pt.subFinishCode, stockColour: true } : {}),
                 ...(pt.noFinish ? { noFinish: true } : {}),
             });
         });
-        addLog(`Kit ${erpOf(it)} ×${qty}: ${k.parts.map(pt => `${pt.qty} × ${pt.erp}${pt.finishCode ? ` (${pt.finishCode})` : ''}`).join(', ')} — the parts are made and picked; the kit is what the customer buys.`, 'success');
+        addLog(`Kit ${erpOf(it)} ×${qty}: ${k.parts.map(pt => `${pt.qty} × ${pt.erp}${pt.perFoot ? ` @ ${pt.feetPer} ft` : ''}${pt.finishCode ? ` (${pt.finishCode})` : ''}`).join(', ')} — the parts are made and picked; the kit is what the customer buys.`, 'success');
         return true;
     };
 
@@ -1342,6 +1349,19 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         if (!lines.length && !trvOrder.length) return alert('No lines have a NetSuite item ID. Sync these items to NetSuite first.');
         if (!window.confirm(`Create a ${asLabel} for ${selectedCustomer?.name || customerId} with ${lines.length - kitSold.length} stock line(s)${kitSold.length ? ` (the parts of ${kitSold.length} kit${kitSold.length === 1 ? '' : 's'} at $0, each kit's price on the rollup)` : ''}${trvOrder.length ? ` + a traverse system (components consumed + $ holder)` : ''}?\n\nThe record is saved HERE first, and the NetSuite write rides the staged sync (posts in ~1 min — RTG Transmit Log / 11.1 Sync Queue show progress).`)) return;
 
+        // ── FINISH COMPLETE, OR FINISH AS AVAILABLE (Stuart 2026-10-12, SO60812) ────────────────────────────────────
+        // "there needs to be a flag/question asked at completion of order entry of whether to finish complete or as
+        //  available." An order with two or more to-be-finished lines is asked here, and the answer is written in the
+        // fields the RTG card and the SO Pack card switch (Shared/orderStatus.finishModeStampOf) — the start reads them:
+        // complete = the order's work orders release together; as available = ready lines start now as their own work
+        // order and the waiting ones follow. Closing the question without an answer creates nothing.
+        let finishStamp = {};
+        if (asType === 'salesorder' && tbfLineCountOf(lines) >= 2) {
+            const mode = await askFinishMode(tbfLineCountOf(lines));
+            if (!mode) return;
+            finishStamp = finishModeStampOf({ mode, by: (currentUser && (currentUser.name || currentUser.uName)) || (typeof currentUser === 'string' ? currentUser : '') });
+        }
+
         setPushing(true);
         try {
             let nsCustomerId = customerId.startsWith('CUST-') ? customerId.replace('CUST-', '') : customerId;
@@ -1676,6 +1696,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 orderClass: ORDER_ENTRY_CLASS, type: 'Stock',
                 brand: activeBrand,
                 ...soHeader,
+                ...finishStamp,
                 ...(backorderLines.length ? { backorderLines, backorderAt: stamp } : {}),
                 // Kept verbatim from before the shared header: the WMS and the CRM key on these exact
                 // values (the memo keeps its 'Quick Ship' fallback and 40-char cut for NetSuite).
@@ -2517,6 +2538,28 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 />
             )}
 
+            {/* FINISH COMPLETE, OR AS AVAILABLE — asked once, when the order is created (Stuart 2026-10-12) */}
+            {finishAsk && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 11000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+                    <div style={{ background: '#fff', padding: '24px', width: 'min(620px, 94vw)', border: '1px solid var(--line)', borderRadius: '4px', boxShadow: '0 16px 60px rgba(0,0,0,0.3)' }}>
+                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.25rem', color: 'var(--ink)', marginBottom: '4px' }}>How should this order be finished?</div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: '16px' }}>{finishAsk.count} lines to be finished · it can be switched later on the RTG card or the SO Pack card</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                            <button onClick={() => answerFinishMode(FINISH_MODE.COMPLETE)} style={{ flex: '1 1 240px', textAlign: 'left', padding: '14px 16px', background: '#fff', border: '1px solid var(--ink)', cursor: 'pointer' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)' }}>Finish complete</div>
+                                <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '6px', lineHeight: 1.4 }}>Every line waits for the others. The order goes to the floor together, once all of it is ready.</div>
+                            </button>
+                            <button onClick={() => answerFinishMode(FINISH_MODE.AS_AVAILABLE)} style={{ flex: '1 1 240px', textAlign: 'left', padding: '14px 16px', background: '#fff', border: '1px solid var(--brass)', cursor: 'pointer' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)' }}>⚡ Finish as available</div>
+                                <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '6px', lineHeight: 1.4 }}>Lines that are ready start now. Lines waiting on parts follow as their own work order.</div>
+                            </button>
+                        </div>
+                        <div style={{ marginTop: '16px', textAlign: 'right' }}>
+                            <button onClick={() => answerFinishMode(null)} style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Cancel — nothing is created</button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {/* FINISH CHOOSER — a pattern kit with 2+ available finishes asks for the color first */}
             {kitFinishPick && (
                 <div onClick={() => setKitFinishPick(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 11000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>

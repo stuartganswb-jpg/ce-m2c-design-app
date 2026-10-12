@@ -1,6 +1,6 @@
 // node scripts/rowPair.test.mjs — a row hits the floor as a production order does (Stuart 2026-09-23):
 // grouped by row and finish, one pair per group, the pole the shop's, the small parts finishing's.
-import { floorGroupsOf, splitGroupJobs, pairShapeOf, pairIdsOf, finishGroupsOf, holdSplitGroups, pairGroupKeyOf } from '../src/components/Shared/rowPairShape.js';
+import { floorGroupsOf, splitGroupJobs, pairShapeOf, pairIdsOf, finishGroupsOf, holdSplitGroups, pairGroupKeyOf, splitsAsAvailable, jobWaits, asAvailableWavesOf } from '../src/components/Shared/rowPairShape.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 const ok = (n, c) => { if (c) pass++; else { fail++; console.log(`✗ ${n}`); } };
@@ -180,5 +180,35 @@ const job = (part, finish, line, more = {}) => ({ so: null, part, finish, qty: N
     eq('a plated pole alone: a pick-only document with nothing to pick, no pole stream on the finishing floor', [onlyPole.finPayload.pickOnly, onlyPole.finPayload.partsList.length, 'finishStream' in onlyPole.finPayload], [true, 0, false]);
     const painted = pairShapeOf({ group: floorGroupsOf([{ ...pole, finish: 'P06' }], display)[0], so: display, brand: 'ce', now: 5, inventory: [rod], woId: 'WR', shopWoId: 'WR-C' });
     eq('a PAINTED pole alone is unchanged: the finishing floor paints it on the pole stream', [!!painted.finPayload.pickOnly, painted.finPayload.currentPhase, painted.finPayload.finishStream], [false, 'Setup', 'POLES']);
+}
+// ── FINISH COMPLETE, OR FINISH AS AVAILABLE (Stuart 2026-10-12, SO60812: Read Window, RF1) ─────────────────────────
+// 100 end caps and 100 twelve-foot rods ready; the bracket's two arms to be milled and phosphated first.
+{
+    const L = (erp, extra = {}) => ({ erp, qty: 100, ...extra });
+    const caps = { line: L('HTAEC35'), lineIdx: 0, finish: 'RF1', lineErp: 'HTAEC35' };
+    const rods = { line: L('H1-138TRV', { perFoot: true, feetPer: 12 }), lineIdx: 3, finish: 'RF1', lineErp: 'H1-138TRV' };
+    const bracket = { line: L('HRW-138TRAVLB', { qty: 200 }), lineIdx: 1, finish: 'RF1', lineErp: 'HRW-138TRAVLB', __makeup: [{ kind: 'CONVERT' }, { kind: 'SHOP_WO' }] };
+    const complete = { id: 'SO-C' }, avail = { id: 'SO-A', finishAsAvailable: true }, display = { id: 'SO-D', finishAsAvailable: true, displayRelease: true };
+    eq('the order\'s choice: as available splits — complete does not, and a display order\'s rows are not this', [splitsAsAvailable(avail), splitsAsAvailable(complete), splitsAsAvailable(display), splitsAsAvailable(null)], [true, false, false, false]);
+    eq('a line waits when something must be made, converted, cut or received for it', [jobWaits(bracket), jobWaits(caps), jobWaits({ __rcptRefs: [{ itemId: 'X', qtyNeeded: 1 }] }), jobWaits({ __poleCut: { cutId: 'RC' } }), jobWaits({ __makeup: [], __rcptRefs: [] })], [true, false, true, true, false]);
+    eq('FINISH COMPLETE: one pair for the finish, the three lines together — exactly as before', floorGroupsOf([caps, bracket, rods], complete).map(g => [g.key, g.jobs.map(j => j.lineErp)]), [['|RF1|', ['HTAEC35', 'HRW-138TRAVLB', 'H1-138TRV']]]);
+    const waves = floorGroupsOf([caps, bracket, rods], avail);
+    eq('FINISH AS AVAILABLE: the ready lines are one pair, the waiting line a second pair of the same finish', waves.map(g => [g.key, g.finish, g.wave, g.jobs.map(j => j.lineErp)]),
+        [['|RF1|', 'RF1', 'NOW', ['HTAEC35', 'H1-138TRV']], ['|RF1||W', 'RF1', 'LATER', ['HRW-138TRAVLB']]]);
+    ok('…two pairs, two ids — the second is not the first with a letter', pairIdsOf(avail, waves[0], 1000).woId === pairIdsOf(avail, waves[1], 1000).woId && pairIdsOf(avail, waves[1], 1001).woId !== pairIdsOf(avail, waves[0], 1000).woId);
+    eq('…a group that is all ready, or all waiting, is one pair', [floorGroupsOf([caps, rods], avail).length, floorGroupsOf([bracket], avail).length, floorGroupsOf([bracket, { ...caps, __makeup: [{ kind: 'CONVERT' }] }], avail).length], [1, 1, 1]);
+    eq('…and a display order\'s row still starts as ONE pair', floorGroupsOf([{ ...caps, line: L('HTAEC35', { row: 'Row 1' }) }, { ...bracket, line: L('HRW-138TRAVLB', { row: 'Row 1' }) }], display).length, 1);
+    // A pole and what rides it: the fee / return / miter goes wherever its pole goes.
+    const pole = { line: L('H1-138WR-O'), lineIdx: 5, finish: 'S03', lineErp: 'POLE', custom: true };
+    const fee = { line: L('MITER'), lineIdx: 6, finish: 'S03', lineErp: 'MITER', custom: true, rider: true };
+    const finial = { line: L('H1-138WF'), lineIdx: 7, finish: 'S03', lineErp: 'FINIAL' };
+    const lateFinial = { ...finial, lineIdx: 8, lineErp: 'FINIAL-LATE', __rcptRefs: [{ itemId: 'H1-138WF', qtyNeeded: 2 }] };
+    eq('a ready pole keeps its rider; the late small part follows', asAvailableWavesOf({ key: '|S03|', finish: 'S03', jobs: [pole, fee, finial, lateFinial] }).map(g => g.jobs.map(j => j.lineErp)), [['POLE', 'MITER', 'FINIAL'], ['FINIAL-LATE']]);
+    eq('a pole waiting on its cut takes its rider with it; the ready small part goes now', asAvailableWavesOf({ key: '|S03|', finish: 'S03', jobs: [{ ...pole, __poleCut: { cutId: 'RC-1' } }, fee, finial] }).map(g => g.jobs.map(j => j.lineErp)), [['FINIAL'], ['POLE', 'MITER']]);
+    // The automatic start: as available, nothing ready waits for a line that is with a person.
+    const waiting = [{ line: L('HRW-138TRAVLB'), finish: 'RF1', erp: 'HRW-138TRAVLB' }];
+    eq('FINISH COMPLETE: the ready lines of the finish wait with the line under review (the 09-27 rule)', holdSplitGroups({ ready: [caps, rods], waiting, so: complete }).held.map(h => [h.job.lineErp, h.withErp]), [['HTAEC35', 'HRW-138TRAVLB'], ['H1-138TRV', 'HRW-138TRAVLB']]);
+    eq('FINISH AS AVAILABLE: they start now', [holdSplitGroups({ ready: [caps, rods], waiting, so: avail }).start.map(j => j.lineErp), holdSplitGroups({ ready: [caps, rods], waiting, so: avail }).held.length], [['HTAEC35', 'H1-138TRV'], 0]);
+    eq('…a display order\'s row still holds its finish together', holdSplitGroups({ ready: [{ ...caps, line: L('HTAEC35', { row: 'Row 1' }) }], waiting: [{ line: L('HRW-138TRAVLB', { row: 'Row 1' }), finish: 'RF1', erp: 'HRW-138TRAVLB' }], so: display }).held.length, 1);
 }
 console.log(`rowPair: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

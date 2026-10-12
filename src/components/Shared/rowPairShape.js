@@ -53,7 +53,46 @@ export const floorGroupsOf = (jobs = [], so = null) => {
         if (!groups.has(key)) groups.set(key, { key, rowKey, rowLabel, finish, tag, jobs: [] });
         groups.get(key).jobs.push(job);
     });
-    return [...groups.values()];
+    const out = [...groups.values()];
+    // FINISH AS AVAILABLE: a group's ready lines and its waiting lines are TWO pairs (asAvailableWavesOf, below).
+    return splitsAsAvailable(so) ? out.flatMap(asAvailableWavesOf) : out;
+};
+
+// ── FINISH COMPLETE, OR FINISH AS AVAILABLE — THE ORDER'S OWN CHOICE, OBEYED AT THE START (Stuart 2026-10-12) ────────
+// "orders entered with multiple lines from sales order entry, there needs to be a flag/question asked at completion of
+//  order entry of whether to finish complete or as available … time to unite it with above so that the multiple
+//  workorders can release and be tied together."
+// SO60812 (Read Window, RF1): 100 end caps and 100 twelve-foot rods were ready; the bracket's two arms had to be milled
+// and phosphated first. One pair per finish (2026-09-27) put all three on ONE work order, parked on the bracket's
+// gates — and the order's "Finish as available" switch (2026-09-03) could not reach a line inside a parked pair.
+// The switch now means the same thing at the start as it does at the release:
+//   · FINISH COMPLETE (the default) — one pair per row and finish, as before; the order's work orders release together
+//     (Shared/orderStatus.wholeOrderWait).
+//   · FINISH AS AVAILABLE — within a finish, the lines that can start now are one pair and the lines waiting on
+//     something made, converted, cut or received are a second pair of the same finish, which follows when its own
+//     gates clear. Nothing ready waits for a review of the others (holdSplitGroups, below).
+// AN ORDER RELEASED BY ROWS IS NOT THIS: a display order is stamped as-available so its ROWS release on their own
+// (Shared/displayRelease.displayAnchorPatch) — a row is still "a small typical order" and starts as one pair.
+export const splitsAsAvailable = (so) => !!so && so.finishAsAvailable === true && !so.displayRelease;
+/** Does this (prepared) job wait on something made, converted, cut or received before its pair can be released? */
+export const jobWaits = (job) => !!job && (((job.__makeup || []).length > 0) || ((job.__rcptRefs || []).length > 0) || !!job.__poleCut);
+/**
+ * One group → itself, or its two WAVES: the lines that can start now, and the lines that wait. A rider (a fee, a
+ * return, a miter) is fabrication ON its pole: it goes wherever the group's poles go. A group that is all ready, or
+ * all waiting, is one pair exactly as before. Pure.
+ * @returns [group] | [readyGroup, waitingGroup] — the waiting one keyed `…|W`, `wave: 'LATER'`
+ */
+export const asAvailableWavesOf = (group) => {
+    const jobs = (group && group.jobs) || [];
+    const poles = jobs.filter(j => j.custom && !j.rider);
+    const polesWait = poles.length > 0 && poles.every(jobWaits);
+    const waits = (j) => (j.rider ? (poles.length ? polesWait : false) : jobWaits(j));
+    const later = jobs.filter(waits), now = jobs.filter(j => !waits(j));
+    if (!later.length || !now.length) return [group];
+    return [
+        { ...group, jobs: now, wave: 'NOW', waveOf: 2 },
+        { ...group, key: `${group.key}|W`, jobs: later, wave: 'LATER', waveOf: 2 },
+    ];
 };
 
 /**
@@ -72,6 +111,8 @@ export const pairGroupKeyOf = (line, finish, so = null) => {
     return `${byRows ? rowKeyOf(String(rowOfLine(line || {}) || '')) : ''}|${U(finish)}`;
 };
 export const holdSplitGroups = ({ ready = [], waiting = [], so = null } = {}) => {
+    // FINISH AS AVAILABLE (2026-10-12): nothing ready waits for a line that is waiting on a person.
+    if (splitsAsAvailable(so)) return { start: [...(ready || [])], held: [] };
     const waitingBy = new Map();
     (waiting || []).forEach(w => {
         const k = pairGroupKeyOf(w.line, w.finish, so);
@@ -216,6 +257,10 @@ export const poleTrackRepairOf = (fin) => {
 // An Order Entry line is its own line number on the sales order (Shared/partFacts — "Line 3 of 7").
 const lineNoOf = (job) => (Number.isInteger(job && job.lineIdx) && job.lineIdx >= 0 ? { lineNo: job.lineIdx + 1 } : {});
 
+/** What a pair is called on RTG and the floor: "Order SO60812 · RF1 · 2 small-part lines + 1 custom". */
+export const pairItemNameOf = ({ rowLabel = '', soRef = '', finish = '', relLabel = '', small = 0, custom = 0 } = {}) =>
+    `${rowLabel || `Order ${soRef}`} · ${finish}${relLabel ? ` · ${relLabel}` : ''} · ${small} small-part line${small === 1 ? '' : 's'}${custom ? ` + ${custom} custom` : ''}`;
+
 /**
  * THE PAIR'S THREE DOCUMENTS — pure. Mirrors buildParkedWorkOrder's sales shape, multi-line:
  * the RTG record, the finishing payload (every small part of the group, the CPQ split's parts-list
@@ -253,6 +298,11 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
                 // else the item's clientPricing row for this customer (Shared/clientPricing).
                 clientSku: (job.line && job.line.clientSku) || ((findClientPriceRow((part && part.clientPricing) || (job.part && job.part.clientPricing), custKeys) || {}).clientSku) || '',
                 ...uomStampOf(part || pl, N(pl.quantity != null ? pl.quantity : pl.qty)),
+                // A ROD BOUGHT BY THE FOOT IS PULLED IN FEET AND FINISHED IN PIECES (Stuart 2026-10-12, SO60812): the pull
+                // line's quantity is feet (what NetSuite stocks and the picker takes), and its unit made 1200 ft read as
+                // 1200 poles on the card and the pole track. The line's own pieces and length say what is on the rack.
+                ...(job.line && job.line.perFoot && N(job.line.feetPer) > 0 && code === U(job.part && (job.part.legacyErpId || job.part.itemId))
+                    ? { pcs: N(job.qty), feetPer: N(job.line.feetPer), ...(N(job.line.cutLength) > 0 ? { cutLength: N(job.line.cutLength) } : {}) } : {}),
             });
         });
     });
@@ -309,7 +359,7 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
         soLineQty: (group.jobs || []).filter(j => Number.isInteger(j.lineIdx) && j.lineIdx >= 0).reduce((m, j) => ({ ...m, [j.lineIdx]: N(m[j.lineIdx]) + N(j.qty) }), {}),
     } : {};
     const label = `${rowLabel ? `${rowLabel} · ` : ''}${finish}${relLabel ? ` · ${relLabel}` : ''}`;
-    const itemName = `${rowLabel || `Order ${soRef}`} · ${finish}${relLabel ? ` · ${relLabel}` : ''} · ${small.length} small-part line${small.length === 1 ? '' : 's'}${custom.length ? ` + ${custom.length} custom` : ''}`;
+    const itemName = pairItemNameOf({ rowLabel, soRef, finish, relLabel, small: small.length, custom: custom.length });
     const salesHeader = {
         orderClass: 'ORDER_ENTRY', soAppId: so && so.id, soId: soRef, customerId: (so && so.customerId) || null, customer: cust,
         soAccepted: !!(so && so.nsInternalId), soLineIdxs: lineIdxs,

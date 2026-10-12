@@ -8,6 +8,7 @@ import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { runOeAuto, oeInventoryOf, loadOeFinishes } from '../Shared/oeGenerate';
+import { startReadyLinesOf } from '../Shared/oeAsAvailable';
 import { restampBreakdownLines, splitLineFinishOf, isUnfinishedFinish } from '../Shared/subFinish';
 import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
@@ -36,6 +37,7 @@ import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, 
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
+import ReviewWaitingBanner from '../Shared/ReviewWaitingBanner';
 import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance, closeShortLine } from '../Shared/scrapClose';
 import { millBaseOf } from '../Shared/finishRouting';
 import { woRecipeCode } from '../Shared/finishingTime';
@@ -1289,6 +1291,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     }
                     if (n) addLog(`▶ ${n} floor doc(s) for SO ${ref} released from the backorder hold — the in-stock parts run now.`, 'success');
                 } catch (e) { addLog(`⚠ Could not release the backorder hold for SO ${ref}: ${e.message || e}`, 'error'); }
+                // THE START HALF (Stuart 2026-10-12, SO60812 — Shared/oeAsAvailable): an Order Entry work order parked on a
+                // gate gives up its READY lines, which start as their own work order; the waiting lines keep their place.
+                try {
+                    const { libraryParts } = await loadTxData();
+                    const res = await startReadyLinesOf({ so, brand: activeBrand, user: currentUser || '', inventory: oeInventoryOf(libraryParts, activeBrand), log: addLog });
+                    (res.notes || []).forEach(note => addLog(`ℹ Finish as available · ${note}`, 'info'));
+                } catch (e) { addLog(`⚠ SO ${ref}: the ready lines of its parked work order could not be started (${e.message || e}) — the switch is ON; start them from the card's review.`, 'error'); }
             }
             addLog(`${!on ? '⚡ Finish as available ON' : 'Finish as available OFF'} for SO ${ref}: ${reason}`, !on ? 'warn' : 'info');
         } catch (e) { alert('Could not change it: ' + (e.message || e)); }
@@ -3809,6 +3818,9 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                 return (
                     <>
                     <HeldOrdersBanner orders={heldOrders} onRelease={resumeHeld} refOf={(o) => o.soId && !o.woId ? o.soId : woRefOf(o)} />
+                    {/* ORDERS PARKED FOR A PERSON'S REVIEW (Stuart 2026-10-12: "RTG is master of order details, state it there") — SO60812 sat
+                        eleven days with its reasons recorded on a card nobody opened. Same door as the card's own button. */}
+                    <ReviewWaitingBanner orders={liveSO} onReview={(r) => { try { sessionStorage.setItem('hq_oe_review_so', r.id); } catch (e) { /* the view still opens */ } window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }} />
                     {/* RECONCILIATION sits directly above the transmit log: together they are the
                         two ways this board can be contradicted — by the floor, and by NetSuite. */}
                     <div style={{ background: '#fff', border: `1px solid ${orphanFindings.length ? '#d9534f' : 'var(--line)'}`, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>

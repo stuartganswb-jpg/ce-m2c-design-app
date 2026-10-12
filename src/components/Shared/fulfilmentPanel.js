@@ -20,6 +20,8 @@ import {
     shipmentPackagesOf, shippedBoxesOf, rideAlongPatchOf, voidEffectsOf, soAfterVoid,
 } from './fulfilment';
 import { orderBoxesOf, boxHomeFor, boxShipStampsOf, boxesAfterVoid, boxOf, isBoxShipped } from './orderBoxes';
+import { queueSoFulfilment } from './fulfilmentQueue';
+import { useBinAsk } from './BinChoiceModal';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 const NS_BASE = 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1';
@@ -104,6 +106,40 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
     };
 
     const printLabels = (images) => printHtmlDocument(labelDocHtml(images), { autoPrintDelay: 1200, timeout: 120000 });
+
+    // ── 📤 THE NETSUITE FULFILMENT, SENT OR SENT AGAIN FROM HERE (Stuart 2026-10-12, Shared/fulfilmentQueue) ───────────
+    // A fulfilment that failed in NetSuite for want of a bin ("Please configure the inventory detail"), or one the packer
+    // left unsent because the bin was not known, is sent from this tab by the SAME queuer the pack bench uses: the order's
+    // open lines are read fresh, an item held in more than one bin is asked about, and the failed entry is cancelled.
+    // Nothing is sent twice: NetSuite's own open lines decide what is left, and one entry per order may be in flight.
+    const { askBins, binModal } = useBinAsk();
+    const nsSoIdOf = (d) => { const so = soOf(d); return String((isQsOrder(d) ? (d.nsInternalId || '') : (so && so.nsInternalId)) || ''); };
+    // Not a document still waiting for its siblings to pack (the last one packed sends the order's fulfilment), and not
+    // a display shipment (its fulfilment is sent by itself, from the order's bin).
+    const needsNsFulfilment = (d) => !!d && !d.nsIfId && !((soOf(d) || {}).nsIfId) && !!nsSoIdOf(d) && d.nsFulfillDeferred !== true && d.packMode !== 'DISPLAY';
+    const sendNsFulfilment = async (d) => {
+        setBusy(`if:${d.id}`); setNote(null);
+        try {
+            const so = soOf(d);
+            const writeBack = [{ collection: isQsOrder(d) ? 'hq_sales_orders' : 'fin_workorders', docId: d.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }];
+            if (!isQsOrder(d) && so && so.id) writeBack.push({ collection: 'hq_sales_orders', docId: so.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' });
+            const sent = await queueSoFulfilment({
+                nsSoId: nsSoIdOf(d), ref: packRefOf(d),
+                label: `NS Fulfillment — ${packRefOf(d)} (${d.customerName || d.clientName || d.customer || ''})`,
+                memo: `Packed in app · sent from Fulfilment by ${operator?.name || 'Packer'}`.slice(0, 90),
+                writeBack, createdBy: operator?.name || '', preferBin: (so && so.committedBin) || d.committedBin || '', askBins,
+            });
+            if (sent.ok) {
+                await updateDoc(packDocRef(d), { nsFulfillQueued: true, nsFulfillNeedsBins: false, ...(sent.binText ? { nsFulfilBins: sent.binText, nsFulfilBinsBy: operator?.name || '', nsFulfilBinsAt: Date.now() } : {}) });
+                writeLog(`NetSuite fulfilment sent from Fulfilment for ${packRefOf(d)}${sent.binText ? ` — ${sent.binText}` : ''}`, 'packing');
+                setNote({ ok: true, text: `📤 NetSuite fulfilment queued for ${packRefOf(d)}${sent.binText ? ` — taken from: ${sent.binText}` : ''}. Watch 11.1 → NetSuite Sync Queue (~1 min).` });
+            } else {
+                if (sent.reason === 'NOT_CHOSEN') await updateDoc(packDocRef(d), { nsFulfillNeedsBins: true }).catch(() => {});
+                setNote({ ok: false, text: sent.text });
+            }
+        } catch (e) { setNote({ ok: false, text: `NetSuite fulfilment for ${packRefOf(d)} was not sent: ${e.message || e}` }); }
+        finally { setBusy(''); }
+    };
 
     const sendShipToNetSuite = async (d, patch) => {
         const nsIfId = String(d.nsIfId || '');
@@ -270,6 +306,7 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                 {!isLive && <span style={{ fontSize: '12px', color: theme.inkSoft }}>Rates and labels are samples; shipping records nothing. An admin switches to LIVE in HQ → 9.5.</span>}
             </div>
 
+            {binModal}
             {note && <div style={{ padding: '10px 12px', marginBottom: '14px', border: `1px solid ${note.ok ? '#3a7d44' : '#9b2c2c'}`, color: note.ok ? '#3a7d44' : '#9b2c2c', background: '#fff', fontSize: '13px', whiteSpace: 'pre-wrap' }}>{note.text}</div>}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 300px) 1fr', gap: '18px', alignItems: 'start' }}>
@@ -292,6 +329,17 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                     {selected && address && (
                         <div style={{ border: `1px solid ${theme.line}`, background: '#fff', padding: '16px' }}>
                             <div style={{ fontFamily: theme.mono, fontSize: '13px', marginBottom: '12px' }}>{packRefOf(selected)} — {selected.customerName || selected.clientName || selected.customer || ''}</div>
+                            {needsNsFulfilment(selected) && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '8px 10px', marginBottom: '12px', border: `1px solid ${theme.line}`, background: theme.paper2 }}>
+                                    <span style={{ fontSize: '12px', color: theme.inkSoft, flex: 1, minWidth: '220px' }}>
+                                        NetSuite has no fulfilment for this order yet{selected.nsFulfillNeedsBins ? ' — it was not sent: no bin was chosen' : (selected.nsFulfillQueued ? ' — it is queued, or it failed (11.1 → NetSuite Sync Queue says which)' : ' — it was not sent')}.
+                                    </span>
+                                    <button style={btn(false)} disabled={busy === `if:${selected.id}`} onClick={() => sendNsFulfilment(selected)}
+                                        title="Reads the order's open lines and NetSuite's bins now. An item held in more than one bin is asked about; a failed entry is replaced. An entry still in flight is never doubled.">
+                                        {busy === `if:${selected.id}` ? 'Reading NetSuite…' : '📤 NetSuite fulfilment — confirm bins & send'}
+                                    </button>
+                                </div>
+                            )}
 
                             <div style={label}>Ship to <span style={{ textTransform: 'none', letterSpacing: 0 }}>({addressSource})</span></div>
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px', margin: '6px 0 8px' }}>

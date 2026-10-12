@@ -169,5 +169,30 @@ ok('a quote has none', netSuiteOrderNoOf({ status: 'CONFIGURED' }, null) === '')
     ok('mid-coat reads painting, never ready', !r.ready && /small parts: painting/.test(r.reason));
     eq('no document → nothing', packReadinessOf(null), null);
 }
+// ── THE CHOICE ASKED AT ORDER ENTRY (Stuart 2026-10-12) — and the order that chose "finish complete" ───────────────
+{
+    const { finishModeStampOf, finishModeOf, choseFinishComplete, unstartedTbfLinesOf, tbfLineCountOf, FINISH_MODE } = await import('../src/components/Shared/orderStatus.js');
+    eq('the stamp: complete', finishModeStampOf({ mode: 'COMPLETE', by: 'Eric', at: 5 }), { finishMode: 'COMPLETE', finishModeAt: 5, finishModeBy: 'Eric', finishAsAvailable: false, finishAsAvailableAt: 5, finishAsAvailableBy: 'Eric', finishAsAvailableReason: 'chosen at order entry' });
+    eq('the stamp: as available — the same four fields the RTG and SO Pack switches write', [finishModeStampOf({ mode: 'AS_AVAILABLE', by: 'Eric', at: 5 }).finishAsAvailable, finishModeStampOf({ mode: 'AS_AVAILABLE', by: 'Eric', at: 5 }).finishMode], [true, 'AS_AVAILABLE']);
+    eq('no answer → nothing is written', [finishModeStampOf({}), finishModeStampOf({ mode: 'MAYBE' })], [{}, {}]);
+    eq('the switch wins over what order entry chose', [finishModeOf({ finishMode: 'COMPLETE', finishAsAvailable: true }), finishModeOf({ finishMode: 'AS_AVAILABLE', finishAsAvailable: false }), finishModeOf({})], [FINISH_MODE.AS_AVAILABLE, FINISH_MODE.COMPLETE, FINISH_MODE.COMPLETE]);
+    const lines = [
+        { erp: 'HTAEC35', toBeFinished: true, finishCode: 'RF1' },
+        { erp: 'HRW-138TRAVLB', toBeFinished: true, finishCode: 'RF1' },
+        { erp: 'HRW-138TRAV12', isKit: true, toBeFinished: false },
+        { erp: 'H1-138TRV', toBeFinished: true, inKit: true },
+        { erp: 'STOCKED', qty: 4 },
+        { erp: 'GONE', toBeFinished: true, offOrder: true },
+    ];
+    eq('to-be-finished lines: the kit line and a line taken off the order are not counted; a stocked line is not', tbfLineCountOf(lines), 3);
+    const so = { id: 'SO-9', finishMode: 'COMPLETE', finishAsAvailable: false, lines, oeGen: { 0: { kind: 'WO', ids: ['A1'] } } };
+    eq('nothing started yet for the bracket and the rod', unstartedTbfLinesOf(so).map(u => [u.lineIdx, u.erp]), [[1, 'HRW-138TRAVLB'], [3, 'H1-138TRV']]);
+    const A1 = { id: 'A1', soAppId: 'SO-9', status: 'Approved' };
+    ok('an order that CHOSE finish complete waits for the lines nothing is started for', wholeOrderWait(A1, [A1], so).wait && /2 lines not started yet \(HRW-138TRAVLB, H1-138TRV\)/.test(wholeOrderWait(A1, [A1], so).reason));
+    ok('…every line started → it goes', !wholeOrderWait(A1, [A1], { ...so, oeGen: { 0: {}, 1: {}, 3: {} } }).wait);
+    ok('…flipped to as available → it goes', !wholeOrderWait(A1, [A1], { ...so, finishAsAvailable: true }).wait);
+    ok('an order nobody was asked about is exactly as it was: only its work orders are read', !wholeOrderWait(A1, [A1], { id: 'SO-9', lines }).wait && !choseFinishComplete({ id: 'SO-9', lines }));
+    ok('a display order released by rows is never held by this', !wholeOrderWait(A1, [A1], { ...so, displayRelease: true }).wait);
+}
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
