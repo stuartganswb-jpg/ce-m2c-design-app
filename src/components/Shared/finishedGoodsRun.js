@@ -162,6 +162,27 @@ export const planFinishedRun = ({ part, qty, pins = [], inventory = [] }) => {
     return { erp, outsourced, finishSuffix: sfx, exploded, lines, materials };
 };
 
+// ── A PART WITH NO /P RECORD IS FINISHED FROM ITS RAW ITEM (Stuart 2026-10-12, SO60812's end caps) ──────────────────
+// The planner's fallback for a single part that has no phosphated record is to "pull" the finished code itself
+// (pullOf above: HTAEC35 in RF1 → HTAEC35/RF1). Nobody stocks that code, so the two callers that check stock DROP the
+// line — rightly for a STOCK build (Shared/finishedRunPrecheck: checking it "would read the very shortage that prompted
+// the order") — and Order Entry's review dropped it the same way. On an order that left NOTHING: 100 × HTAEC35 to be
+// finished RF1 was planned with no pull, its raw stock was never read ("ready"), and its work order's parts list did not
+// contain it — on SO60812, and on the order before it (SO60156's end-cap work order, an empty list). What such a line
+// pulls is the RAW item, painted as it is: the same line, named for the item, in the item's own unit. A plan that pulls
+// a /P, a mill core for the plater, or a BOM's members is returned untouched.
+// @param plan  planFinishedRun's result          @param part  the line's own (raw) library record
+// @returns the plan's lines, with a self-pull replaced by the raw pull
+export const rawPullLinesOf = (plan, part) => {
+    const lines = (plan && plan.lines) || [];
+    if (!plan || plan.exploded) return lines;
+    const raw = erpOf(part);
+    return lines.map(l => {
+        if (String(l.legacyErpId || '').toUpperCase() !== String(plan.erp || '').toUpperCase() || !raw || raw === String(plan.erp || '').toUpperCase()) return l;
+        return { ...l, legacyErpId: raw, partId: raw, partName: `${(part && part.itemName) || raw} — raw pull (no /P record)`, sourceComponent: raw, rawPull: true, ...uomStampOf(part, l.quantity) };
+    });
+};
+
 // SuiteQL for live availability of the plan's pull codes (optionally at one location).
 export const availabilityQuery = (codes, locationId) => {
     const idList = codes.map(c => `'${String(c).toUpperCase().replace(/'/g, "''")}'`).join(',');

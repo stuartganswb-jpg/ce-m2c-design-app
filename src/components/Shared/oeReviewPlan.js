@@ -29,8 +29,9 @@
 //           is planned here and shown, but opens only once the convert RESTlet can build
 //           against a work order — flagged, never silent.
 
-import { planFinishedRun, isAssemblyPart } from './finishedGoodsRun.js';
+import { planFinishedRun, isAssemblyPart, rawPullLinesOf } from './finishedGoodsRun.js';
 import { poleFeetOf, isFootUnit } from './oeLines.js';
+import { DIVISION_CUSTOM } from './lineClassification.js';
 import { millBaseOf } from './finishRouting.js';
 import { finishedCodeOf, isUnfinishedFinish } from './subFinish.js';
 import { SOURCING, sourcingOf } from './sourcing.js';
@@ -229,7 +230,14 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         }
         const finishedErp = `${erp}/${j.finish}`;
         const plan = planFinishedRun({ part: { ...j.part, legacyErpId: finishedErp }, qty: j.qty, pins: j.pins || [], inventory });
-        const lines = plan.exploded ? plan.lines : plan.lines.filter(l => String(l.legacyErpId || '').toUpperCase() !== plan.erp);
+        // A part with no /P record pulls its RAW item (Shared/finishedGoodsRun.rawPullLinesOf, 2026-10-12) — the planner's
+        // "pull the finished code itself" was dropped here, which left the line with nothing to pull and nothing checked.
+        // A SHOP-MADE line (a custom pole) keeps its material where it always was — the cut list, and the pole choice
+        // below, which reads the rod itself — so only what the FINISHING side makes gains the pull.
+        const shopMade = j.division === DIVISION_CUSTOM || (!j.division && isPoleCategory(String(j.part?.manufacturingSpecs?.productType || j.part?.productType || '')));
+        const lines = shopMade
+            ? (plan.exploded ? plan.lines : plan.lines.filter(l => String(l.legacyErpId || '').toUpperCase() !== plan.erp))
+            : rawPullLinesOf(plan, j.part);
         // The piece a person reads (Shared/subFinish.finishedCodeOf — a traverse track made TCP is H1-2TRVTRK/C); the
         // plan keeps <code>/<finish>, from which its mill base is read.
         // A STOCK COLOUR (j.stockFirst — Shared/oeGenerate STOCK_FIRST) is planned as the paint run here; its stocked colour
