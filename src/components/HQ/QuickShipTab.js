@@ -8,6 +8,8 @@ import { quickShipPullLines, quickShipCoverCodes, quickShipBackorderLines } from
 import { pillowCartPlanOf, PILLOW_REQUEST_STATUS } from '../Shared/pillowRequest';   // 🧵 Uniquity custom pillows from the Vision board (S7 step 3c) — ONE guarded mount
 import { lineImageForItem, lineImageOfAsset, lineImagesOf } from '../Shared/lineImage';   // 🖼 a picture on a line — samples from the Asset Gallery (S7 step 7)
 import AssetImagePicker from '../Shared/AssetImagePicker';
+import PillowQuickSell from './PillowQuickSell';   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
+import { QUICK_SELL_REQUEST_ID } from '../Shared/pillowQuickSell';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
@@ -497,26 +499,39 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             e => { console.warn('pillow request listen failed', e); setPillowReqs([]); });
         return unsub;
     }, [activeBrand]);
+    const pillowByCode = (code) => allItems.find(x => erpOf(x) === String(code || '').toUpperCase()) || null;
+    // ONE push for the made-to-order pillow shape — the board's request and the quick sell both land here:
+    // the holder (the design rides it), then each part at $0 beneath it (yards as 'yd').
+    const pushPillowPlan = ({ plan, line, requestId, index }) => {
+        const holderKey = `pillow-${requestId}-${index}`;
+        pushLine(plan.holder.item, plan.holder.qty, plan.holder.note, null, { rateOverride: plan.holder.rate, noPack: true, pillow: { requestId, line: index, madeToOrder: plan.holder.madeToOrder, summary: line.summary || '', sizeKey: line.sizeKey || '', group: line.group || '', design: line.design || null, panels: line.panels || [], sourced: plan.sourced, capturedFabrics: line.capturedFabrics || [], snapshot: line.snapshot || '', ...(line.standardSku ? { standardSku: line.standardSku } : {}) }, pillowKey: holderKey });
+        plan.parts.forEach(part => pushLine(part.item, 1, part.note, null, part.uom === 'YARD'
+            ? { rateOverride: 0, noPack: true, inKit: true, kitOf: holderKey, perFoot: true, feetPer: part.yards, unitWord: 'yd' }
+            : { rateOverride: 0, noPack: true, inKit: true, kitOf: holderKey }));
+    };
     const loadPillowReq = async (job) => {
         const lines = ((job.pillowRequest || {}).lines) || [];
-        const byCode = (code) => allItems.find(x => erpOf(x) === String(code || '').toUpperCase()) || null;
-        const plans = lines.map(l => pillowCartPlanOf({ line: l, findByCode: byCode }));
+        const plans = lines.map(l => pillowCartPlanOf({ line: l, findByCode: pillowByCode }));
         const bad = plans.find(p => !p.ok);
         if (bad) { addLog(`⛔ Pillow request ${job.jobId || job.id} not loaded — ${bad.errors.map(e => e.message).join(' ')}`, 'error'); return; }
         setCustomerId(job.customer?.id || '');
         setCustSearch(job.customer ? `${job.customer.name || ''} (${job.customer.id})` : '');
         setJobName(job.jobName || '');
-        plans.forEach((plan, i) => {
-            const holderKey = `pillow-${job.id}-${i}`;
-            pushLine(plan.holder.item, plan.holder.qty, plan.holder.note, null, { rateOverride: plan.holder.rate, noPack: true, pillow: { requestId: job.id, line: i, madeToOrder: plan.holder.madeToOrder, summary: lines[i].summary || '', sizeKey: lines[i].sizeKey || '', group: lines[i].group || '', design: lines[i].design || null, panels: lines[i].panels || [], sourced: plan.sourced, capturedFabrics: lines[i].capturedFabrics || [], snapshot: lines[i].snapshot || '' }, pillowKey: holderKey });
-            plan.parts.forEach(part => pushLine(part.item, 1, part.note, null, part.uom === 'YARD'
-                ? { rateOverride: 0, noPack: true, inKit: true, kitOf: holderKey, perFoot: true, feetPer: part.yards, unitWord: 'yd' }
-                : { rateOverride: 0, noPack: true, inKit: true, kitOf: holderKey }));
-        });
+        plans.forEach((plan, i) => pushPillowPlan({ plan, line: lines[i], requestId: job.id, index: i }));
         try {
             await updateDoc(doc(db, 'jobs', job.id), { status: 'QUICKSHIP_REVIEW', 'pillowRequest.loadedBy': currentUser || 'staff', 'pillowRequest.loadedAt': new Date().toISOString() });
         } catch (e) { console.warn('pillow request stamp failed', e); }
         addLog(`🧵 Loaded pillow request ${job.jobId || job.id} — ${lines.length} pillow line(s) for ${job.customer?.name || '?'}${plans.some(p => p.sourced.length) ? ' · a fabric to be sourced rides the note' : ''}`, 'success');
+    };
+    // 🛋 THE QUICK SELL (S7 step 2): the rule's answer → the cart. A SKU is a plain stock line at the chart
+    // price; a throw is a stock line at its own price; made to order is the custom shape through the same push.
+    const addQuickSell = (plan) => {
+        if (!plan || !plan.ok) return;
+        if (plan.kind === 'THROW') { pushLine(plan.throwItem, plan.qty, '', null, {}); return; }
+        if (plan.kind === 'SKU') { pushLine(plan.sku.item, plan.qty, plan.note || '', null, { rateOverride: plan.sku.chartPrice }); return; }
+        const cartPlan = pillowCartPlanOf({ line: plan.mto.line, findByCode: pillowByCode });
+        if (!cartPlan.ok) { addLog(`⛔ Not added — ${cartPlan.errors.map(e => e.message).join(' ')}`, 'error'); return; }
+        pushPillowPlan({ plan: cartPlan, line: plan.mto.line, requestId: `${QUICK_SELL_REQUEST_ID}${Date.now()}`, index: 0 });
     };
     const loadPortalReq = async (job) => {
         const pr = job.portalRequest || {};
@@ -1900,6 +1915,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         })}
                     </div>
                 </div>
+            )}
+            {activeBrand === 'uniquity' && (
+                <PillowQuickSell items={allItems} findPart={(id) => allItems.find(x => x.id === id) || pillowByCode(id)} rateFor={rateFor} onAdd={addQuickSell} addLog={addLog} />
             )}
             {portalReqs.length > 0 && (
                 <div style={{ ...card, padding: '20px 24px', border: '1px solid var(--brass)' }}>
