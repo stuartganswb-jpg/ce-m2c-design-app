@@ -15,7 +15,7 @@ const ReviewWaitingBanner = ({ orders = [], onReview, style }) => {
             {rows.map(r => (
                 <div key={r.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '14px', flexWrap: 'wrap', padding: '10px 0', borderTop: '1px solid rgba(138,109,31,.25)' }}>
                     <div style={{ minWidth: '170px' }}>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: '0.95rem', fontWeight: 700, color: '#8a6d1f' }}>SO {r.ref}</div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '0.95rem', fontWeight: 700, color: '#8a6d1f' }}>{/^SO/i.test(r.ref) ? r.ref : `SO ${r.ref}`}</div>
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginTop: '3px' }}>
                             {r.customer}{r.customer ? ' · ' : ''}<span style={{ color: r.days >= 3 ? '#d9534f' : 'var(--ink-soft)', fontWeight: r.days >= 3 ? 700 : 400 }}>waiting {waitedText(r.days)}</span>
                         </div>

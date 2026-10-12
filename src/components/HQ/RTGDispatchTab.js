@@ -33,11 +33,12 @@ import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, co
 import { woRefOf } from '../Shared/woRef';
 import { isOpenPo, isDraftPo, approvePurchaseOrder, markPoSent, poRef, PO_STATUS } from '../Shared/purchaseOrders';
 import { poLinesLocked, poLockMessage } from '../Shared/poLock';
-import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone, liftPatchFor, wholeOrderWait, customFabLabel } from '../Shared/orderStatus';
+import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone, liftPatchFor, wholeOrderWait, customFabLabel, canReopenInProduction } from '../Shared/orderStatus';
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import ReviewWaitingBanner from '../Shared/ReviewWaitingBanner';
+import DaySummaryPanel from './DaySummaryPanel';
 import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance, closeShortLine } from '../Shared/scrapClose';
 import { millBaseOf } from '../Shared/finishRouting';
 import { woRecipeCode } from '../Shared/finishingTime';
@@ -317,6 +318,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     }, []);
     const [salesOrders, setSalesOrders] = useState([]);
     const [showArchive, setShowArchive] = useState(false);   // dispatched rows older than a week
+    const [daySummaryOpen, setDaySummaryOpen] = useState(false);   // 📋 the day's orders (HQ/DaySummaryPanel)
     const [workOrders, setWorkOrders] = useState([]);
     const [purchaseOrders, setPurchaseOrders] = useState([]);
     const [inventoryTasks, setInventoryTasks] = useState([]);
@@ -3481,6 +3483,10 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Ready to Go (RTG) Dispatch</h2>
                 </div>
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    {/* THE DAY'S ORDERS (Stuart 2026-10-12): every sales order entered that day from both doors, where each
+                        stands, what went on backorder — and, for a manager, the card's own overrule buttons. */}
+                    <button onClick={() => setDaySummaryOpen(true)} title="Every sales order entered today (or any day) from Order Entry and CPQ: NetSuite's answer, finish complete / as available, each work order's standing, what waits on a person, and the parts that went on backorder that day. Print it or copy it to send."
+                        style={{ ...btnStyle, padding: '8px 14px', fontSize: '10px' }}>📋 Day summary</button>
                     {/* WHERE IS IT — from RTG it sees EVERYTHING: every floor job, board record,
                         shop job, demand, rod cut AND inbound PO (with delivery status/ETA). */}
                     <WhereIsIt compact
@@ -3821,6 +3827,12 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     {/* ORDERS PARKED FOR A PERSON'S REVIEW (Stuart 2026-10-12: "RTG is master of order details, state it there") — SO60812 sat
                         eleven days with its reasons recorded on a card nobody opened. Same door as the card's own button. */}
                     <ReviewWaitingBanner orders={liveSO} onReview={(r) => { try { sessionStorage.setItem('hq_oe_review_so', r.id); } catch (e) { /* the view still opens */ } window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }} />
+                    {daySummaryOpen && (
+                        <DaySummaryPanel onClose={() => setDaySummaryOpen(false)} orders={liveSO} workOrders={liveWO} finDocs={liveFin} shopDocs={liveShop}
+                            brand={activeBrand} userName={currentUser || ''} canOverrule={canReopenInProduction(userRole)} isOrderEntry={isOrderEntryOrder} refOf={woRefOf}
+                            onToggleFinish={toggleFinishAsAvailable} onDispatch={(so) => autoSplitSalesOrder(so)}
+                            onReview={(so) => { try { sessionStorage.setItem('hq_oe_review_so', so.id); } catch (e) { /* the view still opens */ } setDaySummaryOpen(false); window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }} />
+                    )}
                     {/* RECONCILIATION sits directly above the transmit log: together they are the
                         two ways this board can be contradicted — by the floor, and by NetSuite. */}
                     <div style={{ background: '#fff', border: `1px solid ${orphanFindings.length ? '#d9534f' : 'var(--line)'}`, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>
