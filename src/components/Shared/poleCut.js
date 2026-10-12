@@ -127,6 +127,48 @@ export function cutPlanFromSource({ targetErp, targetFt, sourceFt, per, scrapFt 
     };
 }
 
+// ── THE OFFCUT IS STOCK, NOT SCRAP (Stuart 2026-10-12) ───────────────────────────────────────────────────────────────
+// "when taking HTA1235 and turning into HTA635, the off cuts should also turn in to HTA435 as we can get one 6 and
+//  one 4 from each 12."  CUT_OPTIONS has said so since Eric wrote it down (12 → "1 × 6 ft + 1 × 4 ft", 2 ft scrap),
+// and a bench cut carries both lengths (`targets`). But a cut raised FOR A WORK ORDER names one length — the one the
+// order wants — so five open orders read "10 × HTA1235 → 10 × HTA635" and the ten 4 ft pieces coming off the same
+// sticks went nowhere: not into NetSuite, not onto a shelf record. The rule is read where the cut is COMPLETED, from
+// the saw's own table, so it holds for a cut raised by any door (a finishing work order, Order Entry's pole choice,
+// the Sales Snapshot) and for the orders already open.
+/** What ELSE comes off each stick when a `sourceFt` stick is cut for `targetFt` pieces: [{ ft, per }]. */
+export const alsoYieldsFor = (sourceFt, targetFt) => {
+    const want = Number(targetFt);
+    const opt = cutOptionsFor(sourceFt).find(o => (o.targets || []).some(t => Number(t.ft) === want));
+    return opt ? (opt.targets || []).filter(t => Number(t.ft) !== want && Number(t.per) > 0).map(t => ({ ft: Number(t.ft), per: Number(t.per) })) : [];
+};
+// The same rod at another length, its finish kept: HTA1235 → 4 → HTA435 · HTA1235/SG → 4 → HTA435/SG.
+const codeAtLength = (erp, ft) => { const c = String(erp || '').trim().toUpperCase(); const out = LEN_RE.test(rawOf(c)) ? c.replace(LEN_RE, `${ft}$2`) : ''; return out === c ? '' : out; };
+/**
+ * THE PIECES A CUT ORDER PUTS ON THE SHELF — one line per item its completion receives.
+ * A cut that names its own lengths (`targets`, the bench) is read as written. Otherwise: the length the order was
+ * raised for, and every other length the saw yields from the same sticks (`offcut: true`) — one per stick for 12 → 6.
+ * @param order   a rod_cut_orders record
+ * @param nsIdOf  (item code) → its NetSuite internal id, or null when the app does not know the item
+ * @returns [{ itemId, internalId, qty, ft, offcut }]
+ */
+export const cutYieldLinesOf = (order, { nsIdOf = () => null } = {}) => {
+    const o = order || {};
+    if (Array.isArray(o.targets) && o.targets.length) {
+        return o.targets.map(t => ({ itemId: String(t.itemId || '').toUpperCase(), internalId: t.internalId != null ? String(t.internalId) : null, qty: Number(t.qty) || 0, ft: poleLengthOf(t.itemId), offcut: false }));
+    }
+    const main = { itemId: String(o.targetItemId || '').toUpperCase(), internalId: o.targetInternalId != null ? String(o.targetInternalId) : null, qty: Number(o.qtyTarget) || 0, ft: poleLengthOf(o.targetItemId), offcut: false };
+    const sFt = poleLengthOf(o.sourceItemId), sticks = Number(o.qtySource) || 0;
+    const extra = (sFt && main.ft && sticks > 0) ? alsoYieldsFor(sFt, main.ft).map(y => {
+        const itemId = codeAtLength(o.sourceItemId, y.ft);
+        if (!itemId) return null;
+        const id = nsIdOf(itemId);
+        return { itemId, internalId: id != null && id !== '' ? String(id) : null, qty: sticks * y.per, ft: y.ft, offcut: true };
+    }).filter(Boolean) : [];
+    return [main, ...extra];
+};
+/** "10 × HTA635 + 10 × HTA435" */
+export const cutYieldText = (lines = []) => (lines || []).map(l => `${l.qty} × ${l.itemId}`).join(' + ');
+
 /**
  * The code for the same rod at a different length: HCUMP810 → 4 ft → HCUMP410.
  * A SUGGESTION ONLY (Stuart 2026-08-25: "we shouldn't have to limit it by pattern, you could always
