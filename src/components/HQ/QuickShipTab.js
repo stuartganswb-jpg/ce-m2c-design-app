@@ -9,6 +9,7 @@ import { pillowCartPlanOf, PILLOW_REQUEST_STATUS } from '../Shared/pillowRequest
 import { lineImageForItem, lineImageOfAsset, lineImagesOf } from '../Shared/lineImage';   // 🖼 a picture on a line — samples from the Asset Gallery (S7 step 7)
 import AssetImagePicker from '../Shared/AssetImagePicker';
 import PillowQuickSell from './PillowQuickSell';
+import CurtainQuickSell from './CurtainQuickSell';   // 🪟 M2C custom curtains — the chart's price + the workroom's line (the finder; Add waits for the workroom route)
 import CounterScreens from './CounterScreens';   // 🛋 the show counter's screens (counterMode)
 import PayLinkPanel from '../Shared/PayLinkPanel';   // the QR the customer scans at the counter
 import { fetchCustomerPriceLevel, priceLevelNoteOf, mayAutoSetDiscount } from '../Shared/nsPriceLevel';   // the customer's NetSuite price level → the order discount (Stuart 2026-10-12)
@@ -2116,6 +2117,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
             {activeBrand === 'uniquity' && (
                 <PillowQuickSell items={allItems} findPart={(id) => allItems.find(x => x.id === id) || pillowByCode(id)} rateFor={rateFor} onAdd={addQuickSell} addLog={addLog} />
             )}
+            {activeBrand === 'm2c' && <CurtainQuickSell />}
             {portalReqs.length > 0 && (
                 <div style={{ ...card, padding: '20px 24px', border: '1px solid var(--brass)' }}>
                     <span style={{ ...lbl, color: 'var(--brass)' }}>Portal Quote Requests · {portalReqs.length} awaiting review</span>
