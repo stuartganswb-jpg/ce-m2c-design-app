@@ -27,7 +27,7 @@ import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
 import { traverseOrderLinesOf } from '../Shared/subFinish';
 import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary, isCheckoutForCustomer } from '../Shared/feeRules';
-import { isShippingItem } from '../Shared/flatRateShipping';
+import { isShippingItem, orderPackagingPlanOf, PACK_FEE_CODES } from '../Shared/flatRateShipping';
 import { priceChoice } from '../Shared/hardwarePricing';
 import { customerPriceLevel } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
@@ -940,6 +940,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
             // …or that it wears nothing: an item tagged Unfinished, cut only (2026-09-28).
             ...(opts && opts.noFinish ? { noFinish: true } : {}),
             ...(opts && opts.feeRule ? { feeRule: opts.feeRule } : {}),
+            // 📦 the packaging fee this form added by the rule (see the effect below) — the operator's the moment they touch it.
+            ...(opts && opts.autoPack ? { autoPack: true } : {}),
             // AN ITEM KIT (Shared/itemKit, 2026-09-28): the kit line is sold and billed (no NetSuite item — its money rides
             // the rollup); each part rides beneath it at $0, made and picked as itself, in the kit's finish or stock colour.
             ...(opts && opts.isKit ? { isKit: true, itemKit: true, kitCode: opts.kitCode || '' } : {}),
@@ -1276,7 +1278,9 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
         } catch (e) { addLog(`Delete kit failed: ${e.message}`, 'error'); }
     };
 
-    const setQty = (key, q) => setCart(prev => prev.map(l => l.key === key ? { ...l, qty: Math.max(1, parseInt(q) || 1) } : l));
+    // (a packaging line the rule added becomes the operator's own when its quantity is typed — `autoPack` comes off)
+    const [packOff, setPackOff] = useState(false);     // the operator removed the automatic packaging fee on THIS order
+    const setQty = (key, q) => setCart(prev => prev.map(l => l.key === key ? { ...l, qty: Math.max(1, parseInt(q) || 1), ...(l.autoPack ? { autoPack: false } : {}) } : l));
     // ── EVERY LINE CAN NAME ITS ROOM (Stuart 2026-08-31) ────────────────────────────────────
     // One order covers several windows, so the room belongs on the LINE, not only in the header
     // sidemark. The memo prints on the customer's quote beside the line it describes, rides that
@@ -1302,9 +1306,53 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
         setShip({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
         setTrvCfg(null); setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
         setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setQuickQty('');
-        setEditingSo(null); setReopenedQuote('');
+        setEditingSo(null); setReopenedQuote(''); setPackOff(false);
     };
-    const removeLine = (key) => setCart(prev => prev.filter(l => l.key !== key));
+    const removeLine = (key) => {
+        if (cart.some(l => l.key === key && l.autoPack)) setPackOff(true);   // taken off by hand: it stays off for this order
+        setCart(prev => prev.filter(l => l.key !== key));
+    };
+
+    // ── 📦 THE PACKAGING FEE, AS AT CPQ CHECKOUT (Stuart 2026-10-12: "apply to both … make both overridable and also
+    //    they only apply on these screens when the applicable customer is logged in") ─────────────────────────────
+    // One fee per pole or system, by the customer's own fee sheet (Shared/flatRateShipping.orderPackagingPlanOf): $25
+    // (H1-PCKF2) for a motorized system, a pole with returns, a bend or a bay cut, or over 16 ft — else the standard
+    // $12 (H1-PCKF1). This form had no automatic fee at all, so an order entered here and the same order configured
+    // in CPQ could leave with different packaging. The line is added for the operator and kept in step with the
+    // cart; it is THEIRS the moment they type its quantity (it stops following) or take it off (it stays off for
+    // this order), and a packaging line they add themselves is never joined by another. Only for a customer the two
+    // fees are assigned to in 4.6 (their checkout items) — nobody else's order sees a thing. Never on an order
+    // being edited or a reopened quote: those say what was sold.
+    useEffect(() => {
+        if (!customerId || editingSo || reopenedQuote || packOff) return;
+        const fees = PACK_FEE_CODES.map(code => [code, custCheckoutItems.find(it => erpOf(it) === code && isFeeItemRecord(it)) || null]).filter(([, it]) => it);
+        if (!fees.length) return;
+        const packIds = new Set(fees.map(([, it]) => it.id));
+        if (cart.some(l => packIds.has(l.itemId) && !l.autoPack)) return;
+        const isPole = (it) => /POLE|\bRODS?\b|FASCIA/i.test(String(it?.manufacturingSpecs?.productType || it?.category || ''));
+        const systems = [], feeNames = [];
+        cart.forEach(l => {
+            if (l.autoPack || l.inKit || l.trvOfKit) return;
+            const it = itemById(l.itemId);
+            if (l.trvKitCode) {
+                // a traverse system (its extra feet are a second line of the same kit, not a second system)
+                if (!l.trvIsFeet) systems.push({ qty: l.qty, lengthIn: (Number(l.trvFeet) || 4) * 12, motorized: !!l.trvMotor || String(it?.manufacturingSpecs?.kitAlign?.drive || '').toUpperCase() === 'MOTORIZED' });
+                return;
+            }
+            if (it && isFeeItemRecord(it)) { feeNames.push({ name: l.name || it.itemName || '', qty: l.qty }); return; }
+            if (l.perFoot && l.unitWord !== 'yd' && isPole(it)) systems.push({ qty: l.qty, lengthIn: Number(l.cutLength) > 0 ? Number(l.cutLength) : (Number(l.feetPer) || 0) * 12, motorized: false });
+        });
+        const want = orderPackagingPlanOf({ systems, feeNames }).counts;
+        fees.forEach(([code, it]) => {
+            const q = want[code] || 0, cur = cart.find(l => l.autoPack && l.itemId === it.id);
+            if (!cur && q > 0) {
+                pushLine(it, q, '', null, { noPack: true, feeRule: feeRuleOf(it.manufacturingSpecs), autoPack: true });
+                addLog(`📦 Packaging: ${code} ×${q} added by the fee sheet's rule — change its quantity or remove it to override.`, 'info');
+            } else if (cur && q === 0) setCart(prev => prev.filter(l => l.key !== cur.key));
+            else if (cur && cur.qty !== q) setCart(prev => prev.map(l => (l.key === cur.key ? { ...l, qty: q } : l)));
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cart, customerId, custCheckoutItems, editingSo, reopenedQuote, packOff]);
 
     // LIVE pricing (Stuart 2026-07-17): rates resolve at RENDER/PUSH time, never frozen at add
     // time — so picking the customer before OR after filling the cart reprices every line
