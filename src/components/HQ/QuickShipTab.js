@@ -10,7 +10,9 @@ import { lineImageForItem, lineImageOfAsset, lineImagesOf } from '../Shared/line
 import AssetImagePicker from '../Shared/AssetImagePicker';
 import PillowQuickSell from './PillowQuickSell';
 import CounterScreens from './CounterScreens';   // 🛋 the show counter's screens (counterMode)
-import PayLinkPanel from '../Shared/PayLinkPanel';   // the QR the customer scans at the counter   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
+import PayLinkPanel from '../Shared/PayLinkPanel';   // the QR the customer scans at the counter
+import { fetchCustomerPriceLevel, priceLevelNoteOf, mayAutoSetDiscount } from '../Shared/nsPriceLevel';   // the customer's NetSuite price level → the order discount (Stuart 2026-10-12)
+import { nsCustomerIdOf } from '../Shared/nsHeader';   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
 import { QUICK_SELL_REQUEST_ID } from '../Shared/pillowQuickSell';
 import { fabricNsLineOf } from '../Shared/pillowCatalog';   // an app-only fabric pushes as a fraction of its throw (Stuart 2026-10-12)
 import { db } from '../../firebase';
@@ -182,6 +184,29 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
     // orderDiscountPercent (Stuart 2026-09-11): a set % at checkout on every item line's rate — rides
     // quickShipExtras like the rest, so an edit / reopen brings it back typed.
     const [soExtras, setSoExtras] = useState({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '', orderDiscountPercent: '' });
+    // THE CUSTOMER'S NETSUITE PRICE LEVEL (Stuart 2026-10-12): read once when a customer is picked; its percent
+    // becomes the order discount unless someone typed one; said on screen and in the log, never silent.
+    const [priceLevelInfo, setPriceLevelInfo] = useState(null);
+    const lastAutoPct = useRef(null);
+    useEffect(() => {
+        let alive = true;
+        if (!customerId) { setPriceLevelInfo(null); return undefined; }
+        (async () => {
+            const lvl = await fetchCustomerPriceLevel(nsCustomerIdOf(customerId));
+            if (!alive) return;
+            setPriceLevelInfo(lvl);
+            if (!lvl.read) { addLog(`⚠ NetSuite price level not read for ${customerId} (${lvl.error || 'no answer'}) — set the order discount by hand if one applies.`, 'warn'); return; }
+            addLog(`💲 ${priceLevelNoteOf(lvl)}`, lvl.reason === 'UNKNOWN' ? 'warn' : 'info');
+            if (lvl.percent !== null && lvl.percent >= 0) {
+                setSoExtras(prev => {
+                    if (!mayAutoSetDiscount(prev.orderDiscountPercent, lastAutoPct.current)) return prev;
+                    lastAutoPct.current = lvl.percent;
+                    return { ...prev, orderDiscountPercent: lvl.percent > 0 ? String(lvl.percent) : '' };
+                });
+            }
+        })();
+        return () => { alive = false; };
+    }, [customerId]); // eslint-disable-line react-hooks/exhaustive-deps
     // The components configurator (required at checkout): opens right after a kit lands in the
     // cart, offering the rules doc's carrier styles / included picks / billable accessories.
     const [trvCfg, setTrvCfg] = useState(null);          // { drive, feet, kitCode, finish } while open
@@ -2007,6 +2032,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                     onPickCustomer={(c) => { setCustomerId(c.id); setCustSearch(`${c.name} (${c.id})`); }} jobName={jobName} setJobName={setJobName}
                     items={allItems} findPart={(id) => allItems.find(x => x.id === id) || pillowByCode(id)} rateFor={rateFor}
                     onAddQuickSell={addQuickSell} onAddCustomPillow={addCounterCustom} addLog={addLog} cartCount={cart.length} cartTotal={cartTotal}
+                    priceNote={priceLevelInfo ? (priceLevelInfo.read ? priceLevelNoteOf(priceLevelInfo) : 'NetSuite price level not read') : ''}
                     onShowCart={() => { const el = document.getElementById('counter-cart'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }} />
                 {cartCard}
                 {lastCreated && cart.length === 0 && Number(lastCreated.total) > 0 && (
@@ -2133,6 +2159,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                     )}
                 </div>
                 <div><span style={lbl}>Job / Sidemark (optional)</span><input value={jobName} onChange={e => setJobName(e.target.value)} placeholder="e.g. Smith Residence" style={inp} /></div>
+                {priceLevelInfo && <div style={{ gridColumn: '1 / -1', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.06em', color: priceLevelInfo.reason === 'UNKNOWN' || !priceLevelInfo.read ? '#a86b00' : 'var(--ink-soft)' }}>💲 {priceLevelInfo.read ? priceLevelNoteOf(priceLevelInfo) : 'NetSuite price level not read — set the order discount by hand if one applies'}</div>}
             </div>
 
             {/* CATALOG SCOPE — pick the collection and every picker below narrows to the parts that

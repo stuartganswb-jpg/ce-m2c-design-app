@@ -734,8 +734,10 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
             )}
         </div>
 
-        {/* RIGHT COLUMN - CANVAS */}
-        <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', borderRadius: '2px', overflow: 'hidden' }}>
+        {/* RIGHT COLUMN - CANVAS — pinned to the top of the view while the form scrolls (Stuart 2026-10-12: "the drawing
+            window opens blank at the top of the view, you have to scroll down to encounter the pillow sketch" — the column
+            used to stretch to the form's height and the 1000×600 board sat centred far down it) */}
+        <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', borderRadius: '2px', overflow: 'hidden', alignSelf: 'flex-start', position: 'sticky', top: counter ? '76px' : '16px', height: 'min(760px, calc(100vh - 100px))', width: '100%' }}>
             <div style={{ padding: '16px 20px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                {viewMode === 'ENGINEERING' ? (
                    <div style={{ display: 'flex', gap: '8px' }}>
@@ -757,7 +759,7 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                </div>
             </div>
             
-            <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: viewMode === 'VISUAL' ? 'var(--dark)' : 'var(--paper)', minHeight: '650px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: viewMode === 'VISUAL' ? 'var(--dark)' : 'var(--paper)', minHeight: '420px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                {viewMode === 'VISUAL' && !activeBg && <div style={{ color: 'var(--ink-soft)', textAlign: 'center' }}><div style={{ fontSize: '3rem', marginBottom: '16px', opacity: 0.5 }}>🖼️</div><h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>No Room Scene Loaded</h3></div>}
 
                {(viewMode === 'ENGINEERING' || (viewMode === 'VISUAL' && activeBg)) && (
