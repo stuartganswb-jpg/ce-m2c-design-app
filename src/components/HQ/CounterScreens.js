@@ -12,12 +12,14 @@ import { db } from '../../firebase';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import PillowQuickSell from './PillowQuickSell';
 import VisionPillow from './VisionPillow';
+import { customerPayloadOf, createNsCustomer, crmRecordOf, crmRecordAppOnlyOf } from '../Shared/nsCustomer';   // a new customer is made in NetSuite FIRST (its id is the app's id)
+import { nsProxyFetch } from '../Shared/nsProxy';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
 const card = { background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' };
 const inp = { boxSizing: 'border-box', padding: '14px 16px', fontSize: '1.1rem', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: '#fff', width: '100%' };
 const bigTile = (on) => ({ flex: '1 1 200px', minHeight: '150px', border: `1px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: on ? 'var(--ink)' : '#fff', color: on ? '#fff' : 'var(--ink)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', fontFamily: 'var(--serif)', fontSize: '1.4rem', borderRadius: '2px' });
-const btn = (primary) => ({ padding: '12px 18px', background: primary ? 'var(--ink)' : 'transparent', color: primary ? '#fff' : 'var(--ink)', border: primary ? 'none' : '1px solid var(--line)', cursor: 'pointer', ...mono, color: primary ? '#fff' : 'var(--ink)' });
+const btn = (primary) => ({ padding: '12px 18px', background: primary ? 'var(--ink)' : 'transparent', border: primary ? 'none' : '1px solid var(--line)', cursor: 'pointer', ...mono, color: primary ? '#fff' : 'var(--ink)' });
 
 const HOME = [
     { key: 'THROWS', glyph: '🧣', label: 'Throws', sub: 'the throw, standard or XL' },
@@ -36,19 +38,39 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
 
     const matches = customers.filter(c => !q || `${c.name} ${c.id} ${c.email || ''} ${c.contact || ''}`.toLowerCase().includes(q.toLowerCase())).slice(0, 24);
 
+    const [nsFail, setNsFail] = useState('');   // NetSuite's refusal, when it refused; offers the app-only save
+    // A NEW CUSTOMER IS MADE IN NETSUITE FIRST (Stuart 2026-10-12): the app's customer id is the NetSuite id, so the
+    // sales order can go straight to NetSuite. One synchronous POST, then the CRM record in the sync's own shape.
     const createCustomer = async () => {
-        const name = String(newCust && newCust.name || '').trim();
+        const name = String((newCust && newCust.name) || '').trim();
         if (!name) { addLog('A new customer needs a name.', 'error'); return; }
-        setBusy(true);
+        setBusy(true); setNsFail('');
         try {
-            // the CRM's own record shape (ExternalCoopTab.handleCreateNewCrm): CUST-<4 digits>, brand uniquity
-            const id = `CUST-${Math.floor(1000 + Math.random() * 9000)}`;
-            const rec = { id, type: 'CUSTOMER', name, email: String(newCust.email || '').trim(), phone: String(newCust.phone || '').trim(), contact: name, salesRep: currentUser || '', terms: '', discountCode: '', creditLimit: '', billingAddress: '', shippingAddresses: [], brandId: 'uniquity', sharedBrands: ['uniquity'], createdAt: new Date().toISOString(), ytd: 0, mtd: 0, openOrders: 0, createdVia: 'SHOW_COUNTER' };
-            await setDoc(doc(db, 'crm_records', id), rec);
-            addLog(`👤 New customer ${name} (${id}) filed in the CRM.`, 'success');
+            const body = customerPayloadOf({ name, email: newCust.email, phone: newCust.phone, brand: 'uniquity', salesRep: currentUser || '' });
+            if (!body.ok) { body.errors.forEach(e => addLog(`⛔ ${e.message}`, 'error')); setBusy(false); return; }
+            const r = await createNsCustomer({ nsProxyFetch, payload: body.payload });
+            if (!r.ok) { setNsFail(r.error); addLog(`⛔ NetSuite did not create the customer: ${r.error}`, 'error'); setBusy(false); return; }
+            const rec = crmRecordOf({ nsId: r.nsId, name, email: newCust.email, phone: newCust.phone, brand: 'uniquity', by: currentUser || '' });
+            await setDoc(doc(db, 'crm_records', rec.id), rec);
+            addLog(`👤 New customer ${name} created in NetSuite (id ${r.nsId}) and filed in the CRM as ${rec.id}.`, 'success');
             onPickCustomer(rec);
             setNewCust(null); setScreen('HOME');
-        } catch (e) { addLog(`Could not create the customer: ${e.message || e}`, 'error'); }
+        } catch (e) { setNsFail(e.message || String(e)); addLog(`⛔ Could not create the customer in NetSuite: ${e.message || e}`, 'error'); }
+        setBusy(false);
+    };
+    // NetSuite unreachable at the show: the sale is still recorded — in the app only, said on the record, and the
+    // sales order's NetSuite push waits until the customer exists there (create + 11.1 sync, then Queue now on RTG).
+    const createCustomerAppOnly = async () => {
+        const name = String((newCust && newCust.name) || '').trim();
+        if (!name) return;
+        setBusy(true);
+        try {
+            const rec = crmRecordAppOnlyOf({ name, email: newCust.email, phone: newCust.phone, brand: 'uniquity', by: currentUser || '', reason: nsFail });
+            await setDoc(doc(db, 'crm_records', rec.id), rec);
+            addLog(`⚠ ${name} filed in the app only (${rec.id}) — NOT in NetSuite. The sales order will be recorded here and its NetSuite push will refuse until the customer is created in NetSuite and synced (11.1), then Queue now on RTG.`, 'warn');
+            onPickCustomer(rec);
+            setNewCust(null); setNsFail(''); setScreen('HOME');
+        } catch (e) { addLog(`Could not file the customer: ${e.message || e}`, 'error'); }
         setBusy(false);
     };
 
@@ -89,10 +111,17 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
                             <input autoFocus value={newCust.name} onChange={e => setNewCust({ ...newCust, name: e.target.value })} placeholder="Name / company" style={inp} />
                             <input value={newCust.email} onChange={e => setNewCust({ ...newCust, email: e.target.value })} placeholder="Email" inputMode="email" style={inp} />
                             <input value={newCust.phone} onChange={e => setNewCust({ ...newCust, phone: e.target.value })} placeholder="Phone" inputMode="tel" style={inp} />
-                            <div style={{ display: 'flex', gap: '10px' }}>
-                                <button onClick={createCustomer} disabled={busy} style={btn(true)}>{busy ? 'Saving…' : 'Save customer'}</button>
-                                <button onClick={() => setNewCust(null)} style={btn(false)}>Back</button>
+                            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                <button onClick={createCustomer} disabled={busy} style={btn(true)}>{busy ? 'Creating in NetSuite…' : 'Create customer (NetSuite + CRM)'}</button>
+                                <button onClick={() => { setNewCust(null); setNsFail(''); }} style={btn(false)}>Back</button>
                             </div>
+                            {nsFail && (
+                                <div style={{ border: '1px solid #d9534f', background: '#fdf3f3', padding: '12px', fontSize: '0.9rem' }}>
+                                    <div style={{ color: '#8a1f1f', marginBottom: '8px' }}>NetSuite did not create the customer: {nsFail}</div>
+                                    <div style={{ color: 'var(--ink-soft)', marginBottom: '8px' }}>Fix it and try again, or file the customer in the app only — the sale is recorded, and its NetSuite push waits until the customer exists in NetSuite and is synced on 11.1.</div>
+                                    <button onClick={createCustomerAppOnly} disabled={busy} style={btn(false)}>File in the app only for now</button>
+                                </div>
+                            )}
                         </div>
                     )}
                     <div style={{ marginTop: '16px' }}>
