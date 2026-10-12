@@ -3,8 +3,6 @@ import { onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordRe
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from './firebase';
 
-const Showroom = lazy(() => import('./Showroom.jsx'));
-const VisionIntake = lazy(() => import('./VisionIntake.jsx'));
 const QuickShip = lazy(() => import('./QuickShip.jsx'));
 const Gallery = lazy(() => import('./Gallery.jsx'));
 const Tools = lazy(() => import('./Tools.jsx'));
@@ -231,11 +229,15 @@ const Orders = () => {
   );
 };
 
+// THE SHOWROOM AND MEASURE & FIT ARE OFF THE TAB BAR (Stuart 2026-10-12: "go ahead and take it down
+// and we work on new one aligned with new cpq engine/tag system, the older can be totally scraped").
+// Both ran on the OLD step configurator — Configurator.jsx walking flow steps, priced by
+// functions/portalEngine.js — while HQ quotes on the tag engine, so the portal offered finishes and
+// prices HQ would not. They come back as ONE configurator on the engine HQ itself runs; until then
+// neither is imported here, so neither is in the bundle a customer loads.
 const TABS = [
   { id: 'orders', label: 'Orders & Quotes' },
   { id: 'payments', label: 'Payments' },
-  { id: 'showroom', label: 'Showroom' },
-  { id: 'measure', label: 'Measure & Fit' },
   { id: 'quickship', label: 'Quick Ship' },
   { id: 'gallery', label: 'Gallery' },
   { id: 'tools', label: 'Tools, Specs & FAQs' },
@@ -261,16 +263,6 @@ const Dashboard = ({ user }) => {
         ))}
       </nav>
       {tab === 'orders' && <Orders />}
-      {tab === 'showroom' && (
-        <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading the 3D showroom…</div>}>
-          <Showroom />
-        </Suspense>
-      )}
-      {tab === 'measure' && (
-        <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading Measure &amp; Fit…</div>}>
-          <VisionIntake />
-        </Suspense>
-      )}
       {tab === 'quickship' && (
         <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading the stock counter…</div>}>
           <QuickShip />
