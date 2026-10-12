@@ -53,6 +53,7 @@ export const ENGINE_DOORS = {
     'hardwarePricing.js': 'priceConfiguration',    // the money on it
     'hardwareHandoff.js': 'handoffItem',           // the cart line every consumer reads
     'hardwareAutoPicks.js': 'autoPicksOf',         // the picks the configurator makes on its own
+    'hardwareSession.js': 'sessionOf',             // the configuration itself, without the screen — what the portal's server calls
 };
 export const ENGINE_ROOTS = Object.keys(ENGINE_DOORS);
 /** The server's copy, relative to the repo. */

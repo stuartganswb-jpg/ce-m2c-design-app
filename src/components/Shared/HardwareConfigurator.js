@@ -19,8 +19,9 @@ import { SCOPE, scopeTargetsOf, scopeInForce, swatchActionOf, highlightOf } from
 import { kitBracketPicksOf, kitBracketSummary } from './kitBracketPicks';
 import { workIsPristine } from './cpqWorkspace';
 import { parseKitCode } from './kitCode';
-import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
-import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
+import { renderScaleOf } from './sizeMatrix';
+import { modelNodesOf } from './hardwareAdapter';
+import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle } from './hardwareSession';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort, customerPriceLevel } from './priceLevels';
 import { findClientPriceRow, customerKeys } from './clientPricing';
@@ -245,107 +246,33 @@ function HardwareConfiguratorInner({
     // the pricing section the whole configurator died on render with "Cannot access ... before
     // initialization" (2026-08-21). A `const` is not hoisted the way a function is; anything a hook
     // depends on has to be declared before it, not merely somewhere in the same component.
-    const partIndex = useMemo(() => {
-        const m = new Map();
-        parts.forEach(pt => [pt.id, pt.itemId, pt.legacyErpId].forEach(k => {
-            const kk = String(k || '').trim().toUpperCase();
-            if (kk && kk !== 'PENDING' && !m.has(kk)) m.set(kk, pt);
-        }));
-        return m;
-    }, [parts]);
-    const findPart = useCallback((id) => partIndex.get(String(id || '').trim().toUpperCase()) || null, [partIndex]);
-
-    // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
-    // id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
-    // the app's own record id and means nothing off this screen. A pin can be tagged with either, so
-    // the pin's id is resolved to the library item and OUR number read off it — never printed raw.
-    // 'PENDING' is the placeholder on an item that has not been numbered yet, so it never prints.
-    const ourId = useCallback((id) => {
-        const pt = findPart(id);
-        const legacy = String(pt?.legacyErpId || '').trim();
-        if (legacy && legacy.toUpperCase() !== 'PENDING') return legacy;
-        return String(pt?.itemId || id || '').trim();
-    }, [findPart]);
-
-    // ── ONE FLOW, EVERY DIAMETER (Stuart 2026-08-21) ─────────────────────────────────────────
-    // "can you integrate the H2 combined flow with the new engine."
     //
-    // H2-05 / H2-75 / H2-1 / H2-138 are ONE flow whose first question is the rod diameter, and the
-    // geometry is the H2-138 master — the fullest of the four. Everything else is the same product
-    // in another size, resolved through the code grammar (Shared/sizeMatrix). H1 goes the same way
-    // next, which is why none of this is written per-collection.
-    //
-    // ⚠ THE SWAP HAPPENS ON THE CHOICE, WHICH IS WHY IT IS THIS SMALL. Change the part a pin points
-    // AT and the whole engine follows for free: the cards name the right item, pricing bills it,
-    // the BOM carries it, the push maps it, the handoff hands it over. The pin's NODES are left
-    // alone on purpose — the render is the 138 master scaled, not four sets of geometry.
-    const sizeSteps = useMemo(() => (flow?.steps || []).filter(st => st?.type === SIZE_STEP_TYPE), [flow]);
+    // ── THE WORKING-OUT LIVES IN Shared/hardwareSession (Stuart 2026-10-12, the portal rebuild) ───
+    // How a part is found, which part a pin points at for the size chosen, and how the picks settle
+    // were worked out here, where only this screen could run them. The customer portal is being
+    // rebuilt on this engine, so they moved — the code AND his words that explain each rule — into
+    // one module this screen, the portal and the portal's server all call. Nothing was re-thought.
+    const partIndex = useMemo(() => partIndexOf(parts), [parts]);
+    const findPart = useCallback((id) => partIn(partIndex, id), [partIndex]);
+    // OUR part number (`legacyErpId`), never the app's own record id — see hardwareSession.ourNumberOf.
+    const ourId = useCallback((id) => ourNumberOf(findPart(id), id), [findPart]);
+
+    // ONE FLOW, EVERY DIAMETER — the swap happens on the CHOICE (hardwareSession.choicesAtSize).
+    const sizeSteps = useMemo(() => sizeStepsOf(flow), [flow]);
     const [sizePick, setSizePick] = useState({});       // size step id -> optId
-    // sizeSelectionsOf falls back to the family's base cell, so `sel` is complete from the first
-    // render — an unanswered diameter quotes the base size rather than nothing at all.
-    const sizeSel = useMemo(() => (sizeSteps.length ? sizeSelectionsOf(flow, sizePick) : null), [flow, sizePick, sizeSteps]);
-    const sizeIndex = useMemo(() => (sizeSel ? buildSizeIndex(parts) : null), [sizeSel, parts]);
-    const choices = useMemo(() => {
-        const raw = choicesFromAssembly(assembly, pins);
-        if (!sizeSel || !sizeIndex) return raw;
-        const returnsOk = returnsAllowedFor(sizeSel);
-        const out = [];
-        raw.forEach(c => {
-            // A RETURN NEEDS DEPTH. At the shallow projection this collection makes no return, so
-            // it is not offered — the same rule the old engine applies (returnsMinProj).
-            if (!returnsOk && c.role === 'RETURN') return;
-            const part = findPart(c.partId);
-            if (!part) { out.push(c); return; }          // unresolvable parts are the diagnostics' problem
-            // Not made at this size — not a choice at this size. A stamped family knows; an
-            // unstamped part is left alone and behaves exactly as it does today.
-            if (!partAllowedAtSize(part, sizeSel, sizeIndex)) return;
-            const swapped = sizeVariantOf(part, sizeSel, sizeIndex);
-            out.push(swapped.swapped && swapped.part ? { ...c, partId: swapped.part.id } : c);
-        });
-        return out;
-    }, [assembly, pins, sizeSel, sizeIndex, findPart]);
-    // The size matrix answers the projection question for a combined flow, so the engine's own
-    // proj context is taken from it rather than asked twice. Untouched where there is no matrix.
-    const sizeProjInches = useMemo(() => (sizeSel ? projInchesOfSel(sizeSel) : null), [sizeSel]);
-    const effAnswers = useMemo(() => (sizeProjInches != null ? { ...answers, proj: sizeProjInches } : answers), [answers, sizeProjInches]);
+    const sizeSel = useMemo(() => sizeSelOf(flow, sizePick, sizeSteps), [flow, sizePick, sizeSteps]);
+    const sizeIndex = useMemo(() => sizeIndexOf(sizeSel, parts), [sizeSel, parts]);
+    const choices = useMemo(() => choicesAtSize({ assembly, pins, sizeSel, sizeIndex, findPart }), [assembly, pins, sizeSel, sizeIndex, findPart]);
+    const sizeProjInches = useMemo(() => sizeProjInchesOf(sizeSel), [sizeSel]);
+    const effAnswers = useMemo(() => answersAtSize(answers, sizeProjInches), [answers, sizeProjInches]);
     const modelNodes = useMemo(() => modelNodesOf(assembly), [assembly]);
 
-    // ⚠ A PICK IS ONLY JUSTIFIED BY THE MODEL IT APPEARS IN, AND DROPPING ONE CHANGES THAT MODEL
-    // (Stuart 2026-08-20: "it deletes the bracket arms which is correct but it leaves the
-    //  backplates"). Pick brackets, then a return, and the plate stayed on the quote — three
-    // BP-S lines for two brackets.
-    //
-    // The filter below has always dropped a pick that is no longer offered, but it read a model
-    // built from the RAW picks — so the suppressed bracket was still "chosen" as far as the model
-    // was concerned, the plate pool was still the bracket's plain pool, and the stale plate was
-    // still a valid option. One pass cannot see this: it is DROPPING THE BRACKET that makes the
-    // plate invalid, and that only becomes true on the next pass.
-    //
-    // So it settles. Each pass keeps the picks the current model still offers and re-resolves;
-    // when a pass drops nothing, the selection and the model agree and we stop. In the steady
-    // state — nothing to drop — this is exactly one resolve, as before.
-    // ⚠ REPLACE THE PIN, KEEP THE PART (Stuart 2026-08-20: "the incorrect finial disappears — you
-    // just need to replace with the correct one"). A finial is pinned once per bracket family, so
-    // choosing the OTHER double bracket invalidates the pin the customer picked — but not the part
-    // they chose. Dropping it empties a step they already answered and blames them for the
-    // bracket. The same part number, cut for the bracket now chosen, is sitting right there in the
-    // slot; the pick moves to it.
-    //
-    // Used for BOTH the settling below and the live picks the UI reads, so what renders, what is
-    // billed and what shows as chosen can never disagree about which pin won.
+    // The same re-seat serves BOTH the settling (hardwareSession.settle) and the live picks the UI
+    // reads, so what renders, what is billed and what shows as chosen can never disagree about
+    // which pin won.
     const resolvePicks = useCallback((m, raw) => reseatPicks(m, raw), []);
 
-    const model = useMemo(() => {
-        let sel = Object.values(picks).filter(Boolean);
-        let m = resolveHardware({ choices, answers: effAnswers, selectedIds: sel, modelNodes });
-        for (let pass = 0; pass < 4; pass++) {
-            const next = Object.values(resolvePicks(m, picks));
-            if (next.length === sel.length && next.every(id => sel.includes(id))) break;
-            sel = next;
-            m = resolveHardware({ choices, answers: effAnswers, selectedIds: sel, modelNodes });
-        }
-        return m;
-    }, [choices, effAnswers, picks, modelNodes, resolvePicks]);
+    const model = useMemo(() => settle({ choices, answers: effAnswers, picks, modelNodes }), [choices, effAnswers, picks, modelNodes]);
 
     // An answer higher up can invalidate a pick below it — choose the traverse rod and the standard
     // arm you had chosen is not offered any more. Rather than police that with a sweep (the thing

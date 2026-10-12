@@ -1,0 +1,152 @@
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// THE CONFIGURATION, WITHOUT THE SCREEN (Stuart 2026-10-12, the portal rebuild)
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+//
+// "ok as long as we can always keep in total alignment."
+//
+// hardwareModel says what an assembly OFFERS, hardwarePricing what a resolved configuration COSTS,
+// hardwareHandoff what the cart line LOOKS like. Between them sits the configuration itself — which
+// part a pin points at for the size chosen, which picks survive a later answer, how many rings eight
+// feet takes, which finish each part wears — and that lived inside the CPQ screen
+// (HardwareConfigurator.js), where nothing but that screen could run it.
+//
+// The customer portal is being rebuilt on this engine. A second screen that worked the same things
+// out its own way would agree with HQ only until the first rule changed — which is exactly how the
+// old portal fell two months behind. So the working-out moves HERE, a piece at a time, and the CPQ
+// screen calls it: one implementation, three callers (HQ's screen, the portal's screen, the
+// portal's server). Each function below is the body of the memo it replaced — MOVED, not
+// re-thought — with what it closed over handed in as arguments, and the words that explain the
+// rule moved with it.
+//
+// Pure: no React, no Firebase, only the engine files beside it, imported with their .js (the rule
+// scripts/sync-engine.mjs enforces — it copies this file to the portal's server with the rest).
+// Harness: scripts/hardwareSession.test.mjs.
+
+import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter.js';
+import { resolve, reseatPicks } from './hardwareModel.js';
+import { autoPicksOf } from './hardwareAutoPicks.js';
+import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, projInchesOfSel } from './sizeMatrix.js';
+
+// ── THE PARTS, AND HOW ONE IS FOUND ──────────────────────────────────────────────────────────
+// A pin can be tagged with the library record's id, its itemId or OUR number, so every one of them
+// finds the part: UPPERCASED, and the first record to claim a key keeps it. 'PENDING' is the
+// placeholder on an item that has not been numbered yet — it is nobody's number.
+export function partIndexOf(parts) {
+    const m = new Map();
+    (parts || []).forEach(pt => [pt.id, pt.itemId, pt.legacyErpId].forEach(k => {
+        const kk = String(k || '').trim().toUpperCase();
+        if (kk && kk !== 'PENDING' && !m.has(kk)) m.set(kk, pt);
+    }));
+    return m;
+}
+export const partIn = (partIndex, id) => partIndex.get(String(id || '').trim().toUpperCase()) || null;
+
+// OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
+// id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
+// the app's own record id and means nothing off the screen. A pin can be tagged with either, so
+// the pin's id is resolved to the library item and OUR number read off it — never printed raw.
+// 'PENDING' is the placeholder on an item that has not been numbered yet, so it never prints.
+export function ourNumberOf(pt, id) {
+    const legacy = String(pt?.legacyErpId || '').trim();
+    if (legacy && legacy.toUpperCase() !== 'PENDING') return legacy;
+    return String(pt?.itemId || id || '').trim();
+}
+
+// ── ONE FLOW, EVERY DIAMETER (Stuart 2026-08-21) ─────────────────────────────────────────────
+// "can you integrate the H2 combined flow with the new engine."
+//
+// H2-05 / H2-75 / H2-1 / H2-138 are ONE flow whose first question is the rod diameter, and the
+// geometry is the H2-138 master — the fullest of the four. Everything else is the same product
+// in another size, resolved through the code grammar (Shared/sizeMatrix). H1 goes the same way
+// next, which is why none of this is written per-collection.
+//
+// ⚠ THE SWAP HAPPENS ON THE CHOICE, WHICH IS WHY IT IS THIS SMALL. Change the part a pin points
+// AT and the whole engine follows for free: the cards name the right item, pricing bills it,
+// the BOM carries it, the push maps it, the handoff hands it over. The pin's NODES are left
+// alone on purpose — the render is the 138 master scaled, not four sets of geometry.
+export const sizeStepsOf = (flow) => (flow?.steps || []).filter(st => st?.type === SIZE_STEP_TYPE);
+// sizeSelectionsOf falls back to the family's base cell, so `sel` is complete from the first
+// render — an unanswered diameter quotes the base size rather than nothing at all.
+export const sizeSelOf = (flow, sizePick, sizeSteps) => (sizeSteps.length ? sizeSelectionsOf(flow, sizePick) : null);
+export const sizeIndexOf = (sizeSel, parts) => (sizeSel ? buildSizeIndex(parts) : null);
+export function choicesAtSize({ assembly, pins, sizeSel, sizeIndex, findPart }) {
+    const raw = choicesFromAssembly(assembly, pins);
+    if (!sizeSel || !sizeIndex) return raw;
+    const returnsOk = returnsAllowedFor(sizeSel);
+    const out = [];
+    raw.forEach(c => {
+        // A RETURN NEEDS DEPTH. At the shallow projection this collection makes no return, so
+        // it is not offered — the same rule the old engine applies (returnsMinProj).
+        if (!returnsOk && c.role === 'RETURN') return;
+        const part = findPart(c.partId);
+        if (!part) { out.push(c); return; }          // unresolvable parts are the diagnostics' problem
+        // Not made at this size — not a choice at this size. A stamped family knows; an
+        // unstamped part is left alone and behaves exactly as it does today.
+        if (!partAllowedAtSize(part, sizeSel, sizeIndex)) return;
+        const swapped = sizeVariantOf(part, sizeSel, sizeIndex);
+        out.push(swapped.swapped && swapped.part ? { ...c, partId: swapped.part.id } : c);
+    });
+    return out;
+}
+// The size matrix answers the projection question for a combined flow, so the engine's own
+// proj context is taken from it rather than asked twice. Untouched where there is no matrix.
+export const sizeProjInchesOf = (sizeSel) => (sizeSel ? projInchesOfSel(sizeSel) : null);
+export const answersAtSize = (answers, sizeProjInches) => (sizeProjInches != null ? { ...answers, proj: sizeProjInches } : answers);
+
+// ── THE PICKS SETTLE ─────────────────────────────────────────────────────────────────────────
+// ⚠ A PICK IS ONLY JUSTIFIED BY THE MODEL IT APPEARS IN, AND DROPPING ONE CHANGES THAT MODEL
+// (Stuart 2026-08-20: "it deletes the bracket arms which is correct but it leaves the
+//  backplates"). Pick brackets, then a return, and the plate stayed on the quote — three
+// BP-S lines for two brackets.
+//
+// The filter has always dropped a pick that is no longer offered, but it read a model built
+// from the RAW picks — so the suppressed bracket was still "chosen" as far as the model was
+// concerned, the plate pool was still the bracket's plain pool, and the stale plate was still a
+// valid option. One pass cannot see this: it is DROPPING THE BRACKET that makes the plate
+// invalid, and that only becomes true on the next pass.
+//
+// So it settles. Each pass keeps the picks the current model still offers and re-resolves;
+// when a pass drops nothing, the selection and the model agree and we stop. In the steady
+// state — nothing to drop — this is exactly one resolve, as before.
+// ⚠ REPLACE THE PIN, KEEP THE PART (Stuart 2026-08-20: "the incorrect finial disappears — you
+// just need to replace with the correct one"). A finial is pinned once per bracket family, so
+// choosing the OTHER double bracket invalidates the pin the customer picked — but not the part
+// they chose. Dropping it empties a step they already answered and blames them for the
+// bracket. The same part number, cut for the bracket now chosen, is sitting right there in the
+// slot; the pick moves to it (hardwareModel.reseatPicks).
+export function settle({ choices, answers, picks, modelNodes }) {
+    let sel = Object.values(picks).filter(Boolean);
+    let m = resolve({ choices, answers, selectedIds: sel, modelNodes });
+    for (let pass = 0; pass < 4; pass++) {
+        const next = Object.values(reseatPicks(m, picks));
+        if (next.length === sel.length && next.every(id => sel.includes(id))) break;
+        sel = next;
+        m = resolve({ choices, answers, selectedIds: sel, modelNodes });
+    }
+    return m;
+}
+
+/**
+ * The configuration, in one call — for a caller that is not a React screen (the portal's server, a
+ * harness). The CPQ screen makes these SAME calls one memo at a time, so a keystroke re-works only
+ * what it touched; this makes them in the same order, with the same arguments.
+ *
+ * @param data   { assembly, pins, parts, flow } — what the screen is handed
+ * @param state  { answers, picks, sizePick }    — what the operator has answered
+ */
+export function sessionOf({ assembly, pins = [], parts = [], flow = null } = {}, { answers = {}, picks = {}, sizePick = {} } = {}) {
+    const partIndex = partIndexOf(parts);
+    const findPart = (id) => partIn(partIndex, id);
+    const ourId = (id) => ourNumberOf(findPart(id), id);
+    const sizeSteps = sizeStepsOf(flow);
+    const sizeSel = sizeSelOf(flow, sizePick, sizeSteps);
+    const sizeIndex = sizeIndexOf(sizeSel, parts);
+    const choices = choicesAtSize({ assembly, pins, sizeSel, sizeIndex, findPart });
+    const sizeProjInches = sizeProjInchesOf(sizeSel);
+    const effAnswers = answersAtSize(answers, sizeProjInches);
+    const modelNodes = modelNodesOf(assembly);
+    const model = settle({ choices, answers: effAnswers, picks, modelNodes });
+    // The picks made on the operator's behalf (Shared/hardwareAutoPicks) — read from the answers AS GIVEN.
+    const { settledKeys, livePicks } = autoPicksOf({ model, answers, operatorPicks: reseatPicks(model, picks) });
+    return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks };
+}
