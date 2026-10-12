@@ -18,6 +18,9 @@
       "source": "functions",
       "codebase": "default",
       "disallowLegacyRuntimeConfig": true,
+      "predeploy": [
+        "node scripts/sync-engine.mjs"
+      ],
       "ignore": [
         "node_modules",
         ".git",

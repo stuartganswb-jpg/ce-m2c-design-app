@@ -1,2 +1,5 @@
 node_modules/
 *.local
+# The engine's copy for the portal's server — made by scripts/sync-engine.mjs before every deploy
+# (firebase.json predeploy). Generated: never edit it, never commit it.
+engine/
