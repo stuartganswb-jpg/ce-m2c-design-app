@@ -14,7 +14,10 @@ import { isRailroad, fabricWidthOf } from '../Shared/pillowCuts';
 import { saveGuideCapture } from '../Shared/guideCapture';   // the ONE Asset Gallery writer — a photographed fabric files as kind FABRIC
 import { pillowRequestOf } from '../Shared/pillowRequest';   // step 3c: the board → Order Entry (tab 7) as a jobs PILLOW_REQUEST
 
-const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, globalLists, activeSession, customerName = '' }) => {
+// `counter` + `onAddToCart(line)` (the show counter, 2026-10-12): the board inside the counter page — no Vision quote
+// session is needed, the CPQ push is not offered, and "Add to this cart" hands the priced line straight to the cart
+// instead of writing a jobs request for tab 7 to load.
+const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, globalLists, activeSession, customerName = '', counter = false, onAddToCart = null }) => {
   const [viewMode, setViewMode] = useState('ENGINEERING');
   const [isPushingToCPQ, setIsPushingToCPQ] = useState(false);
   
@@ -338,6 +341,12 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
           const capturedUsed = capturedFabrics.filter(f => pricedQ.rows.some(r => r.captured && r.assetId === f.assetId)).map(f => ({ id: f.id, assetId: f.assetId, code: f.legacyErpId, name: f.itemName, thumbnailUrl: f.thumbnailUrl || '', priceGroup: f.manufacturingSpecs.priceGroup, widthIn: f.manufacturingSpecs.width, railroad: !!f.manufacturingSpecs.customData.railroad, patternId: f.manufacturingSpecs.customData.patternId, color: f.manufacturingSpecs.customData.color }));
           const req = pillowRequestOf({ session: { ...activeSession, customerName }, priced: pricedQ, geometry, design, capturedFabrics: capturedUsed, snapshot, qty, by: currentUser, brandId: activeBrand });
           if (!req.ok) { setSendState(p => ({ ...p, busy: false, msg: req.errors.map(e => e.message).join(' '), tone: 'err' })); return; }
+          if (counter && typeof onAddToCart === 'function') {
+              // the counter: the same priced line, straight into the cart beside it — no request, no second screen
+              onAddToCart(req.doc.pillowRequest.lines[0]);
+              setSendState({ busy: false, qty: '1', tone: 'ok', msg: `Added ${qty} × ${req.doc.pillowRequest.lines[0].summary} at $${pricedQ.unitPrice} to the cart.` });
+              return;
+          }
           await setDoc(doc(db, 'jobs', req.doc.jobId), { ...req.doc, createdAtServer: serverTimestamp() });
           setSendState({ busy: false, qty: '1', tone: 'ok', msg: `Sent ${req.doc.jobId} to Order Entry — ${qty} × ${req.doc.pillowRequest.lines[0].summary} at $${pricedQ.unitPrice}. Open 7. Quick Ship → Custom pillows awaiting entry → Load into cart.` });
       } catch (e) {
@@ -479,7 +488,7 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
           ))}
       </div>
 
-      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, opacity: activeSession?.quoteId ? 1 : 0.4, pointerEvents: activeSession?.quoteId ? 'auto' : 'none' }}>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1, opacity: (activeSession?.quoteId || counter) ? 1 : 0.4, pointerEvents: (activeSession?.quoteId || counter) ? 'auto' : 'none' }}>
         
         {/* LEFT COLUMN - CONFIGURATOR OR VISUAL TOOLS */}
         <div style={{ width: '450px', background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', overflowY: 'auto' }}>
@@ -713,12 +722,12 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                                 <input value={sendState.qty} onChange={e => setSendState(p => ({ ...p, qty: e.target.value }))} style={{ ...fieldStyle, width: '90px', padding: '8px' }} />
                             </div>
                             <button onClick={handleSendToOrderEntry} disabled={sendState.busy || !activeSession?.customerId || !priced || !priced.ok} style={{ width: '100%', padding: '16px', background: (sendState.busy || !activeSession?.customerId || !priced || !priced.ok) ? 'var(--paper-2)' : 'var(--ink)', color: (sendState.busy || !activeSession?.customerId || !priced || !priced.ok) ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
-                                {sendState.busy ? 'Sending…' : 'Send to Order Entry'}
+                                {sendState.busy ? (counter ? 'Adding…' : 'Sending…') : (counter ? '+ Add to this cart' : 'Send to Order Entry')}
                             </button>
                             {sendState.msg && <div style={{ fontSize: '0.8rem', color: sendState.tone === 'err' ? '#d9534f' : (sendState.tone === 'ok' ? '#2e7d32' : 'var(--ink-soft)') }}>{sendState.msg}</div>}
-                            <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeSession?.quoteId} style={{ width: '100%', padding: '16px', background: (isPushingToCPQ || !activeSession?.quoteId) ? 'var(--paper-2)' : 'var(--ink)', color: (isPushingToCPQ || !activeSession?.quoteId) ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: (isPushingToCPQ || !activeSession?.quoteId) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
+                            {!counter && <button onClick={handlePushToCPQ} disabled={isPushingToCPQ || !activeSession?.quoteId} style={{ width: '100%', padding: '16px', background: (isPushingToCPQ || !activeSession?.quoteId) ? 'var(--paper-2)' : 'var(--ink)', color: (isPushingToCPQ || !activeSession?.quoteId) ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: (isPushingToCPQ || !activeSession?.quoteId) ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
                                 {isPushingToCPQ ? "Saving..." : "Push Config to CPQ"}
-                            </button>
+                            </button>}
                         </div>
                     </div>
                 </div>

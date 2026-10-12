@@ -84,6 +84,13 @@ export function quickSellPlanOf({ cw, mode = 'PILLOW', sizeKey = '', variant = '
     const q = Math.max(1, Math.floor(num(qty) || 1));
     if (!cw) return { ok: false, errors: [{ code: 'NO_COLOURWAY', message: 'Pick a fabric.' }], warnings, kind: '', why: '', qty: q, summary: '', note: '', chartPrice: null };
 
+    if (up(mode) === 'SAMPLE') {
+        // a swatch: the small sample (SWA/) or the large one (SWAL/), at its own price — stock, never sewn
+        const v = up(variant) === 'L' || up(variant) === 'XL' ? 'L' : 'S';
+        const item = (cw.samples || {})[v] || null;
+        if (!item) return { ok: false, errors: [{ code: 'NO_SAMPLE', message: `${cw.label} has no ${v === 'L' ? 'large' : 'small'} sample in the library.` }], warnings, kind: 'SAMPLE', why: '', qty: q, summary: '', note: '', chartPrice: null };
+        return { ok: true, errors, warnings, kind: 'SAMPLE', why: 'SAMPLE', qty: q, summary: `${cw.label} · ${v === 'L' ? 'large' : 'small'} sample`, note: '', sampleItem: item, chartPrice: null };
+    }
     if (up(mode) === 'THROW') {
         const v = up(variant) || 'STD';
         const item = (cw.throws || {})[v] || null;
@@ -166,7 +173,7 @@ export const quickSellTilesOf = (catalog, { q = '', group = '', mode = 'PILLOW' 
     const t = up(q);
     const g = up(group);
     return ((catalog && catalog.list) || [])
-        .filter(cw => (up(mode) === 'THROW' ? !!(cw.throws && (cw.throws.STD || cw.throws.XL || cw.throws.XXL)) : (Object.keys(cw.pillows || {}).length > 0 || !!cw.fabric)))
+        .filter(cw => (up(mode) === 'THROW' ? !!(cw.throws && (cw.throws.STD || cw.throws.XL || cw.throws.XXL)) : up(mode) === 'SAMPLE' ? !!(cw.samples && (cw.samples.S || cw.samples.L)) : (Object.keys(cw.pillows || {}).length > 0 || !!cw.fabric)))
         .filter(cw => !g || up(cw.group) === g)
         .filter(cw => !t || [cw.key, cw.patternRaw, cw.label, cw.colourName, cw.colour].some(v => up(v).includes(t)))
         .sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));

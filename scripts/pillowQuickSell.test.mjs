@@ -72,6 +72,16 @@ const thr = quickSellPlanOf({ cw: bell10, mode: 'THROW', qty: 2 });
 ok('a throw short on the honest shelf is sold short and said; in stock says so; unread stays unknown', quickSellPlanOf({ cw: bell10, mode: 'THROW', qty: 3, available: 2 }).why === 'SHORT' && quickSellPlanOf({ cw: bell10, mode: 'THROW', qty: 3, available: 2 }).warnings.some(w => /2 whole throws on the shelf for 3/.test(w)) && quickSellPlanOf({ cw: bell10, mode: 'THROW', qty: 1, available: 2 }).why === 'IN_STOCK' && thr.why === 'STOCK_UNKNOWN');
 ok('the throw is the throw item; XL on request; a missing variant refuses', thr.ok && thr.kind === 'THROW' && thr.throwItem.legacyErpId === 'Bell/10T' && quickSellPlanOf({ cw: bell10, mode: 'THROW', variant: 'XL' }).throwItem.legacyErpId === 'Bell/10T-XL' && !quickSellPlanOf({ cw: bell10, mode: 'THROW', variant: 'XXL' }).ok);
 
+// ── the sample ───────────────────────────────────────────────────────────────────────────────
+{
+    const lib3 = [...lib, item('SWA/Bell10', { name: 'Bell- Natural #10 Small Sample', specs: { basePrice: 15 } }), item('SWAL/Bell10', { name: 'Bell- Natural #10 Large Sample', specs: { basePrice: 40 } })];
+    const cat3 = colourwaysOf(lib3);
+    const b = cat3.byKey.get('BELL/10');
+    const sm = quickSellPlanOf({ cw: b, mode: 'SAMPLE', qty: 2 });
+    ok('a sample is the SWA item (small) or SWAL (large); a colourway with none refuses', sm.ok && sm.kind === 'SAMPLE' && sm.sampleItem.legacyErpId === 'SWA/Bell10' && quickSellPlanOf({ cw: b, mode: 'SAMPLE', variant: 'L' }).sampleItem.legacyErpId === 'SWAL/Bell10' && !quickSellPlanOf({ cw: cat3.byKey.get('BELL/22'), mode: 'SAMPLE' }).ok);
+    ok('the sample tiles list only colourways with a sample', quickSellTilesOf(cat3, { mode: 'SAMPLE' }).length === 1 && quickSellTilesOf(cat3, { mode: 'SAMPLE' })[0].key === 'BELL/10');
+}
+
 // ── refusals ─────────────────────────────────────────────────────────────────────────────────
 const noGroup = quickSellPlanOf({ cw: lost, sizeKey: '19x19', available: 4, config, findPart });
 ok('no group on the colourway refuses by name, even with a SKU on the shelf', !noGroup.ok && noGroup.errors[0].code === 'NO_GROUP');

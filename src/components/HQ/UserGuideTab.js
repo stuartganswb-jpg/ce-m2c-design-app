@@ -1188,6 +1188,14 @@ const UniquityGuide = () => (
             <Path name="Send to Order Entry" goes="7. Quick Ship → Custom pillows awaiting entry">Pick a customer in the header, say how many, press it. The request shows on the customer's CRM pipeline, priced.</Path>
         </Screen>
 
+        <h2 style={S.h2}>At the show — <span style={S.tabno}>the Show Counter · hub tile 06 · your PIN</span></h2>
+        <Screen title="🛋 Show Counter" tag="icons all the way · the same order as tab 7">
+            <Path name="Sign in" goes="your own PIN">The counter is tab 7 in a lean skin at its own address: the cart, the customer, the save and every rule are the same, so a counter order is an Order Entry order — RTG, the warehouse, Stitch &amp; Sew and NetSuite see it exactly as one.</Path>
+            <Path name="Customer first">Type a name and tap the customer, or tap <b>New customer</b> for a designer met at the show (name, email, phone — filed in the CRM at once). A job or sidemark is optional.</Path>
+            <Path name="The menu" goes="Throws · Pillows · Custom pillow · Samples">Big tiles, no dropdowns. Pillows: a size tile, a fabric tile, an edge tile, a trim tile, the fill, − and + for the quantity, Add. Throws: a fabric tile, Standard or XL. Samples: a fabric tile, small or large. Custom pillow: the board, drawn as on 9. Client Vision, with <b>Add to this cart</b> at the bottom.</Path>
+            <Path name="The cart and the sale">The cart rides beneath the screens; <b>Cart</b> at the top right scrolls to it. Create Sales Order or Create Quote — the same buttons as tab 7. Then <b>turn the screen to the customer</b>: make the pay link and they scan the QR to pay a deposit or the whole amount on their own phone. The order is on their CRM card from that moment; the office can email the quote or invoice from there as backup.</Path>
+        </Screen>
+
         <h2 style={S.h2}>Selling — <span style={S.tabno}>7. Quick Ship</span></h2>
         <Screen title="🛋 Pillows &amp; throws — the quick sell" tag="size · fabric · add to cart">
             <Path name="Pillow" goes="a size tile → a fabric tile → Add to cart">The size tiles are the chart's sizes drawn to proportion; a pale tile has no finished pillow in the catalog and is always made to order. The fabric tiles are one per colourway with its picture, its group letter in the corner and a SKU mark when the size you picked exists as a finished pillow. Search by pattern, colour name or number; narrow to a group. Edge (knife, flange, welt), a trim on the outer edges and the fill are the only options — anything more is the board.</Path>

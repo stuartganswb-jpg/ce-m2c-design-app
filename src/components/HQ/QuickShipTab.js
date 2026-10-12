@@ -8,7 +8,9 @@ import { quickShipPullLines, quickShipCoverCodes, quickShipBackorderLines } from
 import { pillowCartPlanOf, PILLOW_REQUEST_STATUS } from '../Shared/pillowRequest';   // 🧵 Uniquity custom pillows from the Vision board (S7 step 3c) — ONE guarded mount
 import { lineImageForItem, lineImageOfAsset, lineImagesOf } from '../Shared/lineImage';   // 🖼 a picture on a line — samples from the Asset Gallery (S7 step 7)
 import AssetImagePicker from '../Shared/AssetImagePicker';
-import PillowQuickSell from './PillowQuickSell';   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
+import PillowQuickSell from './PillowQuickSell';
+import CounterScreens from './CounterScreens';   // 🛋 the show counter's screens (counterMode)
+import PayLinkPanel from '../Shared/PayLinkPanel';   // the QR the customer scans at the counter   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
 import { QUICK_SELL_REQUEST_ID } from '../Shared/pillowQuickSell';
 import { fabricNsLineOf } from '../Shared/pillowCatalog';   // an app-only fabric pushes as a fraction of its throw (Stuart 2026-10-12)
 import { db } from '../../firebase';
@@ -143,7 +145,9 @@ const KB_SLOTS = [
 // re-adding the kit next month doesn't quietly re-bill last month's rush.
 const KIT_CFG_KEYS = Object.keys(EMPTY_KB).filter(k => !k.startsWith('rush'));
 
-const QuickShipTab = ({ currentUser, activeBrand }) => {
+// `counterMode` (the Uniquity show counter, 2026-10-12): the same tab — cart, customer, save, every rule — wearing the
+// counter's screens (HQ/CounterScreens) instead of the hardware catalog. One door, one spine.
+const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
     const [allItems, setAllItems] = useState([]);     // every brand part (for fee lookup)
     const [customers, setCustomers] = useState([]);
     const [kits, setKits] = useState([]);             // saved prebuilt kits
@@ -534,10 +538,18 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const addQuickSell = (plan) => {
         if (!plan || !plan.ok) return;
         if (plan.kind === 'THROW') { pushLine(plan.throwItem, plan.qty, '', null, {}); return; }
+        if (plan.kind === 'SAMPLE') { pushLine(plan.sampleItem, plan.qty, '', null, {}); return; }
         if (plan.kind === 'SKU') { pushLine(plan.sku.item, plan.qty, plan.note || '', null, { rateOverride: plan.sku.chartPrice }); return; }
         const cartPlan = pillowCartPlanOf({ line: plan.mto.line, findByCode: pillowByCode });
         if (!cartPlan.ok) { addLog(`⛔ Not added — ${cartPlan.errors.map(e => e.message).join(' ')}`, 'error'); return; }
         pushPillowPlan({ plan: cartPlan, line: plan.mto.line, requestId: `${QUICK_SELL_REQUEST_ID}${Date.now()}`, index: 0 });
+    };
+    // the counter's custom board hands its priced line straight here (VisionPillow onAddToCart)
+    const addCounterCustom = (line) => {
+        const cartPlan = pillowCartPlanOf({ line, findByCode: pillowByCode });
+        if (!cartPlan.ok) { addLog(`⛔ Not added — ${cartPlan.errors.map(e => e.message).join(' ')}`, 'error'); return; }
+        pushPillowPlan({ plan: cartPlan, line, requestId: `COUNTER${Date.now()}`, index: 0 });
+        addLog(`✂️ Added ${line.qty || 1} × custom pillow — ${line.summary || ''}`, 'success');
     };
     const loadPortalReq = async (job) => {
         const pr = job.portalRequest || {};
@@ -1673,7 +1685,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 });
                 addLog(`✅ Quote saved (${qJobId}) and queued to NetSuite (outbox ${obId}).`, 'success');
                 alert(`✅ Quote saved on ${selectedCustomer?.name || customerId}'s pipeline (Tab 10) and queued to NetSuite — the estimate # lands on it in ~1 minute.`);
-                setLastCreated({ kind: 'QUOTE', id: qJobId });
+                setLastCreated({ kind: 'QUOTE', id: qJobId, total: cartTotal, customerName: selectedCustomer?.name || customerId });
                 resetOrderEntry();
                 setPushing(false); return;
             }
@@ -1825,7 +1837,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 setEditingSo(null);
             }
 
-            setLastCreated({ kind: 'SALES ORDER', id: hqId });
+            setLastCreated({ kind: 'SALES ORDER', id: hqId, total: cartTotal, customerName: selectedCustomer?.name || customerId });
             resetOrderEntry();
         } catch (e) {
             console.error('Quick Ship push error', e);
@@ -1865,6 +1877,156 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             </div>
         );
     };
+
+    // THE CART CARD — one block, drawn in both skins (the counter shows it beneath its screens).
+    const cartCard = (
+        <div id="counter-cart">
+                {/* RIGHT: CART */}
+                <div style={{ ...card, display: 'flex', flexDirection: 'column', minHeight: '400px' }}>
+                    <div style={{ ...cardHd, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>Order Cart</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{cart.length} line(s)</span>
+                    </div>
+                    <div style={{ padding: '12px 16px', flex: 1, overflowY: 'auto' }}>
+                        {cart.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', padding: '20px', textAlign: 'center' }}>Empty — add stocked items or a kit.</div>}
+                        {pricedCart.map(l => (
+                            <div key={l.key} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 74px auto', gap: '10px', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--paper-2)' }}>
+                                <div style={{ minWidth: 0 }}>
+                                    {/* Customer-facing code leads; the real stocked code rides small
+                                        beneath it, since that's what we pick and barcode. */}
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--ink)' }}>{l.aliasErp || l.erp || '—'} {!l.nsId && <span style={{ color: '#d9534f' }} title="No NetSuite ID — will be skipped on push">⚠</span>}</div>
+                                    {l.aliasErp && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>ships as {l.erp}</div>}
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.packUom && <span style={{ color: 'var(--brass)' }}> · {l.qty} × {l.packUom} = {l.eachQty} ea</span>}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}{l.kitFinish ? ` · ${l.kitFinish}` : ''}</span>}</div>
+                                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '4px' }}>
+                                        {l.lineImage && l.lineImage.url ? <img src={l.lineImage.url} alt="" title={l.lineImage.name || ''} style={{ width: '34px', height: '34px', objectFit: 'cover', border: '1px solid var(--line)' }} /> : null}
+                                        <button onClick={() => setImagePickFor(l.key)} title="Pick a picture from the Asset Gallery for this line (prints on the quote)" style={{ background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontSize: '12px', padding: '3px 6px' }}>🖼</button>
+                                        {l.lineImage ? <button onClick={() => setLineImage(l.key, null)} title="Remove the picture" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '11px', color: 'var(--ink-soft)' }}>✕</button> : null}
+                                    </div>
+                                    <input value={l.lineMemo || ''} onChange={e => setLineMemo(l.key, e.target.value)} placeholder="Memo / room — e.g. LIVING ROOM LEFT" title="Prints on the customer's quote beside this line, and rides the line's NetSuite Tag" style={{ width: '100%', marginTop: '4px', padding: '4px 6px', border: '1px solid var(--line)', background: l.lineMemo ? '#fffdf5' : '#fff', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }} />
+                                </div>
+                                <input type="number" min="1" value={l.qty} onChange={e => setQty(l.key, e.target.value)} style={qtyInp} title={l.packUom ? `Packs of ${l.packSize}` : 'Quantity'} />
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', textAlign: 'right', color: 'var(--ink)' }}>${(l.rate * l.eachQty).toFixed(2)}</div>
+                                <button onClick={() => removeLine(l.key)} style={{ border: 'none', background: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.1rem' }} title="Remove">×</button>
+                            </div>
+                        ))}
+                    </div>
+                    <div style={{ borderTop: '1px solid var(--line)', padding: '14px 20px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+                            <div><span style={lbl}>Customer PO #</span><input value={soExtras.po} onChange={e => setSoExtras(p2 => ({ ...p2, po: e.target.value }))} placeholder="their PO number" style={{ ...inp, width: '100%' }} /></div>
+                            <div><span style={lbl}>Sidemark / job (memo + line tag)</span><input value={soExtras.sidemark} onChange={e => setSoExtras(p2 => ({ ...p2, sidemark: e.target.value }))} placeholder="e.g. SMITH RESIDENCE" style={{ ...inp, width: '100%' }} /></div>
+                            <div style={{ gridColumn: '1 / -1' }}><span style={lbl}>Internal memo (optional — never customer-facing)</span><input value={soExtras.internalMemo} onChange={e => setSoExtras(p2 => ({ ...p2, internalMemo: e.target.value }))} style={{ ...inp, width: '100%' }} /></div>
+                            {/* Need-by + production notes (Stuart 2026-08-28): ride the SO record, the
+                                Order Entry Needs board, every work order this order fires, and the WMS
+                                card — the manufacturing side reads them everywhere the order goes. */}
+                            <div><span style={lbl}>Need-by date (production)</span><input type="date" value={soExtras.needBy} onChange={e => setSoExtras(p2 => ({ ...p2, needBy: e.target.value }))} style={{ ...inp, width: '100%' }} /></div>
+                            <div><span style={lbl}>Production notes (rides to the floor)</span><input value={soExtras.prodNotes} onChange={e => setSoExtras(p2 => ({ ...p2, prodNotes: e.target.value }))} placeholder="e.g. match sample on file · ship complete" style={{ ...inp, width: '100%' }} /></div>
+                            {/* A DISPLAY ORDER IS BORN PARKED FOR 10.5 (Stuart 2026-10-07, Shared/salesOrderHeader.displayParkOf) — the
+                                same tick CPQ's checkout carries: RTG does not start its to-be-finished lines by itself and the
+                                WMS offers nothing until a row is released on 10.5 Display Management. */}
+                            <label style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', border: `1px solid ${soExtras.displayOrder ? 'var(--brass)' : 'var(--line)'}`, background: soExtras.displayOrder ? '#fdf8ef' : '#fff', cursor: 'pointer' }}>
+                                <input type="checkbox" checked={!!soExtras.displayOrder} onChange={e => setSoExtras(p2 => ({ ...p2, displayOrder: e.target.checked }))} />
+                                <span style={{ fontSize: '0.85rem' }}><b>Display order</b> — its rows are released from 10.5 Display Management, by count. Nothing starts by itself and the warehouse is offered nothing until a row is released.</span>
+                            </label>
+                            {/* A SET % FOR THE WHOLE ORDER (Stuart 2026-09-11): every item line's rate,
+                                fees untouched — the same field CPQ's checkout writes (orderDiscount). */}
+                            <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <span style={{ ...lbl, marginBottom: 0 }}>Order discount %</span>
+                                <input type="number" min="0" max="100" step="0.5" value={soExtras.orderDiscountPercent ?? ''} onChange={e => setSoExtras(p2 => ({ ...p2, orderDiscountPercent: e.target.value }))} placeholder="none" style={{ ...inp, width: '90px', textAlign: 'right' }} />
+                                <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{orderDiscountPct > 0 ? `applied to every item line's price (kits included, fees excluded) — saves $${orderDiscountSaved.toFixed(2)}` : 'blank = no discount; applies to every item line, not to fees'}</span>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+                            <span style={{ ...lbl, marginBottom: 0, flex: 1 }}>Shipping</span>
+                            {[['SAVED', 'Saved address'], ['CUSTOM', 'Custom drop-ship']].map(([k, l2]) => (
+                                <button key={k} onClick={() => setShip(prev => ({ ...prev, method: k }))} style={{ padding: '7px 12px', border: `1px solid ${ship.method === k ? 'var(--ink)' : 'var(--line)'}`, background: ship.method === k ? 'var(--ink)' : '#fff', color: ship.method === k ? '#fff' : 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{l2}</button>
+                            ))}
+                        </div>
+                        {ship.method === 'SAVED' ? (
+                            (selectedCustomer?.shippingAddresses?.length ? (
+                                <select value={ship.addressId} onChange={e => setShip(prev => ({ ...prev, addressId: e.target.value }))} style={{ ...inp, width: '100%', marginBottom: '10px' }}>
+                                    <option value="">— saved NetSuite address (default if blank) —</option>
+                                    {selectedCustomer.shippingAddresses.map(a => <option key={a.addressBookId} value={a.addressBookId}>{a.label} — {a.addr1}, {a.city} {a.state}</option>)}
+                                </select>
+                            ) : <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginBottom: '10px' }}>No synced NetSuite addresses — use Custom drop-ship, or the SO ships to the customer default.</div>)
+                        ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+                                <input placeholder="Attention" value={ship.custom.attention} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, attention: e.target.value } }))} style={inp} />
+                                <input placeholder="Addressee / company" value={ship.custom.addressee} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, addressee: e.target.value } }))} style={inp} />
+                                <input placeholder="Address 1" value={ship.custom.addr1} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, addr1: e.target.value } }))} style={{ ...inp, gridColumn: '1 / -1' }} />
+                                <input placeholder="Address 2" value={ship.custom.addr2} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, addr2: e.target.value } }))} style={{ ...inp, gridColumn: '1 / -1' }} />
+                                <input placeholder="City" value={ship.custom.city} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, city: e.target.value } }))} style={inp} />
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <input placeholder="ST" value={ship.custom.state} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, state: e.target.value } }))} style={{ ...inp, width: '54px' }} />
+                                    <input placeholder="Zip" value={ship.custom.zip} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, zip: e.target.value } }))} style={inp} />
+                                </div>
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ ...lbl, marginBottom: 0 }}>Shipping charge $</span>
+                            <input type="number" min="0" step="0.01" value={ship.amount} onChange={e => setShip(prev => ({ ...prev, amount: e.target.value }))} placeholder="0.00" style={{ ...inp, width: '110px', textAlign: 'right' }} />
+                            <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>rides the SO header with an auto-resolved ship method</span>
+                        </div>
+                    </div>
+                    <div style={{ borderTop: '1px solid var(--line)', padding: '16px 20px', background: 'var(--paper)' }}>
+                        {/* THE CONFIRMATION (Stuart 2026-08-30: the button stayed lit "like you
+                            need to push it again"). Unmissable, and it clears on the next add. */}
+                        {lastCreated && cart.length === 0 && (
+                            <div style={{ marginBottom: '14px', padding: '12px 14px', background: '#eaf5ec', border: '2px solid #3a7d44', fontFamily: 'var(--mono)', fontSize: '11px', color: '#2f7d3b', letterSpacing: '.04em' }}>
+                                ✅ {lastCreated.kind} <b>{lastCreated.id}</b> CREATED — queued to NetSuite (number stamps back on accept). It is on the customer's CRM card now{lastCreated.kind === 'SALES ORDER' ? '; any to-be-finished lines start by themselves on RTG once NetSuite accepts it — the order\'s RTG card shows each line, and names in red any that need a person' : ''}.
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Est. Total</span>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>
+                                {orderDiscountSaved > 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', textDecoration: 'line-through', marginRight: '10px' }}>${cartGross.toFixed(2)}</span>}
+                                {orderDiscountSaved > 0 && <span style={{ fontSize: '0.8rem', color: 'var(--brass)', marginRight: '10px' }}>Order Discount ({orderDiscountPct}%): -${orderDiscountSaved.toFixed(2)}</span>}
+                                ${cartTotal.toFixed(2)}
+                            </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button onClick={() => pushToNetSuite('salesorder')} disabled={pushing || cart.length === 0}
+                                style={{ ...btn(pushing ? 'var(--paper-2)' : 'var(--ink)', pushing ? 'var(--ink-soft)' : '#fff'), flex: 1.4, cursor: pushing ? 'wait' : 'pointer' }}>
+                                {pushing ? 'Transmitting…' : 'Create Sales Order'}
+                            </button>
+                            <button onClick={() => pushToNetSuite('estimate')} disabled={pushing || cart.length === 0}
+                                title="Same cart, same fields — pushed as a NetSuite QUOTE (estimate, CE Quote form) instead of a sales order. No pick/pack until it becomes an order."
+                                style={{ ...btn('transparent', pushing ? 'var(--ink-soft)' : 'var(--ink)'), flex: 1, border: '1px solid var(--ink)', cursor: pushing ? 'wait' : 'pointer' }}>
+                                {pushing ? '…' : 'Create Quote'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+        </div>
+    );
+
+    // ── THE SHOW COUNTER (Stuart 2026-10-12): the counter's screens + this tab's own cart, save and log ──
+    if (counterMode) {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '16px', maxWidth: '1400px', margin: '0 auto' }}>
+                <CounterScreens currentUser={currentUser} customers={customers} customerId={customerId} selectedCustomer={selectedCustomer}
+                    onPickCustomer={(c) => { setCustomerId(c.id); setCustSearch(`${c.name} (${c.id})`); }} jobName={jobName} setJobName={setJobName}
+                    items={allItems} findPart={(id) => allItems.find(x => x.id === id) || pillowByCode(id)} rateFor={rateFor}
+                    onAddQuickSell={addQuickSell} onAddCustomPillow={addCounterCustom} addLog={addLog} cartCount={cart.length} cartTotal={cartTotal}
+                    onShowCart={() => { const el = document.getElementById('counter-cart'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }} />
+                {cartCard}
+                {lastCreated && cart.length === 0 && Number(lastCreated.total) > 0 && (
+                    <div style={{ ...card, padding: '20px 24px', border: '2px solid var(--brass)' }}>
+                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem', marginBottom: '6px' }}>Turn the screen to the customer</div>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '12px' }}>Make the link and they scan the QR to pay on their own phone. {lastCreated.kind} <b>{lastCreated.id}</b> is on their CRM card; the office can email it from there.</div>
+                        <PayLinkPanel docType={lastCreated.kind === 'QUOTE' ? 'QUOTE' : 'SALES_ORDER'} collection={lastCreated.kind === 'QUOTE' ? 'jobs' : 'hq_sales_orders'} docId={lastCreated.id}
+                            reference={lastCreated.id} customerName={lastCreated.customerName || ''} totalAmount={Number(lastCreated.total) || 0} brand={activeBrand} />
+                    </div>
+                )}
+                {log.length > 0 && (
+                    <div style={{ ...card, background: 'var(--dark)', overflow: 'hidden' }}>
+                        <div style={{ padding: '10px 16px', maxHeight: '200px', overflowY: 'auto', fontFamily: 'var(--mono)', fontSize: '11px' }}>
+                            {log.slice(0, 20).map((l, i) => <div key={i} style={{ color: l.type === 'error' ? '#f28b82' : (l.type === 'warn' ? '#f6c768' : (l.type === 'success' ? '#9fd8a6' : '#cfcfcf')), padding: '2px 0' }}>{l.time} · {l.msg}</div>)}
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    }
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', fontFamily: 'var(--sans)' }}>
@@ -2439,121 +2601,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     </div>
                 </div>
 
-                {/* RIGHT: CART */}
-                <div style={{ ...card, display: 'flex', flexDirection: 'column', minHeight: '400px' }}>
-                    <div style={{ ...cardHd, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span>Order Cart</span>
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{cart.length} line(s)</span>
-                    </div>
-                    <div style={{ padding: '12px 16px', flex: 1, overflowY: 'auto' }}>
-                        {cart.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', padding: '20px', textAlign: 'center' }}>Empty — add stocked items or a kit.</div>}
-                        {pricedCart.map(l => (
-                            <div key={l.key} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 74px auto', gap: '10px', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--paper-2)' }}>
-                                <div style={{ minWidth: 0 }}>
-                                    {/* Customer-facing code leads; the real stocked code rides small
-                                        beneath it, since that's what we pick and barcode. */}
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--ink)' }}>{l.aliasErp || l.erp || '—'} {!l.nsId && <span style={{ color: '#d9534f' }} title="No NetSuite ID — will be skipped on push">⚠</span>}</div>
-                                    {l.aliasErp && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>ships as {l.erp}</div>}
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.packUom && <span style={{ color: 'var(--brass)' }}> · {l.qty} × {l.packUom} = {l.eachQty} ea</span>}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}{l.kitFinish ? ` · ${l.kitFinish}` : ''}</span>}</div>
-                                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '4px' }}>
-                                        {l.lineImage && l.lineImage.url ? <img src={l.lineImage.url} alt="" title={l.lineImage.name || ''} style={{ width: '34px', height: '34px', objectFit: 'cover', border: '1px solid var(--line)' }} /> : null}
-                                        <button onClick={() => setImagePickFor(l.key)} title="Pick a picture from the Asset Gallery for this line (prints on the quote)" style={{ background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontSize: '12px', padding: '3px 6px' }}>🖼</button>
-                                        {l.lineImage ? <button onClick={() => setLineImage(l.key, null)} title="Remove the picture" style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '11px', color: 'var(--ink-soft)' }}>✕</button> : null}
-                                    </div>
-                                    <input value={l.lineMemo || ''} onChange={e => setLineMemo(l.key, e.target.value)} placeholder="Memo / room — e.g. LIVING ROOM LEFT" title="Prints on the customer's quote beside this line, and rides the line's NetSuite Tag" style={{ width: '100%', marginTop: '4px', padding: '4px 6px', border: '1px solid var(--line)', background: l.lineMemo ? '#fffdf5' : '#fff', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }} />
-                                </div>
-                                <input type="number" min="1" value={l.qty} onChange={e => setQty(l.key, e.target.value)} style={qtyInp} title={l.packUom ? `Packs of ${l.packSize}` : 'Quantity'} />
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', textAlign: 'right', color: 'var(--ink)' }}>${(l.rate * l.eachQty).toFixed(2)}</div>
-                                <button onClick={() => removeLine(l.key)} style={{ border: 'none', background: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.1rem' }} title="Remove">×</button>
-                            </div>
-                        ))}
-                    </div>
-                    <div style={{ borderTop: '1px solid var(--line)', padding: '14px 20px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-                            <div><span style={lbl}>Customer PO #</span><input value={soExtras.po} onChange={e => setSoExtras(p2 => ({ ...p2, po: e.target.value }))} placeholder="their PO number" style={{ ...inp, width: '100%' }} /></div>
-                            <div><span style={lbl}>Sidemark / job (memo + line tag)</span><input value={soExtras.sidemark} onChange={e => setSoExtras(p2 => ({ ...p2, sidemark: e.target.value }))} placeholder="e.g. SMITH RESIDENCE" style={{ ...inp, width: '100%' }} /></div>
-                            <div style={{ gridColumn: '1 / -1' }}><span style={lbl}>Internal memo (optional — never customer-facing)</span><input value={soExtras.internalMemo} onChange={e => setSoExtras(p2 => ({ ...p2, internalMemo: e.target.value }))} style={{ ...inp, width: '100%' }} /></div>
-                            {/* Need-by + production notes (Stuart 2026-08-28): ride the SO record, the
-                                Order Entry Needs board, every work order this order fires, and the WMS
-                                card — the manufacturing side reads them everywhere the order goes. */}
-                            <div><span style={lbl}>Need-by date (production)</span><input type="date" value={soExtras.needBy} onChange={e => setSoExtras(p2 => ({ ...p2, needBy: e.target.value }))} style={{ ...inp, width: '100%' }} /></div>
-                            <div><span style={lbl}>Production notes (rides to the floor)</span><input value={soExtras.prodNotes} onChange={e => setSoExtras(p2 => ({ ...p2, prodNotes: e.target.value }))} placeholder="e.g. match sample on file · ship complete" style={{ ...inp, width: '100%' }} /></div>
-                            {/* A DISPLAY ORDER IS BORN PARKED FOR 10.5 (Stuart 2026-10-07, Shared/salesOrderHeader.displayParkOf) — the
-                                same tick CPQ's checkout carries: RTG does not start its to-be-finished lines by itself and the
-                                WMS offers nothing until a row is released on 10.5 Display Management. */}
-                            <label style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', border: `1px solid ${soExtras.displayOrder ? 'var(--brass)' : 'var(--line)'}`, background: soExtras.displayOrder ? '#fdf8ef' : '#fff', cursor: 'pointer' }}>
-                                <input type="checkbox" checked={!!soExtras.displayOrder} onChange={e => setSoExtras(p2 => ({ ...p2, displayOrder: e.target.checked }))} />
-                                <span style={{ fontSize: '0.85rem' }}><b>Display order</b> — its rows are released from 10.5 Display Management, by count. Nothing starts by itself and the warehouse is offered nothing until a row is released.</span>
-                            </label>
-                            {/* A SET % FOR THE WHOLE ORDER (Stuart 2026-09-11): every item line's rate,
-                                fees untouched — the same field CPQ's checkout writes (orderDiscount). */}
-                            <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <span style={{ ...lbl, marginBottom: 0 }}>Order discount %</span>
-                                <input type="number" min="0" max="100" step="0.5" value={soExtras.orderDiscountPercent ?? ''} onChange={e => setSoExtras(p2 => ({ ...p2, orderDiscountPercent: e.target.value }))} placeholder="none" style={{ ...inp, width: '90px', textAlign: 'right' }} />
-                                <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{orderDiscountPct > 0 ? `applied to every item line's price (kits included, fees excluded) — saves $${orderDiscountSaved.toFixed(2)}` : 'blank = no discount; applies to every item line, not to fees'}</span>
-                            </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
-                            <span style={{ ...lbl, marginBottom: 0, flex: 1 }}>Shipping</span>
-                            {[['SAVED', 'Saved address'], ['CUSTOM', 'Custom drop-ship']].map(([k, l2]) => (
-                                <button key={k} onClick={() => setShip(prev => ({ ...prev, method: k }))} style={{ padding: '7px 12px', border: `1px solid ${ship.method === k ? 'var(--ink)' : 'var(--line)'}`, background: ship.method === k ? 'var(--ink)' : '#fff', color: ship.method === k ? '#fff' : 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{l2}</button>
-                            ))}
-                        </div>
-                        {ship.method === 'SAVED' ? (
-                            (selectedCustomer?.shippingAddresses?.length ? (
-                                <select value={ship.addressId} onChange={e => setShip(prev => ({ ...prev, addressId: e.target.value }))} style={{ ...inp, width: '100%', marginBottom: '10px' }}>
-                                    <option value="">— saved NetSuite address (default if blank) —</option>
-                                    {selectedCustomer.shippingAddresses.map(a => <option key={a.addressBookId} value={a.addressBookId}>{a.label} — {a.addr1}, {a.city} {a.state}</option>)}
-                                </select>
-                            ) : <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginBottom: '10px' }}>No synced NetSuite addresses — use Custom drop-ship, or the SO ships to the customer default.</div>)
-                        ) : (
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-                                <input placeholder="Attention" value={ship.custom.attention} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, attention: e.target.value } }))} style={inp} />
-                                <input placeholder="Addressee / company" value={ship.custom.addressee} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, addressee: e.target.value } }))} style={inp} />
-                                <input placeholder="Address 1" value={ship.custom.addr1} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, addr1: e.target.value } }))} style={{ ...inp, gridColumn: '1 / -1' }} />
-                                <input placeholder="Address 2" value={ship.custom.addr2} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, addr2: e.target.value } }))} style={{ ...inp, gridColumn: '1 / -1' }} />
-                                <input placeholder="City" value={ship.custom.city} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, city: e.target.value } }))} style={inp} />
-                                <div style={{ display: 'flex', gap: '8px' }}>
-                                    <input placeholder="ST" value={ship.custom.state} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, state: e.target.value } }))} style={{ ...inp, width: '54px' }} />
-                                    <input placeholder="Zip" value={ship.custom.zip} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, zip: e.target.value } }))} style={inp} />
-                                </div>
-                            </div>
-                        )}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <span style={{ ...lbl, marginBottom: 0 }}>Shipping charge $</span>
-                            <input type="number" min="0" step="0.01" value={ship.amount} onChange={e => setShip(prev => ({ ...prev, amount: e.target.value }))} placeholder="0.00" style={{ ...inp, width: '110px', textAlign: 'right' }} />
-                            <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>rides the SO header with an auto-resolved ship method</span>
-                        </div>
-                    </div>
-                    <div style={{ borderTop: '1px solid var(--line)', padding: '16px 20px', background: 'var(--paper)' }}>
-                        {/* THE CONFIRMATION (Stuart 2026-08-30: the button stayed lit "like you
-                            need to push it again"). Unmissable, and it clears on the next add. */}
-                        {lastCreated && cart.length === 0 && (
-                            <div style={{ marginBottom: '14px', padding: '12px 14px', background: '#eaf5ec', border: '2px solid #3a7d44', fontFamily: 'var(--mono)', fontSize: '11px', color: '#2f7d3b', letterSpacing: '.04em' }}>
-                                ✅ {lastCreated.kind} <b>{lastCreated.id}</b> CREATED — queued to NetSuite (number stamps back on accept). It is on the customer's CRM card now{lastCreated.kind === 'SALES ORDER' ? '; any to-be-finished lines start by themselves on RTG once NetSuite accepts it — the order\'s RTG card shows each line, and names in red any that need a person' : ''}.
-                            </div>
-                        )}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>
-                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Est. Total</span>
-                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>
-                                {orderDiscountSaved > 0 && <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', textDecoration: 'line-through', marginRight: '10px' }}>${cartGross.toFixed(2)}</span>}
-                                {orderDiscountSaved > 0 && <span style={{ fontSize: '0.8rem', color: 'var(--brass)', marginRight: '10px' }}>Order Discount ({orderDiscountPct}%): -${orderDiscountSaved.toFixed(2)}</span>}
-                                ${cartTotal.toFixed(2)}
-                            </span>
-                        </div>
-                        <div style={{ display: 'flex', gap: '10px' }}>
-                            <button onClick={() => pushToNetSuite('salesorder')} disabled={pushing || cart.length === 0}
-                                style={{ ...btn(pushing ? 'var(--paper-2)' : 'var(--ink)', pushing ? 'var(--ink-soft)' : '#fff'), flex: 1.4, cursor: pushing ? 'wait' : 'pointer' }}>
-                                {pushing ? 'Transmitting…' : 'Create Sales Order'}
-                            </button>
-                            <button onClick={() => pushToNetSuite('estimate')} disabled={pushing || cart.length === 0}
-                                title="Same cart, same fields — pushed as a NetSuite QUOTE (estimate, CE Quote form) instead of a sales order. No pick/pack until it becomes an order."
-                                style={{ ...btn('transparent', pushing ? 'var(--ink-soft)' : 'var(--ink)'), flex: 1, border: '1px solid var(--ink)', cursor: pushing ? 'wait' : 'pointer' }}>
-                                {pushing ? '…' : 'Create Quote'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                {cartCard}
             </div>
 
             {trvCfg && (

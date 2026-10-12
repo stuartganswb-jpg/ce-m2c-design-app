@@ -80,6 +80,14 @@ const LandingPage = () => {
             onClick={() => navigate('/stitch-sew')}
           />
 
+          <HubButton 
+            theme={theme}
+            number="06"
+            title="Show Counter"
+            subtitle="Uniquity pillows, throws & samples at the show"
+            onClick={() => navigate('/uniquity-counter')}
+          />
+
         </div>
 
         {/* FOOTER — signed-in identity + daily sign-out */}
