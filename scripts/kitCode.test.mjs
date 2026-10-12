@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { parseKitCode, matchKit, resolveKitCode, kitCodeFor, describeKitAlign, axesKeyOf } from './kitCode.mjs';
+import { parseKitCode, matchKit, resolveKitCode, kitCodeFor, describeKitAlign, axesKeyOf, kitForMount, motorCodeFor } from './kitCode.mjs';
 import { parseTraverseKitSheets } from './traverseKitImport.mjs';
 
 test('hand-picked codes parse to their known meanings', () => {
@@ -124,4 +124,61 @@ test('the reverse banner tells the H kit from the V kit, and a typed code resolv
     // the two families never resolve into each other
     assert.equal(resolveKitCode(lib138, 'H1-2TRV-4/P'), null);
     assert.equal(resolveKitCode(lib, 'H1-138TRV-4H/P'), null);
+});
+
+// ── THE KIT FOLLOWS THE MOUNT (Stuart 2026-10-12) ─────────────────────────────────────────────
+test('kitForMount: a wall kit under a ceiling answer becomes the ceiling kit of the same set-up, motor and all', { skip }, () => {
+    const all = [...lib, ...lib138];
+    const wall = lib.find(k => k.legacyErpId === 'H1-2TRV-4MD/P'), ceil = lib.find(k => k.legacyErpId === 'H1-2TRV-4MDC/P');
+    assert.ok(wall && ceil);
+    const r = kitForMount(all, wall, 'CEILING');
+    assert.equal(r.mode, 'switched');
+    assert.equal(r.kit, ceil);
+    assert.equal(r.from, wall);
+    assert.equal(r.align.mount, 'CEILING');
+    // …and back again, and the same motor by its item, not by its code
+    assert.equal(kitForMount(all, ceil, 'wall').kit, wall);
+    assert.equal(motorCodeFor(wall, ceil, 'H1-2TRV-4MD/P-60W'), 'H1-2TRV-4MD/P-60C');
+    assert.equal(motorCodeFor(ceil, wall, 'h1-2trv-4md/p-35c'), 'H1-2TRV-4MD/P-35W');
+    assert.equal(motorCodeFor(wall, ceil, ''), '');
+    assert.equal(motorCodeFor(wall, ceil, 'NOT-A-CODE'), '');
+    // every single / double track kit of the family has its other mount, in every material
+    lib.filter(k => !/FRT/.test(k.legacyErpId)).forEach(k => {
+        const o = kitForMount(all, k, k.manufacturingSpecs.kitAlign.mount === 'WALL' ? 'CEILING' : 'WALL');
+        assert.equal(o.mode, 'switched', k.legacyErpId);
+        assert.equal(o.kit.manufacturingSpecs.kitAlign.material, k.manufacturingSpecs.kitAlign.material, k.legacyErpId);
+        assert.equal(o.kit.manufacturingSpecs.kitAlign.setup, k.manufacturingSpecs.kitAlign.setup, k.legacyErpId);
+        assert.equal(o.kit.manufacturingSpecs.kitAlign.drive, k.manufacturingSpecs.kitAlign.drive, k.legacyErpId);
+    });
+});
+
+test('kitForMount: the same mount, no answer, or an inside mount leave the kit alone', { skip }, () => {
+    const wall = lib.find(k => k.legacyErpId === 'H1-2TRV-4/P');
+    for (const m of ['WALL', 'wall', '', null, undefined, 'END']) {
+        const r = kitForMount(lib, wall, m);
+        assert.equal(r.mode, 'same', String(m));
+        assert.equal(r.kit, wall);
+        assert.equal(r.align, wall.manufacturingSpecs.kitAlign);
+    }
+    assert.deepEqual(kitForMount(lib, null, 'CEILING'), { kit: null, align: null, mode: 'same' });
+});
+
+test('kitForMount: a family with no ceiling kit keeps its kit and carries the mount — the 1-3/8" traverse', { skip }, () => {
+    const all = [...lib, ...lib138];
+    const k = lib138.find(x => x.legacyErpId === 'H1-138TRV-4V/EP');
+    const r = kitForMount(all, k, 'CEILING');
+    assert.equal(r.mode, 'followed');
+    assert.equal(r.kit, k);
+    assert.equal(r.align.mount, 'CEILING');
+    assert.equal(r.align.bracketStyle, 'V');
+    assert.equal(k.manufacturingSpecs.kitAlign.mount, 'WALL', 'the record itself is not touched');
+});
+
+test('kitForMount: a set-up the family does not make on that mount stays as picked — the 2" stationary front on a ceiling', { skip }, () => {
+    const frt = lib.find(k => k.legacyErpId === 'H1-2TRV-4FRT/P');
+    assert.ok(frt);
+    const r = kitForMount(lib, frt, 'CEILING');
+    assert.equal(r.mode, 'nokit');
+    assert.equal(r.kit, frt);
+    assert.equal(r.align.mount, 'WALL');
 });

@@ -34,6 +34,7 @@ import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 import { captureTransparentPng, saveGuideCapture } from './guideCapture';
 import { subFinishOfFinish } from './subFinish';
 import { BoardFrame, captureBoardFrame, readDisplayMode, writeDisplayMode } from './displayFrame';   // DISPLAY MODE (S5, Stuart 2026-09-13) — one guarded block, see below
+import { kitForMount, motorCodeFor } from './kitCode';   // the kit follows the mount (Stuart 2026-10-12) — see kitBill
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // THE MASTER TEMPLATE (Stuart 2026-08-17)
@@ -996,27 +997,42 @@ function HardwareConfiguratorInner({
     // computed once here and passed to both.
     const kitBill = useMemo(() => {
         if (!kitSource) return null;
-        const kp = priceChoice({ partId: kitSource.code }, kitSource.record, priceCtx);
+        // ── THE KIT FOLLOWS THE MOUNT (Stuart 2026-10-12, QUO203: a wall double started, ceiling brackets picked —
+        //    the wall kit billed and the two ceiling brackets billed on top at $55, where the order is the ceiling
+        //    kit). The kit in hand stays what the operator started from; what BILLS is that kit followed to the
+        //    mount answered (Shared/kitCode.kitForMount): the family's kit for that mount where one is made — its
+        //    own number, price, per-foot rate and motor code — else the same kit covering that mount's bracket (the
+        //    1-3/8" traverse has one kit for both: "swap out for ceiling brackets at same price"). Derived here,
+        //    never a state change: the answer back to Wall is the kit as picked again, and a reopened line follows
+        //    its saved mount the same way.
+        const km = kitForMount(kits, kitSource.record, answers.mount);
+        const moved = km.mode === 'switched' && km.kit;
+        const kitRecord = moved ? km.kit : kitSource.record;
+        const kitCode = moved ? String(kitRecord.legacyErpId || kitRecord.itemName || kitSource.code) : kitSource.code;
+        const kitName = moved ? (kitRecord.itemName || kitCode) : kitSource.name;
+        const kp = priceChoice({ partId: kitCode }, kitRecord, priceCtx);
         // The ADDITIONAL-FOOT rate, from the same Client Pricing row tab 7 bills from — one
         // source of truth (Stuart 2026-08-27). Matched by the same key rule every row lookup
         // uses; absent → applyKitPricing falls back to the flow's own per-foot item rates.
-        const kitRow = findClientPriceRow(kitSource.record?.clientPricing, customerKeys(customerId, customer));
+        const kitRow = findClientPriceRow(kitRecord?.clientPricing, customerKeys(customerId, customer));
         // ── WHAT THE KIT ALREADY PAID FOR (Stuart 2026-09-03: "check back against 4.6 — all of
         // the kits are built, all of the info is tagged, you just need to gather and display it")
         // The rules explosion for a flow-aligned kit (fascia + track by the foot, the bracket count
         // at this length and projection, splices, the motor or plugs) plus the record's own
         // kitComponents. Each with the quantity the kit covers; applyKitPricing bills only above it.
-        const ms = kitSource.record?.manufacturingSpecs || {};
-        const family = ms.kitFamily || (parseKitCode(kitSource.code) || {}).family || 'H1-2TRV';
+        const ms = kitRecord?.manufacturingSpecs || {};
+        const family = ms.kitFamily || (parseKitCode(kitCode) || {}).family || 'H1-2TRV';
         const motorCodes = Array.isArray(ms.kitMotorCodes) ? ms.kitMotorCodes : [];
         // ⚠ Read from `answers` here, not from `trvDrive` — that const is declared BELOW this memo
         // and a memo factory runs where it is called (the temporal-dead-zone ReferenceError this
         // file has been taken out by twice). Same expression, evaluated early.
         const driveNow = /MOTOR/.test(String(answers.drive || '').toUpperCase()) ? 'MOTORIZED' : 'MANUAL';
-        const mc = driveNow === 'MOTORIZED' && kitMotor ? motorCodes.find(x => String(x.code || '').toUpperCase() === String(kitMotor).toUpperCase()) : null;
+        // (the motor was chosen by ITS code on the kit in hand; on the followed kit it is the same motor's code)
+        const motorPick = moved ? motorCodeFor(kitSource.record, kitRecord, kitMotor) : kitMotor;
+        const mc = driveNow === 'MOTORIZED' && motorPick ? motorCodes.find(x => String(x.code || '').toUpperCase() === String(motorPick).toUpperCase()) : null;
         const feet = lengthFeet || kitSource.baseFeet;
         const exploded = ms.kitAlign
-            ? explodeTraverse({ family, align: { ...ms.kitAlign, drive: driveNow }, feet, motorItem: mc?.motorItem || '', rules: trvRules, proj: answers.proj != null ? String(answers.proj) : '' })
+            ? explodeTraverse({ family, align: { ...(km.mode === 'followed' ? km.align : ms.kitAlign), drive: driveNow }, feet, motorItem: mc?.motorItem || '', rules: trvRules, proj: answers.proj != null ? String(answers.proj) : '' })
             : { lines: [] };
         // THE KIT COVERS ITS CARRIERS (Stuart 2026-09-19, QUO156 row 6: "still billing them even though the
         // reduced number should be included in the kit"). The explosion leaves carriers to the components
@@ -1031,8 +1047,10 @@ function HardwareConfiguratorInner({
             ...(Array.isArray(ms.kitComponents) ? ms.kitComponents : []).map(c => ({ partId: c.partId, code: findPart(c.partId)?.legacyErpId || '', qty: Number(c.qty) || 1 })),
         ];
         return {
-            kitCode: kitSource.code, kitName: kitSource.name, kitPrice: kp?.price || 0,
+            kitCode, kitName, kitPrice: kp?.price || 0,
             baseFeet: kitSource.baseFeet,
+            // How the mount was followed — for the strip under the kit picker, which says so in words.
+            mountFollow: km.mode === 'same' ? null : { mode: km.mode, mount: String(answers.mount || '').toUpperCase(), from: kitSource.code, to: kitCode, theirs: (mc && mc.fabSku) || kp?.sku || kp?.aliasCode || '' },
             perFootPrice: kitRow?.perFootPrice,
             // THEIR number, resolved by the same rule every other line's alias is.
             clientSku: kp?.sku || kp?.aliasCode || '',
@@ -1040,7 +1058,7 @@ function HardwareConfiguratorInner({
             // The per-motor code and net, folded onto the kit line by applyKitPricing (tab 7's way).
             motor: mc ? { code: mc.code, fabSku: mc.fabSku || '', motorItem: mc.motorItem || '', net: parseFloat(mc.net) } : null,
         };
-    }, [kitSource, priceCtx, customerId, customer, kitMotor, answers.drive, answers.proj, trvRules, lengthFeet, findPart]);
+    }, [kitSource, kits, priceCtx, customerId, customer, kitMotor, answers.drive, answers.proj, answers.mount, trvRules, lengthFeet, findPart]);
     // ── ONE SOURCE OF CARRIERS (Stuart 2026-09-19: "HTSLNTCAR is charging $9.00, aren't these included
     // in the first 4 ft kit?"). They are — on the Traverse components line. The $9 was a SECOND set: the
     // carrier pinned on the assembly rides every track, counted four a foot and billed at the customer's
@@ -2032,6 +2050,15 @@ function HardwareConfiguratorInner({
                             <option value="">motor: — choose their code —</option>
                             {(kitSource.record.manufacturingSpecs.kitMotorCodes || []).map(x => <option key={x.code} value={x.code}>{x.code}{x.motorItem ? ` · ${x.motorItem}` : ''}{Number.isFinite(parseFloat(x.net)) ? ` · $${parseFloat(x.net)}` : ''}</option>)}
                         </select>
+                    )}
+                    {kitBill && kitBill.mountFollow && (
+                        <span style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: kitBill.mountFollow.mode === 'nokit' ? '#8a6508' : 'var(--brass)', fontWeight: 600 }}>
+                            {kitBill.mountFollow.mode === 'switched'
+                                ? `Mount is ${kitBill.mountFollow.mount === 'CEILING' ? 'Ceiling' : 'Wall'} — billing the ${kitBill.mountFollow.mount === 'CEILING' ? 'ceiling' : 'wall'} kit ${kitBill.mountFollow.to}${kitBill.mountFollow.theirs ? ` (${kitBill.mountFollow.theirs})` : ''}, not ${kitBill.mountFollow.from}.`
+                                : kitBill.mountFollow.mode === 'followed'
+                                    ? `Mount is ${kitBill.mountFollow.mount === 'CEILING' ? 'Ceiling' : 'Wall'} — this kit is the same on either mount: its ${kitBill.mountFollow.mount === 'CEILING' ? 'ceiling' : 'wall'} brackets are in the kit, at the kit price.`
+                                    : `No kit is made for this set-up on a ${kitBill.mountFollow.mount === 'CEILING' ? 'ceiling' : 'wall'} mount — ${kitBill.mountFollow.from} bills as picked and the brackets bill on their own.`}
+                        </span>
                     )}
                     <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
                         {kitSource

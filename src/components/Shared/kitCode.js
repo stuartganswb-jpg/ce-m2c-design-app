@@ -67,6 +67,45 @@ export function matchKit(kits, align) {
     return (kits || []).find(k => axesKeyOf(k?.manufacturingSpecs?.kitAlign) === want) || null;
 }
 
+// ── THE KIT FOLLOWS THE MOUNT (Stuart 2026-10-12) ───────────────────────────────────────────────
+// In CPQ the kit is the record the operator STARTS from, and it seeds — it does not lock. So a wall kit
+// could be started and a ceiling bracket picked: QUO203 billed the wall double (HMTS7509F, $1,871 + $96 a
+// foot) and two ceiling brackets at $55 on top, where Fabricut's own order is the ceiling kit HMTS7533F
+// ($1,911 + $129 a foot). Tab 7 never had this — it resolves a kit by its code, and the mount is in the code.
+// Given the kit in hand and the mount that was ANSWERED:
+//   'same'      nothing to do (the mount is the kit's, or is not a wall / ceiling answer);
+//   'switched'  a kit of the same family and the same other axes is made for that mount → THAT kit bills,
+//               at its own number, price and per-foot rate;
+//   'followed'  the family makes no kit for that mount at all (the 1-3/8" traverse: "swap out for ceiling
+//               brackets at same price") → the kit stays, and `align` carries the answered mount so the
+//               kit's own bracket and plate for it are what the kit covers;
+//   'nokit'     the family makes kits for that mount, but none for THIS set-up (the 2" stationary front on a
+//               ceiling is not made) → the kit stays exactly as picked, and the caller says so.
+// Pure. Never refuses: a kit that cannot follow simply stays.
+const familyOfKit = (k) => U(k?.manufacturingSpecs?.kitFamily) || U((parseKitCode(k?.legacyErpId || k?.itemId) || {}).family);
+export function kitForMount(kits, kit, mountAnswer) {
+    const align = kit?.manufacturingSpecs?.kitAlign || null;
+    const want = U(mountAnswer), has = U(align?.mount);
+    if (!kit || !align || !has || (want !== 'WALL' && want !== 'CEILING') || want === has) return { kit: kit || null, align, mode: 'same' };
+    const fam = familyOfKit(kit);
+    const family = (kits || []).filter(k => k?.manufacturingSpecs?.kitAlign && familyOfKit(k) === fam);
+    const other = matchKit(family, { ...align, mount: want });
+    if (other) return { kit: other, align: other.manufacturingSpecs.kitAlign, mode: 'switched', from: kit };
+    return family.some(k => U(k.manufacturingSpecs.kitAlign.mount) === want)
+        ? { kit, align, mode: 'nokit' }
+        : { kit, align: { ...align, mount: want }, mode: 'followed' };
+}
+
+/** A per-motor code of one kit, as the SAME motor's code on another kit (wall -60W ⇄ ceiling -60C). '' when there is none. */
+export function motorCodeFor(fromKit, toKit, code) {
+    const c = U(code);
+    if (!c) return '';
+    const from = (fromKit?.manufacturingSpecs?.kitMotorCodes || []).find(x => U(x.code) === c);
+    if (!from || !from.motorItem) return '';
+    const to = (toKit?.manufacturingSpecs?.kitMotorCodes || []).find(x => U(x.motorItem) === U(from.motorItem));
+    return to ? String(to.code || '') : '';
+}
+
 /**
  * Resolve a typed code to { kit, motorItem, parsed }. The kit's own motorCodes are the authority —
  * an exact code match there wins (it carries the resolved motor); parsing is the fallback so a
