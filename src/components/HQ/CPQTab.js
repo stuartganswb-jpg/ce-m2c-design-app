@@ -41,6 +41,8 @@ import { restampLines } from '../Shared/hardwareHandoff';
 import { buildLookupIndex } from '../Shared/partLookup.js';
 import PartLookupPanel from '../Shared/PartLookupPanel.js';
 import { buildEngineSnapshot, snapshotFileName, snapshotSummary, taggedFlowsOf, trvFamiliesOf, quotesSinceDay } from '../Shared/engineSnapshot';
+import { checkStatesOf, mineOf, compareCheck, checkSummary } from '../Shared/portalCheck';
+import { ENGINE_VERSION } from '../Shared/engineVersion';
 
 const woodTexCache = {};   // `${url}|${ru}x${rv}` → a tiled clone of the swatch (wood only)
 const globalTextureCache = {};
@@ -1104,6 +1106,36 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           alert(`Engine snapshot failed — no file was saved.\n\n${(e && e.message) || e}`);
       } finally {
           setSnapshotBusy(false);
+      }
+  };
+  // ── 🛰 DOES THE PORTAL'S SERVER BUILD WHAT CPQ BUILDS? (the portal rebuild, step 3 — Stuart 2026-10-13) ──────────
+  // The portal's Cloud Functions run a copy of this engine and read the library, the pins and the finishes
+  // themselves. No script can read production, so the proof is made here: for the flow that is open (and the
+  // customer CPQ is pricing — the job's, else the flow's own), CPQ works every framing two ways through the parts,
+  // hands the same answers to the server (portalConfigCheck) and holds the two cart lines against each other, row
+  // for row (Shared/portalCheck). It only reads and compares — nothing is saved, on either side. Super admin only.
+  const [portalCheckBusy, setPortalCheckBusy] = useState(false);
+  const checkPortalServer = async () => {
+      if (!isSuperAdmin || portalCheckBusy) return;
+      if (!activeFlow || !activeAssembly || !shadowPins.length) { alert('Open a flow first — the check is made on the flow that is open.'); return; }
+      setPortalCheckBusy(true);
+      try {
+          const customerId = jobData.customerId || activeFlow.customerId || '';
+          const customer = liveCustomers.find(c => c.id === customerId) || null;
+          // exactly what the configurator below is handed
+          const data = { assembly: activeAssembly, pins: shadowPins, parts: [...libraryParts, ...liveAssemblies, ...kitLibrary.filter(isItemKit)], kits: [],
+              finishes: [...globalFinishes, ...outsourceFinishes], outsourceCodes: outsourceFinishes, flow: activeFlow, spanMap, spanCaps, extraItems: effectiveExtraItems,
+              flowFinishes: Array.isArray(activeFlow.flowFinishes) ? activeFlow.flowFinishes : [], trvRules, customer, customerId };
+          const states = checkStatesOf(data, { max: 40 });
+          const mine = states.map(st => mineOf(data, st));
+          const res = (await httpsCallable(functions, 'portalConfigCheck')({ customerId, flowId: activeFlow.id, states })).data || {};
+          alert(checkSummary({ flowName: activeFlow.name || activeFlow.id, customerName: customer ? (customer.companyName || customer.name || customerId) : '', report: compareCheck(mine, res.results || []),
+              world: res.world || null, mineWorld: { assembly: activeAssembly.id, pins: data.pins.length, parts: data.parts.length, finishes: data.finishes.length, chart: !!trvRules }, server: res.server || null, engineVersion: ENGINE_VERSION }));
+      } catch (e) {
+          const notThere = /not[- ]found|NOT_FOUND|internal|CORS|Failed to fetch/i.test(`${(e && e.code) || ''} ${(e && e.message) || ''}`);
+          alert(`Portal server check could not be made.\n\n${(e && e.message) || e}${notThere ? '\n\nIf the portal functions have not been deployed since step 3 was pushed, the server has no check to answer yet — deploy them from Cloud Shell.' : ''}`);
+      } finally {
+          setPortalCheckBusy(false);
       }
   };
   // ▶ THE NEW ENGINE, side by side (Stuart 2026-08-17: "just get a new master template that works
@@ -5411,6 +5443,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                           {isSuperAdmin && (
                               <button onClick={saveEngineSnapshot} disabled={snapshotBusy} title="ENGINE SNAPSHOT — saves ONE file to this computer: what CPQ hands the engine for every tagged flow of this brand (the flows, their assemblies and pins, the library, the kits, the finishes, the traverse charts, the 6.5 spans) and the engine lines of the last sixty days' quotes. It only reads — nothing is changed. Left out: our cost and vendor, customer details, anything typed on a quote." style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: snapshotBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', background: 'transparent', border: '1px solid var(--line)', padding: '5px 10px', opacity: snapshotBusy ? 0.6 : 1 }}>
                                   ⬇ {snapshotBusy ? 'Reading…' : 'Engine snapshot'}
+                              </button>
+                          )}
+                          {isSuperAdmin && (
+                              <button onClick={checkPortalServer} disabled={portalCheckBusy} title="PORTAL SERVER CHECK — for the flow that is open: CPQ works every framing two ways through the parts, hands the same answers to the portal's server, and compares the cart line each side builds, row for row. It only reads and compares — nothing is saved. Run it after the portal functions are deployed, and before a flow is assigned to a customer in Portal Access."
+                                  style={{ padding: '8px 12px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: portalCheckBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                  🛰 {portalCheckBusy ? 'Asking the server…' : 'Portal server check'}
                               </button>
                           )}
                           </>

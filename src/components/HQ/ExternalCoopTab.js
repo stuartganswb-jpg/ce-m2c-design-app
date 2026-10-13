@@ -60,6 +60,25 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
   const [busy, setBusy] = useState(false);
   const [inviteLink, setInviteLink] = useState(null); // { email, link } of the latest created user
 
+  // ── IS THE PORTAL'S SERVER RUNNING THE ENGINE ITS SITE WAS BUILT WITH? (the portal rebuild, step 3 — 2026-10-13) ──
+  // The portal's configurator runs HQ's engine in two places: the site (rebuilt on every push) and its Cloud
+  // Functions (deployed by hand, from Cloud Shell). After an engine change the server is BEHIND until it is
+  // deployed — and while it is, the server refuses to price or take a request, so a customer is told "being
+  // updated" instead of being quoted by two engines that disagree. This line says which it is, never a guess:
+  // the server reads the site's own stamp (/engine.json) and compares it with the copy it runs.
+  const [engineLight, setEngineLight] = useState({ state: 'asking' });   // asking | inLine | behind | unknown
+  const askEngineLight = async () => {
+      setEngineLight({ state: 'asking' });
+      try {
+          const d = (await httpsCallable(functions, 'portalEngineStatus')()).data || {};
+          setEngineLight({ state: d.inLine ? 'inLine' : (d.site ? 'behind' : 'unknown'), server: d.server || null, site: d.site || null, why: d.siteError || '' });
+      } catch (e) {
+          setEngineLight({ state: 'unknown', why: String((e && e.message) || e).slice(0, 160), notDeployed: /not[- ]found|NOT_FOUND|internal/i.test(`${(e && e.code) || ''} ${(e && e.message) || ''}`) });
+      }
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { askEngineLight(); }, []);
+
   // The CPQ flow is the customer-entitlement unit: an assigned flow's assembly (and its BOM)
   // defines everything the customer may see in the portal — showroom, and later gallery/stock/CPQ.
   // Local mirror of crm_records.portalFlowIds (the parent's selected-record state doesn't live-update).
@@ -345,6 +364,16 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '10px', marginBottom: '16px' }}>
         <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Portal Access</h4>
         <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>portal.classicalelements.com</span>
+      </div>
+
+      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.04em', marginBottom: '14px', padding: '8px 10px', border: `1px solid ${engineLight.state === 'behind' ? '#b00020' : 'var(--line)'}`, background: engineLight.state === 'behind' ? '#fff5f5' : 'var(--paper-2)', color: engineLight.state === 'behind' ? '#b00020' : 'var(--ink-soft)', display: 'flex', gap: '10px', alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <span style={{ flex: '1 1 auto' }}>
+          {engineLight.state === 'asking' && 'Portal engine · asking the server…'}
+          {engineLight.state === 'inLine' && `✓ Portal engine IN LINE — the portal site and its server run the same engine (${engineLight.server?.engineVersion || '—'} · ${engineLight.server?.files || 0} files).`}
+          {engineLight.state === 'behind' && `⚠ Portal engine BEHIND — the site was built with engine ${engineLight.site?.engineVersion || '—'} (files ${engineLight.site?.closureHash || '—'}), its server runs ${engineLight.server?.engineVersion || '—'} (files ${engineLight.server?.closureHash || '—'}). The portal's configurator is paused for customers until the portal functions are deployed from Cloud Shell.`}
+          {engineLight.state === 'unknown' && `Portal engine · could not be read${engineLight.why ? ` (${engineLight.why})` : ''}.${engineLight.notDeployed ? ' The portal functions may not have been deployed since the rebuild — deploy them from Cloud Shell.' : ''}`}
+        </span>
+        {engineLight.state !== 'asking' && <span onClick={askEngineLight} style={{ cursor: 'pointer', textDecoration: 'underline', flex: '0 0 auto' }}>check again</span>}
       </div>
 
       {denied && <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Managing portal logins requires an admin role.</div>}

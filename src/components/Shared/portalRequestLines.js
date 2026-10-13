@@ -100,6 +100,25 @@ export function portalRequestLines(job, flowDoc, finishes, { custNames, flowById
     const req = (job && job.portalRequest) || {};
     const out = [];
 
+    // BUILT ON HQ'S ENGINE (portalRequest.kind 'CONFIG' — the portal rebuild, 2026-10-13). The request's lines are real
+    // cart lines (cpqData.cartItems, engine 'TAGS'): what was chosen is read off them — the parts the customer sees,
+    // each with its finish in their own words — not re-derived from flow steps, which the tag engine does not use.
+    if (req.kind === 'CONFIG') {
+        const items = (job && job.cpqData && Array.isArray(job.cpqData.cartItems)) ? job.cpqData.cartItems : [];
+        items.forEach((it, i) => {
+            if (!it) return;
+            const ln = (Array.isArray(req.lines) && req.lines[i]) || {};
+            const tag = it.sidemark || ln.lineTag || '';
+            out.push({ name: `▶ ${ln.flowName || it.assemblyName || 'Configuration'}${tag ? ` [${tag}]` : ''}${Number(it.qty) > 1 ? ` × ${it.qty}` : ''}`, qty: 0, isHeader: true });
+            (Array.isArray(it.pricingBreakdown) ? it.pricingBreakdown : []).filter((l) => l && !l.hidden && !l.isNote).forEach((l) => {
+                const finish = l.clientFinishName || l.finishLabel || '';
+                out.push({ name: `${l.name || l.legacyErpId || ''}${finish ? ` — ${finish}` : ''}`, qty: Number(l.qty) || 0 });
+            });
+        });
+        if (req.note) out.push({ name: `Note: ${String(req.note).slice(0, 300)}`, qty: 0 });
+        return out;
+    }
+
     const lines = Array.isArray(req.lines) && req.lines.length ? req.lines : null;
     if (lines) {
         lines.forEach((ln) => {
