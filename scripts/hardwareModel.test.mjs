@@ -1982,11 +1982,60 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('and none of the 3-5/8" copies', !offered(['ROD', 'ERA']).some(id => id.startsWith('#39')));
     eq('a plain bracket still gets the plain 4-5/8" plates (#41)',
         offered(['ROD', 'ECB']), ['#41·H1-138BP-R', '#41·H1-138CP-S', '#41·H1-2RCTBP-H'].sort());
-    // The fee return keeps its exemption — every depth's return copy stays eligible, as before.
+    // The fee return keeps its exemption as a FALLBACK (2026-10-13): where a copy is pinned at its
+    // own depth that copy stands — the next block proves the rest.
     const fee = resolve({ choices: base, answers: { proj: '4.625' }, selectedIds: ['ROD', 'FEE'] })
         .slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT');
-    ok('a FEE return is unchanged: return copies, exempt from depth pairing',
+    ok('a FEE return still gets return copies, one per part',
         fee.options.length === 3 && fee.options.every(o => o.returnOnly));
+    eq('…and they are the copies pinned at ITS depth (#44)', fee.options.map(o => o.id).sort(), ['#44·H1-138BP-R', '#44·H1-138CP-S', '#44·H1-2RCTBP-H'].sort());
+}
+
+// ── A FEE RETURN'S PLATE IS THE COPY PINNED AT ITS DEPTH (Stuart 2026-10-13, H1-75 · single ·
+//    wall · 6" · french return: "it sits wrong … if the tags are correct then the engine must be
+//    addressed") ─────────────────────────────────────────────────────────────────────────────
+// H1-75, H1-1 and H1-138 pin a set of return plates PER DEPTH, each tagged with the depth it was
+// modelled at. The fee return's exemption let every copy through and the first per part won — on
+// H1-75 the 4-5/8" set, pinned first, stood behind the 3-5/8", the 6" and the double's return.
+// The exemption stays as the fallback it was written to be: per part, the copy at the return's
+// depth wins; a part with no copy there keeps the one it has; a one-set collection does not move.
+{
+    const parts = ['H1-75RBP-R', 'H1-75RCP-S'];
+    const set = (slot, proj, extra = {}, only = parts) => only.map(p => ({ id: `#${slot}·${p}`, partId: p, role: 'BACKPLATE', position: 'LEFT', proj, mount: 'WALL', returnOnly: true, nodes: [`n${slot}${p}`], ...extra }));
+    const frame = [
+        { id: 'ROD', partId: 'H1-75R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] },
+        { id: 'ROD-L', partId: 'H1-75R', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['rl'] },
+        { id: 'B3', partId: 'H1-75BS', role: 'BRACKET', position: 'CENTER', proj: '3.625', setup: 'SINGLE', mount: 'WALL', nodes: ['b3'] },
+        { id: 'B4', partId: 'H1-75BE', role: 'BRACKET', position: 'CENTER', proj: '4.625', setup: 'SINGLE', mount: 'WALL', nodes: ['b4'] },
+        { id: 'B6', partId: 'H1-75B6', role: 'BRACKET', position: 'CENTER', proj: '6.00', setup: 'SINGLE', mount: 'WALL', nodes: ['b6'] },
+        { id: 'BD', partId: 'H1-75D', role: 'BRACKET', position: 'CENTER', proj: 'FRONT:6.5,BACK:3.25', setup: 'DOUBLE', mount: 'WALL', nodes: ['bd'] },
+        { id: 'MT3', partId: 'CE-FEE-6294', role: 'RETURN', position: 'LEFT', proj: '3.625', setup: 'SINGLE', nodes: ['mt3'] },
+        { id: 'FR4', partId: 'CE-FEE-4594', role: 'RETURN', position: 'LEFT', proj: '4.625', setup: 'SINGLE', nodes: ['fr4'] },
+        { id: 'FR6', partId: 'CE-FEE-4594', role: 'RETURN', position: 'LEFT', proj: '6.00', setup: 'SINGLE', nodes: ['fr6'] },
+        { id: 'FRD', partId: 'CE-FEE-4539', role: 'RETURN', position: 'LEFT', proj: 'FRONT:6.5,BACK:3.25', setup: 'DOUBLE', nodes: ['frd'] },
+    ];
+    // Pinned in H1-75's own order: the 4-5/8" set first, which is why it used to win everywhere.
+    const h75 = [...frame, ...set(24, '4.625'), ...set(34, '6.00'), ...set(41, '6.5', { setup: 'DOUBLE' }), ...set(61, '3.625', { setup: 'SINGLE' })];
+    const behind = (choices, answers, sel) => resolve({ choices, answers, selectedIds: sel })
+        .slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT').options.map(o => o.id).sort();
+    const want = (slot, only = parts) => only.map(p => `#${slot}·${p}`).sort();
+    eq('a 6" french return stands on the plates pinned at 6" (#34), not the first set', behind(h75, { setup: 'SINGLE', proj: '6' }, ['ROD', 'FR6']), want(34));
+    eq('a 3-5/8" miter return stands on the 3-5/8" set (#61)', behind(h75, { setup: 'SINGLE', proj: '3.625' }, ['ROD', 'MT3']), want(61));
+    eq('a 4-5/8" return keeps the 4-5/8" set (#24) — unchanged', behind(h75, { setup: 'SINGLE', proj: '4.625' }, ['ROD', 'FR4']), want(24));
+    eq("a double's return (front 6-1/2\") stands on the double's set (#41)", behind(h75, { setup: 'DOUBLE' }, ['ROD', 'FRD']), want(41));
+    // One per part, still: the copy changes, the list of products does not.
+    ok('and it is still one option per part', behind(h75, { setup: 'SINGLE', proj: '6' }, ['ROD', 'FR6']).length === parts.length);
+    // A part pinned at ONE depth only is not lost at the others — the exemption is the fallback.
+    const lone = [...h75, ...set(24, '4.625', {}, ['H1-75RCP-V'])];
+    eq('a plate pinned at one depth only still stands behind a 6" return',
+        behind(lone, { setup: 'SINGLE', proj: '6' }, ['ROD', 'FR6']), [...want(34), '#24·H1-75RCP-V'].sort());
+    // A collection with ONE set of return plates sees no change at all (the 2026-08-25 case).
+    const oneSet = [...frame, ...set(34, '6.00')];
+    eq('one set, modelled at 6": it still stands behind a 3-5/8" return', behind(oneSet, { setup: 'SINGLE', proj: '3.625' }, ['ROD', 'MT3']), want(34));
+    eq('…and behind a 4-5/8" one', behind(oneSet, { setup: 'SINGLE', proj: '4.625' }, ['ROD', 'FR4']), want(34));
+    // The same pair on a plate reads as "made for this return" too (H1-138 tags its double set so).
+    const paired = [...frame, ...set(24, '4.625'), ...set(78, 'FRONT:6.5, BACK:3.25', { setup: 'DOUBLE' })];
+    eq("a plate tagged with the return's own pair is its plate", behind(paired, { setup: 'DOUBLE' }, ['ROD', 'FRD']), want(78));
 }
 
 // ── A DOUBLE BRACKET SERVES ONE FRONT, AND CARRIERS RIDE THEIR OWN TRACK (Stuart 2026-09-06) ──

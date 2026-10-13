@@ -1382,6 +1382,32 @@ export function slots(choices, answers = {}, selectedIds = []) {
             }
         }
 
+        // ── …AND WHERE A COPY IS PINNED AT THE ARM'S OWN DEPTH, THAT COPY IS THE ONE (Stuart
+        // 2026-10-13, H1-75 single · wall · 6" · french return: "it sits wrong") ────────────────
+        // The rtn-only exemption above was written when a collection carried ONE set of return
+        // plates, modelled at one depth and standing behind every return. H1-75, H1-1 and H1-138
+        // now pin a set PER DEPTH — 3-5/8", 4-5/8", 6", and the double's 6-1/2" — each tagged with
+        // the depth it was modelled at. Exempt from the pairing, every copy survived and the FIRST
+        // per part won: the 4-5/8" plate behind a 6" return, 1-3/8" off the wall. (The same
+        // symptom the end-arm rule above cured on H1-2TRV — for the fee returns it was still open.)
+        //
+        // So the exemption becomes what it always meant: a FALLBACK. Per PART — a rtn-only copy
+        // made at the arm's depth beats its copies made at another; a part with no copy at this
+        // depth keeps the ones it has. A collection with one set sees no change at all, and
+        // nothing that was offered stops being offered: only WHICH pin stands for the part moves.
+        // A double's return carries both depths (FRONT / BACK); its plate is pinned at the front
+        // one or at the same pair, and either is read as "made for this return".
+        {
+            const armDepths = (arm.projs && arm.projs.length) ? arm.projs : Object.values(arm.projTiers || {});
+            if (armDepths.length) {
+                const samePair = (o) => !!(o.projTiers && arm.projTiers && Object.keys(o.projTiers).length
+                    && Object.entries(o.projTiers).every(([t, v]) => arm.projTiers[t] !== undefined && sameMeasure(v, arm.projTiers[t])));
+                const atDepth = (o) => samePair(o) || (o.projs || []).some(p => armDepths.some(q => sameMeasure(p, q)));
+                const partKey = (o) => String(o.partId || o.id).toUpperCase();
+                const pinnedHere = new Set(slot.options.filter(o => o.returnOnly && atDepth(o)).map(partKey));
+                if (pinnedHere.size) slot.options = slot.options.filter(o => !o.returnOnly || !pinnedHere.has(partKey(o)) || atDepth(o));
+            }
+        }
         // THREE PLATE POOLS, one live at a time — they occupy the same spot on the wall:
         //   in-line arm → the in-line copies (inl-only), falling back to the RETURN copies where a
         //                 collection has no in-line ones (1.6: "flows without inl-only plates fall

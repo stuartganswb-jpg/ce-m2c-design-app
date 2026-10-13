@@ -89,6 +89,51 @@ const kB = (() => { const m = resolve({ choices: dbl, answers: { rodKind: 'SOLID
     ok('…on the back step, by name, though the step is no longer asked', /BACK/.test(d[0].step) && /not asked|no longer/.test(d[0].reason), d[0] && (d[0].step + ' / ' + d[0].reason));
 }
 {
+    // ── THE SAME PART IN THE SAME STEP IS KEPT, WHATEVER TIER ITS PINS CARRY (Stuart 2026-10-13) ──
+    // H1-75 and H1-1 pin a return plate once per depth, and the 3-5/8" copies carry rod: front while
+    // the 4-5/8" and 6" ones carry none. A line saved on one copy and re-seated by the engine on the
+    // copy at the return's depth was named "Removed by a later choice" — and the plate was on the
+    // bill the whole time. (The portal session replayed 983 saved configurations: 6 false notices.)
+    const model = {
+        slots: [{ key: 'BACKPLATE||LEFT', kind: 'BACKPLATE', tier: '', position: 'LEFT', options: [], rejected: [] }],
+        choices: [
+            { id: 'RET', partId: 'CE-FEE-6294', role: 'RETURN', position: 'LEFT', tier: '' },
+            { id: 'PL-46', partId: 'H1-75RCP-H', name: 'Horizontal Cover Plate for Returns', role: 'BACKPLATE', position: 'LEFT', tier: '' },
+            { id: 'PL-36', partId: 'H1-75RCP-H', name: 'Horizontal Cover Plate for Returns', role: 'BACKPLATE', position: 'LEFT', tier: 'FRONT' },
+            { id: 'PL-OTHER', partId: 'H1-75RBP-R', name: 'Round Backplate for Returns', role: 'BACKPLATE', position: 'LEFT', tier: 'FRONT' },
+        ],
+    };
+    const raw = { 'END||LEFT': 'RET', 'BACKPLATE||LEFT': 'PL-46' };
+    eq("a plate re-seated on another pin of the same part, in the same step, is kept — the pins' tier tags do not matter",
+        droppedPicks(model, raw, { 'END||LEFT': 'RET', 'BACKPLATE||LEFT': 'PL-36' }, { labelOf }).map(x => x.choiceId), []);
+    eq('…a DIFFERENT part seated in that step is still a removal',
+        droppedPicks(model, raw, { 'END||LEFT': 'RET', 'BACKPLATE||LEFT': 'PL-OTHER' }, { labelOf }).map(x => x.choiceId), ['PL-46']);
+    eq('…and so is the step left empty while its return is still there',
+        droppedPicks(model, raw, { 'END||LEFT': 'RET' }, { labelOf }).map(x => x.choiceId), ['PL-46']);
+}
+{
+    // The same thing through the engine itself: a line saved before 2026-10-13 holds the FIRST copy
+    // of its return plate (the 4-5/8" one); the engine now seats the copy pinned at the return's
+    // depth, which on H1-75 and H1-1 carries rod: front. Kept, and nothing to acknowledge.
+    const parts = ['H1-75RBP-R', 'H1-75RCP-H'];
+    const set = (slot, proj, extra = {}) => parts.map(p => C({ id: `#${slot}·${p}`, partId: p, role: 'BACKPLATE', position: 'LEFT', proj, mount: 'WALL', returnOnly: true, nodes: [`n${slot}${p}`], ...extra }));
+    const cs = [
+        C({ id: 'ROD', partId: 'H1-75R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] }),
+        C({ id: 'ROD-L', partId: 'H1-75R', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['rl'] }),
+        C({ id: 'B3', partId: 'H1-75BS', role: 'BRACKET', position: 'CENTER', proj: '3.625', setup: 'SINGLE', mount: 'WALL', nodes: ['b3'] }),
+        C({ id: 'B4', partId: 'H1-75BE', role: 'BRACKET', position: 'CENTER', proj: '4.625', setup: 'SINGLE', mount: 'WALL', nodes: ['b4'] }),
+        C({ id: 'MT3', partId: 'CE-FEE-6294', role: 'RETURN', position: 'LEFT', proj: '3.625', setup: 'SINGLE', nodes: ['mt3'] }),
+        ...set(24, '4.625'), ...set(61, '3.625', { setup: 'SINGLE', tier: 'FRONT' }),
+    ];
+    const answers = { setup: 'SINGLE', proj: 3.625 };
+    const m0 = resolve({ choices: cs, answers, selectedIds: ['ROD', 'MT3'] });
+    const k = { rod: m0.slots.find(s => s.kind === 'ROD').key, end: m0.slots.find(s => s.kind === 'END' && s.position === 'LEFT').key, bp: m0.slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT').key };
+    const raw = { [k.rod]: 'ROD', [k.end]: 'MT3', [k.bp]: '#24·H1-75RCP-H' };
+    const s = settle(cs, answers, raw);
+    eq("a line saved on the first copy re-seats on the copy pinned at the return's depth", s.live[k.bp], '#61·H1-75RCP-H');
+    eq('…and nothing is named as removed', droppedPicks(s.m, raw, s.live, { labelOf }).map(x => x.choiceId), []);
+}
+{
     // acknowledgements survive a re-pass; a pick that comes back clears its entry
     const a = [{ key: 'END|LEFT|RET-E', acked: true }, { key: 'X|Y', acked: false }];
     const merged = mergeDrops(a, [{ key: 'END|LEFT|RET-E' }, { key: 'NEW|Z' }]);

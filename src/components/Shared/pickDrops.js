@@ -40,6 +40,16 @@ export function droppedPicks(model, rawPicks = {}, livePicks = {}, { labelOf = (
         if (livePicks[slotKey] === choiceId) return;             // still chosen where it was chosen
         const had = choices.find(c => c.id === choiceId);
         if (!had) return;                                        // a pick from another assembly / a stale key
+        // ⚠ THE SAME PART IN THE SAME STEP IS KEPT, WHATEVER ITS PINS ARE TAGGED (Stuart 2026-10-13,
+        // with the return-plate change in hardwareModel). The step IS the place on the order — its
+        // key is KIND|TIER|POSITION — so a pick the engine moved onto another pin of the same part
+        // inside it has not gone anywhere. The test below compares the two PINS' own tier tags, and
+        // a backplate step has no tier: H1-75 and H1-1 pin their 3-5/8" return plates rod: front
+        // and the 4-5/8" and 6" ones blank, so a plate re-seated between them was named as removed
+        // ("not offered under the current Rod Setup answers") while it sat on the bill, and Add
+        // waited for an acknowledgement of nothing.
+        const seated = choices.find(c => c.id === livePicks[slotKey]);
+        if (seated && U(seated.partId) && U(seated.partId) === U(had.partId)) return;
         // Re-seated on its TWIN — the same part, another pin, for the same place on the order
         // (same role, tier and position): kept, not removed. The back finial that leaves when the
         // order becomes a single is NOT a twin of the front one still chosen.
