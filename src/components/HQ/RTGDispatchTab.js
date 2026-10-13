@@ -960,7 +960,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         return { originalJob, svgUri, finishRecipe };
     };
 
+    // The record exactly as the board holds it, and the kind it was opened as — what the window's ✕ Close hands the closer.
+    const viewRawRef = useRef(null);
     const handleViewOrder = async (order, orderType) => {
+        viewRawRef.current = { order, kind: orderType };
         setActiveViewOrder({ ...order, orderType });
         setActiveJobDetails(null);
         // Snapshot stock WOs carry everything on the parked finPayload — no CPQ job to fetch
@@ -4333,6 +4336,19 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                 <span style={{ flex: 2, fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
                                     {(() => { const st = releaseStateOf(activeViewOrder, activeViewOrder.orderType === 'sales' && !activeViewOrder.finPayload && !activeViewOrder.routeTo ? 'sales' : 'stock'); return `Auto-release: ${st.text}`; })()}
                                 </span>
+                                {/* ✕ CLOSE, IN THE WINDOW TOO (Stuart 2026-10-13, WO11578: "there is still no way to close WO11578 … RTG can
+                                    only auto release"). The board row's own button — the ONE closer, the same confirm. A work order the
+                                    weekly sweep archived off the board has no row left to press it on, and this window (View, and the Daily
+                                    Job Log) was the only way to reach it. Not offered on an order that is already closed. */}
+                                {viewRawRef.current && viewRawRef.current.order && viewRawRef.current.order.id === activeViewOrder.id && !isClosedState(activeViewOrder) && (
+                                    <button
+                                        title="Close this order EVERYWHERE — RTG, finishing floor, shop floor, and the NetSuite work order if one exists. Docs kept for history. The same button as the board row."
+                                        onClick={() => { const { order, kind } = viewRawRef.current; setActiveViewOrder(null); closeOrderEverywhere(order, kind); }}
+                                        style={{ flex: 1, padding: '16px', background: '#fff', color: '#d9534f', border: '1px solid #d9534f', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', fontWeight: 700 }}
+                                    >
+                                        ✕ Close this order
+                                    </button>
+                                )}
                                 <button
                                     onClick={async () => {
                                         const o = activeViewOrder;
