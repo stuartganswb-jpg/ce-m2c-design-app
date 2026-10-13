@@ -40,6 +40,7 @@ import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
 import { restampLines } from '../Shared/hardwareHandoff';
 import { buildLookupIndex } from '../Shared/partLookup.js';
 import PartLookupPanel from '../Shared/PartLookupPanel.js';
+import { buildEngineSnapshot, snapshotFileName, snapshotSummary, taggedFlowsOf, trvFamiliesOf, quotesSinceDay } from '../Shared/engineSnapshot';
 
 const woodTexCache = {};   // `${url}|${ru}x${rv}` → a tiled clone of the swatch (wood only)
 const globalTextureCache = {};
@@ -1066,6 +1067,45 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   // TEMP (Stage 0 debug): when on, glow the meshes the current step's selection controls.
   const [debugHighlight, setDebugHighlight] = useState(false);
   const [showDoctor, setShowDoctor] = useState(false);
+  // ── THE ENGINE'S INPUTS, AS ONE FILE (Stuart 2026-10-13: "hq button" · Shared/engineSnapshot) ───────────
+  // The portal is being rebuilt on the tag engine, and each rule moved out of the configurator is proven
+  // against what production holds today. Firestore answers only the signed-in app, so a super admin saves it
+  // from here: what this tab hands the engine for every tagged flow of the brand. READS ONLY — the pins of
+  // each flow's assembly, the traverse charts, the quotes of the last sixty days — and ONE file to this
+  // computer. Nothing is written, here or anywhere. What the file leaves out is said in the module.
+  const [snapshotBusy, setSnapshotBusy] = useState(false);
+  const saveEngineSnapshot = async () => {
+      if (!isSuperAdmin || snapshotBusy) return;
+      setSnapshotBusy(true);
+      try {
+          const pinsByAssembly = {};
+          await Promise.all([...new Set(taggedFlowsOf(cpqFlows).map(f => f.linkedAssemblyId))].map(async (id) => {
+              const snap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', id)));
+              pinsByAssembly[id] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          }));
+          const trvRulesByFamily = {};
+          await Promise.all(trvFamiliesOf(cpqFlows).map(async (fam) => {
+              const d = await getDoc(doc(db, 'system', `traverse_rules_${fam}`));
+              if (d.exists()) trvRulesByFamily[fam] = d.data();
+          }));
+          const jobsSnap = await getDocs(query(collection(db, 'jobs'), where('dateSaved', '>=', quotesSinceDay())));
+          const jobs = jobsSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(j => j.brandId === activeBrand);
+          const at = new Date();
+          const snapshot = buildEngineSnapshot({ brand: activeBrand, at: at.toISOString(), flows: cpqFlows, assemblies: liveAssemblies, parts: libraryParts, kits: kitLibrary,
+              finishes: globalFinishes, outsourceFinishes, customers: liveCustomers, spanMap, spanCaps, pinsByAssembly, trvRulesByFamily, jobs, cart });
+          const fileName = snapshotFileName(activeBrand, at);
+          const url = URL.createObjectURL(new Blob([JSON.stringify(snapshot)], { type: 'application/json' }));
+          const a = document.createElement('a');
+          a.href = url; a.download = fileName;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 2000);
+          alert(`Engine snapshot saved to this computer's Downloads:\n${fileName}\n\n${snapshotSummary(snapshot)}`);
+      } catch (e) {
+          alert(`Engine snapshot failed — no file was saved.\n\n${(e && e.message) || e}`);
+      } finally {
+          setSnapshotBusy(false);
+      }
+  };
   // ▶ THE NEW ENGINE, side by side (Stuart 2026-08-17: "just get a new master template that works
   // 100% as long as the tags are correct"). A super-admin toggle that replaces the whole step UI
   // and render with the tag-driven configurator for this assembly. The old path is untouched and
@@ -5366,6 +5406,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                           {isSuperAdmin && (
                               <button onClick={() => setShowDoctor(v => !v)} title="FLOW DOCTOR — why this configuration renders the way it does: steps with nothing selected, steps whose options all filtered away, geometry no available option can bring back, sections no step controls, and mapped names the .glb does not contain. Runs ONLY while open — on a large flow the check is far too expensive to leave running behind every click." style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: flowDoctor.idle ? 'var(--ink-soft)' : flowDoctor.red ? '#a33' : flowDoctor.amber ? '#8a6508' : '#2a7', background: showDoctor ? 'var(--paper-2)' : 'transparent', border: `1px solid ${!flowDoctor.idle && flowDoctor.red ? '#a33' : 'var(--line)'}`, padding: '5px 10px' }}>
                                   🩺 {flowDoctor.idle ? 'Check flow' : flowDoctor.red ? `${flowDoctor.red} critical` : flowDoctor.amber ? `${flowDoctor.amber} to review` : 'Healthy'}
+                              </button>
+                          )}
+                          {isSuperAdmin && (
+                              <button onClick={saveEngineSnapshot} disabled={snapshotBusy} title="ENGINE SNAPSHOT — saves ONE file to this computer: what CPQ hands the engine for every tagged flow of this brand (the flows, their assemblies and pins, the library, the kits, the finishes, the traverse charts, the 6.5 spans) and the engine lines of the last sixty days' quotes. It only reads — nothing is changed. Left out: our cost and vendor, customer details, anything typed on a quote." style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: snapshotBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', background: 'transparent', border: '1px solid var(--line)', padding: '5px 10px', opacity: snapshotBusy ? 0.6 : 1 }}>
+                                  ⬇ {snapshotBusy ? 'Reading…' : 'Engine snapshot'}
                               </button>
                           )}
                           </>
