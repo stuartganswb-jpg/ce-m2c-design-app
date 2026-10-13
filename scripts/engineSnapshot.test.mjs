@@ -91,8 +91,8 @@ const line = (over = {}) => ({ engine: 'TAGS', engineVersion: '364bdaaf15e7', pi
 
 // ── the newest quotes that carry an engine line ──────────────────────────────────────────────────────────────────
 const JOBS = [
-    { id: 'QUO100', customerId: 'CUST-4720', status: 'QUOTE', dateSaved: '2026-09-01', cpqData: { cartItems: [line({ qty: 1 })] } },
-    { id: 'QUO300', customerId: 'CUST-9', status: 'SALES_ORDER', createdAt: { seconds: 1791500000 }, cpqData: { cartItems: [{ erp: 'STOCK-1', qty: 4 }, line({ qty: 3 }), line({ qty: 4 })] } },
+    { id: 'QUO100', customer: { id: 'CUST-4720', name: 'FABRICUT' }, status: 'QUOTE', dateSaved: '2026-09-01', cpqData: { cartItems: [line({ qty: 1 })] } },                 // as CPQ saves a quote: customer: { id, name }
+    { id: 'QUO300', customer: { id: 'CUST-9', name: 'Walk-in Trade' }, customerId: 'IGNORED-WHEN-BOTH', status: 'SALES_ORDER', createdAt: { seconds: 1791500000 }, cpqData: { cartItems: [{ erp: 'STOCK-1', qty: 4 }, line({ qty: 3 }), line({ qty: 4 })] } },
     { id: 'QUO200', customerId: 'CUST-4720', status: 'QUOTE', createdAt: stamp, cpqData: { cartItems: [line({ qty: 2 })] } },
     { id: 'SO-OE-1', customerId: 'CUST-4720', status: 'SALES_ORDER', createdAt: { seconds: 1792000000 }, items: [{ erp: 'H1-1R', qty: 1 }] },        // Order Entry: no cart at all
     { id: 'QUO080', customerId: 'CUST-4720', createdAt: { seconds: 1780000000 }, cpqData: { cartItems: [line({ qty: 8 })] } },                         // stamped in May: older than the one that names only its day (September)
@@ -102,6 +102,8 @@ const JOBS = [
 eq('newest first, by the day it was saved; only quotes that carry an engine line; each of its engine lines, in the cart\'s own position', quotedLinesOf(JOBS).map(l => [l.jobId, l.line, l.qty]), [['QUO300', 1, 3], ['QUO300', 2, 4], ['QUO200', 0, 2], ['QUO100', 0, 1], ['QUO080', 0, 8], ['QUO050', 0, 9]]);
 eq('the newest N quotes — counted in quotes, not lines', quotedLinesOf(JOBS, { limit: 2 }).map(l => l.jobId), ['QUO300', 'QUO300', 'QUO200']);
 eq('no quotes, no lines', [quotedLinesOf([]), quotedLinesOf(undefined), quotedLinesOf(JOBS, { limit: 0 })], [[], [], []]);
+eq('each line knows WHO its quote was for — the id CPQ saves under customer, an older top-level id, or nobody; never the name', [...new Set(quotedLinesOf(JOBS).map(l => `${l.jobId}:${l.customerId}`))], ['QUO300:CUST-9', 'QUO200:CUST-4720', 'QUO100:CUST-4720', 'QUO080:CUST-4720', 'QUO050:CUST-4720']);
+ok('…the name on the quote is not carried', !/Walk-in Trade/.test(JSON.stringify(quotedLinesOf(JOBS))) && quotedLinesOf([{ id: 'Q', cpqData: { cartItems: [line()] } }])[0].customerId === '');
 eq('the cart: its engine lines, where they stand', cartLinesOf([{ erp: 'STOCK', qty: 1 }, line({ qty: 5 })]).map(l => [l.source, l.line, l.qty, l.jobId]), [['cart', 1, 5, undefined]]);
 eq('no cart is an empty cart', [cartLinesOf(null), cartLinesOf(undefined), cartLinesOf('x')], [[], [], []]);
 eq('saved quotes are read back sixty days, to the day a quote stamps on itself', [SNAPSHOT_QUOTE_DAYS, quotesSinceDay(Date.UTC(2026, 9, 13, 14, 0)), quotesSinceDay(Date.UTC(2026, 0, 5), 10)], [60, '2026-08-14', '2025-12-26']);

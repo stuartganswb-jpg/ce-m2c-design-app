@@ -144,7 +144,10 @@ export function quotedLinesOf(jobs = [], { limit = SNAPSHOT_QUOTES } = {}) {
     (jobs || []).filter(Boolean).map(j => [j, savedAtOf(j)]).sort((a, b) => b[1] - a[1]).forEach(([j, at]) => {
         if (taken >= limit) return;
         const items = (j.cpqData && Array.isArray(j.cpqData.cartItems)) ? j.cpqData.cartItems : [];
-        const lines = items.map((it, i) => engineLineOf(it, { source: 'quote', jobId: j.id || '', line: i, customerId: j.customerId || '', status: j.status || '', savedAt: at || null })).filter(Boolean);
+        // WHO THE QUOTE WAS FOR: CPQ saves it as `customer: { id, name }` — only the id is carried (the engine prices a line
+        // for its job's customer, not the flow's; the first snapshots read a field a quote does not have and left this blank).
+        const customerId = String((j.customer && j.customer.id) || j.customerId || '');
+        const lines = items.map((it, i) => engineLineOf(it, { source: 'quote', jobId: j.id || '', line: i, customerId, status: j.status || '', savedAt: at || null })).filter(Boolean);
         if (!lines.length) return;
         taken++;
         out.push(...lines);
