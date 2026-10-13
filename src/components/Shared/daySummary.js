@@ -10,6 +10,7 @@
 // (Shared/orderStatus gates, Shared/reviewWaiting, the split's backorder record), and the overrule buttons on the
 // screen are the card's own. Pure — scripts/daySummary.test.mjs.
 import { gateSummary, isReleasable, wholeOrderWait, finishModeOf, FINISH_MODE, unstartedTbfLinesOf } from './orderStatus.js';
+import { stockToReallocateText, REALLOCATE_WORD, orderLine, holdersText } from './stockReallocate.js';
 import { reviewWaitingOf } from './reviewWaiting.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -135,7 +136,7 @@ const timeOf = (ms) => (ms ? new Date(ms).toLocaleTimeString([], { hour: 'numeri
 const finishText = (r) => (r.finishMode === FINISH_MODE.AS_AVAILABLE ? 'as available' : 'complete') + (r.finishBy ? ` (${r.finishBy})` : (r.finishAsked ? '' : ' (default)'));
 
 /** The day in plain text — to paste into a message or an email. */
-export function daySummaryText(sum, { day = '', brand = '' } = {}) {
+export function daySummaryText(sum, { day = '', brand = '', stock = [] } = {}) {
     const c = sum.counts;
     const out = [`ORDERS ENTERED ${day}${brand ? ` · ${U(brand)}` : ''}`,
         `${c.entered} entered (${c.orderEntry} Order Entry, ${c.cpq} CPQ${c.display ? `, ${c.display} display` : ''}) · ${c.needAttention} need attention · ${c.onFloor} on the floor · ${c.backorderedParts} part${c.backorderedParts === 1 ? '' : 's'} backordered today`, ''];
@@ -150,13 +151,20 @@ export function daySummaryText(sum, { day = '', brand = '' } = {}) {
         out.push('', 'BACKORDERED TODAY');
         sum.backorders.forEach(b => out.push(`   ${b.qty} × ${b.code}${b.name ? ` — ${b.name}` : ''} · ${b.orders.join(', ')}${b.onOrder ? ` · ${b.onOrder} on order` : ' · nothing on order'}`));
     }
+    // Stock to reallocate (Stuart 2026-10-13 · Shared/stockReallocate) — every open order, as NetSuite read when the screen was opened.
+    if (stock && stock.length) out.push('', stockToReallocateText(stock));
     return out.join('\n');
 }
 
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 /** The day as a printable page (letter, portrait) — Shared/labelPrint.printHtmlDocument prints it. */
-export function daySummaryHtml(sum, { day = '', brand = '', printedBy = '' } = {}) {
+export function daySummaryHtml(sum, { day = '', brand = '', printedBy = '', stock = [] } = {}) {
     const c = sum.counts;
+    const st = (stock || []).map(it => `<tr>
+        <td><b>${esc(it.code)}</b><br><span class="s">${esc(it.name)}</span></td>
+        <td><b>${esc(REALLOCATE_WORD[it.kind] || it.kind)}</b><br><span class="s">on hand ${it.onHand} · committed ${it.committed}<br>wanted ${it.wanted} · free ${it.free}</span></td>
+        <td>${it.orders.map(o => esc(orderLine(o))).join('<br>')}<br><span class="s">NetSuite holds it for: ${esc(holdersText(it, 12))}</span></td>
+    </tr>`).join('');
     const rows = sum.rows.map(r => `<tr>
         <td><b>${esc(soLabel(r.ref))}</b><br>${esc(r.customer)}<br><span class="s">${esc(r.door)}${r.enteredBy ? ` · ${esc(r.enteredBy)}` : ''} · ${esc(timeOf(r.enteredAt))}</span></td>
         <td><b>${esc(r.verdict)}</b><br><span class="s">NetSuite: ${esc(r.netsuite)}<br>finish ${esc(finishText(r))}</span></td>
@@ -176,5 +184,6 @@ export function daySummaryHtml(sum, { day = '', brand = '', printedBy = '' } = {
         <div class="k">${c.entered} entered (${c.orderEntry} Order Entry, ${c.cpq} CPQ${c.display ? `, ${c.display} display` : ''}) · ${c.needAttention} need attention · ${c.onFloor} on the floor · ${c.parked} parked · ${c.backorderedParts} part${c.backorderedParts === 1 ? '' : 's'} backordered today${printedBy ? ` · printed by ${esc(printedBy)}` : ''}</div>
         <table><tr><th style="width:27%">Order</th><th style="width:25%">Status</th><th>Work orders · review · backorders</th></tr>${rows || '<tr><td colspan="3">No sales order was entered that day.</td></tr>'}</table>
         ${sum.backorders.length ? `<h2>Backordered today</h2><table><tr><th>Part</th><th>Short</th><th>On order</th><th>Orders</th></tr>${bo}</table>` : ''}
+        ${st ? `<h2>Stock to reallocate — every open order, as NetSuite reads now</h2><div class="k">Nothing here stops the floor. Re-commit in NetSuite before the build if the stock should go to a different order.</div><table><tr><th style="width:24%">Item</th><th style="width:26%">NetSuite</th><th>Orders that want it</th></tr>${st}</table>` : ''}
     </body></html>`;
 }

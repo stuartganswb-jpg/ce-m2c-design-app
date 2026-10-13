@@ -21,7 +21,11 @@
 //
 // One row per pull code, need summed across configurations:
 //   { code, name, need, onHand, short, onOrder, unit, state, coveredBy, coverCodes }
-//   state COVERED  — the shelf covers the need (green)
+//   + from the refresh (Stuart 2026-10-13, null until RTG has read them): nsOnHand, nsCommitted — what NetSuite lists
+//     for the item, every order counted — and ownHeld, how much of that commitment is THIS order's.
+//   onHand is what is FREE FOR THIS ORDER: NetSuite's available plus its own hold. short = need − that.
+//   state COVERED  — what is free for the order covers the need (green)
+//         HELD     — it does not, but the shelf physically holds the need: committed to other orders (amber)
 //         SHORT    — it does not; coveredBy says what was raised for the gap (red)
 //         UNVERIFIED — the shelf could not be read, or the units disagree; onHand/short are null,
 //                      never a number that looks like a fact (grey)
@@ -31,7 +35,10 @@ import { classifyLine } from './backorder.js';
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 
-export const MATERIAL_STATE = { COVERED: 'COVERED', SHORT: 'SHORT', UNVERIFIED: 'UNVERIFIED' };
+// HELD (Stuart 2026-10-13): the stock IS on the shelf, but NetSuite has committed enough of it to OTHER orders that
+// what is free does not cover this one. Not a short — the picker pulls it and management decides who gets it (RTG →
+// Day summary → Stock to reallocate). Only the refresh reads it (it needs NetSuite's on hand, Shared/shelfFigures).
+export const MATERIAL_STATE = { COVERED: 'COVERED', SHORT: 'SHORT', UNVERIFIED: 'UNVERIFIED', HELD: 'HELD' };
 
 const stateOf = (onHand, need) => (onHand == null ? MATERIAL_STATE.UNVERIFIED : (onHand >= need ? MATERIAL_STATE.COVERED : MATERIAL_STATE.SHORT));
 
@@ -179,9 +186,17 @@ export const refreshMaterialRows = (rows = [], avail = null) => {
         const onHand = known ? codes.reduce((a, c) => a + N((map[c] || {}).available), 0) : null;
         const onOrder = known ? codes.reduce((a, c) => a + N((map[c] || {}).onOrder), 0) : N(r.onOrder);
         const short = onHand == null ? null : Math.max(0, N(r.need) - onHand);
-        const state = stateOf(onHand, N(r.need));
-        if (onHand !== r.onHand || short !== r.short || onOrder !== r.onOrder || state !== r.state) changed = true;
-        return { ...r, onHand, onOrder, short, state };
+        // WHAT NETSUITE LISTS (Stuart 2026-10-13): on hand and committed for the item, and this order's own share of the
+        // commitment — shown beside what is free for the order. A figure the read did not bring is null, never 0.
+        const fig = (k) => { const have = known ? codes.filter(c => c in map && map[c] && map[c][k] != null) : []; return have.length ? have.reduce((a, c) => a + N(map[c][k]), 0) : null; };
+        const nsOnHand = fig('nsOnHand'), nsCommitted = fig('nsCommitted');
+        const ownHeld = known ? codes.reduce((a, c) => a + N((map[c] || {}).heldForOrder), 0) : null;
+        const base = stateOf(onHand, N(r.need));
+        const state = (base === MATERIAL_STATE.SHORT && nsOnHand != null && nsOnHand >= N(r.need)) ? MATERIAL_STATE.HELD : base;
+        const was = (v) => (v === undefined ? null : v);
+        if (onHand !== r.onHand || short !== r.short || onOrder !== r.onOrder || state !== r.state
+            || nsOnHand !== was(r.nsOnHand) || nsCommitted !== was(r.nsCommitted) || (ownHeld || 0) !== (r.ownHeld || 0)) changed = true;
+        return { ...r, onHand, onOrder, short, state, nsOnHand, nsCommitted, ownHeld };
     });
     return { rows: out, changed };
 };
@@ -206,6 +221,15 @@ export const stockHolderIdOf = (d, salesOrder = null) => {
     if (!d) return '';
     return U(d.orderType) === 'STOCK' ? digits(d.nsWoId) : digits(salesOrder && salesOrder.nsInternalId);
 };
+
+/** A free-stock map with NetSuite's on hand / committed laid beside each code it knows (Shared/shelfFigures). Pure. */
+export const withShelfFigures = (map = {}, figures = {}) => {
+    const out = {};
+    Object.entries(map || {}).forEach(([c, v]) => { const f = (figures || {})[U(c)]; out[c] = f ? { ...v, nsOnHand: f.nsOnHand, nsCommitted: f.nsCommitted } : v; });
+    return out;
+};
+/** A document whose rows RTG has not read NetSuite for yet — released since the morning run. */
+export const neverRefreshed = (d) => !!d && !d.materialRefreshedAt;
 
 export const materialRefreshable = (d, coll) => {
     if (!d || d.deleted || d.closed === true) return false;

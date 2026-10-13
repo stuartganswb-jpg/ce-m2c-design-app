@@ -13,7 +13,8 @@ import { restampBreakdownLines, splitLineFinishOf, isUnfinishedFinish } from '..
 import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
-import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey , stockHolderIdOf } from '../Shared/materialGrid';
+import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey , stockHolderIdOf, withShelfFigures, neverRefreshed } from '../Shared/materialGrid';
+import { fetchShelfFigures } from '../Shared/shelfFigures';
 import { finishGroupsOf, docStreamsOf, poleCountRepairOf, poleTrackRepairOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe, writeShopDocOnce, claimRelease, endReleaseClaim, fetchMasterFinishes } from '../Shared/floorRelease';
@@ -1378,14 +1379,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // release's. Once a day from 6 am, by the first RTG session open after that (the record in
     // hq_config/floor_stock_refresh says when it ran; a run started in the last ten minutes by
     // another session is not repeated); the 🌅 button runs it any other time.
-    const refreshFloorStock = async ({ manual = false } = {}) => {
+    // `onlyNew` (Stuart 2026-10-13): the documents released since the last run — their material box has the release's
+    // figures but not yet what NetSuite lists (on hand, committed). Same read, those documents only, and the morning
+    // run's own record (the day it ran) is left as it is.
+    const refreshFloorStock = async ({ manual = false, onlyNew = false } = {}) => {
         if (stockRefreshBusyRef.current) return;
         const targets = [
             ...liveFin.filter(d => materialRefreshable(d, 'fin_workorders')).map(d => ({ coll: 'fin_workorders', d })),
             ...liveShop.filter(d => materialRefreshable(d, 'shop_custom_orders')).map(d => ({ coll: 'shop_custom_orders', d })),
             ...liveWO.filter(d => materialRefreshable(d, 'hq_work_orders')).map(d => ({ coll: 'hq_work_orders', d })),
-        ];
+        ].filter(t => !onlyNew || neverRefreshed(t.d));
         const codes = materialCodesOf(targets.map(t => t.d));
+        if (onlyNew && (!targets.length || !codes.length)) return;
         const by = currentUser || 'RTG';
         const cfgRef = doc(db, 'hq_config', 'floor_stock_refresh');
         stockRefreshBusyRef.current = true;
@@ -1418,13 +1423,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     try { for (let i = 0; i < codes.length; i += 100) Object.assign(held, await fetchOrderCommitted(nsIds, codes.slice(i, i + 100))); }
                     catch (e) { heldKnown = false; addLog(`⚠ Floor stock refresh: what NetSuite holds for each order could not be read (${e.message || e}) — the documents show free stock only today.`, 'warn'); }
                 }
+                // WHAT NETSUITE LISTS (Stuart 2026-10-13: "show what NS lists as stock and committed but allow them to
+                // proceed") — on hand and committed for every code, laid beside what is free for each order. A second
+                // read (Shared/shelfFigures); if it fails the box shows a dash in those two columns, nothing else moves.
+                const shelf = await fetchShelfFigures(codes, locationId);
+                if (!shelf.known) addLog('⚠ Floor stock refresh: NetSuite on hand / committed could not be read — the material boxes show a dash in those two columns until the next run.', 'warn');
+                const shelfMap = withShelfFigures(map, shelf.map);
                 for (const t of targets) {
                     const ns = heldKnown ? nsOf(t.d) : '';
-                    const { rows, changed: ch } = refreshMaterialRows(t.d.materialRows, { map: ns ? withOrderHeld(map, held, ns) : map, unitsKnown });
+                    const { rows, changed: ch } = refreshMaterialRows(t.d.materialRows, { map: ns ? withOrderHeld(shelfMap, held, ns) : shelfMap, unitsKnown });
                     if (ch) changed++;
                     // The as-of moves on every open document, changed or not — the card must say TODAY.
                     await updateDoc(doc(db, t.coll, t.d.id), { materialRows: rows, materialRefreshedAt: Date.now(), materialRefreshedBy: by });
                 }
+            }
+            if (onlyNew) {
+                await setDoc(cfgRef, { [activeBrand]: { running: null, lastNewAt: Date.now(), lastNewBy: by, lastNewDocs: targets.length } }, { merge: true });
+                addLog(`🌅 Floor stock read for ${targets.length} document(s) released since the last run (${codes.length} code(s)).`, 'info');
+                return;
             }
             await setDoc(cfgRef, { [activeBrand]: { lastRunAt: Date.now(), lastRunBy: by, lastRunDay: refreshDayKey(), docs: targets.length, codes: codes.length, changed, manual, running: null, lastError: null } }, { merge: true });
             addLog(`🌅 Floor stock refreshed${manual ? '' : ' (morning run)'}: ${targets.length} open document(s), ${codes.length} code(s) read, ${changed} with a changed picture.`, targets.length ? 'success' : 'info');
@@ -1442,7 +1458,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // The morning run: checked once the live feeds have landed, then every ten minutes.
     useEffect(() => {
         if (!stockRefresh) return undefined;                  // the record has not been read yet
-        const tick = () => { if (refreshDue(stockRefresh)) refreshFloorStock({ manual: false }); };
+        // The morning run when it is due; otherwise the documents released since it (no run in hand in the last ten minutes).
+        // At most one such read in ten minutes, and none for ten minutes after a failed one — every run writes this
+        // record, which re-arms this timer.
+        const within10 = (t) => !!t && (Date.now() - (Number(t) || 0)) < 10 * 60 * 1000;
+        const mayReadNew = () => !!stockRefresh.lastRunDay && !within10(stockRefresh.running && stockRefresh.running.at) && !within10(stockRefresh.lastNewAt) && !within10(stockRefresh.lastErrorAt);
+        const tick = () => { if (refreshDue(stockRefresh)) refreshFloorStock({ manual: false }); else if (mayReadNew()) refreshFloorStock({ manual: false, onlyNew: true }); };
         const t0 = setTimeout(tick, 20000);
         const id = setInterval(tick, 10 * 60 * 1000);
         return () => { clearTimeout(t0); clearInterval(id); };

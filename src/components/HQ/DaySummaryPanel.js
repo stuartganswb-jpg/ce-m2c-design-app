@@ -1,7 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { daySummaryOf, dayBoundsOf, dayStrOf, daySummaryText, daySummaryHtml, soLabel, VERDICT } from '../Shared/daySummary';
 import { FINISH_MODE } from '../Shared/orderStatus';
 import { printHtmlDocument } from '../Shared/labelPrint';
+import { materialRefreshable, materialCodesOf } from '../Shared/materialGrid';
+import { fetchShelfFigures } from '../Shared/shelfFigures';
+import { fetchStockHolds } from '../Shared/stockHolds';
+import { stockToReallocateOf, REALLOCATE, REALLOCATE_WORD, orderLine, holdersText } from '../Shared/stockReallocate';
+import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 
 // THE DAY'S ORDERS — a screen opened from RTG (Stuart 2026-10-12: "end of day summary of orders entered and their status
 // from both sales entry and cpq, so that management can see what has happened and overrule"). It reads the feeds the
@@ -23,10 +28,41 @@ const DaySummaryPanel = ({ onClose, orders = [], workOrders = [], finDocs = [], 
         return daySummaryOf({ orders, workOrders, finDocs, shopDocs, start, end, isOrderEntry, refOf });
     }, [day, orders, workOrders, finDocs, shopDocs, isOrderEntry, refOf]);
     const soOf = (id) => orders.find(o => o.id === id) || null;
+    // 📦 STOCK TO REALLOCATE (Stuart 2026-10-13: "add the warning/scenario to end of day summary so we can reallocate stock
+    // if necessary prior to any build, but this does not need to stop production"). Every open document whose parts are
+    // not pulled yet, against what NetSuite lists NOW — read when this screen opens and on ↻, never on a timer. It
+    // reads only; nothing here holds or releases anything (Shared/stockReallocate).
+    const [stock, setStock] = useState({ loading: true, items: [], error: '', at: 0, docs: 0, holdersKnown: true });
+    const feeds = useRef({});
+    feeds.current = { orders, workOrders, finDocs, shopDocs, refOf, brand };
+    const readStock = async () => {
+        const f = feeds.current;
+        const targets = [
+            ...(f.finDocs || []).filter(d => materialRefreshable(d, 'fin_workorders')).map(d => ({ coll: 'fin_workorders', d })),
+            ...(f.shopDocs || []).filter(d => materialRefreshable(d, 'shop_custom_orders')).map(d => ({ coll: 'shop_custom_orders', d })),
+            ...(f.workOrders || []).filter(d => materialRefreshable(d, 'hq_work_orders')).map(d => ({ coll: 'hq_work_orders', d })),
+        ];
+        const codes = materialCodesOf(targets.map(t => t.d));
+        if (!targets.length || !codes.length) return setStock({ loading: false, items: [], error: '', at: Date.now(), docs: targets.length, holdersKnown: true });
+        setStock(s => ({ ...s, loading: true, error: '' }));
+        try {
+            const locationId = (BRAND_NETSUITE_MAP[f.brand] || {}).location || '17';
+            const [shelf, held] = await Promise.all([fetchShelfFigures(codes, locationId), fetchStockHolds(codes, locationId)]);
+            if (!shelf.known) return setStock({ loading: false, items: [], error: 'NetSuite on hand / committed could not be read — try ↻ again.', at: Date.now(), docs: targets.length, holdersKnown: false });
+            const soOfDoc = (d) => {
+                const keys = [d.soAppId, d.salesOrderId, d.orderKey, d.soId].filter(Boolean).map(String);
+                return keys.length ? ((f.orders || []).find(o => keys.includes(String(o.id)) || (o.soId && keys.includes(String(o.soId)))) || null) : null;
+            };
+            const items = stockToReallocateOf({ docs: targets, figures: shelf.map, holds: held.known ? held.map : null, refOf: f.refOf || ((d) => (d && (d.nsWoTran || d.id)) || ''), soOf: soOfDoc });
+            setStock({ loading: false, items, error: '', at: Date.now(), docs: targets.length, holdersKnown: held.known });
+        } catch (e) { setStock({ loading: false, items: [], error: `Stock could not be read (${e.message || e}).`, at: Date.now(), docs: targets.length, holdersKnown: false }); }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    useEffect(() => { readStock(); }, [brand]);
     const shift = (n) => { const { start } = dayBoundsOf(day); setDay(dayStrOf(start + n * 86400000 + 43200000)); };
     const c = sum.counts;
     const copy = async () => {
-        const text = daySummaryText(sum, { day, brand });
+        const text = daySummaryText(sum, { day, brand, stock: stock.items });
         try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2500); }
         catch (e) { window.prompt('Copy the summary:', text); }
     };
@@ -43,7 +79,7 @@ const DaySummaryPanel = ({ onClose, orders = [], workOrders = [], finDocs = [], 
                         <input type="date" value={day} onChange={e => e.target.value && setDay(e.target.value)} style={{ padding: '7px 8px', border: '1px solid var(--ink)', fontFamily: 'var(--mono)', fontSize: '0.85rem' }} />
                         <button style={btn(false)} onClick={() => shift(1)} title="The day after">▶</button>
                         <button style={btn(false)} onClick={() => setDay(dayStrOf())}>Today</button>
-                        <button style={btn(false)} onClick={() => printHtmlDocument(daySummaryHtml(sum, { day, brand, printedBy: userName }), { autoPrintDelay: 400 })} title="Prints the day — or saves it as a PDF to send">🖨 Print / PDF</button>
+                        <button style={btn(false)} onClick={() => printHtmlDocument(daySummaryHtml(sum, { day, brand, printedBy: userName, stock: stock.items }), { autoPrintDelay: 400 })} title="Prints the day — or saves it as a PDF to send">🖨 Print / PDF</button>
                         <button style={btn(false)} onClick={copy} title="Copies the day as plain text, to paste into a message or an email">{copied ? '✓ Copied' : '⧉ Copy text'}</button>
                         <button style={btn(true)} onClick={onClose}>Close</button>
                     </div>
@@ -109,6 +145,50 @@ const DaySummaryPanel = ({ onClose, orders = [], workOrders = [], finDocs = [], 
                             </div>
                         )}
                     <div style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)', marginTop: '10px', textTransform: 'none', letterSpacing: 0 }}>Worked from Stock View → Sales Snapshot → Backorders (a PO or a work order covers each).</div>
+
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', margin: '26px 0 8px' }}>
+                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)' }}>Stock to reallocate <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)' }}>every open order · as NetSuite reads now</span></div>
+                        <button style={btn(false)} onClick={readStock} disabled={stock.loading} title="Reads NetSuite again: on hand, committed, and who each item is held for">{stock.loading ? 'Reading NetSuite…' : '↻ Read NetSuite'}</button>
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', marginBottom: '8px', lineHeight: 1.45 }}>
+                        Nothing here stops the floor — the picker pulls what is on the shelf. This is where to see, before a build, that stock an order needs is committed to another one, so it can be re-committed in NetSuite.
+                    </div>
+                    {stock.error
+                        ? <div style={{ padding: '14px', background: '#fff', border: '1px solid #d9534f', color: '#d9534f' }}>{stock.error}</div>
+                        : stock.loading
+                            ? <div style={{ padding: '14px', background: '#fff', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Reading NetSuite…</div>
+                            : stock.items.length === 0
+                                ? <div style={{ padding: '14px', background: '#fff', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Every open order's parts are free for it — nothing to reallocate ({stock.docs} open document{stock.docs === 1 ? '' : 's'} read).</div>
+                                : (
+                                    <div style={{ background: '#fff', border: '1px solid var(--line)' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 1.3fr) 80px 90px 80px 80px minmax(280px, 3fr)', gap: '10px', padding: '8px 14px', ...mono, fontSize: '9px', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)' }}>
+                                            <div>Item</div><div>On hand</div><div>Committed</div><div>Wanted</div><div>Free</div><div>Orders that want it · who NetSuite holds it for</div>
+                                        </div>
+                                        {stock.items.map(it => {
+                                            const tone = it.kind === REALLOCATE.SHORT ? '#d9534f' : '#8a6d1f';
+                                            return (
+                                                <div key={it.code} style={{ display: 'grid', gridTemplateColumns: 'minmax(170px, 1.3fr) 80px 90px 80px 80px minmax(280px, 3fr)', gap: '10px', padding: '10px 14px', borderBottom: '1px solid var(--line)', borderLeft: `4px solid ${tone}`, fontSize: '0.88rem', alignItems: 'start' }}>
+                                                    <div>
+                                                        <div style={{ fontFamily: 'var(--mono)', fontWeight: 700 }}>{it.code}</div>
+                                                        {it.name ? <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{it.name}</div> : null}
+                                                        <div style={{ ...mono, fontSize: '9px', fontWeight: 700, color: tone, marginTop: '4px' }}>{REALLOCATE_WORD[it.kind]}</div>
+                                                    </div>
+                                                    <div style={{ fontWeight: 700 }}>{it.onHand}</div>
+                                                    <div>{it.committed}</div>
+                                                    <div>{it.wanted}</div>
+                                                    <div style={{ color: it.free < it.wanted ? tone : 'var(--ink)', fontWeight: 700 }}>{it.free}</div>
+                                                    <div style={{ lineHeight: 1.5 }}>
+                                                        {it.orders.map(o => <div key={o.id} style={{ color: o.state === 'OK' ? 'var(--ink-soft)' : 'var(--ink)' }}>{orderLine(o)}</div>)}
+                                                        <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '4px' }}>NetSuite holds it for: {holdersText(it, 8)}</div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                    <div style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)', marginTop: '10px', textTransform: 'none', letterSpacing: 0 }}>
+                        {stock.at ? `Read ${new Date(stock.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · ` : ''}Counts every open document whose parts are not pulled yet, on any day — not only the day shown above. "Free" is on hand less what NetSuite holds for anyone other than the orders listed.{!stock.holdersKnown && !stock.error ? ' Who each item is held for could not be read this time, so every commitment is counted against the orders.' : ''}
+                    </div>
                 </div>
             </div>
         </div>

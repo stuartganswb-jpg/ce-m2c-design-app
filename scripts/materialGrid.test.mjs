@@ -1,7 +1,7 @@
 // node scripts/materialGrid.test.mjs — the material grid on the floor card (Stuart 2026-09-23):
 // computed once at release, stamped on every document, refreshed each morning until pulled.
 import {
-    materialRowsOf, materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialCodesOf,
+    materialRowsOf, materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialCodesOf, withShelfFigures, neverRefreshed,
     materialRefreshable, materialAgeText, refreshDayKey, refreshDue, MATERIAL_STATE,
     pickDoneOf, pickedRowsOf, PICK_STATE, stockHolderIdOf,
 } from '../src/components/Shared/materialGrid.js';
@@ -152,6 +152,37 @@ const { COVERED, SHORT, UNVERIFIED } = MATERIAL_STATE;
     const after = refreshMaterialRows(row, { map: seenBy(stockHolderIdOf(wo11722)), unitsKnown: true }).rows[0];
     eq('read as the free shelf alone it was short of its own ten', [before.onHand, before.short, before.state], [0, 10, SHORT]);
     eq('read with what its work order holds: need 10 · on hand 10 · short 0', [after.need, after.onHand, after.short, after.state], [10, 10, 0, COVERED]);
+}
+
+// ── WHAT NETSUITE LISTS, AND "COMMITTED TO OTHER ORDERS" IS NOT "SHORT" (Stuart 2026-10-13) ─────────────────────────
+// "can't we make it show what NS lists as stock and committed but allow them to proceed … this does not need to stop
+// production." The refresh lays NetSuite's on hand and committed beside what is free for the order; a row the shelf
+// physically covers but other orders have committed reads HELD (amber, pick and go), not SHORT.
+{
+    const HELD = MATERIAL_STATE.HELD;
+    const row = (need) => [{ code: 'HCUMP410', name: 'Pole', need, onHand: 5, short: Math.max(0, need - 5), onOrder: 0, state: SHORT, coveredBy: '', coverCodes: ['HCUMP410'] }];
+    // NetSuite 10-13: HCUMP410 — 66 on hand, 61 committed, 5 available.
+    const free = { HCUMP410: { available: 5, onOrder: 0, unit: 'Each' } };
+    const withFig = withShelfFigures(free, { HCUMP410: { nsOnHand: 66, nsCommitted: 61 } });
+    eq('the figures are laid beside the code, nothing else moves', withFig, { HCUMP410: { available: 5, onOrder: 0, unit: 'Each', nsOnHand: 66, nsCommitted: 61 } });
+    eq('a code the figures do not know is left as it was', withShelfFigures({ X: { available: 1 } }, {}), { X: { available: 1 } });
+    const other = refreshMaterialRows(row(10), { map: withFig, unitsKnown: true }).rows[0];
+    eq('an order NetSuite holds nothing for: 66 on the shelf, 5 free → HELD, not SHORT', [other.nsOnHand, other.nsCommitted, other.ownHeld, other.onHand, other.short, other.state], [66, 61, 0, 5, 5, HELD]);
+    const own = refreshMaterialRows(row(10), { map: { HCUMP410: { ...withFig.HCUMP410, available: 15, heldForOrder: 10 } }, unitsKnown: true }).rows[0];
+    eq('the order NetSuite holds ten for: covered, and it says how much is its own', [own.nsOnHand, own.nsCommitted, own.ownHeld, own.onHand, own.short, own.state], [66, 61, 10, 15, 0, COVERED]);
+    const big = refreshMaterialRows(row(80), { map: withFig, unitsKnown: true }).rows[0];
+    eq('more than the shelf physically holds is still SHORT', [big.nsOnHand, big.onHand, big.short, big.state], [66, 5, 75, SHORT]);
+    const noFig = refreshMaterialRows(row(10), { map: free, unitsKnown: true }).rows[0];
+    eq('the figures not read: a dash (null), and the row reads as it always did', [noFig.nsOnHand, noFig.nsCommitted, noFig.onHand, noFig.state], [null, null, 5, SHORT]);
+    eq('a second run that brings the same figures changes nothing', refreshMaterialRows([other], { map: withFig, unitsKnown: true }).changed, false);
+    eq('…and figures arriving on an old row is a change', refreshMaterialRows(row(10), { map: withFig, unitsKnown: true }).changed, true);
+    // A painted row sums its cover codes — the figures too.
+    const painted = [{ code: 'H1-138BS/P06', need: 40, onHand: 0, short: 40, onOrder: 0, state: SHORT, coveredBy: '', coverCodes: ['H1-138BS/P06', 'H1-138BS/P', 'H1-138BS'] }];
+    const pm = withShelfFigures({ 'H1-138BS/P': { available: 0, onOrder: 0 }, 'H1-138BS': { available: 10, onOrder: 0 } }, { 'H1-138BS/P': { nsOnHand: 30, nsCommitted: 30 }, 'H1-138BS': { nsOnHand: 25, nsCommitted: 15 } });
+    const pr = refreshMaterialRows(painted, { map: pm, unitsKnown: true }).rows[0];
+    eq('cover codes: on hand and committed are summed like the free stock', [pr.nsOnHand, pr.nsCommitted, pr.onHand, pr.state], [55, 45, 10, HELD]);
+    eq('units unreadable: no figure is shown either', refreshMaterialRows(row(10), { map: withFig, unitsKnown: false }).rows.map(r => [r.nsOnHand, r.nsCommitted, r.ownHeld, r.state]), [[null, null, null, UNVERIFIED]]);
+    eq('a document RTG has not read NetSuite for yet', [neverRefreshed({ materialRefreshedAt: null }), neverRefreshed({}), neverRefreshed({ materialRefreshedAt: 5 }), neverRefreshed(null)], [true, true, false, false]);
 }
 
 console.log(`materialGrid: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
