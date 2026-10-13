@@ -23,7 +23,7 @@
 // Harness: scripts/hardwareSession.test.mjs.
 
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter.js';
-import { resolve, reseatPicks, recommendedQty, bearingEnds, centreBracketsFor } from './hardwareModel.js';
+import { resolve, reseatPicks, recommendedQty, bearingEnds, centreBracketsFor, finishesFor } from './hardwareModel.js';
 import { autoPicksOf } from './hardwareAutoPicks.js';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, projInchesOfSel } from './sizeMatrix.js';
 import { bracketAdviceFor, DEFAULT_DROP_FT } from './bracketSpan.js';
@@ -31,6 +31,8 @@ import { carrierRows } from './traverseConfigurator.js';
 import { usageAt } from './traverseExplode.js';
 import { rodMaterialsOf, extrasForRod, liveExtrasOf } from './flowExtras.js';
 import { normalizeExtras } from './extrasRestore.js';
+import { wearsAsTwin } from './materialTwin.js';
+import { subFinishOfFinish } from './subFinish.js';
 
 // ── THE PARTS, AND HOW ONE IS FOUND ──────────────────────────────────────────────────────────
 // A pin can be tagged with the library record's id, its itemId or OUR number, so every one of them
@@ -263,18 +265,336 @@ export const spliceIsSatisfied = (spliceCodes, extras, sameItemCode) => spliceCo
 export const withRequiredSplice = (typedExtras, spliceCode, sameItemCode) =>
     (typedExtras.some(x => sameItemCode(x.code, spliceCode) && Number(x.qty) > 0) ? typedExtras : [...typedExtras.filter(x => !sameItemCode(x.code, spliceCode)), { code: spliceCode, qty: '1', note: '' }]);
 
+// ── WHICH FINISH EACH PART WEARS ─────────────────────────────────────────────────────────────
+// ── ONE DEFAULT PER MATERIAL (Stuart 2026-09-09: "when i just selected finish for the metal
+// center bracket it removed my finish selection of the wood components"). The rail still sets a
+// default for every step at once — that is the typical order — but a stain and a paint are two
+// defaults, one per material, held side by side; a part wears the one its material can take,
+// and "just this part" (a wood gem finial and its metal collar each have their own) overrules
+// it on any step exactly as before. `globalFinish` stays the METAL default for the readers that
+// want one code: the per-foot rod pricing, the track's stock colour, the kit and Vision seeds.
+export const globalFinishOf = (globalFinishes) => globalFinishes.METAL || Object.values(globalFinishes).find(Boolean) || '';
+export function finishIndexOf(finishes) {
+    const m = new Map();
+    finishes.forEach(f => { const k = String(f.code || f.name || '').toUpperCase(); if (k) m.set(k, f); });
+    return m;
+}
+export const materialOfFinish = (f) => String((f && (f.material || f.type)) || 'METAL').toUpperCase();
+// A single code lands in its material's slot (seeds, restores); blank clears every default.
+export function withGlobalFinish(globalFinishes, code, finishByCode) {
+    const c = String(code || '').toUpperCase();
+    if (!c) return {};
+    const f = finishByCode.get(c);
+    return { ...globalFinishes, [materialOfFinish(f)]: c };
+}
+// ── WHO WEARS A FINISH (Stuart 2026-10-06, the 1" brass · Shared/materialTwin) ─────────────────
+// The material rule, as ever (hardwareModel.finishesFor) — and a part ALSO wears a finish of a material
+// its library record names a TWIN in: LBR is a BRASS finish, and H1-1BS is made in brass as H1-1BBS.
+// "it is just the parts listed": a part with no brass twin does not wear LBR, on any path.
+export const wearsAsTwinFinish = (c, f, findPart) => !!c && !!f && !c.noFinish && !finishesFor(c, [f]).length
+    && wearsAsTwin(findPart(c.partId), f, findPart);
+export const wearsFinishOf = (c, f, twinWear) => !!c && !!f && (finishesFor(c, [f]).length > 0 || twinWear(c, f));
+// The default THIS part wears: the material's own pick. A finish the part wears as a twin outranks the
+// one of its own material — pick LBR for the configuration and the brass-made parts go brass while
+// everything else keeps the metal finish.
+export function globalFinishForChoice(c, { globalFinishes, finishByCode, twinWear }) {
+    const picks = Object.values(globalFinishes).map(code => [String(code || '').toUpperCase(), finishByCode.get(String(code || '').toUpperCase())]).filter(([, f]) => f);
+    const asTwin = picks.find(([, f]) => twinWear(c, f));
+    if (asTwin) return asTwin[0];
+    for (const [code, f] of picks) if (finishesFor(c, [f]).length) return code;
+    return '';
+}
+export const chosenListOf = (resolved, livePicks) =>
+    [...resolved.choices.filter(c => Object.values(livePicks).includes(c.id)), ...resolved.riders, ...resolved.companions];
+// What a given part is wearing: its own finish in per-part mode, the configuration's otherwise.
+// ONE FINISH, THEN ANY EXCEPTIONS (Stuart 2026-08-17: "select a finish once for the whole
+// config, select again at any part you would like in another finish"). The override is always
+// available — it is not a mode to turn on. A part wears its own finish if one was set for it,
+// and the configuration's otherwise, so the common order is one click and the mixed one is two.
+export function partFinishByPartOf(partFinish, model) {
+    const m = {};
+    Object.entries(partFinish).forEach(([id, code]) => {
+        const c = model.choices.find(x => x.id === id);
+        if (c?.partId) m[String(c.partId).toUpperCase()] = code;
+    });
+    return m;
+}
+// ── A PLATE WEARS ITS ARM'S FINISH (Stuart 2026-09-09: "the bracket arm takes a finish code but
+// the matching backplate/coverplate does not, stays mill finish"). "Just this part" on a bracket
+// means the bracket AND the plate it sits on — they are one piece of hardware on the wall. A
+// plate with no finish of its own follows the arm holding the rod at its position: the return
+// or inside mount when one is chosen there, else the bracket. Its own pick still wins.
+export function armFinishOfChoice(c, { resolved, livePicks, partFinish, partFinishByPart }) {
+    if (!c || c.role !== 'BACKPLATE') return '';
+    const pos = String(c.position || '').toUpperCase();
+    const pickAt = (kind) => {
+        const sl = resolved.slots.find(x => x.kind === kind && String(x.position || '').toUpperCase() === pos);
+        const id = sl ? livePicks[sl.key] : '';
+        return id ? (sl.options || []).find(o => o.id === id) || null : null;
+    };
+    const end = pickAt('END');
+    const arm = (end && ['RETURN', 'INSIDE_MOUNT'].includes(end.role)) ? end : pickAt('BRACKET');
+    if (!arm) return '';
+    return partFinish[arm.id] || partFinishByPart[String(arm.partId || '').toUpperCase()] || '';
+}
+export const finishForChoice = (c, { partFinish, armFinishOf, globalFinishFor }) => partFinish[c.id] || armFinishOf(c) || globalFinishFor(c);
+
+// ── A CUSTOM-FINISHED TRACK WEARS THE FASCIA'S FINISH (Stuart 2026-08-31) ────────────────
+// "one tick per track and we will need if ticked to associate the same finish color as
+//  selected for the fascia in the cpq." The stock track is bronze or champagne and never asks
+// a finish question — the upcharge FEE on a track step IS the decision to paint it. So a fee
+// extra ticked on a track step dresses THAT track in whatever the fascia is wearing (its own
+// exception first, the configuration finish otherwise) — and it stays LIVE: change the
+// fascia's finish and the paint-matched track follows, because this is derived, never copied.
+// Scoped by data on every side: only a FEE item (partClass/productType, the same test the CPQ
+// uses) ticked on a TRACK slot can arm it, and only traverse assemblies have track slots.
+export function matchFinishOverrideOf({ extras, findPart, chosenList, finishFor, globalFinish, model, livePicks }) {
+    const out = {};
+    const isFeePart = (p) => !!(p && (p.partClass === 'Fee'
+        || String(p.manufacturingSpecs?.productType || p.productType || '').toUpperCase() === 'FEE'));
+    const feeSlots = new Set(extras
+        .filter(x => Number(x.qty) > 0 && x.slot && isFeePart(findPart(x.code)))
+        .map(x => x.slot));
+    if (!feeSlots.size) return out;
+    const fascia = chosenList.find(c => c.role === 'FASCIA');
+    const code = fascia ? finishFor(fascia) : globalFinish;
+    if (!code) return out;
+    model.slots.filter(s => s.kind === 'TRACK' && feeSlots.has(s.key)).forEach(s => {
+        const pick = livePicks[s.key];
+        if (pick) out[pick] = code;
+    });
+    return out;
+}
+
+// ── THE FINISH A LINE IS ACTUALLY BILLED AND SPRAYED IN (Stuart 2026-08-21) ───────────────
+// "once the finish is chosen to the left it needs to list the chosen color in the pricing
+// window as well of course in the bom to send along to finishing … in case people do choose
+// different finishes for different parts."
+//
+// Three things had to agree and only two did. The RENDER already painted per part; the PRICE
+// and the sheet that reaches finishing read one code for the whole configuration. So brass
+// rings on a black pole rendered brass, billed the black variant and told the floor black.
+//
+// ⚠ AN EXCEPTION IS KEYED ON THE CHOICE, AND A PART IS OFTEN SEVERAL PINS. A pole is three —
+// left, core, right — so a finish set on the one the customer clicked would leave its own other
+// two segments billing the configuration finish. The exception therefore travels by PART: same
+// part number, same finish, which is what "just this part" means to the person clicking it.
+// …and the MATERIAL GATE is applied here, exactly as the renderer applies it: a part wears only
+// a finish its material can take, so a wood stain chosen for the configuration does not bill a
+// stained bracket, and clear acrylic bills and sprays as nothing at all.
+// ── A RETURN CUT INTO THE POLE WEARS THE POLE'S FINISH (Stuart 2026-09-18, SO60551 row 2: the
+// miter return on a stained oak fascia went to the floor as EP4). A miter, a French return, a bend
+// is a FEE — fabrication ON the rod, not a part beside it — so it has no material of its own to
+// gate and no finish of its own to pick: it is whatever the rod it is cut into is. Derived, never
+// copied, exactly as a plate follows its arm: change the rod's finish and the return follows.
+// Scoped by data on both sides — role RETURN, and the library record is a Fee — so a real cast
+// return bracket (an item) keeps the material rule it always had. The rod of the same tier on a
+// double; its own per-part pick still wins.
+export const isFeeRecord = (p) => !!(p && (p.partClass === 'Fee'
+    || String(p.manufacturingSpecs?.productType || p.productType || '').toUpperCase() === 'FEE'));
+export function rodFinishForChoice(choice, { chosenList, partFinish, partFinishByPart, globalFinishFor }) {
+    const rods = chosenList.filter(c => ['ROD', 'FASCIA'].includes(c.role));
+    if (!rods.length) return '';
+    const tier = String((choice && choice.tier) || '').toUpperCase();
+    const rod = (tier && rods.find(r => String(r.tier || '').toUpperCase() === tier)) || rods[0];
+    return String(partFinish[rod.id] || partFinishByPart[String(rod.partId || '').toUpperCase()] || globalFinishFor(rod) || '').toUpperCase();
+}
+export const followsRodChoice = (choice, findPart) => !!choice && choice.role === 'RETURN' && isFeeRecord(findPart(choice.partId));
+// ── THE STOCK COLOUR A PART IS MADE IN (Stuart 2026-09-18) — the sub finish 4.5 aligns to the ROD's
+// finish first (S04 → TCP, so a stained traverse gets champagne brackets whatever the metal slot
+// holds), the configuration's otherwise. Only a track, or an item the library says uses it.
+export function subFinishForChoice(choice, part, { findPart, finishByCode, rodFinishFor, globalFinish }) {
+    if (!choice) return '';
+    const takes = choice.role === 'TRACK' || !!(part || findPart(choice.partId))?.manufacturingSpecs?.usesSubFinish;
+    if (!takes) return '';
+    // The ONE lookup the floor routes read too (Shared/subFinish.subFinishOfFinish, 2026-09-27).
+    const subOf = (code) => subFinishOfFinish(code, [finishByCode.get(String(code || '').toUpperCase())].filter(Boolean));
+    return subOf(rodFinishFor(choice)) || subOf(globalFinish);
+}
+export function lineFinishForChoice(choice, { partFinish, partFinishByPart, armFinishOf, globalFinishFor, finishByCode, matchFinishOverride, followsRod, rodFinishFor, findPart, wearsFinish }) {
+    // The paint-to-match override outranks every gate — noFinish and the material rule say
+    // what the STOCK part takes, and the upcharge is precisely the decision to overrule that.
+    if (choice && matchFinishOverride[choice.id]) return matchFinishOverride[choice.id];
+    // A TRACK ships in its stock finish (bronze or champagne, matched to the fascia in the
+    // library) — the configuration's finish never lands on it uninvited, or every quote would
+    // send the floor an unpaid paint job. Only the upcharge above can paint a track.
+    if (choice && choice.role === 'TRACK') return '';
+    if (!choice || choice.noFinish) return '';
+    // A return cut into the pole: the rod's finish, past the material gate (it IS the pole).
+    if (followsRod(choice)) return partFinish[choice.id] || rodFinishFor(choice);
+    // A part made in a stock colour wears no finish unless one was picked for IT — the configuration's
+    // metal finish does not repaint a champagne bracket uninvited (the track has always worked so).
+    if (choice.role !== 'TRACK' && findPart(choice.partId)?.manufacturingSpecs?.usesSubFinish
+        && !partFinish[choice.id] && !partFinishByPart[String(choice.partId || '').toUpperCase()]) return '';
+    const code = partFinish[choice.id] || partFinishByPart[String(choice.partId || '').toUpperCase()] || armFinishOf(choice) || globalFinishFor(choice);
+    if (!code) return '';
+    const f = finishByCode.get(String(code).toUpperCase());
+    if (!f || !wearsFinish(choice, f)) return '';
+    return code;
+}
+
+// NODE → TEXTURE. A no-finish part is skipped entirely, so the clear rule paints it instead —
+// the collar of a two-part finial takes the finish, the acrylic top never does.
+export function textureOverridesOf({ resolved, chosenList, finishByCode, finishFor, matchFinishOverride, followsRod, rodFinishFor, partFinish, wearsFinish }) {
+    const out = {};
+    // ⚠ PAINT WHAT RENDERS, NOT WHAT WAS CLICKED (Stuart 2026-08-17: "the right end treatment is
+    // not rendering the finish properly on the rod, only the end treatment is, the left side
+    // works"). A three-piece pole is three PINS but one decision: choosing the rod renders its
+    // left, core and right segments, yet only the pin the customer's answer points AT was in the
+    // chosen list — so the other segments rendered in mill finish beside a brass one. Painting
+    // per-click can only ever be right for parts that are one pin, which the pole is not.
+    //
+    // So the finish walks the VISIBLE set instead, the same set the renderer draws: every node
+    // that renders is painted by the finish of the part that OWNS it, and a segment inherits
+    // from the rod it belongs to — same partId, same decision, same finish, by construction.
+    const chosenIds = new Set(chosenList.map(c => c.id));
+    const byPart = new Map();
+    chosenList.forEach(c => { if (c.partId) byPart.set(String(c.partId).toUpperCase(), c); });
+    (resolved.visible ? [...resolved.visible] : []).forEach(node => {
+        const owner = resolved.ownership?.owner?.get(node);
+        if (!owner) return;
+        // The owner itself if it was chosen; otherwise the chosen part it is a piece of.
+        const c = chosenIds.has(owner.id) ? owner
+            : (owner.partId ? byPart.get(String(owner.partId).toUpperCase()) : null);
+        // A paint-matched track renders painted — the same override, applied to the same set.
+        const ov = c && (matchFinishOverride[c.id] || matchFinishOverride[owner.id]);
+        if (!c || ((c.noFinish || owner.noFinish) && !ov)) return;
+        // …and an unmatched track renders its stock look, never the configuration's finish.
+        if (!ov && (c.role === 'TRACK' || owner.role === 'TRACK')) return;
+        // ⚠ A RETURN CUT INTO THE POLE IS DRAWN IN THE POLE'S FINISH (Stuart 2026-10-01, H1-2TRV wood miter return:
+        // "the pole renders correctly as wood, the return is in cart correctly as wood finish but the rendering is
+        // metal"). The 09-18 rule — a miter, a French return, a bend is fabrication ON the rod and wears what the rod
+        // wears — was written into the cart line (lineFinishFor) and never into this pass, which still asked the
+        // return's own material tag: metal, so the oak stain was refused and the return drew bare. Same rule, same
+        // two helpers, here: the rod's finish (its own per-part pick still wins), past the material gate.
+        const follows = !ov && followsRod(c);
+        const f = finishByCode.get(String(ov || (follows ? (partFinish[c.id] || rodFinishFor(c)) : finishFor(c))).toUpperCase());
+        // The material gate, applied at the last moment: a global pick of a wood stain simply
+        // does not land on the steel brackets, and nothing lands on the acrylic.
+        if (!f || (!ov && !follows && !wearsFinish(c, f))) return;
+        const url = f.textureUrl || f.finalImageUrl;
+        if (url) out[String(node).toLowerCase()] = url;
+    });
+    return out;
+}
+// The finishes this configuration actually wears — the configuration's own, plus any per-part
+// exception. RTG reads the label off this, so it must be what is on the parts, not what is
+// selected in the panel.
+export function chosenFinishObjectsOf(globalFinishes, partFinish, finishByCode) {
+    const codes = new Set([...Object.values(globalFinishes), ...Object.values(partFinish)].filter(Boolean).map(c => String(c).toUpperCase()));
+    return [...codes].map(c => finishByCode.get(c)).filter(Boolean);
+}
+// ⚠ WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE (Stuart 2026-09-16, SO60429: "we lost the
+// wood finish altogether"). A wood part with no finish chosen — no WOOD row pick, no per-part
+// pick — reached the cart wearing nothing: no species item, no stain for the floor, a bare
+// code in NetSuite. The add names the parts and waits; the WOOD row of the finish step (or
+// the part's own swatch) is the answer. A part tagged as taking no finish is not asked.
+export const bareWoodOf = (chosenList, finishFor) =>
+    chosenList.filter(c => Array.isArray(c.materials) && c.materials.includes('WOOD') && !c.noFinish && !finishFor(c));
+
+// ── WHICH FINISHES ARE OFFERED, AND WHAT THEY ARE CALLED ─────────────────────────────────────
+// A FINISH IS NAMED, NOT JUST COLOURED (Stuart 2026-08-17: "make the finish chips bigger and
+// place the name under each one, our code along with customer name"). The customer's own word
+// for it comes from the finish's client mapping — it is what they will say on the phone.
+export function clientFinishNameOf(f, customerId, customer) {
+    if (!customerId && !customer) return '';
+    const keys = new Set([customerId, customer?.name, customer?.companyName].filter(Boolean).map(v => String(v).trim().toUpperCase()));
+    const hit = (Array.isArray(f.clientMapping) ? f.clientMapping : []).find(m => keys.has(String(m.customerId || '').trim().toUpperCase()));
+    return hit?.clientFinishName || '';
+}
+// Material first, then where it is done — in-house and outsourced price and lead differently.
+// ── WHAT THIS FLOW OFFERS, IN ONE PLACE (Stuart 2026-08-21) ──────────────────────────────
+// "when selecting brimar flow at first its just there selected finishes, but as soon as i click
+// on one it opens the full library of finishes even the ones not selected in tab 11."
+//
+// The flow's list was applied where the swatches are GROUPED and nowhere else, so the moment a
+// part was picked the per-part row underneath — "just this part" — offered the whole library.
+// A collection that has been narrowed to its own finishes must stay narrowed everywhere, or the
+// narrowing is decoration: one wrong click and a Brimar quote wears a finish Brimar does not
+// sell. An empty list still means "never narrowed", which is every flow's behaviour before the
+// control existed.
+export const offeredFinishesOf = (finishes, flowFinishes) => (flowFinishes.length
+    ? finishes.filter(f => flowFinishes.includes(f.code || f.finishCode || f.name || f.id))
+    : finishes);
+export function finishGroupsOf({ offeredFinishes, chosenList, wearsFinish }) {
+    // …and then the parts have their say: a finish no chosen part can wear is not offered.
+    const usable = offeredFinishes.filter(f => !chosenList.length || chosenList.some(c => wearsFinish(c, f)));
+    const byMat = new Map();
+    usable.forEach(f => {
+        const m = String(f.material || f.type || 'METAL').toUpperCase();
+        if (!byMat.has(m)) byMat.set(m, { inHouse: [], out: [] });
+        // A METAL finish splits by how it is applied — painted here, plated by a vendor. WOOD
+        // does not: a stain is a stain whichever side of the wall it is done on, so it stays one
+        // list rather than being cut in two and labelled the same thing twice.
+        const splits = !m.includes('WOOD');
+        const out = splits && (f.multiplier !== undefined || f.vendor);
+        (out ? byMat.get(m).out : byMat.get(m).inHouse).push(f);
+    });
+    return [...byMat.entries()];
+}
+// ── WHAT THE FINISH IS, NOT WHO APPLIES IT (Stuart 2026-08-21) ──────────────────────────
+// "we can rename the categories to Wood, Painted and Plated rather than in house and
+// outsourced, just changing the naming conventions."
+//
+// Right, and it is not only nicer language: in house / outsourced is OUR problem, and it was on
+// a screen where the question is what the customer is buying. The split underneath is unchanged
+// — a paint we apply here, a plating a vendor does — only what it is called. A wood group is
+// wood whichever side of the wall it is finished on, so it says so once instead of splitting.
+export function finishGroupLabel(mat, kind) {
+    const m = String(mat || '').toUpperCase();
+    if (m.includes('WOOD')) return 'Wood';
+    if (m.includes('METAL')) return kind === 'out' ? 'Plated' : 'Painted';
+    if (m.includes('BRASS')) return 'Solid brass';      // the part is MADE in it — in house or sent out is ours to know
+    return kind === 'out' ? 'Outsourced' : 'In house';   // an unfamiliar material keeps the old words
+}
+
+/**
+ * The finish rules for one configuration, in one call — the same functions, bound to this configuration,
+ * in the order the CPQ screen binds them. `finishFor` is what a part is wearing; `lineFinishFor` what
+ * its line is billed and sprayed in; `subFinishFor` the stock colour it is made in.
+ */
+export function finishRulesOf({ finishes = [], flowFinishes = [], customer = null, customerId = '', findPart, model, resolved, livePicks, extras = [] },
+    { globalFinishes = {}, partFinish = {} } = {}) {
+    const finishByCode = finishIndexOf(finishes);
+    const globalFinish = globalFinishOf(globalFinishes);
+    const twinWear = (c, f) => wearsAsTwinFinish(c, f, findPart);
+    const wearsFinish = (c, f) => wearsFinishOf(c, f, twinWear);
+    const globalFinishFor = (c) => globalFinishForChoice(c, { globalFinishes, finishByCode, twinWear });
+    const chosenList = chosenListOf(resolved, livePicks);
+    const partFinishByPart = partFinishByPartOf(partFinish, model);
+    const armFinishOf = (c) => armFinishOfChoice(c, { resolved, livePicks, partFinish, partFinishByPart });
+    const finishFor = (c) => finishForChoice(c, { partFinish, armFinishOf, globalFinishFor });
+    const matchFinishOverride = matchFinishOverrideOf({ extras, findPart, chosenList, finishFor, globalFinish, model, livePicks });
+    const rodFinishFor = (choice) => rodFinishForChoice(choice, { chosenList, partFinish, partFinishByPart, globalFinishFor });
+    const followsRod = (choice) => followsRodChoice(choice, findPart);
+    const subFinishFor = (choice, part) => subFinishForChoice(choice, part, { findPart, finishByCode, rodFinishFor, globalFinish });
+    const lineFinishFor = (choice) => lineFinishForChoice(choice, { partFinish, partFinishByPart, armFinishOf, globalFinishFor, finishByCode, matchFinishOverride, followsRod, rodFinishFor, findPart, wearsFinish });
+    const textureOverrides = textureOverridesOf({ resolved, chosenList, finishByCode, finishFor, matchFinishOverride, followsRod, rodFinishFor, partFinish, wearsFinish });
+    const chosenFinishObjects = chosenFinishObjectsOf(globalFinishes, partFinish, finishByCode);
+    const offeredFinishes = offeredFinishesOf(finishes, flowFinishes);
+    const finishGroups = finishGroupsOf({ offeredFinishes, chosenList, wearsFinish });
+    const bareWood = bareWoodOf(chosenList, finishFor);
+    const clientFinishName = (f) => clientFinishNameOf(f, customerId, customer);
+    return { finishByCode, globalFinishes, globalFinish, partFinish, twinWear, wearsFinish, globalFinishFor, chosenList, partFinishByPart, armFinishOf, finishFor,
+        matchFinishOverride, rodFinishFor, followsRod, subFinishFor, lineFinishFor, textureOverrides, chosenFinishObjects, offeredFinishes, finishGroups, bareWood, clientFinishName };
+}
+
 /**
  * The configuration, in one call — for a caller that is not a React screen (the portal's server, a
  * harness). The CPQ screen makes these SAME calls one memo at a time, so a keystroke re-works only
  * what it touched; this makes them in the same order, with the same arguments.
  *
- * @param data   { assembly, pins, parts, flow, spanMap, spanCaps, trvRules, extraItems } — what the screen is handed
- * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId, extras, spliceWaived } — what
- *               the operator has answered, as a cart line saves it (engineConfig); a saved length and the
- *               saved add-by-hand rows are read back exactly as Edit restores them
+ * @param data   { assembly, pins, parts, flow, spanMap, spanCaps, trvRules, extraItems, finishes, flowFinishes,
+ *                 customer, customerId } — what the screen is handed
+ * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId, extras, spliceWaived, globalFinishes,
+ *                 globalFinish, partFinish } — what the operator has answered, as a cart line saves it
+ *               (engineConfig); a saved length, the saved add-by-hand rows and the saved finish defaults are
+ *               read back exactly as Edit restores them
  */
-export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMap = {}, spanCaps = {}, trvRules = null, extraItems = [] } = {},
-    { answers = {}, picks = {}, sizePick = {}, lengthInches: savedLength = null, stepQty = {}, fabricId = 'PRINT', extras: savedExtras = [], spliceWaived = false } = {}) {
+export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMap = {}, spanCaps = {}, trvRules = null, extraItems = [],
+    finishes = [], flowFinishes = [], customer = null, customerId = '' } = {},
+    { answers = {}, picks = {}, sizePick = {}, lengthInches: savedLength = null, stepQty = {}, fabricId = 'PRINT', extras: savedExtras = [], spliceWaived = false,
+        globalFinishes: savedGlobalFinishes = null, globalFinish: savedGlobalFinish = '', partFinish: savedPartFinish = null } = {}) {
     const partIndex = partIndexOf(parts);
     const findPart = (id) => partIn(partIndex, id);
     const ourId = (id) => ourNumberOf(findPart(id), id);
@@ -309,7 +629,14 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     if (spliceNeeded && spliceCode && !spliceWaived) typedExtras = withRequiredSplice(typedExtras, spliceCode, sameItemCode);
     const extras = liveExtrasOf(typedExtras, extraItems, rodMats);
     const spliceSatisfied = spliceIsSatisfied(spliceCodes, extras, sameItemCode);
+    // The finishes: the saved defaults as Edit restores them — one per material, or (a line saved before there
+    // was one per material) ONE code, which lands in its material's slot — and the rules bound to this configuration.
+    const globalFinishes = (savedGlobalFinishes && typeof savedGlobalFinishes === 'object') ? { ...savedGlobalFinishes }
+        : (savedGlobalFinish ? withGlobalFinish({}, savedGlobalFinish, finishIndexOf(finishes)) : {});
+    const partFinish = { ...(savedPartFinish || {}) };
+    const fin = finishRulesOf({ finishes, flowFinishes, customer, customerId, findPart, model, resolved, livePicks, extras }, { globalFinishes, partFinish });
     return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks,
         lengthInches, lengthFeetExact, lengthFeet, advice, recommendFor, quantities, resolved,
-        sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied };
+        sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied,
+        ...fin };
 }
