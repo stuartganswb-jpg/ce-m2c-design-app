@@ -1377,26 +1377,6 @@ const collectionGateOf = (crm) => {
     const set = new Set(allowed);
     return (asm) => collectionsOfAsm(asm).some((c) => set.has(c));
 };
-// Resolve Approved_Designs docs by ANY id spelling — doc id first, then itemId / legacyErpId 'in'
-// fallbacks — returning a Map keyed by the REQUESTED id. Shared by the portal fee-name display
-// and the Measure & Fit bracket/backplate dims.
-const partsByAnyId = async (db, ids) => {
-    const map = new Map();
-    const want = [...new Set((ids || []).map(String).filter(Boolean))];
-    if (!want.length) return map;
-    const snaps = await db.getAll(...want.map((id) => db.collection('Approved_Designs').doc(id)));
-    snaps.forEach((s2) => { if (s2.exists) map.set(s2.id, { id: s2.id, ...s2.data() }); });
-    for (const fieldName of ['itemId', 'legacyErpId']) {
-        const unresolved = want.filter((id) => !map.has(id));
-        if (!unresolved.length) break;
-        for (const ids30 of chunk(unresolved, 30)) {
-            const qs = await db.collection('Approved_Designs').where(fieldName, 'in', ids30).get();
-            qs.forEach((d) => { const it = d.data(); const key = String(it[fieldName] || ''); if (key && !map.has(key)) map.set(key, { id: d.id, ...it }); });
-        }
-    }
-    return map;
-};
-
 // Per-flow collection check for the single-flow endpoints. Denies with the SAME message as the
 // flow-id check so a customer can never probe which flows exist by reading the error.
 const assertCollectionAllowed = async (db, crm, flow, flowId) => {
@@ -1520,173 +1500,216 @@ exports.portalCatalog = onCall({ cors: true }, async (request) => {
 });
 
 
-// ---- Client configurator (portal Vision/CPQ) ------------------------------------------------
-// Returns ONE assigned flow, sanitized for the portal's render engine: the flow steps (geometry/
-// node maps, finish targeting — no pricing), the linked assembly's GLB + node clusters, and the
-// finish palette. Entitlement is enforced: the flow must be in the customer's crm_records
-// .portalFlowIds. NEVER returns cost/vendor data or internal option prices.
-// Customer-facing option name. Fee options carry the fee ENTITY's internal id as partName
-// (CE-FEE-4594) or an authoring hint ("Mitered Return (fee — set price)") — customers must see
-// a DESCRIPTION (Stuart 2026-07-25). feeNameOf resolves the fee item's library itemName; when
-// unresolvable, the "(fee…)" suffix is stripped so at worst a readable phrase remains.
-const customerOptName = (o, feeNameOf) => {
-    const raw = String(o.partName || o.label || '');
-    const feeish = !!o.isFee || /\(fee/i.test(raw);
-    if (!feeish) return raw;
-    const resolved = (feeNameOf && o.partId) ? feeNameOf(o.partId) : '';
-    return resolved || raw.replace(/\s*\(fee[^)]*\)\s*$/i, '').trim() || raw;
+// ---- The portal configurator, on HQ's engine (the rebuild, step 3 — Stuart 2026-10-12 / 10-13) ----
+// The old configurator's server — portalFlow, portalResolve, portalQuoteRequest, portalVisionDraft and
+// functions/portalEngine.js, a port of CPQ's pricing that fell two months behind it — is gone ("the older
+// can be totally scraped"). These run HQ's OWN engine: functions/portalSession.js loads the copy the deploy
+// makes (functions/engine) and calls hardwareSession.sessionOf. The rulings each line answers to are in
+// that file: the portal shows the level Portal Access set and never a cost level; the request lands at the
+// customer's own level; solid brass is CPQ-only; a customer adds no items by hand.
+const portalSession = require('./portalSession');
+
+// The brand's library is every Approved_Designs record — thousands — and a walk asks for a view on every
+// click, so what was read is kept per instance for a short while: a price or a tag changed in HQ reaches
+// the portal within LIBRARY_TTL_MS.
+const LIBRARY_TTL_MS = 90 * 1000;
+let libraryKept = { at: 0, records: null, loading: null };
+const loadLibrary = async (db) => {
+    if (libraryKept.records && Date.now() - libraryKept.at < LIBRARY_TTL_MS) return libraryKept.records;
+    if (!libraryKept.loading) {
+        libraryKept.loading = db.collection('Approved_Designs').get()
+            .then((snap) => { libraryKept = { at: Date.now(), records: snap.docs.map((d) => ({ id: d.id, ...d.data() })), loading: null }; return libraryKept.records; })
+            .catch((e) => { libraryKept.loading = null; throw e; });
+    }
+    return libraryKept.loading;
 };
-const sanitizeStep = (s, feeNameOf) => ({
-    id: s.id,
-    title: s.title || '',
-    type: s.type || '',
-    stepRole: s.stepRole || '',
-    position: s.position || '',
-    sizeAxis: s.sizeAxis || '',
-    sizeFamily: s.sizeFamily || '',
-    targetNodes: s.targetNodes || '',
-    finishTargetNodes: s.finishTargetNodes || '',
-    finishDataSource: s.finishDataSource || '',
-    finishAllowedOptions: s.finishAllowedOptions || null,
-    dataSource: s.dataSource || '',
-    allowedOptions: s.allowedOptions || null, // finish/option ids this step is scoped to
-    geometryMap: s.geometryMap || null,
-    subGeometryMap: s.subGeometryMap || null,
-    mountSelector: s.mountSelector || null,
-    mountPosition: s.mountPosition || '',
-    // The dimensional-input calculator (calc_straight_pole / calc_french_return_1in / …) — without
-    // it the portal's finished-size field computes qty as 1 (Stuart 2026-07-27: "the dimensional
-    // input does not populate the rod qty").
-    calculatorTemplate: s.calculatorTemplate || '',
-    hideQty: !!s.hideQty,
-    isCenterClone: !!s.isCenterClone,
-    styleOptions: (s.styleOptions || []).map((o) => ({
-        optId: o.optId || o.partId || '', partId: o.partId || '', partName: customerOptName(o, feeNameOf),
-        label: customerOptName({ ...o, partName: o.label || o.partName }, feeNameOf), targetNode: o.targetNode || '', finalImageUrl: o.finalImageUrl || o.imageUrl || '',
-        sizeValue: o.sizeValue ?? null, sizeScale: o.sizeScale ?? null, location: o.location || '', position: o.position || '',
-        finishAllowedOptions: o.finishAllowedOptions || null,
-        hidesBracket: !!o.hidesBracket,
-        isReturn: !!o.isReturn,
-        endTreatment: o.endTreatment || '',
-        isReturnArm: !!o.isReturnArm,
-        usesReturnPlates: !!o.usesReturnPlates,
-        isBasic: !!o.isBasic,
-        // Per-assembly flows (H2 pivot): the option's projection tag + fee flag drive the
-        // portal's projTagOk gating — physical dims/flags only, never cost.
-        projInches: o.projInches || '',
-        isFee: !!o.isFee,
-    })),
-    subOptions: (s.subOptions || []).map((o) => ({
-        optId: o.optId || o.partId || '', partId: o.partId || '', partName: customerOptName(o, feeNameOf),
-        label: customerOptName({ ...o, partName: o.label || o.partName }, feeNameOf), targetNode: o.targetNode || '', location: o.location || '', position: o.position || '',
-        returnOnly: !!o.returnOnly, inlineOnly: !!o.inlineOnly, projInches: o.projInches || '',
-    })),
-});
-
-exports.portalFlow = onCall({ cors: true }, async (request) => {
-    const customerId = assertPortalCustomer(request);
-    const flowId = String((request.data || {}).flowId || '');
-    if (!flowId) throw new HttpsError('invalid-argument', 'flowId is required.');
-
-    const db = admin.firestore();
+// What CPQ reads for ONE flow: the flow, the pins of its assembly, the master and outsourced finishes,
+// 6.5's span map and the flow family's traverse chart — from the same documents, by the same keys.
+const flowKept = new Map();
+const loadFlowRecords = async (db, flowId) => {
+    const hit = flowKept.get(flowId);
+    if (hit && Date.now() - hit.at < LIBRARY_TTL_MS) return hit;
+    const flowSnap = await db.collection('cpq_flows').doc(flowId).get();
+    if (!flowSnap.exists) throw new HttpsError('not-found', 'Product configuration not found.');
+    const flow = { id: flowSnap.id, ...flowSnap.data() };
+    const asmId = String(flow.linkedAssemblyId || '');
+    const [pinSnap, mf, outSnap, spanSnap, trvSnap] = await Promise.all([
+        asmId ? db.collection('assembly_pins').where('assemblyId', '==', asmId).get() : Promise.resolve({ docs: [] }),
+        db.collection('system').doc('master_finishes').get(),
+        db.collection('hq_outsource_finishes').get(),
+        db.collection('system').doc('bracket_span_map').get(),
+        db.collection('system').doc(`traverse_rules_${portalSession.trvFamilyOf(flow)}`).get(),
+    ]);
+    const kept = {
+        at: Date.now(), flow, pins: pinSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+        finishes: (mf.exists && mf.data().finishes) || [], outsourceFinishes: outSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+        spanDoc: spanSnap.exists ? spanSnap.data() : null, trvRules: trvSnap.exists ? trvSnap.data() : null,
+    };
+    flowKept.set(flowId, kept);
+    return kept;
+};
+// One customer, one flow: entitled (the SAME answer whether or not the flow exists, so nobody can probe for
+// flows), then the world CPQ hands the engine for it. The customer is the CLAIM's, never the browser's.
+const portalWorldFor = async (db, engine, customerId, flowId) => {
+    const fid = String(flowId || '');
     const crmSnap = await db.collection('crm_records').doc(customerId).get();
     const crm = crmSnap.exists ? crmSnap.data() : {};
     const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
-    if (!allowed.includes(flowId)) throw new HttpsError('permission-denied', 'This product is not enabled on your account.');
+    if (!fid || !allowed.includes(fid)) throw new HttpsError('permission-denied', 'This product is not enabled on your account.');
+    const kept = await loadFlowRecords(db, fid);
+    await assertCollectionAllowed(db, crm, kept.flow, fid);
+    const records = await loadLibrary(db);
+    const customer = { id: customerId, ...crm };
+    const data = portalSession.worldFor(engine, { flow: kept.flow, records, pins: kept.pins, finishes: kept.finishes, outsourceFinishes: kept.outsourceFinishes, spanDoc: kept.spanDoc, trvRules: kept.trvRules, customer, customerId });
+    if (!data.assembly || !data.pins.length) throw new HttpsError('failed-precondition', 'This product is not ready on the portal yet.');
+    return { data, customer, crm };
+};
+// The customer's answers, field by field — a finish the portal does not offer is refused by name.
+const portalStateOf = (engine, data, raw) => {
+    const finishCodes = new Set(portalSession.portalFinishesOf(engine, data).map((f) => String(f.code || f.name || '').trim().toUpperCase()).filter(Boolean));
+    try { return portalSession.stateFromClient(raw, { finishCodes }); } catch (e) {
+        if (e instanceof portalSession.Refused) throw new HttpsError('invalid-argument', e.message);
+        throw e;
+    }
+};
+// Functions are deployed by hand, the portal site on every push. Until this server is deployed after an
+// engine change the two halves are different engines — and then neither a view nor a request is given.
+const assertInLine = (engine, site) => {
+    if (!portalSession.inLine(engine.stamp, site)) {
+        throw new HttpsError('failed-precondition', 'The configurator is being updated — please try again in a few minutes.', { reason: 'ENGINE_BEHIND', server: engine.stamp });
+    }
+};
 
-    const flowSnap = await db.collection('cpq_flows').doc(flowId).get();
-    if (!flowSnap.exists) throw new HttpsError('not-found', 'Product configuration not found.');
-    const flow = flowSnap.data();
-    await assertCollectionAllowed(db, crm, flow, flowId);
+// EVERYTHING THE PORTAL DRAWS for one set of answers: the steps and what each offers, what is drawn, the
+// money at the level this customer's portal shows, why it cannot be requested yet. Called on every click.
+exports.portalConfigView = onCall({ cors: true, memory: '512MiB' }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const { flowId, state, site } = request.data || {};
+    const engine = await portalSession.loadEngine();
+    assertInLine(engine, site);
+    const { data, customer } = await portalWorldFor(admin.firestore(), engine, customerId, flowId);
+    const levels = portalSession.levelsFor(engine, customer);
+    return portalSession.viewOf(engine, data, portalStateOf(engine, data, state), { level: levels.chosenForShown, money: levels.money });
+});
 
-    // Customer-facing FEE names (see customerOptName) + safe DIMS for bracket/backplate options.
-    // Option partIds may be the Approved_Designs doc id, the itemId, or the legacyErpId — the
-    // partsByAnyId resolver tries all three. A handful of small reads per flow load.
-    const feeIds = [...new Set((flow.steps || [])
-        .flatMap((s) => [...(s.styleOptions || []), ...(s.subOptions || [])])
-        .filter((o) => o && (o.isFee || /\(fee/i.test(String(o.partName || ''))) && o.partId)
-        .map((o) => String(o.partId)))];
-    const feeDocs = await partsByAnyId(db, feeIds);
-    const feeNameOf = (pid) => String((feeDocs.get(String(pid)) || {}).itemName || '');
+// A REQUEST. Every line is worked out again here at the customer's OWN level — the cart line CPQ itself
+// would write for them (engine 'TAGS') — and lands as ONE jobs doc flagged PORTAL_REQUEST, exactly where
+// portal requests have always landed: CRM shows it, staff reopen it in CPQ, and nothing reaches RTG, the
+// floors, WMS or NetSuite until they save and approve it there. What the customer was SHOWN rides beside
+// it for the portal's own card and is never a price of the quote.
+exports.portalConfigRequest = onCall({ cors: true, memory: '512MiB' }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const { lines, note, sidemark, site } = request.data || {};
+    const engine = await portalSession.loadEngine();
+    assertInLine(engine, site);
+    const rawLines = (Array.isArray(lines) ? lines : []).filter((ln) => ln && ln.flowId).slice(0, 25);
+    if (!rawLines.length) throw new HttpsError('invalid-argument', 'No configuration to request.');
+    const db = admin.firestore();
+    const email = String((request.auth.token && request.auth.token.email) || '');
+    const puSnap = await db.collection('portal_users').doc(request.auth.uid).get();
+    const submitterName = (puSnap.exists && puSnap.data().name) || email;
 
-    // Bracket & backplate DIMS (physical measurements only — width/length/diameter, orientation,
-    // arm thickness, return-bracket flag): the Measure & Fit page feeds these into the shared fit
-    // math, so a chosen backplate drives Total System O2O exactly as on the internal board
-    // (bpEndHalf/armThk read the same shapes). Never cost or vendor data.
-    const isBrStep = (s) => !!s && (s.stepRole === 'BRACKET' || (/bracket/i.test(String(s.title || '')) && !/end treatment/i.test(String(s.title || ''))));
-    const dimIds = [...new Set((flow.steps || []).filter(isBrStep)
-        .flatMap((s) => [...(s.styleOptions || []), ...(s.subOptions || [])])
-        .map((o) => o && o.partId).filter(Boolean).map(String))];
-    const dimDocs = await partsByAnyId(db, dimIds);
-    const numOrNull = (v) => { const f = parseFloat(v); return Number.isFinite(f) ? f : null; };
-    const dimsOf = (pid) => {
-        const d2 = dimDocs.get(String(pid || ''));
-        if (!d2) return null;
-        const ms = d2.manufacturingSpecs || {}; const par = ms.parametric || {}; const cd = ms.customData || {};
-        return { width: numOrNull(par.width), length: numOrNull(par.length), fixedDiameter: numOrNull(par.fixedDiameter), bpOrientation: String(cd.bpOrientation || ''), armThickness: numOrNull(cd.armThickness), isReturnBracket: !!cd.isReturnBracket };
-    };
-
-    let assembly = null;
-    if (flow.linkedAssemblyId) {
-        const asmSnap = await db.collection('Approved_Designs').doc(flow.linkedAssemblyId).get();
-        if (asmSnap.exists) {
-            const a = asmSnap.data();
-            const ms = a.manufacturingSpecs || {};
-            const crmName = String(crm.name || '').toLowerCase();
-            const cp = Array.isArray(a.clientPricing) ? a.clientPricing.find((r) => {
-                const rid = String((r && r.customerId) || '');
-                return rid === customerId || (!!crmName && rid.toLowerCase() === crmName);
-            }) : null;
-            const startRaw = cp ? (cp.clientSalesPrice ?? cp.price ?? ms.basePrice) : ms.basePrice;
-            const startingPrice = (startRaw === undefined || startRaw === null || startRaw === '') ? null : Number(startRaw);
-            assembly = {
-                cadUrl: ms.cadUrl || null,
-                nodeClusters: (a.nodeClusters || []).map((c) => ({ id: c.id, location: c.location || '', position: c.position || '', category: c.category || '', nodes: c.nodes || c.meshes || [] })),
-                startingPrice: Number.isFinite(startingPrice) ? startingPrice : null,
-            };
-        }
+    // EVERY line before anything is written: entitled, answered only with what the portal offers, and not
+    // refused by the engine. One line that cannot be sent stops the request and says which.
+    const built = [];
+    let crm = {};
+    for (let i = 0; i < rawLines.length; i++) {
+        const world = await portalWorldFor(db, engine, customerId, rawLines[i].flowId);
+        crm = world.crm;
+        const state = portalStateOf(engine, world.data, rawLines[i].state);
+        const req = portalSession.requestLineOf(engine, world.data, state, { level: 'STANDARD' });
+        if (req.refusal) throw new HttpsError('failed-precondition', `Line ${i + 1}: ${req.refusal.message}`, { reason: req.refusal.kind, line: i + 1 });
+        const levels = portalSession.levelsFor(engine, world.customer);
+        const shown = portalSession.viewOf(engine, world.data, state, { level: levels.chosenForShown, money: levels.money }).price;
+        built.push({ item: req.item, flow: world.data.flow, shown });
     }
 
-    // Finish palette (in-house + outsourced), sanitized. code/name let the portal compute the same
-    // PBR response as studioScene; textureUrl drives the map swap. clientName = this customer's own
-    // finish name (from the finish's clientMapping, keyed by company name) so a Fabricut login sees
-    // Fabricut's finish names. No cost/vendor fields.
-    const custNames = new Set([crm.name, crm.companyName].filter(Boolean).map((s) => String(s).trim().toUpperCase()));
-    const clientNameOf = (f) => {
-        const m = Array.isArray(f.clientMapping) ? f.clientMapping.find((x) => custNames.has(String((x.customerId) || '').trim().toUpperCase())) : null;
-        return (m && m.clientFinishName) || null;
-    };
-    const mf = await db.collection('system').doc('master_finishes').get();
-    const inhouse = ((mf.exists && mf.data().finishes) || [])
-        .filter((f) => f && f.textureUrl)
-        .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', clientName: clientNameOf(f), code: f.code || '', textureUrl: f.textureUrl, bomSuffix: f.bomSuffix || '', pbr: f.pbr || null, outsourced: false }));
-    const outSnap = await db.collection('hq_outsource_finishes').get();
-    const outsourced = outSnap.docs.map((d) => d.data()).filter((f) => f && f.textureUrl)
-        .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', clientName: clientNameOf(f), code: f.code || '', textureUrl: f.textureUrl, bomSuffix: f.bomSuffix || '', pbr: f.pbr || null, outsourced: true }));
-    const finishes = [...inhouse, ...outsourced];
-
-    return {
-        flow: {
-            id: flowId,
-            name: flow.name || 'Product',
-            steps: (flow.steps || []).map((s) => {
-                const out = sanitizeStep(s, feeNameOf);
-                if (isBrStep(s)) {
-                    [...(out.styleOptions || []), ...(out.subOptions || [])].forEach((o) => { const dm = dimsOf(o.partId); if (dm) o.dims = dm; });
-                }
-                return out;
-            }),
-            hiddenClusters: flow.hiddenClusters || [],
-            hiddenNodes: flow.hiddenNodes || [],
+    const quoteNo = await nextQuoteNo(db, `${initialsOf(submitterName, email)}${mmddyy()}`);
+    const cleanSidemark = String(sidemark || '').slice(0, 120).trim();
+    // The cart lines, as CPQ places its own in the cart: the quote they belong to, their notes as a list.
+    const cartItems = built.map((b, i) => ({
+        ...b.item, id: `PORTAL-${quoteNo}-${i + 1}`, masterQuoteId: quoteNo,
+        generalNotes: Array.isArray(b.item.generalNotes) ? b.item.generalNotes : [], capturedViews: null, fromPortal: true,
+    }));
+    const first = built[0];
+    const jobName = built.length === 1
+        ? `${first.flow.name || 'Portal request'} — ${crm.name || ''}`.trim()
+        : `Portal order (${built.length} configurations) — ${crm.name || ''}`.trim();
+    await db.collection('jobs').doc(quoteNo).set({
+        jobId: quoteNo,
+        quoteNo,
+        brandId: crm.brandId || null,
+        status: 'PORTAL_REQUEST',
+        source: 'PORTAL',
+        customer: { id: customerId, name: crm.name || '' },
+        author: submitterName,
+        createdBy: { name: submitterName, email, via: 'PORTAL' },
+        jobName,
+        orderSidemark: cleanSidemark || null,
+        ...(cleanSidemark ? { sidemark: cleanSidemark } : {}),
+        portalRequest: {
+            // 'CONFIG' = built on HQ's engine: the lines are real cart lines (cpqData.cartItems) at the customer's level.
+            kind: 'CONFIG',
+            flowId: String(first.flow.id || ''),
+            flowName: String(first.flow.name || ''),
+            lineTag: String(first.item.sidemark || ''),
+            lines: built.map((b) => ({ flowId: String(b.flow.id || ''), flowName: String(b.flow.name || ''), lineTag: String(b.item.sidemark || '') })),
+            shown: built.map((b) => b.shown),
+            note: String(note || '').slice(0, 2000),
+            sidemark: cleanSidemark,
+            byEmail: email,
+            engine: engine.stamp,
         },
-        assembly,
-        finishes,
-        // Bay configuration (display-safe scalar) — the portal Measure & Fit page seeds its
-        // shape from this, mirroring the internal Vision board's fabShape seeding.
-        fabShape: flow.fabShape || '',
-        // Per-assembly flows (H2 pivot): the flow-level implied projection (stamped when exactly
-        // one proj tag exists) — the Configurator's projTagOk falls back to it, like the board.
-        impliedProjInches: flow.impliedProjInches ?? null,
+        // (through JSON: a cart line may carry an undefined field, which Firestore refuses)
+        cpqData: { cartItems: JSON.parse(JSON.stringify(cartItems)) },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        dateSaved: new Date().toISOString(),
+    });
+    return { ok: true, id: quoteNo, quoteNo, lineCount: built.length };
+});
+
+// IS THE PORTAL'S SERVER RUNNING THE ENGINE ITS SITE WAS BUILT WITH? (HQ → CRM → Portal Access.) The site
+// publishes its stamp at build (portal/engine.json); this server reads it and says which of the two it is.
+const PORTAL_SITE = 'https://portal.classicalelements.com';
+exports.portalEngineStatus = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const engine = await portalSession.loadEngine();
+    let site = null;
+    let siteError = '';
+    try {
+        const r = await fetch(`${PORTAL_SITE}/engine.json?t=${Date.now()}`);
+        if (r.ok) site = await r.json(); else siteError = `the portal site answered ${r.status}`;
+    } catch (e) { siteError = String((e && e.message) || e).slice(0, 160); }
+    const clean = (site && typeof site === 'object') ? { engineVersion: String(site.engineVersion || ''), closureHash: String(site.closureHash || ''), builtAt: String(site.builtAt || '') } : null;
+    return { server: engine.stamp, site: clean, siteError, inLine: portalSession.inLine(engine.stamp, clean) };
+});
+
+// HQ ASKS THE PORTAL'S SERVER TO WORK CONFIGURATIONS IT HAS WORKED ITSELF, AND COMPARES (CPQ → 🛰). No script
+// can read production, so this is the proof that the server reads what CPQ reads: the same answers in, the
+// same cart line out. Staff only — the rows come back at the customer's own level, as HQ holds them; and a
+// flow may be checked BEFORE it is assigned to anyone.
+exports.portalConfigCheck = onCall({ enforceAppCheck: true, memory: '512MiB', timeoutSeconds: 120 }, async (request) => {
+    assertStaffAdmin(request);
+    const { customerId, flowId, states } = request.data || {};
+    const engine = await portalSession.loadEngine();
+    const db = admin.firestore();
+    const kept = await loadFlowRecords(db, String(flowId || ''));
+    const records = await loadLibrary(db);
+    const crmSnap = customerId ? await db.collection('crm_records').doc(String(customerId)).get() : null;
+    const customer = (crmSnap && crmSnap.exists) ? { id: crmSnap.id, ...crmSnap.data() } : null;
+    const data = portalSession.worldFor(engine, { flow: kept.flow, records, pins: kept.pins, finishes: kept.finishes, outsourceFinishes: kept.outsourceFinishes, spanDoc: kept.spanDoc, trvRules: kept.trvRules, customer, customerId: customer ? customer.id : '' });
+    const results = (Array.isArray(states) ? states : []).slice(0, 60).map((raw) => {
+        try {
+            const req = portalSession.requestLineOf(engine, data, portalStateOf(engine, data, raw), { level: 'STANDARD' });
+            if (!req.item) return { refusal: req.refusal.kind };
+            return { level: String(req.item.priceLevel || ''), total: req.total, picks: Object.keys(req.item.engineConfig.picks || {}).length,
+                rows: req.item.pricingBreakdown.map((l) => [String(l.legacyErpId || ''), Number(l.qty) || 0, Number(l.price) || 0, Number(l.total) || 0]) };
+        } catch (e) { return { error: String((e && e.message) || e).slice(0, 200) }; }
+    });
+    return {
+        server: engine.stamp,
+        world: { assembly: String((data.assembly && data.assembly.id) || ''), pins: data.pins.length, parts: data.parts.length, finishes: data.finishes.length, chart: !!data.trvRules, customer: customer ? String(customer.name || customer.id) : '' },
+        results,
     };
 });
 
@@ -1733,7 +1756,7 @@ exports.reserveQuoteNo = onCall({ enforceAppCheck: true }, async (request) => {
 // pricing chain the CPQ checkout screen uses. WHITELISTED payload: no partHandling, no routing,
 // no other customers' pricing. Deliberately NO fall-back-to-all-fees here (CPQ falls back until
 // something is ticked; a customer-facing screen shows nothing until curation happens).
-const { feeRuleOf, feeRuleSummary, isFeeItemRecord, isCheckoutSelectable } = require('./feeRulesPort');
+const { feeRuleOf, feeRuleSummary, isFeeItemRecord } = require('./feeRulesPort');
 exports.portalCheckoutCatalog = onCall({ cors: true }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const db = admin.firestore();
@@ -1765,290 +1788,6 @@ exports.portalCheckoutCatalog = onCall({ cors: true }, async (request) => {
         })
         .sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
     return { items };
-});
-
-// A customer submits their configured product(s) as a QUOTE REQUEST. It lands as a jobs doc
-// flagged 'PORTAL_REQUEST' for the team to price and confirm in CPQ — nothing is priced or
-// pushed here.
-//
-// MULTI-LINE (Stuart 2026-08-10: "once the config is done there is no way to add another line"):
-// the payload carries `lines[]` — several configurations in one order, each with its own room
-// tag — plus checkout `addOns[]` picked from the 4.6-curated catalogue above. Every line is
-// entitlement-checked like a single request; every add-on is re-validated server-side against
-// the checkoutSelectable tick (the client can't inject arbitrary items). The legacy single-line
-// payload (flowId/selections at the top level) still works — older cached portal bundles keep
-// requesting quotes.
-exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
-    const customerId = assertPortalCustomer(request);
-    const { flowId, flowName, selections, note, viewedLevel, sidemark, lineTag, lines, addOns } = request.data || {};
-    const db = admin.firestore();
-    const crmSnap = await db.collection('crm_records').doc(customerId).get();
-    const crm = crmSnap.exists ? crmSnap.data() : {};
-    const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
-
-    const rawLines = (Array.isArray(lines) && lines.length ? lines : [{ flowId, flowName, selections, lineTag }])
-        .filter((ln) => ln && ln.flowId).slice(0, 25);
-    if (!rawLines.length) throw new HttpsError('invalid-argument', 'No configuration to request.');
-
-    const email = String((request.auth.token && request.auth.token.email) || '');
-    const puSnap = await db.collection('portal_users').doc(request.auth.uid).get();
-    const submitterName = (puSnap.exists && puSnap.data().name) || email;
-
-    // Entitlement + flow docs for EVERY line before anything is written.
-    const flowDocs = [];
-    for (const ln of rawLines) {
-        const fid = String(ln.flowId || '');
-        if (!allowed.includes(fid)) throw new HttpsError('permission-denied', 'Not enabled on your account.');
-        const flowSnap = await db.collection('cpq_flows').doc(fid).get();
-        const fd = flowSnap.exists ? flowSnap.data() : {};
-        await assertCollectionAllowed(db, crm, flowSnap.exists ? fd : null, fid);
-        flowDocs.push(fd);
-    }
-
-    // Checkout add-ons: only items genuinely ticked in 4.6 → Checkout Items survive; quantity
-    // clamped; percentage-mode items always ride as qty 1 (they are on/off).
-    const cleanAddOns = [];
-    for (const a of (Array.isArray(addOns) ? addOns : []).slice(0, 40)) {
-        const id = String((a && a.id) || '').trim();
-        if (!id) continue;
-        const pSnap = await db.collection('Approved_Designs').doc(id).get();
-        if (!pSnap.exists) continue;
-        const p = { id: pSnap.id, ...pSnap.data() };
-        if (!isCheckoutSelectable(p) || p.manufacturingSpecs?.isRetired === true) continue;
-        if (crm.brandId && p.brandId !== crm.brandId && !(Array.isArray(p.sharedBrands) && p.sharedBrands.includes(crm.brandId))) continue;
-        const rule = feeRuleOf(p.manufacturingSpecs);
-        const qty = rule.mode === 'PERCENT' ? 1 : Math.min(9999, Math.max(0, parseFloat(a.qty) || 0));
-        if (!(qty > 0)) continue;
-        cleanAddOns.push({
-            id: p.id,
-            code: String(p.legacyErpId || p.itemId || '').toUpperCase(),
-            name: p.itemName || '',
-            qty,
-            isFee: isFeeItemRecord(p),
-            mode: rule.mode,
-        });
-    }
-
-    const quoteNo = await nextQuoteNo(db, `${initialsOf(submitterName, email)}${mmddyy()}`);
-
-    // ORDER TAGGING (2026-08-10, mirrors HQ CPQ): cleanSidemark = the order-level header tag
-    // ("Smith Residence") → job.orderSidemark (raw; staff reopen-in-CPQ restores from it) +
-    // job.sidemark (the display field CRM/RTG/push memo read). Each line's tag ("Living Room")
-    // → that cart line's sidemark, so documents render "▶ Assembly [Living Room]" and staff
-    // reopen lands with the tag pre-filled.
-    const cleanSidemark = String(sidemark || '').slice(0, 120).trim();
-
-    // CPQ CART SNAPSHOT (Stuart 2026-07-28: "quote arrived in HQ at CRM but does not reopen in
-    // CPQ"). Reopen-in-CPQ reads job.cpqData.cartItems and restores exactly five fields —
-    // flowId, assemblyId, dynamicConfigParams, stepQuantities, dimensionInputs (see
-    // Shared/reopenQuote.js -> CPQTab.handleEditCartItem). ONE cart line per configuration.
-    const cartItems = [];
-    const cleanLines = [];
-    for (let i = 0; i < rawLines.length; i++) {
-        const ln = rawLines[i];
-        const fd = flowDocs[i];
-        const sel = ln.selections || {};
-        const rawParams = sel.params || {};
-        const dynamicConfigParams = {};
-        const dimensionInputs = {};
-        Object.entries(rawParams).forEach(([k, v]) => {
-            const m = /^(.*)__dims$/.exec(k);          // the portal sends measurements as `${stepId}__dims`
-            if (m && v && typeof v === 'object') dimensionInputs[m[1]] = v;
-            else if (typeof v === 'string') dynamicConfigParams[k] = v;
-        });
-        const stepQuantities = {};
-        Object.entries(sel.quantities || {}).forEach(([k, v]) => {
-            if (typeof v === 'string' || typeof v === 'number') stepQuantities[k] = String(v);
-        });
-        let assemblyName = String(ln.flowName || '');
-        const asmId = String(fd.linkedAssemblyId || '');
-        if (asmId) {
-            const asmSnap = await db.collection('Approved_Designs').doc(asmId).get();
-            if (asmSnap.exists) assemblyName = asmSnap.data().itemName || assemblyName;
-        }
-        const cleanTag = String(ln.lineTag || '').slice(0, 120).trim();
-        cartItems.push({
-            id: `PORTAL-${quoteNo}-${i + 1}`,
-            masterQuoteId: quoteNo,
-            assemblyId: asmId,
-            assemblyName: assemblyName || 'Configured Item',
-            sidemark: cleanTag || 'Portal request',
-            flowId: String(ln.flowId || ''),
-            qty: 1,
-            priceLevel: String(crm.portalPriceLevel || 'STANDARD'),
-            pricing: {},
-            pricingBreakdown: [],
-            dynamicConfigParams,
-            stepQuantities,
-            dimensionInputs,
-            fromPortal: true,
-        });
-        cleanLines.push({
-            flowId: String(ln.flowId || ''),
-            flowName: String(ln.flowName || ''),
-            lineTag: cleanTag,
-            selections: sel,
-        });
-    }
-
-    const jobName = cleanLines.length === 1
-        ? `${cleanLines[0].flowName || 'Portal request'} — ${crm.name || ''}`.trim()
-        : `Portal order (${cleanLines.length} configurations) — ${crm.name || ''}`.trim();
-
-    const ref = db.collection('jobs').doc(quoteNo);
-    await ref.set({
-        jobId: quoteNo,
-        quoteNo,
-        brandId: crm.brandId || null,
-        status: 'PORTAL_REQUEST',
-        source: 'PORTAL',
-        customer: { id: customerId, name: crm.name || '' },
-        // WHO generated this quote — first-class on the doc so CRM and the portal both show it.
-        // createdBy is stamped once at creation and never overwritten (CPQ finalize merges around
-        // it); `author` may later become the staff member who priced it.
-        author: submitterName,
-        createdBy: { name: submitterName, email, via: 'PORTAL' },
-        jobName,
-        // orderSidemark always stamped (raw, nullable); sidemark only when given — the CRM card
-        // falls back to job.note when sidemark is absent, and that behavior must survive.
-        orderSidemark: cleanSidemark || null,
-        ...(cleanSidemark ? { sidemark: cleanSidemark } : {}),
-        portalRequest: {
-            // Line[0] mirrored at the top level so readers deployed before lines[] existed
-            // (older portalMyOrders, CRM DOCS) still render the first configuration.
-            flowId: cleanLines[0].flowId,
-            flowName: cleanLines[0].flowName,
-            selections: cleanLines[0].selections,
-            lineTag: cleanLines[0].lineTag,
-            lines: cleanLines,
-            addOns: cleanAddOns,
-            note: String(note || '').slice(0, 2000),
-            sidemark: cleanSidemark,
-            byEmail: email,
-            // Which of their price-ladder levels the customer was VIEWING when they sent this —
-            // context for staff; the staff quote itself still prices at the assigned level.
-            viewedLevel: ['FAB_COST', 'FAB_WHOLESALE', 'FAB_RETAIL'].includes(String(viewedLevel || '')) ? String(viewedLevel) : '',
-        },
-        cpqData: { cartItems },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        dateSaved: new Date().toISOString(),
-    });
-    return { ok: true, id: quoteNo, quoteNo, lineCount: cleanLines.length };
-});
-
-// A customer submits MEASUREMENTS for a product (portal "Measure & Fit" page). Two writes:
-//  (1) a jobs doc (status PORTAL_REQUEST, portalRequest.kind 'VISION_MEASURE') so the request
-//      shows on the CRM card pipeline exactly like a configurator quote request; its id is the
-//      minted quote number, so the card's existing Reopen CPQ / Reopen Vision buttons adopt it.
-//  (2) a cpq_drafts doc in the EXACT shape the internal Vision writes (masterQuoteId = that
-//      quote number, spatialData = full engData + empty attachments/shopNotes), so CPQ lists it
-//      under "Lines Awaiting Configuration" and Vision's "Load saved line" restores the whole
-//      board with ZERO re-entry. The staff Vision pass (Load Line → Save Line) recomputes and
-//      re-stamps engineeringNotes + the shop-drawing SVG from this data — its save flips status
-//      to DRAFT_FROM_VISION, which is the "measurements verified by staff" marker.
-// The customer's readout numbers ride only as a PREVIEW (computedBy PORTAL_CLIENT, empty svg):
-// nothing prices or cuts from them — pricing is staff Configure, cut sheets come from the staff
-// Vision save. engData is WHITELISTED field-by-field: enums checked, numbers coerced, part-id
-// fields forced empty (bracket selection is engineering, not intake).
-exports.portalVisionDraft = onCall({ cors: true }, async (request) => {
-    const customerId = assertPortalCustomer(request);
-    const { flowId, flowName, sidemark, note, engData: rawEng, preview, params: rawParams } = request.data || {};
-    const db = admin.firestore();
-    const crmSnap = await db.collection('crm_records').doc(customerId).get();
-    const crm = crmSnap.exists ? crmSnap.data() : {};
-    const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
-    if (!allowed.includes(String(flowId || ''))) throw new HttpsError('permission-denied', 'Not enabled on your account.');
-    const flowSnap = await db.collection('cpq_flows').doc(String(flowId)).get();
-    if (!flowSnap.exists) throw new HttpsError('permission-denied', 'Not enabled on your account.');
-    const flow = flowSnap.data();
-    await assertCollectionAllowed(db, crm, flow, flowId);
-
-    const num = (v, d) => { const f = parseFloat(v); return Number.isFinite(f) ? f : d; };
-    const oneOf = (v, list, d) => { const s = String(v || '').toUpperCase(); return list.includes(s) ? s : d; };
-    const e = rawEng || {};
-    const MOUNTS = ['OPEN', 'INSIDE', 'CEILING'];
-    // FLUSH included: the internal endStyleOf maps Flush Cut AND Inside Mount options to 'FLUSH'.
-    const ENDS = ['FINIAL', 'RETURN_BEND', 'RETURN_MITER', 'FLUSH'];
-    const engData = {
-        shape: oneOf(e.shape, ['STRAIGHT', 'MITERED', 'BOW'], 'STRAIGHT'),
-        inputMode: oneOf(e.inputMode, ['WALL', 'ORDERING'], 'WALL'),
-        w1: num(e.w1, 0), w2: num(e.w2, 0), w3: num(e.w3, 0),
-        a1: num(e.a1, 135), a2: num(e.a2, 135), bowDepth: num(e.bowDepth, 0),
-        mountLeft: oneOf(e.mountLeft, MOUNTS, 'OPEN'), mountRight: oneOf(e.mountRight, MOUNTS, 'OPEN'),
-        mountCenter: oneOf(e.mountCenter, MOUNTS, 'OPEN'), mountOuter: oneOf(e.mountOuter, MOUNTS, 'OPEN'),
-        endStyle: oneOf(e.endStyle, ENDS, 'FINIAL'), endStyleRight: oneOf(e.endStyleRight, ENDS, ''),
-        proj: (e.proj === '' || e.proj === undefined || e.proj === null) ? '' : num(e.proj, ''),
-        bracketId: '', bracketIdRight: '', bracketIdCenter: '',
-        backplateIdLeft: '', backplateIdRight: '', backplateIdCenter: '',
-        poleDiameter: num(e.poleDiameter, 1.0), bracketW: num(e.bracketW, 3.0), finialW: num(e.finialW, 3.5),
-        bracketThickness: num(e.bracketThickness, 0.25), insideMountDeduct: num(e.insideMountDeduct, 0.25),
-        returnRadius: num(e.returnRadius, 4.0), gripAllowance: num(e.gripAllowance, 8.5),
-    };
-
-    const email = String((request.auth.token && request.auth.token.email) || '');
-    const puSnap = await db.collection('portal_users').doc(request.auth.uid).get();
-    const submitterName = (puSnap.exists && puSnap.data().name) || email;
-    const quoteNo = await nextQuoteNo(db, `${initialsOf(submitterName, email)}${mmddyy()}`);
-    const draftId = `DRAFT-PORTAL-${Date.now()}`;
-    const brandId = flow.brandId || crm.brandId || null;
-    const cleanNote = String(note || '').slice(0, 2000);
-    const cleanSidemark = String(sidemark || '').slice(0, 120);
-    const jobName = `Measure — ${String(flowName || flow.name || 'Portal')} — ${crm.name || ''}`.trim();
-    const p = preview || {};
-    const pnum = (v) => { const f = parseFloat(v); return Number.isFinite(f) ? f : null; };
-
-    // STEP PICKS (stepId → optId) — the flow-driven selections (rod diameter / projection / end
-    // treatments / brackets), VALIDATED against the flow's own steps so only real selections ride.
-    // They land in specs exactly like the internal Vision save's dynamicConfigParams spread, so
-    // staff Load-Line and CPQ Configure open pre-picked on the same options the customer's
-    // readouts used (this is what makes the portal numbers and the board numbers agree).
-    const stepParams = {};
-    const stepById = new Map((flow.steps || []).map((s) => [String(s.id), s]));
-    for (const [k, v] of Object.entries(rawParams || {}).slice(0, 40)) {
-        // `${stepId}__sub` = the step's backplate sub-chooser (same key convention as CPQ/Vision).
-        const isSub = /__sub$/.test(String(k));
-        const st = stepById.get(String(k).replace(/__sub$/, ''));
-        if (!st) continue;
-        const pool = isSub ? (st.subOptions || []) : (st.styleOptions || []);
-        const opt = pool.find((o) => (o.optId || o.partId) === v);
-        if (opt) stepParams[String(k)] = String(v);
-    }
-
-    await db.collection('jobs').doc(quoteNo).set({
-        jobId: quoteNo, quoteNo, brandId,
-        status: 'PORTAL_REQUEST', source: 'PORTAL',
-        customer: { id: customerId, name: crm.name || '' },
-        author: submitterName,
-        createdBy: { name: submitterName, email, via: 'PORTAL' },
-        jobName,
-        portalRequest: { kind: 'VISION_MEASURE', flowId: String(flowId || ''), flowName: String(flowName || flow.name || ''), note: cleanNote, byEmail: email, draftId },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        dateSaved: new Date().toISOString(),
-    });
-
-    await db.collection('cpq_drafts').doc(draftId).set({
-        id: draftId, brandId, category: 'HARDWARE', status: 'DRAFT_FROM_PORTAL',
-        jobName, sidemark: cleanSidemark,
-        customerId,
-        linkedAssemblyId: flow.linkedAssemblyId || null,
-        linkedCpqFlowId: String(flowId), flowId: String(flowId), cpqFlowId: String(flowId),
-        masterQuoteId: quoteNo,
-        specs: {
-            collection: '',
-            bracketId: '',
-            engineeringNotes: {
-                computedBy: 'PORTAL_CLIENT', shape: engData.shape,
-                poleO2O: pnum(p.poleO2O), totalSystemO2O: pnum(p.totalSystemO2O),
-                pole1: pnum(p.pole1), pole2: pnum(p.pole2), pole3: pnum(p.pole3),
-                svgString: '', customerNote: cleanNote,
-            },
-            ...stepParams,
-        },
-        spatialData: { ...engData, attachments: [], shopNotes: [] },
-        author: { name: `${crm.name || 'Customer'} (portal)`, email },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    return { ok: true, quoteNo, draftId };
 });
 
 // ---- Quick Ship stock counter (portal) --------------------------------------------------------
@@ -2377,76 +2116,6 @@ exports.portalAssets = onCall({ cors: true }, async (request) => {
     return { assets, collections: allowed };
 });
 
-
-// ---- Configured pricing (server-side engine, matches HQ) -------------------------------------
-// Loads the SAME data CPQTab prices from (flow + brand's Approved_Designs parts + the assembly's
-// BOM + finishes + the customer's clientPricing) and runs the ported pricing engine at the
-// customer's assigned portalPriceLevel. Returns only the resulting line breakdown + total — never
-// cost tiers, vendor data, or the parts themselves. Called by the portal on each selection change.
-const portalEngine = require('./portalEngine');
-
-exports.portalResolve = onCall({ cors: true }, async (request) => {
-    const customerId = assertPortalCustomer(request);
-    const { flowId, selections } = request.data || {};
-    const params = (selections && selections.params) || {};
-    const quantities = (selections && selections.quantities) || {};
-
-    const db = admin.firestore();
-    const crmSnap = await db.collection('crm_records').doc(customerId).get();
-    const crm = crmSnap.exists ? crmSnap.data() : {};
-    const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
-    if (!allowed.includes(String(flowId || ''))) throw new HttpsError('permission-denied', 'This product is not enabled on your account.');
-
-    const flowSnap = await db.collection('cpq_flows').doc(String(flowId)).get();
-    if (!flowSnap.exists) throw new HttpsError('not-found', 'Product configuration not found.');
-    const flow = flowSnap.data();
-    await assertCollectionAllowed(db, crm, flow, flowId);
-    const brand = flow.brandId || crm.brandId || null;
-
-    // The customer NEVER sees cost: force any non-safe level back to STANDARD server-side.
-    let priceLevel = String(crm.portalPriceLevel || 'STANDARD');
-    if (!['STANDARD', 'FAB_COST', 'FAB_WHOLESALE', 'FAB_RETAIL'].includes(priceLevel)) priceLevel = 'STANDARD';
-    // Customer view toggle (Stuart 2026-07-27): a Fabricut-leveled customer may flip the quote
-    // VIEW between the three levels of their own ladder — their cost (CE → them), their
-    // wholesale (MSRP ÷ 2), their retail (MSRP). All three are THE CUSTOMER'S numbers; STANDARD
-    // (our pricing) is never reachable from the portal, and customers not assigned a FAB_ level
-    // get no toggle at all.
-    const reqLevel = String((request.data && request.data.priceLevel) || '');
-    if (['FAB_COST', 'FAB_WHOLESALE', 'FAB_RETAIL'].includes(reqLevel) && priceLevel.indexOf('FAB_') === 0) priceLevel = reqLevel;
-
-    let assembly = null;
-    if (flow.linkedAssemblyId) {
-        const asmSnap = await db.collection('Approved_Designs').doc(flow.linkedAssemblyId).get();
-        if (asmSnap.exists) assembly = { id: asmSnap.id, ...asmSnap.data() };
-    }
-
-    // Brand's parts library (matches CPQTab's libraryParts + liveAssemblies filter).
-    const adSnap = await db.collection('Approved_Designs').get();
-    const allParts = adSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
-        .filter((p) => !brand || p.brandId === brand || (Array.isArray(p.sharedBrands) && p.sharedBrands.includes(brand)));
-
-    // The assembly's BOM (quantities).
-    let bomPins = [];
-    if (assembly && assembly.itemId) {
-        const pinSnap = await db.collection('assembly_pins').where('assemblyId', '==', assembly.itemId).get();
-        bomPins = pinSnap.docs.map((d) => d.data());
-    }
-
-    const mf = await db.collection('system').doc('master_finishes').get();
-    const finishes = (mf.exists && mf.data().finishes) || [];
-    const outSnap = await db.collection('hq_outsource_finishes').get();
-    const outsourceFinishes = outSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-    const custKeys = new Set([customerId, crm.name, crm.companyName].filter(Boolean).map((s) => String(s).trim().toUpperCase()));
-
-    const engineCtx = { flow, assembly, params, quantities, allParts, finishes, outsourceFinishes, bomPins, custKeys, priceLevel };
-    const { lines, total } = portalEngine.computePricing(engineCtx);
-    const stepOptions = portalEngine.resolveStepOptions(engineCtx);
-
-    // Only customer-safe line fields leave the server.
-    const safeLines = lines.map((l) => ({ name: l.name, qty: l.qty, price: l.price, total: l.total, itemNo: l.itemNo || '', isFee: !!l.isFee }));
-    return { price: { level: priceLevel, total, lines: safeLines }, stepOptions };
-});
 
 // ============================================================================
 // 🚚 UPS — connection probe (test environment only)
