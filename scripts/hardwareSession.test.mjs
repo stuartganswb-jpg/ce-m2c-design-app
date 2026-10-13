@@ -8,17 +8,24 @@
 //
 // SESSION_MODULE=<path> runs the same assertions against a mutated copy (mutation check).
 
-import { resolve, reseatPicks, recommendedQty, bearingEnds, centreBracketsFor, finishesFor } from '../src/components/Shared/hardwareModel.js';
+import { resolve, reseatPicks, recommendedQty, bearingEnds, centreBracketsFor, finishesFor, ROD_ROLES, TRAVERSE } from '../src/components/Shared/hardwareModel.js';
 import { choicesFromAssembly, modelNodesOf } from '../src/components/Shared/hardwareAdapter.js';
 import { autoPicksOf } from '../src/components/Shared/hardwareAutoPicks.js';
 import { bracketAdviceFor, DEFAULT_DROP_FT } from '../src/components/Shared/bracketSpan.js';
-import { carrierRows } from '../src/components/Shared/traverseConfigurator.js';
-import { usageAt } from '../src/components/Shared/traverseExplode.js';
-import { rodMaterialsOf, extrasForRod, liveExtrasOf } from '../src/components/Shared/flowExtras.js';
+import { carrierRows, configuratorLines, configuratorTotal, defaultPicks } from '../src/components/Shared/traverseConfigurator.js';
+import { usageAt, explodeTraverse } from '../src/components/Shared/traverseExplode.js';
+import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf } from '../src/components/Shared/flowExtras.js';
 import { normalizeExtras } from '../src/components/Shared/extrasRestore.js';
 import { settleVision } from '../src/components/Shared/visionEngine.js';
 import { wearsAsTwin } from '../src/components/Shared/materialTwin.js';
 import { subFinishOfFinish } from '../src/components/Shared/subFinish.js';
+import { priceConfiguration, priceChoice, pricingWarnings } from '../src/components/Shared/hardwarePricing.js';
+import { customerPriceLevel } from '../src/components/Shared/priceLevels.js';
+import { findClientPriceRow, customerKeys } from '../src/components/Shared/clientPricing.js';
+import { applyKitPricing } from '../src/components/Shared/kitSeed.js';
+import { kitForMount, motorCodeFor, parseKitCode } from '../src/components/Shared/kitCode.js';
+import { takesNoFinish } from '../src/components/Shared/finishLabel.js';
+import { questionsOf, unansweredOf } from '../src/components/Shared/finishQuestions.js';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, projInchesOfSel, buildSizeSteps } from '../src/components/Shared/sizeMatrix.js';
 import { ENGINE_DOORS, engineClosure } from './sync-engine.mjs';
 import { ASSEMBLY, PINS } from './hardwareAutoPicks.fixture.mjs';
@@ -29,7 +36,10 @@ const { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, c
     spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice,
     globalFinishOf, finishIndexOf, materialOfFinish, withGlobalFinish, wearsAsTwinFinish, wearsFinishOf, globalFinishForChoice, chosenListOf, partFinishByPartOf,
     armFinishOfChoice, finishForChoice, matchFinishOverrideOf, isFeeRecord, rodFinishForChoice, followsRodChoice, subFinishForChoice, lineFinishForChoice,
-    textureOverridesOf, chosenFinishObjectsOf, bareWoodOf, clientFinishNameOf, offeredFinishesOf, finishGroupsOf, finishGroupLabel, finishRulesOf } = S;
+    textureOverridesOf, chosenFinishObjectsOf, bareWoodOf, clientFinishNameOf, offeredFinishesOf, finishGroupsOf, finishGroupLabel, finishRulesOf,
+    driveOf, priceCtxOf, kitFromSaved, kitBillOf, carriersFromStepOf, pricingCtxOf, pricedOf, priceWarningsOf, askingFinishesOf, liveFinishAnswersOf, openFinishQuestionsOf,
+    kitPartsByLineOf, extraLinesOf, isTraverseOf, trvFeetOf, trvTracksOf, trvPriceOfCode, trvItemInfoOf, trvSeedOf, trvComponentsOf, trvLinesOf, spliceOnLineOf, shipsInOnePieceOf,
+    grandTotalOf, billOf } = S;
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => {
@@ -342,6 +352,148 @@ const oldFinish = ({ finishes, flowFinishes, customer, customerId, findPart, mod
     };
     return { globalFinish, finishByCode, matOfFinish, twinWear, wearsFinish, globalFinishFor, chosenList, partFinishByPart, armFinishOf, finishFor, matchFinishOverride, isFeeRecord,
         rodFinishFor, followsRod, subFinishFor, lineFinishFor, textureOverrides, chosenFinishObjects, clientFinishName, offeredFinishes, finishGroups, groupLabel, bareWood, setGlobalFinish };
+};
+
+// The price block, as the screen held it (HardwareConfigurator.js @ cf3db903) — the level in force, the price context,
+// the kit, the priced lines, what a finish asks, what was added by hand, the traverse components, the total: every
+// memo and callback in its order, closed over the same things.
+const oldBill = ({ customer, customerId, priceLevel, outsourceCodes, flow, kits, trvRules, findPart, model, resolved, livePicks, extras, lengthFeet, lengthInches,
+    spliceCodes, spliceOverIn, sameItemCode, finishByCode, globalFinish, lineFinishFor, subFinishFor, matchFinishOverride, answers, kitSource, kitMotor, trvSel, finishAnswers }) => {
+    const { level: effectiveLevel, isDefault: levelIsDefault } = customerPriceLevel(customer, priceLevel);
+    const priceCtx = ({
+        customerId, customer, priceLevel: effectiveLevel, outsourceCodes,
+        levelIsDefault,
+        finishCode: globalFinish, finishFor: lineFinishFor, findPart, findByCode: findPart,
+        subFinishFor,
+        finishObjOf: (code) => finishByCode.get(String(code || '').toUpperCase()) || null,
+        fallbackPrices: flow?.fallbackPrices || null,
+        billedFeet: lengthFeet || 0,
+        lengthInches: lengthInches || 0,
+        drive: /MOTOR/.test(String(answers.drive || '').toUpperCase()) ? 'MOTORIZED' : 'MANUAL',
+    });
+    const kitBill = (() => {
+        if (!kitSource) return null;
+        const km = kitForMount(kits, kitSource.record, answers.mount);
+        const moved = km.mode === 'switched' && km.kit;
+        const kitRecord = moved ? km.kit : kitSource.record;
+        const kitCode = moved ? String(kitRecord.legacyErpId || kitRecord.itemName || kitSource.code) : kitSource.code;
+        const kitName = moved ? (kitRecord.itemName || kitCode) : kitSource.name;
+        const kp = priceChoice({ partId: kitCode }, kitRecord, priceCtx);
+        const kitRow = findClientPriceRow(kitRecord?.clientPricing, customerKeys(customerId, customer));
+        const ms = kitRecord?.manufacturingSpecs || {};
+        const family = ms.kitFamily || (parseKitCode(kitCode) || {}).family || 'H1-2TRV';
+        const motorCodes = Array.isArray(ms.kitMotorCodes) ? ms.kitMotorCodes : [];
+        const driveNow = /MOTOR/.test(String(answers.drive || '').toUpperCase()) ? 'MOTORIZED' : 'MANUAL';
+        const motorPick = moved ? motorCodeFor(kitSource.record, kitRecord, kitMotor) : kitMotor;
+        const mc = driveNow === 'MOTORIZED' && motorPick ? motorCodes.find(x => String(x.code || '').toUpperCase() === String(motorPick).toUpperCase()) : null;
+        const feet = lengthFeet || kitSource.baseFeet;
+        const exploded = ms.kitAlign
+            ? explodeTraverse({ family, align: { ...(km.mode === 'followed' ? km.align : ms.kitAlign), drive: driveNow }, feet, motorItem: mc?.motorItem || '', rules: trvRules, proj: answers.proj != null ? String(answers.proj) : '' })
+            : { lines: [] };
+        const billedFeet = Math.max(Number(feet) || 0, Number(kitSource.baseFeet) || 4);
+        const carrierCover = carrierRows(trvRules).map(u => ({ code: String(u.itemId || '').trim().toUpperCase(), partId: findPart(u.itemId)?.id, qty: usageAt(u, billedFeet) }));
+        const included = [
+            ...carrierCover,
+            ...exploded.lines.map(l => ({ code: l.code, partId: findPart(l.code)?.id, qty: l.qty })),
+            ...(Array.isArray(ms.kitComponents) ? ms.kitComponents : []).map(c => ({ partId: c.partId, code: findPart(c.partId)?.legacyErpId || '', qty: Number(c.qty) || 1 })),
+        ];
+        return {
+            kitCode, kitName, kitPrice: kp?.price || 0,
+            baseFeet: kitSource.baseFeet,
+            mountFollow: km.mode === 'same' ? null : { mode: km.mode, mount: String(answers.mount || '').toUpperCase(), from: kitSource.code, to: kitCode, theirs: (mc && mc.fabSku) || kp?.sku || kp?.aliasCode || '' },
+            perFootPrice: kitRow?.perFootPrice,
+            clientSku: kp?.sku || kp?.aliasCode || '',
+            included,
+            motor: mc ? { code: mc.code, fabSku: mc.fabSku || '', motorItem: mc.motorItem || '', net: parseFloat(mc.net) } : null,
+        };
+    })();
+    const carriersFromStep = !!(trvSel && trvSel.carrierStyle);
+    const pricingCtx = (carriersFromStep ? { ...priceCtx, skipRoles: ['CARRIER'] } : priceCtx);
+    const priced = (() => {
+        const p = priceConfiguration(resolved, pricingCtx);
+        return kitBill ? applyKitPricing(p, kitBill) : p;
+    })();
+    const priceWarnings = pricingWarnings({ lines: priced.lines.filter(l => !l.hidden) });
+    const askingFinishes = (() => {
+        const worn = new Set(priced.lines.map(l => String(l.finishCode || '').toUpperCase()).filter(Boolean));
+        return [...worn].map(c => finishByCode.get(c)).filter(f => f && questionsOf(f).length)
+            .map(f => ({ finish: f, code: String(f.code || f.name || '').toUpperCase(), questions: questionsOf(f) }));
+    })();
+    const liveFinishAnswers = (() => {
+        const out = {};
+        askingFinishes.forEach(a => { if (finishAnswers[a.code]) out[a.code] = finishAnswers[a.code]; });
+        return out;
+    })();
+    const kitPartsByLine = (() => {
+        const m = new Map();
+        let cur = null;
+        (priced.lines || []).forEach(l => {
+            if (l.isKit && l.itemKit) { cur = l; m.set(l, []); return; }
+            if (cur && l.inKit && l.hidden && l.kitOf === (cur.billedId || '')) { m.get(cur).push(l); return; }
+            cur = null;
+        });
+        return m;
+    })();
+    const extraLines = extras.filter(x => x.code).map(x => {
+        const part = findPart(x.code);
+        const qty = Number(x.qty) > 0 ? Number(x.qty) : 1;
+        const matched = x.slot ? matchFinishOverride[livePicks[x.slot]] : '';
+        const unfinished = takesNoFinish(part);
+        const p = priceChoice({ partId: x.code }, part, unfinished ? { ...priceCtx, finishCode: '' } : (matched ? { ...priceCtx, finishCode: matched } : priceCtx));
+        return { partId: x.code, name: part?.itemName || x.code, qty, unit: p.price, total: p.price * qty,
+                 sku: p.sku || p.aliasCode, source: p.source, detail: p.detail, note: x.note, extra: true,
+                 ...(x.slot ? { slot: x.slot } : {}),
+                 finishCode: unfinished ? '' : (matched || globalFinish), noFinish: unfinished };
+    });
+    const isTraverse = (() => {
+        const ids = new Set(Object.values(livePicks));
+        return model.choices.some(c => ids.has(c.id) && ROD_ROLES.includes(c.role) && c.rodKind === TRAVERSE);
+    })();
+    const trvDrive = /MOTOR/.test(String(answers.drive || '').toUpperCase()) ? 'MOTORIZED' : 'MANUAL';
+    const trvFeet = Math.max(lengthFeet || 4, 4);
+    const trvTracks = String(answers.setup || '').toUpperCase() === 'DOUBLE' ? 2 : 1;
+    const trvPriceOf = (code) => {
+        const part = findPart(code);
+        return part ? (priceChoice({ partId: code }, part, priceCtx).price || 0) : 0;
+    };
+    const trvItemInfo = (code) => {
+        const part = findPart(code);
+        if (!part) return null;
+        const p = priceChoice({ partId: code }, part, priceCtx);
+        return { name: part.itemName || code, sku: p.sku || p.aliasCode || '' };
+    };
+    const trvSeed = (trvRules && isTraverse
+        ? { carrierStyle: '', carrierQty: '', draw: '', motorSide: '', picks: defaultPicks({ rules: trvRules, drive: trvDrive, feet: trvFeet, trackCount: trvTracks }), accessories: {} }
+        : null);
+    const trvLive = trvSel || trvSeed;
+    const trvComponents = ((trvRules && isTraverse && trvLive)
+        ? configuratorLines({ rules: trvRules, drive: trvDrive, feet: trvFeet, realFeet: lengthFeet || undefined, sel: trvLive, priceOf: trvPriceOf })
+        : []);
+    const trvLines = trvComponents.map(c => ({
+        partId: c.code, name: c.why || c.code, qty: c.qty,
+        unit: c.billable ? c.rate : 0, total: c.billable ? c.rate * c.qty : 0,
+        source: 'traverse components', detail: c.billable ? c.why : `included — ${c.why}`, extra: true,
+    }));
+    const spliceOnLine = extras.filter(x => spliceCodes.some(c => sameItemCode(x.code, c))).reduce((n, x) => n + (Number(x.qty) > 0 ? Number(x.qty) : 0), 0)
+        + trvComponents.filter(c => /SPLICE|JOINER|JNR|SPLC/i.test(String(c.code || ''))).reduce((n, c) => n + (Number(c.qty) > 0 ? Number(c.qty) : 0), 0);
+    const noSplice = noSpliceOf({ lengthInches, limitInches: spliceOverIn, canSplice: spliceCodes.length > 0 || (isTraverse && !!trvRules), spliceQty: spliceOnLine });
+    const grandTotal = priced.total + extraLines.reduce((s2, l) => s2 + l.total, 0) + configuratorTotal(trvComponents);
+    // (in addConfiguration) the finish questions still open
+    const openQuestions = askingFinishes.map(a => [a, unansweredOf(a.finish, finishAnswers[a.code])]).filter(([, m]) => m.length);
+    return { effectiveLevel, levelIsDefault, priceCtx, kitBill, carriersFromStep, pricingCtx, priced, priceWarnings, askingFinishes, liveFinishAnswers, kitPartsByLine, extraLines,
+        isTraverse, trvDrive, trvFeet, trvTracks, trvPriceOf, trvItemInfo, trvSeed, trvLive, trvComponents, trvLines, spliceOnLine, noSplice, grandTotal, openQuestions };
+};
+// The kit a reopened line names, as the screen's restore effect decided it (the kit list loaded): what it set.
+const oldKitRestore = (kits, s) => {
+    const want = String(s.kitPick || '').trim();
+    const wantCode = String(s.kitCode || '').trim().toUpperCase();
+    if (!want && !wantCode) return { kitPick: '', kitMotor: '', kitSource: null, report: null };
+    const idOf = (k) => String(k.id || k.legacyErpId || '');
+    const chosen = kits.find(k => want && idOf(k) === want)
+        || kits.find(k => wantCode && String(k.legacyErpId || '').trim().toUpperCase() === wantCode);
+    if (!chosen || !chosen.manufacturingSpecs?.kitAlign) return { kitPick: '', kitMotor: '', kitSource: null, report: wantCode || want };
+    const name = String(chosen.legacyErpId || chosen.itemName || 'the kit');
+    return { kitPick: idOf(chosen), kitMotor: String(s.kitMotor || ''), kitSource: { code: name, name: chosen.itemName || name, baseFeet: Number(chosen.manufacturingSpecs.kitAlign.minFeet) || 4, record: chosen }, report: null };
 };
 
 // ── THE RULES: how a part is found ────────────────────────────────────────────────────────────
@@ -801,6 +953,179 @@ const FIN = [
     const ixF = finishIndexOf(FIN);
     const oldRed = oldFinish({ finishes: FIN, flowFinishes: [], findPart: () => null, model: { choices: [], slots: [] }, resolved: { choices: [], riders: [], companions: [], slots: [] }, livePicks: {}, extras: [], globalFinishes: {}, partFinish: {} }).setGlobalFinish;
     eq('a single saved code lands where the screen\'s setter put it — every code, onto every state', [{}, { METAL: 'P14' }, { WOOD: 'S04', METAL: 'EP4' }].flatMap(prev => ['', ...CODES, 'p14', 'antique pewter'].map(code => JSON.stringify(withGlobalFinish(prev, code, ixF)) === JSON.stringify(oldRed(prev, code)))).every(Boolean), true);
+}
+
+// ── THE RULES, the price: the pieces that are a rule in themselves ─────────────────────────────────────────────
+{
+    eq('the drive is manual unless the answer says motorised', [driveOf('Motorized'), driveOf('MOTOR'), driveOf('manual'), driveOf(''), driveOf(undefined)], ['MOTORIZED', 'MOTORIZED', 'MANUAL', 'MANUAL', 'MANUAL']);
+    const ctx = priceCtxOf({ customerId: 'C1', customer: { name: 'X' }, effectiveLevel: 'FAB_COST', levelIsDefault: true, outsourceCodes: ['EP4'], globalFinish: 'P14', lineFinishFor: () => 'L', subFinishFor: () => 'S', findPart: () => 'F',
+        finishByCode: finishIndexOf(FIN), flow: { fallbackPrices: { BRACKET: 11 } }, lengthFeet: 9, lengthInches: 96.5, drive: 'MOTORIZED' });
+    eq('what the price rules are handed: the level in force and whether it was chosen, the one finish code, the feet billed and the inches cut, the drive, the flow\'s fallbacks',
+        [ctx.priceLevel, ctx.levelIsDefault, ctx.finishCode, ctx.billedFeet, ctx.lengthInches, ctx.drive, ctx.fallbackPrices, ctx.customerId, ctx.outsourceCodes], ['FAB_COST', true, 'P14', 9, 96.5, 'MOTORIZED', { BRACKET: 11 }, 'C1', ['EP4']]);
+    eq('…each line\'s own finish, the stock colour, the part finder under both its names, and the finish record behind a code (its species)', [ctx.finishFor(), ctx.subFinishFor(), ctx.findPart(), ctx.findByCode === ctx.findPart, ctx.finishObjOf('s04').bomSuffix, ctx.finishObjOf('nope')], ['L', 'S', 'F', true, 'OAK', null]);
+    eq('no length, no fallbacks → none', [priceCtxOf({ finishByCode: new Map(), flow: null }).billedFeet, priceCtxOf({ finishByCode: new Map(), flow: null }).lengthInches, priceCtxOf({ finishByCode: new Map(), flow: {} }).fallbackPrices], [0, 0, null]);
+
+    const k = (id, code, align, extra = {}) => ({ id, legacyErpId: code, itemName: `System ${code}`, manufacturingSpecs: align ? { kitAlign: align } : {}, ...extra });
+    const kl = [k('K1', 'H1-2TRV-4/P', { minFeet: 4 }), k('', 'H1-2TRV-6/P', { minFeet: 6 }), k('K3', 'H1-2TRV-WB', null), k('K4', '', {}, { itemName: 'Unnumbered' })];
+    eq('a line that names no kit', kitFromSaved(kl, {}), { none: true });
+    eq('the kit by the id it was picked under', [kitFromSaved(kl, { kitPick: 'K1' }).kitPick, kitFromSaved(kl, { kitPick: 'K1' }).kitSource.code, kitFromSaved(kl, { kitPick: 'K1' }).kitSource.baseFeet, kitFromSaved(kl, { kitPick: 'K1' }).kitSource.record === kl[0]], ['K1', 'H1-2TRV-4/P', 4, true]);
+    eq('…a kit with no id is picked under its number; an older line names its kit by the number on its own bill, whatever the case', [kitFromSaved(kl, { kitPick: 'H1-2TRV-6/P' }).kitSource.baseFeet, kitFromSaved(kl, { kitCode: ' h1-2trv-4/p ' }).kitPick, kitFromSaved(kl, { kitPick: 'GONE', kitCode: 'H1-2TRV-6/P' }).kitPick], [6, 'K1', 'H1-2TRV-6/P']);
+    eq('a kit this flow no longer offers, or one that lost its alignment, is named as missing', [kitFromSaved(kl, { kitPick: 'GONE' }), kitFromSaved(kl, { kitCode: 'h1-2trv-9/p' }), kitFromSaved(kl, { kitPick: 'K3' }), kitFromSaved([], { kitPick: 'K1' })], [{ missing: 'GONE' }, { missing: 'H1-2TRV-9/P' }, { missing: 'K3' }, { missing: 'K1' }]);
+    eq('its name is its number, else its description; its base feet 4 where the alignment names none', [kitFromSaved(kl, { kitPick: 'K4' }).kitSource.code, kitFromSaved(kl, { kitPick: 'K4' }).kitSource.name, kitFromSaved(kl, { kitPick: 'K4' }).kitSource.baseFeet], ['Unnumbered', 'Unnumbered', 4]);
+    eq('no kit in hand → no kit on the bill', kitBillOf({ kitSource: null }), null);
+
+    eq('the pinned carrier leaves the bill only once the components step names a style', [carriersFromStepOf(null), carriersFromStepOf({ carrierStyle: '' }), carriersFromStepOf({ carrierStyle: 'HTSRIPCAR' })], [false, false, true]);
+    const base = { priceLevel: 'STANDARD' };
+    ok('…and then on a copy: the price context itself is never touched', pricingCtxOf(base, false) === base && pricingCtxOf(base, true) !== base && JSON.stringify(pricingCtxOf(base, true)) === JSON.stringify({ priceLevel: 'STANDARD', skipRoles: ['CARRIER'] }) && base.skipRoles === undefined);
+    const asks = FIN.map(f => (f.code === 'LBR' ? { ...f, questions: [{ label: 'Surface', choices: ['Brushed', 'Polished'] }, { label: 'Coating', choices: ['Lacquered', 'Unlacquered'] }] } : f));
+    const lines = { lines: [{ finishCode: 'lbr' }, { finishCode: 'P14' }, { finishCode: '' }, { finishCode: 'LBR' }] };
+    const asking = askingFinishesOf(lines, finishIndexOf(asks));
+    eq('the finishes that ASK, among those a line actually wears — each once', asking.map(a => [a.code, a.questions.map(q => q.label)]), [['LBR', ['Surface', 'Coating']]]);
+    eq('a finish nobody wears asks nothing', askingFinishesOf({ lines: [{ finishCode: 'P14' }] }, finishIndexOf(asks)), []);
+    eq('only the answers of finishes still worn travel with the line', liveFinishAnswersOf(asking, { LBR: { Surface: 'Polished' }, P14: { Sheen: 'Flat' } }), { LBR: { Surface: 'Polished' } });
+    eq('every question is answered before the line leaves: the ones still open, by finish', [openFinishQuestionsOf(asking, {}).map(([a, m]) => [a.code, m]), openFinishQuestionsOf(asking, { LBR: { surface: 'polished' } }).map(([a, m]) => [a.code, m]), openFinishQuestionsOf(asking, { LBR: { Surface: 'Brushed', Coating: 'Lacquered' } })],
+        [[['LBR', ['Surface', 'Coating']]], [['LBR', ['Coating']]], []]);
+    const kitL = { isKit: true, itemKit: true, billedId: 'KIT1' }, sysL = { isKit: true, billedId: 'SYS' }, p1 = { inKit: true, hidden: true, kitOf: 'KIT1', billedId: 'A' }, p2 = { inKit: true, hidden: true, kitOf: 'KIT1', billedId: 'B' }, stray = { inKit: true, hidden: true, kitOf: 'OTHER' }, plain = { billedId: 'P' };
+    eq('the parts each item-kit line brings: the hidden lines that follow it, its own, until anything else', [...kitPartsByLineOf({ lines: [plain, p1, kitL, p1, p2, stray, p1, sysL, p2] })].map(([l, ps]) => [l.billedId, ps.map(x => x.billedId)]), [['KIT1', ['A', 'B']]]);
+    eq('…one entry per kit line', [...kitPartsByLineOf({ lines: [kitL, p1, p2, plain, { ...kitL, billedId: 'KIT2' }, { ...p1, kitOf: 'KIT2', billedId: 'C' }] })].map(([l, ps]) => [l.billedId, ps.map(x => x.billedId)]), [['KIT1', ['A', 'B']], ['KIT2', ['C']]]);
+
+    const lib = [{ id: 'D-J', legacyErpId: 'JNR', itemName: 'Joiner', manufacturingSpecs: { basePrice: 20, customData: { unfinished: true } } }, { id: 'D-FEE', legacyErpId: 'PAINT-FEE', itemName: 'Paint to match', partClass: 'Fee', manufacturingSpecs: { basePrice: 45 } },
+        { id: 'D-FEEP', legacyErpId: 'PAINT-FEE/EP', itemName: 'Paint to match (plated)', partClass: 'Fee', manufacturingSpecs: { basePrice: 90 } }, { id: 'D-RG', legacyErpId: 'RG', itemName: 'Ring', manufacturingSpecs: { basePrice: 3 } }];
+    const find = (id) => partIn(partIndexOf(lib), id);
+    const pc = priceCtxOf({ customerId: '', customer: null, effectiveLevel: 'STANDARD', levelIsDefault: false, outsourceCodes: [], globalFinish: 'P14', lineFinishFor: () => '', subFinishFor: () => '', findPart: find, finishByCode: finishIndexOf(FIN), flow: null, lengthFeet: 8, lengthInches: 96, drive: 'MANUAL' });
+    const xl = extraLinesOf({ extras: [{ code: 'JNR', qty: '2', note: 'centre' }, { code: 'PAINT-FEE', qty: '1', slot: 'T|F' }, { code: 'PAINT-FEE', qty: '', slot: 'T|B' }, { code: 'RG', qty: '0' }, { code: '' }, { code: 'NOT-HELD', qty: '3' }], findPart: find, priceCtx: pc, globalFinish: 'P14', matchFinishOverride: { 'trk-f': 'EP4' }, livePicks: { 'T|F': 'trk-f', 'T|B': 'trk-b' } });
+    eq('added by hand: an unfinished item prices plain and carries no finish; a paint-match fee prices at, and names, the colour it buys; the rest wear the configuration\'s',
+        xl.map(l => [l.partId, l.qty, l.unit, l.total, l.finishCode, l.noFinish, l.slot || '', l.note || '']), [['JNR', 2, 20, 40, '', true, '', 'centre'], ['PAINT-FEE', 1, 90, 90, 'EP4', false, 'T|F', ''], ['PAINT-FEE', 1, 45, 45, 'P14', false, 'T|B', ''], ['RG', 1, 3, 3, 'P14', false, '', ''], ['NOT-HELD', 3, 0, 0, 'P14', false, '', '']]);
+    ok('…each marked as added by hand, with the rule that priced it', xl.every(l => l.extra === true && typeof l.source === 'string') && xl[0].name === 'Joiner' && xl[4].name === 'NOT-HELD');
+
+    const mdl = { choices: [{ id: 'a', role: 'FASCIA', rodKind: 'TRAVERSE' }, { id: 'b', role: 'ROD', rodKind: 'SOLID' }, { id: 'c', role: 'BRACKET', rodKind: 'TRAVERSE' }] };
+    eq('a traverse configuration is one whose chosen ROD is a traverse rod', [isTraverseOf(mdl, { r: 'a' }), isTraverseOf(mdl, { r: 'b' }), isTraverseOf(mdl, { r: 'c' }), isTraverseOf(mdl, {})], [true, false, false, false]);
+    eq('the chart starts at 4 ft; a double is two tracks', [trvFeetOf(null), trvFeetOf(3), trvFeetOf(9), trvTracksOf('double'), trvTracksOf('SINGLE'), trvTracksOf(undefined)], [4, 4, 9, 2, 1, 1]);
+    eq('a component is priced, and named, by the same chain as everything else', [trvPriceOfCode('RG', find, pc), trvPriceOfCode('NOT-HELD', find, pc), trvItemInfoOf('RG', find, pc), trvItemInfoOf('NOT-HELD', find, pc)], [3, 0, { name: 'Ring', sku: '' }, null]);
+    const RULES = { usage: [{ label: 'Pinch Pleat Carriers', itemId: 'HTSLNTCAR', byFeet: { 4: 16, 8: 32 } }, { label: 'Splice', itemId: 'SPL', byFeet: { 8: 1 } }], configurator: [{ itemId: 'ENDSTOP', drive: 'BOTH', billable: false }, { itemId: 'SPL', drive: 'BOTH', billable: false }, { itemId: 'WAND', drive: 'MANUAL', billable: true }] };
+    eq('the selection seeds from the chart — only for a traverse rod on a collection that has one', [trvSeedOf({ trvRules: RULES, isTraverse: true, trvDrive: 'MANUAL', trvFeet: 8, trvTracks: 2 }), trvSeedOf({ trvRules: RULES, isTraverse: false, trvDrive: 'MANUAL', trvFeet: 8, trvTracks: 1 }), trvSeedOf({ trvRules: null, isTraverse: true, trvDrive: 'MANUAL', trvFeet: 8, trvTracks: 1 })],
+        [{ carrierStyle: '', carrierQty: '', draw: '', motorSide: '', picks: { ENDSTOP: 4, SPL: 1 }, accessories: {} }, null, null]);
+    const comps = trvComponentsOf({ trvRules: RULES, isTraverse: true, trvLive: { carrierStyle: 'HTSLNTCAR', carrierQty: '40', picks: { SPL: 2 }, accessories: { WAND: 2 } }, trvDrive: 'MANUAL', trvFeet: 8, lengthFeet: 8, trvPriceOf: (c) => ({ HTSLNTCAR: 1.5, SPL: 20, WAND: 12 }[c] || 0) });
+    eq('the components: the chart\'s count included, what is above it billed, an accessory billed', comps.map(c => [c.code, c.qty, c.rate, c.billable]), [['HTSLNTCAR', 32, 0, false], ['HTSLNTCAR', 8, 1.5, true], ['SPL', 1, 0, false], ['SPL', 1, 20, true], ['WAND', 2, 12, true]]);
+    eq('…none without a traverse rod, a chart, or a selection', [trvComponentsOf({ trvRules: RULES, isTraverse: false, trvLive: {} }), trvComponentsOf({ trvRules: null, isTraverse: true, trvLive: {} }), trvComponentsOf({ trvRules: RULES, isTraverse: true, trvLive: null })], [[], [], []]);
+    eq('on the quote an included component rides at $0 and says so', trvLinesOf(comps).map(l => [l.partId, l.qty, l.unit, l.total, /^included — /.test(l.detail), l.extra, l.source]), [['HTSLNTCAR', 32, 0, 0, true, true, 'traverse components'], ['HTSLNTCAR', 8, 1.5, 12, false, true, 'traverse components'], ['SPL', 1, 0, 0, true, true, 'traverse components'], ['SPL', 1, 20, 20, false, true, 'traverse components'], ['WAND', 2, 12, 24, false, true, 'traverse components']]);
+    const same = (a, b) => sameItem(a, b, find);
+    eq('the joiners on the line: the add-by-hand rows that are the flow\'s joiner (under any of its names) and the traverse chart\'s own', [spliceOnLineOf({ extras: [{ code: 'D-J', qty: '2' }, { code: 'RG', qty: '5' }, { code: 'JNR', qty: '0' }], spliceCodes: ['JNR'], sameItemCode: same, trvComponents: [...comps, { code: 'trv-joiner', qty: 2 }, { code: 'SPLICE-X', qty: 0 }] }),
+        spliceOnLineOf({ extras: [{ code: 'D-J', qty: '2' }], spliceCodes: [], sameItemCode: same, trvComponents: comps }), spliceOnLineOf({ extras: [], spliceCodes: ['JNR'], sameItemCode: same, trvComponents: [] })], [4, 0, 0]);
+    const one = (o) => shipsInOnePieceOf({ lengthInches: 150, spliceOverIn: 120, spliceCodes: ['JNR'], isTraverse: false, trvRules: null, spliceOnLine: 0, ...o });
+    eq('over the limit with no joiner on the line — said only where a joiner could have been had', [one({}), one({ spliceOnLine: 1 }), one({ lengthInches: 120 }), one({ spliceCodes: [] }), one({ spliceCodes: [], isTraverse: true, trvRules: RULES }), one({ spliceCodes: [], isTraverse: true })], [true, false, false, false, true, false]);
+    eq('what the configuration comes to: the lines, what was added by hand, the billable components', grandTotalOf({ total: 100 }, xl, comps), 100 + 178 + 56);
+    eq('nothing resolved prices to nothing — with or without a kit in hand the bill has its shape', [pricedOf({ bom: [], choices: [] }, pc, null), Array.isArray(pricedOf({ bom: [], choices: [] }, pc, { kitCode: 'K', kitName: 'K', kitPrice: 195, baseFeet: 4, included: [] }).lines)], [{ lines: [], total: 0 }, true]);
+    const warned = priceWarningsOf({ lines: [{ source: 'no price on this item', name: 'Hidden nut', detail: 'd', hidden: true }, { source: 'no price on this item', name: 'Bracket', billedId: 'BE', detail: 'nothing on BE' }, { source: 'item base price', name: 'Ring' }] });
+    eq('a part with no price is called out — a hidden one is not the operator\'s to act on', [warned.length, /Bracket \(BE\)/.test(warned[0].msg), warned[0].sev], [1, true, 'red']);
+    const bare = billOf({ findPart: find, model: { choices: [], slots: [] }, resolved: { bom: [], choices: [] }, livePicks: {}, finishByCode: finishIndexOf(FIN), globalFinish: '', lineFinishFor: () => '', subFinishFor: () => '', matchFinishOverride: {}, sameItemCode: same });
+    eq('the bill of nothing: standard, no kit, no traverse, nothing owed', [bare.effectiveLevel, bare.levelIsDefault, bare.kitBill, bare.kitSaved, bare.isTraverse, bare.trvComponents, bare.grandTotal, bare.noSplice, bare.priced], ['STANDARD', false, null, { none: true }, false, [], 0, false, { lines: [], total: 0 }]);
+}
+
+// ── THE MOVE, the price: the module against the screen's old block, on the live H1-2TRV pins ───────────────────
+// Every framing, several ways through the parts each, as five customers (nobody · Fabricut at their defaulted cost ·
+// Fabricut with Retail chosen · another customer with a level of their own · another at standard), billed from no
+// kit and from each of six (wall / ceiling, manual / motorized with its motors, a double with no ceiling twin, a
+// family with one kit for both mounts), with the traverse components as seeded and as answered, items added by
+// hand, finishes that ask — priced parts, parts with no price, a kit made of parts.
+{
+    const hh = (t) => { let x = 2166136261; for (const c of String(t)) { x ^= c.charCodeAt(0); x = Math.imul(x, 16777619); } return x >>> 0; };
+    const money = (code, lo, hi) => lo + (hh(code) % ((hi - lo) * 4)) / 4;
+    const mk5 = (code, specs = {}, extra = {}) => ({ id: `PD-${code}`, itemId: `PD-${code}`, legacyErpId: code, itemName: `Item ${code}`, partClass: 'Inventory', manufacturingSpecs: specs, ...extra });
+    const tiers = (code) => ({ cost: money(`${code}|c`, 5, 30), wholesale: money(`${code}|w`, 30, 60), retail: money(`${code}|r`, 60, 120), paintedCost: money(`${code}|pc`, 6, 32), paintedWholesale: money(`${code}|pw`, 32, 64), paintedRetail: money(`${code}|pr`, 64, 128),
+        platedCost: money(`${code}|ec`, 12, 50), platedWholesale: money(`${code}|ew`, 50, 90), platedRetail: money(`${code}|er`, 90, 180), fabCodeBase: `H${hh(code) % 9000 + 1000}F`, fabCodePainted: `H${hh(code) % 9000 + 1000}F`, fabCodePremium: `H${hh(code) % 9000 + 1000}F PREMIUM` });
+    const codes = [...new Map(PINS.map(pn => [pn.partId, pn.legacyErpId || pn.partName])).entries()];
+    const pinned = codes.map(([id, code], i) => ({ id, itemId: id, legacyErpId: code, itemName: `Item ${code}`, partClass: 'Inventory',
+        manufacturingSpecs: { ...(i % 4 !== 3 && code !== 'H1-2TRVNUT' ? { basePrice: money(code, 4, 40) } : {}), ...(i % 3 === 0 ? { fabricut: tiers(code) } : {}), ...(/^H1-2TRV-(WB|EWB)$/.test(code) ? { usesSubFinish: true } : {}), ...(code === 'H1-2RCTPR' ? { customData: { unfinished: true } } : {}) },
+        ...(i % 2 ? { clientPricing: [{ customerId: 'FABRICUT', clientSku: `F${hh(code) % 9000 + 1000}`, price: money(`${code}|row`, 3, 35) }, { customerId: 'cust-brimar', clientSku: `B${hh(code) % 900 + 100}`, price: money(`${code}|brow`, 5, 45) }] } : {}) }));
+    const idOfCode = (code) => (codes.find(([, c]) => c === code) || [])[0];
+    // the bracket H1-2TRV-CB is sold as one number and made of two parts (an item kit)
+    const cb = pinned.find(x => x.legacyErpId === 'H1-2TRV-CB');
+    if (cb) { cb.partClass = 'Kit'; cb.manufacturingSpecs = { ...cb.manufacturingSpecs, basePrice: 61, kitComponents: [{ partId: 'PD-CB-ARM', qty: 1 }, { partId: 'PD-CB-CUFF', qty: 2 }, { partId: 'PD-NOT-HELD', qty: 1 }] }; }
+    const lib5 = [...pinned, mk5('CB-ARM', { basePrice: 9 }), mk5('CB-CUFF', { basePrice: 4, customData: { unfinished: true } }),
+        ...pinned.filter((x, i) => i % 3 === 1 && x.partClass !== 'Kit').flatMap(x => [mk5(`${x.legacyErpId}/P`, { basePrice: money(`${x.legacyErpId}/P`, 8, 60) }), mk5(`${x.legacyErpId}/EP4`, { basePrice: money(`${x.legacyErpId}/EP4`, 20, 90) })]),
+        mk5('H1-2TRV-WB/C', { basePrice: 33 }), mk5('H1-2TRV-WB/B', {}), mk5('H1-2RCTWR-O', {}),
+        mk5('PAINT-FEE', { basePrice: 45 }, { partClass: 'Fee' }), mk5('PAINT-FEE/EP', { basePrice: 90 }, { partClass: 'Fee' }), mk5('H1-2JNR', { basePrice: 20, customData: { unfinished: true } }), mk5('CONN-1', { basePrice: 7 }),
+        mk5('HTSRIPCAR', { basePrice: 1.25 }), mk5('H1-2TRVSPL', { basePrice: 18 }), mk5('H1-2TRVMC', { basePrice: 6 }), mk5('ENDSTOP-2', {}), mk5('WAND-36', { basePrice: 14 }, { clientPricing: [{ customerId: 'FABRICUT', clientSku: 'HWAND', price: 11 }] }), mk5('REMOTE-1', { basePrice: 60 })];
+    const kit5 = (code, align, { perFoot, specs = {}, family = 'H1-2TRV', price } = {}) => ({ id: `KIT-${code}`, itemId: `KIT-${code}`, legacyErpId: code, itemName: `System ${code}`, partClass: 'Kit',
+        manufacturingSpecs: { kitFamily: family, kitAlign: { frontRail: 'TRACK', material: 'P', minFeet: 4, ...align }, ...specs },
+        clientPricing: [{ customerId: 'FABRICUT', clientSku: `HTS-${hh(code) % 900 + 100}`, price: price ?? (150 + hh(code) % 100), ...(perFoot != null ? { perFootPrice: perFoot } : {}) }] });
+    const KITS5 = [
+        kit5('H1-2TRV-4/P', { setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL' }, { perFoot: 22 }),
+        kit5('H1-2TRV-4C/P', { setup: 'SINGLE', drive: 'MANUAL', mount: 'CEILING' }, { perFoot: 24, specs: { kitComponents: [{ partId: idOfCode('H1-2RCTPR'), qty: 2 }, { partId: 'PD-CONN-1' }] } }),
+        kit5('H1-2TRV-4M/P', { setup: 'SINGLE', drive: 'MOTORIZED', mount: 'WALL' }, { specs: { kitMotorCodes: [{ code: 'H1-2TRV-4M/P-35W', fabSku: 'HM35W', motorItem: 'HSOM-21', net: '1050' }, { code: 'H1-2TRV-4M/P-60W', fabSku: '', motorItem: 'HSOM-20', net: 1150 }] } }),
+        kit5('H1-2TRV-4MC/P', { setup: 'SINGLE', drive: 'MOTORIZED', mount: 'CEILING' }, { specs: { kitMotorCodes: [{ code: 'H1-2TRV-4M/P-35C', fabSku: 'HM35C', motorItem: 'HSOM-21', net: 1075 }] } }),
+        kit5('H1-2TRV-4D/P', { setup: 'DOUBLE', drive: 'MANUAL', mount: 'WALL' }),
+        kit5('H1-138TRV-4H/P', { setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL', rodKind: 'TRAVERSE', bracketStyle: 'H' }, { family: 'H1-138TRV', price: 0 }),
+    ];
+    const RULES5 = { usage: [{ label: 'Pinch Pleat Carriers', itemId: 'HTSLNTCAR', byFeet: { 2: 8, 3: 12, 4: 16, 6: 24, 8: 32, 12: 48 } }, { label: 'Ripplefold Carriers', itemId: 'HTSRIPCAR', byFeet: { 4: 12, 8: 24, 12: 36 } },
+        { label: 'Wall brackets', itemId: 'H1-2TRV-WB', byFeet: { 4: 2, 8: 3, 12: 4 } }, { label: 'Splice', itemId: 'H1-2TRVSPL', byFeet: { 12: 1 } }],
+        configurator: [{ itemId: 'H1-2TRVMC', drive: 'MANUAL', billable: false }, { itemId: 'ENDSTOP-2', drive: 'BOTH', billable: false }, { itemId: 'H1-2TRVSPL', drive: 'BOTH', billable: false }, { itemId: 'WAND-36', drive: 'MANUAL', billable: true }, { itemId: 'REMOTE-1', drive: 'MOTORIZED', billable: true }] };
+    const FINQ = FIN.map(f => (f.code === 'EP4' ? { ...f, questions: [{ label: 'Sheen', choices: ['Bright', 'Satin'] }] } : f));
+    const WHO = [{ customer: null, customerId: '', priceLevel: 'STANDARD' }, { customer: { id: 'C-FAB', name: 'FABRICUT' }, customerId: 'C-FAB', priceLevel: 'STANDARD' }, { customer: { id: 'C-FAB', name: 'Fabricut', companyName: 'FABRICUT' }, customerId: 'C-FAB', priceLevel: 'FAB_RETAIL' },
+        { customer: { id: 'CUST-BRIMAR', name: 'Brimar', defaultPriceLevel: 'fab_wholesale' }, customerId: 'CUST-BRIMAR', priceLevel: 'STANDARD' }, { customer: { id: 'CUST-BRIMAR', name: 'Brimar', defaultPriceLevel: 'STANDARD' }, customerId: 'CUST-BRIMAR', priceLevel: 'STANDARD' }];
+    const tally = { compared: 0, differ: 0, kit: 0, switched: 0, followed: 0, nokit: 0, motor: 0, motorTwin: 0, missingKit: 0, byCode: 0, carriersStep: 0, billedComp: 0, itemKit: 0, unfinishedExtra: 0, matchedFee: 0, noPrice: 0, fallback: 0, defaulted: 0, chosen: 0, asking: 0, open: 0, onePiece: 0, perFoot: 0, stock: 0, covered: 0 };
+    const firstDiff = [];
+    framings.forEach((answers, fi) => {
+        for (let v = 0; v < 12; v++) {
+            const rand = rng(`bill|${fi}|${v}`);
+            const picks = picksFor(answers, `bill|${fi}|${v}`);
+            const who = WHO[(fi + v) % WHO.length];
+            const kit = v % 3 === 0 ? null : KITS5[(fi * 5 + v) % KITS5.length];
+            const motors = kit ? (kit.manufacturingSpecs.kitMotorCodes || []) : [];
+            const kitState = !kit ? {} : v % 7 === 5 ? { kitPick: 'KIT-GONE', kitMotor: 'X' } : v % 5 === 4 ? { kitCode: kit.legacyErpId.toLowerCase(), kitMotor: motors.length ? motors[0].code : '' } : { kitPick: kit.id, kitMotor: motors.length ? (v % 4 === 1 ? 'NOT-A-MOTOR' : motors[(fi + v) % motors.length].code) : '' };
+            const chosenIds = Object.values(picks);
+            const partFinish = {}; for (let kk = 0; kk < v % 3; kk++) partFinish[chosenIds[Math.floor(rand() * chosenIds.length)]] = ['P14', 'EP4', 'S04', 'ANTIQUE PEWTER'][Math.floor(rand() * 4)];
+            const m0 = settle({ choices, answers, picks, modelNodes });
+            const live0 = autoPicksOf({ model: m0, answers, operatorPicks: reseatPicks(m0, picks) }).livePicks;
+            const tracks = m0.slots.filter(sl => sl.kind === 'TRACK' && live0[sl.key]);
+            const extras = [...(v % 2 ? [{ code: 'H1-2JNR', qty: String(1 + (v % 3)), note: v % 4 === 1 ? '18 in from the left' : '' }] : []), ...(tracks.length && v % 3 === 1 ? [{ code: 'PAINT-FEE', qty: '1', note: '', slot: tracks[0].key }] : []), ...(v % 5 === 2 ? [{ code: 'CONN-1', qty: '4', note: '' }, { code: 'NOT-HELD', qty: '1', note: '' }] : [])];
+            const drive = driveOf(answers.drive);
+            const trvSel = v % 3 === 0 ? null : v % 3 === 1 ? { carrierStyle: v % 2 ? 'HTSRIPCAR' : 'HTSLNTCAR', carrierQty: '', draw: 'LEFT', motorSide: '', picks: defaultPicks({ rules: RULES5, drive, feet: 8, trackCount: 1 }), accessories: {} }
+                : { carrierStyle: v % 2 ? 'HTSLNTCAR' : '', carrierQty: '60', draw: 'CENTER', motorSide: 'RIGHT', picks: { 'H1-2TRVSPL': 2, 'ENDSTOP-2': 2, 'H1-2TRVMC': 1 }, accessories: { 'WAND-36': 2, 'REMOTE-1': 1, 'NOT-OFFERED': 3 } };
+            const data = { assembly: ASSEMBLY, pins: PINS, parts: lib5, flow: { fallbackPrices: v % 2 ? { BRACKET: 11, RING: 2, TRACK: 5 } : null, spliceOverInches: 96 }, trvRules: v % 6 === 5 ? null : RULES5, extraItems: [{ code: 'H1-2JNR', label: 'Joiner' }, { code: 'PAINT-FEE', label: 'Paint the track to match', step: 'track' }],
+                finishes: FINQ, flowFinishes: [], ...who, outsourceCodes: FINQ.filter(f => f.vendor && f.material === 'METAL'), kits: KITS5 };
+            const state = { answers, picks, lengthInches: [null, 36, 96, 150.5, 60][(fi + v) % 5], stepQty: {}, extras, spliceWaived: v % 4 >= 2, globalFinishes: [{}, { METAL: 'P14' }, { METAL: 'EP4', WOOD: 'S04' }, { METAL: 'ANTIQUE PEWTER', WOOD: 'S11' }][(fi + v) % 4], partFinish,
+                finishAnswers: v % 2 ? { EP4: { Sheen: 'Satin' }, P14: { Depth: 'Deep' } } : (v % 4 === 2 ? { EP4: { Sheen: 'Matte' } } : null), ...kitState, ...(trvSel ? { trvSel } : {}) };
+            const sn = sessionOf(data, state);
+            const of = oldFinish({ finishes: data.finishes, flowFinishes: [], customer: who.customer, customerId: who.customerId, findPart: sn.findPart, model: sn.model, resolved: sn.resolved, livePicks: sn.livePicks, extras: sn.extras, globalFinishes: sn.globalFinishes, partFinish: sn.partFinish });
+            const rk = oldKitRestore(KITS5, state);
+            const ob = oldBill({ ...who, outsourceCodes: data.outsourceCodes, flow: data.flow, kits: KITS5, trvRules: data.trvRules, findPart: sn.findPart, model: sn.model, resolved: sn.resolved, livePicks: sn.livePicks, extras: sn.extras, lengthFeet: sn.lengthFeet, lengthInches: sn.lengthInches,
+                spliceCodes: sn.spliceCodes, spliceOverIn: sn.spliceOverIn, sameItemCode: sn.sameItemCode, finishByCode: of.finishByCode, globalFinish: of.globalFinish, lineFinishFor: of.lineFinishFor, subFinishFor: of.subFinishFor, matchFinishOverride: of.matchFinishOverride,
+                answers, kitSource: rk.kitSource, kitMotor: rk.kitMotor, trvSel: trvSel ? { ...trvSel } : null, finishAnswers: state.finishAnswers || {} });
+            const said = (x, open, kitNow) => JSON.stringify({ level: [x.effectiveLevel, x.levelIsDefault], ctx: x.priceCtx, species: (x.priceCtx.finishObjOf('s04') || {}).id, ctxFinish: [...sn.model.choices].slice(0, 6).map(c => [x.priceCtx.finishFor(c), x.priceCtx.subFinishFor(c)]), kitNow, kitBill: x.kitBill,
+                carriers: x.carriersFromStep, skip: x.pricingCtx.skipRoles || null, priced: x.priced, warnings: x.priceWarnings, asking: x.askingFinishes.map(a => [a.code, a.questions]), live: x.liveFinishAnswers, open: open.map(([a, mm]) => [a.code, mm]),
+                kitParts: [...x.kitPartsByLine].map(([l, ps]) => [l.billedId, ps.map(q => q.billedId)]), extraLines: x.extraLines, trv: [x.isTraverse, x.trvDrive, x.trvFeet, x.trvTracks, x.trvSeed, x.trvLive, x.trvComponents, x.trvLines],
+                info: ['HTSLNTCAR', 'WAND-36', 'NOT-HELD'].map(c => [x.trvPriceOf(c), x.trvItemInfo(c)]), splice: [x.spliceOnLine, x.noSplice], total: x.grandTotal });
+            tally.compared++;
+            if (said(ob, ob.openQuestions, [rk.kitPick, rk.kitMotor, rk.kitSource]) !== said(sn, sn.openFinishQuestions, [sn.kitPick, sn.kitMotor, sn.kitSource])) { tally.differ++; if (firstDiff.length < 3) firstDiff.push(`#${fi}.${v}`); }
+            const kb = sn.kitBill;
+            if (kb) { tally.kit++; if (kb.mountFollow) tally[kb.mountFollow.mode] = (tally[kb.mountFollow.mode] || 0) + 1; if (kb.motor) tally.motor++; if (kb.mountFollow && kb.mountFollow.mode === 'switched' && kb.motor) tally.motorTwin++; if (kb.perFootPrice != null) tally.perFoot++; if (kb.included.some(i => i.qty > 0)) tally.covered++; }
+            if (sn.kitSaved.missing) tally.missingKit++;
+            if (state.kitCode && sn.kitSource) tally.byCode++;
+            if (sn.carriersFromStep) tally.carriersStep++;
+            if (sn.trvComponents.some(c => c.billable)) tally.billedComp++;
+            if (sn.priced.lines.some(l => l.itemKit)) tally.itemKit++;
+            if (sn.extraLines.some(l => l.noFinish)) tally.unfinishedExtra++;
+            if (sn.extraLines.some(l => l.slot && l.finishCode && l.finishCode !== sn.globalFinish)) tally.matchedFee++;
+            if (sn.priced.lines.some(l => /no price/.test(l.source))) tally.noPrice++;
+            if (sn.priced.lines.some(l => /flow default/.test(l.source))) tally.fallback++;
+            if (sn.levelIsDefault) tally.defaulted++; else if (sn.effectiveLevel !== 'STANDARD') tally.chosen++;
+            if (sn.askingFinishes.length) tally.asking++;
+            if (sn.openFinishQuestions.length) tally.open++;
+            if (sn.noSplice) tally.onePiece++;
+            if (sn.priced.lines.some(l => l.subFinishCode)) tally.stock++;
+        }
+    });
+    if (process.env.HS_VERBOSE) console.log('price —', JSON.stringify(tally));
+    eq(`the price: the module agrees with the old inline block on every bill (${tally.compared} set-ups compared)${firstDiff.length ? ` — first: ${firstDiff.join(', ')}` : ''}`, tally.differ, 0);
+    ok(`the set-ups take each rule's road — a kit ${tally.kit} (switched to the other mount's ${tally.switched}, followed ${tally.followed}, no kit for that mount ${tally.nokit}, a motor folded on ${tally.motor}, the motor's twin ${tally.motorTwin}, a per-foot rate ${tally.perFoot}, parts covered ${tally.covered}), a kit no longer offered ${tally.missingKit}, named by its number ${tally.byCode}, carriers from the step ${tally.carriersStep}, a billed component ${tally.billedComp}, an item kit ${tally.itemKit}, an unfinished item added ${tally.unfinishedExtra}, a matched fee ${tally.matchedFee}, no price ${tally.noPrice}, a flow default ${tally.fallback}, a defaulted level ${tally.defaulted}, a chosen one ${tally.chosen}, a finish that asks ${tally.asking}, questions open ${tally.open}, one piece ${tally.onePiece}, a stock colour ${tally.stock}`,
+        tally.kit > 30 && tally.switched > 3 && tally.followed > 3 && tally.nokit > 0 && tally.motor > 3 && tally.motorTwin > 0 && tally.perFoot > 5 && tally.covered > 20 && tally.missingKit > 3 && tally.byCode > 3 && tally.carriersStep > 10 && tally.billedComp > 5 && tally.itemKit > 5
+        && tally.unfinishedExtra > 10 && tally.matchedFee > 0 && tally.noPrice > 5 && tally.fallback > 5 && tally.defaulted > 20 && tally.chosen > 10 && tally.asking > 10 && tally.open > 3 && tally.onePiece > 3 && tally.stock > 3);
+    // the kit a reopened line names: found the way the screen's restore effect found it
+    const cases5 = [{}, { kitPick: 'KIT-H1-2TRV-4/P' }, { kitPick: 'KIT-H1-2TRV-4M/P', kitMotor: 'H1-2TRV-4M/P-35W' }, { kitCode: 'h1-2trv-4c/p' }, { kitPick: 'GONE', kitCode: 'H1-2TRV-4D/P' }, { kitPick: 'GONE' }, { kitCode: 'NOPE', kitMotor: 'x' }];
+    eq('the kit a reopened line names: by its id, else by its number; one no longer offered is named; none is none', cases5.map(st => { const o = oldKitRestore(KITS5, st); const nw = kitFromSaved(KITS5, st);
+        return JSON.stringify([o.kitPick, o.kitSource, o.report]) === JSON.stringify([nw.kitPick || '', nw.kitSource || null, nw.missing || null]) && !!nw.none === (!st.kitPick && !st.kitCode); }).every(Boolean), true);
 }
 
 // ── THE WHOLE CALL: what a caller that is not a screen gets ───────────────────────────────────────────────

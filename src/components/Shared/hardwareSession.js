@@ -23,16 +23,23 @@
 // Harness: scripts/hardwareSession.test.mjs.
 
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter.js';
-import { resolve, reseatPicks, recommendedQty, bearingEnds, centreBracketsFor, finishesFor } from './hardwareModel.js';
+import { resolve, reseatPicks, recommendedQty, bearingEnds, centreBracketsFor, finishesFor, ROD_ROLES, TRAVERSE } from './hardwareModel.js';
 import { autoPicksOf } from './hardwareAutoPicks.js';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, projInchesOfSel } from './sizeMatrix.js';
 import { bracketAdviceFor, DEFAULT_DROP_FT } from './bracketSpan.js';
-import { carrierRows } from './traverseConfigurator.js';
-import { usageAt } from './traverseExplode.js';
-import { rodMaterialsOf, extrasForRod, liveExtrasOf } from './flowExtras.js';
+import { carrierRows, configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator.js';
+import { usageAt, explodeTraverse } from './traverseExplode.js';
+import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf } from './flowExtras.js';
 import { normalizeExtras } from './extrasRestore.js';
 import { wearsAsTwin } from './materialTwin.js';
 import { subFinishOfFinish } from './subFinish.js';
+import { priceConfiguration, priceChoice, pricingWarnings } from './hardwarePricing.js';
+import { customerPriceLevel } from './priceLevels.js';
+import { findClientPriceRow, customerKeys } from './clientPricing.js';
+import { applyKitPricing } from './kitSeed.js';
+import { kitForMount, motorCodeFor, parseKitCode } from './kitCode.js';
+import { takesNoFinish } from './finishLabel.js';
+import { questionsOf, unansweredOf } from './finishQuestions.js';
 
 // ── THE PARTS, AND HOW ONE IS FOUND ──────────────────────────────────────────────────────────
 // A pin can be tagged with the library record's id, its itemId or OUR number, so every one of them
@@ -579,22 +586,327 @@ export function finishRulesOf({ finishes = [], flowFinishes = [], customer = nul
         matchFinishOverride, rodFinishFor, followsRod, subFinishFor, lineFinishFor, textureOverrides, chosenFinishObjects, offeredFinishes, finishGroups, bareWood, clientFinishName };
 }
 
+// ── PRICE ─────────────────────────────────────────────────────────────────────────────────────
+// ── OUR COST TO THEM IS THE DEFAULT, ONCE THERE IS A "THEM" ──────────────────────────────
+// Stuart 2026-08-17: "it should default at our cost to them". The tier in the Customer Alias &
+// Pricing box only ever applied ABOVE Standard, so a connected customer still quoted off the
+// item's own base price — which a mill item does not have, hence a screen of $0.00 lines with
+// a perfectly good 12.50 sitting in the box beside them. Standard is "our pricing", and our
+// pricing to a NAMED account is the cost column; with nobody named there is no tier to read
+// and Standard is the only honest answer.
+//
+// This is a DEFAULT, not an override: choosing Wholesale or Retail still wins, an item with no
+// tier data still falls through to its customer row and then its base price, and the level in
+// force is named on screen beside the total so a quote can never be priced off a tier nobody
+// could see.
+// ⚠ THE LEVEL IS THE CUSTOMER'S, NOT "any customer gets Fabricut's" (Stuart 2026-08-22). One
+// shared answer, read by CPQ, Quick Ship and the portal alike — see Shared/priceLevels
+// (customerPriceLevel → { level, isDefault }, which every caller asks before anything is priced).
+//
+// MANUAL unless the answer says motorised — the rules doc speaks MANUAL / MOTORIZED / BOTH, and
+// a collection that never asks the question is manual by construction. One reading of the drive
+// answer for the three that need it: what a track is cut to, what a kit explodes to, which
+// traverse components are shown.
+export const driveOf = (driveAnswer) => (/MOTOR/.test(String(driveAnswer || '').toUpperCase()) ? 'MOTORIZED' : 'MANUAL');
+export function priceCtxOf({ customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, subFinishFor, findPart, finishByCode, flow, lengthFeet, lengthInches, drive }) {
+    return {
+        customerId, customer, priceLevel: effectiveLevel, outsourceCodes,
+        // Whether that level was CHOSEN or defaulted decides whether it outranks the customer's own
+        // negotiated row — see the precedence in hardwarePricing.
+        levelIsDefault,
+        finishCode: globalFinish, finishFor: lineFinishFor, findPart, findByCode: findPart,
+        // The stock colour a sub-finish part is made in (rod's finish first) — sold as <base>/B · <base>/C.
+        subFinishFor,
+        // The finish RECORD behind a code — the engine reads its species suffix (OAK / WALNUT) to bill
+        // the -O / -W item (hardwarePricing step 0a, Stuart 2026-09-16).
+        finishObjOf: (code) => finishByCode.get(String(code || '').toUpperCase()) || null,
+        // The flow's per-kind fallback, used only where a part has no price under any rule (tab 11).
+        fallbackPrices: flow?.fallbackPrices || null,
+        // What the rods are cut from — see the per-foot rule in priceConfiguration. The
+        // inches travel too: they become the line's cutLength, which is what the bench reads.
+        billedFeet: lengthFeet || 0,
+        lengthInches: lengthInches || 0,
+        // The drive decides what a track and an F-clip are cut to (Shared/traverseTags) — manual unless answered.
+        drive,
+    };
+}
+
+// ── THE KIT A LINE IS BILLED FROM ────────────────────────────────────────────────────────────
+// A kit named on a saved line (Stuart 2026-09-19, QUO154 row 6): by the id it was picked under, else —
+// a line saved before the pick travelled — by the kit number on its own bill. The kit is found among
+// the kits THIS flow offers and must still carry its alignment; it then owns the first line of the bill
+// again, at the base feet its alignment names (4 where it names none). Nothing is re-seeded: the saved
+// answers are the truth.
+//   → { none: true }          the line names no kit
+//   → { missing: '<name>' }   it names one this flow no longer offers
+//   → { kitPick, kitSource }  the kit, as the screen holds it: { code, name, baseFeet, record }
+export function kitFromSaved(kits, { kitPick, kitCode } = {}) {
+    const want = String(kitPick || '').trim();
+    const wantCode = String(kitCode || '').trim().toUpperCase();
+    if (!want && !wantCode) return { none: true };
+    const idOf = (k) => String(k.id || k.legacyErpId || '');
+    const chosen = kits.find(k => want && idOf(k) === want)
+        || kits.find(k => wantCode && String(k.legacyErpId || '').trim().toUpperCase() === wantCode);
+    if (!chosen || !chosen.manufacturingSpecs?.kitAlign) return { missing: wantCode || want };
+    const name = String(chosen.legacyErpId || chosen.itemName || 'the kit');
+    return { kitPick: idOf(chosen), kitSource: { code: name, name: chosen.itemName || name, baseFeet: Number(chosen.manufacturingSpecs.kitAlign.minFeet) || 4, record: chosen } };
+}
+// ⚠ THE KIT TRANSFORM RUNS ONLY WHERE A KIT WAS CHOSEN. Every other configuration gets
+// priceConfiguration's answer verbatim, which is what keeps four tested collections still.
+// ⚠ ONE DESCRIPTION OF THE BILL, USED TWICE. The panel below and the cart item built at Add
+// must never disagree about money, and handoffItem prices the configuration AGAIN from
+// `resolved` — so the kit has to travel to it rather than being applied only on screen. It is
+// computed once here and passed to both.
+export function kitBillOf({ kitSource, kits, priceCtx, customerId, customer, kitMotor, drive, proj, mount, trvRules, lengthFeet, findPart }) {
+    if (!kitSource) return null;
+    // ── THE KIT FOLLOWS THE MOUNT (Stuart 2026-10-12, QUO203: a wall double started, ceiling brackets picked —
+    //    the wall kit billed and the two ceiling brackets billed on top at $55, where the order is the ceiling
+    //    kit). The kit in hand stays what the operator started from; what BILLS is that kit followed to the
+    //    mount answered (Shared/kitCode.kitForMount): the family's kit for that mount where one is made — its
+    //    own number, price, per-foot rate and motor code — else the same kit covering that mount's bracket (the
+    //    1-3/8" traverse has one kit for both: "swap out for ceiling brackets at same price"). Derived here,
+    //    never a state change: the answer back to Wall is the kit as picked again, and a reopened line follows
+    //    its saved mount the same way.
+    const km = kitForMount(kits, kitSource.record, mount);
+    const moved = km.mode === 'switched' && km.kit;
+    const kitRecord = moved ? km.kit : kitSource.record;
+    const kitCode = moved ? String(kitRecord.legacyErpId || kitRecord.itemName || kitSource.code) : kitSource.code;
+    const kitName = moved ? (kitRecord.itemName || kitCode) : kitSource.name;
+    const kp = priceChoice({ partId: kitCode }, kitRecord, priceCtx);
+    // The ADDITIONAL-FOOT rate, from the same Client Pricing row tab 7 bills from — one
+    // source of truth (Stuart 2026-08-27). Matched by the same key rule every row lookup
+    // uses; absent → applyKitPricing falls back to the flow's own per-foot item rates.
+    const kitRow = findClientPriceRow(kitRecord?.clientPricing, customerKeys(customerId, customer));
+    // ── WHAT THE KIT ALREADY PAID FOR (Stuart 2026-09-03: "check back against 4.6 — all of
+    // the kits are built, all of the info is tagged, you just need to gather and display it")
+    // The rules explosion for a flow-aligned kit (fascia + track by the foot, the bracket count
+    // at this length and projection, splices, the motor or plugs) plus the record's own
+    // kitComponents. Each with the quantity the kit covers; applyKitPricing bills only above it.
+    const ms = kitRecord?.manufacturingSpecs || {};
+    const family = ms.kitFamily || (parseKitCode(kitCode) || {}).family || 'H1-2TRV';
+    const motorCodes = Array.isArray(ms.kitMotorCodes) ? ms.kitMotorCodes : [];
+    const driveNow = driveOf(drive);
+    // (the motor was chosen by ITS code on the kit in hand; on the followed kit it is the same motor's code)
+    const motorPick = moved ? motorCodeFor(kitSource.record, kitRecord, kitMotor) : kitMotor;
+    const mc = driveNow === 'MOTORIZED' && motorPick ? motorCodes.find(x => String(x.code || '').toUpperCase() === String(motorPick).toUpperCase()) : null;
+    const feet = lengthFeet || kitSource.baseFeet;
+    const exploded = ms.kitAlign
+        ? explodeTraverse({ family, align: { ...(km.mode === 'followed' ? km.align : ms.kitAlign), drive: driveNow }, feet, motorItem: mc?.motorItem || '', rules: trvRules, proj: proj != null ? String(proj) : '' })
+        : { lines: [] };
+    // THE KIT COVERS ITS CARRIERS (Stuart 2026-09-19, QUO156 row 6: "still billing them even though the
+    // reduced number should be included in the kit"). The explosion leaves carriers to the components
+    // step, so the carrier pinned on the assembly billed in full beside the kit. Covered at the chart
+    // count for the length BILLED — the kit's own 4 ft below it (16), the length above it — so a
+    // shorter system's smaller count is always inside the kit and only a count above the chart bills.
+    const billedFeet = Math.max(Number(feet) || 0, Number(kitSource.baseFeet) || 4);
+    const carrierCover = carrierRows(trvRules).map(u => ({ code: String(u.itemId || '').trim().toUpperCase(), partId: findPart(u.itemId)?.id, qty: usageAt(u, billedFeet) }));
+    const included = [
+        ...carrierCover,
+        ...exploded.lines.map(l => ({ code: l.code, partId: findPart(l.code)?.id, qty: l.qty })),
+        ...(Array.isArray(ms.kitComponents) ? ms.kitComponents : []).map(c => ({ partId: c.partId, code: findPart(c.partId)?.legacyErpId || '', qty: Number(c.qty) || 1 })),
+    ];
+    return {
+        kitCode, kitName, kitPrice: kp?.price || 0,
+        baseFeet: kitSource.baseFeet,
+        // How the mount was followed — for the strip under the kit picker, which says so in words.
+        mountFollow: km.mode === 'same' ? null : { mode: km.mode, mount: String(mount || '').toUpperCase(), from: kitSource.code, to: kitCode, theirs: (mc && mc.fabSku) || kp?.sku || kp?.aliasCode || '' },
+        perFootPrice: kitRow?.perFootPrice,
+        // THEIR number, resolved by the same rule every other line's alias is.
+        clientSku: kp?.sku || kp?.aliasCode || '',
+        included,
+        // The per-motor code and net, folded onto the kit line by applyKitPricing (tab 7's way).
+        motor: mc ? { code: mc.code, fabSku: mc.fabSku || '', motorItem: mc.motorItem || '', net: parseFloat(mc.net) } : null,
+    };
+}
+// ── ONE SOURCE OF CARRIERS (Stuart 2026-09-19: "HTSLNTCAR is charging $9.00, aren't these included
+// in the first 4 ft kit?"). They are — on the Traverse components line. The $9 was a SECOND set: the
+// carrier pinned on the assembly rides every track, counted four a foot and billed at the customer's
+// price, whatever style the components step chose (a ripplefold order still got pinch-pleat ones).
+// Once the components step names a carrier style, that line IS the carriers: the pinned rider still
+// renders in the track, and leaves the bill, the BOM and the pick. No style chosen → the rider stays
+// exactly as it was, so a track can never go out with none.
+export const carriersFromStepOf = (trvSel) => !!(trvSel && trvSel.carrierStyle);
+export const pricingCtxOf = (priceCtx, carriersFromStep) => (carriersFromStep ? { ...priceCtx, skipRoles: ['CARRIER'] } : priceCtx);
+export function pricedOf(resolved, pricingCtx, kitBill) {
+    const p = priceConfiguration(resolved, pricingCtx);
+    return kitBill ? applyKitPricing(p, kitBill) : p;
+}
+// A hidden part with no price is still a real problem — it just is not the operator's, so it
+// is reported quietly rather than in red on a quote they cannot act on.
+export const priceWarningsOf = (priced) => pricingWarnings({ lines: priced.lines.filter(l => !l.hidden) });
+// THE FINISHES THAT ASK SOMETHING, among those a line actually wears (Stuart 2026-10-06, the brass surface and
+// coating: "a dedicated field would be better" · one answer for the "whole config" · "yes required").
+export function askingFinishesOf(priced, finishByCode) {
+    const worn = new Set(priced.lines.map(l => String(l.finishCode || '').toUpperCase()).filter(Boolean));
+    return [...worn].map(c => finishByCode.get(c)).filter(f => f && questionsOf(f).length)
+        .map(f => ({ finish: f, code: String(f.code || f.name || '').toUpperCase(), questions: questionsOf(f) }));
+}
+// only the answers of finishes still worn travel with the line
+export function liveFinishAnswersOf(askingFinishes, finishAnswers) {
+    const out = {};
+    askingFinishes.forEach(a => { if (finishAnswers[a.code]) out[a.code] = finishAnswers[a.code]; });
+    return out;
+}
+// A FINISH THAT ASKS IS ANSWERED BEFORE THE LINE LEAVES (Stuart 2026-10-06: "yes required"). Solid brass with
+// no word on brushed / polished, lacquered or not, is an order the floor cannot make.
+export const openFinishQuestionsOf = (askingFinishes, finishAnswers) =>
+    askingFinishes.map(a => [a, unansweredOf(a.finish, finishAnswers[a.code])]).filter(([, m]) => m.length);
+// The parts each item-kit line brings — the hidden lines that follow it (hardwarePricing writes a kit, then its
+// parts). Read by the pricing panel so a kit line can say what each part wears.
+export function kitPartsByLineOf(priced) {
+    const m = new Map();
+    let cur = null;
+    (priced.lines || []).forEach(l => {
+        if (l.isKit && l.itemKit) { cur = l; m.set(l, []); return; }
+        if (cur && l.inKit && l.hidden && l.kitOf === (cur.billedId || '')) { m.get(cur).push(l); return; }
+        cur = null;
+    });
+    return m;
+}
+// Added by hand — priced by the SAME chain as everything else (override → price level → client
+// row → base). A splice a customer negotiated is still that customer's price; nothing about it
+// being typed in rather than resolved changes what they pay for it.
+export function extraLinesOf({ extras, findPart, priceCtx, globalFinish, matchFinishOverride, livePicks }) {
+    return extras.filter(x => x.code).map(x => {
+        const part = findPart(x.code);
+        const qty = Number(x.qty) > 0 ? Number(x.qty) : 1;
+        // The slot travels with the line (a per-track fee is its own line per track), and a
+        // paint-match fee says WHICH color the upcharge buys — the fascia's, via the override.
+        // It also PRICES at that color: a fee with finish variants (painted vs plated upgrade)
+        // bills the variant the matched finish actually is, not the configuration's.
+        const matched = x.slot ? matchFinishOverride[livePicks[x.slot]] : '';
+        // ⚠ UNFINISHED ITEMS (Stuart 2026-09-03, live order 1: the joiner went to the floor stamped
+        // S04). An extra used to take the configuration's finish unconditionally; now the ITEM's own
+        // "Unfinished" tag (Master Library / 4.5) is asked first — a splice, joiner or connector
+        // prices as the plain part and carries no finish code, so the floor is told nothing to do.
+        const unfinished = takesNoFinish(part);
+        const p = priceChoice({ partId: x.code }, part, unfinished ? { ...priceCtx, finishCode: '' } : (matched ? { ...priceCtx, finishCode: matched } : priceCtx));
+        return { partId: x.code, name: part?.itemName || x.code, qty, unit: p.price, total: p.price * qty,
+                 sku: p.sku || p.aliasCode, source: p.source, detail: p.detail, note: x.note, extra: true,
+                 ...(x.slot ? { slot: x.slot } : {}),
+                 // Priced at the configuration's finish, so it says so — a row with no finish under
+                 // it beside rows that have one reads as an oversight rather than a fact. Unless the
+                 // item itself says it takes none: then no code, and the line says why.
+                 finishCode: unfinished ? '' : (matched || globalFinish), noFinish: unfinished };
+    });
+}
+
+// ── TRAVERSE COMPONENTS ARE THE LAST QUESTION A TRACK ASKS (Stuart 2026-08-21) ────────────
+// "integrate that simple configurator at the last step of any traverse rod … it basically has
+// two options, the manual components and the motorized components, that is what decides what
+// is shown."
+//
+// The old engine interposed this as a MODAL on Add to Cart, and the new engine's onAdd went
+// straight to the cart — so a traverse configuration reached a quote with no track components
+// on it at all, silently. It is not a checkout interruption here: it is the last step of the
+// walk, because that is what it is. A track without its carriers is not a finished decision.
+//
+// DRIVE IS ALREADY AN ANSWER. The engine asks manual vs motorised as a world axis (AXES, order
+// 25) wherever a collection stocks both, so nothing new is asked — the answer already given is
+// what gates the list, exactly as the rules doc gates it.
+export function isTraverseOf(model, livePicks) {
+    const ids = new Set(Object.values(livePicks));
+    return model.choices.some(c => ids.has(c.id) && ROD_ROLES.includes(c.role) && c.rodKind === TRAVERSE);
+}
+export const trvFeetOf = (lengthFeet) => Math.max(lengthFeet || 4, 4);
+export const trvTracksOf = (setupAnswer) => (String(setupAnswer || '').toUpperCase() === 'DOUBLE' ? 2 : 1);
+export function trvPriceOfCode(code, findPart, priceCtx) {
+    const part = findPart(code);
+    return part ? (priceChoice({ partId: code }, part, priceCtx).price || 0) : 0;
+}
+export function trvItemInfoOf(code, findPart, priceCtx) {
+    const part = findPart(code);
+    if (!part) return null;
+    const p = priceChoice({ partId: code }, part, priceCtx);
+    return { name: part.itemName || code, sku: p.sku || p.aliasCode || '' };
+}
+// The selection SEEDS from the chart and stays seeded until it is touched: a length typed after
+// the panel was first drawn re-seeds it, because the chart quantity IS a function of length and
+// a stale count is a wrong count. Once the operator has answered, their answer stands.
+export const trvSeedOf = ({ trvRules, isTraverse, trvDrive, trvFeet, trvTracks }) => (trvRules && isTraverse
+    ? { carrierStyle: '', carrierQty: '', draw: '', motorSide: '', picks: defaultPicks({ rules: trvRules, drive: trvDrive, feet: trvFeet, trackCount: trvTracks }), accessories: {} }
+    : null);
+export const trvComponentsOf = ({ trvRules, isTraverse, trvLive, trvDrive, trvFeet, lengthFeet, trvPriceOf }) => ((trvRules && isTraverse && trvLive)
+    ? configuratorLines({ rules: trvRules, drive: trvDrive, feet: trvFeet, realFeet: lengthFeet || undefined, sel: trvLive, priceOf: trvPriceOf })
+    : []);
+// On the quote the same way they land on the cart item: an included component rides at $0 so
+// the documents and the BOM still show every part the order carries.
+export const trvLinesOf = (trvComponents) => trvComponents.map(c => ({
+    partId: c.code, name: c.why || c.code, qty: c.qty,
+    unit: c.billable ? c.rate : 0, total: c.billable ? c.rate * c.qty : 0,
+    source: 'traverse components', detail: c.billable ? c.why : `included — ${c.why}`, extra: true,
+}));
+
+// Over the limit with NO joiner on the line — from the length step or from the traverse chart
+// (its joiner is a tick on the Traverse components step). Allowed; said here, on the step, and
+// on the line the floor reads (Shared/flowExtras.noSpliceOf).
+export const spliceOnLineOf = ({ extras, spliceCodes, sameItemCode, trvComponents }) =>
+    extras.filter(x => spliceCodes.some(c => sameItemCode(x.code, c))).reduce((n, x) => n + (Number(x.qty) > 0 ? Number(x.qty) : 0), 0)
+    + trvComponents.filter(c => /SPLICE|JOINER|JNR|SPLC/i.test(String(c.code || ''))).reduce((n, c) => n + (Number(c.qty) > 0 ? Number(c.qty) : 0), 0);
+export const shipsInOnePieceOf = ({ lengthInches, spliceOverIn, spliceCodes, isTraverse, trvRules, spliceOnLine }) =>
+    noSpliceOf({ lengthInches, limitInches: spliceOverIn, canSplice: spliceCodes.length > 0 || (isTraverse && !!trvRules), spliceQty: spliceOnLine });
+export const grandTotalOf = (priced, extraLines, trvComponents) => priced.total + extraLines.reduce((s2, l) => s2 + l.total, 0) + configuratorTotal(trvComponents);
+
+/**
+ * The bill for one configuration, in one call — the same functions in the order the CPQ screen calls them:
+ * the level in force, the price context, the kit a line is billed from, the priced lines, what was added by
+ * hand, the traverse components, and the total.
+ */
+export function billOf({ customer = null, customerId = '', priceLevel = 'STANDARD', outsourceCodes = [], flow = null, kits = [], trvRules = null,
+    findPart, model, resolved, livePicks, extras = [], lengthFeet, lengthInches, spliceCodes = [], spliceOverIn, sameItemCode,
+    finishByCode, globalFinish, lineFinishFor, subFinishFor, matchFinishOverride },
+    { answers = {}, kitPick = '', kitCode = '', kitMotor = '', trvSel = null, finishAnswers = {} } = {}) {
+    const { level: effectiveLevel, isDefault: levelIsDefault } = customerPriceLevel(customer, priceLevel);
+    const priceCtx = priceCtxOf({ customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, subFinishFor, findPart, finishByCode, flow, lengthFeet, lengthInches, drive: driveOf(answers.drive) });
+    // The kit, restored as Edit restores it: found among the kits this flow offers, never re-seeded.
+    const saved = kitFromSaved(kits, { kitPick, kitCode });
+    const kitSource = saved.kitSource || null;
+    const kitBill = kitBillOf({ kitSource, kits, priceCtx, customerId, customer, kitMotor: kitSource ? String(kitMotor || '') : '', drive: answers.drive, proj: answers.proj, mount: answers.mount, trvRules, lengthFeet, findPart });
+    const carriersFromStep = carriersFromStepOf(trvSel);
+    const pricingCtx = pricingCtxOf(priceCtx, carriersFromStep);
+    const priced = pricedOf(resolved, pricingCtx, kitBill);
+    const priceWarnings = priceWarningsOf(priced);
+    const askingFinishes = askingFinishesOf(priced, finishByCode);
+    const liveFinishAnswers = liveFinishAnswersOf(askingFinishes, finishAnswers);
+    const openFinishQuestions = openFinishQuestionsOf(askingFinishes, finishAnswers);
+    const kitPartsByLine = kitPartsByLineOf(priced);
+    const extraLines = extraLinesOf({ extras, findPart, priceCtx, globalFinish, matchFinishOverride, livePicks });
+    const isTraverse = isTraverseOf(model, livePicks);
+    const trvDrive = driveOf(answers.drive);
+    const trvFeet = trvFeetOf(lengthFeet);
+    const trvTracks = trvTracksOf(answers.setup);
+    const trvPriceOf = (code) => trvPriceOfCode(code, findPart, priceCtx);
+    const trvItemInfo = (code) => trvItemInfoOf(code, findPart, priceCtx);
+    const trvSeed = trvSeedOf({ trvRules, isTraverse, trvDrive, trvFeet, trvTracks });
+    const trvLive = trvSel || trvSeed;
+    const trvComponents = trvComponentsOf({ trvRules, isTraverse, trvLive, trvDrive, trvFeet, lengthFeet, trvPriceOf });
+    const trvLines = trvLinesOf(trvComponents);
+    const spliceOnLine = spliceOnLineOf({ extras, spliceCodes, sameItemCode, trvComponents });
+    const noSplice = shipsInOnePieceOf({ lengthInches, spliceOverIn, spliceCodes, isTraverse, trvRules, spliceOnLine });
+    const grandTotal = grandTotalOf(priced, extraLines, trvComponents);
+    return { effectiveLevel, levelIsDefault, priceCtx, kitSaved: saved, kitSource, kitPick: saved.kitPick || '', kitMotor: kitSource ? String(kitMotor || '') : '', kitBill,
+        carriersFromStep, pricingCtx, priced, priceWarnings, askingFinishes, liveFinishAnswers, openFinishQuestions, kitPartsByLine, extraLines,
+        isTraverse, trvDrive, trvFeet, trvTracks, trvPriceOf, trvItemInfo, trvSeed, trvLive, trvComponents, trvLines, spliceOnLine, noSplice, grandTotal };
+}
+
 /**
  * The configuration, in one call — for a caller that is not a React screen (the portal's server, a
  * harness). The CPQ screen makes these SAME calls one memo at a time, so a keystroke re-works only
  * what it touched; this makes them in the same order, with the same arguments.
  *
  * @param data   { assembly, pins, parts, flow, spanMap, spanCaps, trvRules, extraItems, finishes, flowFinishes,
- *                 customer, customerId } — what the screen is handed
+ *                 customer, customerId, priceLevel, outsourceCodes, kits } — what the screen is handed
  * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId, extras, spliceWaived, globalFinishes,
- *                 globalFinish, partFinish } — what the operator has answered, as a cart line saves it
- *               (engineConfig); a saved length, the saved add-by-hand rows and the saved finish defaults are
- *               read back exactly as Edit restores them
+ *                 globalFinish, partFinish, finishAnswers, kitPick, kitCode, kitMotor, trvSel } — what the operator
+ *               has answered, as a cart line saves it (engineConfig); a saved length, the saved add-by-hand
+ *               rows, the saved finish defaults and the kit a line was billed from are read back exactly as
+ *               Edit restores them
  */
 export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMap = {}, spanCaps = {}, trvRules = null, extraItems = [],
-    finishes = [], flowFinishes = [], customer = null, customerId = '' } = {},
+    finishes = [], flowFinishes = [], customer = null, customerId = '', priceLevel = 'STANDARD', outsourceCodes = [], kits = [] } = {},
     { answers = {}, picks = {}, sizePick = {}, lengthInches: savedLength = null, stepQty = {}, fabricId = 'PRINT', extras: savedExtras = [], spliceWaived = false,
-        globalFinishes: savedGlobalFinishes = null, globalFinish: savedGlobalFinish = '', partFinish: savedPartFinish = null } = {}) {
+        globalFinishes: savedGlobalFinishes = null, globalFinish: savedGlobalFinish = '', partFinish: savedPartFinish = null,
+        finishAnswers: savedFinishAnswers = null, kitPick = '', kitCode = '', kitMotor = '', trvSel: savedTrvSel = null } = {}) {
     const partIndex = partIndexOf(parts);
     const findPart = (id) => partIn(partIndex, id);
     const ourId = (id) => ourNumberOf(findPart(id), id);
@@ -635,8 +947,15 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
         : (savedGlobalFinish ? withGlobalFinish({}, savedGlobalFinish, finishIndexOf(finishes)) : {});
     const partFinish = { ...(savedPartFinish || {}) };
     const fin = finishRulesOf({ finishes, flowFinishes, customer, customerId, findPart, model, resolved, livePicks, extras }, { globalFinishes, partFinish });
+    // The bill: the answers a finish asked and the Traverse components answers as Edit restores them (each a copy),
+    // the kit the line was billed from found among this flow's kits.
+    const finishAnswers = (savedFinishAnswers && typeof savedFinishAnswers === 'object') ? JSON.parse(JSON.stringify(savedFinishAnswers)) : {};
+    const trvSel = savedTrvSel && typeof savedTrvSel === 'object' ? { ...savedTrvSel } : null;
+    const bill = billOf({ customer, customerId, priceLevel, outsourceCodes, flow, kits, trvRules, findPart, model, resolved, livePicks, extras, lengthFeet, lengthInches,
+        spliceCodes, spliceOverIn, sameItemCode, finishByCode: fin.finishByCode, globalFinish: fin.globalFinish, lineFinishFor: fin.lineFinishFor, subFinishFor: fin.subFinishFor,
+        matchFinishOverride: fin.matchFinishOverride }, { answers, kitPick, kitCode, kitMotor, trvSel, finishAnswers });
     return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks,
         lengthInches, lengthFeetExact, lengthFeet, advice, recommendFor, quantities, resolved,
         sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied,
-        ...fin };
+        ...fin, finishAnswers, trvSel, ...bill };
 }
