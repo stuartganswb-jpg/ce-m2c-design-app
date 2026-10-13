@@ -5,7 +5,7 @@
 // the ONE list's answers so a reader swap cannot change what releases. If a rule change breaks a
 // row here, the change is wrong, not the test — unless Stuart changed the rule.
 
-import { packReadinessOf,
+import { packReadinessOf, floorWaitsOf,
     GATES, gatesOf, openGatesOf, isReleasable, gateSummary,
     customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor, wholeOrderWait, canReopenPostedOrder, netSuiteOrderNoOf, setupWaitsOnShop, stageWaitsOnMatch, nothingToPick, isSalesDoc, stagingMatched } from '../src/components/Shared/orderStatus.js';
 
@@ -207,6 +207,21 @@ ok('a quote has none', netSuiteOrderNoOf({ status: 'CONFIGURED' }, null) === '')
     ok('…flipped to as available → it goes', !wholeOrderWait(A1, [A1], { ...so, finishAsAvailable: true }).wait);
     ok('an order nobody was asked about is exactly as it was: only its work orders are read', !wholeOrderWait(A1, [A1], { id: 'SO-9', lines }).wait && !choseFinishComplete({ id: 'SO-9', lines }));
     ok('a display order released by rows is never held by this', !wholeOrderWait(A1, [A1], { ...so, displayRelease: true }).wait);
+}
+// ── THE FLOOR SIGNS A DOCUMENT OFF BEFORE THE BENCH TOUCHES IT (Stuart 2026-10-13) — floorWaitsOf, asked by the pack
+//    verdict and by each WMS pack action. ──
+{
+    const poles = { orderType: 'stock', productType: 'POLE', totalParts: 20, totalPoles: 20, currentPhase: 'Painting', poleStepIndex: 1, tasks: { poleSpray: { status: 'Running', assignedTo: 'Jhonaton', startTime: 5 } } };
+    eq('signed off the floor → nothing to wait for', floorWaitsOf({ ...poles, currentPhase: 'Complete' }, { poleRecipeLen: 4 }), []);
+    eq('a pick-only document never goes to the floor', floorWaitsOf({ pickOnly: true, currentPhase: 'Complete' }), []);
+    eq('mid-coat → the track and its coat, as the card prints it', floorWaitsOf(poles, { recipeLen: 3, poleRecipeLen: 4 }), ['poles: painting (coat 2 of 4 · pole spray)']);
+    eq('still in the setup queue → both tracks of a mixed document', floorWaitsOf({ orderType: 'sales', totalParts: 30, totalPoles: 10, currentPhase: 'Setup', tasks: {} }), ['small parts: setup queue (not started)', 'poles: setup queue (not started)']);
+    ok('a document sent back to the floor after its last coat still waits', floorWaitsOf({ orderType: 'stock', totalParts: 5, currentPhase: 'Painting', currentStepIndex: 3, tasks: {} }, { recipeLen: 3 }).length === 1);
+    ok('a closed document is nobody\'s to pack', floorWaitsOf({ currentPhase: 'Closed' }).length === 1);
+    eq('no document → nothing', floorWaitsOf(null), []);
+    // …and the verdict reads the same words it always did.
+    const r = packReadinessOf(poles, { recipeLen: 3, poleRecipeLen: 4 });
+    eq('the pack verdict carries exactly those words', [r.ready, r.waits], [false, ['poles: painting (coat 2 of 4 · pole spray)']]);
 }
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

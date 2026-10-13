@@ -257,6 +257,21 @@ export function orderStatusOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
 // shows a document: READY TO PACK only then; otherwise NOT READY TO PACK and exactly what it waits on — the hold,
 // the shop, each finishing stream by its stage, an open pick. Packed / gathered say so.
 // → { ready, done, word, reason, waits: [..] }
+//
+// IS THE FINISHING FLOOR DONE WITH THIS DOCUMENT — said once (Stuart 2026-10-13: "they should not be allowed to react on
+// something that is on the floor, they can't see it to pack"). The floor signs a document off itself — currentPhase
+// 'Complete', written at the last coat of its last track — and a pick-only document never goes there. Anything else is
+// still the floor's. → the words for each track still open, as every card prints them; [] once the floor is done. The
+// verdict below asks it, and so does each pack action on the WMS bench (the queue lists only finished documents; the
+// action checks for itself).
+export function floorWaitsOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
+    if (!wo || wo.currentPhase === 'Complete' || wo.pickOnly === true) return [];
+    const st = orderStatusOf(wo, { recipeLen, poleRecipeLen });
+    const open = st.streams.filter(x => x.key !== 'CUSTOM' && x.stage !== 'FINISHED' && x.stage !== 'NONE');
+    return open.length
+        ? open.map(x => `${x.label.toLowerCase()}: ${stageLabel(x.stage).toLowerCase()}${x.detail ? ` (${x.detail})` : ''}`)
+        : ['finishing: not signed off the floor yet'];
+}
 export function packReadinessOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
     if (!wo) return null;
     if (wo.currentPhase === 'Closed') return { ready: false, done: true, word: 'CLOSED', reason: 'out of production', waits: [] };
@@ -269,12 +284,7 @@ export function packReadinessOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
     if (wo.hasCustomSibling && !customPartsReady(wo)) waits.push(`custom shop: ${String(customFabLabel(wo)).toLowerCase()}`);
     const ps = String(wo.pickStatus || '');
     if (wo.sentToPickPack && (ps === '' || ps === 'Pending')) waits.push('parts pick: still open in the WMS pick queue');
-    if (!(wo.currentPhase === 'Complete' || wo.pickOnly === true)) {
-        const st = orderStatusOf(wo, { recipeLen, poleRecipeLen });
-        const open = st.streams.filter(x => x.key !== 'CUSTOM' && x.stage !== 'FINISHED' && x.stage !== 'NONE');
-        open.forEach(x => waits.push(`${x.label.toLowerCase()}: ${stageLabel(x.stage).toLowerCase()}${x.detail ? ` (${x.detail})` : ''}`));
-        if (!open.length) waits.push('finishing: not signed off the floor yet');
-    }
+    floorWaitsOf(wo, { recipeLen, poleRecipeLen }).forEach(w => waits.push(w));
     return waits.length
         ? { ready: false, done: false, word: 'NOT READY TO PACK', reason: waits.join(' · '), waits }
         : { ready: true, done: false, word: 'READY TO PACK', reason: 'finished — in the WMS pack queue', waits: [] };

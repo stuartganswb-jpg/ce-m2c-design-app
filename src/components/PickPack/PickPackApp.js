@@ -12,7 +12,7 @@ import { materialLabelText, lineSpanText } from '../Shared/partFacts';
 import MaterialGridCard from '../Shared/MaterialGridCard';
 import { coverArrival } from '../Shared/backorderCover';
 import { uomOf, uomLabel } from '../Shared/uom';
-import { orderStatusOf, customPartsReady, liftPatchFor, nothingToPick, stagingMatched } from '../Shared/orderStatus';
+import { orderStatusOf, customPartsReady, liftPatchFor, nothingToPick, stagingMatched, floorWaitsOf } from '../Shared/orderStatus';
 import { asksSprayStation, sprayStationOf, sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS, WINDOW_LABEL, TASK_LABEL } from '../Shared/floorActivity';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
@@ -862,6 +862,19 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // THE ONE TEST (Shared/pickLines.isQuickShip, 2026-09-23) — this used to be a local copy.
     const isQsOrder = isQuickShip;
     const packDocOf = (j) => doc(db, isQsOrder(j) ? 'hq_sales_orders' : 'fin_workorders', j.id);
+    // THE FLOOR SIGNS IT OFF BEFORE THE BENCH TOUCHES IT (Stuart 2026-10-13: "they should not be allowed to react on
+    // something that is on the floor, they can't see it to pack"). The pack queue lists only documents the finishing floor
+    // has finished, so this is never met on the normal road — it is the ACTION's own check, for a document sent back to
+    // the floor (a reopen, a reset) while a bench still has its card open. One reading, Shared/orderStatus.floorWaitsOf —
+    // the words are the ones every card prints. A stocked sales order never goes to the floor. The shop half, a hold and
+    // the traverse station keep their own checks below, with the exceptions each was given.
+    const floorRefusal = (job, verb) => {
+        if (!job || isQsOrder(job)) return false;
+        const waits = floorWaitsOf(job);
+        if (!waits.length) return false;
+        alert(`${packRef(job)} is still on the finishing floor — ${waits.join(' · ')}.\n\nNothing of it can be ${verb} until the floor has finished it. Close this card; it returns to the pack queue when the floor signs it off.`);
+        return true;
+    };
 
     // ── SPIN OR BOOTH AT THE PICK (Stuart 2026-09-29: "the spin machine requires different set up
     // fixtures") — the Setup Queue's Start Setup pair, here too, writing the SAME field the finishing
@@ -2479,6 +2492,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
 
     const confirmPackLine = async (job, line) => {
+        if (floorRefusal(job, 'packed')) return;
         // Looking is free; changing the order is not. (Stuart 2026-09-03 — the card opens read-only.)
         if (!claimIsMine(claimOf(job, 'pack'))) {
             const c = claimOf(job, 'pack');
@@ -2955,6 +2969,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const completePacking = async (job) => {
         if (packCompletingRef.current) return;
         if (job.packStatus === 'Packed') return alert('This order is already packed.');
+        // …and neither packed, put away nor gathered (the gather is called from here alone) while the floor still has it.
+        if (floorRefusal(job, 'packed, put away or gathered')) return;
         // #14: a paint run's put-away adjustment goes to NetSuite ONCE. The stamp is a guard, not
         // just a record — a second scan (or a second tablet on the same order) is refused here.
         if (isPaintOnlyOrder(job) && (job.jfpAdjQueued || job.jfpAdjPosted)) {
