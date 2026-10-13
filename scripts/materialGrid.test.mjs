@@ -133,6 +133,21 @@ const { COVERED, SHORT, UNVERIFIED } = MATERIAL_STATE;
     eq('one of two skipped is short, not skipped', [r[0].pickState, r[0].picked, r[0].shortAtPick], [PICK_STATE.SHORT_AT_PICK, 44, 44]);
     r = pickedRowsOf({ ...so60676, pickStatus: 'Cleared_Overtaken' });
     eq('a pick cleared by hand says cleared, never a count', [r[0].pickState, r[0].picked], [PICK_STATE.CLEARED, null]);
+    // A STOCK RUN, A PAINT RUN AND AN ORDER ENTRY PAIR SPELL IT `quantity` (2026-10-13, WO11653: 20 poles picked read
+    // "need 0 · picked 0") — the same count the WMS picker was asked for.
+    const stockRun = {
+        pickStatus: 'Picked_Awaiting_Staging',
+        partsList: [{ legacyErpId: 'HCUMP815', partId: 'HCUMP815', quantity: 20, pcs: 20, uom: 'EA' }],
+        materialRows: [{ code: 'HCUMP815', need: 20, onHand: 40, short: 0, state: COVERED, coverCodes: ['HCUMP815', 'HCUMP815/P'] }],
+    };
+    r = pickedRowsOf(stockRun);
+    eq('a stock run: picked 20 of 20, not 0 of 0', [r[0].pickState, r[0].picked, r[0].target, r[0].shortAtPick], [PICK_STATE.PICKED, 20, 20, 0]);
+    r = pickedRowsOf({ ...stockRun, pickShorts: [{ line: 0, itemId: 'HCUMP815', target: 20, picked: 12 }] });
+    eq('…and a short pick on it reads 12 of 20', [r[0].pickState, r[0].picked, r[0].target, r[0].shortAtPick], [PICK_STATE.SHORT_AT_PICK, 12, 20, 8]);
+    r = pickedRowsOf({ ...stockRun, pickStatus: 'Cleared_Overtaken' });
+    eq('…and cleared by hand still carries the count asked for', [r[0].pickState, r[0].target], [PICK_STATE.CLEARED, 20]);
+    r = pickedRowsOf({ ...stockRun, partsList: [{ legacyErpId: 'HCUMP815', quantity: 20, qty: 2 }] });
+    eq('a line with both spellings reads `quantity`, as the picker does', [r[0].picked, r[0].target], [20, 20]);
 }
 
 // ── WHOSE STOCK IS IT (Stuart 2026-10-13, WO11722: HTA635/SG × 10, the morning after the rod cuts) ──────────────────

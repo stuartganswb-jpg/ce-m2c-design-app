@@ -261,13 +261,17 @@ export const pickedRowsOf = (d) => {
     const cleared = String((d && d.pickStatus) || '').startsWith('Cleared');
     const shortAt = new Map(((d && d.pickShorts) || []).filter(x => x && Number.isInteger(x.line)).map(x => [x.line, x]));
     const skipAt = new Set(((d && d.pickSkips) || []).filter(x => x && Number.isInteger(x.line)).map(x => x.line));
+    // BOTH partsList SPELLINGS (2026-10-13): a stock run, a paint run and an Order Entry pair write `quantity`, the CPQ
+    // split writes `qty` — read here as the need rows above and the WMS pick (pickLines.lineQty) read it. On `qty` alone
+    // every picked document that was not a CPQ split said "need 0 · picked 0".
+    const qtyOf = (l) => N(l.quantity != null ? l.quantity : l.qty);
     return rows.map(r => {
         const codes = new Set([r.code, ...(Array.isArray(r.coverCodes) ? r.coverCodes : [])].map(U).filter(Boolean));
         const idxs = lines.map((l, i) => ({ l, i })).filter(x => x.l && !x.l.isFee && !x.l.isKit && codes.has(U(x.l.legacyErpId || x.l.partId)));
         if (!idxs.length) return { ...r, pickState: PICK_STATE.NOT_ON_PICK, picked: null, target: null, shortAtPick: 0 };
-        const target = idxs.reduce((a, x) => a + N(x.l.qty), 0);
+        const target = idxs.reduce((a, x) => a + qtyOf(x.l), 0);
         if (cleared) return { ...r, pickState: PICK_STATE.CLEARED, picked: null, target, shortAtPick: 0 };
-        const picked = idxs.reduce((a, x) => a + (skipAt.has(x.i) ? 0 : shortAt.has(x.i) ? N(shortAt.get(x.i).picked) : N(x.l.qty)), 0);
+        const picked = idxs.reduce((a, x) => a + (skipAt.has(x.i) ? 0 : shortAt.has(x.i) ? N(shortAt.get(x.i).picked) : qtyOf(x.l)), 0);
         const allSkipped = idxs.every(x => skipAt.has(x.i));
         const pickState = allSkipped ? PICK_STATE.SKIPPED : picked < target ? PICK_STATE.SHORT_AT_PICK : PICK_STATE.PICKED;
         return { ...r, pickState, picked, target, shortAtPick: Math.max(0, target - picked) };
