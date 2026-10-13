@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel, ViewCapturer } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
-import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, reseatPicks, recommendedQty, takesQty, bearingEnds, companionsFor, ROD_ROLES } from './hardwareModel';
+import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, reseatPicks, recommendedQty, takesQty, bearingEnds, companionsFor } from './hardwareModel';
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
 import { traverseAnswersMissing, drawLabel } from './traverseDraw';
 import { seedFromVision } from './visionBridge';
@@ -11,8 +11,7 @@ import { seedFromKit } from './kitSeed';
 import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
 import { autoPicksOf } from './hardwareAutoPicks';
 import { normalizeExtras } from './extrasRestore';
-import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceNote } from './flowExtras';
-import { shopNotesOf, clientNotesOf } from './lineShopNotes';
+import { rodMaterialsOf, extrasForRod, liveExtrasOf } from './flowExtras';
 import { SCOPE, scopeTargetsOf, scopeInForce, swatchActionOf, highlightOf } from './finishScope';
 import { kitBracketPicksOf, kitBracketSummary } from './kitBracketPicks';
 import { workIsPristine } from './cpqWorkspace';
@@ -23,15 +22,17 @@ import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, 
     spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice,
     globalFinishOf, finishIndexOf, withGlobalFinish, wearsAsTwinFinish, wearsFinishOf, globalFinishForChoice, chosenListOf, partFinishByPartOf, armFinishOfChoice,
     finishForChoice, matchFinishOverrideOf, rodFinishForChoice, followsRodChoice, subFinishForChoice, lineFinishForChoice, textureOverridesOf, chosenFinishObjectsOf,
-    bareWoodOf, clientFinishNameOf, offeredFinishesOf, finishGroupsOf, finishGroupLabel,
-    driveOf, priceCtxOf, kitFromSaved, kitBillOf, carriersFromStepOf, pricingCtxOf, pricedOf, priceWarningsOf, askingFinishesOf, liveFinishAnswersOf, openFinishQuestionsOf,
+    clientFinishNameOf, offeredFinishesOf, finishGroupsOf, finishGroupLabel,
+    driveOf, priceCtxOf, kitFromSaved, kitBillOf, carriersFromStepOf, pricingCtxOf, pricedOf, priceWarningsOf, askingFinishesOf, liveFinishAnswersOf,
     kitPartsByLineOf, extraLinesOf, isTraverseOf, trvFeetOf, trvTracksOf, trvPriceOfCode, trvItemInfoOf, trvSeedOf, trvComponentsOf, trvLinesOf, spliceOnLineOf, shipsInOnePieceOf,
-    grandTotalOf } from './hardwareSession';
+    grandTotalOf,
+    AXIS_LABEL, valueLabel, slotLabel, visibleOverridesOf, clearListOf, railNamesOf, stretchSpecOf, spliceMarksOf, cloneSpecsOf, chosenPartsOf, renderStateOf,
+    stepsOf, stepHintOf, extrasOnStepOf, stepAnswerOf, configQtyOf, dropRefusalOf, addRefusalOf, cartLineOf } from './hardwareSession';
 import { aliasFor } from './hardwarePricing';
 import { priceLevelShort, customerPriceLevel } from './priceLevels';
 import { findClientPriceRow, customerKeys } from './clientPricing';
 import { indexForAssembly } from './partLookup.js';
-import { handoffItem, customerLines } from './hardwareHandoff';
+import { customerLines } from './hardwareHandoff';
 import { finishLabelOf } from './finishLabel';
 import { unansweredOf } from './finishQuestions';
 import { ftIn, FABRIC_CLASSES } from './bracketSpan';
@@ -74,28 +75,7 @@ import { BoardFrame, captureBoardFrame, readDisplayMode, writeDisplayMode } from
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' };
 
-const AXIS_LABEL = { rodKind: 'Rod Type', setup: 'Single or Double', drive: 'Drive', mount: 'Mount', proj: 'Bracket Projection', frontLayer: 'Front of the Double' };
-const valueLabel = (axis, v) => {
-    if (axis === 'proj') {
-        const n = Number(v);
-        const known = { 0.75: '.75"', 3.625: '3-5/8"', 4.625: '4-5/8"', 6: '6"' };
-        return known[n] || `${n}"`;
-    }
-    // The two ways a double carries its front layer — said as the product, not as the tag.
-    if (axis === 'frontLayer') return v === 'FASCIA' ? 'Stationary fascia with rings (one track)' : 'Traverse track front & rear';
-    return String(v).charAt(0) + String(v).slice(1).toLowerCase();
-};
-const slotLabel = (s) => {
-    const kind = s.kind === 'END' ? 'End Treatment' : s.kind.charAt(0) + s.kind.slice(1).toLowerCase().replace('_', ' ');
-    const cap = (w) => `${w.charAt(0)}${w.slice(1).toLowerCase()}`;
-    // On a double every rod asks its own questions, so the rail must say WHICH ROD — "Front Rod",
-    // "Back Left End Treatment". Without it a double shows two identical headings and the operator
-    // is answering one of them blind.
-    // A single has ONE rod - saying Front/Back on it is noise (and on H1-75, whose only rod
-    // is pinned BACK, it read as a rear-rod question on a single order). Doubles keep the word.
-    const parts = [(s.tier && !s.tierSolo) ? cap(s.tier) : '', s.position ? cap(s.position) : '', kind].filter(Boolean);
-    return parts.join(' ');
-};
+// (The words on the rail — AXIS_LABEL, valueLabel, slotLabel — are hardwareSession's, with the rest of the walk.)
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // THE ENGINE FAILS ALONE (Stuart 2026-08-17: "once i hit new engine … goes full blank on me")
@@ -307,9 +287,7 @@ function HardwareConfiguratorInner({
         setExtras(a => withRequiredSplice(a, spliceCode, sameItemCode));
     }, [spliceNeeded, spliceCode, spliceWaived, extras, sameItemCode]);
     // The one sentence every refusal says — the same words on the button and in the strip.
-    const dropRefusal = pendingDrops.length
-        ? `${pendingDrops.length} selection${pendingDrops.length === 1 ? ' was' : 's were'} removed by a later choice — read the strip under the rail and press Understood on each before adding.`
-        : '';
+    const dropRefusal = dropRefusalOf(pendingDrops);
 
 
     // ── A VISION DRAWING ARRIVES AS ANSWERS (Stuart 2026-08-21) ──────────────────────────────
@@ -515,73 +493,14 @@ function HardwareConfiguratorInner({
     const resolved = useMemo(
         () => resolvedOf({ choices, answers: effAnswers, livePicks, modelNodes, quantities }),
         [choices, effAnswers, livePicks, modelNodes, quantities]);
-    const visibleOverrides = useMemo(() => {
-        const o = {};
-        resolved.visible.forEach(n => { o[String(n).toLowerCase()] = true; });
-        return o;
-    }, [resolved]);
-    // 🧊 The clear parts, from the TAG — never from a mesh name. Passing this switches the renderer
-    // off its hardcoded acrylic item-code list entirely for this configurator.
-    const clearList = useMemo(() => [...resolved.clear].map(n => String(n).toLowerCase()), [resolved]);
-    // ── N CENTRE BRACKETS RENDER AS N (Stuart 2026-09-09: "the old engine used to clone the center
-    // bracket so if we added 2,3 etc the render added them, can we please bring back that feature
-    // on the new engine"). The renderer never lost it — DynamicModel still spaces N copies of a
-    // mesh set along a rail; the old engine fed it from the flow's clone step and this one fed it
-    // nothing. The same spec, from the resolved model: the CENTER bracket pick (and its plate) as
-    // the meshes, the bracket alone as the placement anchor, the chosen rod(s) as the rail, the
-    // slot's quantity as the count. Count comes from `quantities` — typed, else the span advice.
-    // THE RAIL IS THE WHOLE POLE AS DRAWN (Stuart 2026-09-09: "the 1st bracket is no longer in
-        // the center it is off to the left"). A rod slot's pick is ONE piece of a pole modelled in
-        // three (LEFT / CENTER / RIGHT), so spacing along the pick alone centred the bracket on a
-        // piece. The rail is every rod-role node the render currently shows — all the pieces, and
-        // only as long as the ends leave it (a return drops its end piece).
-    const railNames = useMemo(() => {
-        const shown = new Set([...resolved.visible].map(n => String(n).toLowerCase()));
-        // The F-clip strip runs the length of the track (Stuart 2026-09-09: "it makes it appear
-        // that the track is too short since it does not stretch") — a rider, not a rod, but it is
-        // rail-length and stretches with the rail; carriers stay discrete pieces and spread.
-        return [...new Set((model.choices || [])
-            .filter(c => ROD_ROLES.includes(c.role) || c.role === 'FCLIP')
-            .flatMap(c => c.nodes || [])
-            .filter(n => shown.has(String(n).toLowerCase())))];
-    }, [resolved, model]);
-    // ── A LONG ORDER RENDERS LONG (Stuart 2026-09-09: "i am working on a long rod of 144in and it
-    // will need 5 center brackets … the 5th overruns the left bracket and right bracket. can you
-    // stretch the rod/pole when they are long?"). DynamicModel scales the pole meshes along their
-    // axis to this length and moves everything else out with the ends; only when the order is
-    // longer than the model, and only where the model reads as inches.
-    const stretchSpec = useMemo(() => (lengthInches > 0 && railNames.length ? { railNames, lengthInches } : null), [railNames, lengthInches]);
-    // ── A SPLICE IS DRAWN AS A PENCIL LINE (Stuart 2026-09-09: "any time there is a splice entered
-    // it adds a fine line to show it … from cpq it would always be shown in the center, if the
-    // splice is added in vision at an exact spot then ideally the rendering could show that").
-    // Fractions along the rail, left to right: the drawing's positions where Vision placed them
-    // (from the left edge = d / L, from the right = 1 − d / L), else one at the centre, N spread
-    // evenly. Keyed on the flow's own splice item — the same detection the length step uses — so
-    // every flow with a joiner gets the line. A picture of a decision already on the line.
-    const spliceMarks = useMemo(() => {
-        const count = extras.filter(x => spliceCodes.includes(x.code)).reduce((n, x) => n + (Number(x.qty) > 0 ? Number(x.qty) : 0), 0);
-        if (!count) return [];
-        const L = Number(lengthInches) || 0;
-        const drawn = drawnSplices.filter(sp => sp && sp.distInches != null && L > 0)
-            .map(sp => (String(sp.ref).toUpperCase() === 'END' ? 1 - Number(sp.distInches) / L : Number(sp.distInches) / L))
-            .filter(f => Number.isFinite(f)).map(f => Math.min(0.98, Math.max(0.02, f)));
-        if (drawn.length) return drawn.map(frac => ({ frac }));
-        return Array.from({ length: count }, (_, i) => ({ frac: (i + 1) / (count + 1) }));
-    }, [extras, spliceCodes, drawnSplices, lengthInches]);
-    const cloneSpecs = useMemo(() => {
-        const pickOf = (sl) => { const id = livePicks[sl.key]; return id ? (sl.options || []).find(x => x.id === id) || null : null; };
-        const out = [];
-        resolved.slots.forEach(sl => {
-            if (sl.kind !== 'BRACKET' || String(sl.position || '').toUpperCase() !== 'CENTER') return;
-            const o = pickOf(sl);
-            if (!o || !(o.nodes || []).length) return;
-            const plateSlot = resolved.slots.find(x => x.kind === 'BACKPLATE' && String(x.position || '').toUpperCase() === 'CENTER');
-            const plate = plateSlot ? pickOf(plateSlot) : null;
-            const count = Number(quantities[o.id]) || 1;
-            out.push({ stepId: sl.key, meshNames: [...o.nodes, ...((plate && plate.nodes) || [])], anchorNames: [...o.nodes], railNames, count });
-        });
-        return out;
-    }, [resolved, railNames, livePicks, quantities]);
+    // ── WHAT IS DRAWN — the nodes shown, the clear parts, the rail the pole is (and stretches along), the pencil line of
+    //    a splice, N centre brackets drawn as N: hardwareSession (visibleOverridesOf … cloneSpecsOf), his words with the code.
+    const visibleOverrides = useMemo(() => visibleOverridesOf(resolved), [resolved]);
+    const clearList = useMemo(() => clearListOf(resolved), [resolved]);
+    const railNames = useMemo(() => railNamesOf(resolved, model), [resolved, model]);
+    const stretchSpec = useMemo(() => stretchSpecOf(railNames, lengthInches), [railNames, lengthInches]);
+    const spliceMarks = useMemo(() => spliceMarksOf({ extras, spliceCodes, drawnSplices, lengthInches }), [extras, spliceCodes, drawnSplices, lengthInches]);
+    const cloneSpecs = useMemo(() => cloneSpecsOf({ resolved, railNames, livePicks, quantities }), [resolved, railNames, livePicks, quantities]);
 
     // ── WHICH FINISH EACH PART WEARS — the rules and his words are hardwareSession's (the portal rebuild, 2026-10-12):
     //    one default per material, a brass twin, the exception that travels by part, the plate that follows its arm,
@@ -678,10 +597,7 @@ function HardwareConfiguratorInner({
 
 
 
-    const chosen = useMemo(() => {
-        const ids = new Set(Object.values(livePicks));
-        return [...model.choices.filter(c => ids.has(c.id)), ...model.riders];
-    }, [model, livePicks]);
+    const chosen = useMemo(() => chosenPartsOf(model, livePicks), [model, livePicks]);
 
     const setAnswer = useCallback((k, v) => setAnswers(a => ({ ...a, [k]: a[k] === v ? undefined : v })), []);
     const setPick = useCallback((k, v) => setPicks(p => ({ ...p, [k]: p[k] === v ? undefined : v })), []);
@@ -781,140 +697,12 @@ function HardwareConfiguratorInner({
         border: `1px solid ${active ? 'var(--ink)' : 'var(--line)'}`, opacity: disabled ? 0.4 : 1, textAlign: 'left',
     });
 
-    // ── EVERY DECISION IS A STEP (Stuart 2026-08-17) ─────────────────────────────────────────
-    // The rail carries the whole product; the panel carries only what is being decided now. An
-    // answered step shows its ANSWER, so nothing has to be re-opened to check what it was.
-    //
-    // Backplates do not get a step of their own — a plate is chosen WITH its arm, so it nests
-    // inside the bracket step, which is also where the pairing rules can be seen doing their work.
-    const steps = useMemo(() => {
-        const out = [];
-        // ── THE FRAMING QUESTIONS ARE ONE STEP (Stuart 2026-08-20) ───────────────────────────
-        // "combine steps 1, 2 and 3 into one step … below the rod type box another box for single
-        //  or double and then another box below that for mount … that will help keep the rail from
-        //  being too long as well."
-        //
-        // Rod type, single-or-double, drive and mount are all the same kind of question: how is
-        // this rod framed, before a single part is chosen. Each is two or three chips, so each was
-        // spending a whole step and a whole rail cell on one line of buttons.
-        //
-        // ⚠ BRACKET PROJECTION IS NOT ONE OF THEM and keeps its own step. It is the one axis with
-        // consequences — it gates which brackets exist, and pairs the plates to the arm — so it is
-        // a decision, not framing. Grouping everything BELOW it also means nothing is reordered:
-        // projection already sorts last of the axes, so the group is the contiguous block in front
-        // of it and every question stays exactly where it was.
-        // ⚠ THE SIZE QUESTIONS LEAD, because everything after them is a different part. On a
-        // combined flow the diameter is the first thing asked and the projection second — the same
-        // order, and the same option lists, the old engine asks them in. A collection with no size
-        // matrix has no size steps and nothing here changes.
-        sizeSteps.forEach(st => out.push({ kind: 'SIZE', key: `size:${st.id}`, sizeStep: st, label: st.title }));
-        const liveAxes = model.axes.filter(a => !a.implied && a.values.length > 1)
-            // …and the matrix's projection IS the projection question. Asking the tag axis as well
-            // would put the same question on screen twice, with two different vocabularies.
-            .filter(a => !(a.key === 'proj' && sizeProjInches != null));
-        const framing = liveAxes.filter(a => a.key !== 'proj');
-        if (framing.length === 1) {
-            const a = framing[0];
-            out.push({ kind: 'AXIS', key: `axis:${a.key}`, axis: a, label: AXIS_LABEL[a.key] || a.key });
-        } else if (framing.length) {
-            out.push({ kind: 'AXES', key: 'axes:framing', axes: framing, label: 'Rod Setup' });
-        }
-        liveAxes.filter(a => a.key === 'proj')
-            .forEach(a => out.push({ kind: 'AXIS', key: `axis:${a.key}`, axis: a, label: AXIS_LABEL[a.key] || a.key }));
-        const plates = model.slots.filter(s => s.kind === 'BACKPLATE');
-        const nested = new Set();
-        model.slots.filter(s => s.kind !== 'BACKPLATE').forEach(s => {
-            if (!s.options.length && !s.suppressedBy) return;
-            if (settledKeys.has(s.key)) return;      // answered by the drive — see settledKeys
-            // ── A TRACK END IS NEVER A STEP (Stuart 2026-09-06) ────────────────────────────
-            // "can't we remove steps 14+15 for the track ends since these are decided when
-            //  choosing manual or motorized — there is no reason to have them as steps … they are
-            //  chosen in step one and do not need their own steps as there are no options."
-            // A settled end was already skipped (one option → auto-picked, above). A SUPPRESSED
-            // front end on a fascia-front double still drew as "not asked", and an end with two
-            // options — drive not yet answered — drew as a question that step one answers. None of
-            // those is a decision made here. The pick still happens: the drive answer settles it
-            // and livePicks carries it, so the end still renders and bills.
-            if (s.kind === 'TRV_END') return;
-            // A plate belongs to the arm that carries it. Normally that is the bracket — but when a
-            // RETURN has taken that end the bracket step is suppressed, and the return is the arm
-            // (see bracketAt in hardwareModel), so the plate travels to the END step instead. Left
-            // under the suppressed bracket it rendered nowhere and the plate could not be chosen.
-            const plateHere = () => plates.find(p => (p.position || '') === (s.position || ''));
-            let sub = null;
-            if (s.kind === 'BRACKET' && !s.suppressedBy) sub = plateHere();
-            else if (s.kind === 'END' && s.position) {
-                const bkt = model.slots.find(x => x.kind === 'BRACKET' && (x.position || '') === (s.position || ''));
-                if (!bkt || bkt.suppressedBy) sub = plateHere();
-            }
-            // A double has a front and a back end at each position; the plate is shared, so the
-            // first to claim it keeps it rather than both drawing the same picker.
-            if (sub && nested.has(sub.key)) sub = null;
-            if (sub) nested.add(sub.key);
-            out.push({ kind: 'SLOT', key: s.key, slot: s, sub, label: slotLabel(s) });
-        });
-        plates.filter(p => !nested.has(p.key) && p.options.length)
-            .forEach(p => out.push({ kind: 'SLOT', key: p.key, slot: p, label: slotLabel(p) }));
-        // ── PHASE 2 OF THE RESHUFFLE (Stuart 2026-08-20) ────────────────────────────────────
-        // "after these selections will come pole length (as it helps determine # of brackets)
-        //  then lastly the brackets and shared items."
-        //
-        // Length stops being the last thing asked and becomes the last thing asked BEFORE the
-        // brackets, because it is an input to them: 6.5 ft of heavy blackout wants a different
-        // number of arms than 6.5 ft of sheer, and the span advice from 6.5 cannot say so until it
-        // knows the length. Asked afterwards, the advice arrived when the decision was already made.
-        //
-        // ── …AND FROM 2026-09-10 RIGHT AFTER THE ROD (Stuart: "right after rod choice should
-        // be rod length that is just more natural, then carry on as is with the order"). Placed
-        // by the ROD-kind steps (rod, fascia, track) rather than by a fixed index, so it lands
-        // correctly whatever the collection offers; a collection with no rod step at all gets
-        // it right after the Rod Setup axes, still before the ends.
-        const lengthStep = { kind: 'LENGTH', key: 'length', label: 'Pole length' };
-        let lastRod = -1, lastAxis = -1;
-        out.forEach((st, i) => {
-            if (st.kind === 'SLOT' && ROD_ROLES.includes(st.slot.kind)) lastRod = i;
-            if (st.kind === 'AXIS') lastAxis = i;
-        });
-        if (lastRod >= 0) out.splice(lastRod + 1, 0, lengthStep);
-        else if (lastAxis >= 0) out.splice(lastAxis + 1, 0, lengthStep);
-        else out.push(lengthStep);
-        // ── WHAT RIDES ON THE ROD IS ONE QUESTION (Stuart 2026-08-21) ───────────────────────
-        // "if the selection for front track is track then the carriers should be presented at 13,
-        // if the front is omitted then rings should be presented … it could made in one step since
-        // there again is only one answer here."
-        //
-        // Rings and carriers are the same job done by two parts, and WHICH of them an order needs
-        // was already decided upstairs: a track takes carriers, a fascia takes rings (carriesRings,
-        // in the model). The engine has always known that — it builds the carriers as riders — but
-        // it built them SILENTLY, so a double that chose the front track reached the end of the
-        // walk having never been shown the things that will hang the drapery.
-        //
-        // So where there is no ring question, the carriers take that place in the walk and are
-        // SHOWN rather than merely billed. It is not a decision — there is one answer and the drive
-        // and the track already gave it — so nothing is asked; it is the step saying what is
-        // included, at the count the length works out to.
-        const ringSlot = out.find(st => st.kind === 'SLOT' && st.slot.kind === 'RING');
-        const carriers = (model.riders || []).filter(r => r.role === 'CARRIER');
-        if (!ringSlot && carriers.length) out.push({ kind: 'CARRIERS', key: 'carriers', label: 'Carriers', carriers });
-
-        // …and the track's own components last of all, which is where they belong: every one of
-        // them is a function of a decision above (the drive, the length, one track or two), so it
-        // is the only step that can be asked once and asked correctly. No rules doc, no step — a
-        // collection whose components have never been charted is not asked a question it cannot
-        // answer, and says so on the step rather than offering an empty list.
-        if (isTraverse && trvRules) out.push({ kind: 'TRV', key: 'traverse', label: 'Traverse components' });
-        return out;
-    }, [model, isTraverse, trvRules, sizeSteps, sizeProjInches, settledKeys]);
-
-    // Rings-vs-track stopped being an omission the day it became a question (the frontLayer axis,
-    // Stuart 2026-08-31) — so the track step no longer coaches "omit it". What it says instead is
-    // the one fact the auto-picked card cannot: the stock finishes follow the fascia, and painting
-    // to match is the upcharge (offered below via the flow's checkout items on this step).
-    const hintFor = useCallback((st) => {
-        if (!st || st.kind !== 'SLOT') return '';
-        if (st.slot.kind === 'TRACK') return 'Chosen by the layout at Rod Setup. Comes in bronze or champagne to coordinate with the fascia — add the custom-finish upcharge to paint it to match.';
-        return '';
-    }, []);
+    // ── EVERY DECISION IS A STEP — the framing questions in one, the plate nested under its arm, the length right after
+    //    the rod, the carriers shown in the rings' place, the track's components last: hardwareSession.stepsOf (his words
+    //    are there); and the one thing the track step says that its auto-picked card cannot (stepHintOf).
+    const steps = useMemo(() => stepsOf({ model, isTraverse, trvRules, sizeSteps, sizeProjInches, settledKeys }),
+        [model, isTraverse, trvRules, sizeSteps, sizeProjInches, settledKeys]);
+    const hintFor = useCallback((st) => stepHintOf(st), []);
 
     const [stepIx, setStepIx] = useState(0);
     // ── REOPENING A SAVED CONFIGURATION (Stuart 2026-08-28: "once we hit reopen there is no
@@ -986,63 +774,22 @@ function HardwareConfiguratorInner({
     }, [reopenSeed, kits]);
     const ix = Math.min(stepIx, Math.max(0, steps.length - 1));
     const step = steps[ix];
-    // MASTER CONTROL (Stuart 2026-08-26): tab 11's item list IS what CPQ presents, and each item
-    // names the STEP it belongs on (free-text match against the step label). Blank keeps the item
-    // on the pole-length step, where these have always lived — so existing flows are unchanged.
-    const extrasOnStep = (st) => (offeredExtraItems || []).filter(it => {
-        const m = String(it.step || '').trim().toUpperCase();
-        if (!m) return st?.kind === 'LENGTH';
-        if (st?.kind === 'LENGTH' && /LENGTH|POLE/.test(m)) return true;
-        const label = String(st?.label || '').toUpperCase();
-        return !!label && (label.includes(m) || m.includes(label));
-    });
+    // MASTER CONTROL: tab 11's item list is what is presented, each item on the step it names (hardwareSession.extrasOnStepOf).
+    const extrasOnStep = (st) => extrasOnStepOf(offeredExtraItems, st);
     const stepExtras = extrasOnStep(step);
     const stepHint = hintFor(step);
 
-    // What the rail shows under each heading: the answer, once there is one.
-    const answerOf = useCallback((st) => {
-        if (st.kind === 'AXIS') { const v = answers[st.axis.key]; return v == null || v === '' ? '' : valueLabel(st.axis.key, v); }
-        // One cell, every answer in it — the rail still shows the whole product at a glance.
-        if (st.kind === 'AXES') {
-            return st.axes.map(a => {
-                const v = answers[a.key];
-                return v == null || v === '' ? '' : valueLabel(a.key, v);
-            }).filter(Boolean).join(' \u00b7 ');
-        }
-        if (st.kind === 'SIZE') {
-            const opt = (st.sizeStep.styleOptions || []).find(o => o.optId === sizePick[st.sizeStep.id]);
-            return opt ? (opt.partName || opt.label || opt.optId) : '';
-        }
-        if (st.kind === 'CARRIERS') {
-            const n = st.carriers.reduce((sum, c) => sum + (recommendedQty(c, lengthFeet) || c.qty || 1), 0);
-            return n ? `${n} included` : 'included';
-        }
-        if (st.kind === 'LENGTH') return lengthFeet ? `${lengthFeet} ft` : '';
-        // The rail says what was decided, so a traverse quote can be read back at a glance: the
-        // carrier style is the decision, the count is the consequence.
-        if (st.kind === 'TRV') {
-            if (!trvLive?.carrierStyle) return '';
-            const style = (trvRules?.usage || []).find(u => String(u.itemId || '').toUpperCase() === trvLive.carrierStyle);
-            return `${style?.label || trvLive.carrierStyle} · ${trvComponents.length}`;
-        }
-        if (st.slot.suppressedBy) return 'not asked';
-        const pick = st.slot.options.find(o => o.id === livePicks[st.slot.key]);
-        return pick ? (ourId(pick.partId) || pick.name) : '';   // our number on the rail too
-    }, [answers, livePicks, lengthFeet, ourId, trvLive, trvRules, trvComponents, sizePick]);
+    // What the rail shows under each heading: the answer, once there is one (hardwareSession.stepAnswerOf).
+    const answerOf = useCallback((st) => stepAnswerOf(st, { answers, livePicks, lengthFeet, ourId, trvLive, trvRules, trvComponents, sizePick }),
+        [answers, livePicks, lengthFeet, ourId, trvLive, trvRules, trvComponents, sizePick]);
 
     // ── SEVERAL CONFIGURATIONS, ONE QUOTE ────────────────────────────────────────────────────
     // A room is a configuration; a job is several. Each is finished, memo'd and added, and the
     // strip is where you see what is already in and what it came to.
     const [configMemo, setConfigMemo] = useState('');
-    // ⚠ HOW MANY OF THIS EXACT CONFIGURATION (Stuart 2026-08-26: "if customer wants 2 of the exact
-    // config the last step is ask/enter this"). This is a MULTIPLIER on the whole build — 2 means
-    // two complete identical sets of every part below, never a dimension. It rides the cart item as
-    // `qty`, which every consumer already multiplies by (Shared/configQty: the floors print
-    // "×7 each · 14 total", the NetSuite resolver pushes line qty × this, per-foot lines push
-    // feet × this while the cut length stays per-piece — so 2 × an 8ft pole is two 8ft poles,
-    // never a 2ft pole).
+    // HOW MANY OF THIS EXACT CONFIGURATION — a multiplier on the whole build, never a dimension (hardwareSession.configQtyOf).
     const [cfgQty, setCfgQty] = useState('1');
-    const cfgQtyN = Math.max(1, parseInt(cfgQty, 10) || 1);
+    const cfgQtyN = configQtyOf(cfgQty);
     // NOTES BELONG TO THE STEP THE OPERATOR IS ON (Stuart 2026-08-17). A note typed while deciding
     // the right bracket is about the right bracket; filing them all into one box loses which
     // decision they were about, which is the only thing that makes them useful downstream.
@@ -1075,28 +822,11 @@ function HardwareConfiguratorInner({
     }, [onWorkState, assembly, answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, typedExtras,
         lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices, spliceWaived, stepNoteClient, finishAnswers]);
     const addConfiguration = () => {
-        if (!priced.lines.length) return;
-        // ⚠ NEVER ADD SHORT (Stuart 2026-09-10). A removal nobody has acknowledged is an order that
-        // would leave here missing a part the operator chose. The strip names it; Add waits.
-        if (pendingDrops.length) return;
-        // ⚠ WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE (Stuart 2026-09-16 — hardwareSession.bareWoodOf). The add names
-        // the parts and waits; the WOOD row of the finish step (or the part's own swatch) is the answer.
-        const bareWood = bareWoodOf(chosenList, finishFor);
-        if (bareWood.length) {
-            alert(`Pick the WOOD finish first — ${bareWood.map(c => c.name || c.partId).join(', ')} would leave here with no stain.\n\nChoose it on the WOOD row of the finish step, or on the part itself.`);
-            return;
-        }
-        // A FINISH THAT ASKS IS ANSWERED BEFORE THE LINE LEAVES (Stuart 2026-10-06: "yes required"). Solid brass with
-        // no word on brushed / polished, lacquered or not, is an order the floor cannot make.
-        const openQuestions = openFinishQuestionsOf(askingFinishes, finishAnswers);
-        if (openQuestions.length) {
-            alert(`Answer the finish questions first — ${openQuestions.map(([a, m]) => `${a.code}${a.finish.name ? ` (${String(a.finish.name).trim()})` : ''}: ${m.join(', ')}`).join(' · ')}.\n\nThey are at the top of the finish panel and apply to the whole configuration.`);
-            return;
-        }
-        // THE HANDOFF IS BUILT HERE, in the shape CPQ has always written — so the shop floor, the
-        // finishing floor, RTG, the ERP push and the CRM documents all keep working without
-        // knowing which engine produced the order. onAdd is what puts it in the cart; without one
-        // the strip still works, so the configurator is usable before the cart is wired.
+        // ⚠ NEVER ADD SHORT · WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE · A FINISH THAT ASKS IS ANSWERED FIRST — the rules,
+        // their order and his words are hardwareSession.addRefusalOf. Nothing priced and a removal nobody has acknowledged
+        // wait in silence (the button and the strip already say why); the other two say what to do.
+        const refusal = addRefusalOf({ priced, pendingDrops, chosenList, finishFor, askingFinishes, finishAnswers });
+        if (refusal) { if (refusal.alert) alert(refusal.alert); return; }
         // A picture of what was configured, taken as it is added — front view, white ground, ≤900px
         // JPEG (the same capturer the old engine used) — so the quotation and the sales order can
         // show the customer what they are ordering. Never blocks the add: no canvas, no picture.
@@ -1105,73 +835,16 @@ function HardwareConfiguratorInner({
         // DISPLAY MODE: the frame is the board — capture exactly it (transparent) for the designer.
         const displaySnapshot = (displayMode.on && frameRectRef.current) ? captureBoardFrame(glStateRef.current, frameRectRef.current, { scale: 1 }) : null;
         const displayBoard = displaySnapshot ? { widthIn: displayMode.widthIn, heightIn: displayMode.heightIn, lengthInches, readsInches: frameRectRef.current.reading != null ? Math.round(frameRectRef.current.reading * 10) / 10 : null } : null;
-        const built = handoffItem(resolved, {
-            ...pricingCtx, assembly, flow, findPart, qty: cfgQtyN, renderSnapshot,
-            // The pins this line was resolved from — fingerprinted on the line so Approve can tell
-            // when the tags have changed since the save (Shared/cartStaleness).
-            pins,
-            sidemark: configMemo, memo: configMemo,
-            finishes: chosenFinishObjects, finishLabel: finishLabelOf(chosenFinishObjects),
-            priceLevel: effectiveLevel, lengthInches, lengthFeet,
-            // extraLines = the extras AS THE PANEL PRICED THEM (priceChoice, customer row) — the
-            // handoff uses these verbatim so the docs, floors and NetSuite bill what was shown.
-            // Filtered to extras actually TAKEN: extraLines coerces a 0 qty to 1 for display.
-            extras, extraLines: extraLines.filter(l => Number((extras.find(x => x.code === l.partId && (x.slot || '') === (l.slot || '')) || {}).qty) > 0),
-            stepNotes, answers, picks: livePicks, partFinish, globalFinish, globalFinishes, stepQty,
-            // What the finishes were asked — written into each line's finish text, and kept for Edit.
-            finishAnswers: liveFinishAnswers,
-            // The kit, so the cart bills exactly what the panel showed — and WHICH kit, so Edit restores it.
-            kit: kitBill, kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
-            // The Traverse components answers (carrier style + count, draw, picks) — Edit restores them, or
-            // a re-add would silently swap the chosen carriers back for the pinned ones.
-            trvSel: (isTraverse && trvSel) ? trvSel : null,
-            // The track's components, in the shape the cart has always carried them — the ERP push
-            // reads `trvComponents` off the item and the documents read the breakdown rows, so
-            // neither can tell which engine asked the question.
-            trvComponents,
-            // ── HOW IT OPENS, ON THE ORDER (Stuart 2026-08-22) ───────────────────────────────
-            // Not a part and not a price — an instruction. The bench assembles the carriers to it
-            // and hangs the master on the drawn side, so it has to reach the floor and the
-            // paperwork, not just the screen it was answered on.
-            traverseDraw: trvLive?.draw || '',
-            traverseMotorSide: trvLive?.motorSide || '',
-            // ── THE FROZEN RENDER (Stuart 2026-08-21) ────────────────────────────────────────
-            // The shop floor, the finishing floor and the HQ work-order window re-render a saved
-            // order from this and nothing else (Shared/ConfiguredItemViewer). The old engine wrote
-            // it at add; without it a TAGS order opens to an empty canvas six weeks later, when the
-            // assembly has moved on and nobody can reconstruct what was sold.
-            //
-            // ⚠ `defaultHidden` AND `clearNodes` TRAVEL WITH IT. This engine renders ADDITIVELY —
-            // nothing is visible until it is chosen — so replaying the same overrides without that
-            // flag would show the entire .glb, every option at once. The old engine's saved states
-            // carry neither and behave exactly as they always have.
-            renderState: cadUrl ? {
-                cadUrl,
-                textureEntries: Object.entries(textureOverrides || {}).map(([target, url]) => ({ target, url })),
-                visibilityEntries: Object.entries(visibleOverrides || {}).map(([target, visible]) => ({ target, visible })),
-                cloneSpecs,
-                stretchSpec,
-                spliceMarks,
-                defaultHidden: true,
-                clearNodes: clearList,
-            } : null,
-        });
-        // ── WHAT THE SHOP IS TOLD, ON THE LINE THE SHOP READS (Stuart 2026-10-01 · Shared/lineShopNotes) ──
-        // The note typed on each step ("Anything the shop needs to know about Pole length") was saved
-        // for Edit and read by nothing else. It goes on the line's generalNotes — View Item prints
-        // them, RTG stamps them on the shop order — under the step it was typed on. A pole over the
-        // one-piece limit going out with no joiner leads the list, and carries the flag the reopen reads.
-        const shopNotes = shopNotesOf({ steps, stepNotes, lead: noSplice ? [noSpliceNote(lengthInches, spliceOverIn)] : [] });
-        // The notes ticked "show to the customer" also ride the line as clientNotes — CPQ's save writes them under
-        // this configuration as display-only rows the money documents print. The ticks are saved for Edit.
-        const clientNotes = clientNotesOf({ steps, stepNotes, visible: stepNoteClient });
-        const ticked = Object.keys(stepNoteClient).length > 0;
-        const item = (noSplice || shopNotes.length || ticked)
-            ? { ...built,
-                ...((noSplice || ticked) ? { engineConfig: { ...built.engineConfig, ...(noSplice ? { spliceWaived: true } : {}), ...(ticked ? { stepNoteClient: { ...stepNoteClient } } : {}) } } : {}),
-                ...(shopNotes.length ? { generalNotes: shopNotes } : {}),
-                ...(clientNotes.length ? { clientNotes } : {}) }
-            : built;
+        // THE HANDOFF — the cart line in the shape CPQ has always written, the frozen render, what the shop is told and what
+        // the customer is shown: hardwareSession.cartLineOf / renderStateOf (the same call the portal's server makes).
+        const item = cartLineOf({ resolved, pricingCtx, assembly, flow, findPart, qty: cfgQtyN, renderSnapshot, pins, memo: configMemo,
+            chosenFinishObjects, effectiveLevel, lengthInches, lengthFeet, extras, extraLines, stepNotes, stepNoteClient,
+            answers, livePicks, partFinish, globalFinish, globalFinishes, stepQty, liveFinishAnswers,
+            kitBill, kitSource, kitPick, kitMotor, isTraverse, trvSel, trvComponents, trvLive,
+            renderState: renderStateOf({ cadUrl, textureOverrides, visibleOverrides, cloneSpecs, stretchSpec, spliceMarks, clearList }),
+            steps, noSplice, spliceOverIn });
+        // onAdd is what puts it in the cart; without one the strip still works, so the configurator is usable before the
+        // cart is wired.
         if (typeof onAdd === 'function') onAdd(displaySnapshot ? { ...item, displaySnapshot, displayBoard } : item);
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');

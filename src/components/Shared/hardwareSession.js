@@ -29,7 +29,7 @@ import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAl
 import { bracketAdviceFor, DEFAULT_DROP_FT } from './bracketSpan.js';
 import { carrierRows, configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator.js';
 import { usageAt, explodeTraverse } from './traverseExplode.js';
-import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf } from './flowExtras.js';
+import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf, noSpliceNote } from './flowExtras.js';
 import { normalizeExtras } from './extrasRestore.js';
 import { wearsAsTwin } from './materialTwin.js';
 import { subFinishOfFinish } from './subFinish.js';
@@ -38,8 +38,11 @@ import { customerPriceLevel } from './priceLevels.js';
 import { findClientPriceRow, customerKeys } from './clientPricing.js';
 import { applyKitPricing } from './kitSeed.js';
 import { kitForMount, motorCodeFor, parseKitCode } from './kitCode.js';
-import { takesNoFinish } from './finishLabel.js';
+import { takesNoFinish, finishLabelOf } from './finishLabel.js';
 import { questionsOf, unansweredOf } from './finishQuestions.js';
+import { handoffItem } from './hardwareHandoff.js';
+import { shopNotesOf, clientNotesOf } from './lineShopNotes.js';
+import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops.js';
 
 // ── THE PARTS, AND HOW ONE IS FOUND ──────────────────────────────────────────────────────────
 // A pin can be tagged with the library record's id, its itemId or OUR number, so every one of them
@@ -889,6 +892,414 @@ export function billOf({ customer = null, customerId = '', priceLevel = 'STANDAR
         isTraverse, trvDrive, trvFeet, trvTracks, trvPriceOf, trvItemInfo, trvSeed, trvLive, trvComponents, trvLines, spliceOnLine, noSplice, grandTotal };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// THE WALK, WHAT IS DRAWN, THE REFUSALS AT ADD AND THE CART LINE (move 6 of 6)
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+// ── THE WORDS ON THE RAIL ────────────────────────────────────────────────────────────────────
+export const AXIS_LABEL = { rodKind: 'Rod Type', setup: 'Single or Double', drive: 'Drive', mount: 'Mount', proj: 'Bracket Projection', frontLayer: 'Front of the Double' };
+export const valueLabel = (axis, v) => {
+    if (axis === 'proj') {
+        const n = Number(v);
+        const known = { 0.75: '.75"', 3.625: '3-5/8"', 4.625: '4-5/8"', 6: '6"' };
+        return known[n] || `${n}"`;
+    }
+    // The two ways a double carries its front layer — said as the product, not as the tag.
+    if (axis === 'frontLayer') return v === 'FASCIA' ? 'Stationary fascia with rings (one track)' : 'Traverse track front & rear';
+    return String(v).charAt(0) + String(v).slice(1).toLowerCase();
+};
+export const slotLabel = (s) => {
+    const kind = s.kind === 'END' ? 'End Treatment' : s.kind.charAt(0) + s.kind.slice(1).toLowerCase().replace('_', ' ');
+    const cap = (w) => `${w.charAt(0)}${w.slice(1).toLowerCase()}`;
+    // On a double every rod asks its own questions, so the rail must say WHICH ROD — "Front Rod",
+    // "Back Left End Treatment". Without it a double shows two identical headings and the operator
+    // is answering one of them blind.
+    // A single has ONE rod - saying Front/Back on it is noise (and on H1-75, whose only rod
+    // is pinned BACK, it read as a rear-rod question on a single order). Doubles keep the word.
+    const parts = [(s.tier && !s.tierSolo) ? cap(s.tier) : '', s.position ? cap(s.position) : '', kind].filter(Boolean);
+    return parts.join(' ');
+};
+
+// ── WHAT IS DRAWN ────────────────────────────────────────────────────────────────────────────
+// ADDITIVE, FROM NOTHING: geometry is default-hidden and what you see is exactly the union of what
+// has been chosen — so the picture is a list of the nodes to show, keyed the way the renderer keys them.
+export function visibleOverridesOf(resolved) {
+    const o = {};
+    resolved.visible.forEach(n => { o[String(n).toLowerCase()] = true; });
+    return o;
+}
+// 🧊 The clear parts, from the TAG — never from a mesh name. Passing this switches the renderer
+// off its hardcoded acrylic item-code list entirely for this configurator.
+export const clearListOf = (resolved) => [...resolved.clear].map(n => String(n).toLowerCase());
+// ── N CENTRE BRACKETS RENDER AS N (Stuart 2026-09-09: "the old engine used to clone the center
+// bracket so if we added 2,3 etc the render added them, can we please bring back that feature
+// on the new engine"). The renderer never lost it — DynamicModel still spaces N copies of a
+// mesh set along a rail; the old engine fed it from the flow's clone step and this one fed it
+// nothing. The same spec, from the resolved model: the CENTER bracket pick (and its plate) as
+// the meshes, the bracket alone as the placement anchor, the chosen rod(s) as the rail, the
+// slot's quantity as the count. Count comes from `quantities` — typed, else the span advice.
+// THE RAIL IS THE WHOLE POLE AS DRAWN (Stuart 2026-09-09: "the 1st bracket is no longer in
+// the center it is off to the left"). A rod slot's pick is ONE piece of a pole modelled in
+// three (LEFT / CENTER / RIGHT), so spacing along the pick alone centred the bracket on a
+// piece. The rail is every rod-role node the render currently shows — all the pieces, and
+// only as long as the ends leave it (a return drops its end piece).
+export function railNamesOf(resolved, model) {
+    const shown = new Set([...resolved.visible].map(n => String(n).toLowerCase()));
+    // The F-clip strip runs the length of the track (Stuart 2026-09-09: "it makes it appear
+    // that the track is too short since it does not stretch") — a rider, not a rod, but it is
+    // rail-length and stretches with the rail; carriers stay discrete pieces and spread.
+    return [...new Set((model.choices || [])
+        .filter(c => ROD_ROLES.includes(c.role) || c.role === 'FCLIP')
+        .flatMap(c => c.nodes || [])
+        .filter(n => shown.has(String(n).toLowerCase())))];
+}
+// ── A LONG ORDER RENDERS LONG (Stuart 2026-09-09: "i am working on a long rod of 144in and it
+// will need 5 center brackets … the 5th overruns the left bracket and right bracket. can you
+// stretch the rod/pole when they are long?"). DynamicModel scales the pole meshes along their
+// axis to this length and moves everything else out with the ends; only when the order is
+// longer than the model, and only where the model reads as inches.
+export const stretchSpecOf = (railNames, lengthInches) => (lengthInches > 0 && railNames.length ? { railNames, lengthInches } : null);
+// ── A SPLICE IS DRAWN AS A PENCIL LINE (Stuart 2026-09-09: "any time there is a splice entered
+// it adds a fine line to show it … from cpq it would always be shown in the center, if the
+// splice is added in vision at an exact spot then ideally the rendering could show that").
+// Fractions along the rail, left to right: the drawing's positions where Vision placed them
+// (from the left edge = d / L, from the right = 1 − d / L), else one at the centre, N spread
+// evenly. Keyed on the flow's own splice item — the same detection the length step uses — so
+// every flow with a joiner gets the line. A picture of a decision already on the line.
+export function spliceMarksOf({ extras, spliceCodes, drawnSplices, lengthInches }) {
+    const count = extras.filter(x => spliceCodes.includes(x.code)).reduce((n, x) => n + (Number(x.qty) > 0 ? Number(x.qty) : 0), 0);
+    if (!count) return [];
+    const L = Number(lengthInches) || 0;
+    const drawn = drawnSplices.filter(sp => sp && sp.distInches != null && L > 0)
+        .map(sp => (String(sp.ref).toUpperCase() === 'END' ? 1 - Number(sp.distInches) / L : Number(sp.distInches) / L))
+        .filter(f => Number.isFinite(f)).map(f => Math.min(0.98, Math.max(0.02, f)));
+    if (drawn.length) return drawn.map(frac => ({ frac }));
+    return Array.from({ length: count }, (_, i) => ({ frac: (i + 1) / (count + 1) }));
+}
+export function cloneSpecsOf({ resolved, railNames, livePicks, quantities }) {
+    const pickOf = (sl) => { const id = livePicks[sl.key]; return id ? (sl.options || []).find(x => x.id === id) || null : null; };
+    const out = [];
+    resolved.slots.forEach(sl => {
+        if (sl.kind !== 'BRACKET' || String(sl.position || '').toUpperCase() !== 'CENTER') return;
+        const o = pickOf(sl);
+        if (!o || !(o.nodes || []).length) return;
+        const plateSlot = resolved.slots.find(x => x.kind === 'BACKPLATE' && String(x.position || '').toUpperCase() === 'CENTER');
+        const plate = plateSlot ? pickOf(plateSlot) : null;
+        const count = Number(quantities[o.id]) || 1;
+        out.push({ stepId: sl.key, meshNames: [...o.nodes, ...((plate && plate.nodes) || [])], anchorNames: [...o.nodes], railNames, count });
+    });
+    return out;
+}
+// The parts on the order: what was picked (or picked on the operator's behalf), and what rides on the rod.
+export function chosenPartsOf(model, livePicks) {
+    const ids = new Set(Object.values(livePicks));
+    return [...model.choices.filter(c => ids.has(c.id)), ...model.riders];
+}
+// ── THE FROZEN RENDER (Stuart 2026-08-21) ────────────────────────────────────────────────────
+// The shop floor, the finishing floor and the HQ work-order window re-render a saved
+// order from this and nothing else (Shared/ConfiguredItemViewer). The old engine wrote
+// it at add; without it a TAGS order opens to an empty canvas six weeks later, when the
+// assembly has moved on and nobody can reconstruct what was sold.
+//
+// ⚠ `defaultHidden` AND `clearNodes` TRAVEL WITH IT. This engine renders ADDITIVELY —
+// nothing is visible until it is chosen — so replaying the same overrides without that
+// flag would show the entire .glb, every option at once. The old engine's saved states
+// carry neither and behave exactly as they always have.
+export const renderStateOf = ({ cadUrl, textureOverrides, visibleOverrides, cloneSpecs, stretchSpec, spliceMarks, clearList }) => (cadUrl ? {
+    cadUrl,
+    textureEntries: Object.entries(textureOverrides || {}).map(([target, url]) => ({ target, url })),
+    visibilityEntries: Object.entries(visibleOverrides || {}).map(([target, visible]) => ({ target, visible })),
+    cloneSpecs,
+    stretchSpec,
+    spliceMarks,
+    defaultHidden: true,
+    clearNodes: clearList,
+} : null);
+
+// ── EVERY DECISION IS A STEP (Stuart 2026-08-17) ─────────────────────────────────────────────
+// The rail carries the whole product; the panel carries only what is being decided now. An
+// answered step shows its ANSWER, so nothing has to be re-opened to check what it was.
+//
+// Backplates do not get a step of their own — a plate is chosen WITH its arm, so it nests
+// inside the bracket step, which is also where the pairing rules can be seen doing their work.
+export function stepsOf({ model, isTraverse, trvRules, sizeSteps, sizeProjInches, settledKeys }) {
+    const out = [];
+    // ── THE FRAMING QUESTIONS ARE ONE STEP (Stuart 2026-08-20) ───────────────────────────
+    // "combine steps 1, 2 and 3 into one step … below the rod type box another box for single
+    //  or double and then another box below that for mount … that will help keep the rail from
+    //  being too long as well."
+    //
+    // Rod type, single-or-double, drive and mount are all the same kind of question: how is
+    // this rod framed, before a single part is chosen. Each is two or three chips, so each was
+    // spending a whole step and a whole rail cell on one line of buttons.
+    //
+    // ⚠ BRACKET PROJECTION IS NOT ONE OF THEM and keeps its own step. It is the one axis with
+    // consequences — it gates which brackets exist, and pairs the plates to the arm — so it is
+    // a decision, not framing. Grouping everything BELOW it also means nothing is reordered:
+    // projection already sorts last of the axes, so the group is the contiguous block in front
+    // of it and every question stays exactly where it was.
+    // ⚠ THE SIZE QUESTIONS LEAD, because everything after them is a different part. On a
+    // combined flow the diameter is the first thing asked and the projection second — the same
+    // order, and the same option lists, the old engine asks them in. A collection with no size
+    // matrix has no size steps and nothing here changes.
+    sizeSteps.forEach(st => out.push({ kind: 'SIZE', key: `size:${st.id}`, sizeStep: st, label: st.title }));
+    const liveAxes = model.axes.filter(a => !a.implied && a.values.length > 1)
+        // …and the matrix's projection IS the projection question. Asking the tag axis as well
+        // would put the same question on screen twice, with two different vocabularies.
+        .filter(a => !(a.key === 'proj' && sizeProjInches != null));
+    const framing = liveAxes.filter(a => a.key !== 'proj');
+    if (framing.length === 1) {
+        const a = framing[0];
+        out.push({ kind: 'AXIS', key: `axis:${a.key}`, axis: a, label: AXIS_LABEL[a.key] || a.key });
+    } else if (framing.length) {
+        out.push({ kind: 'AXES', key: 'axes:framing', axes: framing, label: 'Rod Setup' });
+    }
+    liveAxes.filter(a => a.key === 'proj')
+        .forEach(a => out.push({ kind: 'AXIS', key: `axis:${a.key}`, axis: a, label: AXIS_LABEL[a.key] || a.key }));
+    const plates = model.slots.filter(s => s.kind === 'BACKPLATE');
+    const nested = new Set();
+    model.slots.filter(s => s.kind !== 'BACKPLATE').forEach(s => {
+        if (!s.options.length && !s.suppressedBy) return;
+        if (settledKeys.has(s.key)) return;      // answered by the drive — see settledKeys
+        // ── A TRACK END IS NEVER A STEP (Stuart 2026-09-06) ────────────────────────────
+        // "can't we remove steps 14+15 for the track ends since these are decided when
+        //  choosing manual or motorized — there is no reason to have them as steps … they are
+        //  chosen in step one and do not need their own steps as there are no options."
+        // A settled end was already skipped (one option → auto-picked, above). A SUPPRESSED
+        // front end on a fascia-front double still drew as "not asked", and an end with two
+        // options — drive not yet answered — drew as a question that step one answers. None of
+        // those is a decision made here. The pick still happens: the drive answer settles it
+        // and livePicks carries it, so the end still renders and bills.
+        if (s.kind === 'TRV_END') return;
+        // A plate belongs to the arm that carries it. Normally that is the bracket — but when a
+        // RETURN has taken that end the bracket step is suppressed, and the return is the arm
+        // (see bracketAt in hardwareModel), so the plate travels to the END step instead. Left
+        // under the suppressed bracket it rendered nowhere and the plate could not be chosen.
+        const plateHere = () => plates.find(p => (p.position || '') === (s.position || ''));
+        let sub = null;
+        if (s.kind === 'BRACKET' && !s.suppressedBy) sub = plateHere();
+        else if (s.kind === 'END' && s.position) {
+            const bkt = model.slots.find(x => x.kind === 'BRACKET' && (x.position || '') === (s.position || ''));
+            if (!bkt || bkt.suppressedBy) sub = plateHere();
+        }
+        // A double has a front and a back end at each position; the plate is shared, so the
+        // first to claim it keeps it rather than both drawing the same picker.
+        if (sub && nested.has(sub.key)) sub = null;
+        if (sub) nested.add(sub.key);
+        out.push({ kind: 'SLOT', key: s.key, slot: s, sub, label: slotLabel(s) });
+    });
+    plates.filter(p => !nested.has(p.key) && p.options.length)
+        .forEach(p => out.push({ kind: 'SLOT', key: p.key, slot: p, label: slotLabel(p) }));
+    // ── PHASE 2 OF THE RESHUFFLE (Stuart 2026-08-20) ────────────────────────────────────
+    // "after these selections will come pole length (as it helps determine # of brackets)
+    //  then lastly the brackets and shared items."
+    //
+    // Length stops being the last thing asked and becomes the last thing asked BEFORE the
+    // brackets, because it is an input to them: 6.5 ft of heavy blackout wants a different
+    // number of arms than 6.5 ft of sheer, and the span advice from 6.5 cannot say so until it
+    // knows the length. Asked afterwards, the advice arrived when the decision was already made.
+    //
+    // ── …AND FROM 2026-09-10 RIGHT AFTER THE ROD (Stuart: "right after rod choice should
+    // be rod length that is just more natural, then carry on as is with the order"). Placed
+    // by the ROD-kind steps (rod, fascia, track) rather than by a fixed index, so it lands
+    // correctly whatever the collection offers; a collection with no rod step at all gets
+    // it right after the Rod Setup axes, still before the ends.
+    const lengthStep = { kind: 'LENGTH', key: 'length', label: 'Pole length' };
+    let lastRod = -1, lastAxis = -1;
+    out.forEach((st, i) => {
+        if (st.kind === 'SLOT' && ROD_ROLES.includes(st.slot.kind)) lastRod = i;
+        if (st.kind === 'AXIS') lastAxis = i;
+    });
+    if (lastRod >= 0) out.splice(lastRod + 1, 0, lengthStep);
+    else if (lastAxis >= 0) out.splice(lastAxis + 1, 0, lengthStep);
+    else out.push(lengthStep);
+    // ── WHAT RIDES ON THE ROD IS ONE QUESTION (Stuart 2026-08-21) ───────────────────────
+    // "if the selection for front track is track then the carriers should be presented at 13,
+    // if the front is omitted then rings should be presented … it could made in one step since
+    // there again is only one answer here."
+    //
+    // Rings and carriers are the same job done by two parts, and WHICH of them an order needs
+    // was already decided upstairs: a track takes carriers, a fascia takes rings (carriesRings,
+    // in the model). The engine has always known that — it builds the carriers as riders — but
+    // it built them SILENTLY, so a double that chose the front track reached the end of the
+    // walk having never been shown the things that will hang the drapery.
+    //
+    // So where there is no ring question, the carriers take that place in the walk and are
+    // SHOWN rather than merely billed. It is not a decision — there is one answer and the drive
+    // and the track already gave it — so nothing is asked; it is the step saying what is
+    // included, at the count the length works out to.
+    const ringSlot = out.find(st => st.kind === 'SLOT' && st.slot.kind === 'RING');
+    const carriers = (model.riders || []).filter(r => r.role === 'CARRIER');
+    if (!ringSlot && carriers.length) out.push({ kind: 'CARRIERS', key: 'carriers', label: 'Carriers', carriers });
+
+    // …and the track's own components last of all, which is where they belong: every one of
+    // them is a function of a decision above (the drive, the length, one track or two), so it
+    // is the only step that can be asked once and asked correctly. No rules doc, no step — a
+    // collection whose components have never been charted is not asked a question it cannot
+    // answer, and says so on the step rather than offering an empty list.
+    if (isTraverse && trvRules) out.push({ kind: 'TRV', key: 'traverse', label: 'Traverse components' });
+    return out;
+}
+
+// Rings-vs-track stopped being an omission the day it became a question (the frontLayer axis,
+// Stuart 2026-08-31) — so the track step no longer coaches "omit it". What it says instead is
+// the one fact the auto-picked card cannot: the stock finishes follow the fascia, and painting
+// to match is the upcharge (offered below via the flow's checkout items on this step).
+export function stepHintOf(st) {
+    if (!st || st.kind !== 'SLOT') return '';
+    if (st.slot.kind === 'TRACK') return 'Chosen by the layout at Rod Setup. Comes in bronze or champagne to coordinate with the fascia — add the custom-finish upcharge to paint it to match.';
+    return '';
+}
+
+// MASTER CONTROL (Stuart 2026-08-26): tab 11's item list IS what CPQ presents, and each item
+// names the STEP it belongs on (free-text match against the step label). Blank keeps the item
+// on the pole-length step, where these have always lived — so existing flows are unchanged.
+export const extrasOnStepOf = (offeredExtraItems, st) => (offeredExtraItems || []).filter(it => {
+    const m = String(it.step || '').trim().toUpperCase();
+    if (!m) return st?.kind === 'LENGTH';
+    if (st?.kind === 'LENGTH' && /LENGTH|POLE/.test(m)) return true;
+    const label = String(st?.label || '').toUpperCase();
+    return !!label && (label.includes(m) || m.includes(label));
+});
+
+// What the rail shows under each heading: the answer, once there is one.
+export function stepAnswerOf(st, { answers, livePicks, lengthFeet, ourId, trvLive, trvRules, trvComponents, sizePick }) {
+    if (st.kind === 'AXIS') { const v = answers[st.axis.key]; return v == null || v === '' ? '' : valueLabel(st.axis.key, v); }
+    // One cell, every answer in it — the rail still shows the whole product at a glance.
+    if (st.kind === 'AXES') {
+        return st.axes.map(a => {
+            const v = answers[a.key];
+            return v == null || v === '' ? '' : valueLabel(a.key, v);
+        }).filter(Boolean).join(' \u00b7 ');
+    }
+    if (st.kind === 'SIZE') {
+        const opt = (st.sizeStep.styleOptions || []).find(o => o.optId === sizePick[st.sizeStep.id]);
+        return opt ? (opt.partName || opt.label || opt.optId) : '';
+    }
+    if (st.kind === 'CARRIERS') {
+        const n = st.carriers.reduce((sum, c) => sum + (recommendedQty(c, lengthFeet) || c.qty || 1), 0);
+        return n ? `${n} included` : 'included';
+    }
+    if (st.kind === 'LENGTH') return lengthFeet ? `${lengthFeet} ft` : '';
+    // The rail says what was decided, so a traverse quote can be read back at a glance: the
+    // carrier style is the decision, the count is the consequence.
+    if (st.kind === 'TRV') {
+        if (!trvLive?.carrierStyle) return '';
+        const style = (trvRules?.usage || []).find(u => String(u.itemId || '').toUpperCase() === trvLive.carrierStyle);
+        return `${style?.label || trvLive.carrierStyle} · ${trvComponents.length}`;
+    }
+    if (st.slot.suppressedBy) return 'not asked';
+    const pick = st.slot.options.find(o => o.id === livePicks[st.slot.key]);
+    return pick ? (ourId(pick.partId) || pick.name) : '';   // our number on the rail too
+}
+
+// ⚠ HOW MANY OF THIS EXACT CONFIGURATION (Stuart 2026-08-26: "if customer wants 2 of the exact
+// config the last step is ask/enter this"). This is a MULTIPLIER on the whole build — 2 means
+// two complete identical sets of every part below, never a dimension. It rides the cart item as
+// `qty`, which every consumer already multiplies by (Shared/configQty: the floors print
+// "×7 each · 14 total", the NetSuite resolver pushes line qty × this, per-foot lines push
+// feet × this while the cut length stays per-piece — so 2 × an 8ft pole is two 8ft poles,
+// never a 2ft pole).
+export const configQtyOf = (typed) => Math.max(1, parseInt(typed, 10) || 1);
+
+// ── THE REFUSALS AT ADD ──────────────────────────────────────────────────────────────────────
+// The one sentence every refusal for a removal says — the same words on the button and in the strip.
+export const dropRefusalOf = (pendingDrops) => (pendingDrops.length
+    ? `${pendingDrops.length} selection${pendingDrops.length === 1 ? ' was' : 's were'} removed by a later choice — read the strip under the rail and press Understood on each before adding.`
+    : '');
+/**
+ * Why this configuration may not be added yet — null when it may. In the order the screen checks them:
+ *   NOTHING_PRICED    no line to add (the button is greyed; nothing is said)
+ *   REMOVALS          ⚠ NEVER ADD SHORT (Stuart 2026-09-10). A removal nobody has acknowledged is an order that
+ *                     would leave here missing a part the operator chose. The strip names it; Add waits.
+ *   BARE_WOOD         ⚠ WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE (Stuart 2026-09-16 — bareWoodOf). The add names
+ *                     the parts and waits; the WOOD row of the finish step (or the part's own swatch) is the answer.
+ *   FINISH_QUESTIONS  A FINISH THAT ASKS IS ANSWERED BEFORE THE LINE LEAVES (Stuart 2026-10-06: "yes required"). Solid
+ *                     brass with no word on brushed / polished, lacquered or not, is an order the floor cannot make.
+ * `alert` is what the CPQ screen says out loud (the first two say nothing: the button and the strip already do).
+ */
+export function addRefusalOf({ priced, pendingDrops, chosenList, finishFor, askingFinishes, finishAnswers }) {
+    if (!priced.lines.length) return { kind: 'NOTHING_PRICED' };
+    if (pendingDrops.length) return { kind: 'REMOVALS', message: dropRefusalOf(pendingDrops) };
+    const bareWood = bareWoodOf(chosenList, finishFor);
+    if (bareWood.length) {
+        return { kind: 'BARE_WOOD', bareWood,
+            alert: `Pick the WOOD finish first — ${bareWood.map(c => c.name || c.partId).join(', ')} would leave here with no stain.\n\nChoose it on the WOOD row of the finish step, or on the part itself.` };
+    }
+    const openQuestions = openFinishQuestionsOf(askingFinishes, finishAnswers);
+    if (openQuestions.length) {
+        return { kind: 'FINISH_QUESTIONS', openQuestions,
+            alert: `Answer the finish questions first — ${openQuestions.map(([a, m]) => `${a.code}${a.finish.name ? ` (${String(a.finish.name).trim()})` : ''}: ${m.join(', ')}`).join(' · ')}.\n\nThey are at the top of the finish panel and apply to the whole configuration.` };
+    }
+    return null;
+}
+
+// ── THE CART LINE ────────────────────────────────────────────────────────────────────────────
+// extraLines = the extras AS THE PANEL PRICED THEM (priceChoice, customer row) — the
+// handoff uses these verbatim so the docs, floors and NetSuite bill what was shown.
+// Filtered to extras actually TAKEN: extraLines coerces a 0 qty to 1 for display.
+export const takenExtraLinesOf = (extraLines, extras) =>
+    extraLines.filter(l => Number((extras.find(x => x.code === l.partId && (x.slot || '') === (l.slot || '')) || {}).qty) > 0);
+/**
+ * THE HANDOFF IS BUILT HERE, in the shape CPQ has always written — so the shop floor, the
+ * finishing floor, RTG, the ERP push and the CRM documents all keep working without
+ * knowing which engine produced the order.
+ *
+ * `renderSnapshot` is a picture of what was configured, taken as it is added (the screen's; a caller with no
+ * canvas passes none — it never blocks the add). `renderState` is the frozen render (renderStateOf).
+ */
+export function cartLineOf({ resolved, pricingCtx, assembly, flow, findPart, qty, renderSnapshot = null, pins, memo,
+    chosenFinishObjects, effectiveLevel, lengthInches, lengthFeet, extras, extraLines, stepNotes, stepNoteClient,
+    answers, livePicks, partFinish, globalFinish, globalFinishes, stepQty, liveFinishAnswers,
+    kitBill, kitSource, kitPick, kitMotor, isTraverse, trvSel, trvComponents, trvLive, renderState,
+    steps, noSplice, spliceOverIn }) {
+    const built = handoffItem(resolved, {
+        ...pricingCtx, assembly, flow, findPart, qty, renderSnapshot,
+        // The pins this line was resolved from — fingerprinted on the line so Approve can tell
+        // when the tags have changed since the save (Shared/cartStaleness).
+        pins,
+        sidemark: memo, memo,
+        finishes: chosenFinishObjects, finishLabel: finishLabelOf(chosenFinishObjects),
+        priceLevel: effectiveLevel, lengthInches, lengthFeet,
+        extras, extraLines: takenExtraLinesOf(extraLines, extras),
+        stepNotes, answers, picks: livePicks, partFinish, globalFinish, globalFinishes, stepQty,
+        // What the finishes were asked — written into each line's finish text, and kept for Edit.
+        finishAnswers: liveFinishAnswers,
+        // The kit, so the cart bills exactly what the panel showed — and WHICH kit, so Edit restores it.
+        kit: kitBill, kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
+        // The Traverse components answers (carrier style + count, draw, picks) — Edit restores them, or
+        // a re-add would silently swap the chosen carriers back for the pinned ones.
+        trvSel: (isTraverse && trvSel) ? trvSel : null,
+        // The track's components, in the shape the cart has always carried them — the ERP push
+        // reads `trvComponents` off the item and the documents read the breakdown rows, so
+        // neither can tell which engine asked the question.
+        trvComponents,
+        // ── HOW IT OPENS, ON THE ORDER (Stuart 2026-08-22) ───────────────────────────────
+        // Not a part and not a price — an instruction. The bench assembles the carriers to it
+        // and hangs the master on the drawn side, so it has to reach the floor and the
+        // paperwork, not just the screen it was answered on.
+        traverseDraw: trvLive?.draw || '',
+        traverseMotorSide: trvLive?.motorSide || '',
+        renderState,
+    });
+    // ── WHAT THE SHOP IS TOLD, ON THE LINE THE SHOP READS (Stuart 2026-10-01 · Shared/lineShopNotes) ──
+    // The note typed on each step ("Anything the shop needs to know about Pole length") was saved
+    // for Edit and read by nothing else. It goes on the line's generalNotes — View Item prints
+    // them, RTG stamps them on the shop order — under the step it was typed on. A pole over the
+    // one-piece limit going out with no joiner leads the list, and carries the flag the reopen reads.
+    const shopNotes = shopNotesOf({ steps, stepNotes, lead: noSplice ? [noSpliceNote(lengthInches, spliceOverIn)] : [] });
+    // The notes ticked "show to the customer" also ride the line as clientNotes — CPQ's save writes them under
+    // this configuration as display-only rows the money documents print. The ticks are saved for Edit.
+    const clientNotes = clientNotesOf({ steps, stepNotes, visible: stepNoteClient });
+    const ticked = Object.keys(stepNoteClient).length > 0;
+    return (noSplice || shopNotes.length || ticked)
+        ? { ...built,
+            ...((noSplice || ticked) ? { engineConfig: { ...built.engineConfig, ...(noSplice ? { spliceWaived: true } : {}), ...(ticked ? { stepNoteClient: { ...stepNoteClient } } : {}) } } : {}),
+            ...(shopNotes.length ? { generalNotes: shopNotes } : {}),
+            ...(clientNotes.length ? { clientNotes } : {}) }
+        : built;
+}
+
 /**
  * The configuration, in one call — for a caller that is not a React screen (the portal's server, a
  * harness). The CPQ screen makes these SAME calls one memo at a time, so a keystroke re-works only
@@ -897,16 +1308,22 @@ export function billOf({ customer = null, customerId = '', priceLevel = 'STANDAR
  * @param data   { assembly, pins, parts, flow, spanMap, spanCaps, trvRules, extraItems, finishes, flowFinishes,
  *                 customer, customerId, priceLevel, outsourceCodes, kits } — what the screen is handed
  * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId, extras, spliceWaived, globalFinishes,
- *                 globalFinish, partFinish, finishAnswers, kitPick, kitCode, kitMotor, trvSel } — what the operator
- *               has answered, as a cart line saves it (engineConfig); a saved length, the saved add-by-hand
- *               rows, the saved finish defaults and the kit a line was billed from are read back exactly as
- *               Edit restores them
+ *                 globalFinish, partFinish, finishAnswers, kitPick, kitCode, kitMotor, trvSel, stepNotes,
+ *                 stepNoteClient, memo, qty, drawnSplices, drops } — what the operator has answered, as a cart
+ *               line saves it (engineConfig); a saved length, the saved add-by-hand rows, the saved finish
+ *               defaults, the kit a line was billed from, the notes and the ticks are read back exactly as Edit
+ *               restores them. `drops` is what has already been named as removed, with what was acknowledged
+ *               (each { key, acked }) — a caller that shows the removals hands them back with `acked: true`.
+ * @returns everything the screen works out, by the screen's own names — among them `steps` (the walk),
+ *          `refusal` (why it may not be added yet, or null) and `item` (the cart line; null while refused)
  */
 export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMap = {}, spanCaps = {}, trvRules = null, extraItems = [],
     finishes = [], flowFinishes = [], customer = null, customerId = '', priceLevel = 'STANDARD', outsourceCodes = [], kits = [] } = {},
     { answers = {}, picks = {}, sizePick = {}, lengthInches: savedLength = null, stepQty = {}, fabricId = 'PRINT', extras: savedExtras = [], spliceWaived = false,
         globalFinishes: savedGlobalFinishes = null, globalFinish: savedGlobalFinish = '', partFinish: savedPartFinish = null,
-        finishAnswers: savedFinishAnswers = null, kitPick = '', kitCode = '', kitMotor = '', trvSel: savedTrvSel = null } = {}) {
+        finishAnswers: savedFinishAnswers = null, kitPick = '', kitCode = '', kitMotor = '', trvSel: savedTrvSel = null,
+        stepNotes: savedStepNotes = null, stepNoteClient: savedStepNoteClient = null, memo: savedMemo = '', sidemark = '', qty: savedQty = 1,
+        drawnSplices: savedDrawnSplices = null, drops: savedDrops = null, renderSnapshot = null } = {}) {
     const partIndex = partIndexOf(parts);
     const findPart = (id) => partIn(partIndex, id);
     const ourId = (id) => ourNumberOf(findPart(id), id);
@@ -954,8 +1371,39 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const bill = billOf({ customer, customerId, priceLevel, outsourceCodes, flow, kits, trvRules, findPart, model, resolved, livePicks, extras, lengthFeet, lengthInches,
         spliceCodes, spliceOverIn, sameItemCode, finishByCode: fin.finishByCode, globalFinish: fin.globalFinish, lineFinishFor: fin.lineFinishFor, subFinishFor: fin.subFinishFor,
         matchFinishOverride: fin.matchFinishOverride }, { answers, kitPick, kitCode, kitMotor, trvSel, finishAnswers });
+    // The walk, what is drawn, whether it may be added and the cart line: the notes, the ticks, the memo, the
+    // multiplier and a drawing's splices read back as Edit (or a restored workspace) restores them.
+    const stepNotes = { ...(savedStepNotes || {}) };
+    const stepNoteClient = (savedStepNoteClient && typeof savedStepNoteClient === 'object') ? { ...savedStepNoteClient } : {};
+    const drawnSplices = Array.isArray(savedDrawnSplices) ? savedDrawnSplices.map(sp => ({ distInches: sp.distInches, ref: sp.ref || '' })) : [];
+    const memo = savedMemo || sidemark || '';
+    const qty = configQtyOf(savedQty);
+    const steps = stepsOf({ model, isTraverse: bill.isTraverse, trvRules, sizeSteps, sizeProjInches, settledKeys });
+    const answerOf = (st) => stepAnswerOf(st, { answers, livePicks, lengthFeet, ourId, trvLive: bill.trvLive, trvRules, trvComponents: bill.trvComponents, sizePick });
+    const extrasOnStep = (st) => extrasOnStepOf(offeredExtraItems, st);
+    const visibleOverrides = visibleOverridesOf(resolved);
+    const clearList = clearListOf(resolved);
+    const railNames = railNamesOf(resolved, model);
+    const stretchSpec = stretchSpecOf(railNames, lengthInches);
+    const spliceMarks = spliceMarksOf({ extras, spliceCodes, drawnSplices, lengthInches });
+    const cloneSpecs = cloneSpecsOf({ resolved, railNames, livePicks, quantities });
+    const chosen = chosenPartsOf(model, livePicks);
+    const cadUrl = assembly?.manufacturingSpecs?.cadUrl;
+    const renderState = renderStateOf({ cadUrl, textureOverrides: fin.textureOverrides, visibleOverrides, cloneSpecs, stretchSpec, spliceMarks, clearList });
+    // What a later choice removed (Shared/pickDrops), over what was already named and acknowledged.
+    const drops = mergeDrops(Array.isArray(savedDrops) ? savedDrops : [], droppedPicks(model, picks, livePicks, { labelOf: slotLabel }));
+    const pendingDrops = unacknowledged(drops);
+    const dropRefusal = dropRefusalOf(pendingDrops);
+    const refusal = addRefusalOf({ priced: bill.priced, pendingDrops, chosenList: fin.chosenList, finishFor: fin.finishFor, askingFinishes: bill.askingFinishes, finishAnswers });
+    const item = refusal ? null : cartLineOf({ resolved, pricingCtx: bill.pricingCtx, assembly, flow, findPart, qty, renderSnapshot, pins, memo,
+        chosenFinishObjects: fin.chosenFinishObjects, effectiveLevel: bill.effectiveLevel, lengthInches, lengthFeet, extras, extraLines: bill.extraLines, stepNotes, stepNoteClient,
+        answers, livePicks, partFinish, globalFinish: fin.globalFinish, globalFinishes, stepQty, liveFinishAnswers: bill.liveFinishAnswers,
+        kitBill: bill.kitBill, kitSource: bill.kitSource, kitPick: bill.kitPick, kitMotor: bill.kitMotor, isTraverse: bill.isTraverse, trvSel, trvComponents: bill.trvComponents, trvLive: bill.trvLive,
+        renderState, steps, noSplice: bill.noSplice, spliceOverIn });
     return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks,
         lengthInches, lengthFeetExact, lengthFeet, advice, recommendFor, quantities, resolved,
         sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied,
-        ...fin, finishAnswers, trvSel, ...bill };
+        ...fin, finishAnswers, trvSel, ...bill,
+        stepNotes, stepNoteClient, drawnSplices, memo, qty, steps, answerOf, extrasOnStep, visibleOverrides, clearList, railNames, stretchSpec, spliceMarks, cloneSpecs,
+        chosen, cadUrl, renderState, drops, pendingDrops, dropRefusal, refusal, item };
 }
