@@ -1553,7 +1553,13 @@ function HardwareConfiguratorInner({
                                           }
                                           setExtras(a => {
                                             const i = a.findIndex(x => x.code === it.code && (x.slot || '') === slotScope);
-                                            if (i < 0) return [...a, { code: it.code, qty: '1', note: '', ...(slotScope ? { slot: slotScope } : {}), ...patch }];
+                                            // ⚠ A QUANTITY THAT IS NOT ABOVE ZERO ADDS NOTHING (Stuart 2026-10-13: "fix both"). Typing a
+                                            // quantity is what puts an item on the order — and a 0 typed into an EMPTY box put it there
+                                            // too: priced as one on the step and in the estimate, on the cart line ×1 at $0.00 when it
+                                            // was the only item added by hand (left off when another was taken), and saved for Edit as
+                                            // ×1 either way. An item that is already on the order still leaves when its quantity is
+                                            // cleared or set to 0 — the line below, as before.
+                                            if (i < 0) return ('qty' in patch && !(Number(patch.qty) > 0)) ? a : [...a, { code: it.code, qty: '1', note: '', ...(slotScope ? { slot: slotScope } : {}), ...patch }];
                                             const next = [...a]; next[i] = { ...next[i], ...patch };
                                             return next[i].qty === '' || Number(next[i].qty) <= 0 ? next.filter((_, j) => j !== i) : next;
                                           });
