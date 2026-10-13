@@ -15,6 +15,7 @@ import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey , stockHolderIdOf, withShelfFigures, neverRefreshed } from '../Shared/materialGrid';
 import { fetchShelfFigures } from '../Shared/shelfFigures';
+import { stillRealTargetOf, stillRealStamp, NO_MOVEMENT_DAYS } from '../Shared/openWork';
 import { finishGroupsOf, docStreamsOf, poleCountRepairOf, poleTrackRepairOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe, writeShopDocOnce, claimRelease, endReleaseClaim, fetchMasterFinishes } from '../Shared/floorRelease';
@@ -2349,6 +2350,21 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         }
     };
 
+    // ── THE DAY SUMMARY'S DRIFT LISTS (Stuart 2026-10-13 · Shared/openWork) ───────────────────────────────────────────
+    // "Out of step" and "No movement" list open work orders; a person decides each. Close is the board's own closer, with
+    // its own confirm (the record where there is one, as a board row hands it). "Still real" writes one stamp on the
+    // document — who said so and when — which counts as movement, so the row leaves the list for fourteen days.
+    const closeFromSummary = (row) => closeOrderEverywhere(row.hq || row.fin, 'stock');
+    const confirmStillReal = async (row) => {
+        const t = stillRealTargetOf(row);
+        if (!t) return;
+        if (!window.confirm(`${row.ref} — still real?\n\n${row.where} · nothing recorded for ${row.idleDays} days.\n\nOK = it is real and waiting. It leaves the "No movement" list for ${NO_MOVEMENT_DAYS} days and your name is recorded against it. Nothing else about the order changes.`)) return;
+        try {
+            await updateDoc(doc(db, t.coll, t.id), stillRealStamp(currentUser || ''));
+            addLog(`🧭 ${row.ref}: said still real by ${currentUser || '?'} — off the No movement list for ${NO_MOVEMENT_DAYS} days.`, 'info');
+        } catch (e) { alert('Could not record it: ' + (e.message || e)); }
+    };
+
     // ── DISPATCHED STRIP ────────────────────────────────────────────────────────────────────
     // A dispatched order is DONE from this board's point of view but must still be VISIBLE with
     // its status (Stuart 2026-07-28). It renders as one condensed row — no action buttons except
@@ -3858,6 +3874,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                         <DaySummaryPanel onClose={() => setDaySummaryOpen(false)} orders={liveSO} workOrders={liveWO} finDocs={liveFin} shopDocs={liveShop}
                             brand={activeBrand} userName={currentUser || ''} canOverrule={canReopenInProduction(userRole)} isOrderEntry={isOrderEntryOrder} refOf={woRefOf}
                             onToggleFinish={toggleFinishAsAvailable} onDispatch={(so) => autoSplitSalesOrder(so)}
+                            onCloseDoc={closeFromSummary} onStillReal={confirmStillReal}
                             onReview={(so) => { try { sessionStorage.setItem('hq_oe_review_so', so.id); } catch (e) { /* the view still opens */ } setDaySummaryOpen(false); window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }} />
                     )}
                     {/* RECONCILIATION sits directly above the transmit log: together they are the

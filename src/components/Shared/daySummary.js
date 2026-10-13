@@ -11,6 +11,7 @@
 // screen are the card's own. Pure — scripts/daySummary.test.mjs.
 import { gateSummary, isReleasable, wholeOrderWait, finishModeOf, FINISH_MODE, unstartedTbfLinesOf } from './orderStatus.js';
 import { stockToReallocateText, REALLOCATE_WORD, orderLine, holdersText } from './stockReallocate.js';
+import { openWorkText, NO_MOVEMENT_DAYS } from './openWork.js';
 import { reviewWaitingOf } from './reviewWaiting.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
@@ -136,7 +137,7 @@ const timeOf = (ms) => (ms ? new Date(ms).toLocaleTimeString([], { hour: 'numeri
 const finishText = (r) => (r.finishMode === FINISH_MODE.AS_AVAILABLE ? 'as available' : 'complete') + (r.finishBy ? ` (${r.finishBy})` : (r.finishAsked ? '' : ' (default)'));
 
 /** The day in plain text — to paste into a message or an email. */
-export function daySummaryText(sum, { day = '', brand = '', stock = [] } = {}) {
+export function daySummaryText(sum, { day = '', brand = '', stock = [], openWork = null } = {}) {
     const c = sum.counts;
     const out = [`ORDERS ENTERED ${day}${brand ? ` · ${U(brand)}` : ''}`,
         `${c.entered} entered (${c.orderEntry} Order Entry, ${c.cpq} CPQ${c.display ? `, ${c.display} display` : ''}) · ${c.needAttention} need attention · ${c.onFloor} on the floor · ${c.backorderedParts} part${c.backorderedParts === 1 ? '' : 's'} backordered today`, ''];
@@ -153,13 +154,19 @@ export function daySummaryText(sum, { day = '', brand = '', stock = [] } = {}) {
     }
     // Stock to reallocate (Stuart 2026-10-13 · Shared/stockReallocate) — every open order, as NetSuite read when the screen was opened.
     if (stock && stock.length) out.push('', stockToReallocateText(stock));
+    // Open work that has drifted (Stuart 2026-10-13 · Shared/openWork): finished in NetSuite, or nothing recorded for 14 days.
+    const drift = openWork ? openWorkText(openWork) : '';
+    if (drift) out.push('', drift);
     return out.join('\n');
 }
 
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 /** The day as a printable page (letter, portrait) — Shared/labelPrint.printHtmlDocument prints it. */
-export function daySummaryHtml(sum, { day = '', brand = '', printedBy = '', stock = [] } = {}) {
+export function daySummaryHtml(sum, { day = '', brand = '', printedBy = '', stock = [], openWork = null } = {}) {
     const c = sum.counts;
+    const driftRow = (r, last) => `<tr><td><b>${esc(r.ref)}</b><br><span class="s">${esc(r.item)}${r.qty ? ` ×${r.qty}` : ''}</span></td><td>${esc(r.where)}<br><span class="s">raised ${r.ageDays == null ? '—' : `${r.ageDays} days ago`}</span></td><td>${esc(last)}</td></tr>`;
+    const oos = ((openWork && openWork.outOfStep) || []).map(r => driftRow(r, r.why)).join('');
+    const idle = ((openWork && openWork.noMovement) || []).map(r => driftRow(r, `nothing recorded for ${r.idleDays} days`)).join('');
     const st = (stock || []).map(it => `<tr>
         <td><b>${esc(it.code)}</b><br><span class="s">${esc(it.name)}</span></td>
         <td><b>${esc(REALLOCATE_WORD[it.kind] || it.kind)}</b><br><span class="s">on hand ${it.onHand} · committed ${it.committed}<br>wanted ${it.wanted} · free ${it.free}</span></td>
@@ -185,5 +192,7 @@ export function daySummaryHtml(sum, { day = '', brand = '', printedBy = '', stoc
         <table><tr><th style="width:27%">Order</th><th style="width:25%">Status</th><th>Work orders · review · backorders</th></tr>${rows || '<tr><td colspan="3">No sales order was entered that day.</td></tr>'}</table>
         ${sum.backorders.length ? `<h2>Backordered today</h2><table><tr><th>Part</th><th>Short</th><th>On order</th><th>Orders</th></tr>${bo}</table>` : ''}
         ${st ? `<h2>Stock to reallocate — every open order, as NetSuite reads now</h2><div class="k">Nothing here stops the floor. Re-commit in NetSuite before the build if the stock should go to a different order.</div><table><tr><th style="width:24%">Item</th><th style="width:26%">NetSuite</th><th>Orders that want it</th></tr>${st}</table>` : ''}
+        ${oos ? `<h2>Out of step — open here, finished in NetSuite</h2><table><tr><th style="width:30%">Work order</th><th style="width:28%">Where the app has it</th><th>NetSuite</th></tr>${oos}</table>` : ''}
+        ${idle ? `<h2>No movement — open, nothing recorded for ${NO_MOVEMENT_DAYS} days or more</h2><table><tr><th style="width:30%">Work order</th><th style="width:28%">Where the app has it</th><th>Last movement</th></tr>${idle}</table>` : ''}
     </body></html>`;
 }

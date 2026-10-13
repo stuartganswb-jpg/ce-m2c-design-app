@@ -7,6 +7,7 @@ import { fetchShelfFigures } from '../Shared/shelfFigures';
 import { fetchStockHolds } from '../Shared/stockHolds';
 import { stockToReallocateOf, REALLOCATE, REALLOCATE_WORD, orderLine, holdersText } from '../Shared/stockReallocate';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
+import { openWorkOf, outOfStepOf, noMovementOf, nsIdsOfRows, fetchNsStatuses, NO_MOVEMENT_DAYS } from '../Shared/openWork';
 
 // THE DAY'S ORDERS — a screen opened from RTG (Stuart 2026-10-12: "end of day summary of orders entered and their status
 // from both sales entry and cpq, so that management can see what has happened and overrule"). It reads the feeds the
@@ -20,7 +21,7 @@ const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppe
 const btn = (strong) => ({ ...mono, padding: '8px 12px', cursor: 'pointer', background: strong ? 'var(--ink)' : '#fff', color: strong ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', whiteSpace: 'nowrap' });
 const timeOf = (ms) => (ms ? new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '');
 
-const DaySummaryPanel = ({ onClose, orders = [], workOrders = [], finDocs = [], shopDocs = [], brand = '', userName = '', canOverrule = false, isOrderEntry, refOf, onToggleFinish, onReview, onDispatch }) => {
+const DaySummaryPanel = ({ onClose, orders = [], workOrders = [], finDocs = [], shopDocs = [], brand = '', userName = '', canOverrule = false, isOrderEntry, refOf, onToggleFinish, onReview, onDispatch, onCloseDoc, onStillReal }) => {
     const [day, setDay] = useState(dayStrOf());
     const [copied, setCopied] = useState(false);
     const sum = useMemo(() => {
@@ -57,12 +58,27 @@ const DaySummaryPanel = ({ onClose, orders = [], workOrders = [], finDocs = [], 
             setStock({ loading: false, items, error: '', at: Date.now(), docs: targets.length, holdersKnown: held.known });
         } catch (e) { setStock({ loading: false, items: [], error: `Stock could not be read (${e.message || e}).`, at: Date.now(), docs: targets.length, holdersKnown: false }); }
     };
+    // 🧭 OPEN WORK THAT HAS DRIFTED (Stuart 2026-10-13: "how do we make sure it all stays aligned and current" · Shared/openWork).
+    // The same rows as 12.5's Open Work Orders, from the feeds the board already holds — so a close shows here at once.
+    // OUT OF STEP reads NetSuite's status of each row's work order / sales order (when the screen opens, and on ↻);
+    // NO MOVEMENT is the app's own stamps. Nothing here closes by itself: Close is the board's own closer, pressed by a person.
+    const openRows = useMemo(() => openWorkOf({ hqDocs: workOrders, finDocs, shopDocs, salesOrders: orders, ...(refOf ? { refOf } : {}) }), [workOrders, finDocs, shopDocs, orders, refOf]);
+    const [nsSt, setNsSt] = useState({ loading: true, map: null, error: '', at: 0 });
+    const readStatuses = async () => {
+        const f = feeds.current;
+        const rows = openWorkOf({ hqDocs: f.workOrders, finDocs: f.finDocs, shopDocs: f.shopDocs, salesOrders: f.orders });
+        setNsSt(s => ({ ...s, loading: true, error: '' }));
+        const res = await fetchNsStatuses(nsIdsOfRows(rows));
+        setNsSt(res.known ? { loading: false, map: res.map, error: '', at: Date.now() } : { loading: false, map: null, error: 'NetSuite could not be read — nothing is called out of step until it can. Try ↻ again.', at: Date.now() });
+    };
+    const outOfStep = useMemo(() => outOfStepOf(openRows, nsSt.map), [openRows, nsSt.map]);
+    const noMovement = useMemo(() => noMovementOf(openRows, { except: outOfStep.map(r => r.key) }), [openRows, outOfStep]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    useEffect(() => { readStock(); }, [brand]);
+    useEffect(() => { readStock(); readStatuses(); }, [brand]);
     const shift = (n) => { const { start } = dayBoundsOf(day); setDay(dayStrOf(start + n * 86400000 + 43200000)); };
     const c = sum.counts;
     const copy = async () => {
-        const text = daySummaryText(sum, { day, brand, stock: stock.items });
+        const text = daySummaryText(sum, { day, brand, stock: stock.items, openWork: { outOfStep, noMovement } });
         try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2500); }
         catch (e) { window.prompt('Copy the summary:', text); }
     };
@@ -79,7 +95,7 @@ const DaySummaryPanel = ({ onClose, orders = [], workOrders = [], finDocs = [], 
                         <input type="date" value={day} onChange={e => e.target.value && setDay(e.target.value)} style={{ padding: '7px 8px', border: '1px solid var(--ink)', fontFamily: 'var(--mono)', fontSize: '0.85rem' }} />
                         <button style={btn(false)} onClick={() => shift(1)} title="The day after">▶</button>
                         <button style={btn(false)} onClick={() => setDay(dayStrOf())}>Today</button>
-                        <button style={btn(false)} onClick={() => printHtmlDocument(daySummaryHtml(sum, { day, brand, printedBy: userName, stock: stock.items }), { autoPrintDelay: 400 })} title="Prints the day — or saves it as a PDF to send">🖨 Print / PDF</button>
+                        <button style={btn(false)} onClick={() => printHtmlDocument(daySummaryHtml(sum, { day, brand, printedBy: userName, stock: stock.items, openWork: { outOfStep, noMovement } }), { autoPrintDelay: 400 })} title="Prints the day — or saves it as a PDF to send">🖨 Print / PDF</button>
                         <button style={btn(false)} onClick={copy} title="Copies the day as plain text, to paste into a message or an email">{copied ? '✓ Copied' : '⧉ Copy text'}</button>
                         <button style={btn(true)} onClick={onClose}>Close</button>
                     </div>
@@ -189,6 +205,55 @@ const DaySummaryPanel = ({ onClose, orders = [], workOrders = [], finDocs = [], 
                     <div style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)', marginTop: '10px', textTransform: 'none', letterSpacing: 0 }}>
                         {stock.at ? `Read ${new Date(stock.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · ` : ''}Counts every open document whose parts are not pulled yet, on any day — not only the day shown above. "Free" is on hand less what NetSuite holds for anyone other than the orders listed.{!stock.holdersKnown && !stock.error ? ' Who each item is held for could not be read this time, so every commitment is counted against the orders.' : ''}
                     </div>
+
+                    {(() => {
+                        const grid = 'minmax(170px, 1.2fr) minmax(150px, 1fr) minmax(240px, 2.2fr) auto';
+                        const head = (cols) => <div style={{ display: 'grid', gridTemplateColumns: grid, gap: '10px', padding: '8px 14px', ...mono, fontSize: '9px', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)' }}>{cols.map(c => <div key={c}>{c}</div>)}</div>;
+                        const line = (r, tone, third, buttons) => (
+                            <div key={r.key} style={{ display: 'grid', gridTemplateColumns: grid, gap: '10px', padding: '10px 14px', borderBottom: '1px solid var(--line)', borderLeft: `4px solid ${tone}`, fontSize: '0.88rem', alignItems: 'start' }}>
+                                <div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontWeight: 700 }}>{r.ref}</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{r.item}{r.qty ? ` ×${r.qty}` : ''}{r.soRef ? ` · ${soLabel(r.soRef)}` : ''}</div>
+                                </div>
+                                <div>{r.where}<div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>raised {r.ageDays == null ? '—' : `${r.ageDays} day${r.ageDays === 1 ? '' : 's'} ago`}</div></div>
+                                <div style={{ color: tone, fontWeight: 500 }}>{third}</div>
+                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>{buttons}</div>
+                            </div>
+                        );
+                        const closeBtn = (r) => canOverrule && onCloseDoc && <button key="c" style={{ ...btn(false), borderColor: '#d9534f', color: '#d9534f' }} onClick={() => onCloseDoc(r)} title="The board's own Close — it names what it will close and asks first.">✕ Close</button>;
+                        return (
+                            <>
+                                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', margin: '26px 0 8px' }}>
+                                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)' }}>Out of step with NetSuite <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)' }}>open here · finished there</span></div>
+                                    <button style={btn(false)} onClick={readStatuses} disabled={nsSt.loading} title="Reads NetSuite's status of every open work order and its sales order again">{nsSt.loading ? 'Reading NetSuite…' : '↻ Read NetSuite'}</button>
+                                </div>
+                                <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', marginBottom: '8px', lineHeight: 1.45 }}>
+                                    A work order the app still has open while NetSuite shows it Built, Closed or Cancelled — or its sales order fully fulfilled, Billed or Closed. It was finished outside the app; closing it here takes it off every queue. Nothing closes by itself.
+                                </div>
+                                {nsSt.error
+                                    ? <div style={{ padding: '14px', background: '#fff', border: '1px solid #d9534f', color: '#d9534f' }}>{nsSt.error}</div>
+                                    : nsSt.loading && !nsSt.map
+                                        ? <div style={{ padding: '14px', background: '#fff', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Reading NetSuite…</div>
+                                        : outOfStep.length === 0
+                                            ? <div style={{ padding: '14px', background: '#fff', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Every open work order is still open in NetSuite too ({openRows.length} open here).</div>
+                                            : <div style={{ background: '#fff', border: '1px solid var(--line)' }}>{head(['Work order', 'Where the app has it', 'NetSuite says', ''])}{outOfStep.map(r => line(r, '#d9534f', r.why, [closeBtn(r)]))}</div>}
+
+                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)', margin: '26px 0 8px' }}>No movement in {NO_MOVEMENT_DAYS} days <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)' }}>open · nothing recorded</span></div>
+                                <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', marginBottom: '8px', lineHeight: 1.45 }}>
+                                    Open work nobody has picked, started, finished or moved for {NO_MOVEMENT_DAYS} days or more. Either it is real and waiting — say so, and it leaves this list for another {NO_MOVEMENT_DAYS} days — or it is not, and it is closed. Display rows waiting for their display to ship are not listed.
+                                </div>
+                                {noMovement.length === 0
+                                    ? <div style={{ padding: '14px', background: '#fff', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Nothing open has sat for {NO_MOVEMENT_DAYS} days.</div>
+                                    : <div style={{ background: '#fff', border: '1px solid var(--line)' }}>{head(['Work order', 'Where the app has it', 'Last movement', ''])}{noMovement.map(r => line(r, '#8a6d1f', `nothing recorded for ${r.idleDays} days`, [
+                                        canOverrule && onStillReal && <button key="r" style={btn(false)} onClick={() => onStillReal(r)} title={`It is real and waiting — off this list for ${NO_MOVEMENT_DAYS} days. Records who said so.`}>Still real</button>,
+                                        closeBtn(r),
+                                    ]))}</div>}
+                                <div style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)', marginTop: '10px', textTransform: 'none', letterSpacing: 0 }}>
+                                    {nsSt.at ? `NetSuite read ${new Date(nsSt.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · ` : ''}The same open work orders as 12.5 Stock View → Sales Snapshot → Open WOs, for this division.
+                                </div>
+                            </>
+                        );
+                    })()}
                 </div>
             </div>
         </div>

@@ -13,6 +13,7 @@ import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/fini
 import { closeOrderEverywhere, hardDeleteWithLedger, propagateFloorState } from '../Shared/orderLifecycle';
 import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { woRefOf } from '../Shared/woRef';
+import { openWorkOf, openGroupCounts, OPEN_GROUP_LABEL } from '../Shared/openWork';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutPlanFromSource, sourcesForLength, poleOptionsWithStock } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
@@ -1614,35 +1615,29 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         alert(`${qty} × ${code} is not a Snapshot row (no stocked-sales history), so it is in the MAIN grid's Order column instead.\n\nClose the Snapshot, review it in Global Inventory Health, then press "Push PO to RTG Dispatch" (Purchasing) or "Push Work Order to RTG Dispatch" (Production) on the right.`);
     };
 
+    // ONE READING OF "OPEN" (Stuart 2026-10-13 · Shared/openWork): the RTG record, its finishing document and its shop job
+    // read together — a shop-only work order whose shop job is completed is done (fourteen of the 120 listed that day
+    // were), every row is put in a group and carries its age. The Day summary's "Out of step" and "No movement" read
+    // the same rows.
+    const [openWosScope, setOpenWosScope] = useState('DIVISION');   // this division | every division
     const loadOpenWos = async () => {
         setOpenWos({ loading: true, rows: [] });
         try {
-            const [hqSnap, finSnap] = await Promise.all([
+            const [hqSnap, finSnap, shopSnap, soSnap] = await Promise.all([
                 getDocs(collection(db, 'hq_work_orders')),
                 getDocs(collection(db, 'fin_workorders')),
+                getDocs(collection(db, 'shop_custom_orders')),
+                getDocs(collection(db, 'hq_sales_orders')),
             ]);
-            const finById = {};
-            finSnap.docs.forEach(d => { finById[d.id] = { id: d.id, ...d.data() }; });
-            const seenFin = new Set();
-            const rows = [];
-            hqSnap.docs.forEach(d => {
-                const hq = { id: d.id, ...d.data() };
-                if (hq.deleted || ['Closed', 'Cancelled', 'Done', 'Deleted'].includes(hq.status)) return;
-                const fin = finById[(hq.finPayload && hq.finPayload.id) || hq.id] || null;
-                if (fin) seenFin.add(fin.id);
-                if (fin && fin.currentPhase === 'Closed') return;
-                if (fin && fin.packStatus === 'Packed') return; // done + put away = not open
-                rows.push({ hq, fin });
-            });
-            finSnap.docs.forEach(d => {
-                const fin = { id: d.id, ...d.data() };
-                if (seenFin.has(fin.id) || fin.deleted || fin.currentPhase === 'Closed' || fin.packStatus === 'Packed') return;
-                rows.push({ hq: null, fin });
-            });
-            rows.sort((a, b) => (((b.fin && b.fin.createdAt) || (b.hq && b.hq.createdAt) || 0) - (((a.fin && a.fin.createdAt) || (a.hq && a.hq.createdAt) || 0))));
+            const all = (snap) => snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const rows = openWorkOf({ hqDocs: all(hqSnap), finDocs: all(finSnap), shopDocs: all(shopSnap), salesOrders: all(soSnap), refOf: woRefOf });
             setOpenWos({ loading: false, rows });
         } catch (e) { setOpenWos({ loading: false, rows: [], error: e.message || String(e) }); }
     };
+    // This division's rows (a document with no division stamp is shown everywhere — work is never hidden), or every division's.
+    const openWosShown = (openWos && !openWos.loading && Array.isArray(openWos.rows))
+        ? (openWosScope === 'ALL' ? openWos.rows : openWos.rows.filter(r => !r.brand || r.brand === String(activeBrand || '').toLowerCase()))
+        : [];
     const woRowRef = (row) => (row.fin && woRefOf(row.fin)) || (row.hq && woRefOf(row.hq)) || '';
     const resetWoToSetup = async (row) => {
         const fin = row.fin;
@@ -3671,9 +3666,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cleanup · repair actions never touch the NetSuite work order itself</span>
-                                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', fontWeight: 500, color: 'var(--ink)' }}>📋 Open Work Orders {openWos.loading ? '…' : `(${openWos.rows.length})`}</span>
+                                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', fontWeight: 500, color: 'var(--ink)' }}>📋 Open Work Orders {openWos.loading ? '…' : `(${openWosShown.length})`}</span>
+                                {!openWos.loading && !openWos.error && (
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', display: 'block', marginTop: '6px', letterSpacing: '.03em' }}>
+                                        {openGroupCounts(openWosShown).map(g => `${g.count} ${g.label.toLowerCase()}`).join(' · ') || 'nothing open'}
+                                        {openWosScope === 'DIVISION' && openWos.rows.length !== openWosShown.length ? ` · ${openWos.rows.length - openWosShown.length} more in other divisions` : ''}
+                                    </span>
+                                )}
                             </div>
                             <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                {['DIVISION', 'ALL'].map(sc => (
+                                    <button key={sc} onClick={() => setOpenWosScope(sc)} title={sc === 'DIVISION' ? 'Only this division\u2019s work orders' : 'Every division together'}
+                                        style={{ padding: '8px 12px', background: openWosScope === sc ? 'var(--ink)' : 'transparent', border: '1px solid var(--ink)', color: openWosScope === sc ? '#fff' : 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>
+                                        {sc === 'DIVISION' ? String(activeBrand || 'this division').toUpperCase() : 'All divisions'}
+                                    </button>
+                                ))}
                                 <button onClick={loadOpenWos} style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>⟳ Refresh</button>
                                 <button onClick={() => setOpenWos(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
                             </span>
@@ -3683,21 +3690,23 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 <div style={{ padding: '40px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)' }}>Loading work orders…</div>
                             ) : openWos.error ? (
                                 <div style={{ padding: '30px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '12px' }}>Failed: {openWos.error}</div>
-                            ) : openWos.rows.length === 0 ? (
+                            ) : openWosShown.length === 0 ? (
                                 <div style={{ padding: '40px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)' }}>No open work orders — everything is closed or packed.</div>
                             ) : (
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
                                     <thead>
                                         <tr style={{ background: 'var(--paper)', borderBottom: '2px solid var(--ink)' }}>
-                                            {['WO', 'Item', 'Where', 'Tasks S·P·B·H', 'NetSuite', 'Pack', ''].map(h => <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', position: 'sticky', top: 0, background: 'var(--paper)' }}>{h}</th>)}
+                                            {['WO', 'Item', 'Age', 'Where', 'Tasks S·P·B·H', 'NetSuite', 'Pack', ''].map(h => <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', position: 'sticky', top: 0, background: 'var(--paper)' }}>{h}</th>)}
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {openWos.rows.map((row, i) => {
+                                        {openWosShown.map((row, i) => {
                                             const fin = row.fin, hq = row.hq;
+                                            const firstOfGroup = i === 0 || openWosShown[i - 1].group !== row.group;
                                             const t = (fin && fin.tasks) || {};
                                             const mini = ['spinSetup', 'spinSpray', 'spinBake', 'hand'].map(k => t[k]?.status === 'Complete' ? '✓' : (t[k]?.status === 'Running' ? '▶' : '·')).join(' ');
-                                            const where = !fin ? `RTG · ${hq.status}${hq.pushedToFinishing ? ' (dispatched?)' : ' (parked)'}` : `${fin.currentPhase || '—'}${fin.currentPhase !== 'Complete' ? ` · coat ${(fin.currentStepIndex || 0) + 1}` : ''}${fin.redlineAlert ? ' · ⚠ redline' : ''}`;
+                                            // A row with no finishing document says where it really is — on the shop floor, at the plater, or parked (Shared/openWork).
+                                            const where = !fin ? row.where : `${fin.currentPhase || '—'}${fin.currentPhase !== 'Complete' ? ` · coat ${(fin.currentStepIndex || 0) + 1}` : ''}${fin.redlineAlert ? ' · ⚠ redline' : ''}`;
                                             const nsBits = [];
                                             if (fin?.nsWoTran || hq?.nsWoTran) nsBits.push(`WO ${fin?.nsWoTran || hq?.nsWoTran}`);
                                             if (fin?.nsWoCompletionTran) nsBits.push(`BUILD ${fin.nsWoCompletionTran}`);
@@ -3705,12 +3714,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             else if (fin?.nsCompletionQueued) nsBits.push('build queued…');
                                             if (fin?.nsWoClosed) nsBits.push('closed');
                                             return (
-                                                <tr key={(fin && fin.id) || (hq && hq.id) || i} style={{ borderBottom: '1px solid var(--paper-2)' }}>
+                                                <React.Fragment key={(fin && fin.id) || (hq && hq.id) || i}>
+                                                {firstOfGroup && (
+                                                    <tr style={{ background: 'var(--paper-2)' }}>
+                                                        <td colSpan={8} style={{ padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', fontWeight: 700 }}>
+                                                            {OPEN_GROUP_LABEL[row.group]} · {openWosShown.filter(r => r.group === row.group).length}
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                                <tr style={{ borderBottom: '1px solid var(--paper-2)' }}>
                                                     <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>
                                                         <div style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--ink)' }}>{woRowRef(row)}</div>
                                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{(fin && fin.id) || (hq && hq.id)}</div>
                                                     </td>
                                                     <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{woItemCodeOf(fin) || woItemCodeOf(hq) || '—'} ×{(fin && fin.totalParts) || (hq && (hq.totalParts || hq.qty)) || '?'}</td>
+                                                    <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '11px', whiteSpace: 'nowrap', color: row.ageDays >= 14 ? '#d9534f' : 'var(--ink-soft)', fontWeight: row.ageDays >= 14 ? 700 : 400 }} title={row.idleDays != null ? `nothing recorded for ${row.idleDays} day${row.idleDays === 1 ? '' : 's'}` : ''}>{row.ageDays == null ? '—' : `${row.ageDays}d`}</td>
                                                     <td style={{ padding: '9px 14px', fontSize: '0.8rem', color: 'var(--ink)' }}>{where}</td>
                                                     <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{fin ? mini : '—'}</td>
                                                     <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '10px', color: nsBits.length ? 'var(--ink)' : 'var(--line)' }}>{nsBits.join(' · ') || '—'}</td>
@@ -3720,6 +3738,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         <button onClick={() => closeWoRow(row)} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>✕ Close</button>
                                                     </td>
                                                 </tr>
+                                                </React.Fragment>
                                             );
                                         })}
                                     </tbody>
