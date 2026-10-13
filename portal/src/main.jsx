@@ -9,6 +9,8 @@ import { ENGINE_VERSION } from '@engine/engineVersion.js';
 // it can be read. The server's copy carries the same figure (functions/engine/MANIFEST.json), so a
 // half that is behind the other can be seen, never guessed.
 document.documentElement.dataset.engine = ENGINE_VERSION;
+// …and the hash of every engine file this site was built with (vite.config.js; the same figure is published as /engine.json).
+document.documentElement.dataset.engineFiles = __SITE_ENGINE__.closureHash;
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
