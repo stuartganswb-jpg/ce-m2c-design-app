@@ -10,6 +10,7 @@ import {
     parseCurtainWorkbook, findCurtainHeader, chartOf, linesOfChart, curtainDocOf, chartBytesOf, chartDiffOf, CHART_MAX_BYTES,
     issueSummaryOf, rowRangesOf, widthsWordOf, widthRangeWordOf,
     hasCurtainChart, curtainStylesOf, curtainFabricsOf, curtainLiningsOf, curtainGroupsOf, curtainQuoteOf, workroomRefOf, curtainOrderTextOf,
+    styleNameOf, styleNamesOf,
     swatchNameOf, curtainSwatchesOf, swatchLoadPlanOf, swatchProductTypeOf, swatchQueryTypesOf, SWATCH_PRODUCT_TYPE, SWATCH_PRODUCT_TYPES, FABRIC_BY_WORKROOM,
 } from '../src/components/Shared/curtainPricing.js';
 
@@ -169,6 +170,26 @@ const plan = swatchLoadPlanOf(['M2C DF UNIQ Winters 01 White.png', 'M2C DF Maeve
 ok('the load plan: HAVE · NEW · the twin refused · unreadable refused · a style already there · a new style', plan.map(r => r.status).join(',') === 'HAVE,NEW,REFUSED,REFUSED,HAVE,NEW', plan.map(r => r.status).join(','));
 ok('…a new row carries what will be filed', plan[1].fabric === 'Maeve' && plan[1].colour === 'Ash' && plan[5].kind === 'STYLE' && plan[5].style === 'Grommet Pleat');
 
+// ── the name a top style is shown by (Stuart 2026-10-12: the grommet style is sold as "Leather Rings") ──────────
+const aliased = { ...docu, styleNames: { GROMMET_PLEAT: 'Leather Rings' } };
+ok('a style is shown by the office\'s word when one is set, else by the sheet\'s', styleNameOf(aliased, 'Grommet Pleat') === 'Leather Rings' && styleNameOf(aliased, 'PINCH_PLEAT') === 'Pinch Pleat' && styleNameOf(docu, 'GROMMET_PLEAT') === 'Grommet Pleat');
+ok('the styles carry the shown name beside the sheet\'s own', curtainStylesOf(aliased).map(x => `${x.label}>${x.name}`).join('|') === 'Pinch Pleat>Pinch Pleat|Grommet Pleat>Leather Rings|Ripple Fold>Ripple Fold');
+const qn = curtainQuoteOf(aliased, { style: 'Grommet Pleat', fabric: 'Winters', lining: 'Unlined', n: 1, lengthIn: 30, colour: 'Brown' });
+ok('the order says Leather Rings', qn.ok && curtainOrderTextOf(qn.line) === 'Winters Brown · Leather Rings · Unlined · 20–30" wide × 30" long', qn.ok ? curtainOrderTextOf(qn.line) : JSON.stringify(qn.errors));
+ok('…and the workroom is still quoted its own sheet and its own word', workroomRefOf(qn.line).startsWith('GROMMET PLEAT row ') && workroomRefOf(qn.line).includes(' · Grommet Pleat · ') && !workroomRefOf(qn.line).includes('Leather'));
+ok('the price is the same line whatever the style is called', qn.line.row === curtainQuoteOf(docu, { style: 'Grommet Pleat', fabric: 'Winters', lining: 'Unlined', n: 1, lengthIn: 30 }).line.row);
+ok('a re-apply keeps the names of the styles still on the chart, and only those', curtainDocOf({ chart, live: aliased }).styleNames.GROMMET_PLEAT === 'Leather Rings' && Object.keys(curtainDocOf({ chart, live: { styleNames: { GONE: 'x', PINCH_PLEAT: '' } } }).styleNames).length === 0 && JSON.stringify(curtainDocOf({ chart, live: null }).styleNames) === '{}');
+const sn = styleNamesOf(docu, { GROMMET_PLEAT: ' Leather Rings ', PINCH_PLEAT: 'pinch pleat', RIPPLE_FOLD: '' });
+ok('names typed → stored: trimmed, the sheet\'s own word stored as none, every style keyed', sn.ok && sn.names.GROMMET_PLEAT === 'Leather Rings' && sn.names.PINCH_PLEAT === '' && sn.names.RIPPLE_FOLD === '');
+ok('two styles under one name are refused, by name', (() => { const r = styleNamesOf(docu, { GROMMET_PLEAT: 'Rings', PINCH_PLEAT: 'rings' }); return !r.ok && r.errors[0].code === 'NAME_TAKEN' && /would both be shown as/.test(r.errors[0].message); })());
+ok('a style shown under another style\'s sheet name is refused', !styleNamesOf(docu, { GROMMET_PLEAT: 'Ripple Fold' }).ok);
+ok('a name too long for a tile is refused', styleNamesOf(docu, { GROMMET_PLEAT: 'x'.repeat(41) }).errors[0].code === 'NAME_LONG');
+const sixNamed = { ...six, styleNames: { GROMMET_PLEAT: 'Leather Rings' } };
+ok('a pleat picture named by the shown name reads as its style — once the name is set', swatchNameOf('M2C DF Leather Rings.png', sixNamed).styleKey === 'GROMMET_PLEAT' && !swatchNameOf('M2C DF Leather Rings.png', six).ok);
+ok('…and one that carries the sheet\'s word reads either way', swatchNameOf('M2C DF Leather Rings (Grommet Pleat).png', six).styleKey === 'GROMMET_PLEAT' && swatchNameOf('M2C DF Leather Rings (Grommet Pleat).png', sixNamed).styleKey === 'GROMMET_PLEAT');
+ok('a fabric swatch is never taken for a style by the shown name', swatchNameOf('M2C DF UNIQ Winters 01 White.png', sixNamed).kind === 'COLOUR');
+ok('a gallery picture filed by hand under the shown name lands on its style', !!curtainSwatchesOf([asset({ patternId: 'LEATHER RINGS', finishId: '' })], sixNamed).styles.GROMMET_PLEAT && !curtainSwatchesOf([asset({ patternId: 'LEATHER RINGS', finishId: '' })], six).styles.GROMMET_PLEAT);
+
 // ── the real workbook, when it is on this machine ─────────────────────────────────────────────────
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dir = path.join(here, '..', 'M2C Curtains');
@@ -224,6 +245,12 @@ if (!book) {
         ok('REAL: all 21 swatch files read as a fabric and a colour', files.length === 21 && rows.every(r => r.status === 'NEW' && r.kind === 'COLOUR'), JSON.stringify(rows.filter(r => r.status !== 'NEW')));
         const per = {}; rows.forEach(r => { per[r.fabric] = (per[r.fabric] || 0) + 1; });
         ok('REAL: Winters 4 · Tasso 4 · Conrad 4 · Maeve 3 · Grange 3 · Alize 3', per.Winters === 4 && per.Tasso === 4 && per.Conrad === 4 && per.Maeve === 3 && per.Grange === 3 && per.Alize === 3, JSON.stringify(per));
+    }
+    const styleDir = path.join(dir, 'pleat styles');
+    if (fs.existsSync(styleDir)) {
+        const pics = fs.readdirSync(styleDir).filter(f => /\.(png|jpe?g)$/i.test(f));
+        const rows = swatchLoadPlanOf(pics, realDoc, null);
+        ok('REAL: the three top-style pictures each read as their own style', pics.length === 3 && rows.every(r => r.status === 'NEW' && r.kind === 'STYLE') && new Set(rows.map(r => r.styleKey)).size === 3, JSON.stringify(rows));
     }
     console.log(`  (real workbook: ${book} — ${real.lines.length} lines, document ≈ ${Math.round(chartBytesOf(realDoc) / 1024)} KB)`);
 }

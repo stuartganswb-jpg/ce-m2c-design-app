@@ -24,7 +24,7 @@ import {
     CURTAIN_PRICING_DOC, CURTAIN_BRAND, FABRIC_BY_WORKROOM, CHART_MAX_BYTES, swatchQueryTypesOf,
     parseCurtainWorkbook, curtainDocOf, chartBytesOf, chartDiffOf, issueSummaryOf, hasCurtainChart,
     curtainLiningsOf, curtainGroupsOf, linesOfChart, widthsWordOf,
-    curtainSwatchesOf, swatchLoadPlanOf, swatchProductTypeOf,
+    curtainSwatchesOf, swatchLoadPlanOf, swatchProductTypeOf, styleNameOf, styleNamesOf,
 } from '../Shared/curtainPricing';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
@@ -49,7 +49,7 @@ const ChartTable = ({ chart }) => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             {chart.styles.map(s => (
                 <div key={s.key}>
-                    <div style={{ ...mono, marginBottom: '4px', color: 'var(--ink)' }}>{s.label} · sheet {s.sheet} · {count[s.key] || 0} lines</div>
+                    <div style={{ ...mono, marginBottom: '4px', color: 'var(--ink)' }}>{s.label} · sheet {s.sheet} · {count[s.key] || 0} lines{styleNameOf(chart, s.key) !== s.label ? ` · shown as ${styleNameOf(chart, s.key)}` : ''}</div>
                     <table style={{ borderCollapse: 'collapse', width: '100%', fontFamily: 'var(--sans)' }}>
                         <thead><tr><th style={th}>Fabric</th><th style={th}>Cuttable</th><th style={th}>Lining</th><th style={th}>Width groups (finished panel)</th></tr></thead>
                         <tbody>
@@ -90,6 +90,8 @@ const CurtainPricingAdmin = ({ currentUser }) => {
 
     const [workroom, setWorkroom] = useState('');
     const [workroomDirty, setWorkroomDirty] = useState(false);
+    const [names, setNames] = useState({});             // the name each top style is shown by, as typed
+    const [namesDirty, setNamesDirty] = useState(false);
 
     const [assets, setAssets] = useState(null);         // the gallery's curtain pictures (null = not read yet)
     const [files, setFiles] = useState([]);             // the pictures dropped on the loader
@@ -102,6 +104,7 @@ const CurtainPricingAdmin = ({ currentUser }) => {
         return () => { u1(); u2(); };
     }, []);
     useEffect(() => { if (!workroomDirty) setWorkroom((live && live.workroom && live.workroom.name) || ''); }, [live, workroomDirty]);
+    useEffect(() => { if (!namesDirty) setNames({ ...((live && live.styleNames) || {}) }); }, [live, namesDirty]);
 
     const readGallery = useCallback(async () => {
         try {
@@ -155,6 +158,21 @@ const CurtainPricingAdmin = ({ currentUser }) => {
             await setDoc(doc(db, 'system', CURTAIN_PRICING_DOC), { workroom: { name: String(workroom || '').trim(), fabricSuppliedBy: (live.workroom && live.workroom.fabricSuppliedBy) || FABRIC_BY_WORKROOM }, workroomSavedAt: Date.now(), workroomSavedBy: currentUser || '' }, { merge: true });
             setWorkroomDirty(false);
             say(`Workroom saved: ${String(workroom || '').trim() || '(blank)'}.`, 'ok');
+        } catch (err) { say(`Save failed: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
+
+    const saveNames = async () => {
+        if (!hasChart) return;
+        const r = styleNamesOf(live, names);
+        if (!r.ok) { r.errors.forEach(e => say(e.message, 'err')); return; }
+        setBusy(true);
+        try {
+            // every style keyed (a cleared name is '' — never an empty map, which a merge would read as "replace")
+            await setDoc(doc(db, 'system', CURTAIN_PRICING_DOC), { styleNames: r.names, styleNamesSavedAt: Date.now(), styleNamesSavedBy: currentUser || '' }, { merge: true });
+            setNamesDirty(false);
+            const set = live.styles.filter(s => r.names[s.key]).map(s => `${s.label} → ${r.names[s.key]}`);
+            say(set.length ? `Shown names saved: ${set.join(' · ')}. The workroom is still quoted the sheet's own.` : 'Shown names cleared — every top style reads as its sheet names it.', 'ok');
         } catch (err) { say(`Save failed: ${err.message || err}`, 'err'); }
         setBusy(false);
     };
@@ -251,6 +269,16 @@ const CurtainPricingAdmin = ({ currentUser }) => {
                                 </div>
                                 <ChartTable chart={live} />
                                 <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap', borderTop: '1px solid var(--paper-2)', paddingTop: '12px' }}>
+                                    {live.styles.map(s => (
+                                        <label key={s.key}><div style={mono}>{s.label} · shown as</div>
+                                            <input value={names[s.key] || ''} onChange={e => { setNamesDirty(true); setNames(prev => ({ ...prev, [s.key]: e.target.value })); }} placeholder={s.label} style={{ ...field, width: '190px' }} /></label>
+                                    ))}
+                                    <button onClick={saveNames} disabled={busy || !namesDirty} style={btn(true, busy || !namesDirty)}>Save shown names</button>
+                                    <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', flex: 1, minWidth: '260px' }}>
+                                        The name on the seller's tile and on the order. Blank = the sheet's own. The workroom is always quoted the <b>sheet's</b> name and row.
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap', borderTop: '1px solid var(--paper-2)', paddingTop: '12px' }}>
                                     <label><div style={mono}>Workroom the lines are quoted to</div><input value={workroom} onChange={e => { setWorkroomDirty(true); setWorkroom(e.target.value); }} placeholder="the workroom's name" style={{ ...field, width: '260px' }} /></label>
                                     <button onClick={saveWorkroom} disabled={busy || !workroomDirty} style={btn(true, busy || !workroomDirty)}>Save workroom</button>
                                     <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', flex: 1, minWidth: '260px' }}>
@@ -264,7 +292,7 @@ const CurtainPricingAdmin = ({ currentUser }) => {
             <div style={card}>
                 <h3 style={h}>Swatches</h3>
                 <p style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
-                    Drop the fabric pictures. A file name is read against the chart — <code>M2C DF UNIQ Winters 01 White.png</code> is <b>Winters · 01 White</b>; a file that names a top style (<code>Pinch Pleat.png</code>) is that style's own picture.
+                    Drop the fabric pictures. A file name is read against the chart — <code>M2C DF UNIQ Winters 01 White.png</code> is <b>Winters · 01 White</b>; a file that names a top style (<code>Pinch Pleat.png</code>), by the sheet's word or the one it is shown by, is that style's own picture.
                     Each is filed in the <b>Asset Gallery</b>, where the quick sell reads its tiles. A gallery picture uploaded by hand reads the same when its pattern is the fabric, its finish the colour and its type a curtain type.
                 </p>
                 {!hasChart ? <div style={{ color: 'var(--ink-soft)', fontSize: '0.9rem' }}>Apply the chart first — the file names are read against its fabrics.</div> : (
@@ -298,9 +326,9 @@ const CurtainPricingAdmin = ({ currentUser }) => {
                             </div>
                             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                                 {live.styles.map(s => (
-                                    <div key={s.key} style={{ width: '96px' }} title={s.label}>
+                                    <div key={s.key} style={{ width: '96px' }} title={styleNameOf(live, s.key) === s.label ? s.label : `${styleNameOf(live, s.key)} — the sheet's ${s.label}`}>
                                         <div style={{ width: '96px', height: '64px', background: '#efe9e0', overflow: 'hidden', border: '1px solid var(--line)' }}>{swatches.styles[s.key] ? <img src={swatches.styles[s.key].url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ ...mono, padding: '6px', fontSize: '8px' }}>no picture yet</div>}</div>
-                                        <div style={{ fontSize: '0.75rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.label}</div>
+                                        <div style={{ fontSize: '0.75rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{styleNameOf(live, s.key)}</div>
                                     </div>
                                 ))}
                                 {swatches.colours.map(c => (

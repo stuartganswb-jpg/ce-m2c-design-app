@@ -169,11 +169,11 @@ const CurtainQuickSell = () => {
                             const on = style === s.key;
                             const pic = swatches.styles[s.key];
                             return (
-                                <button key={s.key} onClick={() => setStyle(s.key)} style={{ ...tile(on), width: '132px' }}>
+                                <button key={s.key} onClick={() => setStyle(s.key)} title={s.name === s.label ? s.label : `${s.name} — the workroom's ${s.label}`} style={{ ...tile(on), width: '132px' }}>
                                     <div style={{ width: '100%', height: '74px', background: on ? 'var(--paper)' : '#faf8f4', overflow: 'hidden' }}>
                                         {pic ? <img src={pic.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <HeadingGlyph label={s.label} on={on} />}
                                     </div>
-                                    <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>{s.label}</div>
+                                    <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>{s.name}</div>
                                 </button>
                             );
                         })}

@@ -277,9 +277,13 @@ export function linesOfChart(chart) {
 /** What Apply writes: the chart whole, the workroom carried over from the live document, and who applied it. */
 export function curtainDocOf({ chart, live = null, fileName = '', by = '', at = 0 } = {}) {
     const w = (live && live.workroom) || {};
+    const was = (live && live.styleNames) || {};
+    const styleNames = {};
+    ((chart && chart.styles) || []).forEach(s => { if (str(was[s.key])) styleNames[s.key] = str(was[s.key]); });
     return {
         ...chart,
         brandId: CURTAIN_BRAND,
+        styleNames,
         workroom: { name: str(w.name), fabricSuppliedBy: str(w.fabricSuppliedBy) || FABRIC_BY_WORKROOM },
         sourceFile: str(fileName), appliedAt: at || 0, appliedBy: str(by),
     };
@@ -336,7 +340,37 @@ const pick = (list, v) => { const k = keyOf(v); return (list || []).find(x => x.
 const blockOf = (chart, style, fabric, lining) => ((chart && chart.blocks) || []).find(b => b.style === style && b.fabric === fabric && b.lining === lining) || null;
 export const hasCurtainChart = (chart) => !!(chart && Array.isArray(chart.blocks) && chart.blocks.length);
 
-export const curtainStylesOf = (chart) => (hasCurtainChart(chart) ? chart.styles || [] : []);
+/**
+ * THE NAME A TOP STYLE IS SHOWN BY (Stuart 2026-10-12: the grommet style is sold as "Leather Rings"). The sheet's own
+ * word stays the style's identity and is what the workroom is quoted — its sheet is still called GROMMET PLEAT; the
+ * office's word, when one is set (`styleNames`, 6.5 Tools → Curtain Pricing), is what the seller's tile and the order say.
+ */
+export const styleNameOf = (chart, key) => {
+    const k = keyOf(key);
+    const s = ((chart && chart.styles) || []).find(x => x.key === k);
+    return str(chart && chart.styleNames && chart.styleNames[k]) || (s ? s.label : '');
+};
+/** The top styles, each with the `name` it is shown by. */
+export const curtainStylesOf = (chart) => (hasCurtainChart(chart) ? (chart.styles || []).map(s => ({ ...s, name: styleNameOf(chart, s.key) })) : []);
+/**
+ * The names typed on the tool → what is stored. { ok, errors[{code,message}], names: { styleKey → name | '' } }
+ * A name that is the sheet's own stores as none; two styles may not be shown under one name, nor one under another's sheet name.
+ */
+export function styleNamesOf(chart, edits = {}) {
+    const errors = [], names = {};
+    const styles = (chart && chart.styles) || [];
+    styles.forEach(s => {
+        const v = str(edits[s.key]);
+        names[s.key] = v && alnum(v) !== alnum(s.label) ? v : '';
+        if (v.length > 40) errors.push({ code: 'NAME_LONG', message: `"${v}" is too long for a tile — 40 characters at most.` });
+    });
+    styles.forEach(s => {
+        const shown = names[s.key] || s.label;
+        const clash = styles.find(o => o.key !== s.key && (alnum(names[o.key] || o.label) === alnum(shown) || (names[s.key] && alnum(o.label) === alnum(shown))));
+        if (clash && !errors.some(e => e.code === 'NAME_TAKEN')) errors.push({ code: 'NAME_TAKEN', message: `${s.label} and ${clash.label} would both be shown as "${shown}".` });
+    });
+    return { ok: errors.length === 0, errors, names };
+}
 /** The fabrics the chart carries (for one style when given), in sheet order. */
 export const curtainFabricsOf = (chart, { style = '' } = {}) => {
     if (!hasCurtainChart(chart)) return [];
@@ -398,7 +432,7 @@ export function curtainQuoteOf(chart, { style = '', fabric = '', lining = '', n 
     const band = chart.bands[i];
     const price = round2(g.retail[i]);
     const line = {
-        style: s.key, styleLabel: s.label, sheet: s.sheet, row: g.rows[i],
+        style: s.key, styleLabel: s.label, styleName: styleNameOf(chart, s.key), sheet: s.sheet, row: g.rows[i],
         fabric: f.name, fabricKey: f.key, colour: str(colour), lining: li.name, liningKey: li.key,
         n: g.n, widthsWord: widthsWordOf(g.n), widthLow: g.low, widthHigh: g.high, widthRange: widthRangeWordOf(g.low, g.high),
         cuttable: f.cuttable === undefined ? null : f.cuttable,
@@ -413,9 +447,9 @@ export const workroomRefOf = (line) => (!line ? '' : [
     `${line.sheet} row ${line.row}`, line.fabric, line.styleLabel, line.lining,
     `${line.widthsWord} (${line.widthRange} finished)`, `${line.band.low}–${line.band.high}" long`,
 ].join(' · '));
-/** The line as the order says it: the panel that is made. */
+/** The line as the order says it: the panel that is made, its top style by the name it is sold under. */
 export const curtainOrderTextOf = (line) => (!line ? '' : [
-    `${line.fabric}${line.colour ? ` ${line.colour}` : ''}`, line.styleLabel, line.lining,
+    `${line.fabric}${line.colour ? ` ${line.colour}` : ''}`, line.styleName || line.styleLabel, line.lining,
     `${line.widthRange} wide × ${line.lengthIn}" long`,
 ].join(' · '));
 
@@ -439,12 +473,14 @@ const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const wholeWordRe = (name) => new RegExp(`(^|[^A-Za-z0-9])(${str(name).split(' ').map(esc).join('[\\s_-]+')})(?![A-Za-z0-9])`, 'i');
 const styleOfText = (text, styles = []) => {
     const t = alnum(text);
-    const whole = (styles || []).find(s => alnum(s.label) && t.includes(alnum(s.label)));
+    const words = (s) => [s.label, s.name].filter(w => alnum(w));          // the sheet's word, and the one it is shown by
+    const whole = (styles || []).find(s => words(s).some(w => t.includes(alnum(w))));
     if (whole) return whole;
-    // "Grommet.png" for Grommet Pleat, "Ripplefold" for Ripple Fold: the label's first word, when no other style starts with it.
-    const firsts = (styles || []).map(s => ({ s, w: alnum(str(s.label).split(' ')[0]) })).filter(x => x.w.length >= 4);
-    const hits = firsts.filter(x => t.includes(x.w) && firsts.filter(y => y.w === x.w).length === 1);
-    return hits.length === 1 ? hits[0].s : null;
+    // "Grommet.png" for Grommet Pleat, "Ripplefold" for Ripple Fold: a name's first word, when no other style starts with it.
+    const firsts = [];
+    (styles || []).forEach(s => words(s).forEach(w => { const f = alnum(str(w).split(' ')[0]); if (f.length >= 4) firsts.push({ s, w: f }); }));
+    const hits = [...new Set(firsts.filter(x => t.includes(x.w) && !firsts.some(y => y.w === x.w && y.s.key !== x.s.key)).map(x => x.s))];
+    return hits.length === 1 ? hits[0] : null;
 };
 
 /**
@@ -464,7 +500,7 @@ export function swatchNameOf(fileName, chart) {
         if (!colour) return { ok: false, error: `"${base}" names ${f.name} but no colour after it.` };
         return { ok: true, kind: 'COLOUR', fabric: f.name, fabricKey: f.key, colour, style: '' };
     }
-    const s = styleOfText(base, chart.styles);
+    const s = styleOfText(base, curtainStylesOf(chart));
     if (s) return { ok: true, kind: 'STYLE', fabric: '', colour: '', style: s.label, styleKey: s.key };
     return { ok: false, error: `"${base}" names no fabric and no top style on the chart (${(chart.fabrics || []).map(f => f.name).join(', ')}).` };
 }
@@ -499,7 +535,7 @@ export function curtainSwatchesOf(assets = [], chart, { brand = CURTAIN_BRAND } 
             byKey.set(`${f.key}|${keyOf(colour)}`, { key: `${f.key}|${keyOf(colour)}`, fabric: f.name, fabricKey: f.key, colour, ...pic });
             return;
         }
-        const s = pick(chart.styles, tag.style || a.patternId) || (tag.style ? null : styleOfText(a.patternId, chart.styles));
+        const s = pick(chart.styles, tag.style || a.patternId) || (tag.style ? null : styleOfText(a.patternId, curtainStylesOf(chart)));
         if (s) { out.styles[s.key] = pic; return; }
         out.unmatched.push(a);
     });
