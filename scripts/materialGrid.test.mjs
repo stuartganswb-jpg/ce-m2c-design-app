@@ -3,7 +3,7 @@
 import {
     materialRowsOf, materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialCodesOf,
     materialRefreshable, materialAgeText, refreshDayKey, refreshDue, MATERIAL_STATE,
-    pickDoneOf, pickedRowsOf, PICK_STATE,
+    pickDoneOf, pickedRowsOf, PICK_STATE, stockHolderIdOf,
 } from '../src/components/Shared/materialGrid.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
@@ -133,6 +133,25 @@ const { COVERED, SHORT, UNVERIFIED } = MATERIAL_STATE;
     eq('one of two skipped is short, not skipped', [r[0].pickState, r[0].picked, r[0].shortAtPick], [PICK_STATE.SHORT_AT_PICK, 44, 44]);
     r = pickedRowsOf({ ...so60676, pickStatus: 'Cleared_Overtaken' });
     eq('a pick cleared by hand says cleared, never a count', [r[0].pickState, r[0].picked], [PICK_STATE.CLEARED, null]);
+}
+
+// ── WHOSE STOCK IS IT (Stuart 2026-10-13, WO11722: HTA635/SG × 10, the morning after the rod cuts) ──────────────────
+// NetSuite that morning: HTA635 — 50 on hand, 50 committed (ten to each of WO11718…WO11722), 0 available.
+{
+    const wo11722 = { id: 'WO-STK-48990-1790772909987', orderType: 'stock', nsWoId: '951722', nsWoTran: 'WO11722' };
+    eq('a stock work order\'s stock is held by its OWN NetSuite work order', stockHolderIdOf(wo11722), '951722');
+    eq('…a sales document\'s by its sales order, never by a work order of its own', [stockHolderIdOf({ orderType: 'sales', nsWoId: '77' }, { nsInternalId: '936808' }), stockHolderIdOf({ orderType: 'sales' }, null)], ['936808', '']);
+    eq('…a stock document NetSuite has no work order for yet reads the free shelf, as before', [stockHolderIdOf({ orderType: 'stock' }), stockHolderIdOf({ orderType: 'stock', nsWoId: 'pending' }), stockHolderIdOf(null)], ['', '', '']);
+    eq('…and a stock document never borrows a sales order\'s hold', stockHolderIdOf({ orderType: 'stock', nsWoId: '' }, { nsInternalId: '936808' }), '');
+    // The read the refresh makes: the free shelf, plus what NetSuite holds for this document (oeReviewPlan.withOrderHeld's sum).
+    const free = { HTA635: { available: 0, onOrder: 0, unit: 'Each' } };
+    const held = { '951722|HTA635': 10 };
+    const seenBy = (id) => (id && held[`${id}|HTA635`] ? { HTA635: { ...free.HTA635, available: free.HTA635.available + held[`${id}|HTA635`] } } : free);
+    const row = [{ code: 'HTA635', name: 'HTA635', need: 10, onHand: 0, short: 10, onOrder: 0, state: SHORT, coveredBy: 'stock not read at release', coverCodes: ['HTA635'] }];
+    const before = refreshMaterialRows(row, { map: seenBy(''), unitsKnown: true }).rows[0];
+    const after = refreshMaterialRows(row, { map: seenBy(stockHolderIdOf(wo11722)), unitsKnown: true }).rows[0];
+    eq('read as the free shelf alone it was short of its own ten', [before.onHand, before.short, before.state], [0, 10, SHORT]);
+    eq('read with what its work order holds: need 10 · on hand 10 · short 0', [after.need, after.onHand, after.short, after.state], [10, 10, 0, COVERED]);
 }
 
 console.log(`materialGrid: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

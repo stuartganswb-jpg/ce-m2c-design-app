@@ -13,7 +13,7 @@ import { restampBreakdownLines, splitLineFinishOf, isUnfinishedFinish } from '..
 import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
-import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey } from '../Shared/materialGrid';
+import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey , stockHolderIdOf } from '../Shared/materialGrid';
 import { finishGroupsOf, docStreamsOf, poleCountRepairOf, poleTrackRepairOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe, writeShopDocOnce, claimRelease, endReleaseClaim, fetchMasterFinishes } from '../Shared/floorRelease';
@@ -1407,13 +1407,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     const keys = [d.soAppId, d.salesOrderId, d.orderKey, d.soId].filter(Boolean).map(String);
                     return keys.length ? (liveSO.find(o => keys.includes(String(o.id)) || (o.soId && keys.includes(String(o.soId)))) || null) : null;
                 };
-                const nsOf = (d) => { const o = (d.orderType === 'stock') ? null : soOfDoc(d); return o && o.nsInternalId ? String(o.nsInternalId) : ''; };
+                // …AND A STOCK DOCUMENT SEES WHAT ITS OWN NETSUITE WORK ORDER HOLDS (Stuart 2026-10-13, WO11722 — Shared/
+                // materialGrid.stockHolderIdOf): fifty HTA635 on the shelf, ten committed to each of five stock work orders,
+                // and every one of them read "on hand 0 · short 10". The same read, by the work order's own NetSuite id.
+                const nsOf = (d) => stockHolderIdOf(d, d.orderType === 'stock' ? null : soOfDoc(d));
                 const nsIds = [...new Set(targets.map(t => nsOf(t.d)).filter(Boolean))];
                 const held = {};
                 let heldKnown = true;
                 if (nsIds.length) {
                     try { for (let i = 0; i < codes.length; i += 100) Object.assign(held, await fetchOrderCommitted(nsIds, codes.slice(i, i + 100))); }
-                    catch (e) { heldKnown = false; addLog(`⚠ Floor stock refresh: what NetSuite holds for each sales order could not be read (${e.message || e}) — sales documents show free stock only today.`, 'warn'); }
+                    catch (e) { heldKnown = false; addLog(`⚠ Floor stock refresh: what NetSuite holds for each order could not be read (${e.message || e}) — the documents show free stock only today.`, 'warn'); }
                 }
                 for (const t of targets) {
                     const ns = heldKnown ? nsOf(t.d) : '';

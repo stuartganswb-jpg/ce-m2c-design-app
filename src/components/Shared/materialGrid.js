@@ -194,6 +194,19 @@ export const materialCodesOf = (docs = []) => [...new Set((docs || []).flatMap(d
  * done the shelf dropped because of THIS order, and a refresh would show a false short. Picked,
  * staged, started and closed documents keep the rows from their release.
  */
+// ── WHOSE STOCK IS IT (Stuart 2026-10-13, WO11722) ───────────────────────────────────────────────────────────────────
+// NetSuite's "available" is on hand MINUS everything committed — including what is committed to the very order being
+// read. A sales document has counted its own order's hold since 2026-09-27 (Shared/oeReviewPlan.withOrderHeld). A STOCK
+// work order did not: the day after fifty HTA635 were cut for five stock work orders, each of them read "need 10 · on
+// hand 0 · short 10" — all fifty were on the shelf, each ten committed to the NetSuite work order asking for it.
+// The NetSuite transaction that holds stock FOR a document: a sales document's is its sales order; a stock document's
+// is its own NetSuite work order. '' = nothing holds for it (no NetSuite record yet) — the free shelf alone, as before.
+export const stockHolderIdOf = (d, salesOrder = null) => {
+    const digits = (v) => { const t = String(v == null ? '' : v).trim(); return /^\d+$/.test(t) ? t : ''; };
+    if (!d) return '';
+    return U(d.orderType) === 'STOCK' ? digits(d.nsWoId) : digits(salesOrder && salesOrder.nsInternalId);
+};
+
 export const materialRefreshable = (d, coll) => {
     if (!d || d.deleted || d.closed === true) return false;
     if (!Array.isArray(d.materialRows) || !d.materialRows.length) return false;
