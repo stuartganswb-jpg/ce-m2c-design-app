@@ -25,9 +25,14 @@ export const dropKey = (slotKey, choiceId) => `${slotKey}|${choiceId}`;
  * @param rawPicks   { slotKey: choiceId } as the operator set them
  * @param livePicks  { slotKey: choiceId } after reseatPicks — what the rail shows as chosen
  * @param labelOf    (slot) => the step's on-screen label
+ * @param everyChoice  (optional) EVERY choice the assembly pins, at any size — handing it in switches on the two
+ *                     cases below for a pick that is not among the choices offered now. Without it such a pick is
+ *                     passed over, as it always was (Vision's screen calls this reader too, and is unchanged).
+ * @param savedParts   (optional) { slotKey: { partId, code, name } } — which part each pick was, as the line recorded
+ *                     it when it was saved (Shared/hardwareSession.pickPartsOf); lines saved before 2026-10-13 have none
  * @returns [{ key, slotKey, choiceId, step, partName, partCode, reason }]
  */
-export function droppedPicks(model, rawPicks = {}, livePicks = {}, { labelOf = (s) => s.key } = {}) {
+export function droppedPicks(model, rawPicks = {}, livePicks = {}, { labelOf = (s) => s.key, everyChoice = null, savedParts = null } = {}) {
     const out = [];
     const slots = (model && model.slots) || [];
     const choices = (model && model.choices) || [];
@@ -39,7 +44,43 @@ export function droppedPicks(model, rawPicks = {}, livePicks = {}, { labelOf = (
         if (!choiceId) return;                                   // the operator's own un-pick is not a removal
         if (livePicks[slotKey] === choiceId) return;             // still chosen where it was chosen
         const had = choices.find(c => c.id === choiceId);
-        if (!had) return;                                        // a pick from another assembly / a stale key
+        if (!had) {
+            if (!everyChoice) return;                            // a pick from another assembly / a stale key
+            // ── A SAVED PICK THAT IS NOT AMONG THE CHOICES ANY MORE IS NAMED TOO (Stuart 2026-10-13: "fix both") ──
+            // Until today a pick the model does not hold was passed over as "not ours" — and that is exactly what a
+            // SAVED line's pick is once its tag has been changed in 1.6 (a new item number re-makes the pin), or,
+            // on a flow that asks the size, once the size chosen is one the part is not made in. Edit reopened the
+            // line without that part, the strip named nothing and Add was allowed: of the 139 lines of the last 80
+            // quotes, 12 came back short that way (H1-2TRV's miter returns; wood gem finials and in-line brackets on
+            // H1-138) — two of them short of their wall brackets as well, which had followed the return out. And it
+            // is the road the Approve warning sends people down: "the assembly's tags changed — reopen, re-save".
+            // So the caller hands in every choice the assembly pins, and the pick is named:
+            //   · pinned, but not offered now      → by its part: "not made in the size now chosen";
+            //   · pinned nowhere on the assembly   → by the part the line recorded beside the pick (lines saved from
+            //     today on), else by its step alone: "no longer on this assembly".
+            // NOT named: a step the same part sits in again, and — where the line cannot say which part it was — a
+            // step the engine has filled itself (a track with one option, a track end the drive settled): the
+            // operator is never asked those, and the only part the assembly offers there is on the order.
+            const slot0 = slots.find(s => s.key === slotKey);
+            const seated0 = choices.find(c => c.id === livePicks[slotKey]) || null;
+            const pinned = everyChoice.find(c => c.id === choiceId) || null;
+            const was = pinned ? { partId: pinned.partId, code: pinned.partId || '', name: pinned.name || pinned.partId || '' } : ((savedParts && savedParts[slotKey]) || null);
+            if (seated0 && was && U(was.partId) && U(seated0.partId) === U(was.partId)) return;     // the same part is in the step again
+            if (seated0 && !was) return;                                                           // filled by the engine itself; the line cannot say what it held
+            out.push({
+                key: dropKey(slotKey, choiceId), slotKey, choiceId,
+                step: labelOf(slot0 || slotFromKey(slotKey)),
+                partName: was ? (was.name || was.code || 'the part saved on this line') : 'the part saved on this line',
+                partCode: was ? (was.code || '') : '',
+                // (a tag taken off and put back is a new pin of the SAME part: the line can say so where it recorded
+                //  the part — the operator picks it again; nothing here re-seats a pick the engine's own rule let go)
+                reason: pinned ? 'not made in the size now chosen'
+                    : (was && slot0 && (slot0.options || []).some(o => U(o.partId) && U(o.partId) === U(was.partId)))
+                        ? 'its tag in 1.6 was re-made since this line was saved — the part is still offered on this step: pick it again'
+                        : `no longer on this assembly — its tag in 1.6 was changed or removed since this line was saved${seated0 ? ` (the step now holds ${seated0.name || seated0.partId})` : ''}`,
+            });
+            return;
+        }
         // ⚠ THE SAME PART IN THE SAME STEP IS KEPT, WHATEVER ITS PINS ARE TAGGED (Stuart 2026-10-13,
         // with the return-plate change in hardwareModel). The step IS the place on the order — its
         // key is KIND|TIER|POSITION — so a pick the engine moved onto another pin of the same part

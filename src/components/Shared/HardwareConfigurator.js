@@ -27,7 +27,7 @@ import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, 
     kitPartsByLineOf, extraLinesOf, isTraverseOf, trvFeetOf, trvTracksOf, trvPriceOfCode, trvItemInfoOf, trvSeedOf, trvComponentsOf, trvLinesOf, spliceOnLineOf, shipsInOnePieceOf,
     grandTotalOf,
     AXIS_LABEL, valueLabel, slotLabel, visibleOverridesOf, clearListOf, railNamesOf, stretchSpecOf, spliceMarksOf, cloneSpecsOf, chosenPartsOf, renderStateOf,
-    stepsOf, stepHintOf, extrasOnStepOf, stepAnswerOf, configQtyOf, dropRefusalOf, addRefusalOf, cartLineOf } from './hardwareSession';
+    stepsOf, stepHintOf, extrasOnStepOf, stepAnswerOf, configQtyOf, dropRefusalOf, addRefusalOf, cartLineOf, everyChoiceOf } from './hardwareSession';
 import { aliasFor } from './hardwarePricing';
 import { priceLevelShort, customerPriceLevel } from './priceLevels';
 import { findClientPriceRow, customerKeys } from './clientPricing';
@@ -157,6 +157,9 @@ function HardwareConfiguratorInner({
     // that says so: one entry per removal with the engine's reason; the strip under the rail shows
     // it, and "+ Add configuration" refuses while any entry is unacknowledged.
     const [drops, setDrops] = useState([]);
+    // Which part each pick was, as a reopened line recorded it (engineConfig.pickParts — hardwareSession.pickPartsOf):
+    // what the strip names when a saved pick's pin has been re-made in 1.6 since. Lines saved before 2026-10-13 have none.
+    const [savedPickParts, setSavedPickParts] = useState({});
     // ONE DEFAULT PER MATERIAL, held side by side; `globalFinish` is the one code for the readers that want one
     // (hardwareSession.globalFinishOf — the rule and his words are there).
     const [globalFinishes, setGlobalFinishes] = useState({});   // { METAL: 'P14', WOOD: 'S11', … }
@@ -254,14 +257,17 @@ function HardwareConfiguratorInner({
     const { settledKeys, livePicks } = useMemo(
         () => autoPicksOf({ model, answers, operatorPicks: resolvePicks(model, picks) }),
         [model, answers, picks, resolvePicks]);
+    // Every choice the assembly pins, at any size: a pick that is not offered now is looked for here, so one whose pin
+    // is gone — or whose part is not made at the size chosen — is NAMED in the strip too (Shared/pickDrops).
+    const everyChoice = useMemo(() => everyChoiceOf(assembly, pins), [assembly, pins]);
     useEffect(() => {
-        const now = droppedPicks(model, picks, livePicks, { labelOf: slotLabel });
+        const now = droppedPicks(model, picks, livePicks, { labelOf: slotLabel, everyChoice, savedParts: savedPickParts });
         setDrops(prev => {
             const next = mergeDrops(prev, now);
             const same = next.length === prev.length && next.every((d, i) => d.key === prev[i].key && d.acked === prev[i].acked && d.reason === prev[i].reason);
             return same ? prev : next;
         });
-    }, [model, picks, livePicks]);
+    }, [model, picks, livePicks, everyChoice, savedPickParts]);
     const pendingDrops = useMemo(() => unacknowledged(drops), [drops]);
     const ackDrop = (key) => setDrops(prev => prev.map(d => d.key === key ? { ...d, acked: true } : d));
     // ── THE ADD-BY-HAND ITEMS FOR THE ROD CHOSEN (Stuart 2026-09-30 · Shared/flowExtras) ────────
@@ -718,6 +724,7 @@ function HardwareConfiguratorInner({
         reopenAppliedRef.current = s.key;
         setAnswers({ ...(s.answers || {}) });
         setPicks({ ...(s.picks || {}) });
+        setSavedPickParts((s.pickParts && typeof s.pickParts === 'object') ? { ...s.pickParts } : {});
         setPartFinish({ ...(s.partFinish || {}) });
         setStepNotes({ ...(s.stepNotes || {}) });
         setStepNoteClient((s.stepNoteClient && typeof s.stepNoteClient === 'object') ? { ...s.stepNoteClient } : {});
@@ -815,12 +822,13 @@ function HardwareConfiguratorInner({
             ...(spliceWaived ? { spliceWaived: true } : {}),
             ...(Object.keys(stepNoteClient).length ? { stepNoteClient } : {}),
             ...(Object.keys(finishAnswers).length ? { finishAnswers } : {}),
+            ...(Object.keys(savedPickParts).length ? { pickParts: savedPickParts } : {}),
         };
         if (!workPublishedRef.current && workIsPristine(work)) return;
         workPublishedRef.current = true;
         onWorkState(work);
     }, [onWorkState, assembly, answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, typedExtras,
-        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices, spliceWaived, stepNoteClient, finishAnswers]);
+        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices, spliceWaived, stepNoteClient, finishAnswers, savedPickParts]);
     const addConfiguration = () => {
         // ⚠ NEVER ADD SHORT · WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE · A FINISH THAT ASKS IS ANSWERED FIRST — the rules,
         // their order and his words are hardwareSession.addRefusalOf. Nothing priced and a removal nobody has acknowledged
@@ -849,7 +857,7 @@ function HardwareConfiguratorInner({
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
         kitPicksDoneRef.current = new Set();   // the next configuration fills its own brackets
-        setStepNotes({}); setStepNoteClient({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setFinishAnswers({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]);
+        setStepNotes({}); setStepNoteClient({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setFinishAnswers({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]); setSavedPickParts({});
     };
 
     const railCell = (st, i) => {

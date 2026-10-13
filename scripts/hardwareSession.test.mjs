@@ -44,7 +44,7 @@ const { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, c
     kitPartsByLineOf, extraLinesOf, isTraverseOf, trvFeetOf, trvTracksOf, trvPriceOfCode, trvItemInfoOf, trvSeedOf, trvComponentsOf, trvLinesOf, spliceOnLineOf, shipsInOnePieceOf,
     grandTotalOf, billOf,
     AXIS_LABEL, valueLabel, slotLabel, visibleOverridesOf, clearListOf, railNamesOf, stretchSpecOf, spliceMarksOf, cloneSpecsOf, chosenPartsOf, renderStateOf,
-    stepsOf, stepHintOf, extrasOnStepOf, stepAnswerOf, configQtyOf, dropRefusalOf, addRefusalOf, takenExtraLinesOf, cartLineOf } = S;
+    stepsOf, stepHintOf, extrasOnStepOf, stepAnswerOf, configQtyOf, dropRefusalOf, addRefusalOf, takenExtraLinesOf, cartLineOf, pickPartsOf, everyChoiceOf } = S;
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => {
@@ -1288,7 +1288,7 @@ const FIN = [
     const WHO = [{ customer: null, customerId: '', priceLevel: 'STANDARD' }, { customer: { id: 'C-FAB', name: 'FABRICUT' }, customerId: 'C-FAB', priceLevel: 'STANDARD' }, { customer: { id: 'C-FAB', name: 'Fabricut', companyName: 'FABRICUT' }, customerId: 'C-FAB', priceLevel: 'FAB_RETAIL' },
         { customer: { id: 'CUST-BRIMAR', name: 'Brimar', defaultPriceLevel: 'fab_wholesale' }, customerId: 'CUST-BRIMAR', priceLevel: 'STANDARD' }, { customer: { id: 'CUST-BRIMAR', name: 'Brimar', defaultPriceLevel: 'STANDARD' }, customerId: 'CUST-BRIMAR', priceLevel: 'STANDARD' }];
     const tally = { compared: 0, differ: 0, kit: 0, switched: 0, followed: 0, nokit: 0, motor: 0, motorTwin: 0, missingKit: 0, byCode: 0, carriersStep: 0, billedComp: 0, itemKit: 0, unfinishedExtra: 0, matchedFee: 0, noPrice: 0, fallback: 0, defaulted: 0, chosen: 0, asking: 0, open: 0, onePiece: 0, perFoot: 0, stock: 0, covered: 0 };
-    const walk6 = { compared: 0, walk: 0, draw: 0, add: 0, kinds: {}, nested: 0, hints: 0, itemsOffStep: 0, notAsked: 0, refused: {}, lines: 0, shopNotes: 0, clientNotes: 0, ticksOnly: 0, onePiece: 0, multiples: 0, noModel: 0, drawnMarks: 0, spreadMarks: 0, clones: 0, stretch: 0, clear: 0, noRings: 0, noRod: 0, removals: 0, typed: 0, typedDiffer: 0, typedBeside: 0 };
+    const walk6 = { compared: 0, walk: 0, draw: 0, add: 0, kinds: {}, nested: 0, hints: 0, itemsOffStep: 0, notAsked: 0, refused: {}, lines: 0, shopNotes: 0, clientNotes: 0, ticksOnly: 0, onePiece: 0, multiples: 0, noModel: 0, drawnMarks: 0, spreadMarks: 0, clones: 0, stretch: 0, clear: 0, noRings: 0, noRod: 0, removals: 0, typed: 0, typedDiffer: 0, typedBeside: 0, goneNamed: 0, partsWrong: 0 };
     const first6 = [];
     const firstDiff = [];
     framings.forEach((answers, fi) => {
@@ -1371,7 +1371,11 @@ const FIN = [
                     const stepNoteClient = (st6.stepNoteClient && typeof st6.stepNoteClient === 'object') ? { ...st6.stepNoteClient } : {};
                     const ow = oldWalk({ model: n6.model, settledKeys: n6.settledKeys, isTraverse: ob6.isTraverse, trvRules: data6.trvRules, sizeSteps: n6.sizeSteps, sizeProjInches: n6.sizeProjInches, answers, livePicks: n6.livePicks, lengthFeet: n6.lengthFeet, lengthInches: n6.lengthInches,
                         ourId: n6.ourId, trvLive: ob6.trvLive, trvComponents: ob6.trvComponents, sizePick: {}, offeredExtraItems: n6.offeredExtraItems, resolved: n6.resolved, extras: n6.extras, spliceCodes: n6.spliceCodes, drawnSplices, quantities: n6.quantities });
-                    const drops = mergeDrops(Array.isArray(st6.drops) ? st6.drops : [], droppedPicks(n6.model, st6.picks, n6.livePicks, { labelOf: oldSlotLabel }));
+                    // ⚠ DELIBERATE RULE CHANGE, 2026-10-13 (Stuart: "fix both"): a saved pick that is not among the choices any more
+                    // is NAMED (Shared/pickDrops, its own harness) — the screen's reader as it was passed it over. The reference
+                    // reads the removals with that rule; everything else below is still the screen's code as it was.
+                    const drops = mergeDrops(Array.isArray(st6.drops) ? st6.drops : [], droppedPicks(n6.model, st6.picks, n6.livePicks, { labelOf: oldSlotLabel, everyChoice: choicesFromAssembly(data6.assembly, data6.pins), savedParts: st6.pickParts || {} }));
+                    const passedOver = droppedPicks(n6.model, st6.picks, n6.livePicks, { labelOf: oldSlotLabel });
                     const pendingDrops = unacknowledged(drops);
                     const addArgs = { priced: ob6.priced, pendingDrops, oldBareWood: of6.bareWood, oldOpenQuestions: ob6.openQuestions, resolved: n6.resolved, pricingCtx: ob6.pricingCtx, assembly: data6.assembly, flow: data6.flow, findPart: n6.findPart,
                         cfgQty: String(parseInt(st6.qty, 10) > 0 ? parseInt(st6.qty, 10) : 1), pins: data6.pins, configMemo: st6.memo || st6.sidemark || '', chosenFinishObjects: of6.chosenFinishObjects, effectiveLevel: ob6.effectiveLevel, lengthInches: n6.lengthInches, lengthFeet: n6.lengthFeet,
@@ -1382,7 +1386,9 @@ const FIN = [
                     const oa = oldAdd(addArgs);
                     const walkSaid = (w) => canon([w.steps, w.steps.map(st => [w.hintFor(st), w.extrasOnStep(st).map(it => it.code), w.answerOf(st)])]);
                     const drawSaid = (w) => canon([w.visibleOverrides, w.clearList, w.railNames, w.stretchSpec, w.spliceMarks, w.cloneSpecs, w.chosen]);
-                    const bare = (it) => { if (!it) return null; const c = JSON.parse(JSON.stringify(it)); delete c.id; return c; };
+                    // …and a second one, the same day: the line keeps, beside its picks, WHICH PART each one was (engineConfig.pickParts).
+                    // The line is compared with the screen's without that record; the record itself is checked on its own, below.
+                    const bare = (it) => { if (!it) return null; const c = JSON.parse(JSON.stringify(it)); delete c.id; if (c.engineConfig) delete c.engineConfig.pickParts; return c; };
                     walk6.compared++;
                     if (walkSaid(ow) !== walkSaid({ steps: n6.steps, hintFor: stepHintOf, extrasOnStep: n6.extrasOnStep, answerOf: n6.answerOf })) { walk6.walk++; if (first6.length < 3) first6.push(`walk #${fi}.${v}`); }
                     if (drawSaid(ow) !== drawSaid(n6)) { walk6.draw++; if (first6.length < 3) first6.push(`draw #${fi}.${v}`); }
@@ -1403,6 +1409,14 @@ const FIN = [
                         walk6.typed++;
                         if (canon(bare(was)) !== canon(bare(now))) { walk6.typedDiffer++; if (first6.length < 3) first6.push(`typed #${fi}.${v}`); }
                         if (typedLines.length !== takenExtraLinesOf(typedLines, typedRows).length && takenExtraLinesOf(typedLines, typedRows).length) walk6.typedBeside++;
+                    }
+                    if (drops.length > passedOver.length) walk6.goneNamed++;
+                    if (n6.item) {
+                        const pp = n6.item.engineConfig.pickParts || {};
+                        const right = Object.keys(n6.livePicks).filter(kk => n6.livePicks[kk]).every(kk => { const c = n6.model.choices.find(x => x.id === n6.livePicks[kk]); const pt = n6.findPart(c.partId);
+                            return pp[kk] && pp[kk].partId === String(c.partId) && pp[kk].code === n6.ourId(c.partId) && pp[kk].name === String((pt && pt.itemName) || c.name || ''); })
+                            && Object.keys(pp).length === Object.keys(n6.livePicks).filter(kk => n6.livePicks[kk]).length;
+                        if (!right) { walk6.partsWrong++; if (first6.length < 3) first6.push(`parts #${fi}.${v}`); }
                     }
                     n6.steps.forEach(st => { walk6.kinds[st.kind] = (walk6.kinds[st.kind] || 0) + 1; if (st.sub) walk6.nested++; if (stepHintOf(st)) walk6.hints++; if (st.kind !== 'LENGTH' && n6.extrasOnStep(st).length) walk6.itemsOffStep++; if (n6.answerOf(st) === 'not asked') walk6.notAsked++; });
                     if (n6.refusal) walk6.refused[n6.refusal.kind] = (walk6.refused[n6.refusal.kind] || 0) + 1;
@@ -1428,6 +1442,7 @@ const FIN = [
     eq(`the walk: the module's steps, hints, the items offered on each step and the answer under each heading are the screen's (${walk6.compared} set-ups walked)${first6.length ? ` — first: ${first6.join(', ')}` : ''}`, walk6.walk, 0);
     eq('what is drawn: the nodes shown, the clear parts, the rail, the stretch, the splice lines, the cloned centre brackets, the parts counted', walk6.draw, 0);
     eq('the Add: refused for the same reason in the same words, or the same cart line — every field, the frozen render and the notes with it', walk6.add, 0);
+    eq(`the line keeps which part each pick was — the record's id, our number and its name, one for every pick on the line and no other; and a pick whose pin is not on the assembly is named where the screen's reader passed it over (${walk6.goneNamed} set-ups)`, [walk6.partsWrong, walk6.goneNamed > 5], [0, true]);
     eq(`…and with a row typed to nothing on it — alone, beside rows that were taken (${walk6.typedBeside}), on one step while the same item is taken on another — the Add hands on what the screen's did (${walk6.typed} lines)`, [walk6.typedDiffer, walk6.typed > 50, walk6.typedBeside > 20], [0, true, true]);
     ok(`the set-ups take each road of the walk — steps ${JSON.stringify(walk6.kinds)}, the track hint ${walk6.hints}, items offered off the length step ${walk6.itemsOffStep}, "not asked" ${walk6.notAsked}, refused ${JSON.stringify(walk6.refused)}, removals named then acknowledged ${walk6.removals}, lines ${walk6.lines} (shop notes ${walk6.shopNotes}, customer notes ${walk6.clientNotes}, ticks with nothing to print ${walk6.ticksOnly}, one piece ${walk6.onePiece}, more than one build ${walk6.multiples}, no model ${walk6.noModel}), splice lines drawn where placed ${walk6.drawnMarks} / spread ${walk6.spreadMarks}, stretched ${walk6.stretch}, clear parts ${walk6.clear}, no rings pinned ${walk6.noRings}, no rod pinned ${walk6.noRod}`,
         walk6.kinds.AXES > 50 && walk6.kinds.AXIS > 20 && walk6.kinds.SLOT > 500 && walk6.kinds.LENGTH === walk6.compared && walk6.kinds.CARRIERS > 3 && walk6.kinds.TRV > 30 && walk6.hints > 20 && walk6.itemsOffStep > 50 && walk6.notAsked > 20
@@ -1604,6 +1619,21 @@ const FIN = [
         ['https://models.test/h2.glb', true, ['c-fl_mesh', 'c-rod_mesh'], 96]);
     eq('…a line with nothing to say carries no notes; a saved sidemark is the memo of a line that has none; a multiplier that is no number is one build', [lineOf({}).item.generalNotes, lineOf({}).item.clientNotes, lineOf({}).item.engineConfig.stepNoteClient, lineOf({ sidemark: 'From the drawing' }).item.sidemark, lineOf({ memo: 'Den', sidemark: 'x' }).item.sidemark, lineOf({ qty: 'two' }).item.qty],
         [undefined, undefined, undefined, 'From the drawing', 'Den', 1]);
+    eq('…and which part each pick was, beside the picks (so a reopen can name a part whose pin has since been re-made)', made.item.engineConfig.pickParts,
+        { [sRod.key]: { partId: 'ID-H2-138R', code: 'H2-138R', name: 'H2-138R' }, [sEnd.key]: { partId: 'ID-H2-138F', code: 'H2-138F', name: 'H2-138F' } });
+    eq('pickPartsOf: nothing picked, nothing recorded; a pick that is no choice is left out', [pickPartsOf({}, sized.model.choices, sizeFind), pickPartsOf({ [sRod.key]: 'NOPE', [sEnd.key]: '' }, sized.model.choices, sizeFind)], [{}, {}]);
+    // a saved pick that is not among the choices any more is NAMED, and the add waits
+    const acrylic = sized.model.slots.find(x => x.kind === 'END').options.find(o => /138AF/.test(o.id));
+    const sizeData = { assembly: SIZE_ASM, pins: SIZE_PINS, parts: sizeParts, flow: SIZE_FLOW };
+    const atHalf = (state) => sessionOf(sizeData, { answers: {}, picks: { [sRod.key]: sRod.options[0].id, [sEnd.key]: acrylic.id }, sizePick: { 'SIZE-DIA': 'SIZE-DIA-05', 'SIZE-PROJ': 'SIZE-PROJ-6' }, lengthInches: 96, ...state });
+    const half = atHalf({});
+    eq('a part picked at one diameter and not made at the next is named, with why — and Add waits for it', [half.livePicks[sEnd.key], half.pendingDrops.map(d => [d.step, d.partCode, d.reason]), half.refusal.kind, half.item], [undefined, [['Left End Treatment', acrylic.partId, 'not made in the size now chosen']], 'REMOVALS', null]);
+    const halfAcked = atHalf({ drops: half.drops.map(d => ({ ...d, acked: true })) });
+    ok('…acknowledged, the line is built without it', halfAcked.refusal === null && !!halfAcked.item && !halfAcked.item.engineConfig.picks[sEnd.key] && halfAcked.item.pricingBreakdown.every(l => !/AF$/.test(l.legacyErpId)));
+    const gonePin = (state) => sessionOf(sizeData, { answers: {}, picks: { [sRod.key]: sRod.options[0].id, [sEnd.key]: 'PIN-RE-MADE-SINCE' }, sizePick: { 'SIZE-DIA': 'SIZE-DIA-138', 'SIZE-PROJ': 'SIZE-PROJ-6' }, lengthInches: 96, ...state });
+    eq('a pick whose pin is no longer on the assembly is named by its step — by the part where the line recorded it', [gonePin({}).pendingDrops.map(d => [d.step, d.partName, d.partCode]), gonePin({ pickParts: { [sEnd.key]: { partId: 'ID-OLD', code: 'H2-138XF', name: 'Old finial' } } }).pendingDrops.map(d => [d.step, d.partName, d.partCode]), gonePin({}).refusal.kind],
+        [[['Left End Treatment', 'the part saved on this line', '']], [['Left End Treatment', 'Old finial', 'H2-138XF']], 'REMOVALS']);
+    eq('everyChoiceOf is every choice the assembly pins, whatever the size chosen', [everyChoiceOf(SIZE_ASM, SIZE_PINS).length, half.everyChoice.length, half.choices.length < half.everyChoice.length], [SIZE_PINS.length, SIZE_PINS.length, true]);
     // the parts of one framing with the answers of the next: a later answer removes some of them
     const staleData = { assembly: ASSEMBLY, pins: PINS, parts: [], finishes: FIN };
     const staleState = framings.map((a, i) => ({ answers: framings[(i + 1) % framings.length], picks: picksFor(a, `stale|${i}`), lengthInches: 96, globalFinishes: { METAL: 'P14', WOOD: 'S04' } }))

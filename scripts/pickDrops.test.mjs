@@ -134,6 +134,42 @@ const kB = (() => { const m = resolve({ choices: dbl, answers: { rodKind: 'SOLID
     eq('…and nothing is named as removed', droppedPicks(s.m, raw, s.live, { labelOf }).map(x => x.choiceId), []);
 }
 {
+    // ── A SAVED PICK THAT IS NOT AMONG THE CHOICES ANY MORE (Stuart 2026-10-13: "fix both") ─────────────────
+    // The line was saved with a knob finial and the 6" bracket. Since then the finial's tag was given a new item
+    // number in 1.6 — which re-makes the pin (FIN → FIN-N, H1-75KF → H1-75KFN). Reopened, the finial is not among
+    // the choices: the engine lets the pick go, and until today nothing said so.
+    const finialOnly = (extra) => [...RAW_SINGLE.filter(c => c.id !== 'FIN'), ...extra];
+    const renumbered = finialOnly([C({ id: 'FIN-N', partId: 'H1-75KFN', name: 'Knob Finial, new number', role: 'FINIAL', position: 'LEFT', nodes: ['fin'] })]);
+    const k = (() => { const m = resolve({ choices: RAW_SINGLE, answers: { proj: 6 }, selectedIds: [] }); return { rod: m.slots.find(s => s.kind === 'ROD').key, end: m.slots.find(s => s.kind === 'END').key }; })();
+    const raw = { [k.rod]: 'R', [k.end]: 'FIN' };
+    const s = settle(renumbered, { proj: 6 }, raw);
+    eq('the engine lets go of a pick whose pin is gone', [s.live[k.rod], s.live[k.end]], ['R', undefined]);
+    eq('not told every choice the assembly pins, the reader passes such a pick over — as it always has (Vision still calls it so)', droppedPicks(s.m, raw, s.live, { labelOf }), []);
+    const named = droppedPicks(s.m, raw, s.live, { labelOf, everyChoice: renumbered });
+    eq('told every choice, it NAMES it — by its step alone where the line did not record the part', named.map(x => [x.key, x.step, x.partName, x.partCode]), [[`${k.end}|FIN`, 'LEFT END', 'the part saved on this line', '']]);
+    ok('…and says why', /no longer on this assembly — its tag in 1\.6 was changed or removed since this line was saved$/.test(named[0].reason), named[0].reason);
+    const withPart = droppedPicks(s.m, raw, s.live, { labelOf, everyChoice: renumbered, savedParts: { [k.end]: { partId: 'CE-INV-1', code: 'H1-75KF', name: 'Knob Finial' }, [k.rod]: { partId: 'H1-75R', code: 'H1-75R', name: 'Rod' } } });
+    eq('a line saved from today on recorded the part beside the pick: it is named by the part', withPart.map(x => [x.step, x.partName, x.partCode]), [['LEFT END', 'Knob Finial', 'H1-75KF']]);
+    // a tag taken off and put back: a new pin of the SAME part
+    const repinned = finialOnly([C({ id: 'FIN-2', partId: 'H1-75KF', name: 'Knob Finial', role: 'FINIAL', position: 'LEFT', nodes: ['fin'] })]);
+    const s2 = settle(repinned, { proj: 6 }, raw);
+    const again = droppedPicks(s2.m, raw, s2.live, { labelOf, everyChoice: repinned, savedParts: { [k.end]: { partId: 'H1-75KF', code: 'H1-75KF', name: 'Knob Finial' } } });
+    eq('the same part under a re-made pin is named too — and the line says it is still offered there', again.map(x => [x.partName, /still offered on this step: pick it again$/.test(x.reason)]), [['Knob Finial', true]]);
+    eq('…picked again, the entry is gone', droppedPicks(s2.m, { ...raw, [k.end]: 'FIN-2' }, settle(repinned, { proj: 6 }, { ...raw, [k.end]: 'FIN-2' }).live, { labelOf, everyChoice: repinned }), []);
+    // a step the engine fills itself: the line that cannot say which part it held is not asked about it
+    const seatedModel = { slots: [{ key: 'TRACK|FRONT|', kind: 'TRACK', tier: 'FRONT', position: '', options: [{ id: 'T-NEW', partId: 'TRK', name: 'Track' }] }], choices: [{ id: 'T-NEW', partId: 'TRK', name: 'Track', role: 'TRACK' }] };
+    const autoLive = { 'TRACK|FRONT|': 'T-NEW' };
+    eq('a pick whose pin is gone, in a step the engine has filled itself: not named where the line cannot say what it held', droppedPicks(seatedModel, { 'TRACK|FRONT|': 'T-OLD' }, autoLive, { labelOf, everyChoice: seatedModel.choices }), []);
+    eq('…nor where it held the same part', droppedPicks(seatedModel, { 'TRACK|FRONT|': 'T-OLD' }, autoLive, { labelOf, everyChoice: seatedModel.choices, savedParts: { 'TRACK|FRONT|': { partId: 'trk', code: 'TRK', name: 'Track' } } }), []);
+    eq('…named where it held ANOTHER part, with what the step holds now', droppedPicks(seatedModel, { 'TRACK|FRONT|': 'T-OLD' }, autoLive, { labelOf, everyChoice: seatedModel.choices, savedParts: { 'TRACK|FRONT|': { partId: 'TRK-OLD', code: 'TRK-OLD', name: 'Old track' } } }).map(x => [x.partName, x.partCode, / \(the step now holds Track\)$/.test(x.reason)]), [['Old track', 'TRK-OLD', true]]);
+    // a flow that asks the size: the pin is on the assembly, the part is not made at the size now chosen
+    const sized = RAW_SINGLE.filter(c => c.id !== 'FIN');           // what is offered at the size chosen: every choice but the finial
+    const s3 = settle(sized, { proj: 6 }, raw);
+    eq('a part still pinned on the assembly but not offered at the size now chosen is named by its part', droppedPicks(s3.m, raw, s3.live, { labelOf, everyChoice: RAW_SINGLE }).map(x => [x.step, x.partName, x.partCode, x.reason]), [['LEFT END', 'Knob Finial', 'H1-75KF', 'not made in the size now chosen']]);
+    eq('a step that is no longer asked at all is still named, by what its key says', droppedPicks(s3.m, { 'RING|BACK|': 'RING-GONE' }, s3.live, { labelOf, everyChoice: RAW_SINGLE }).map(x => [x.step, x.partName]), [['BACK RING', 'the part saved on this line']]);
+    eq('the operator\'s own un-pick is still no removal', droppedPicks(s3.m, { [k.end]: '', [k.rod]: 'R' }, s3.live, { labelOf, everyChoice: RAW_SINGLE }), []);
+}
+{
     // acknowledgements survive a re-pass; a pick that comes back clears its entry
     const a = [{ key: 'END|LEFT|RET-E', acked: true }, { key: 'X|Y', acked: false }];
     const merged = mergeDrops(a, [{ key: 'END|LEFT|RET-E' }, { key: 'NEW|Z' }]);

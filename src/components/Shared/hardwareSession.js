@@ -1235,6 +1235,22 @@ export function addRefusalOf({ priced, pendingDrops, chosenList, finishFor, aski
 }
 
 // ── THE CART LINE ────────────────────────────────────────────────────────────────────────────
+// ── WHICH PART EACH PICK WAS, KEPT ON THE LINE (Stuart 2026-10-13: "fix both") ────────────────
+// A line keeps its picks as PIN ids — and a pin is re-made when its tag is given a new item number in 1.6, so
+// the id alone cannot say, later, what the line held (Shared/pickDrops names such a pick; with this it names the
+// PART, not only the step). Our number where the library has one, the record's id beside it, and its name.
+export function pickPartsOf(livePicks, choices, findPart) {
+    const out = {};
+    Object.entries(livePicks || {}).forEach(([slotKey, id]) => {
+        const c = id ? (choices || []).find(x => x.id === id) : null;
+        if (!c) return;
+        const pt = findPart ? findPart(c.partId) : null;
+        out[slotKey] = { partId: String(c.partId || ''), code: ourNumberOf(pt, c.partId), name: String(pt?.itemName || c.name || '') };
+    });
+    return out;
+}
+// Every choice the assembly pins, at any size — what a saved pick is looked for in once it is no longer offered.
+export const everyChoiceOf = (assembly, pins) => choicesFromAssembly(assembly, pins);
 // extraLines = the extras AS THE PANEL PRICED THEM (priceChoice, customer row) — the
 // handoff uses these verbatim so the docs, floors and NetSuite bill what was shown.
 // Filtered to extras actually TAKEN: extraLines coerces a 0 qty to 1 for display.
@@ -1292,9 +1308,12 @@ export function cartLineOf({ resolved, pricingCtx, assembly, flow, findPart, qty
     // this configuration as display-only rows the money documents print. The ticks are saved for Edit.
     const clientNotes = clientNotesOf({ steps, stepNotes, visible: stepNoteClient });
     const ticked = Object.keys(stepNoteClient).length > 0;
-    return (noSplice || shopNotes.length || ticked)
+    // Which part each pick was — kept with the picks, so a reopen can name a part whose pin has since been re-made.
+    const pickParts = pickPartsOf(livePicks, resolved.choices, findPart);
+    const parted = Object.keys(pickParts).length > 0;
+    return (noSplice || shopNotes.length || ticked || parted)
         ? { ...built,
-            ...((noSplice || ticked) ? { engineConfig: { ...built.engineConfig, ...(noSplice ? { spliceWaived: true } : {}), ...(ticked ? { stepNoteClient: { ...stepNoteClient } } : {}) } } : {}),
+            ...((noSplice || ticked || parted) ? { engineConfig: { ...built.engineConfig, ...(noSplice ? { spliceWaived: true } : {}), ...(ticked ? { stepNoteClient: { ...stepNoteClient } } : {}), ...(parted ? { pickParts } : {}) } } : {}),
             ...(shopNotes.length ? { generalNotes: shopNotes } : {}),
             ...(clientNotes.length ? { clientNotes } : {}) }
         : built;
@@ -1309,7 +1328,7 @@ export function cartLineOf({ resolved, pricingCtx, assembly, flow, findPart, qty
  *                 customer, customerId, priceLevel, outsourceCodes, kits } — what the screen is handed
  * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId, extras, spliceWaived, globalFinishes,
  *                 globalFinish, partFinish, finishAnswers, kitPick, kitCode, kitMotor, trvSel, stepNotes,
- *                 stepNoteClient, memo, qty, drawnSplices, drops } — what the operator has answered, as a cart
+ *                 stepNoteClient, memo, qty, drawnSplices, drops, pickParts } — what the operator has answered, as a cart
  *               line saves it (engineConfig); a saved length, the saved add-by-hand rows, the saved finish
  *               defaults, the kit a line was billed from, the notes and the ticks are read back exactly as Edit
  *               restores them. `drops` is what has already been named as removed, with what was acknowledged
@@ -1323,7 +1342,7 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
         globalFinishes: savedGlobalFinishes = null, globalFinish: savedGlobalFinish = '', partFinish: savedPartFinish = null,
         finishAnswers: savedFinishAnswers = null, kitPick = '', kitCode = '', kitMotor = '', trvSel: savedTrvSel = null,
         stepNotes: savedStepNotes = null, stepNoteClient: savedStepNoteClient = null, memo: savedMemo = '', sidemark = '', qty: savedQty = 1,
-        drawnSplices: savedDrawnSplices = null, drops: savedDrops = null, renderSnapshot = null } = {}) {
+        drawnSplices: savedDrawnSplices = null, drops: savedDrops = null, pickParts: savedPickParts = null, renderSnapshot = null } = {}) {
     const partIndex = partIndexOf(parts);
     const findPart = (id) => partIn(partIndex, id);
     const ourId = (id) => ourNumberOf(findPart(id), id);
@@ -1390,8 +1409,11 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const chosen = chosenPartsOf(model, livePicks);
     const cadUrl = assembly?.manufacturingSpecs?.cadUrl;
     const renderState = renderStateOf({ cadUrl, textureOverrides: fin.textureOverrides, visibleOverrides, cloneSpecs, stretchSpec, spliceMarks, clearList });
-    // What a later choice removed (Shared/pickDrops), over what was already named and acknowledged.
-    const drops = mergeDrops(Array.isArray(savedDrops) ? savedDrops : [], droppedPicks(model, picks, livePicks, { labelOf: slotLabel }));
+    // What a later choice removed (Shared/pickDrops), over what was already named and acknowledged — a saved pick
+    // whose pin is gone, or whose part is not made at the size chosen, among them (named by the part the line recorded).
+    const everyChoice = everyChoiceOf(assembly, pins);
+    const pickPartsSaved = (savedPickParts && typeof savedPickParts === 'object') ? { ...savedPickParts } : {};
+    const drops = mergeDrops(Array.isArray(savedDrops) ? savedDrops : [], droppedPicks(model, picks, livePicks, { labelOf: slotLabel, everyChoice, savedParts: pickPartsSaved }));
     const pendingDrops = unacknowledged(drops);
     const dropRefusal = dropRefusalOf(pendingDrops);
     const refusal = addRefusalOf({ priced: bill.priced, pendingDrops, chosenList: fin.chosenList, finishFor: fin.finishFor, askingFinishes: bill.askingFinishes, finishAnswers });
@@ -1405,5 +1427,5 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
         sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied,
         ...fin, finishAnswers, trvSel, ...bill,
         stepNotes, stepNoteClient, drawnSplices, memo, qty, steps, answerOf, extrasOnStep, visibleOverrides, clearList, railNames, stretchSpec, spliceMarks, cloneSpecs,
-        chosen, cadUrl, renderState, drops, pendingDrops, dropRefusal, refusal, item };
+        chosen, cadUrl, renderState, everyChoice, pickPartsSaved, drops, pendingDrops, dropRefusal, refusal, item };
 }
