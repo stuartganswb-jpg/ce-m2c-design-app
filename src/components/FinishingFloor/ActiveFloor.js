@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { isFloorSupervisor } from '../Shared/finishingRoles';
-import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
+import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, woHasPoles, woHasSmallParts, isHandStep,
     FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, sprayStationLockOf, sprayStationPatch, poleCoatIndexOf,
     isHandTask, mayRunHandStep, handStepWarning, TASK_LABEL as FLOOR_TASK_LABEL } from '../Shared/floorActivity';
 import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
@@ -8,7 +8,8 @@ import { normalMinutesOf, punchCheckOf, catchUpRunOf, punchWarning, punchFlagTex
 import { typedWoNumber } from '../Shared/skippedBuild';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
-import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
+import { recipeCopyInForce, liveRecipeOfWo, partsRecipeOfWo, poleRecipeOfWo, coatCountsOf } from '../Shared/floorActivity';
+import { sameSteps } from '../Shared/recipeCopy';
 import { propagateFloorState } from '../Shared/orderLifecycle';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import PartFactsStrip from '../Shared/PartFactsStrip';
@@ -201,10 +202,12 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // code when no variant exists, so everything pre-existing behaves exactly as before.
   // FINISH-STREAM EXCEPTION (the elbow) + AUTO BY PRODUCT TYPE: see streamFlagOf in
   // Shared/floorActivity — a finishStream 'POLES' part runs the -P recipe, an untagged rod resolves POLES.
-  const recipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, partsStreamOf(wo));
-  const poleRecipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, poleStreamOf(wo));
-  const partsRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, partsStreamOf(wo));
-  const poleRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, poleStreamOf(wo));
+  // AN ORDER KEEPS THE RECIPE IT STARTED WITH (Grace, App Imp 2026-10-06 · Shared/recipeCopy): a stream that has begun
+  // and carries a copy of its recipe reads the copy, so a step added in FINISH RECIPES never moves it back a coat.
+  const partsRecipeOf = (wo) => partsRecipeOfWo(recipes, wo);
+  const poleRecipeOf = (wo) => poleRecipeOfWo(recipes, wo);
+  const recipeLen = (wo) => coatCountsOf(recipes, wo).recipeLen;
+  const poleRecipeLen = (wo) => coatCountsOf(recipes, wo).poleRecipeLen;
   // The step each stream is ON right now (null past the end or with no recipe).
   const currentPartsStep = (wo) => { const r = partsRecipeOf(wo); return r && Array.isArray(r.steps) ? (r.steps[wo.currentStepIndex || 0] || null) : null; };
   const currentPoleStep = (wo) => { const r = poleRecipeOf(wo); return r && Array.isArray(r.steps) ? (r.steps[poleIdxOf(wo)] || null) : null; };
@@ -1598,8 +1601,20 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           const hasP = woHasPoles(wo);
           const rParts = partsRecipeOf(wo);
           const rPoles = hasP ? poleRecipeOf(wo) : null;
-          const samePoleDoc = rPoles && rParts && rPoles === rParts;
-          const section = (title, rec) => (
+          const samePoleDoc = rPoles && rParts && (rPoles === rParts || (String(rPoles.code || '') === String(rParts.code || '') && sameSteps(rPoles, rParts)));
+          // The steps this order STARTED WITH, where FINISH RECIPES has changed since (Shared/recipeCopy).
+          const keptNote = (role) => {
+              const c = recipeCopyInForce(wo, role);
+              if (!c) return null;
+              const live = liveRecipeOfWo(recipes, wo, role);
+              return (
+                  <div style={{ margin: '0 0 10px', padding: '8px 10px', background: '#fdf6ec', border: '1px solid #d9a648', fontSize: '0.85rem', color: '#6b4e16', lineHeight: 1.45 }}>
+                      These are the steps this order started with{c.at ? ` (kept ${new Date(c.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}${c.by ? ` · ${c.by}` : ''})` : ''}.{' '}
+                      {sameSteps(c, live) ? 'FINISH RECIPES reads the same today.' : `FINISH RECIPES ${live ? 'has changed since' : 'no longer has this recipe'} — the change applies to orders that start after it, never to one part-way through.`}
+                  </div>
+              );
+          };
+          const section = (title, rec, role) => (
               <div key={title} style={{ marginBottom: '20px' }}>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--brass)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '10px' }}>
                       {title}{rec?.code ? ` — ${rec.code}` : ''}
@@ -1608,6 +1623,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                       <div style={{ fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>Recipe "{wo.recipe || '(none)'}" isn't in FINISH RECIPES — add it there and it appears here.</div>
                   ) : (
                       <>
+                          {keptNote(role)}
                           {rec.name && <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '8px' }}>{rec.name}</div>}
                           {(rec.steps || []).map(st => (
                               <div key={st.step} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid rgba(28,26,22,.06)' }}>
@@ -1638,12 +1654,12 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           <button onClick={() => setRecipeView(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
                       </div>
                       <div style={{ padding: '20px 24px' }}>
-                          {section(hasP ? 'Small Parts' : 'Recipe', rParts)}
+                          {section(hasP ? 'Small Parts' : 'Recipe', rParts, 'parts')}
                           {hasP && (samePoleDoc
                               ? <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '14px' }}>Poles run the SAME recipe (no -P variant defined for {wo.recipe || ''}).</div>
-                              : section('Poles', rPoles))}
+                              : section('Poles', rPoles, 'poles'))}
                           <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', letterSpacing: '.05em', borderTop: '1px dashed var(--line)', paddingTop: '10px' }}>
-                              Live from Finishing → FINISH RECIPES — edits there show here immediately. Expiring or changed finishes never need an Asset Gallery upload.
+                              From Finishing → FINISH RECIPES. An order that has started keeps the steps it started with; a change there shows here for every order that has not started a coat. Expiring or changed finishes never need an Asset Gallery upload.
                           </div>
                       </div>
                   </div>

@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { finishingDb as db } from '../../firebase'; 
-import { doc, setDoc, deleteDoc, getDoc } from "firebase/firestore";
+import { doc, setDoc, deleteDoc, getDoc, updateDoc } from "firebase/firestore";
 import { cardStyle, btnStyle, inputStyle, labelStyle, sectionHeaderStyle } from './finishingStyles';
+import { recipeFreezesOf, freezeText } from '../Shared/recipeFreeze';
+import { woRefOf } from '../Shared/woRef';
 
-const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
+const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user, workOrders = [] }) => {
     const [rCode, setRCode] = useState("");
     const [rName, setRName] = useState("");
     const [steps, setSteps] = useState([
@@ -17,6 +19,20 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
     const [rCat, setRCat] = useState("");
 
     const paintSupplies = supplies.filter(s => s.cat === "Paint/Chemical").map(s => s.name);
+
+    // AN ORDER KEEPS THE RECIPE IT STARTED WITH (Grace, App Imp 2026-10-06 · Stuart 2026-10-13 · Shared/recipeFreeze).
+    // Before a recipe is saved, deleted or un-ticked: every order part-way through it is given a copy of the steps it is
+    // running, so a step added here never moves an order back a coat. `recipesAfter` = the dictionary as it will stand.
+    // Returns false when the person backs out — nothing was written.
+    const keepRunningOrders = async (recipesAfter, what, { ask = true } = {}) => {
+        const fz = recipeFreezesOf({ workOrders, recipesBefore: recipes, recipesAfter, by: user?.name || '', why: what });
+        if (ask && fz.staying.length && !window.confirm(`${freezeText({ staying: fz.staying, refOf: woRefOf, what })}\n\nOK = save · Cancel = leave the recipe as it is`)) return false;
+        for (const p of fz.patches) await updateDoc(doc(db, 'fin_workorders', p.id), p.patch);
+        if (fz.patches.length && writeLog) writeLog(`Kept the running steps on ${fz.patches.length} order${fz.patches.length === 1 ? '' : 's'} before ${what}: ${fz.patches.map(p => p.id).join(', ')}`, 'recipes');
+        return true;
+    };
+    const runningNote = (recipesAfter, what) => freezeText({ staying: recipeFreezesOf({ workOrders, recipesBefore: recipes, recipesAfter }).staying, refOf: woRefOf, what });
+    const without = (code) => Object.fromEntries(Object.entries(recipes).filter(([id, r]) => id !== code && String((r && r.code) || '') !== String(code)));
 
     const handleSaveRecipe = async () => {
         if(!rCode) return alert("Recipe needs a Finish ID");
@@ -33,7 +49,10 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
 
         const cleanedSteps = activeSteps.map((s, idx) => ({ ...s, step: idx + 1 }));
 
-        await setDoc(doc(db, "fin_recipes", safeCode), { code: safeCode, name: rName.trim(), steps: cleanedSteps, instructions });
+        const saved = { code: safeCode, name: rName.trim(), steps: cleanedSteps, instructions };
+        try { if (!(await keepRunningOrders({ ...recipes, [safeCode]: saved }, `the change to ${safeCode}`))) return; }
+        catch (e) { return alert(`Recipe NOT saved — the orders part-way through ${safeCode} could not be given their steps first (${e.message || e}).\n\nNothing was changed. Try again.`); }
+        await setDoc(doc(db, "fin_recipes", safeCode), saved);
         if (writeLog) writeLog(`Updated Recipe: ${safeCode}${rName.trim() ? ` — ${rName.trim()}` : ''}`, 'recipes');
         setRCode("");
         setRName("");
@@ -85,7 +104,11 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
     // floor, which is where Stuart wants mismatches fixed or deleted (2026-08-12).
     const handleDeleteRecipe = async (r) => {
         const isStub = r.needsRecipe || r.stub || !(r.steps || []).length;
-        if (!window.confirm(`Delete recipe ${r.code}?${isStub ? '' : '\n\nOrders carrying this code will show "recipe missing" until it is re-created.'}`)) return;
+        const after = without(r.code);
+        const running = runningNote(after, `deleting ${r.code}`);
+        if (!window.confirm(`Delete recipe ${r.code}?${isStub ? '' : '\n\nOrders carrying this code that have NOT started will show "recipe missing" until it is re-created.'}${running ? `\n\n${running}` : ''}`)) return;
+        try { await keepRunningOrders(after, `deleting ${r.code}`, { ask: false }); }
+        catch (e) { return alert(`Recipe NOT deleted — the orders part-way through ${r.code} could not be given their steps first (${e.message || e}).\n\nNothing was changed. Try again.`); }
         await deleteDoc(doc(db, "fin_recipes", r.code));
         if (writeLog) writeLog(`Deleted recipe ${r.code}${isStub ? ' (needs-recipe stub)' : ''}`, 'recipes');
         if (isStub && r.pushedFromHQ && window.confirm(`${r.code} came from HQ 4.5 (a sales-created finish).\n\nAlso remove it from the HQ In-House Master Finishes list? OK = gone everywhere (incl. CPQ flow palettes). Cancel = it stays in HQ and will push back here on the next sync.`)) {
@@ -216,7 +239,7 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
                                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: canEdit ? 'pointer' : 'default', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--ink)', whiteSpace: 'nowrap' }}>
                                             <input type="checkbox" checked={!!sub} disabled={!canEdit}
                                                 onChange={() => sub
-                                                    ? (window.confirm(`Delete ${code}? ${label} on ${master.code} orders fall back to the master recipe.`) && deleteDoc(doc(db, "fin_recipes", code)).then(() => writeLog && writeLog(`Deleted stream variant ${code}`, 'recipes')))
+                                                    ? (window.confirm(`Delete ${code}? ${label} on ${master.code} orders fall back to the master recipe.${runningNote(without(code), `deleting ${code}`) ? `\n\n${runningNote(without(code), `deleting ${code}`)}` : ''}`) && keepRunningOrders(without(code), `deleting ${code}`, { ask: false }).then(() => deleteDoc(doc(db, "fin_recipes", code))).then(() => writeLog && writeLog(`Deleted stream variant ${code}`, 'recipes')).catch(e => alert(`${code} NOT deleted (${e.message || e}) — nothing was changed.`)))
                                                     : (window.confirm(`Create ${code} — the ${label.toUpperCase()} variant of ${master.code}?\n\nIt starts as a copy of ${master.code}'s steps; press Edit on it to set the real ${label.toLowerCase()} sequence (coats, DTMs). The floor picks it automatically for the ${label.toLowerCase()} stream.`) && setDoc(doc(db, "fin_recipes", code), { code, name: `${master.name || master.code} — ${label.toUpperCase()}`, masterCode: String(master.code).toUpperCase(), steps: (master.steps || []).map(s => ({ ...s })), instructions: master.instructions || '' }).then(() => writeLog && writeLog(`Created stream variant ${code} from ${master.code}`, 'recipes')))}
                                                 style={{ accentColor: 'var(--brass)' }} />
                                             -{sfx} · {label}

@@ -18,6 +18,7 @@
 
 import { isPoleCategory } from './poleCut.js';
 import { resolveStreamRecipe } from './finishingTime.js';
+import { recipeCopyOf } from './recipeCopy.js';
 
 export const OVEN_KEYS = ['spinBake', 'poleBake'];
 export const TASK_LABEL = {
@@ -213,7 +214,7 @@ export function comingCoatsOf(steps, idx, stream, wo) {
 // a choice is harmless where a missing one is not.
 export function asksSprayStation(wo, recipes) {
     if (!wo || !woHasSmallParts(wo)) return false;
-    const r = resolveStreamRecipe(recipes, wo.recipe, partsStreamOf(wo));
+    const r = partsRecipeOfWo(recipes, wo);
     const steps = r && Array.isArray(r.steps) ? r.steps : [];
     if (!steps.length) return true;
     return steps.some(s => !isHandStep(s));
@@ -241,8 +242,27 @@ export function sprayStationPatch(to, by, at = Date.now()) {
 // the MASTER recipe's length. A stream's coat count is its own variant's (-S / -P when Finish Recipes has
 // one, else the master) — the rule the floor's engine has run since 08-11 — and every screen asks it here.
 const stepsOf = (recipe) => ((recipe && Array.isArray(recipe.steps)) ? recipe.steps : []);
-export const partsRecipeOfWo = (recipes, wo) => resolveStreamRecipe(recipes, wo && wo.recipe, partsStreamOf(wo || {}));
-export const poleRecipeOfWo = (recipes, wo) => resolveStreamRecipe(recipes, wo && wo.recipe, poleStreamOf(wo || {}));
+// AN ORDER KEEPS THE RECIPE IT STARTED WITH (Grace, App Imp 2026-10-06 · Stuart 2026-10-13 · Shared/recipeCopy). A document
+// counts its coats by NUMBER, so a step added to FINISH RECIPES in front of the coat an order was on sent that order back
+// a coat. A stream that has BEGUN and carries a copy of its recipe reads the copy; every other reads FINISH RECIPES.
+//   role 'parts' = the coats currentStepIndex counts · role 'poles' = the coats poleStepIndex counts
+const STREAM_TASKS = { parts: ['spinSetup', 'spinSpray', 'spinBake', 'hand'], poles: ['poleSpray', 'poleBake', 'poleHand'] };
+const taskTouched = (t) => !!t && (['Running', 'Complete'].includes(t.status) || !!t.startTime || !!t.completedAt);
+/** Has this stream started — a coat finished, a spin load run, or any step of its first coat started? */
+export const streamBegun = (wo, role) => {
+    if (!wo) return false;
+    const idx = role === 'poles' ? poleCoatIndexOf(wo) : (Number(wo.currentStepIndex) || 0);
+    if (idx > 0) return true;
+    if (role !== 'poles' && Array.isArray(wo.spinLoads) && wo.spinLoads.length) return true;
+    return (STREAM_TASKS[role] || []).some(k => taskTouched((wo.tasks || {})[k]));
+};
+/** The recipe FINISH RECIPES holds for this stream right now (-S / -P when there is one, else the master). */
+export const liveRecipeOfWo = (recipes, wo, role) =>
+    resolveStreamRecipe(recipes, wo && wo.recipe, role === 'poles' ? poleStreamOf(wo || {}) : partsStreamOf(wo || {}));
+/** The copy this stream is running on — only while it has begun (a document reset to coat 1 reads FINISH RECIPES again). */
+export const recipeCopyInForce = (wo, role) => (streamBegun(wo, role) ? recipeCopyOf(wo, role) : null);
+export const partsRecipeOfWo = (recipes, wo) => recipeCopyInForce(wo, 'parts') || liveRecipeOfWo(recipes, wo, 'parts');
+export const poleRecipeOfWo = (recipes, wo) => recipeCopyInForce(wo, 'poles') || liveRecipeOfWo(recipes, wo, 'poles');
 /** { recipeLen, poleRecipeLen } — exactly what Shared/orderStatus.orderStatusOf and OrderStatusChips take. */
 export const coatCountsOf = (recipes, wo) => ({
     recipeLen: stepsOf(partsRecipeOfWo(recipes, wo)).length,

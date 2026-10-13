@@ -215,7 +215,7 @@ const FinishingFloor = () => {
           {activeTab === 'SETUP QUEUE' && <SetupQueue workOrders={workOrders} recipes={recipes} writeLog={writeLog} sysConfig={sysConfig} currentUser={user?.name || ''} />}
           {activeTab === 'SETUP QUEUE' && <div style={{ padding: '0 30px 30px' }}><SchedulePlanner workOrders={workOrders} recipes={recipes} capacityMatrix={capacityMatrix} sysConfig={sysConfig} /></div>}
           {activeTab === 'ACTIVE FLOOR' && <ActiveFloor workOrders={workOrders} recipes={recipes} activePots={activePots} sysConfig={sysConfig} setMixModal={setMixModal} now={now} user={user} setQcModal={setQcModal} users={users} />}
-          {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} />}
+          {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} workOrders={workOrdersRaw.filter(notSew).map(withRecipe)} />}
           {activeTab === 'PRODUCTION TIMES' && <ProductionTimes sysConfig={sysConfig} capacityMatrix={capacityMatrix} recipes={recipes} workOrders={workOrders} prodTypes={prodTypes} writeLog={writeLog} user={user} />}
           {activeTab === 'SUPPLIES' && <Supplies supplies={supplies} writeLog={writeLog} user={user} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}
