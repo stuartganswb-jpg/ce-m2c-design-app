@@ -233,6 +233,15 @@ export function sprayStationPatch(to, by, at = Date.now()) {
     const station = to === SPRAY_STATIONS.BOOTH ? SPRAY_STATIONS.BOOTH : SPRAY_STATIONS.SPIN;
     return { sprayStation: station, sprayStationAt: at, sprayStationBy: by || '', ...(station === SPRAY_STATIONS.BOOTH ? { machineAssigned: null } : {}) };
 }
+// A SLED IS FOR SMALL PARTS ON THE SPIN MACHINE — nothing else takes one (Stuart 2026-10-13, WO11721: ten poles held RED
+// while WO11688's 420 rings, on the spin machine, had none). The sled engine asked only "not sent to the booth", and every
+// document carries a sled-setup task, so a pole-only order — poles go to the booth, as asksSprayStation above knows —
+// qualified and was handed a colour. One reading: small parts (woHasSmallParts) that are not sent to the booth.
+// → may this document hold RED / BLUE?
+export const takesSled = (wo) => !!wo && woHasSmallParts(wo) && sprayStationOf(wo) !== SPRAY_STATIONS.BOOTH;
+// …and a document holding a sled it may not hold gives it back, so the next spin job gets that colour and no card reads
+// a pole order as "on the RED sled". → the patch, or null when there is nothing to give back.
+export const sledReleasePatchOf = (wo) => (wo && wo.machineAssigned && !takesSled(wo)) ? { machineAssigned: null } : null;
 
 // ── HOW MANY COATS EACH STREAM RUNS — ONE READING FOR EVERY SCREEN (Stuart 2026-10-01) ────────────
 // Sandra, App Imp, WO-SO60712 on SL1: "The poles on this item need to go to hand finish." The floor had it

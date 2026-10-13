@@ -9,7 +9,7 @@ import { startStopOf, bakeStopOf, stepStopText, stepOverrideText, stepStopLogTex
 import { typedWoNumber } from '../Shared/skippedBuild';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
-import { recipeCopyInForce, liveRecipeOfWo, partsRecipeOfWo, poleRecipeOfWo, coatCountsOf } from '../Shared/floorActivity';
+import { recipeCopyInForce, liveRecipeOfWo, partsRecipeOfWo, poleRecipeOfWo, coatCountsOf, takesSled, sledReleasePatchOf } from '../Shared/floorActivity';
 import { sameSteps } from '../Shared/recipeCopy';
 import TraverseColourTag from '../Shared/TraverseColourTag';
 import { propagateFloorState } from '../Shared/orderLifecycle';
@@ -159,7 +159,11 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // --- SLED ASSIGNMENT ENGINE ---
   // A BOOTH JOB NEVER TAKES A SLED (Stuart 2026-09-23): small parts sent to the booth at Start Setup
   // are sprayed there, so the spin machine's RED / BLUE must not be held for them.
-  const onSpinMachine = (w) => sprayStationOf(w) !== SPRAY_STATIONS.BOOTH;
+  // …NOR DOES A POLE-ONLY ORDER (Stuart 2026-10-13 · Shared/floorActivity.takesSled): every document carries a sled-setup
+  // task, so "not sent to the booth" alone handed RED to ten poles (WO11721) while a 420-piece spin job had no sled. A
+  // sled is for small parts on the spin machine; a document holding one it may not hold gives it back.
+  const onSpinMachine = takesSled;
+  activeWOs.forEach(w => { const giveBack = sledReleasePatchOf(w); if (giveBack) updateDoc(doc(db, "fin_workorders", w.id), giveBack); });
   const spinningWOs = [...activeWOs].filter(w => onSpinMachine(w) && w.tasks?.spinSetup && w.tasks.spinBake?.status !== 'Complete')
     .sort((a, b) => ((a.scheduleSeq ?? 1e9) - (b.scheduleSeq ?? 1e9)) || a.id.localeCompare(b.id));
 

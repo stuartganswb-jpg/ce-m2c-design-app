@@ -9,7 +9,7 @@
 import {
     woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
     sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, asksSprayStation,
-    sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS, poleCoatIndexOf,
+    sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS, poleCoatIndexOf, takesSled, sledReleasePatchOf,
 } from '../src/components/Shared/floorActivity.js';
 
 let pass = 0, fail = 0;
@@ -129,5 +129,25 @@ eq('anything unknown reads as the spin machine, as sprayStationOf does', spraySt
     ok('small parts say small parts / piezas pequeñas, and read without a name', /SMALL PARTS/.test(sp) && /PIEZAS PEQUEÑAS/.test(sp) && /\nThis next step/.test(sp) && /\nEl siguiente paso/.test(sp));
 }
 
+// ── A SLED IS FOR SMALL PARTS ON THE SPIN MACHINE (Stuart 2026-10-13, WO11721: ten poles held RED) ──────────────
+{
+    const rings = { type: 'HCUSR1/SG-EA', totalParts: 420, tasks: { spinSetup: { status: 'Pending' } } };
+    const poles = { type: 'HTA635/CP', productType: 'POLE', totalParts: 10, totalPoles: 10, poles: { qty: 10 }, tasks: { spinSetup: { status: 'Pending' } } };
+    const mixed = { type: 'MIXED', totalParts: 30, totalPoles: 10, poles: { qty: 10 } };
+    eq('small parts with no choice made are on the spin machine — a sled', takesSled(rings), true);
+    eq('small parts chosen for the spin machine — a sled', takesSled({ ...rings, sprayStation: 'SPIN' }), true);
+    eq('small parts sent to the booth — no sled (2026-09-23)', takesSled({ ...rings, sprayStation: 'BOOTH' }), false);
+    eq('a pole-only order — no sled, though it carries a sled-setup task like every document', takesSled(poles), false);
+    eq('a rod order no count was stamped on is still its poles — no sled', takesSled({ productType: 'ROD', totalParts: 8 }), false);
+    eq('poles with small parts beside them: the small parts ride a sled', takesSled(mixed), true);
+    eq('…unless they went to the booth', takesSled({ ...mixed, sprayStation: 'BOOTH' }), false);
+    eq('no document takes nothing', takesSled(null), false);
+    eq('WO11721: the poles give RED back', sledReleasePatchOf({ ...poles, machineAssigned: 'RED' }), { machineAssigned: null });
+    eq('a pole order holding nothing has nothing to give back', sledReleasePatchOf(poles), null);
+    eq('a spin job keeps its sled', sledReleasePatchOf({ ...rings, machineAssigned: 'BLUE' }), null);
+    eq('a mixed order on the spin machine keeps its sled', sledReleasePatchOf({ ...mixed, machineAssigned: 'RED' }), null);
+    eq('a booth job still holding one gives it back', sledReleasePatchOf({ ...rings, sprayStation: 'BOOTH', machineAssigned: 'RED' }), { machineAssigned: null });
+    eq('no document, no patch', sledReleasePatchOf(null), null);
+}
 console.log(`floorActivity: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
