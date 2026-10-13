@@ -52,7 +52,7 @@ import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i18n';
 import { holdOrder, releaseHold } from '../Shared/orderHold';
-import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutYieldLinesOf, cutYieldText } from '../Shared/poleCut';
+import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutYieldLinesOf, cutYieldText, cutReleaseText, cutReleaseLog } from '../Shared/poleCut';
 import { binsSql, GOOD_STATUS_ID } from '../Shared/fulfilmentBins';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { platingLineRateOf } from '../Shared/platingRate';
@@ -3858,6 +3858,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // them — the same setup label every other job carries, which is what makes the rest of
             // the journey ordinary.
             const isFinishingCut = o.purpose === 'FINISHING' || o.createdVia === 'FINISHING_WO';
+            let cutAutoRelease = null;   // RTG's automatic release for this division: true / false / not read
             if (isFinishingCut && o.finWoId) {
                 try {
                     await updateDoc(doc(db, 'hq_work_orders', o.finWoId), {
@@ -3873,10 +3874,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     finish: o.finWoRecipe || '',
                     customer: 'Internal Stock',
                 });
-                writeLog(`Cut ${o.id} released WO ${o.finWoId} to finishing — label printed.`, 'wms');
+                // WHERE IT REALLY IS (Stuart 2026-10-13 · Shared/poleCut.cutReleaseText): the cut clears the gate; RTG puts
+                // the order on the floor — on its own only when automatic release is on for the division.
+                try { const sw = await getDoc(doc(db, 'hq_config', 'rtg_auto_release')); cutAutoRelease = !!(sw.exists() && (sw.data()[activeBrand] || {}).enabled); }
+                catch (e) { cutAutoRelease = null; }
+                writeLog(cutReleaseLog({ cutId: o.id, woRef: o.finWoId, autoRelease: cutAutoRelease }), 'wms');
             }
 
-            alert(`✅ Rod cut posted to NetSuite:\n\n−${o.qtySource} × ${o.sourceItemId} from ${srcBin}\n${cutLines.map(l => `+${l.qty} × ${l.itemId} into ${binFor(l)}${l.offcut ? ' (offcuts — stock)' : ''}`).join('\n')}${o.scrapFt ? `\n(${o.scrapFt} ft scrap — not tracked)` : ''}${isFinishingCut && o.finWoId ? `\n\n▶ WO ${o.finWoId} is released to finishing and its setup label is printing — send the cut poles with it.${Number(o.overrun) > 0 ? `\n(${o.overrun} spare ${o.targetItemId} stay in ${destBin}.)` : ''}` : ''}`);
+            alert(`✅ Rod cut posted to NetSuite:\n\n−${o.qtySource} × ${o.sourceItemId} from ${srcBin}\n${cutLines.map(l => `+${l.qty} × ${l.itemId} into ${binFor(l)}${l.offcut ? ' (offcuts — stock)' : ''}`).join('\n')}${o.scrapFt ? `\n(${o.scrapFt} ft scrap — not tracked)` : ''}${isFinishingCut && o.finWoId ? `\n\n${cutReleaseText({ woRef: o.finWoId, autoRelease: cutAutoRelease })}${Number(o.overrun) > 0 ? `\n(${o.overrun} spare ${o.targetItemId} stay in ${destBin}.)` : ''}` : ''}`);
             closeCut();
             pullNetSuiteStock();
         } catch (e) {

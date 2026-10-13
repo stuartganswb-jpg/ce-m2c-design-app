@@ -1,6 +1,6 @@
 // node scripts/reviewWaiting.test.mjs — the orders parked for a person's review, as RTG says them (Stuart 2026-10-12).
 // The two orders are the two that were sitting in production that day.
-import { reviewWaitingOf, waitedText } from '../src/components/Shared/reviewWaiting.js';
+import { reviewWaitingOf, notStartedOf, waitedText, NOT_STARTED_GRACE_MS } from '../src/components/Shared/reviewWaiting.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 const DAY = 86400000, now = 100 * DAY;
@@ -19,4 +19,27 @@ eq('closed, deleted, archived, done and running orders are not; a display order 
     reviewWaitingOf([{ ...so60583, status: 'Closed' }, { ...so60583, deleted: true }, { ...so60583, rtgArchived: true }, { ...so60583, oeAuto: { ...so60583.oeAuto, state: 'DONE' } }, { ...so60583, oeAuto: { ...so60583.oeAuto, state: 'RUNNING' } }, { ...so60583, displayRelease: true }, { id: 'X', status: 'Pending' }, null], { now }), []);
 eq('a review entry for a line no longer on the order is dropped', reviewWaitingOf([{ ...so60583, lines: [{ erp: 'H1-75SR' }] }], { now })[0].lines.map(l => l.lineIdx), [0]);
 eq('in words', [waitedText(0), waitedText(1), waitedText(12)], ['today', '1 day', '12 days']);
+
+// ── THE ORDERS NOTHING HAS LOOKED AT (Stuart 2026-10-13) ─────────────────────────────────────────────────────────────
+// SO60993 (Brimar, two to-be-finished lines, entered 10-08): ⚡ automatic release was off, so the automatic start never
+// ran — no review record, no start, on no list for four days. It is listed here, apart from the review list.
+{
+    const so60993 = { id: 'QS-9', soId: 'SO60993', customer: 'BRIMAR', status: 'Pending', nsInternalId: '951000', createdAt: now - 4 * DAY,
+        lines: [{ erp: 'HCUDEC1', toBeFinished: true }, { erp: 'HCUMB410', toBeFinished: true }, { erp: 'HCUSR1' }] };
+    const idle = notStartedOf([so60993], { now });
+    eq('listed with the lines nothing has started on, and how long ago it was entered', idle.map(r => [r.ref, r.customer, r.days, r.lines.map(l => `${l.lineIdx}:${l.erp}`)]), [['SO60993', 'BRIMAR', 4, ['0:HCUDEC1', '1:HCUMB410']]]);
+    eq('it is NOT on the review list — the Day summary still calls it NOT STARTED, not WAITING FOR REVIEW', reviewWaitingOf([so60993], { now }), []);
+    eq('once its lines are started (10-12, the switch back on) it is gone', notStartedOf([{ ...so60993, oeGen: { 0: { kind: 'WO' }, 1: { kind: 'WO' } }, oeAuto: { state: 'DONE', at: now } }], { now }), []);
+    eq('one line started: the other is still listed', notStartedOf([{ ...so60993, oeGen: { 0: { kind: 'WO' } } }], { now })[0].lines.map(l => l.lineIdx), [1]);
+    eq('an order the automatic start PARKED belongs to the review list, never both', [notStartedOf([{ ...so60993, oeAuto: { state: 'NEEDS_REVIEW', at: now - DAY, review: [{ lineIdx: 0, erp: 'HCUDEC1', reasons: ['x'] }] } }], { now }).length, notStartedOf([{ ...so60993, oeAuto: { state: 'FAILED', at: now, error: 'e' } }], { now }).length], [0, 0]);
+    eq('entered in the last quarter of an hour: the automatic start is given its chance', [notStartedOf([{ ...so60993, createdAt: now - 5 * 60000 }], { now }).length, notStartedOf([{ ...so60993, createdAt: now - NOT_STARTED_GRACE_MS }], { now }).length], [0, 1]);
+    eq('the automatic start working on it right now is not "nothing has looked at it"', [notStartedOf([{ ...so60993, oeAuto: { state: 'RUNNING', at: now - 60000 } }], { now }).length, notStartedOf([{ ...so60993, oeAuto: { state: 'RUNNING', at: now - 2 * DAY } }], { now }).length], [0, 1]);
+    eq('a line added to an order the automatic start finished long ago is listed (after the grace, from that run)', [notStartedOf([{ ...so60993, oeGen: { 0: { kind: 'WO' } }, oeAuto: { state: 'DONE', at: now - 60000 } }], { now }).length, notStartedOf([{ ...so60993, oeGen: { 0: { kind: 'WO' } }, oeAuto: { state: 'DONE', at: now - DAY } }], { now }).map(r => r.days)], [0, [1]]);
+    eq('not yet accepted by NetSuite, closed, deleted, archived, a display order, or one with no to-be-finished line: not listed',
+        notStartedOf([{ ...so60993, nsInternalId: '' }, { ...so60993, status: 'Closed' }, { ...so60993, deleted: true }, { ...so60993, rtgArchived: true }, { ...so60993, displayRelease: {} }, { ...so60993, packMode: 'DISPLAY' }, { ...so60993, lines: [{ erp: 'HCUSR1' }] }], { now }), []);
+    eq('a kit line and a line off the order are never "to start"', notStartedOf([{ ...so60993, lines: [{ erp: 'KIT', toBeFinished: true, isKit: true }, { erp: 'OFF', toBeFinished: true, offOrder: true }] }], { now }), []);
+    eq('only the door asked for (the board passes Order Entry)', [notStartedOf([so60993], { now, isOrderEntry: () => false }).length, notStartedOf([so60993], { now, isOrderEntry: (o) => o.soId === 'SO60993' }).length], [0, 1]);
+    eq('oldest first', notStartedOf([{ ...so60993, id: 'B', soId: 'SO2', createdAt: now - DAY }, so60993], { now }).map(r => r.ref), ['SO60993', 'SO2']);
+    eq('a Firestore timestamp is read', notStartedOf([{ ...so60993, createdAt: { seconds: (now - 2 * DAY) / 1000 } }], { now })[0].days, 2);
+}
 console.log(`reviewWaiting: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

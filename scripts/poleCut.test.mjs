@@ -1,7 +1,8 @@
 // node scripts/poleCut.test.mjs — what a completed rod cut puts on the shelf (Stuart 2026-10-12: "we can get one 6 and
 // one 4 from each 12"). The orders are the ones open on the WMS Rod Cuts tab that day.
-import { alsoYieldsFor, cutYieldLinesOf, cutYieldText, sourcesForLength, cutPlanFromSource, poleLengthOf } from '../src/components/Shared/poleCut.js';
+import { alsoYieldsFor, cutYieldLinesOf, cutYieldText, sourcesForLength, cutPlanFromSource, poleLengthOf, cutReleaseText, cutReleaseLog } from '../src/components/Shared/poleCut.js';
 let pass = 0, fail = 0;
+const ok = (n, c) => { if (c) pass++; else { fail++; console.log(`✗ ${n}`); } };
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
 const ns = { HTA1235: '21530', HTA435: '21531', HTA635: '21532', HTA835: '21533' };
 const nsIdOf = (c) => ns[c] || null;
@@ -32,4 +33,19 @@ eq('nothing to read → one empty line, never a throw', cutYieldLinesOf(null).le
 const src12 = sourcesForLength(6).find(o => o.sourceFt === 12);
 eq('the review already shows that a 12 ft cut for 6 ft also yields a 4 ft', [src12.per, src12.scrapFt, src12.alsoYields], [1, 2, [{ ft: 4, per: 1 }]]);
 eq('…and the cut plan it writes is what it was', cutPlanFromSource({ targetErp: 'HTA635/CP', targetFt: 6, sourceFt: 12, per: 1, scrapFt: 2, want: 10 }), { sourceItemId: 'HTA1235', targetItemId: 'HTA635', sourceQty: 10, targetQty: 10, wantQty: 10, overrun: 0, cutTo: '6FT', scrapFt: 20, lengthFt: 6 });
+
+// ── WHERE THE WORK ORDER IS ONCE ITS CUT IS POSTED (Stuart 2026-10-13) ───────────────────────────────────────────────
+// The cut clears the gate and prints the label; RTG puts the order on the finishing floor. On 10-12 automatic release
+// was off, the WMS still said "released to finishing", and the cut poles went out ahead of orders parked in RTG.
+{
+    const on = cutReleaseText({ woRef: 'WO11722', autoRelease: true });
+    const off = cutReleaseText({ woRef: 'WO11722', autoRelease: false });
+    const unknown = cutReleaseText({ woRef: 'WO11722' });
+    ok('every answer names the order, the cut and the label — and none says "released to finishing"', [on, off, unknown].every(t => /^▶ WO WO11722: its cut is done and its setup label is printing\./.test(t) && !/released to finishing/i.test(t)));
+    ok('switch on: it goes on its own, once nothing else holds it', /automatic release is ON/.test(on) && /on its own once nothing else holds it/.test(on) && /Send the cut poles with the label/.test(on));
+    ok('switch off: NOT on the floor, who releases it, and to keep the poles with the label', /NOT on the finishing floor yet/.test(off) && /automatic release is OFF/.test(off) && /release it on RTG/.test(off) && /Keep the cut poles and the label together/.test(off));
+    ok('switch not read: only what is known is said', /when RTG releases it/.test(unknown) && !/is ON|is OFF/.test(unknown));
+    eq('the log line says the same', [cutReleaseLog({ cutId: 'CUT-1', woRef: 'WO11722', autoRelease: false }), cutReleaseLog({ cutId: 'CUT-1', woRef: 'WO11722', autoRelease: true }), cutReleaseLog({ cutId: 'CUT-1', woRef: 'WO11722' })],
+        ['Cut CUT-1 cleared the cut gate on WO WO11722 — label printed; RTG automatic release is OFF — it waits for a release on RTG.', 'Cut CUT-1 cleared the cut gate on WO WO11722 — label printed; RTG automatic release is ON.', 'Cut CUT-1 cleared the cut gate on WO WO11722 — label printed.']);
+}
 console.log(`poleCut: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

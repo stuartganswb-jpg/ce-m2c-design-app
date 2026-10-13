@@ -3850,7 +3850,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     <HeldOrdersBanner orders={heldOrders} onRelease={resumeHeld} refOf={(o) => o.soId && !o.woId ? o.soId : woRefOf(o)} />
                     {/* ORDERS PARKED FOR A PERSON'S REVIEW (Stuart 2026-10-12: "RTG is master of order details, state it there") — SO60812 sat
                         eleven days with its reasons recorded on a card nobody opened. Same door as the card's own button. */}
-                    <ReviewWaitingBanner orders={liveSO} onReview={(r) => { try { sessionStorage.setItem('hq_oe_review_so', r.id); } catch (e) { /* the view still opens */ } window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }} />
+                    <ReviewWaitingBanner orders={liveSO} isOrderEntry={isOrderEntryOrder} autoOn={autoRelease ? !!autoRelease.enabled : null} onReview={(r) => { try { sessionStorage.setItem('hq_oe_review_so', r.id); } catch (e) { /* the view still opens */ } window.dispatchEvent(new CustomEvent('NAVIGATE_TAB', { detail: 'OE_NEEDS' })); }} />
                     {daySummaryOpen && (
                         <DaySummaryPanel onClose={() => setDaySummaryOpen(false)} orders={liveSO} workOrders={liveWO} finDocs={liveFin} shopDocs={liveShop}
                             brand={activeBrand} userName={currentUser || ''} canOverrule={canReopenInProduction(userRole)} isOrderEntry={isOrderEntryOrder} refOf={woRefOf}

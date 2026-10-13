@@ -6,8 +6,11 @@
 // (or failed), oldest first, with the lines still not started and the reason recorded for each.
 // A line that has since been started (its stamp is on the order) is no longer listed; an order with none left is gone.
 // Pure — scripts/reviewWaiting.test.mjs. The banner is Shared/ReviewWaitingBanner.
+import { unstartedTbfLinesOf } from './orderStatus.js';
+
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const DEAD = ['Closed', 'Deleted', 'CANCELLED', 'Shipped', 'Completed'];
+const msOf = (v) => (v && typeof v.toMillis === 'function') ? v.toMillis() : (v && typeof v.seconds === 'number' ? v.seconds * 1000 : (typeof v === 'number' ? v : (Date.parse(v) || 0)));
 
 /**
  * @param orders  the live sales orders (hq_sales_orders) the board already holds
@@ -27,6 +30,28 @@ export function reviewWaitingOf(orders = [], { now = Date.now() } = {}) {
             return { id: o.id, ref: String(o.soId || o.id), customer: String(o.customer || ''), state: a.state, since, days: since ? Math.floor((now - since) / 86400000) : 0, lines, error: a.state === 'FAILED' ? String(a.error || '') : '' };
         })
         .filter(r => r.lines.length || r.state === 'FAILED')
+        .sort((a, b) => (a.since || 0) - (b.since || 0));
+}
+
+// ── …AND THE ORDERS NOTHING HAS LOOKED AT (Stuart 2026-10-13) ────────────────────────────────────────────────────────
+// The list above is what the automatic start PARKED. With ⚡ automatic release switched off the automatic start never
+// runs, so an order's to-be-finished lines sit with no record of any kind — SO60993 (two lines, entered 10-08) was on no
+// list until the switch came back on 10-12. This is that order: NetSuite has accepted it, it has to-be-finished lines
+// with no start stamp, and the automatic start is neither parked on it (that is the list above) nor working on it now.
+// A quarter of an hour's grace, so an order the automatic start is about to take is not flashed up.
+// Its own list, never mixed into the one above — the Day summary reads that one to say WAITING FOR REVIEW.
+export const NOT_STARTED_GRACE_MS = 15 * 60 * 1000;
+/** @returns Array<{ id, ref, customer, since, days, lines: [{ lineIdx, erp }] }> — oldest first */
+export function notStartedOf(orders = [], { now = Date.now(), graceMs = NOT_STARTED_GRACE_MS, isOrderEntry = () => true } = {}) {
+    return (orders || []).filter(o => o && !o.deleted && !o.rtgArchived && !DEAD.includes(String(o.status || '')) && !o.displayRelease && o.packMode !== 'DISPLAY'
+        && !!o.nsInternalId && isOrderEntry(o)
+        && !(o.oeAuto && ['NEEDS_REVIEW', 'FAILED'].includes(o.oeAuto.state))
+        && !(o.oeAuto && o.oeAuto.state === 'RUNNING' && (now - (Number(o.oeAuto.at) || 0)) < graceMs))
+        .map(o => {
+            const since = Math.max(msOf(o.createdAt), Number(o.oeAuto && o.oeAuto.at) || 0);
+            return { id: o.id, ref: String(o.soId || o.id), customer: String(o.customer || ''), since, days: since ? Math.floor((now - since) / 86400000) : 0, lines: unstartedTbfLinesOf(o) };
+        })
+        .filter(r => r.lines.length && (now - r.since) >= graceMs)
         .sort((a, b) => (a.since || 0) - (b.since || 0));
 }
 

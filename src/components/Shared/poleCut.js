@@ -169,6 +169,22 @@ export const cutYieldLinesOf = (order, { nsIdOf = () => null } = {}) => {
 /** "10 × HTA635 + 10 × HTA435" */
 export const cutYieldText = (lines = []) => (lines || []).map(l => `${l.qty} × ${l.itemId}`).join(' + ');
 
+// ── WHERE THE WORK ORDER IS ONCE ITS CUT IS POSTED — SAID TRUTHFULLY (Stuart 2026-10-13) ─────────────────────────────
+// Completing a cut for finishing clears the work order's cut gate and prints its label; it does not put the order on
+// the finishing floor. RTG does that — on its own when ⚡ automatic release is on for the division (and nothing else
+// holds the order), by a person when it is off. The WMS used to say "released to finishing" either way; with the switch
+// off on 2026-10-12 the cut poles went to the floor and the orders stayed parked in RTG.
+//   autoRelease true / false = the switch as read; null = it could not be read (say only what is known)
+export const cutReleaseText = ({ woRef = '', autoRelease = null } = {}) => {
+    const head = `▶ WO ${woRef}: its cut is done and its setup label is printing.`;
+    if (autoRelease === true) return `${head}\nRTG's automatic release is ON — it goes to the finishing floor on its own once nothing else holds it. Send the cut poles with the label.`;
+    if (autoRelease === false) return `${head}\n⚠ It is NOT on the finishing floor yet: RTG's automatic release is OFF, so someone has to release it on RTG (HQ → RTG Dispatch). Keep the cut poles and the label together until it shows in the Setup Queue.`;
+    return `${head}\nIt goes to the finishing floor when RTG releases it — check the Setup Queue before sending the poles.`;
+};
+/** The same fact for the WMS log. */
+export const cutReleaseLog = ({ cutId = '', woRef = '', autoRelease = null } = {}) =>
+    `Cut ${cutId} cleared the cut gate on WO ${woRef} — label printed${autoRelease === true ? '; RTG automatic release is ON' : autoRelease === false ? '; RTG automatic release is OFF — it waits for a release on RTG' : ''}.`;
+
 /**
  * The code for the same rod at a different length: HCUMP810 → 4 ft → HCUMP410.
  * A SUGGESTION ONLY (Stuart 2026-08-25: "we shouldn't have to limit it by pattern, you could always
