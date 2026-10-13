@@ -1,5 +1,5 @@
 import { isQuickShip, pickableLinesOf, isKitHolderLine } from './pickLines.js';
-import { poleCoatIndexOf } from './floorActivity.js';
+import { poleCoatIndexOf, woHasSmallParts } from './floorActivity.js';
 import { isStationPickLine, traverseWaitOf } from './trackLoaded.js';
 import { oeIsTbf } from './oeLines.js';
 import { isKitLine, isOffOrderLine } from './itemKit.js';
@@ -228,8 +228,14 @@ export function orderStatusOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
     } else if (finished) {
         streams.push({ key: 'PARTS', label: 'Finishing', stage: 'FINISHED', detail: 'off the floor', since: wo.completedAt || null });
     } else {
-        streams.push(finishingStream(wo, { key: 'PARTS', label: hasPoles(wo) ? 'Small parts' : 'Finishing', idxField: 'currentStepIndex', taskKeys: ['spinSetup', 'spinSpray', 'hand'], ovenKey: 'spinBake', len: recipeLen }));
-        if (hasPoles(wo)) streams.push(finishingStream(wo, { key: 'POLES', label: 'Poles', idxField: 'poleStepIndex', taskKeys: ['poleSpray', 'poleHand'], ovenKey: 'poleBake', len: poleRecipeLen !== undefined ? poleRecipeLen : recipeLen }));
+        // A POLE-ONLY DOCUMENT HAS ONE TRACK (2026-10-13, WO11653: 20 poles read "small parts: setup queue (not started)"
+        // on the Setup Queue card and in NOT READY TO PACK). The floor has run it that way since Grace's 2026-08-18 report
+        // (floorActivity.woHasSmallParts — cautious: anything ambiguous keeps both tracks); this list never asked it. With
+        // no small parts the pieces ARE the poles, counted or not, so the pole track is always listed then.
+        const small = woHasSmallParts(wo);
+        const poles = hasPoles(wo) || !small;
+        if (small) streams.push(finishingStream(wo, { key: 'PARTS', label: poles ? 'Small parts' : 'Finishing', idxField: 'currentStepIndex', taskKeys: ['spinSetup', 'spinSpray', 'hand'], ovenKey: 'spinBake', len: recipeLen }));
+        if (poles) streams.push(finishingStream(wo, { key: 'POLES', label: 'Poles', idxField: 'poleStepIndex', taskKeys: ['poleSpray', 'poleHand'], ovenKey: 'poleBake', len: poleRecipeLen !== undefined ? poleRecipeLen : recipeLen }));
     }
 
     const fulfilment = fulfilmentOf(wo);

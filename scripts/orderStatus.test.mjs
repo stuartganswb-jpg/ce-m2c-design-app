@@ -153,7 +153,7 @@ ok('a quote has none', netSuiteOrderNoOf({ status: 'CONFIGURED' }, null) === '')
 }
 // ── READY TO PACK — only when it is (2026-09-30, SO60676) ─────────────────────────────────────
 {
-    const so60676 = { salesOrderId: 'SO60676', orderType: 'sales', hasCustomSibling: true, customFabStatus: 'Complete', sentToPickPack: true, pickStatus: 'Picked_Awaiting_Staging', currentPhase: 'Setup', totalPoles: 15, tasks: {}, currentStepIndex: 0 };
+    const so60676 = { salesOrderId: 'SO60676', orderType: 'sales', hasCustomSibling: true, customFabStatus: 'Complete', sentToPickPack: true, pickStatus: 'Picked_Awaiting_Staging', currentPhase: 'Setup', totalParts: 103, totalPoles: 15, tasks: {}, currentStepIndex: 0 };
     let r = packReadinessOf(so60676);
     eq('SO60676 today: not ready, and why — both finishing streams', [r.ready, r.word, r.waits], [false, 'NOT READY TO PACK', ['small parts: setup queue (not started)', 'poles: setup queue (not started)']]);
     r = packReadinessOf({ ...so60676, currentPhase: 'Complete' });
@@ -168,6 +168,20 @@ ok('a quote has none', netSuiteOrderNoOf({ status: 'CONFIGURED' }, null) === '')
     r = packReadinessOf({ ...so60676, currentPhase: 'Painting', currentStepIndex: 1, tasks: { spinSpray: { status: 'Running', assignedTo: 'Ana' } } });
     ok('mid-coat reads painting, never ready', !r.ready && /small parts: painting/.test(r.reason));
     eq('no document → nothing', packReadinessOf(null), null);
+}
+// ── THE TRACKS THE FLOOR RUNS ARE THE TRACKS EVERY CARD LISTS (2026-10-13, WO11653: 20 stock poles read "small parts:
+//    setup queue (not started)"). One rule — floorActivity.woHasSmallParts, the one the Active Floor completes an order by. ──
+{
+    const keys = (wo) => orderStatusOf(wo, { recipeLen: 3, poleRecipeLen: 4 }).streams.map(s => `${s.key}:${s.label}`);
+    const poleRun = { orderType: 'stock', productType: 'POLE', type: 'HCUMP815/G', totalParts: 20, totalPoles: 20, poles: { qty: 20 }, currentPhase: 'Setup', tasks: {}, sentToPickPack: true, pickStatus: 'Picked_Awaiting_Staging' };
+    eq('a pole-only run lists ONE track — poles', keys(poleRun), ['POLES:Poles']);
+    eq('…and its pack verdict waits on the poles alone', packReadinessOf(poleRun, { recipeLen: 3, poleRecipeLen: 4 }).waits, ['poles: setup queue (not started)']);
+    eq('poles and small parts list both', keys({ ...poleRun, productType: '', type: 'MIXED', totalParts: 30, totalPoles: 10, poles: { qty: 10 } }), ['PARTS:Small parts', 'POLES:Poles']);
+    eq('sled sizes counted beside the poles keep both (the cautious side)', keys({ ...poleRun, paintSizes: { S: 4 } }), ['PARTS:Small parts', 'POLES:Poles']);
+    eq('no poles at all is one track — finishing', keys({ orderType: 'stock', type: 'HCUSR15/G-EA', totalParts: 300, currentPhase: 'Setup', tasks: {} }), ['PARTS:Finishing']);
+    eq('a rod order no count was ever stamped on is still its poles, never an empty card', keys({ orderType: 'stock', productType: 'ROD', totalParts: 10, currentPhase: 'Setup', tasks: {} }), ['POLES:Poles']);
+    const painting = orderStatusOf({ ...poleRun, currentPhase: 'Painting', poleStepIndex: 2, tasks: { poleSpray: { status: 'Running', assignedTo: 'Jhonaton', startTime: 5 } } }, { recipeLen: 3, poleRecipeLen: 4 });
+    eq('on the floor it reads the pole coat, against the pole recipe — and nothing is "split"', [painting.streams.map(s => s.detail), painting.isSplit, painting.slowest], [['coat 3 of 4 · pole spray'], false, 'PAINTING']);
 }
 // ── THE CHOICE ASKED AT ORDER ENTRY (Stuart 2026-10-12) — and the order that chose "finish complete" ───────────────
 {

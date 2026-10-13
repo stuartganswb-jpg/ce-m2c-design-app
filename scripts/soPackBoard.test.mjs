@@ -10,7 +10,9 @@ const eq = (n, a, b) => ok(`${n}\n    got  ${JSON.stringify(a)}\n    want ${JSON
 const POLES = { S11: [{ code: 'H1-138P8', name: 'Rod 1-3/8', qty: 2, length: 96, unit: 'in', riders: [{ code: 'FEE-H1-MR', name: 'Mitered return', qty: 2 }] }], UNF: [{ code: 'H1-138T8', name: 'Track', qty: 1, length: 84, unit: 'in' }] };
 const ep5 = { id: 'EP5', pickOnly: true, currentPhase: 'Complete', sentToPickPack: true, pickStatus: 'Pending', salesOrderId: 'SO60831',
     partsList: [{ legacyErpId: 'H1-138RG/EP5', partName: 'Ring', qty: 14 }] };
-const s11 = { id: 'S11', hasCustomSibling: true, customFabStatus: 'Complete', currentPhase: 'Setup', totalPoles: 2, sentToPickPack: true, pickStatus: 'Pending', salesOrderId: 'SO60831',
+// (every finishing document carries its piece count beside its pole count — Shared/rowPairShape.docStreamsOf: small parts + poles;
+//  the floor reads the two to tell a pole-only document from one with small parts, and so does the status list since 2026-10-13)
+const s11 = { id: 'S11', hasCustomSibling: true, customFabStatus: 'Complete', currentPhase: 'Setup', totalParts: 8, totalPoles: 2, sentToPickPack: true, pickStatus: 'Pending', salesOrderId: 'SO60831',
     partsList: [{ legacyErpId: 'H1-138BR', partName: 'Bracket', qty: 4 }, { legacyErpId: 'H1-138FN', partName: 'Finial', quantity: 2 }, { legacyErpId: 'FEE-H1-SPL', partName: 'Splice fee', qty: 1, isFee: true }] };
 const unf = { id: 'UNF', hasCustomSibling: true, customFabStatus: 'Complete', pickOnly: true, currentPhase: 'Complete', sentToPickPack: true, pickStatus: 'Pending', salesOrderId: 'SO60831',
     partsList: [{ legacyErpId: 'H1-CARRIER', partName: 'Carrier', qty: 20 }] };
@@ -81,7 +83,7 @@ const short = { ...ep5Picked, packedLines: { L0: { at: 1, by: 'A', qty: 10 } } }
 eq('a short count reads PART — 10 of 14', [row(board([short]), 'H1-138RG/EP5').state, board([short]).pieces], [LINE_STATE.PART, { ordered: 14, packed: 10, ready: 4, waiting: 0 }]);
 
 // ── one row per part: SO60932 (Brimar) lists the same item once per window ──────────────────────────────────
-const brimar = { id: 'WO-SO60932', hasCustomSibling: true, customFabStatus: 'Complete', currentPhase: 'Setup', totalPoles: 5, sentToPickPack: true, pickStatus: 'Picked_Awaiting_Staging',
+const brimar = { id: 'WO-SO60932', hasCustomSibling: true, customFabStatus: 'Complete', currentPhase: 'Setup', totalParts: 25, totalPoles: 5, sentToPickPack: true, pickStatus: 'Picked_Awaiting_Staging',
     partsList: [{ legacyErpId: 'HCUDEC1', partName: 'Domed End Cap', qty: 5 }, { legacyErpId: 'HCUDEC1', partName: 'Domed End Cap', qty: 5 }, { legacyErpId: 'HCUMB410', partName: 'Bracket', qty: 5 },
         { legacyErpId: 'HCUSR1', partName: 'Ring', qty: 36, quantity: 36 }, { legacyErpId: 'HCUDEC1', partName: 'Domed End Cap', qty: 2, quantity: 2 }] };
 const bLines = (d) => packLinesOf(d, { poleRows: [{ code: 'HBR1-1INPOLE', name: '1" Round Rod', qty: 5, length: 48, unit: 'in' }] });
