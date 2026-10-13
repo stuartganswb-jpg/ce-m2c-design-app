@@ -5,6 +5,7 @@ import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, 
     isHandTask, mayRunHandStep, handStepWarning, TASK_LABEL as FLOOR_TASK_LABEL } from '../Shared/floorActivity';
 import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
 import { normalMinutesOf, punchCheckOf, catchUpRunOf, punchWarning, punchFlagText, TASK_LABEL_ES } from '../Shared/punchCheck';
+import { startStopOf, bakeStopOf, stepStopText, stepOverrideText, stepStopLogText } from '../Shared/stepOrder';
 import { typedWoNumber } from '../Shared/skippedBuild';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
@@ -561,11 +562,33 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       alert(handStepWarning({ who: actor || user?.name || '', order: woRef(wo), coat: (poles ? poleIdxOf(wo) : (wo.currentStepIndex || 0)) + 1, colour: (step && step.color) || '', poles }));
       return true;
   };
+  // 🪜 THE STEPS OF A COAT RUN IN ORDER, AND A BAKE RUNS ITS TIME (Stuart 2026-10-13 · Shared/stepOrder: "there is a direct
+  // finishing order and recipe and all should follow it" · "bake time warn that it is too soon to pin it complete, manager
+  // can override any of the step stops"). A step does not start until the one before it in the coat is complete, and a
+  // bake is not completed before the oven time has run. Whoever PINs is told why, in English and in Spanish, and the stop
+  // is logged; a manager's PIN (Shared/finishingRoles — the list Force Complete reads) turns it into a confirm, and the
+  // override is logged under their name. → true when the step may go ahead.
+  const actorIsManager = (actor) => actor ? isFloorSupervisor({ name: actor, role: roleOfActor(actor) }, users) : isFloorSupervisor(user, users);
+  const stepStopCleared = async (wo, taskKey, action, actor) => {
+      const t = (wo.tasks || {})[taskKey] || {};
+      const stop = action === 'START' ? startStopOf({ wo, taskKey })
+          : action === 'COMPLETE' ? bakeStopOf({ taskKey, task: t, nowMs: Date.now(), ovenMins: cfg.ovenMins }) : null;
+      if (!stop) return true;
+      const who = actor || user?.name || '';
+      const base = { ...(actor ? { u: actor } : {}), station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey, recipe: wo.recipe || '', stepIndex: wo.currentStepIndex || 0, poleStepIndex: poleIdxOf(wo), stopKind: stop.kind };
+      await logManual({ ...base, msg: `STEP STOP · ${action} · ${taskKey} · ${woRef(wo)} — ${stepStopLogText(stop)}`, action: 'BLOCKED' });
+      const step = TASK_LABEL[taskKey] || taskKey;
+      if (!actorIsManager(actor)) { alert(stepStopText({ stop, who, order: woRef(wo), step, stepEs: TASK_LABEL_ES[taskKey] || '' })); return false; }
+      if (!window.confirm(stepOverrideText({ stop, who, order: woRef(wo), step }))) return false;
+      await logManual({ ...base, msg: `⚠ STEP STOP OVERRIDE · ${action} · ${taskKey} · ${woRef(wo)} — ${who || 'manager'} went ahead despite: ${stepStopLogText(stop)}`, action: 'OVERRIDE' });
+      return true;
+  };
   const manualTask = async (wo, taskKey, action, actor) => {
       const t = (wo.tasks || {})[taskKey] || {};
       // ✋ A HAND COAT IS THE HAND FINISHERS' (Stuart 2026-10-01 · Shared/floorActivity). Starting it — or
       // completing it — from a painter's PIN is refused, in English and in Spanish, and the refusal is logged.
       if ((action === 'START' || action === 'COMPLETE') && handStepRefused(wo, taskKey, actor)) return;
+      if ((action === 'START' || action === 'COMPLETE') && !(await stepStopCleared(wo, taskKey, action, actor))) return;
       // The gate. Checked at PIN time, because until they PIN we do not know who is asking.
       if (action === 'START') {
           // PRODUCTION GATE (Stuart 2026-08-10: "all steps work only in unison") — no step starts
@@ -1892,7 +1915,23 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
     // ⏱ THE CARD'S COMPLETE CHECKS THE PUNCH TOO (Stuart 2026-10-01 · Shared/punchCheck). Both of this card's
     // buttons — "Complete Task" and the oven's "Mark Dry Early" — wrote the completion directly and so skipped the
     // check Manual Control makes. Same rule, same stamp, same log line, same words in both languages.
+    // 🪜 THE CARD KEEPS THE COAT'S ORDER AND THE OVEN'S TIME TOO (Stuart 2026-10-13 · Shared/stepOrder) — the same two stops
+    // Manual Control makes, for whoever is signed in on this tablet: told why in English and in Spanish, logged; a manager
+    // is asked instead and the override is logged under their name. → true when the step may go ahead.
+    const cardStopCleared = (stop, action) => {
+        if (!stop) return true;
+        const who = (user && user.name) || task.assignedTo || 'Tablet';
+        const base = { u: who, cat: 'manual', station: 'CARD', woId: wo.id, woRefNo: woRef(wo), task: type, recipe: wo.recipe || '', stopKind: stop.kind };
+        const log = (entry) => addDoc(collection(db, 'fin_logs'), { ...base, t: serverTimestamp(), at: Date.now(), ...entry }).catch(() => {});
+        log({ msg: `STEP STOP · ${action} · ${type} · ${woRef(wo)} — ${stepStopLogText(stop)}`, action: 'BLOCKED' });
+        const stepName = FLOOR_TASK_LABEL[type] || type;
+        if (!isFloorSupervisor(user, users)) { alert(stepStopText({ stop, who, order: woRef(wo), step: stepName, stepEs: TASK_LABEL_ES[type] || '' })); return false; }
+        if (!window.confirm(stepOverrideText({ stop, who, order: woRef(wo), step: stepName }))) return false;
+        log({ msg: `⚠ STEP STOP OVERRIDE · ${action} · ${type} · ${woRef(wo)} — ${who} went ahead despite: ${stepStopLogText(stop)}`, action: 'OVERRIDE' });
+        return true;
+    };
     const completeFromCard = () => {
+        if (!cardStopCleared(bakeStopOf({ taskKey: type, task, nowMs: Date.now(), ovenMins: (cfg || {}).ovenMins }), 'COMPLETE')) return;
         const who = (user && user.name) || task.assignedTo || 'Tablet';
         const nowMs = Date.now();
         const startedMs = task.startTime || null;
@@ -2015,6 +2054,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
             
             {!isRunning ? (
                 <button disabled={disabledStart} onClick={() => {
+                    if (!cardStopCleared(startStopOf({ wo, taskKey: type }), 'START')) return;
                     // Same production gate as Manual Control — a station card must not slip a
                     // start past the pull (spinSetup exempt: Start Setup releases the pick).
                     if (type !== 'spinSetup') {
