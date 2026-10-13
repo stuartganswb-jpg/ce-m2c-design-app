@@ -4,8 +4,9 @@ import { doc, setDoc, deleteDoc, getDoc, updateDoc } from "firebase/firestore";
 import { cardStyle, btnStyle, inputStyle, labelStyle, sectionHeaderStyle } from './finishingStyles';
 import { recipeFreezesOf, freezeText } from '../Shared/recipeFreeze';
 import { woRefOf } from '../Shared/woRef';
+import TraverseColourTag from '../Shared/TraverseColourTag';
 
-const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user, workOrders = [] }) => {
+const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user, workOrders = [], masterFinishes = [] }) => {
     const [rCode, setRCode] = useState("");
     const [rName, setRName] = useState("");
     const [steps, setSteps] = useState([
@@ -273,6 +274,8 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user, workOrders 
                                             </div>
                                         )}
                                     </div>
+                                    {/* The traverse colour that goes with this finish — read from 4.5, never set here (Stuart 2026-10-13). */}
+                                    <TraverseColourTag recipeCode={r.code} finishes={masterFinishes} style={{ marginBottom: '12px' }} />
                                     {isStub && !isOrphan && (
                                         <div style={{ fontSize: '0.85rem', color: '#8a6d3b', fontStyle: 'italic', marginBottom: '10px' }}>No steps yet — sales created this finish in HQ. Press Edit to build the recipe, or Del if it shouldn't exist (that also offers to remove it from HQ).</div>
                                     )}

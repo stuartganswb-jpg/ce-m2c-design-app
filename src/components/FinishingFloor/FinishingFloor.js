@@ -62,6 +62,8 @@ const FinishingFloor = () => {
     : workOrdersRaw.filter(notSew).filter(w => { const b = String(w?.brand || w?.brandId || '').toLowerCase(); return !b || b === floorBrand; })
   ).map(withRecipe);
   const [recipes, setRecipes] = useState({});
+  // 4.5's master finishes — read only here, for the traverse colour that goes with a finish (Shared/traverseColour, 2026-10-13).
+  const [masterFinishes, setMasterFinishes] = useState([]);
   const [paintProfiles, setPaintProfiles] = useState({});
   const [activePots, setActivePots] = useState({});
   const [supplies, setSupplies] = useState([]);
@@ -92,7 +94,8 @@ const FinishingFloor = () => {
       onSnapshot(query(collection(db, "hq_logs"), orderBy("t", "desc"), limit(50)), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(doc(db, "fin_config", "settings"), (docSnap) => { if (docSnap.exists()) setSysConfig(prev => ({ ...prev, ...docSnap.data() })); }),
       onSnapshot(doc(db, "fin_config", "capacityMatrix"), (docSnap) => setCapacityMatrix(docSnap.exists() ? docSnap.data() : {})),
-      onSnapshot(doc(db, "system", "master_lists"), (docSnap) => setProdTypes(docSnap.exists() ? (docSnap.data().prodTypes || []) : []))
+      onSnapshot(doc(db, "system", "master_lists"), (docSnap) => setProdTypes(docSnap.exists() ? (docSnap.data().prodTypes || []) : [])),
+      onSnapshot(doc(db, "system", "master_finishes"), (docSnap) => setMasterFinishes(docSnap.exists() ? (docSnap.data().finishes || []) : []), () => setMasterFinishes([]))
     ];
     return () => unsubs.forEach(unsub => unsub());
   }, [user]);
@@ -214,8 +217,8 @@ const FinishingFloor = () => {
         <div style={{ backgroundColor: '#fff', border: '1px solid var(--line)', flex: 1, boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', borderRadius: '2px' }}>
           {activeTab === 'SETUP QUEUE' && <SetupQueue workOrders={workOrders} recipes={recipes} writeLog={writeLog} sysConfig={sysConfig} currentUser={user?.name || ''} />}
           {activeTab === 'SETUP QUEUE' && <div style={{ padding: '0 30px 30px' }}><SchedulePlanner workOrders={workOrders} recipes={recipes} capacityMatrix={capacityMatrix} sysConfig={sysConfig} /></div>}
-          {activeTab === 'ACTIVE FLOOR' && <ActiveFloor workOrders={workOrders} recipes={recipes} activePots={activePots} sysConfig={sysConfig} setMixModal={setMixModal} now={now} user={user} setQcModal={setQcModal} users={users} />}
-          {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} workOrders={workOrdersRaw.filter(notSew).map(withRecipe)} />}
+          {activeTab === 'ACTIVE FLOOR' && <ActiveFloor workOrders={workOrders} recipes={recipes} activePots={activePots} sysConfig={sysConfig} setMixModal={setMixModal} now={now} user={user} setQcModal={setQcModal} users={users} masterFinishes={masterFinishes} />}
+          {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} workOrders={workOrdersRaw.filter(notSew).map(withRecipe)} masterFinishes={masterFinishes} />}
           {activeTab === 'PRODUCTION TIMES' && <ProductionTimes sysConfig={sysConfig} capacityMatrix={capacityMatrix} recipes={recipes} workOrders={workOrders} prodTypes={prodTypes} writeLog={writeLog} user={user} />}
           {activeTab === 'SUPPLIES' && <Supplies supplies={supplies} writeLog={writeLog} user={user} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}

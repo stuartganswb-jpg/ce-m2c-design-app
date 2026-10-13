@@ -10,6 +10,7 @@ import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { recipeCopyInForce, liveRecipeOfWo, partsRecipeOfWo, poleRecipeOfWo, coatCountsOf } from '../Shared/floorActivity';
 import { sameSteps } from '../Shared/recipeCopy';
+import TraverseColourTag from '../Shared/TraverseColourTag';
 import { propagateFloorState } from '../Shared/orderLifecycle';
 import OrderStatusChips, { holdGateOf } from '../Shared/OrderStatusChips';
 import PartFactsStrip from '../Shared/PartFactsStrip';
@@ -134,7 +135,7 @@ const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs, onForceClear, onStation })
     );
 };
 
-const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, now, user, setQcModal, users }) => {
+const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, now, user, setQcModal, users, masterFinishes = [] }) => {
   const activeWOs = workOrders.filter(w => w.currentPhase === "Painting");
   // "orders that are complete but still sitting on the active floor" (Stuart 2026-07-30) — the
   // prompt raised the moment a coat's last step is stopped. See advancePromptFor below.
@@ -1654,6 +1655,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           <button onClick={() => setRecipeView(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
                       </div>
                       <div style={{ padding: '20px 24px' }}>
+                          {/* The traverse colour that goes with this order's finish — read from 4.5 (Stuart 2026-10-13). */}
+                          <TraverseColourTag recipeCode={wo.recipe} finishes={masterFinishes} style={{ marginBottom: '16px' }} />
                           {section(hasP ? 'Small Parts' : 'Recipe', rParts, 'parts')}
                           {hasP && (samePoleDoc
                               ? <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '14px' }}>Poles run the SAME recipe (no -P variant defined for {wo.recipe || ''}).</div>
