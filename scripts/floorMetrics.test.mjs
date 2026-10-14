@@ -6,7 +6,7 @@ import {
 } from '../src/components/Shared/timecardImport.js';
 import {
     floorTimersOf, standardMinsOf, floorStepsOf, activityOf, wmsKindOf, isWmsLog, clockIndexOf, personDaysOf, weekRowsOf,
-    rankWeek, wallboardDocOf, weeksOf, groupOfRole, personKeyOf, msOf, GROUP, WMS_KIND, SRC, SCORE_PARTS, standardsCheckOf,
+    rankWeek, wallboardDocOf, weeksOf, boardOfRole, boardsOf, personKeyOf, msOf, GROUP, WMS_KIND, SRC, SCORE_PARTS, standardsCheckOf,
 } from '../src/components/Shared/floorMetrics.js';
 
 let pass = 0, fail = 0;
@@ -55,10 +55,11 @@ eq('local day of a time', dateKeyOf(at(2026, 10, 5, 23, 59)), '2026-10-05');
 
 // ── standards ──────────────────────────────────────────────────────────────────────────────────────────────
 const T = floorTimersOf({ ovenMins: 6, poleMins: 4 });
-eq('timers: the floor\'s settings where set, its fall-backs where not', T, { spinSetupMins: 10, spinPaintMins: 3, ovenMins: 6, handSmallMins: 1.35, handPoleMins: 10, poleMins: 4 });
+eq('timers: the floor\'s settings where set, its fall-backs where not', T, { spinSetupMins: 10, spinPaintMins: 3, ovenMins: 6, handSmallMins: 1.35, handPoleMins: 10, poleMins: 4, boothCoatMins: 15, boothLoadPcs: 30 });
 eq('timers with no settings at all', floorTimersOf(null).ovenMins, 10);
 const SLED = { id: 'W1', totalParts: 20, recipe: 'SG' };
 const POLES = { id: 'W2', totalParts: 10, totalPoles: 10, type: 'Poles' };
+eq('a booth spray is the booth\'s standard, per load', standardMinsOf('spinSpray', { id: 'B', totalParts: 12, sprayStation: 'BOOTH' }, T), 15);
 eq('standards — the floor\'s own Est Time', [standardMinsOf('spinSetup', SLED, T), standardMinsOf('spinSpray', SLED, T), standardMinsOf('spinBake', SLED, T), standardMinsOf('poleSpray', POLES, T), standardMinsOf('hand', SLED, T)], [10, 3, 6, 40, 27]);
 const LOADS = { id: 'W3', totalParts: 420, sprayStation: 'SPIN', spinLoads: [{ n: 1, qty: 140, doneAt: at(2026, 10, 5, 10) }], spinLoadQty: 70 };
 near('a hand coat on a spin job in loads is timed against its LOAD', standardMinsOf('hand', LOADS, T, at(2026, 10, 5, 9)), 140 * 1.35);
@@ -123,7 +124,7 @@ const timecard = [
 const clock = clockIndexOf(timecard, { Pat: '9001', robin: '9002', Ghost: '9999' });
 eq('the clock, by app person (case-blind; an unknown number is nobody)', [...clock.keys()], ['pat', 'robin']);
 const groups = { pat: GROUP.FINISHING, robin: GROUP.WMS, sam: GROUP.FINISHING, lee: GROUP.FINISHING };
-const pdays = personDaysOf({ steps, events, clockByPerson: clock, groupOf: (pk) => groups[pk] || GROUP.NONE, nameOf: (pk) => pk.toUpperCase() });
+const pdays = personDaysOf({ steps, events, clockByPerson: clock, boardOf: (pk) => groups[pk] || GROUP.NONE, nameOf: (pk) => pk.toUpperCase() });
 const pat = pdays.find(d => d.pk === 'pat');
 eq('first pin: 7:10 — fifteen minutes after the 6:55 clock-in', [pat.firstMs, pat.startLagMins], [D(7, 10), 15]);
 eq('steps, not-real punches, left running', [pat.steps, pat.short, pat.overruns], [5, 1, 1]);
@@ -175,8 +176,9 @@ eq('hall of shame: the bottom three, worst first, with what pulled them down', r
     ['Cal — working 30% of the day', 'Bea — 50% of 40 steps punched for real', 'Eve — 1.5× the standard time']);
 eq('a group of two: one each side', [ranked.fame.wms.map(f => f.name), ranked.shame.wms.map(f => f.name)], [['Hal'], ['Ivy']]);
 eq('every part has a weight, and each group sums to 100', Object.values(SCORE_PARTS).map(ps => ps.reduce((t, p) => t + p.weight, 0)), [100, 100]);
-eq('roles → boards', ['painter', 'hand_painter', 'Paint_Manager', 'setup_manager', 'setup', 'operator', 'admin', 'csr', ''].map(groupOfRole),
-    ['finishing', 'finishing', 'finishing', 'finishing', 'wms', 'none', 'none', 'none', 'none']);
+eq('roles → boards (the setup manager is on both)', ['painter', 'hand_painter', 'Paint_Manager', 'setup_manager', 'setup', 'operator', 'admin', 'csr', ''].map(boardOfRole),
+    ['finishing', 'finishing', 'finishing', 'both', 'wms', 'none', 'none', 'none', 'none']);
+eq('a board setting → the boards ranked on', ['both', 'finishing', 'wms', 'none', '', undefined].map(boardsOf), [['finishing', 'wms'], ['finishing'], ['wms'], ['none'], ['none'], ['none']]);
 
 // ── what the floor may read ───────────────────────────────────────────────────────────────────────────────
 const board = wallboardDocOf({ week: '2026-10-05', ranked, by: 'Admin', nowMs: 123 });
@@ -195,7 +197,7 @@ const stagedDay = personDaysOf({
         { who: 'Kit', at: R(8, 0), src: SRC.FLOOR_APP, kind: 'app', ref: '' }, { who: 'Kit', at: R(8, 2), src: SRC.FLOOR_APP, kind: 'app', ref: '' },
         { who: 'Kit', at: R(9, 0), src: SRC.APP, kind: 'app', ref: '' },
     ],
-    groupOf: () => GROUP.WMS,
+    boardOf: () => GROUP.WMS,
 })[0];
 eq('WMS: a pick logged twice is one action; two Setup Queue actions are two; an office action is not WMS work', stagedDay.actions, 3);
 
@@ -205,6 +207,33 @@ const setups = Array.from({ length: 12 }, (_, i) => ({ task: 'spinSetup', woId: 
 const check = standardsCheckOf([...sprays, ...setups], { B1: { id: 'B1', totalParts: 12, sprayStation: 'BOOTH' }, S1: { id: 'S1', totalParts: 70, sprayStation: 'SPIN' } });
 eq('standards: a booth spray standard far under the crew\'s real median is flagged', check.find(c => c.task === 'spinSpray'), { task: 'spinSpray', station: 'booth', oven: false, n: 12, short: 0, real: 12, realMedianMins: 25.5, standardMins: 3, off: true });
 eq('standards: too few real punches to judge is not flagged', [check.find(c => c.task === 'spinSetup').station, check.find(c => c.task === 'spinSetup').real, check.find(c => c.task === 'spinSetup').off], ['spin', 2, false]);
+
+// ── the setup manager, on both boards (Stuart 2026-10-14) ───────────────────────────────────────────────────────
+const S = (h, mi) => at(2026, 10, 5, h, mi);
+const setupLogs = [
+    { u: 'Sid', cat: 'production', msg: 'Started Setup for WO11688 → Large Booth', t: { seconds: S(7, 10) / 1000 } },           // before the src stamp
+    { u: 'Sid', src: 'FINISHING', cat: 'production', msg: 'Staged WO11688 to Floor (70 pcs; floor now ~140 pcs)', t: { seconds: S(7, 40) / 1000 } },
+    { u: 'Sid', src: 'FINISHING', cat: 'production', msg: 'Started Setup for WO-STK-9 — 1 part line', t: { seconds: S(8, 30) / 1000 } },
+    { u: 'Sid', src: 'WMS', cat: 'wms', msg: 'Order Picked: WO-STK-9', t: { seconds: S(9, 0) / 1000 } },
+    { u: 'Sid', src: 'SHOP', cat: 'production', msg: 'Cut list printed', t: { seconds: S(9, 30) / 1000 } },
+];
+const setupWos = { D1: { id: 'D1', nsWoTran: 'WO11688', reqDate: '2026-10-06', completedAt: S(15, 0) }, 'WO-STK-9': { id: 'WO-STK-9', reqDate: '2026-10-01', completedAt: S(14, 0) } };
+const sidEv = activityOf({ hqLogs: setupLogs });
+eq('the Setup Queue\'s lines — before and after the src stamp — are the floor\'s; the shop\'s are not', sidEv.map(e => `${e.src}:${e.kind}:${e.ref}`),
+    ['floor-app:setup:WO11688', 'floor-app:staged:WO11688', 'floor-app:setup:WO-STK-9', 'wms:pick:WO-STK-9', 'app:app:']);
+const sidClock = clockIndexOf([{ number: '7001', date: '2026-10-05', totalHours: 8, inMs: S(7, 0), outMs: S(15, 0) }], { sid: '7001' });
+const sidDays = personDaysOf({ events: sidEv, clockByPerson: sidClock, boardOf: () => GROUP.BOTH });
+eq('on both boards: one day row on each', sidDays.map(d => d.group), ['finishing', 'wms']);
+eq('finishing reads the Setup Queue: first touch 7:10, three setups', [sidDays[0].startLagMins, sidDays[0].setups, sidDays[0].actions], [10, 3, 3]);
+eq('pick / pack reads the WMS and the Setup Queue', [sidDays[1].actions, sidDays[1].picks], [4, 1]);
+const sidRows = weekRowsOf({ personDays: sidDays, week: '2026-10-05', wosById: setupWos });
+eq('a row per board', sidRows.map(r => r.group), ['finishing', 'wms']);
+eq('finishing due dates: the orders set up, found by the ref the log names (WO11688 on time, WO-STK-9 late)', sidRows[0].onTime, { ok: 1, total: 2 });
+eq('pick / pack due dates: what was picked', sidRows[1].onTime, { ok: 0, total: 1 });
+const sidWeek = (o) => ({ pk: 'sid', who: 'Sid', group: GROUP.FINISHING, week: '2026-10-05', activeDays: 4, steps: 0, setups: 40, startLagMins: 10, realShare: null, paceRatio: null, nextGapMins: null, steadyShare: 0.9, onTime: { ok: 3, total: 4 }, ...o });
+const sidRank = rankWeek([sidWeek(), fin('Ace'), fin('Bea', { realShare: 0.5 })]);
+eq('a setup manager is ranked on the finishing board by start, steady and due dates — punches, pace and next order left out', [sidRank.finishing.find(r => r.who === 'Sid').score, sidRank.finishing.find(r => r.who === 'Sid').parts.filter(p => p.value == null).map(p => p.key)], [94, ['punches', 'pace', 'next']]);
+eq('…and not without the setups', rankWeek([sidWeek({ setups: 3 })]).unranked.map(r => r.who), ['Sid']);
 
 console.log(`floorMetrics: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

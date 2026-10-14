@@ -12,7 +12,7 @@ import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from 
 import { timecardDaysOf, mergeTimecardDays, timecardPeopleOf, weekKeyOf, addDays, dateKeyOf, dayStartOf } from '../Shared/timecardImport';
 import {
     floorTimersOf, floorStepsOf, activityOf, clockIndexOf, personDaysOf, weekRowsOf, rankWeek, wallboardDocOf, weeksOf,
-    groupOfRole, personKeyOf, standardsCheckOf, GROUP, GROUP_LABEL, SCORE_PARTS, RANK_MIN,
+    boardOfRole, personKeyOf, standardsCheckOf, GROUP, GROUP_LABEL, SCORE_PARTS, RANK_MIN,
 } from '../Shared/floorMetrics';
 
 const box = { background: '#fff', border: '1px solid var(--line)', padding: '20px', marginBottom: '20px' };
@@ -82,7 +82,7 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
         data.people.forEach(p => { const k = personKeyOf(p.name); if (!m.has(k)) m.set(k, { name: p.name, role: p.role || '' }); });
         return m;
     }, [data.people]);
-    const groupOf = useMemo(() => (pk) => cfg.groups[pk] || groupOfRole((directory.get(pk) || {}).role), [cfg.groups, directory]);
+    const boardOf = useMemo(() => (pk) => cfg.groups[pk] || boardOfRole((directory.get(pk) || {}).role), [cfg.groups, directory]);
     const computed = useMemo(() => {
         const wosById = Object.fromEntries(data.wos.map(w => [w.id, w]));
         const steps = floorStepsOf({ finLogs: data.finLogs, wosById, timers: floorTimersOf(data.settings) }).filter(s => s.startMs >= fromMs);
@@ -90,9 +90,9 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
         const firstName = new Map(); events.forEach(e => { const k = personKeyOf(e.who); if (!firstName.has(k)) firstName.set(k, e.who); });
         const nameOf = (pk) => (directory.get(pk) || {}).name || firstName.get(pk) || pk;
         const clock = clockIndexOf(timecards.filter(d => d.date >= fromKey), cfg.map);
-        const personDays = personDaysOf({ steps, events, clockByPerson: clock, groupOf, nameOf });
+        const personDays = personDaysOf({ steps, events, clockByPerson: clock, boardOf, nameOf });
         return { wosById, steps, events, personDays, weeks: weeksOf(personDays), nameOf, standards: standardsCheckOf(steps, wosById) };
-    }, [data, timecards, cfg.map, groupOf, directory, fromMs, fromKey]);
+    }, [data, timecards, cfg.map, boardOf, directory, fromMs, fromKey]);
     useEffect(() => { if (!week || !computed.weeks.includes(week)) setWeek(computed.weeks[0] || ''); }, [computed.weeks, week]);
     const rows = useMemo(() => (week ? weekRowsOf({ personDays: computed.personDays, week, wosById: computed.wosById }) : []), [computed, week]);
     const ranked = useMemo(() => rankWeek(rows), [rows]);
@@ -159,7 +159,7 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
 
     // ── the screen ───────────────────────────────────────────────────────────────────────────────────────
     const weekHasClock = rows.some(r => r.clockDays > 0);
-    const unmappedActive = mapPeople.filter(p => p.actions > 0 && groupOf(p.pk) !== GROUP.NONE && !cfg.map[p.pk]);
+    const unmappedActive = mapPeople.filter(p => p.actions > 0 && boardOf(p.pk) !== GROUP.NONE && !cfg.map[p.pk]);
     const partCell = (r, key) => { const p = (r.parts || []).find(x => x.key === key); return p && p.value != null ? Math.round(p.value * 100) : '—'; };
 
     const groupTable = (g) => {
@@ -176,7 +176,7 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                                 {parts.map(p => <th key={p.key} style={th} title={`weight ${p.weight}`}>{p.label}</th>)}
                                 <th style={th}>Days</th><th style={th}>Hours</th><th style={th}>First touch</th>
                                 {g === GROUP.FINISHING ? (<>
-                                    <th style={th}>Steps</th><th style={th}>Real</th><th style={th}>Pace</th><th style={th}>Next order</th><th style={th}>Oven-free</th>
+                                    <th style={th}>Steps</th><th style={th} title="Setup Queue: started setup or staged to the floor">Setups</th><th style={th}>Real</th><th style={th}>Pace</th><th style={th}>Next order</th><th style={th}>Oven-free</th>
                                 </>) : (<>
                                     <th style={th}>Picks</th><th style={th}>Packs</th><th style={th}>Actions</th><th style={th}>Per hour</th>
                                 </>)}
@@ -194,6 +194,7 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                                         <td style={td}>{mins(r.startLagMins)}</td>
                                         {g === GROUP.FINISHING ? (<>
                                             <td style={td}>{r.steps}{r.overruns ? <span style={{ color: 'var(--ink-soft)' }} title="Left running — not timed"> +{r.overruns}</span> : null}</td>
+                                            <td style={td}>{r.setups || '—'}</td>
                                             <td style={td}>{pct(r.realShare)}</td>
                                             <td style={td}>{r.paceRatio == null ? '—' : `${r.paceRatio.toFixed(1)}×`}</td>
                                             <td style={td}>{mins(r.nextGapMins)}</td>
@@ -291,8 +292,8 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                                                 <td style={td}>{p.actions}</td>
                                                 <td style={td}>
                                                     <select value={draft.groups[p.pk] || ''} onChange={e => setDraft({ ...draft, groups: { ...draft.groups, [p.pk]: e.target.value } })}>
-                                                        <option value="">by role — {GROUP_LABEL[groupOfRole(p.role)]}</option>
-                                                        {[GROUP.FINISHING, GROUP.WMS, GROUP.NONE].map(g => <option key={g} value={g}>{GROUP_LABEL[g]}</option>)}
+                                                        <option value="">by role — {GROUP_LABEL[boardOfRole(p.role)]}</option>
+                                                        {[GROUP.FINISHING, GROUP.WMS, GROUP.BOTH, GROUP.NONE].map(g => <option key={g} value={g}>{GROUP_LABEL[g]}</option>)}
                                                     </select>
                                                 </td>
                                                 <td style={td}>
@@ -335,8 +336,8 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                         <h4 style={h4}>Not ranked this week</h4>
                         <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', lineHeight: 1.7 }}>
                             {ranked.unranked.map(r => {
-                                const why = r.group === GROUP.NONE ? 'not on a board (role)' : r.activeDays < RANK_MIN.days ? `${r.activeDays} day worked` : (r.group === GROUP.FINISHING ? r.steps : r.actions) < RANK_MIN.work ? `${r.group === GROUP.FINISHING ? r.steps + ' steps' : r.actions + ' actions'}` : 'too little could be read';
-                                return <span key={r.pk} style={{ marginRight: '18px', display: 'inline-block' }}><strong style={{ color: 'var(--ink)' }}>{r.who}</strong> — {why}</span>;
+                                const why = r.group === GROUP.NONE ? 'not on a board (role)' : r.activeDays < RANK_MIN.days ? `${r.activeDays} day worked` : (r.group === GROUP.FINISHING ? (r.steps || 0) + (r.setups || 0) : r.actions) < RANK_MIN.work ? `${r.group === GROUP.FINISHING ? `${r.steps} steps, ${r.setups || 0} setups` : r.actions + ' actions'}` : 'too little could be read';
+                                return <span key={`${r.pk}|${r.group}`} style={{ marginRight: '18px', display: 'inline-block' }}><strong style={{ color: 'var(--ink)' }}>{r.who}</strong>{r.group !== GROUP.NONE ? ` (${GROUP_LABEL[r.group]})` : ''} — {why}</span>;
                             })}
                         </div>
                     </div>

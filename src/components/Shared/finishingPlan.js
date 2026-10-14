@@ -24,7 +24,7 @@
 
 import { packFootprint, sledsFromFootprint, streamRecipeKey, POLE_RACK } from './finishingTime.js';
 import { woHasPoles, woHasSmallParts, partsRecipeOfWo, poleRecipeOfWo, partsStreamOf, poleStreamOf, poleCoatIndexOf,
-    isHandStep, sprayStationOf, SPRAY_STATIONS, recipeCopyInForce } from './floorActivity.js';
+    isHandStep, sprayStationOf, SPRAY_STATIONS, recipeCopyInForce, BOOTH_COAT_MINS, BOOTH_LOAD_PCS, boothCoatMinsOf, boothLoadPcsOf } from './floorActivity.js';
 import { isSalesDoc, stageWaitsOnMatch, pickGateOf } from './orderStatus.js';
 import { spinLoadsOf, smallPartsTotalOf, runsInLoads } from './spinLoads.js';
 import { isPoleCategory } from './poleCut.js';
@@ -33,16 +33,16 @@ const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const PLANNABLE = ['Setup', 'setup', 'Painting'];
 const onFloor = (wo) => !!wo && wo.currentPhase === 'Painting';
 
-/** The booth, as Stuart timed it — both are settings in Production Times (fin_config/settings). */
-export const BOOTH_COAT_MINS = 15;
-export const BOOTH_LOAD_PCS = 30;
+/** The booth, as Stuart timed it — both are settings in Production Times (fin_config/settings). One reading, in
+ *  Shared/floorActivity since 2026-10-14 (the floor's punch check and Live Operator Status read it too). */
+export { BOOTH_COAT_MINS, BOOTH_LOAD_PCS };
 
 /** The timers the plan prices with — the same defaults the Active Floor uses where one was never saved. */
 export function planTimersOf(t = {}) {
     return {
         spinSetup: num(t.spinSetupMins) || 10, spinPaint: num(t.spinPaintMins) || 3, oven: num(t.ovenMins) || 10,
         handSmall: num(t.handSmallMins) || 1.35, handPole: num(t.handPoleMins) || 10, pole: num(t.poleMins) || 5,
-        boothCoat: num(t.boothCoatMins) || BOOTH_COAT_MINS, boothLoad: Math.max(1, Math.floor(num(t.boothLoadPcs)) || BOOTH_LOAD_PCS),
+        boothCoat: boothCoatMinsOf(t), boothLoad: boothLoadPcsOf(t),
     };
 }
 

@@ -17,18 +17,13 @@
 //
 // Pure. ActiveFloor asks spinLoadRollover at the last coat of the parts stream.
 
-import { woHasPoles, woHasSmallParts, sprayStationOf, SPRAY_STATIONS } from './floorActivity.js';
+import { woHasSmallParts, sprayStationOf, SPRAY_STATIONS, smallPartsTotalOf } from './floorActivity.js';
 
 const N = (v) => Math.max(0, Math.floor(Number(v) || 0));
 
-// The small parts on the document — its pieces less its poles (the count the floor's rows show).
-export function smallPartsTotalOf(wo) {
-    if (!wo) return 0;
-    const total = N(wo.totalParts);
-    if (!woHasPoles(wo)) return total;
-    const poles = N(wo.totalPoles || (wo.poles && wo.poles.qty));
-    return poles ? Math.max(0, total - poles) : total;
-}
+// The small parts on the document — its pieces less its poles. ONE reading, kept in Shared/floorActivity since 2026-10-14
+// (the booth coat counts them there); re-exported so every importer is unchanged.
+export { smallPartsTotalOf };
 
 // Loads apply to the small-parts stream on the spin machine, and only when there are pieces to load.
 export const runsInLoads = (wo) => !!wo && sprayStationOf(wo) === SPRAY_STATIONS.SPIN && woHasSmallParts(wo) && smallPartsTotalOf(wo) > 0;

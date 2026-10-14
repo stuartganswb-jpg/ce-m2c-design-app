@@ -10,6 +10,7 @@ import {
     woHasPoles, woHasSmallParts, partsStreamOf, poleStreamOf, isHandStep,
     sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, asksSprayStation,
     sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS, poleCoatIndexOf, takesSled, sledReleasePatchOf,
+    estMinsForTask, boothSprayMinsOf, smallPartsTotalOf, BOOTH_COAT_MINS, BOOTH_LOAD_PCS,
 } from '../src/components/Shared/floorActivity.js';
 
 let pass = 0, fail = 0;
@@ -149,5 +150,12 @@ eq('anything unknown reads as the spin machine, as sprayStationOf does', spraySt
     eq('a booth job still holding one gives it back', sledReleasePatchOf({ ...rings, sprayStation: 'BOOTH', machineAssigned: 'RED' }), { machineAssigned: null });
     eq('no document, no patch', sledReleasePatchOf(null), null);
 }
+// ── one booth coat (Stuart 2026-10-14) ──────────────────────────────────────────────────────────────────────────
+eq('the booth, as Stuart timed it', [BOOTH_COAT_MINS, BOOTH_LOAD_PCS], [15, 30]);
+eq('a booth coat: 15 min a load of up to 30, never under one load', [0, 1, 30, 31, 61].map(n => boothSprayMinsOf({ totalParts: n }, {})), [15, 15, 15, 30, 45]);
+eq('the small parts on a document (one reading, re-exported by spinLoads)', [smallPartsTotalOf({ totalParts: 430, totalPoles: 10 }), smallPartsTotalOf({ totalParts: 20 }), smallPartsTotalOf(null)], [420, 20, 0]);
+const liveCfg = { spinPaintMins: 3, boothCoatMins: 15, boothLoadPcs: 30 };
+eq('Live Operator Status: a booth spray is timed as the booth, the spin machine as the spin machine', [estMinsForTask('spinSpray', { totalParts: 50, sprayStation: 'BOOTH' }, liveCfg), estMinsForTask('spinSpray', { totalParts: 50, sprayStation: 'SPIN' }, liveCfg)], [30, 3]);
+
 console.log(`floorActivity: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

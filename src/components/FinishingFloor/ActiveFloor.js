@@ -153,7 +153,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
     mixMins: sysConfig?.mixMins || 5, 
     spinSetupMins: sysConfig?.spinSetupMins || 10, spinPaintMins: sysConfig?.spinPaintMins || 3, 
     ovenMins: sysConfig?.ovenMins || 10, handSmallMins: sysConfig?.handSmallMins || 1.35,
-    handPoleMins: sysConfig?.handPoleMins || 10, poleMins: sysConfig?.poleMins || 5
+    handPoleMins: sysConfig?.handPoleMins || 10, poleMins: sysConfig?.poleMins || 5,
+    // the booth's coat time and load size (Production Times) — their fall-backs live in Shared/floorActivity (2026-10-14)
+    boothCoatMins: sysConfig?.boothCoatMins, boothLoadPcs: sysConfig?.boothLoadPcs
   };
 
   // --- SLED ASSIGNMENT ENGINE ---

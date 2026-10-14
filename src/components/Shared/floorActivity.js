@@ -35,7 +35,7 @@ export function estMinsForTask(taskKey, wo, cfg) {
     const c = cfg || {};
     const parts = num(wo && wo.totalParts);
     if (taskKey === 'spinSetup') return num(c.spinSetupMins);
-    if (taskKey === 'spinSpray') return num(c.spinPaintMins);
+    if (taskKey === 'spinSpray') return sprayStationOf(wo) === SPRAY_STATIONS.BOOTH ? boothSprayMinsOf(wo, c) : num(c.spinPaintMins);
     // The floor config calls the bake dwell `ovenMins`; `bakeMins` is accepted so a future rename
     // of that setting cannot silently zero every oven estimate.
     if (taskKey === 'spinBake' || taskKey === 'poleBake') return num(c.ovenMins) || num(c.bakeMins);
@@ -135,6 +135,16 @@ export const poleCoatIndexOf = (wo) => {
     if (woHasPoles(wo) && woHasSmallParts(wo)) return 0;
     return Number(wo.currentStepIndex) || 0;
 };
+// The small parts on the document — its pieces less its poles (the count the floor's rows show). Moved here from
+// Shared/spinLoads (which re-exports it, so every importer is unchanged) so the booth coat below can count them.
+export function smallPartsTotalOf(wo) {
+    if (!wo) return 0;
+    const whole = (v) => Math.max(0, Math.floor(Number(v) || 0));
+    const total = whole(wo.totalParts);
+    if (!woHasPoles(wo)) return total;
+    const poles = whole(wo.totalPoles || (wo.poles && wo.poles.qty));
+    return poles ? Math.max(0, total - poles) : total;
+}
 // FINISH-STREAM EXCEPTION (the elbow): a WO stamped finishStream 'POLES' (from the item
 // master's flag) runs its PARTS stream on the -P recipe — physically still a small part on a
 // sled, finished to match the poles. 'SMALL' forces the reverse on a pole item.
@@ -172,6 +182,19 @@ export const WINDOW_LABEL = { BOOTH: 'Large Booth', SPIN: 'Spin Machine', HAND: 
 export const SPRAY_STATIONS = { SPIN: 'SPIN', BOOTH: 'BOOTH' };
 export const sprayStationOf = (wo) =>
     String((wo && wo.sprayStation) || '').trim().toUpperCase() === SPRAY_STATIONS.BOOTH ? SPRAY_STATIONS.BOOTH : SPRAY_STATIONS.SPIN;
+
+// ONE BOOTH COAT (Stuart 2026-10-13: "10-30 parts take 15 minute each coat on the recipe plus same bake time as the sled";
+// 2026-10-14: "yes on the 15min standard" for the floor's punch check too). A sprayed small-parts coat in the Large Booth
+// takes the coat time for each load of up to the load size — both settings in Production Times (fin_config/settings
+// boothCoatMins, boothLoadPcs). One reading for the schedule (Shared/finishingPlan.planTimersOf), the punch check
+// (Shared/punchCheck.normalMinutesOf) and Live Operator Status (estMinsForTask). Measured the same day on 129 booth
+// coats since 09-14: the real ones ran a median 1.4× it (one load 23 min, two 52, three 84).
+export const BOOTH_COAT_MINS = 15;
+export const BOOTH_LOAD_PCS = 30;
+export const boothCoatMinsOf = (cfg) => num((cfg || {}).boothCoatMins) || BOOTH_COAT_MINS;
+export const boothLoadPcsOf = (cfg) => Math.max(1, Math.floor(num((cfg || {}).boothLoadPcs)) || BOOTH_LOAD_PCS);
+/** One sprayed coat of this document's small parts in the booth, in minutes — at least one load. */
+export const boothSprayMinsOf = (wo, cfg) => Math.max(1, Math.ceil(smallPartsTotalOf(wo) / boothLoadPcsOf(cfg))) * boothCoatMinsOf(cfg);
 
 // The window a coat of one stream ('parts' | 'poles') is worked in; null past the end of the recipe.
 export function windowOfCoat(stream, step, wo) {

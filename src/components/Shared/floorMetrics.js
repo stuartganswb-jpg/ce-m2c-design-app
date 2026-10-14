@@ -25,8 +25,9 @@
 
 import { normalMinutesOf, minHonestMinutes } from './punchCheck.js';
 import { runsInLoads, spinLoadsOf } from './spinLoads.js';
-import { sprayStationOf, SPRAY_STATIONS } from './floorActivity.js';
+import { sprayStationOf, SPRAY_STATIONS, BOOTH_COAT_MINS, BOOTH_LOAD_PCS } from './floorActivity.js';
 import { dateKeyOf, weekKeyOf, addDays, clockedMinsOf, breakMinsOf } from './timecardImport.js';
+import { woRefOf } from './woRef.js';
 
 const MIN = 60000;
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -55,7 +56,7 @@ const STARTER_MATCH_MS = 15000;
 
 // The floor's timers. The same figures and the same fall-backs the Active Floor's cards use (ActiveFloor `cfg`):
 // fin_config/settings where set, these where not.
-export const FLOOR_TIMER_DEFAULTS = { spinSetupMins: 10, spinPaintMins: 3, ovenMins: 10, handSmallMins: 1.35, handPoleMins: 10, poleMins: 5 };
+export const FLOOR_TIMER_DEFAULTS = { spinSetupMins: 10, spinPaintMins: 3, ovenMins: 10, handSmallMins: 1.35, handPoleMins: 10, poleMins: 5, boothCoatMins: BOOTH_COAT_MINS, boothLoadPcs: BOOTH_LOAD_PCS };
 export const floorTimersOf = (settings) => {
     const s = settings || {}; const out = {};
     Object.keys(FLOOR_TIMER_DEFAULTS).forEach(k => { out[k] = N(s[k]) || FLOOR_TIMER_DEFAULTS[k]; });
@@ -83,15 +84,22 @@ const NOBODY = new Set(['', '?', 'floor', 'tablet', 'manual', 'unattributed', 'u
 export const personKeyOf = (name) => String(name == null ? '' : name).trim().toLowerCase().replace(/\s+/g, ' ');
 const isPerson = (name) => !NOBODY.has(personKeyOf(name));
 
-export const GROUP = { FINISHING: 'finishing', WMS: 'wms', NONE: 'none' };
-export const GROUP_LABEL = { finishing: 'Finishing floor', wms: 'Pick / pack (WMS)', none: 'Not ranked' };
-const FINISHING_ROLES = new Set(['painter', 'hand_painter', 'paint_manager', 'setup_manager', 'floor_manager']);
+// The two boards a person is ranked on. BOTH is a person on each (Stuart 2026-10-14: "Sandra G needs to be on both as
+// she is charge of set up and organizing / scheduling the paint jobs (which goes to which station)") — a row on each
+// board, each read the way that board reads.
+export const GROUP = { FINISHING: 'finishing', WMS: 'wms', BOTH: 'both', NONE: 'none' };
+export const GROUP_LABEL = { finishing: 'Finishing floor', wms: 'Pick / pack (WMS)', both: 'Both boards', none: 'Not ranked' };
+const FINISHING_ROLES = new Set(['painter', 'hand_painter', 'paint_manager', 'floor_manager']);
 const WMS_ROLES = new Set(['setup', 'packaging']);
-/** Which board a role is ranked on. Office, shop and admin roles are not ranked; Floor Metrics can move anyone. */
-export const groupOfRole = (role) => {
+const BOTH_ROLES = new Set(['setup_manager']);
+/** Which board(s) a role is ranked on. Office, shop and admin roles are not ranked; Floor Metrics can move anyone. */
+export const boardOfRole = (role) => {
     const r = personKeyOf(role);
-    return FINISHING_ROLES.has(r) ? GROUP.FINISHING : WMS_ROLES.has(r) ? GROUP.WMS : GROUP.NONE;
+    return FINISHING_ROLES.has(r) ? GROUP.FINISHING : WMS_ROLES.has(r) ? GROUP.WMS : BOTH_ROLES.has(r) ? GROUP.BOTH : GROUP.NONE;
 };
+/** A board setting → the boards ranked on. */
+export const boardsOf = (board) => (board === GROUP.BOTH ? [GROUP.FINISHING, GROUP.WMS]
+    : [GROUP.FINISHING, GROUP.WMS].includes(board) ? [board] : [GROUP.NONE]);
 
 // ── the floor's steps, timed ───────────────────────────────────────────────────────────────────────────────
 /**
@@ -164,8 +172,19 @@ const refOfWmsMsg = (msg, kind) => {
 // Where an action happened: the finishing floor's punches · the floor's other screens (the Setup Queue) · the
 // WMS · anything else in the apps.
 export const SRC = { FLOOR: 'floor', FLOOR_APP: 'floor-app', WMS: 'wms', APP: 'app' };
+// Before 2026-10-03 the floor's log lines carried no src; its categories say whose they are (the shop has stamped its
+// own src SHOP since 2026-08-26, the WMS its categories above, HQ writes no cat at all).
+const FLOOR_APP_CATS = new Set(['setup', 'production', 'recipes', 'inventory']);
 const hqSrcOf = (l) => isWmsLog(l) ? SRC.WMS
-    : (l.src === 'FINISHING' || (!l.src && String(l.cat || '').toLowerCase() === 'setup')) ? SRC.FLOOR_APP : SRC.APP;
+    : (l.src === 'FINISHING' || (!l.src && FLOOR_APP_CATS.has(String(l.cat || '').toLowerCase()))) ? SRC.FLOOR_APP : SRC.APP;
+/** The Setup Queue's two log lines that name an order: "Started Setup for <ref> …" and "Staged <ref> to Floor …". */
+export const SETUP_KIND = { SETUP: 'setup', STAGED: 'staged' };
+const floorAppOf = (msg) => {
+    const m = String(msg || '');
+    const a = m.match(/^Started Setup for (\S+)/); if (a) return { kind: SETUP_KIND.SETUP, ref: a[1] };
+    const b = m.match(/^Staged (\S+) to Floor/); if (b) return { kind: SETUP_KIND.STAGED, ref: b[1] };
+    return { kind: 'app', ref: '' };
+};
 
 /** Every action by a person, in time order: [{ who, at, src, kind, ref }]. */
 export function activityOf({ finLogs = [], hqLogs = [], wos = [] } = {}) {
@@ -178,8 +197,9 @@ export function activityOf({ finLogs = [], hqLogs = [], wos = [] } = {}) {
         const at = msOf(l && l.t);
         if (!at || !isPerson(l.u)) return;
         const src = hqSrcOf(l);
-        const kind = src === SRC.WMS ? wmsKindOf(l.msg) : 'app';
-        ev.push({ who: String(l.u).trim(), at, src, kind, ref: src === SRC.WMS ? refOfWmsMsg(l.msg, kind) : '' });
+        if (src === SRC.WMS) { const kind = wmsKindOf(l.msg); ev.push({ who: String(l.u).trim(), at, src, kind, ref: refOfWmsMsg(l.msg, kind) }); return; }
+        const fa = src === SRC.FLOOR_APP ? floorAppOf(l.msg) : { kind: 'app', ref: '' };
+        ev.push({ who: String(l.u).trim(), at, src, kind: fa.kind, ref: fa.ref });
     });
     wos.forEach(w => {
         if (!w) return;
@@ -243,12 +263,12 @@ const RELEVANT_SRC = { [GROUP.FINISHING]: [SRC.FLOOR, SRC.FLOOR_APP], [GROUP.WMS
 
 /**
  * Every person-day: what they did, against their clock.
- * @param groupOf    personKey → GROUP (role + Floor Metrics' moves)
+ * @param boardOf    personKey → a board setting (role + Floor Metrics' moves); BOTH gives a day row on each board
  * @param nameOf     personKey → the name to show
  * @returns [{ pk, who, date, week, group, clock, firstMs, startLagMins, steps, short, overruns, ratios, gaps,
- *             busyMins, ovenFreeMins, clockedMins, slots, picks, packs, actions, done, orders, unclocked }]
+ *             busyMins, ovenFreeMins, clockedMins, slots, picks, packs, actions, done, orders, setups, setupRefs, unclocked }]
  */
-export function personDaysOf({ steps = [], events = [], clockByPerson = new Map(), groupOf = () => GROUP.NONE, nameOf = (pk) => pk } = {}) {
+export function personDaysOf({ steps = [], events = [], clockByPerson = new Map(), boardOf = () => GROUP.NONE, nameOf = (pk) => pk } = {}) {
     const days = new Map();
     const dayOf = (pk, date) => {
         const k = `${pk}|${date}`;
@@ -259,8 +279,7 @@ export function personDaysOf({ steps = [], events = [], clockByPerson = new Map(
     steps.forEach(s => dayOf(personKeyOf(s.who), dateKeyOf(s.startMs)).steps.push(s));
     clockByPerson.forEach((byDate, pk) => byDate.forEach((_, date) => dayOf(pk, date)));
 
-    return [...days.values()].map(d => {
-        const group = groupOf(d.pk);
+    return [...days.values()].flatMap(d => boardsOf(boardOf(d.pk)).map(group => {
         const clock = (clockByPerson.get(d.pk) || new Map()).get(d.date) || null;
         const win = clock && clock.inMs && clock.outMs ? [clock.inMs, clock.outMs] : null;
         const rel = RELEVANT_SRC[group] ? d.events.filter(e => RELEVANT_SRC[group].includes(e.src)) : d.events;
@@ -303,9 +322,12 @@ export function personDaysOf({ steps = [], events = [], clockByPerson = new Map(
             gaps, busyMins: minsOf(busy), ovenFreeMins: minsOf(oven), clockedMins: clockedMinsOf(clock), slots,
             picks: refsOf(WMS_KIND.PICK).size, packs: refsOf(WMS_KIND.PACK).size, actions: distinct.length, done,
             orders: [...new Set(own.map(s => s.woId).filter(Boolean))],
+            // the Setup Queue: the orders this person started setup on or staged to the floor
+            setups: d.events.filter(e => e.src === SRC.FLOOR_APP && (e.kind === SETUP_KIND.SETUP || e.kind === SETUP_KIND.STAGED)).length,
+            setupRefs: [...new Set(d.events.filter(e => e.src === SRC.FLOOR_APP && e.ref).map(e => e.ref))],
             unclocked: !clock && (d.events.length > 0 || d.steps.length > 0),
         };
-    }).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.pk.localeCompare(b.pk)));
+    })).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.pk.localeCompare(b.pk) || a.group.localeCompare(b.group)));
 }
 
 // ── a person's week ───────────────────────────────────────────────────────────────────────────────────────
@@ -315,8 +337,12 @@ const byDue = (atMs, reqDate) => !!reqDate && dateKeyOf(atMs) <= String(reqDate)
 /** One row per person for the week starting `week` (a Monday, 'YYYY-MM-DD'). Hours stay on the row — never published. */
 export function weekRowsOf({ personDays = [], week, wosById = {} } = {}) {
     const by = new Map();
-    personDays.filter(d => d.week === week).forEach(d => { if (!by.has(d.pk)) by.set(d.pk, []); by.get(d.pk).push(d); });
-    return [...by.entries()].map(([pk, ds]) => {
+    personDays.filter(d => d.week === week).forEach(d => { const k = `${d.pk}|${d.group}`; if (!by.has(k)) by.set(k, []); by.get(k).push(d); });
+    // the Setup Queue names an order the way every log line does (Shared/woRef) — back to its document
+    const byRef = new Map();
+    Object.values(wosById).forEach(w => { if (!w) return; byRef.set(String(woRefOf(w)), w); if (w.id) byRef.set(String(w.id), w); });
+    return [...by.values()].map((ds) => {
+        const pk = ds[0].pk;
         const sum = (f) => ds.reduce((t, d) => t + N(f(d)), 0);
         const steps = sum(d => d.steps), short = sum(d => d.short);
         const slots = ds.filter(d => d.slots);
@@ -326,7 +352,8 @@ export function weekRowsOf({ personDays = [], week, wosById = {} } = {}) {
         const clockedMins = sum(d => d.clockedMins);
         const actions = sum(d => d.actions);
         // due dates: the orders they worked that the floor has finished, and what they picked / packed
-        const orders = [...new Set(ds.flatMap(d => d.orders))];
+        const setOrders = ds.flatMap(d => d.setupRefs || []).map(r => byRef.get(String(r))).filter(Boolean).map(w => w.id);
+        const orders = [...new Set([...ds.flatMap(d => d.orders), ...setOrders])];
         const finished = orders.map(id => wosById[id]).filter(w => w && msOf(w.completedAt) && w.reqDate);
         const handled = ds.flatMap(d => d.done).map(x => ({ ...x, wo: wosById[x.ref] })).filter(x => x.wo && x.wo.reqDate);
         const onTime = ds[0].group === GROUP.WMS
@@ -338,7 +365,7 @@ export function weekRowsOf({ personDays = [], week, wosById = {} } = {}) {
             clockDays: ds.filter(d => d.clock).length, unclockedDays: ds.filter(d => d.unclocked).length,
             hours: ds.reduce((t, d) => t + N(d.clock && d.clock.totalHours), 0),
             startLagMins: median(ds.map(d => d.startLagMins).filter(x => x != null)),
-            steps, short, overruns: sum(d => d.overruns),
+            steps, short, overruns: sum(d => d.overruns), setups: sum(d => d.setups),
             realShare: steps ? (steps - short) / steps : null,
             paceRatio: median(ds.flatMap(d => d.ratios)),
             nextGapMins: median(ds.flatMap(d => d.gaps)),
@@ -375,14 +402,14 @@ export const SCORE_PARTS = {
         { key: 'onTime', label: 'Due dates', weight: 15, of: r => (r.onTime.total ? r.onTime.ok / r.onTime.total : null), says: r => `${r.onTime.ok} of ${r.onTime.total} picks / packs by their due date` },
     ],
 };
-/** Enough of a week to rank: two days of work and ten steps (floor) or ten actions (WMS), and three parts read. */
+/** Enough of a week to rank: two days of work; ten steps or Setup Queue setups (floor) or ten actions (WMS); three parts read. */
 export const RANK_MIN = { days: 2, work: 10, parts: 3 };
 export const FAME_SIZE = 3;
 
 /** Score each row against its group; rank the groups; name the top and the bottom. */
 export function rankWeek(rows = []) {
     const eligible = (r) => r.group !== GROUP.NONE && r.activeDays >= RANK_MIN.days
-        && (r.group === GROUP.FINISHING ? r.steps : r.actions) >= RANK_MIN.work;
+        && (r.group === GROUP.FINISHING ? N(r.steps) + N(r.setups) : r.actions) >= RANK_MIN.work;
     const out = { [GROUP.FINISHING]: [], [GROUP.WMS]: [], unranked: [], fame: {}, shame: {} };
     [GROUP.FINISHING, GROUP.WMS].forEach(g => {
         const mine = rows.filter(r => r.group === g && eligible(r));
@@ -419,7 +446,7 @@ export function wallboardDocOf({ week, ranked, by = '', nowMs = Date.now() } = {
         name: r.who, rank: r.rank, score: r.score,
         parts: Object.fromEntries(r.parts.map(p => [p.key, p.value == null ? null : Math.round(p.value * 100)])),
         facts: {
-            days: r.activeDays, startLagMins: r1(r.startLagMins), steps: r.steps, realPunchPct: r.realShare == null ? null : Math.round(r.realShare * 100),
+            days: r.activeDays, startLagMins: r1(r.startLagMins), steps: r.steps, setups: r.setups || 0, realPunchPct: r.realShare == null ? null : Math.round(r.realShare * 100),
             paceRatio: r1(r.paceRatio), nextGapMins: r1(r.nextGapMins), steadyPct: r.steadyShare == null ? null : Math.round(r.steadyShare * 100),
             longestIdleMins: r.longestIdleMins, picks: r.picks, packs: r.packs, actions: r.actions, actionsPerHour: r1(r.actionsPerHour), onTime: r.onTime,
         },

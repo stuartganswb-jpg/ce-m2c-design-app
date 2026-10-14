@@ -57,5 +57,15 @@ eq('a few minutes short', punchFlagText({ punchFlag: 'TOO_SHORT', punchRanMs: 2 
 eq('no start', punchFlagText({ punchFlag: 'NO_START', punchNormalMins: 5 }), '⚠ no start punch (normal ~5 min)');
 eq('nothing flagged, nothing said', [punchFlagText({}), punchFlagText(null), punchFlagText({ punchFlag: '' })], ['', '', '']);
 
+// ── a booth coat is the booth's standard, per load (Stuart 2026-10-14: "yes on the 15min standard") ───────────
+const booth = (pcs, extra = {}) => ({ id: 'B', totalParts: pcs, sprayStation: 'BOOTH', ...extra });
+eq('booth spray: 15 min a load of up to 30 — 6, 30, 31 and 70 pieces', [6, 30, 31, 70].map(n => normalMinutesOf('spinSpray', booth(n), cfg)), [15, 15, 30, 45]);
+eq('booth spray: Production Times\' booth settings win', normalMinutesOf('spinSpray', booth(40), { ...cfg, boothCoatMins: 12, boothLoadPcs: 20 }), 24);
+eq('booth spray: a booth document of poles and small parts counts only its small parts', normalMinutesOf('spinSpray', booth(70, { totalPoles: 10 }), cfg), 30);
+eq('the spin machine keeps its own spray time', [normalMinutesOf('spinSpray', { totalParts: 70, sprayStation: 'SPIN' }, cfg), normalMinutesOf('spinSpray', { totalParts: 70 }, cfg)], [3, 3]);
+eq('booth: setup and bake are unchanged', [normalMinutesOf('spinSetup', booth(70), cfg), normalMinutesOf('spinBake', booth(70), cfg)], [10, 10]);
+eq('booth: a coat punched in 3 minutes is now under a quarter of 15', punchCheckOf({ startedMs: 1e12, completedMs: 1e12 + 3 * 60000, normalMins: normalMinutesOf('spinSpray', booth(12), cfg) }).flag, PUNCH_FLAG.TOO_SHORT);
+eq('booth: a coat of 4 minutes passes', punchCheckOf({ startedMs: 1e12, completedMs: 1e12 + 4 * 60000, normalMins: normalMinutesOf('spinSpray', booth(12), cfg) }).flag, null);
+
 console.log(`punchCheck: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

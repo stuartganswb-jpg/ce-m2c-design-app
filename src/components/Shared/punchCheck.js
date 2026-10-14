@@ -13,6 +13,8 @@
 // in Spanish, writes the floor log, and stamps the step so the order window shows it. Pure — no React, no
 // Firestore. Harness: scripts/punchCheck.test.mjs.
 
+import { sprayStationOf, SPRAY_STATIONS, boothSprayMinsOf } from './floorActivity.js';
+
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const MIN = 60000;
 
@@ -34,12 +36,13 @@ const polesOf = (wo) => num(wo && (wo.totalPoles || (wo.poles && wo.poles.qty)))
 
 /**
  * How long this step normally takes, in minutes — the same figures the floor's cards print as "Est Time".
- * @param cfg  { spinSetupMins, spinPaintMins, ovenMins, poleMins, handPoleMins, handSmallMins }
+ * @param cfg  { spinSetupMins, spinPaintMins, ovenMins, poleMins, handPoleMins, handSmallMins, boothCoatMins, boothLoadPcs }
+ * A sprayed coat in the booth is the booth's own standard, per load (Shared/floorActivity.boothSprayMinsOf — Stuart 2026-10-14).
  */
 export function normalMinutesOf(taskKey, wo, cfg = {}) {
     switch (String(taskKey || '')) {
         case 'spinSetup': return num(cfg.spinSetupMins);
-        case 'spinSpray': return num(cfg.spinPaintMins);
+        case 'spinSpray': return sprayStationOf(wo) === SPRAY_STATIONS.BOOTH ? boothSprayMinsOf(wo, cfg) : num(cfg.spinPaintMins);
         case 'spinBake':
         case 'poleBake': return num(cfg.ovenMins);
         case 'poleSpray': return polesOf(wo) * num(cfg.poleMins);
