@@ -88,6 +88,14 @@ const LandingPage = () => {
             onClick={() => navigate('/uniquity-counter')}
           />
 
+          <HubButton 
+            theme={theme}
+            number="07"
+            title="Time Clock"
+            subtitle="Clock in · lunch · clock out"
+            onClick={() => navigate('/time-clock')}
+          />
+
         </div>
 
         {/* FOOTER — signed-in identity + daily sign-out */}

@@ -13,6 +13,8 @@ import UpdateBanner from './components/Shared/UpdateBanner';
 
 // 🛋 the Uniquity show counter (S7, 2026-10-12) — lazy, so tab 7 (which it wears) stays out of every floor app's main bundle
 const UniquityCounter = lazy(() => import('./components/Counter/UniquityCounter'));
+// ⏱ the time clock kiosk (2026-10-14) — lazy, its own small chunk
+const TimeClockScreen = lazy(() => import('./components/TimeClock/TimeClockScreen'));
 
 const App = () => {
   return (
@@ -36,6 +38,9 @@ const App = () => {
         
         {/* 🚀 NEW: The Warehouse Routing */}
         <Route path="/pick-pack" element={<PickPackApp />} />
+
+        {/* ⏱ The time clock — clock in, lunch out, lunch in, clock out (any tablet) */}
+        <Route path="/time-clock" element={<Suspense fallback={<div style={{ padding: '40px', fontFamily: 'var(--mono, monospace)', fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', color: '#777' }}>Loading the time clock…</div>}><TimeClockScreen /></Suspense>} />
       </Routes>
       </OuterGate>
     </Router>

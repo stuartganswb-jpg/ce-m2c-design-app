@@ -328,7 +328,8 @@ export function personDaysOf({ steps = [], events = [], chores = [], clockByPers
         const slots = win ? slotsOf({ inMs: win[0], outMs: win[1], eventAts: rel.map(e => e.at), workIvs: working, freeIvs: oven, breakMins: breakMinsOf(clock), freeIsIdle: d.date >= CHORES_FROM }) : null;
         return {
             pk: d.pk, who: nameOf(d.pk), date: d.date, week: weekKeyOf(d.date), group, clock,
-            firstMs, startLagMins: (win && firstMs) ? Math.max(0, (firstMs - win[0]) / MIN) : null,
+            // first touch needs only the clock-in — a day still going (no clock-out yet) has one
+            firstMs, startLagMins: (clock && clock.inMs && firstMs) ? Math.max(0, (firstMs - clock.inMs) / MIN) : null,
             steps: own.length, short: own.filter(s => s.short).length, overruns: own.filter(s => s.overrun).length,
             ratios: timed.filter(s => !s.short && s.normalMins > 0).map(s => s.ranMins / s.normalMins),
             gaps, busyMins: minsOf(busy), choreMins: minsOf(choreIvs), chores: d.chores.length, ovenFreeMins: minsOf(oven), clockedMins: clockedMinsOf(clock), slots,

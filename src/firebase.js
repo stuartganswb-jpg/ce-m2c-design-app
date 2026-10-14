@@ -37,9 +37,11 @@ if ((acIsLocal || acIsPreview) && process.env.REACT_APP_APPCHECK_DEBUG_TOKEN) {
   window.FIREBASE_APPCHECK_DEBUG_TOKEN = process.env.REACT_APP_APPCHECK_DEBUG_TOKEN;
 }
 
-// 3. Initialize App Check immediately after the main app initializes
+// 3. Initialize App Check immediately after the main app initializes. The site key is exported for the time clock's own
+// app instance (Shared/timeClockFirebase), which needs App Check too — one key, not a second copy.
+export const RECAPTCHA_SITE_KEY = '6LcbVRItAAAAAFixIoDhVAI5UJda7HbnTbrwV0Om';
 export const appCheck = initializeAppCheck(app, {
-  provider: new ReCaptchaV3Provider('6LcbVRItAAAAAFixIoDhVAI5UJda7HbnTbrwV0Om'),
+  provider: new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
   isTokenAutoRefreshEnabled: true
 });
 

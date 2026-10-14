@@ -66,6 +66,26 @@ service cloud.firestore {
     // the createStaffLogin & co. callables (Admin SDK); HQ Admin → User Matrix reads it.
     match /staff_logins/{document=**}           { allow read: if isAdmin(); allow write: if false; }
 
+    // ⏱ TIME CLOCK (Stuart 2026-10-14 — payroll hours are admin-only). A person writes their OWN punch: the name on their
+    // PIN token, stamped with the server's time, from the clock — nothing else. Only admins read punches, add a missing one
+    // or void a wrong one (HQ → System Admin → Time Clock & Payroll); nothing is ever deleted. The kiosk (/time-clock,
+    // Shared/timeClock) runs on its own app instance, so the token here is the puncher's.
+    function clockName() { return request.auth.token.name.trim(); }
+    function clockKey() { return clockName().lower().replace('[^a-z0-9]+', '_'); }   // = Shared/timeClock.clockKeyOf
+    match /time_punches/{punch} {
+      allow create: if isAuth() && request.resource.data.name == clockName()
+                    && request.resource.data.source == 'clock' && request.resource.data.t == request.time;
+      allow create, update: if isAdmin();
+      allow read: if isAdmin();
+      allow delete: if false;
+    }
+    // Each person's clock state (in / lunch / out, and the last punch) — what the kiosk offers next. Read and written only
+    // under that person's own key, or by an admin. No hours here.
+    match /time_status/{person} {
+      allow read: if isAdmin() || (isAuth() && person == clockKey());
+      allow write: if isAdmin() || (isAuth() && person == clockKey() && request.resource.data.name == clockName());
+    }
+
     // ---- Core PLM / CPQ ----
     match /Approved_Designs/{document=**}       { allow read, write: if isAuth(); }
     match /assembly_pins/{document=**}          { allow read, write: if isAuth(); }

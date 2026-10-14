@@ -15,6 +15,7 @@ import {
     boardOfRole, personKeyOf, standardsCheckOf, GROUP, GROUP_LABEL, SCORE_PARTS, RANK_MIN,
 } from '../Shared/floorMetrics';
 import { choreIntervalsOf } from '../Shared/floorChores';
+import { clockDaysByPersonOf } from '../Shared/timeClock';
 
 const box = { background: '#fff', border: '1px solid var(--line)', padding: '20px', marginBottom: '20px' };
 const h4 = { margin: '0 0 12px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', fontWeight: 500 };
@@ -35,7 +36,7 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
     const [weeksBack, setWeeksBack] = useState(6);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
-    const [data, setData] = useState({ wos: [], finLogs: [], hqLogs: [], people: [], settings: {} });
+    const [data, setData] = useState({ wos: [], finLogs: [], hqLogs: [], people: [], settings: {}, punches: [] });
     const [cfg, setCfg] = useState({ map: {}, groups: {} });
     const [draft, setDraft] = useState({ map: {}, groups: {} });
     const [timecards, setTimecards] = useState([]);      // the dropped exports — this browser only, never stored
@@ -70,6 +71,8 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                     hqLogs: hqS.docs.map(d => d.data()),
                     people: dirS.docs.map(d => d.data()).filter(p => p && p.name),
                     settings: setS.exists() ? setS.data() : {},
+                    // ⏱ the app's own time clock (admin-read; empty until its rules are deployed or anyone punches)
+                    punches: await getDocs(query(collection(db, 'time_punches'), where('at', '>=', fromMs - 24 * 3600000))).then(s => s.docs.map(d => d.data())).catch(() => []),
                 });
             } catch (e) { if (live) setLoadError(e.message || String(e)); }
             if (live) setLoading(false);
@@ -90,7 +93,13 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
         const events = activityOf({ finLogs: data.finLogs, hqLogs: data.hqLogs, wos: data.wos }).filter(e => e.at >= fromMs);
         const firstName = new Map(); events.forEach(e => { const k = personKeyOf(e.who); if (!firstName.has(k)) firstName.set(k, e.who); });
         const nameOf = (pk) => (directory.get(pk) || {}).name || firstName.get(pk) || pk;
+        // the clock: the dropped export, and the app's own clock over it wherever a person punched that day (Shared/timeClock)
         const clock = clockIndexOf(timecards.filter(d => d.date >= fromKey), cfg.map);
+        clockDaysByPersonOf(data.punches || [], { todayKey: dateKeyOf(Date.now()) }).forEach((days, pk) => {
+            const merged = new Map(clock.get(pk) || []);
+            days.forEach((d, date) => { if (date >= fromKey) merged.set(date, d); });
+            clock.set(pk, merged);
+        });
         const chores = choreIntervalsOf(data.finLogs).filter(c => c.startMs >= fromMs);
         const personDays = personDaysOf({ steps, events, chores, clockByPerson: clock, boardOf, nameOf });
         return { wosById, steps, events, personDays, weeks: weeksOf(personDays), nameOf, standards: standardsCheckOf(steps, wosById) };
