@@ -5,7 +5,7 @@
 // The contract: CE gets its form + class; a brand with no ids on file REFUSES with a named error
 // (never a default form); shipping rides the same way from both doors; the memo is cut to 40.
 
-import { nsTransactionHeader, nsCustomerIdOf } from '../src/components/Shared/nsHeader.js';
+import { nsTransactionHeader, nsCustomerIdOf, orderClassOf, itemClassOf } from '../src/components/Shared/nsHeader.js';
 import { BRAND_NETSUITE_FORMS, BRAND_NETSUITE_MAP } from '../src/components/Shared/brandNetsuite.js';
 
 let pass = 0, fail = 0;
@@ -26,7 +26,7 @@ eq('CUST- prefix stripped', [nsCustomerIdOf('CUST-4720'), nsCustomerIdOf('4720')
 }
 // ── the refusal ──────────────────────────────────────────────────────────────────────────────
 {
-    ['m2c', 'uniquity', 'leyla'].forEach(b => {
+    ['uniquity', 'leyla'].forEach(b => {
         const r = nsTransactionHeader({ brand: b, asType: 'estimate', customerId: '1', memo: 'x' });
         eq(`${b}: refuses with a named code until Eric's ids are on file`, [r.ok, r.error.code], [false, 'NO_NS_FORM_FOR_BRAND']);
         ok(`${b}: the message names the brand and where the ids go`, r.error.message.includes(`"${b}"`) && /BRAND_NETSUITE_FORMS/.test(r.error.message));
@@ -34,11 +34,28 @@ eq('CUST- prefix stripped', [nsCustomerIdOf('CUST-4720'), nsCustomerIdOf('4720')
     });
     eq('unknown brand: refuses on the subsidiary map first', nsTransactionHeader({ brand: 'nope', customerId: '1' }).error.code, 'NO_NS_SUBSIDIARY_FOR_BRAND');
     eq('no customer: NO_CUSTOMER', nsTransactionHeader({ brand: 'ce', customerId: '' }).error.code, 'NO_CUSTOMER');
-    eq('only CE has ids today', Object.keys(BRAND_NETSUITE_FORMS), ['ce']);
-    // the day Eric's ids land, the refusal lifts with no code change
-    BRAND_NETSUITE_FORMS.m2c = { estimate: '900', salesorder: '901', class: '9' };
-    eq('an added brand row builds at once', nsTransactionHeader({ brand: 'm2c', asType: 'salesorder', customerId: '1', memo: 'x' }).header.customForm.id, '901');
-    delete BRAND_NETSUITE_FORMS.m2c;
+    eq('CE and M2C have ids today', Object.keys(BRAND_NETSUITE_FORMS), ['ce', 'm2c']);
+    // the day a brand's ids land, the refusal lifts with no code change
+    BRAND_NETSUITE_FORMS.uniquity = { estimate: '900', salesorder: '901', class: '9' };
+    eq('an added brand row builds at once', nsTransactionHeader({ brand: 'uniquity', asType: 'salesorder', customerId: '1', memo: 'x' }).header.customForm.id, '901');
+    delete BRAND_NETSUITE_FORMS.uniquity;
+}
+// ── M2C (Stuart 2026-10-14: quote form 187, sales order form 281, class Hardware 2 / Lighting 3) ─────────────────────
+// The four M2C saves refused since 9/12 (Dahle Barn, Cresthaven, Laprade, Henningsen) were all Flat Iron hardware.
+{
+    const q = nsTransactionHeader({ brand: 'm2c', asType: 'estimate', customerId: 'CUST-1078', memo: 'Dahle Barn', itemClasses: ['Hardware', 'Hardware', 'Component'] });
+    ok('an M2C quote now builds', q.ok);
+    eq('M2C quote: subsidiary 3, location 19, form 187, class Hardware 2', [q.header.subsidiary.id, q.header.location.id, q.header.customForm.id, q.header.class.id], ['3', '19', '187', '2']);
+    const so = nsTransactionHeader({ brand: 'm2c', asType: 'salesorder', customerId: '1078', memo: 'x', itemClasses: ['Hardware'] });
+    eq('M2C sales order: form 281', [so.header.customForm.id, so.header.class.id], ['281', '2']);
+    eq('an order of lighting is Lighting (3)', nsTransactionHeader({ brand: 'm2c', asType: 'salesorder', customerId: '1', memo: 'x', itemClasses: ['Lighting', 'Component', 'Lighting'] }).header.class.id, '3');
+    const forms = BRAND_NETSUITE_FORMS.m2c;
+    eq('the class rule: hardware, lighting, components only, nothing, both, other classes, any case', [
+        orderClassOf(forms, ['Hardware']), orderClassOf(forms, ['Lighting']), orderClassOf(forms, ['Component', 'Accessory']), orderClassOf(forms, []),
+        orderClassOf(forms, ['Hardware', 'Lighting']), orderClassOf(forms, ['Curtain', 'Lighting', '']), orderClassOf(forms, ['lighting', ' LIGHTING ']),
+    ], ['2', '3', '2', '2', '2', '3', '3']);
+    eq('a brand with one class sends it whatever is sold (CE)', [orderClassOf(BRAND_NETSUITE_FORMS.ce, ['Lighting']), nsTransactionHeader({ brand: 'ce', customerId: '1', memo: 'x', itemClasses: ['Lighting'] }).header.class.id], ['2', '2']);
+    eq('the item\'s class is read where the library keeps it', [itemClassOf({ manufacturingSpecs: { nsClass: 'Lighting' } }), itemClassOf({ nsClass: 'Hardware' }), itemClassOf({}), itemClassOf(null)], ['Lighting', 'Hardware', '', '']);
 }
 // ── shipping, one way from both doors ────────────────────────────────────────────────────────
 {

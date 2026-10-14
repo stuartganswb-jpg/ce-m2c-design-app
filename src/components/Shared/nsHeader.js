@@ -11,6 +11,24 @@ import { BRAND_NETSUITE_MAP, BRAND_NETSUITE_FORMS } from './brandNetsuite.js';
 
 const str = (v) => String(v == null ? '' : v).trim();
 
+// ── WHICH CLASS AN ORDER IS (Stuart 2026-10-14, M2C: "Class field are: Hardware (id: 2); Lighting (id: 3)") ──────────
+// A brand with ONE class (CE: Hardware) sends it on every order. A brand whose row names classes by item class
+// (`classByItem`) sends the class its product lines share — the NetSuite class each item already carries (the
+// library's nsClass, synced from NetSuite). Lines of any other class (Component, Accessory…) do not vote. Lines of
+// two classes, or none that vote, take the brand's default — the one class a person would otherwise have typed.
+const U = (v) => str(v).toUpperCase();
+/** @param forms the brand's BRAND_NETSUITE_FORMS row · @param itemClasses the NetSuite class NAME of each product line */
+export const orderClassOf = (forms, itemClasses = []) => {
+    const by = (forms && forms.classByItem) || null;
+    const fallback = forms && forms.class != null ? String(forms.class) : '';
+    if (!by) return fallback;
+    const names = Object.keys(by);
+    const voting = [...new Set((itemClasses || []).map(c => names.find(n => U(n) === U(c))).filter(Boolean))];
+    return voting.length === 1 ? String(by[voting[0]]) : fallback;
+};
+/** The NetSuite class name a library item carries ('' when none). */
+export const itemClassOf = (part) => str((part && ((part.manufacturingSpecs && part.manufacturingSpecs.nsClass) || part.nsClass)) || '');
+
 /** The NetSuite customer id off the app's CUST-<id> convention. '' when there is none. */
 export const nsCustomerIdOf = (id) => { const s = str(id); return s.startsWith('CUST-') ? s.slice(5) : s; };
 
@@ -21,11 +39,12 @@ export const nsCustomerIdOf = (id) => { const s = str(id); return s.startsWith('
  *   customerId    the app customer id (CUST-123) or the NetSuite id
  *   memo          the mainline memo (each door keeps its own fallback chain and its own cut)
  *   poNumber / internalMemo / appJobId   optional
+ *   itemClasses   the NetSuite class name of each product line (itemClassOf) — decides the class where the brand has two
  *   shipping      { method: 'SAVED'|'CUSTOM', addressId, custom: {attention, addressee, addr1, addr2, city, state, zip, country},
  *                   amount, shipMethod: { id, name } | null }   — shipMethod resolved by the caller
  * Returns { ok: true, header, warnings[] } or { ok: false, error: { code, message } }.
  */
-export function nsTransactionHeader({ brand, asType = 'estimate', customerId, memo = '', poNumber = '', internalMemo = '', appJobId = '', shipping = null } = {}) {
+export function nsTransactionHeader({ brand, asType = 'estimate', customerId, memo = '', poNumber = '', internalMemo = '', appJobId = '', shipping = null, itemClasses = [] } = {}) {
     const b = str(brand).toLowerCase();
     const type = asType === 'salesorder' ? 'salesorder' : 'estimate';
     const nsCustomerId = nsCustomerIdOf(customerId);
@@ -42,7 +61,7 @@ export function nsTransactionHeader({ brand, asType = 'estimate', customerId, me
         subsidiary: { id: map.subsidiary },
         location: { id: map.location },
         customForm: { id: String(forms[type]) },
-        class: { id: String(forms.class) },
+        class: { id: orderClassOf(forms, itemClasses) },
         memo: str(memo),   // each door cuts its own memo (tab 7 to 40; CPQ sends the sidemark / job name whole, as it always has)
         ...(str(poNumber) ? { otherRefNum: str(poNumber).slice(0, 40) } : {}),
         ...(str(internalMemo) ? { custbody_bit_internalmemo: str(internalMemo).slice(0, 999) } : {}),

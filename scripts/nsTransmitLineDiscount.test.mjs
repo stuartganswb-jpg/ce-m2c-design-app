@@ -86,8 +86,11 @@ eq('rates: the set line at ×1.2', b6.payload.item.items.slice(1).map(l => [l.it
 {
     const ce = await buildNsTransaction({ job: job([cartItem('a')], 110, { poNumber: 'PO-9', shippingMethod: 'SAVED', shippingAddressId: '55' }), asType: 'salesorder', brand: 'ce', data, ctx: null });
     eq('CE sales order header: form 177, class 2, subsidiary 2 / location 17, PO, job id, saved address', [ce.payload.customForm, ce.payload.class, ce.payload.subsidiary, ce.payload.location, ce.payload.otherRefNum, ce.payload.custbody50, ce.payload.shipaddresslist], [{ id: '177' }, { id: '2' }, { id: '2' }, { id: '17' }, 'PO-9', 'JOB-1', { id: '55' }]);
+    // M2C's ids landed 2026-10-14 (Stuart): quote form 187, sales order form 281, class Hardware 2 / Lighting 3 by what is sold.
     const m2c = await buildNsTransaction({ job: job([cartItem('a')], 110), asType: 'estimate', brand: 'm2c', data, ctx: null });
-    eq('M2C refuses to queue with a named code until Eric\'s ids are on file', [m2c.ok, m2c.error && m2c.error.code], [false, 'NO_NS_FORM_FOR_BRAND']);
+    eq('M2C now builds: quote form 187, subsidiary 3 / location 19, class Hardware (the line carries no lighting class)', [m2c.ok, m2c.payload && m2c.payload.customForm, m2c.payload && m2c.payload.subsidiary, m2c.payload && m2c.payload.location, m2c.payload && m2c.payload.class], [true, { id: '187' }, { id: '3' }, { id: '19' }, { id: '2' }]);
+    const uq = await buildNsTransaction({ job: job([cartItem('a')], 110), asType: 'estimate', brand: 'uniquity', data, ctx: null });
+    eq('a brand with no ids on file (Uniquity) still refuses with the named code', [uq.ok, uq.error && uq.error.code], [false, 'NO_NS_FORM_FOR_BRAND']);
     const noCust = await buildNsTransaction({ job: { ...job([cartItem('a')], 110), customer: { id: '' } }, asType: 'estimate', brand: 'ce', data, ctx: null });
     eq('no customer still refuses as NO_CUSTOMER', noCust.error && noCust.error.code, 'NO_CUSTOMER');
 }

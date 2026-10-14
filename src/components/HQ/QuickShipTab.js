@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { isPoleCategory } from '../Shared/poleCut';
-import { nsTransactionHeader, withLineLocations } from '../Shared/nsHeader';
+import { nsTransactionHeader, withLineLocations, itemClassOf } from '../Shared/nsHeader';
 import { resolveShipMethod } from '../Shared/nsTransmit';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { quickShipPullLines, quickShipCoverCodes, quickShipBackorderLines } from '../Shared/quickShipBackorder';
@@ -1626,6 +1626,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 brand: activeBrand, asType, customerId, memo: memoText,
                 poNumber: soExtras.po, internalMemo: soExtras.internalMemo,
                 shipping: { method: ship.method, addressId: ship.addressId, custom: ship.custom, amount: shipAmt, shipMethod: sm },
+                // The class follows what is sold where a brand has two (M2C Hardware / Lighting) — each line's own item.
+                itemClasses: lines.map(l => itemClassOf(itemById(l.itemId))),
             });
             if (!hdr.ok) {
                 addLog(`⛔ ${hdr.error.code}: ${hdr.error.message}`, 'error');

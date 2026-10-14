@@ -16,4 +16,9 @@ export const BRAND_NETSUITE_MAP = {
 // Uniquity / Leyla ids, they go here and nothing else changes.
 export const BRAND_NETSUITE_FORMS = {
     'ce': { estimate: '299', salesorder: '177', class: '2' },
+    // M2C (Stuart 2026-10-14): quote = "M2C - Quote" (187), sales order = "M2C - Sales Order Special Order Form W/Link"
+    // (281) — the forms M2C's own NetSuite orders already use. Two classes: Hardware (2) and Lighting (3). The class
+    // follows what the order sells (Shared/nsHeader.orderClassOf): Lighting when every classed product line is a
+    // lighting item, otherwise Hardware.
+    'm2c': { estimate: '187', salesorder: '281', class: '2', classByItem: { Hardware: '2', Lighting: '3' } },
 };

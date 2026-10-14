@@ -21,7 +21,7 @@ import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from './sizeMatrix';
 import { aliasTargetIdOf } from './aliasIdentity';
 import { nsProxyFetch } from './nsProxy';
 import { enqueueNsWrite } from './nsOutbox';
-import { nsTransactionHeader, withLineLocations } from './nsHeader';
+import { nsTransactionHeader, withLineLocations, itemClassOf } from './nsHeader';
 import { cleanSidemark } from './quoteDisplay';
 import { isParkedGeometryLine } from './lineClassification';
 import { netFactorOf } from './lineDiscount';
@@ -643,6 +643,8 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
         brand, asType, customerId: job.customer?.id || '', memo: memoText,
         poNumber: job.poNumber, internalMemo: job.internalMemo, appJobId: job.jobId || job.id,
         shipping: { method: job.shippingMethod, addressId: job.shippingAddressId, custom: job.customShippingAddress, amount: shippingAmount, shipMethod: sm },
+        // The class follows what is sold where a brand has two (M2C Hardware / Lighting) — each pushed line's own item.
+        itemClasses: linesToPush.filter(l => l.nsId !== 'UNMAPPED' && l.nsId !== 'PENDING').map(l => itemClassOf(l.masterPart)),
     });
     if (!hdr.ok) return { ok: false, error: hdr.error };
     hdr.warnings.forEach(w => log(`⚠️ ${w}`, 'warn'));
