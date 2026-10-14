@@ -38,9 +38,17 @@ const engineStamp = () => ({
   },
 });
 
+// …AND IT DRAWS WITH HQ'S OWN DRAWING CODE (step 4, 2026-10-14). The configurator's picture is drawn by the same files HQ's
+// CPQ draws with — Shared/DynamicModel.js, Shared/studioRig.js, Shared/finishPbr.js, Shared/hardwareThumbs.js — reached
+// through '@engine' too. They are browser-only (React, three) and are not part of the server's copy, which takes only what
+// scripts/sync-engine.mjs lists. Two things make HQ's files build here: they are .js files with JSX in them (as HQ's own build
+// reads them), and the packages they import (react, three, the react-three pair) must resolve to THIS app's one copy — a
+// file outside portal/ would otherwise look for them beside HQ, where Vercel installs nothing for this project.
 export default defineConfig({
   plugins: [engineStamp(), react()],
-  resolve: { alias: { '@engine': ENGINE } },
+  resolve: { alias: { '@engine': ENGINE }, dedupe: ['react', 'react-dom', 'three', '@react-three/fiber', '@react-three/drei'] },
+  esbuild: { loader: 'jsx', include: [/src\/components\/Shared\/.*\.js$/, /\.jsx$/], exclude: [] },
+  optimizeDeps: { esbuildOptions: { loader: { '.js': 'jsx' } } },
   // The same stamp, in the bundle: what the portal sends with every configurator call (the server refuses a site on another engine).
   define: { __SITE_ENGINE__: JSON.stringify(SITE_ENGINE) },
   // The dev server may read the engine, which sits outside portal/.

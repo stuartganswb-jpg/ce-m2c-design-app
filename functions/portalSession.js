@@ -277,7 +277,9 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
     // The total is the ENGINE's (parts that are billed but not shown are in it, as on CPQ's own panel), less the money of
     // any line that is only a placeholder — that part is "priced on review", never passed off as firm.
     const everyLine = [...s.priced.lines, ...takenExtras, ...(s.trvLines || [])];
-    const hasReview = everyLine.some(onReview);
+    // "Priced on review" is said of what the customer can SEE, or of a hidden part that carries money — a hidden part with no
+    // price of its own (the standoffs a return brings: $0, as on CPQ's own panel) is part of the set, not a price to come.
+    const hasReview = everyLine.some((l) => onReview(l) && (!l.hidden || Number(l.total) !== 0));
     const firmTotal = money(s.grandTotal - everyLine.filter(onReview).reduce((n, l) => n + (Number(l.total) || 0), 0));
     // ── THE DRAWING: what HQ's own drawing code (Shared/DynamicModel) is handed, and how each finish on screen catches the
     // light — the same numbers HQ's registry holds, worked out from the same two finish lists (Shared/finishPbr.pbrMapOf) ──

@@ -42,14 +42,18 @@ const library = codes.map(([id, code], i) => ({ id, itemId: id, legacyErpId: cod
     manufacturingSpecs: { ...(i % 5 !== 4 && i % 7 !== 3 ? { basePrice: price(code, 4, 40) } : {}), ...(i % 7 !== 3 ? { fabricut: tiers(code) } : {}), partHandling: 'INTERNAL-ROUTE', cost: 1.11, ...(i === 0 ? { customData: { materialTwins: [{ material: 'BRASS', code: 'TWIN-BRASS' }] } } : {}) },
     clientPricing: [...(i % 7 !== 3 ? [{ customerId: 'FABRICUT', clientSku: `F${hh(code) % 9000 + 1000}`, price: price(`${code}|row`, 3, 35) }] : []), { customerId: 'CUST-OTHER', clientSku: `OTHER-${hh(code) % 900}`, price: 1 }] }));
 const extra = (code, base, more = {}) => ({ id: `X-${code}`, itemId: `X-${code}`, legacyErpId: code, itemName: `Item ${code}`, partClass: 'Inventory', brandId: 'ce', manufacturingSpecs: { basePrice: base }, ...more });
-const records = [...library, extra('SCREW-PACK', 3.5, { manufacturingSpecs: { basePrice: 3.5, fabricut: { cost: 2, wholesale: 4, retail: 8 } } }), extra('TWIN-BRASS', 99), extra('H1-2JNR', 20, { manufacturingSpecs: { basePrice: 20, customData: { unfinished: true } } }), extra('FEE-PAINT', 45, { partClass: 'Fee' }),
+const records = [...library, extra('SCREW-PACK', 3.5, { manufacturingSpecs: { basePrice: 3.5, fabricut: { cost: 2, wholesale: 4, retail: 8 } } }), { id: 'X-NOPRICE-BRK', itemId: 'X-NOPRICE-BRK', legacyErpId: 'NOPRICE-BRK', itemName: 'Bracket hardware', partClass: 'Inventory', brandId: 'ce', manufacturingSpecs: {} }, extra('TWIN-BRASS', 99), extra('H1-2JNR', 20, { manufacturingSpecs: { basePrice: 20, customData: { unfinished: true } } }), extra('FEE-PAINT', 45, { partClass: 'Fee' }),
     { ...ASSEMBLY, id: 'ASM-TRV', itemId: 'ASM-TRV', itemName: 'H1 2" Traverse', partClass: 'Assembly', brandId: 'ce', manufacturingSpecs: { ...(ASSEMBLY.manufacturingSpecs || {}), cadUrl: 'https://models.test/trv.glb' } },
     { id: 'KIT-SYS', legacyErpId: 'H1-2TRV-4/P', itemName: 'System kit', partClass: 'Kit', brandId: 'ce', manufacturingSpecs: { kitAlign: { setup: 'SINGLE' } } },
     { id: 'KIT-ITEM', legacyErpId: 'H1-2TRV-CB', itemName: 'Bracket kit', partClass: 'Kit', brandId: 'ce', manufacturingSpecs: { basePrice: 61, kitComponents: [{ partId: library[1].id, qty: 1 }] } },
     { id: 'OTHER-BRAND', legacyErpId: 'M2C-LAMP', itemName: 'Another brand', partClass: 'Inventory', brandId: 'm2c', manufacturingSpecs: { basePrice: 5 } },
     { id: 'SHARED', legacyErpId: 'SHARED-1', itemName: 'Shared with ce', partClass: 'Inventory', brandId: 'm2c', sharedBrands: ['ce'], manufacturingSpecs: { basePrice: 5 } }];
 // …and one part that is billed but never shown — a hidden pin (the screws): in the engine's total, off the customer's lines
-const pins = [...PINS.map(pn => ({ ...pn, assemblyId: 'ASM-TRV' })), { ...PINS[0], id: 'PIN-HIDDEN-SCREWS', assemblyId: 'ASM-TRV', partId: 'X-SCREW-PACK', partName: 'Screw pack', isHiddenPart: true, targetNode: '', choiceNode: '' }];
+// …and a hidden part with no price of its own that the flow's default prices as a bracket ($11): billed, not shown — and a
+// placeholder, so the portal's price must say something is priced on review
+const bracketPin = PINS.find(pn => /BRACKET/i.test(String(pn.catOverride || pn.category || ''))) || PINS[0];
+const pins = [...PINS.map(pn => ({ ...pn, assemblyId: 'ASM-TRV' })), { ...PINS[0], id: 'PIN-HIDDEN-SCREWS', assemblyId: 'ASM-TRV', partId: 'X-SCREW-PACK', partName: 'Screw pack', isHiddenPart: true, targetNode: '', choiceNode: '' },
+    { ...bracketPin, id: 'PIN-HIDDEN-NOPRICE', assemblyId: 'ASM-TRV', partId: 'X-NOPRICE-BRK', partName: 'Bracket hardware', legacyErpId: 'NOPRICE-BRK', isHiddenPart: true, targetNode: '', choiceNode: '' }];
 const FIN = [
     { id: 'F-P14', code: 'P14', name: 'Matte Black', material: 'METAL', textureUrl: 't://p14', subFinishCode: 'TBR', clientMapping: [{ customerId: 'FABRICUT', clientFinishName: 'Black' }, { customerId: 'CUST-OTHER', clientFinishName: 'Their black' }] },
     { id: 'F-P25', code: 'P25', name: 'Warm White', material: 'METAL', textureUrl: 't://p25' },
@@ -146,6 +150,11 @@ framings.forEach((answers, fi) => {
         const firm = Math.round((hq.grandTotal - [...hq.priced.lines, ...hq.extraLines, ...hq.trvLines].filter(l => review(l.source)).reduce((n, l) => n + l.total, 0)) * 100) / 100;
         if (!linesOk || view.price.total !== firm || view.price.level !== 'FAB_RETAIL' || view.price.totalForAll !== Math.round(firm * state.qty * 100) / 100) { t.moneyDiffer++; if (first.length < 3) first.push(`money #${fi}.${v}`); }
         if (view.price.hasReview) t.onReview++;
+        // the "priced on review" mark: a line the customer sees with no firm price, or a hidden part with money on it — never a hidden $0 part
+        const wantReview = [...hq.priced.lines, ...hq.extraLines.filter((l) => Number((hq.extras.find((x) => x.code === l.partId && (x.slot || '') === (l.slot || '')) || {}).qty) > 0), ...hq.trvLines].some((l) => review(l.source) && (!l.hidden || Number(l.total) !== 0));
+        if (view.price.hasReview !== wantReview) { t.moneyDiffer++; if (first.length < 3) first.push(`review mark #${fi}.${v}`); }
+        if (hq.priced.lines.some((l) => l.hidden && review(l.source) && Number(l.total) === 0)) t.hiddenNoPrice = (t.hiddenNoPrice || 0) + 1;
+        if (hq.priced.lines.some((l) => l.hidden && review(l.source) && Number(l.total) !== 0)) t.hiddenPlaceholder = (t.hiddenPlaceholder || 0) + 1;
         if (hq.priced.lines.some(l => l.hidden && l.total > 0)) { t.hiddenBilled++; if (view.price.lines.some(l => l.code === 'SCREW-PACK')) { t.moneyDiffer++; first.push(`hidden shown #${fi}.${v}`); } }
         if (view.price.lines.some(l => l.added)) t.splice++;
         // the wall: nothing of a record, a pin, a cost or another customer's row

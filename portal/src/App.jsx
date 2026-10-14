@@ -14,6 +14,9 @@ const Policies = lazy(() => import('./Policies.jsx'));
 const Pay = lazy(() => import('./Pay.jsx'));
 // Signed-in customers: what is owed, pay it, and keep cards for next time (the gateway's vault).
 const Payments = lazy(() => import('./Payments.jsx'));
+// The configurator, on HQ's own engine and drawn with HQ's own drawing code (the rebuild, step 4 — 2026-10-14). Its tab
+// shows only for a login with a product to configure (Portal Access: live, or preview for a login ticked for previews).
+const Configure = lazy(() => import('./Configure.jsx'));
 
 const fmtMoney = (v) => (v === null || v === undefined) ? '' :
   Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -229,14 +232,13 @@ const Orders = () => {
   );
 };
 
-// THE SHOWROOM AND MEASURE & FIT ARE OFF THE TAB BAR (Stuart 2026-10-12: "go ahead and take it down
-// and we work on new one aligned with new cpq engine/tag system, the older can be totally scraped").
-// Both ran on the OLD step configurator — Configurator.jsx walking flow steps, priced by
-// functions/portalEngine.js — while HQ quotes on the tag engine, so the portal offered finishes and
-// prices HQ would not. They come back as ONE configurator on the engine HQ itself runs; until then
-// neither is imported here, so neither is in the bundle a customer loads.
+// THE OLD SHOWROOM AND MEASURE & FIT ARE GONE (Stuart 2026-10-12: "go ahead and take it down and we work on new one
+// aligned with new cpq engine/tag system, the older can be totally scraped" · 10-14: "yes remove the old"). They ran the
+// OLD step configurator while HQ quotes on the tag engine. CONFIGURE replaces them: ONE configurator on the engine HQ
+// itself runs, listed only when the login has a product to configure.
 const TABS = [
   { id: 'orders', label: 'Orders & Quotes' },
+  { id: 'configure', label: 'Configure', needsProducts: true },
   { id: 'payments', label: 'Payments' },
   { id: 'quickship', label: 'Quick Ship' },
   { id: 'gallery', label: 'Gallery' },
@@ -246,6 +248,15 @@ const TABS = [
 const Dashboard = ({ user }) => {
   const [tab, setTab] = useState('orders');
   const [branding, setBranding] = useState(null);
+  // The products this login may configure — asked once; no products (or no configurator yet) means no Configure tab.
+  const [configFlows, setConfigFlows] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    httpsCallable(functions, 'portalConfigFlows')()
+      .then((r) => { if (alive) setConfigFlows((r.data && r.data.flows) || []); })
+      .catch(() => { if (alive) setConfigFlows([]); });
+    return () => { alive = false; };
+  }, []);
   // Branding is cosmetic — a failure here must never keep the portal from loading.
   useEffect(() => {
     let alive = true;
@@ -255,14 +266,19 @@ const Dashboard = ({ user }) => {
     return () => { alive = false; };
   }, []);
   return (
-    <div className="shell">
+    <div className={`shell${tab === 'configure' ? ' wide' : ''}`}>
       <Header user={user} branding={branding} />
       <nav className="tabs">
-        {TABS.map((t) => (
+        {TABS.filter((t) => !t.needsProducts || (configFlows && configFlows.length)).map((t) => (
           <button key={t.id} className={`tab${tab === t.id ? ' active' : ''}`} onClick={() => setTab(t.id)}>{t.label}</button>
         ))}
       </nav>
       {tab === 'orders' && <Orders />}
+      {tab === 'configure' && (
+        <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading the configurator…</div>}>
+          <Configure flows={configFlows || []} />
+        </Suspense>
+      )}
       {tab === 'quickship' && (
         <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading the stock counter…</div>}>
           <QuickShip />
