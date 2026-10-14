@@ -160,12 +160,18 @@ export const fetchStockForOrder = async (codes, locationId, soNsId) => {
 
 // The unit the APP believes an item is counted in. Unset means eaches — every screen has always
 // assumed eaches, so that IS the app's position until an operator aligns it.
-export const appUnitOf = (part) => String(part?.manufacturingSpecs?.stockUnit || 'EA').toUpperCase();
+// A running-yard item (the Uniquity fabrics carry uom RY) is counted in yards — NetSuite says YD; the two agree.
+const YD_ALIASES = ['YD', 'YARD', 'YARDS', 'RY'];
+export const appUnitOf = (part) => {
+    const u = String(part?.manufacturingSpecs?.stockUnit || part?.manufacturingSpecs?.uom || 'EA').toUpperCase();
+    return YD_ALIASES.includes(u) ? 'YD' : u;
+};
 const EA_ALIASES = ['EA', 'EACH', 'EACHES'];
 export const unitsDisagree = (nsUnit, appUnit) => {
     if (!nsUnit) return false;
     const a = String(appUnit || 'EA').toUpperCase(), n = String(nsUnit).toUpperCase();
     if (a === n) return false;
+    if (YD_ALIASES.includes(a) && YD_ALIASES.includes(n)) return false;
     return !(EA_ALIASES.includes(a) && EA_ALIASES.includes(n));
 };
 
@@ -468,6 +474,11 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
             }
         }
 
+        // A CUSTOM PILLOW (Stuart 2026-10-11, rule 3): NO NetSuite work order — the sales order is the record; the fabric,
+        // insert and zipper are its $0 lines, relieved when it ships; the sewing document is the app's own.
+        if (p.sew) {
+            return { ...p, components, holds, nsPlan: { flow: 'SEW', note: `No NetSuite work order for a pillow — the sales order is the record; its fabric, insert and zipper are the $0 lines beneath it. ONE sewing document per row goes to Stitch & Sew.` } };
+        }
         if (p.rider) {
             return { ...p, components, holds, nsPlan: { flow: 'RIDER', note: `Fabrication on its pole — rides the shop's cut list; nothing to pull or order.` } };
         }

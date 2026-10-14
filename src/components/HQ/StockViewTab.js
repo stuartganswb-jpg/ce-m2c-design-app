@@ -3095,7 +3095,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         return (
                                                             <div key={li} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 16px', padding: '10px 18px', borderBottom: '1px solid var(--paper-2)' }}>
                                                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--ink)', minWidth: '180px' }}>{l.erp} <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}>× {l.qty}</span></span>
-                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 700, color: '#8f6f3e' }}>{fin ? `FINISH: ${fin}` : '⚠ NO FINISH RECORDED'}</span>
+                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 700, color: '#8f6f3e' }}>{fin ? `FINISH: ${fin}` : (l.pillow || String(l.madeToOrder || '').toUpperCase() === 'SEW') ? '🧵 STITCH & SEW' : '⚠ NO FINISH RECORDED'}</span>
                                                                 <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', flex: 1, minWidth: '160px' }}>{l.name || ''}</span>
                                                                 {link ? (
                                                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', padding: '4px 9px', border: '1px solid #3a7d44', color: '#3a7d44', whiteSpace: 'nowrap' }}>
@@ -4714,7 +4714,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     {j.aliasNote && <span style={{ ...mono9, color: 'var(--brass)', marginLeft: '8px' }}>🔗 {j.aliasNote}</span>}
                                                 </span>
                                                 <span style={{ ...mono9, color: j.nsPlan.flow === 'FLOW2' ? '#3a7d44' : 'var(--brass)' }}>
-                                                    {j.nsPlan.flow === 'FLOW2' ? '🏭 NS WORK ORDER OPENS FOR THE FINISHED ITEM' : j.nsPlan.flow === 'PO' ? '🧾 BOUGHT — VENDOR PO IS THE RECORD' : j.nsPlan.baseAssemblyInternalId ? `🏭 TOP-LEVEL NS WO OPENS ON ${j.nsPlan.baseErp}` : 'SO = NETSUITE RECORD (no finished assembly)'}
+                                                    {j.nsPlan.flow === 'SEW' ? '🧵 STITCH & SEW — NO NETSUITE WORK ORDER' : j.nsPlan.flow === 'FLOW2' ? '🏭 NS WORK ORDER OPENS FOR THE FINISHED ITEM' : j.nsPlan.flow === 'PO' ? '🧾 BOUGHT — VENDOR PO IS THE RECORD' : j.nsPlan.baseAssemblyInternalId ? `🏭 TOP-LEVEL NS WO OPENS ON ${j.nsPlan.baseErp}` : 'SO = NETSUITE RECORD (no finished assembly)'}
                                                 </span>
                                             </div>
                                             <div style={{ padding: '4px 16px 10px', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>{j.nsPlan.note}</div>

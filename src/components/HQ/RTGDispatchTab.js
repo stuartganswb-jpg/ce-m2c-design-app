@@ -1384,7 +1384,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             </span>
         );
     };
-    const dispatchedChip = (o) => [o.pushedToFinishing ? 'FINISHING ✓' : null, o.pushedToShop ? 'SHOP ✓' : null].filter(Boolean).join('  ·  ') || 'SENT';
+    const dispatchedChip = (o) => [o.pushedToFinishing ? (String(o.division || '').toUpperCase() === 'SEW' ? 'STITCH & SEW ✓' : 'FINISHING ✓') : null, o.pushedToShop ? 'SHOP ✓' : null].filter(Boolean).join('  ·  ') || 'SENT';   // a sewing document names its own floor (S7, 2026-10-14)
     const whenStr = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
 
     // ── THE MORNING STOCK REFRESH (Stuart 2026-09-23) ────────────────────────────────────
