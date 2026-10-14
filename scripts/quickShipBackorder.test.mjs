@@ -17,6 +17,7 @@ const lines = [
     { erp: 'HCUMP610', name: '6ft pole', eachQty: 12, qty: 2, perFoot: true, feetPer: 6 },        // per foot: pulled as PIECES
     { erp: 'HCUMB410', name: 'Raw bracket', eachQty: 6, qty: 6, toBeFinished: true, finishCode: 'CP' },   // made to order, painted
     { erp: 'HCUFN1', name: 'Finial to plate', eachQty: 2, qty: 2, toBeFinished: true, finishCode: 'EP4', finishOutsourced: true },
+    { erp: 'CUSTOM PILLOW', name: 'Pillow with customized options', eachQty: 1, qty: 1, pillow: { requestId: 'COUNTER1', line: 0, madeToOrder: 'SEW' }, madeToOrder: 'SEW' },   // a made-to-order pillow holder: sewn, never pulled
     { erp: '', name: 'blank', eachQty: 1 },
     { erp: 'ZERO', name: 'zero qty', eachQty: 0 },
 ];

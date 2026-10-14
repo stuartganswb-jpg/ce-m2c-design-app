@@ -11,6 +11,7 @@ import { coverCodesOf } from './backorder.js';
 import { isOutsourcedFinishCode } from './finishRouting.js';
 import { finishedCodeOf } from './subFinish.js';
 import { isKitLine } from './itemKit.js';
+import { isSewLine } from './sewRouteShape.js';
 
 const num = (v) => Number(v) || 0;
 
@@ -24,7 +25,10 @@ export function quickShipPullLines(lines = [], trvDocLines = []) {
     const out = [];
     (lines || []).forEach(l => {
         // A KIT LINE is sold, never stocked or picked — its PARTS are what the shelf is checked for (Shared/itemKit).
-        if (!l || !l.erp || isKitLine(l)) return;
+        // A MADE-TO-ORDER PILLOW HOLDER (Shared/sewRouteShape.isSewLine) the same: it is sewn, never pulled — the first
+        // live counter order (2026-10-14, SOUNIQ-3985) read its two CUSTOM PILLOW holders as painted stock parts with
+        // none on hand and wrote two false TRUE BACKORDERS; its $0 fabric / insert lines beneath are the pull.
+        if (!l || !l.erp || isKitLine(l) || isSewLine(l)) return;
         const qty = l.perFoot ? num(l.qty) : num(l.eachQty != null ? l.eachQty : l.qty);
         if (qty <= 0) return;
         // A TO-BE-FINISHED LINE IS CHECKED AS THE PIECE IT BECOMES (Stuart 2026-09-27): its finished code
