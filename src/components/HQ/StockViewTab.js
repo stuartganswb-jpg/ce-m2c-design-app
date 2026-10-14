@@ -2399,7 +2399,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             if (pl && pl.door === 'KIT') { addLog(`🧰 ${pl.erp}: a kit whose parts are not on the order — re-read the lines (10.5) or enter it again (tab 7).`, 'warn'); return; }
             // A stock colour (the shelf first, else painted) is planned from its base item — its /C record need not exist.
             const door = pl && (pl.part || pl.door === 'STOCK_FIRST') && pl.finish ? pl.door : '';
-            if (door) reviewable.push({ so: w.so, l: w.l, lineIdx: pl.lineIdx, buy: door === 'BUY', stock: door === 'STOCK', stockFirst: door === 'STOCK_FIRST', rider: door === 'RIDER', division: pl.division, finish: pl.finish, ...(pl.linePatch ? { linePatch: pl.linePatch } : {}) }); else direct.push(w);
+            if (door) reviewable.push({ so: w.so, l: w.l, lineIdx: pl.lineIdx, buy: door === 'BUY', stock: door === 'STOCK', stockFirst: door === 'STOCK_FIRST', rider: door === 'RIDER', sew: door === 'SEW', division: pl.division, finish: pl.finish, ...(pl.linePatch ? { linePatch: pl.linePatch } : {}) }); else direct.push(w);
         });
         for (const w of direct) {
             // A BOTH-sourced line whose operator picks "make" defers into the same batch review.
@@ -2495,7 +2495,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const door = pl ? pl.door : oeDoorOf(part, finish, hqParts);
             // CPQ's rules for the line ride with it (a track's sub finish and deducted cut — Shared/subFinish), and its
             // position on the order, since the patched line is a copy.
-            const carry = { rider: door === 'RIDER', division: pl ? pl.division : undefined, finish, ...(pl ? { lineIdx: pl.lineIdx } : {}), ...(pl && pl.linePatch ? { linePatch: pl.linePatch } : {}) };
+            // A CUSTOM PILLOW (door SEW) is planned from the parts beneath its holder (Shared/oeGenerate.buildOeJobs reads `sew`) — the same flag RTG's automatic start sets (S7, 2026-10-14)
+            const carry = { rider: door === 'RIDER', sew: door === 'SEW', division: pl ? pl.division : undefined, finish, ...(pl ? { lineIdx: pl.lineIdx } : {}), ...(pl && pl.linePatch ? { linePatch: pl.linePatch } : {}) };
             let wantPo = door === 'BUY';
             if (door === 'ASK') wantPo = window.confirm(`${erp} is flagged ⚖ BOTH (make and buy).\n\nOK = vendor PO to ${vendorName || 'its vendor'} · Cancel = finishing work order.`);
             if (wantPo) {
