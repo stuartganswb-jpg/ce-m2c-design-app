@@ -6,6 +6,7 @@ import {
     capacityKey, WILDCARD, SIZE_CAPACITY,
     workOrderPartLines, packFootprint, sledsFromFootprint, batchMachineMins,
 } from '../Shared/finishingTime';
+import { BOOTH_COAT_MINS, BOOTH_LOAD_PCS } from '../Shared/finishingPlan';
 
 // Finishing-side production-time configuration. Two non-overlapping inputs live here:
 //   1) AI Production Timers (fin_config/settings) = minutes PER STEP (spin setup, spray, oven,
@@ -31,6 +32,10 @@ const ProductionTimes = ({ sysConfig = {}, capacityMatrix = {}, recipes = {}, wo
         handSmallMins: sysConfig?.handSmallMins ?? 1.35,
         handPoleMins: sysConfig?.handPoleMins ?? 10,
         poleMins: sysConfig?.poleMins ?? 5,
+        // THE BOOTH, FOR SMALL PARTS (Stuart 2026-10-13: "10-30 parts take 15 minutes each coat on the recipe plus same bake
+        // time as the sled") — the schedule counts a booth job in loads of this many pieces, each coat this long plus a bake.
+        boothCoatMins: sysConfig?.boothCoatMins ?? BOOTH_COAT_MINS,
+        boothLoadPcs: sysConfig?.boothLoadPcs ?? BOOTH_LOAD_PCS,
         potLifeMins: sysConfig?.potLifeMins ?? 189,
         recoatMins: sysConfig?.recoatMins ?? 90,
     });
@@ -125,6 +130,8 @@ const ProductionTimes = ({ sysConfig = {}, capacityMatrix = {}, recipes = {}, wo
                     <div><label style={labelStyle}>Hand Finish (Small)</label><input type="number" step="0.1" value={config.handSmallMins} onChange={e => setConfig({ ...config, handSmallMins: Number(e.target.value) })} style={inputStyle} /></div>
                     <div><label style={labelStyle}>Hand Finish (Pole)</label><input type="number" step="0.1" value={config.handPoleMins} onChange={e => setConfig({ ...config, handPoleMins: Number(e.target.value) })} style={inputStyle} /></div>
                     <div><label style={labelStyle}>Pole Paint (Per Piece)</label><input type="number" step="0.1" value={config.poleMins} onChange={e => setConfig({ ...config, poleMins: Number(e.target.value) })} style={inputStyle} /></div>
+                    <div><label style={labelStyle} title="Small parts sprayed in the booth: the minutes one load takes on each sprayed coat, before its bake. The schedule under the Setup Queue reads it.">Booth — Small Parts (per coat, per load)</label><input type="number" step="0.1" value={config.boothCoatMins} onChange={e => setConfig({ ...config, boothCoatMins: Number(e.target.value) })} style={inputStyle} /></div>
+                    <div><label style={labelStyle} title="How many small parts one booth load holds. A bigger job is counted in loads of this size.">Booth — Pieces per Load</label><input type="number" step="1" min="1" value={config.boothLoadPcs} onChange={e => setConfig({ ...config, boothLoadPcs: Number(e.target.value) })} style={inputStyle} /></div>
                     <div><label style={{ ...labelStyle, color: 'var(--brass)' }}>Pot Life</label><input type="number" step="1" value={config.potLifeMins} onChange={e => setConfig({ ...config, potLifeMins: Number(e.target.value) })} style={inputStyle} /></div>
                     <div><label style={{ ...labelStyle, color: '#d9534f' }}>Recoat Window</label><input type="number" step="1" value={config.recoatMins} onChange={e => setConfig({ ...config, recoatMins: Number(e.target.value) })} style={inputStyle} /></div>
                     <button onClick={saveTimers} style={{ ...btnStyle, gridColumn: '1 / -1', marginTop: '8px' }}>Save Timers</button>

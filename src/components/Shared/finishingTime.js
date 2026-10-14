@@ -62,9 +62,13 @@ export function machineLoadPlan(matrix, size, type, qty) {
 // each partsList line; stock/simple WOs use the WO-level size + type × totalParts.
 export function workOrderPartLines(wo) {
   if (!wo) return [];
-  const list = Array.isArray(wo.partsList) ? wo.partsList.filter(p => p && (Number(p.qty) || 0) > 0) : [];
+  // BOTH partsList SPELLINGS, AND PIECES FIRST (2026-10-13): a stock run, a paint run and an Order Entry pair write
+  // `quantity`, the CPQ split `qty`, and a rod sold by the foot carries its pieces in `pcs` — read as the writers count
+  // them (Shared/rowPairShape.docStreamsOf). On `qty` alone every line that was not a CPQ split's counted for nothing.
+  const pcsOf = (p) => Number(p.pcs) || Number(p.quantity) || Number(p.qty) || 0;
+  const list = Array.isArray(wo.partsList) ? wo.partsList.filter(p => p && pcsOf(p) > 0) : [];
   if (list.some(p => p.paintSize || p.productType)) {
-    return list.map(p => ({ size: p.paintSize, type: p.productType, qty: Number(p.qty) || 0 }));
+    return list.map(p => ({ size: p.paintSize, type: p.productType, qty: pcsOf(p) }));
   }
   const qty = Number(wo.totalParts) || 0;
   return qty > 0 ? [{ size: wo.paintSize, type: wo.productType, qty }] : [];
@@ -116,20 +120,6 @@ export function estimateWorkOrder(wo, recipesById = {}, matrix = {}, timers = {}
   const mins = batches * batchMachineMins(recipe, timers) + handMins;
   return { batches, parts, mins, resolved: resolved && !!recipe };
 }
-
-const PLANNABLE_PHASES = ['Setup', 'setup', 'Painting'];
-const sizeMixOf = (lines) => lines.reduce((m, l) => {
-  const s = String(l.size || '').toUpperCase();
-  if (['S', 'M', 'L'].includes(s)) m[s] += (Number(l.qty) || 0);
-  return m;
-}, { S: 0, M: 0, L: 0 });
-const isCustomWO = (w) => (w.orderType || '') === 'sales' || !!w.salesOrderId;
-
-// Is a WO actually READY to schedule onto the floor? A sales/custom order is ready only once Pick/Pack
-// has scan-matched its two halves (stagingStatus 'MATCHED'); stock builds + stock poles skip that
-// staging and are immediately schedulable. Not-ready sales orders still SHOW in the plan, tagged
-// "In Set Up", but don't count toward the runnable schedule.
-const isReadyWO = (w) => w.stagingStatus === 'MATCHED' || ((w.orderType || '') !== 'sales' && !w.salesOrderId);
 
 // Resolve a recipe by key, tolerant of the "CODE - Name" display string RTG stamps onto a WO's
 // `recipe` field (the Recipes tab keys docs by CODE only). Tries the exact key, then the code
@@ -246,138 +236,9 @@ export function streamRecipeStepCount(recipes, key, stream) {
   return (r && Array.isArray(r.steps) && r.steps.length) || 0;
 }
 
-// Price one batch (WOs that share a recipe + a sled pool) from capacity + timers.
-function priceBatch(recipeCode, wos, kind, recipes, matrix, timers) {
-  const recipe = resolveRecipe(recipes, recipeCode);
-  const lines = wos.flatMap(workOrderPartLines);
-  const { footprint, parts, resolved } = packFootprint(lines, matrix);
-  const sleds = sledsFromFootprint(footprint, parts);
-  const mix = sizeMixOf(lines);
-  const sprayedSteps = recipe && Array.isArray(recipe.steps) ? recipe.steps.filter(s => s.app === 'Sprayed').length : 0;
-  const hasHand = !!(recipe && Array.isArray(recipe.steps) && recipe.steps.some(s => s.app === 'Hand Applied'));
-  const handMins = hasHand ? parts * (Number(timers.handSmallMins) || 1.35) : 0;
-  const machineMins = sleds * batchMachineMins(recipe, timers) + handMins;
-  const ovenMins = sleds * sprayedSteps * (Number(timers.ovenMins) || 10);
-  const dates = wos.map(w => w.reqDate).filter(Boolean).sort();
-  return {
-    kind, recipe: recipeCode, wos, woCount: wos.length, parts, sleds, footprint,
-    sizeMix: mix, distinctSizes: ['S', 'M', 'L'].filter(s => mix[s] > 0).length,
-    sprayedSteps, hasHand, reqDate: dates[0] || null,
-    machineMins, handMins, ovenMins, resolved: resolved && !!recipe,
-  };
-}
+// Poles cure 8 to a rack — the pole track's capacity (Shared/finishingPlan prices the racks).
+export const POLE_RACK = 8;
 
-export const POLE_RACK = 8; // poles cure 8 per rack
-
-// A WO whose part is a POLE. Stocked poles (ordered via Stock View) carry a POLE productType; manual
-// pole orders use type:'Poles'. Custom poles are fabricated on the Shop floor and never reach
-// finishing, so finishing pole work is the STOCKED poles only.
-const isPoleWO = (wo) => /pole/i.test(String(wo.productType || '')) || wo.type === 'Poles';
-// Poles a WO contributes to the pole rack: a pole WO's whole qty, else its explicit pole field.
-const poleQtyOf = (wo) => isPoleWO(wo) ? (Number(wo.totalParts) || 0) : (Number(wo.poles?.qty) || Number(wo.totalPoles) || 0);
-
-// Price a pole batch (same-recipe poles pooled), racked 8 at a time. Poles spray on the pole rack and
-// bake in the shared oven (one rack load per sprayed step), then hand-finish.
-function pricePoleBatch(recipeCode, wos, recipes, timers) {
-  const recipe = resolveRecipe(recipes, recipeCode);
-  const poles = wos.reduce((s, w) => s + poleQtyOf(w), 0);
-  const racks = poles > 0 ? Math.ceil(poles / POLE_RACK) : 0;
-  const sprayedSteps = recipe && Array.isArray(recipe.steps) ? recipe.steps.filter(s => s.app === 'Sprayed').length : 0;
-  const hasHand = !!(recipe && Array.isArray(recipe.steps) && recipe.steps.some(s => s.app === 'Hand Applied'));
-  const sprayMins = poles * (Number(timers.poleMins) || 5) * sprayedSteps;
-  const ovenMins = racks * sprayedSteps * (Number(timers.ovenMins) || 10);
-  const handMins = hasHand ? poles * (Number(timers.handPoleMins) || 10) : 0;
-  const dates = wos.map(w => w.reqDate).filter(Boolean).sort();
-  return {
-    kind: 'pole', recipe: recipeCode, wos, woCount: wos.length, poles, racks,
-    sprayedSteps, hasHand, reqDate: dates[0] || null, sprayMins, ovenMins, handMins,
-    resolved: !!recipe,
-  };
-}
-
-// Build a sequenced finishing plan. Stock and custom are scheduled DIFFERENTLY (sleds only ever hold
-// one recipe either way):
-//   • CUSTOM — a sales order is a mix of different part sizes in one finish. Each custom WO is its own
-//     batch, sequenced by due date (the customer commitment).
-//   • STOCK — bulk qty of one item in one finish. Pooled by recipe into filler batches that run after
-//     the dated custom work / top off the machine when there's headroom.
-// Pure function. opts.dailyMins = a shift's oven minutes (capacity denominator).
-export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, timers = {}, opts = {}) {
-  const plannable = workOrders.filter(w => PLANNABLE_PHASES.includes(w.currentPhase));
-  const sledWOs = plannable.filter(w => !isPoleWO(w));   // small parts (sleds)
-  const customWOs = sledWOs.filter(isCustomWO);
-  const stockWOs = sledWOs.filter(w => !isCustomWO(w));
-
-  // Custom small parts: one batch per order. Scan-matched (ready) first, then by due date; not-yet-
-  // matched orders stay visible tagged "In Set Up".
-  const customBatches = customWOs
-    .map(wo => {
-      const b = priceBatch(wo.recipe || '(no recipe)', [wo], 'custom', recipes, matrix, timers);
-      b.ready = isReadyWO(wo);
-      b.status = b.ready ? 'SCHEDULED' : 'IN SET UP';
-      return b;
-    })
-    .sort((a, b) => {
-      if (a.ready !== b.ready) return a.ready ? -1 : 1;
-      return (a.reqDate || '9999-12-31') < (b.reqDate || '9999-12-31') ? -1
-        : (a.reqDate || '9999-12-31') > (b.reqDate || '9999-12-31') ? 1 : 0;
-    });
-
-  // Stock small parts: pooled per recipe, largest first. Always ready (skip pick/pack staging).
-  const stockGroups = {};
-  stockWOs.forEach(wo => { const r = wo.recipe || '(no recipe)'; (stockGroups[r] = stockGroups[r] || []).push(wo); });
-  const stockBatches = Object.entries(stockGroups)
-    .map(([r, wos]) => { const b = priceBatch(r, wos, 'stock', recipes, matrix, timers); b.ready = true; b.status = 'SCHEDULED'; return b; })
-    .sort((a, b) => b.parts - a.parts);
-
-  // Poles (stocked, from Stock View): pooled per recipe, racked 8 at a time. Always ready —
-  // no custom-fab gate, since custom poles never reach finishing.
-  const poleGroups = {};
-  plannable.forEach(wo => { if (poleQtyOf(wo) > 0) { const r = wo.recipe || '(no recipe)'; (poleGroups[r] = poleGroups[r] || []).push(wo); } });
-  const poleBatches = Object.entries(poleGroups)
-    .map(([r, wos]) => { const b = pricePoleBatch(r, wos, recipes, timers); b.ready = true; b.status = 'SCHEDULED'; return b; })
-    .sort((a, b) => b.poles - a.poles);
-
-  // The runnable schedule = READY batches only. "In Set Up" customs still display, but don't count
-  // toward sleds/oven/time or take a run-sequence slot.
-  const sledScheduled = [...customBatches.filter(b => b.ready), ...stockBatches];
-  const setupBatches = customBatches.filter(b => !b.ready);
-  let seq = 0;
-  [...sledScheduled, ...poleBatches].forEach(b => { b.seq = ++seq; });
-  setupBatches.forEach(b => { b.seq = null; });
-
-  const batches = [...customBatches, ...stockBatches];
-  const sum = (arr, k) => arr.reduce((s, b) => s + b[k], 0);
-  const totalMachineMins = sum(sledScheduled, 'machineMins');
-  const sledOvenMins = sum(sledScheduled, 'ovenMins');  // sled bakes only (ready work)
-  const totalSleds = sum(sledScheduled, 'sleds');
-  const totalParts = sum(sledScheduled, 'parts');
-  const smallHandMins = sum(sledScheduled, 'handMins'); // small-part hand finish (ready work)
-  const setupCount = setupBatches.length;
-
-  // Poles share the ONE oven with the sleds (the bottleneck); small-part hand-finish is done during
-  // the pole-oven window (sleds can't cure then anyway).
-  const poleCount = sum(poleBatches, 'poles');
-  const poleRacks = sum(poleBatches, 'racks');
-  const poleSprayMins = sum(poleBatches, 'sprayMins');
-  const poleOvenMins = sum(poleBatches, 'ovenMins');
-  const poleHandMins = sum(poleBatches, 'handMins');
-
-  const ovenTotalMins = sledOvenMins + poleOvenMins;        // serialized through the single oven
-  const totalHandMins = smallHandMins + poleHandMins;
-  const handOverlapMins = Math.min(totalHandMins, poleOvenMins); // hand-finish hidden in pole-oven window
-  const handBeyondMins = Math.max(0, totalHandMins - poleOvenMins);
-
-  const dailyMins = Number(opts.dailyMins) || Number(timers.activeFloorDailyMinutes) || 480;
-  // Wall-clock: the oven is the spine (sled + pole bakes serialized); sled setup/spray pipelines under
-  // it, and hand-finish overlaps the pole-oven window — only hand beyond that window adds on.
-  const wallMins = ovenTotalMins + handBeyondMins;
-
-  return {
-    batches, customBatches, stockBatches, poleBatches,
-    totalMachineMins, totalSleds, totalParts, setupCount,
-    sledOvenMins, poleOvenMins, ovenTotalMins,
-    poleCount, poleRacks, poleSprayMins, smallHandMins, poleHandMins, totalHandMins, handOverlapMins,
-    dailyMins, wallMins, days: wallMins / dailyMins,
-  };
-}
+// THE SCHEDULE ITSELF MOVED (2026-10-13) → Shared/finishingPlan.buildFinishingPlan: each track on its own recipe, only
+// what is left, spin or booth, and the floor's own word for ready. This file keeps what it is named for — capacity,
+// the per-sled machine time and how a recipe code is resolved.

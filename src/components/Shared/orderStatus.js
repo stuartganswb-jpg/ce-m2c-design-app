@@ -104,7 +104,7 @@ export const stagingMatched = (wo) => !!wo && wo.stagingStatus === 'MATCHED';
 // STAGE TO FLOOR WAITS ON THE MATCH (Stuart 2026-09-23: Base Front 1 was staged with no pick and
 // no match). A sales document reaches the finishing floor only through the WMS staging handshake;
 // the card used to offer Stage to Floor regardless. Stock builds and stock poles skip the match,
-// exactly as the scheduler (finishingTime.isReadyWO) has always treated them.
+// as the schedule always treated them — and the schedule asks this very sentence now (Shared/finishingPlan.scheduleWaitOf).
 // Returns the sentence for the card, or '' when it may be staged.
 export const stageWaitsOnMatch = (wo) => {
     if (!isSalesDoc(wo) || stagingMatched(wo)) return '';
