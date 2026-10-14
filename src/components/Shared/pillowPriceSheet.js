@@ -17,6 +17,7 @@
 // Pure: no imports, no Firestore. Proven by scripts/pillowPriceSheet.test.mjs.
 
 import { sizeKeyOf, DEFAULT_PILLOW_PRICING } from './pillowPricing.js';
+import { BUILT_IN_TREATMENT_DETAILS, TREATMENT_KIND } from './pillowTreatments.js';
 
 const up = (v) => String(v === null || v === undefined ? '' : v).trim().toUpperCase();
 const num = (v) => {
@@ -161,13 +162,14 @@ export const masterListDiffOf = (existingList, parsed) => {
 // operator adds to, keyed by a code the board produces (FLANGE / WELT from the edge choice,
 // OUTER_TRIM, FRINGE_SEAM) or a new one; `kind` says where the board offers it.
 
-export const DETAIL_KINDS = ['EDGE', 'TRIM', 'ADDON'];   // EDGE = the edge dropdown · TRIM = trim yardage · ADDON = a tickable extra
+export const DETAIL_KINDS = ['EDGE', 'TRIM', 'ADDON', TREATMENT_KIND];   // EDGE = the edge dropdown · TRIM = trim yardage · ADDON = a tickable extra · TREATMENT = a stitch / leather (4 sides, down the middle, on a seam)
 export const DETAIL_PER = ['EACH', 'YARD'];
 export const BUILT_IN_DETAILS = [
     { code: 'FLANGE', label: 'Flange edge', kind: 'EDGE', per: 'EACH' },
     { code: 'WELT', label: 'Welt / cord edge', kind: 'EDGE', per: 'EACH' },
     { code: 'OUTER_TRIM', label: 'Trim on the outer edges', kind: 'TRIM', per: 'YARD' },
     { code: 'FRINGE_SEAM', label: 'Fringe laid on a seam', kind: 'TRIM', per: 'YARD' },
+    ...BUILT_IN_TREATMENT_DETAILS,   // the show upgrades (Stuart 2026-10-14: $50 stitches, $65 leather welts — typed here)
 ];
 
 /** details map → editor rows (built-ins first, blanks for the ones the document has no price for). */

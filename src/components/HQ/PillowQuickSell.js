@@ -16,7 +16,8 @@ import { db } from '../../firebase';
 import { doc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 import { DEFAULT_PILLOW_PRICING, PILLOW_PRICING_DOC } from '../Shared/pillowPricing';
 import { colourwaysOf, tilePictureOf, fabricCodeOf } from '../Shared/pillowCatalog';
-import { quickSellSizesOf, quickSellEdgesOf, quickSellPlanOf, quickSellTilesOf, honestThrowsOf } from '../Shared/pillowQuickSell';
+import { quickSellSizesOf, quickSellEdgesOf, quickSellPlanOf, quickSellTilesOf, honestThrowsOf, quickSellTreatmentsOf } from '../Shared/pillowQuickSell';
+import { PLACEMENTS, coloursOf } from '../Shared/pillowTreatments';   // the show upgrades: stitch / leather, 4 sides or down the middle, the colour
 import { isTrimItem } from '../Shared/pillowFabricSheet';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
@@ -38,6 +39,9 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
     const [variant, setVariant] = useState(fixedMode === 'SAMPLE' ? 'S' : 'STD');
     const [edge, setEdge] = useState('NONE');
     const [trimId, setTrimId] = useState('');
+    const [treatment, setTreatment] = useState('');          // '' | a Shared/pillowTreatments code
+    const [placement, setPlacement] = useState('FOUR_SIDES');
+    const [colour, setColour] = useState('');
     const [fill, setFill] = useState('');
     const [qty, setQty] = useState('1');
     const [q, setQ] = useState('');
@@ -55,13 +59,15 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
     const catalog = useMemo(() => colourwaysOf(items), [items]);
     const sizes = useMemo(() => quickSellSizesOf(cfg, catalog), [cfg, catalog]);
     const edges = useMemo(() => quickSellEdgesOf(cfg), [cfg]);
+    const treatments = useMemo(() => quickSellTreatmentsOf(cfg), [cfg]);
+    const colours = useMemo(() => coloursOf(treatment), [treatment]);
     const trims = useMemo(() => items.filter(isTrimItem).sort((a, b) => String(a.legacyErpId || '').localeCompare(String(b.legacyErpId || ''))), [items]);
     const groups = useMemo(() => Object.keys(cfg.fabricGroups || {}).sort((a, b) => ((cfg.fabricGroups[a] || {}).rank || 0) - ((cfg.fabricGroups[b] || {}).rank || 0)), [cfg]);
     const tiles = useMemo(() => quickSellTilesOf(catalog, { q, group, mode }), [catalog, q, group, mode]);
     const cw = cwKey ? catalog.byKey.get(cwKey) || null : null;
     const qtyN = Math.max(1, parseInt(qty, 10) || 1);
     // the price before the shelf is read: the same rule with stock unknown
-    const preview = useMemo(() => (cw ? quickSellPlanOf({ cw, mode, sizeKey, variant, edge, trimId, fill, qty: qtyN, available: null, config: cfg, findPart }) : null), [cw, mode, sizeKey, variant, edge, trimId, fill, qtyN, cfg, findPart]);
+    const preview = useMemo(() => (cw ? quickSellPlanOf({ cw, mode, sizeKey, variant, edge, trimId, fill, treatment, placement, colour, qty: qtyN, available: null, config: cfg, findPart }) : null), [cw, mode, sizeKey, variant, edge, trimId, fill, treatment, placement, colour, qtyN, cfg, findPart]);
     const maxDim = Math.max(1, ...sizes.map(s => Math.max(s.w, s.h)));
     const S = counter ? 1.45 : 1;   // the counter's tiles are for a finger, not a mouse
 
@@ -70,7 +76,7 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
         setBusy(true);
         try {
             let available = null;
-            const plainSku = mode === 'PILLOW' && edge === 'NONE' && !trimId && cw.pillows[sizeKey];
+            const plainSku = mode === 'PILLOW' && edge === 'NONE' && !trimId && !treatment && cw.pillows[sizeKey];
             if (plainSku) {
                 try {
                     const r = await fetchAvailabilityUnits([String(cw.pillows[sizeKey].legacyErpId || cw.pillows[sizeKey].itemId)], BRAND_NETSUITE_MAP.uniquity.location);
@@ -93,7 +99,7 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
                     if (h.pieceYards > 0) addLog(`🧵 ${tCode}: NetSuite ${h.available} less ${h.pieceYards} yd of cuts on the shelf = ${h.whole} whole throw(s).`, 'info');
                 } catch (e) { addLog(`⚠ Shelf read failed for ${throwItem.legacyErpId} (${e.message || e}) — sold as the item, the shelf decides at review.`, 'warn'); }
             }
-            const plan = quickSellPlanOf({ cw, mode, sizeKey, variant, edge, trimId, fill, qty: qtyN, available, config: cfg, findPart });
+            const plan = quickSellPlanOf({ cw, mode, sizeKey, variant, edge, trimId, fill, treatment, placement, colour, qty: qtyN, available, config: cfg, findPart });
             setLast(plan);
             if (!plan.ok) { plan.errors.forEach(e => addLog(`⛔ ${e.message}`, 'error')); setBusy(false); return; }
             plan.warnings.forEach(w => addLog(`⚠ ${w}`, 'warn'));
@@ -143,6 +149,33 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
             </button>
         );
     };
+    // a colour tile: the swatch, the name, the NAU number for leather (Stuart 2026-10-14: the words go on the work order)
+    const colourTile = (c) => {
+        const on = colour === c.name;
+        return (
+            <button key={c.name} onClick={() => setColour(on ? '' : c.name)} title={c.code || c.name}
+                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: counter ? '8px 12px' : '5px 8px', border: `2px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: on ? 'var(--paper-2)' : '#fff', cursor: 'pointer', fontFamily: 'var(--sans)', fontSize: counter ? '0.95rem' : '0.8rem', color: 'var(--ink)' }}>
+                <span style={{ width: counter ? '26px' : '18px', height: counter ? '26px' : '18px', borderRadius: '50%', background: c.hex, border: '1px solid rgba(0,0,0,0.25)', flex: 'none' }} />
+                <span>{c.name}{c.number ? <span style={{ ...mono, marginLeft: '6px' }}>{c.number}</span> : null}</span>
+            </button>
+        );
+    };
+    const treatmentStep = treatments.length > 0 && (
+        <div>
+            <span style={lbl}>4 · Stitch &amp; leather · an upcharge on the pillow, same price every colour · tap again to remove</span>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <button onClick={() => { setTreatment(''); setColour(''); }} style={chip(!treatment, counter)}>None</button>
+                {treatments.map(t => <button key={t.code} onClick={() => { const off = treatment === t.code; setTreatment(off ? '' : t.code); setColour(''); }} style={chip(treatment === t.code, counter)}>{counter ? `${t.glyph} ` : ''}{t.label} {money(t.price)}</button>)}
+            </div>
+            {treatment && (
+                <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'flex-start', marginTop: '10px' }}>
+                    <div><span style={lbl}>Where</span><div style={{ display: 'flex', gap: '6px' }}>{PLACEMENTS.map(p => <button key={p.code} onClick={() => setPlacement(p.code)} style={chip(placement === p.code, counter)}>{p.code === 'FOUR_SIDES' ? '▢ ' : '◫ '}{p.label}</button>)}</div>
+                        {placement === 'MIDDLE' && <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px', maxWidth: '240px' }}>One seam right down the middle, the same fabric both sides and the back.</div>}</div>
+                    <div><span style={lbl}>Colour{colour ? '' : ' · pick one, it goes on the sewing document'}</span><div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', maxWidth: '760px' }}>{colours.map(colourTile)}</div></div>
+                </div>
+            )}
+        </div>
+    );
     const qtyBox = counter
         ? <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <button onClick={() => setQty(String(Math.max(1, qtyN - 1)))} style={{ ...chip(false, true), fontSize: '18px', padding: '10px 18px' }}>−</button>
@@ -160,7 +193,7 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
                 {!fixedMode && (
                     <div style={{ display: 'flex', gap: '6px' }}>
                         <button onClick={() => { setMode('PILLOW'); setCwKey(''); }} style={chip(mode === 'PILLOW', counter)}>Pillow</button>
-                        <button onClick={() => { setMode('THROW'); setCwKey(''); setSizeKey(''); setEdge('NONE'); setTrimId(''); }} style={chip(mode === 'THROW', counter)}>Throw</button>
+                        <button onClick={() => { setMode('THROW'); setCwKey(''); setSizeKey(''); setEdge('NONE'); setTrimId(''); setTreatment(''); setColour(''); }} style={chip(mode === 'THROW', counter)}>Throw</button>
                     </div>
                 )}
                 {!counter && <span style={mono}>{catalog.list.length} colourways · {sizes.length} sizes · a plain pillow on the shelf sells as its item at the chart price, anything else is made to order</span>}
@@ -210,6 +243,7 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
                                 </select></div>)}
                     </div>
                 )}
+                {mode === 'PILLOW' && treatmentStep}
                 {mode === 'THROW' && <div><span style={lbl}>2 · Size</span><div style={{ display: 'flex', gap: '6px' }}>{['STD', 'XL', 'XXL'].map(v => <button key={v} onClick={() => setVariant(v)} disabled={cw && !cw.throws[v]} style={{ ...chip(variant === v, counter), opacity: cw && !cw.throws[v] ? 0.4 : 1 }}>{v === 'STD' ? 'Standard' : v}</button>)}</div></div>}
                 {mode === 'SAMPLE' && <div><span style={lbl}>2 · Size</span><div style={{ display: 'flex', gap: '6px' }}>{[['S', 'Small sample'], ['L', 'Large sample']].map(([v, l]) => <button key={v} onClick={() => setVariant(v)} disabled={cw && !cw.samples[v]} style={{ ...chip(variant === v, counter), opacity: cw && !cw.samples[v] ? 0.4 : 1 }}>{l}</button>)}</div></div>}
                 <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--paper-2)', paddingTop: '12px' }}>

@@ -12,7 +12,8 @@ import { panelsOf } from '../Shared/pillowPanels';
 import { isFabricItem, isTrimItem } from '../Shared/pillowFabricSheet';
 import { isRailroad, fabricWidthOf } from '../Shared/pillowCuts';
 import { saveGuideCapture } from '../Shared/guideCapture';   // the ONE Asset Gallery writer — a photographed fabric files as kind FABRIC
-import { pillowRequestOf } from '../Shared/pillowRequest';   // step 3c: the board → Order Entry (tab 7) as a jobs PILLOW_REQUEST
+import { pillowRequestOf } from '../Shared/pillowRequest';
+import { treatmentsOffered, coloursOf, isTreatmentCode } from '../Shared/pillowTreatments';   // the show upgrades on the board: round the 4 sides, or on any drawn seam (Stuart 2026-10-14)   // step 3c: the board → Order Entry (tab 7) as a jobs PILLOW_REQUEST
 
 // `counter` + `onAddToCart(line)` (the show counter, 2026-10-12): the board inside the counter page — no Vision quote
 // session is needed, the CPQ push is not offered, and "Add to this cart" hands the priced line straight to the cart
@@ -44,6 +45,8 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
       const fromTable = Object.entries(d).filter(([, v]) => String(v.kind || '').toUpperCase() === 'EDGE').map(([code, v]) => ({ code, label: v.label || code }));
       return fromTable.length ? fromTable : (globalLists.flangeStyles || []).filter(x => String(x).toUpperCase() !== 'NONE').map(x => ({ code: String(x).toUpperCase(), label: x }));
   }, [pricing, globalLists.flangeStyles]);
+  // the stitch / leather treatments the price table offers (a blank price = not offered), for the edge and any drawn seam
+  const treatments = useMemo(() => treatmentsOffered(pricing), [pricing]);
   const groupCodes = useMemo(() => Object.entries((pricing && pricing.fabricGroups) || {}).sort((a, b) => (a[1].rank || 0) - (b[1].rank || 0)).map(([code, g]) => ({ code, label: g.label || '' })), [pricing]);
   const onCapturePhoto = (e) => {
       const f = e.target.files && e.target.files[0];
@@ -117,6 +120,7 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
       flangeSize: 0, 
       fill: globalLists.fillTypes?.[0] || 'DOWN', 
       stitch: globalLists.stitchTypes?.[0] || 'STANDARD',
+      edgeTreatment: { code: '', colour: '' },   // a stitch / leather welt round the four sides (Shared/pillowTreatments), beside the edge
       back: { fabricId: '' },
       outerTrim: { trimId: '', top: false, bottom: false, left: false, right: false }
   });
@@ -238,7 +242,7 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
   const onPointerUp = () => {
       setIsPanning(false);
       if (engTool === "seam" && drawStart && drawCurrent && viewMode === 'ENGINEERING') {
-          const newSeam = { id: Date.now(), x1: drawStart.x, y1: drawStart.y, x2: drawCurrent.x, y2: drawCurrent.y, treatment: 'STANDARD', trimId: '' };
+          const newSeam = { id: Date.now(), x1: drawStart.x, y1: drawStart.y, x2: drawCurrent.x, y2: drawCurrent.y, treatment: 'STANDARD', trimId: '', colour: '' };
           setPillowData(prev => ({ ...prev, seams: [...prev.seams, newSeam] }));
           setDrawStart(null); setDrawCurrent(null);
       }
@@ -526,6 +530,26 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                             </div>
                         </div>
                         {isFlange && <div style={{ marginTop: '16px' }}><label style={labelStyle}>Flange Size (Inches)</label><input type="number" step="0.5" value={pillowData.flangeSize} onChange={e => setPillowData({...pillowData, flangeSize: parseFloat(e.target.value)||0})} style={fieldStyle} /></div>}
+                        {treatments.length > 0 && (
+                            <div style={{ display: 'flex', gap: '16px', marginTop: '16px' }}>
+                                <div style={{ flex: 1 }}>
+                                    <label style={labelStyle}>Stitch / leather round the 4 sides</label>
+                                    <select value={(pillowData.edgeTreatment || {}).code || ''} onChange={e => setPillowData({ ...pillowData, edgeTreatment: { code: e.target.value, colour: '' } })} style={fieldStyle}>
+                                        <option value="">NONE</option>
+                                        {treatments.map(t => <option key={t.code} value={t.code}>{t.label} — ${t.price}</option>)}
+                                    </select>
+                                </div>
+                                {(pillowData.edgeTreatment || {}).code && (
+                                    <div style={{ flex: 1 }}>
+                                        <label style={labelStyle}>Colour · on the sewing document</label>
+                                        <select value={pillowData.edgeTreatment.colour || ''} onChange={e => setPillowData({ ...pillowData, edgeTreatment: { ...pillowData.edgeTreatment, colour: e.target.value } })} style={{ ...fieldStyle, border: `1px solid ${pillowData.edgeTreatment.colour ? 'var(--line)' : '#d9534f'}` }}>
+                                            <option value="">-- pick the colour --</option>
+                                            {coloursOf(pillowData.edgeTreatment.code).map(c => <option key={c.name} value={c.name}>{c.name}{c.code ? ` · ${c.code}` : ''}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     <div style={{ background: 'var(--paper)', padding: '20px', border: '1px solid var(--line)' }}>
@@ -597,10 +621,17 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)' }}>Seam {index + 1}</label>
                                         <button onClick={() => removeSeam(seam.id)} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', textDecoration: 'underline' }}>Remove</button>
                                     </div>
-                                    <select value={seam.treatment} onChange={e => updateSeamTreatment(seam.id, 'treatment', e.target.value)} style={{ ...fieldStyle, marginBottom: '12px' }}>
+                                    <select value={seam.treatment} onChange={e => { const v = e.target.value; setPillowData(prev => ({ ...prev, seams: prev.seams.map(s => s.id === seam.id ? { ...s, treatment: v, colour: isTreatmentCode(v) ? (s.colour || '') : '' } : s) })); }} style={{ ...fieldStyle, marginBottom: '12px' }}>
                                         <option value="">-- Select Seam Treatment --</option>
                                         {(globalLists.stitchTypes || []).map(st => <option key={st} value={st}>{st}</option>)}
+                                        {treatments.length > 0 && <optgroup label="Stitch / leather — an upcharge on this seam">{treatments.map(t => <option key={t.code} value={t.code}>{t.label} — ${t.price}</option>)}</optgroup>}
                                     </select>
+                                    {isTreatmentCode(seam.treatment) && (
+                                        <select value={seam.colour || ''} onChange={e => updateSeamTreatment(seam.id, 'colour', e.target.value)} style={{ ...fieldStyle, marginBottom: '12px', border: `1px solid ${seam.colour ? 'var(--line)' : '#d9534f'}` }}>
+                                            <option value="">-- pick the colour (it goes on the sewing document) --</option>
+                                            {coloursOf(seam.treatment).map(c => <option key={c.name} value={c.name}>{c.name}{c.code ? ` · ${c.code}` : ''}</option>)}
+                                        </select>
+                                    )}
                                     {(seam.treatment || '').toUpperCase().includes('FRINGE') && (
                                         <select value={seam.trimId} onChange={e => updateSeamTreatment(seam.id, 'trimId', e.target.value)} style={{ ...fieldStyle, border: '1px solid var(--brass)' }}>
                                             <option value="">-- Select Master Trim --</option>

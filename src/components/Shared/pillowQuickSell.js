@@ -20,6 +20,7 @@
 import { sizeKeyOf, dimsOf, sizePriceOf, pricePillow } from './pillowPricing.js';
 import { sizeKeysOf, fabricWidthOf } from './pillowCuts.js';
 import { codeOf, basePriceOf } from './pillowCatalog.js';
+import { treatmentsOffered, treatmentOf, placementOf, colourOf, treatmentWordsOf } from './pillowTreatments.js';
 
 export const EDGES = [{ code: 'NONE', label: 'Knife edge' }, { code: 'FLANGE', label: 'Flange' }, { code: 'WELT', label: 'Welt' }];
 export const QUICK_SELL_REQUEST_ID = 'QUICKSELL';
@@ -41,23 +42,38 @@ export const quickSellSizesOf = (config, catalog) => {
 /** The edge choices the price table offers (a built-in edge with no price is not offered). */
 export const quickSellEdgesOf = (config) => EDGES.filter(e => e.code === 'NONE' || (config && config.details && config.details[e.code] && num(config.details[e.code].price) !== null));
 
-/** The design pricePillow prices for a standard pillow: one fabric both sides, no seams, the edge, trim all round. */
-export const quickSellDesignOf = ({ cw, sizeKey, edge = 'NONE', trimId = '', fill = '' } = {}) => {
+/** The stitch / leather upgrades the price table offers (Shared/pillowTreatments; a blank price = not offered). */
+export const quickSellTreatmentsOf = (config) => treatmentsOffered(config);
+
+/**
+ * The design pricePillow prices for a standard pillow: one fabric both sides, no seams, the edge, trim all
+ * round — and the show upgrade (Stuart 2026-10-14): a stitch or leather welt round the FOUR SIDES
+ * (design.edgeTreatment), or DOWN THE MIDDLE = one real seam, two half-width face panels of the same
+ * fabric, the back whole; that seam is `included` (the upcharge is its price, no seam labour).
+ */
+export const quickSellDesignOf = ({ cw, sizeKey, edge = 'NONE', trimId = '', fill = '', treatment = '', placement = 'FOUR_SIDES', colour = '' } = {}) => {
     const d = dimsOf(sizeKey);
     const fabricId = cw && cw.fabric ? cw.fabric.id : '';
     const e = up(edge) || 'NONE';
+    const t = treatmentOf(treatment);
+    const middle = !!t && up(placement) === 'MIDDLE';
+    const half = d ? Math.round((d.w / 2) * 100) / 100 : null;
     return {
         size: sizeKey, fill: str(fill), flange: e, flangeSize: 0, stitch: 'STANDARD',
-        panels: [{ label: 'A', fabricId, widthIn: d ? d.w : null, heightIn: d ? d.h : null }],
+        edgeTreatment: t && !middle ? { code: t.code, colour: str(colour) } : null,
+        panels: middle
+            ? [{ label: 'A', fabricId, widthIn: half, heightIn: d ? d.h : null }, { label: 'B', fabricId, widthIn: half, heightIn: d ? d.h : null }]
+            : [{ label: 'A', fabricId, widthIn: d ? d.w : null, heightIn: d ? d.h : null }],
         back: fabricId ? { fabricId } : null,
-        seams: [],
+        seams: middle ? [{ id: 'MIDDLE', treatment: t.code, trimId: '', colour: str(colour), lengthIn: d ? d.h : null, middle: true, included: true }] : [],
         outerTrim: { trimId: str(trimId), top: !!trimId, bottom: !!trimId, left: !!trimId, right: !!trimId },
     };
 };
 
-const summaryOf = ({ cw, sizeKey, edge, trimItem, fill, skuCode }) => [
+const summaryOf = ({ cw, sizeKey, edge, trimItem, fill, skuCode, treatment = '', placement = '', colour = '' }) => [
     sizeKey, cw && cw.label, cw && cw.group ? `group ${cw.group}` : '',
-    up(edge) && up(edge) !== 'NONE' ? up(edge).toLowerCase() : '', trimItem ? `trim ${codeOf(trimItem)}` : '', fill ? str(fill).toLowerCase() : '',
+    up(edge) && up(edge) !== 'NONE' ? up(edge).toLowerCase() : '', trimItem ? `trim ${codeOf(trimItem)}` : '',
+    treatment ? treatmentWordsOf({ code: treatment, placement, colour }) : '', fill ? str(fill).toLowerCase() : '',
     skuCode ? `as ${skuCode}` : '',
 ].filter(Boolean).join(' · ');
 
@@ -69,6 +85,8 @@ const summaryOf = ({ cw, sizeKey, edge, trimItem, fill, skuCode }) => [
  *   variant    'STD' | 'XL' | 'XXL' (throw)
  *   edge       'NONE' | 'FLANGE' | 'WELT'
  *   trimId     a trim item's id, or ''
+ *   treatment  '' | a Shared/pillowTreatments code (STITCH_RAILROAD, STITCH_BLANKET, LEATHER_WELT, LEATHER_MINI_WELT)
+ *   placement  'FOUR_SIDES' | 'MIDDLE' (with a treatment) · colour: the yarn / leather colour name (required with one)
  *   fill       the fill word (master list), informational
  *   qty        pillows / throws
  *   available  the SKU's available quantity from NetSuite, or null when not read (an unread shelf is said, not assumed)
@@ -78,7 +96,7 @@ const summaryOf = ({ cw, sizeKey, edge, trimItem, fill, skuCode }) => [
  *   sku  { item, code, chartPrice, skuPrice, mismatch, available }
  *   mto  { priced, line }   — line is the shape pillowCartPlanOf loads (holder, consumed, summary, …)
  */
-export function quickSellPlanOf({ cw, mode = 'PILLOW', sizeKey = '', variant = 'STD', edge = 'NONE', trimId = '', fill = '', qty = 1, available = null, config = {}, findPart } = {}) {
+export function quickSellPlanOf({ cw, mode = 'PILLOW', sizeKey = '', variant = 'STD', edge = 'NONE', trimId = '', fill = '', treatment = '', placement = 'FOUR_SIDES', colour = '', qty = 1, available = null, config = {}, findPart } = {}) {
     const errors = [], warnings = [];
     const lookup = typeof findPart === 'function' ? findPart : () => null;
     const q = Math.max(1, Math.floor(num(qty) || 1));
@@ -110,9 +128,14 @@ export function quickSellPlanOf({ cw, mode = 'PILLOW', sizeKey = '', variant = '
     const e = up(edge) || 'NONE';
     const trimItem = trimId ? lookup(trimId) : null;
     if (trimId && !trimItem) errors.push({ code: 'TRIM_UNKNOWN', message: 'The trim chosen is not in the library.' });
+    const tr = str(treatment) ? treatmentOf(treatment) : null;
+    if (str(treatment) && !tr) errors.push({ code: 'TREATMENT_UNKNOWN', message: `"${treatment}" is not a stitch or leather treatment.` });
+    if (tr && !placementOf(placement)) errors.push({ code: 'PLACEMENT_UNKNOWN', message: 'Pick 4 sides or down the middle.' });
+    if (tr && !colourOf(tr.code, colour)) errors.push({ code: 'TREATMENT_NO_COLOUR', message: `${tr.label}: pick the colour — it goes on the sewing document.` });
     if (errors.length) return { ok: false, errors, warnings, kind: '', why: '', qty: q, summary: '', note: '', chartPrice };
+    const tw = tr ? { treatment: tr.code, placement: up(placement), colour: str(colour) } : {};
 
-    const plain = e === 'NONE' && !trimId;
+    const plain = e === 'NONE' && !trimId && !tr;
     const skuItem = (cw.pillows || {})[key] || null;
     const skuCode = skuItem ? codeOf(skuItem) : '';
     const skuPrice = skuItem ? basePriceOf(skuItem) : null;
@@ -149,19 +172,19 @@ export function quickSellPlanOf({ cw, mode = 'PILLOW', sizeKey = '', variant = '
         errors.push({ code: 'FABRIC_NO_WIDTH', message: `${codeOf(cw.fabric)} has no width — the yards to pull cannot be computed. Set it on the fabric sheet (6.5 Tools → Pillow Pricing).` });
         return { ok: false, errors, warnings, kind: 'MTO', why, qty: q, summary: '', note: '', chartPrice };
     }
-    const design = quickSellDesignOf({ cw, sizeKey: key, edge: e, trimId, fill });
+    const design = quickSellDesignOf({ cw, sizeKey: key, edge: e, trimId, fill, ...tw });
     const priced = pricePillow({ design, findPart: lookup, config, qty: q });
     if (!priced.ok) return { ok: false, errors: priced.errors, warnings: [...warnings, ...priced.warnings], kind: 'MTO', why, qty: q, summary: '', note: '', chartPrice };
     priced.warnings.forEach(w => warnings.push(w));
     if (why === 'SHORT') warnings.push(`${skuCode}: ${num(available)} available for ${q} — made to order instead (the custom pillow shape, 3 weeks)`);
-    const summary = summaryOf({ cw, sizeKey: key, edge: e, trimItem, fill, skuCode });
+    const summary = summaryOf({ cw, sizeKey: key, edge: e, trimItem, fill, skuCode, ...tw });
     const consumed = priced.rows.filter(r => !r.captured).map(r => ({ panel: r.panel || '', legacyErpId: r.legacyErpId, partId: r.partId || '', name: r.name, qty: r.qty, uom: r.uom || 'EACH', perPillow: r.perPillow === undefined ? null : r.perPillow }));
     const line = {
         qty: q,
         holder: { legacyErpId: priced.holder.legacyErpId, partId: priced.holder.partId || '', name: priced.holder.name, price: priced.holder.price, total: priced.holder.total, partHandling: priced.holder.partHandling, madeToOrder: priced.holder.division },
         consumed, sourced: [],
         sizeKey: key, group: priced.group, breakdown: priced.breakdown, summary,
-        design, panels: [{ label: 'A', widthIn: design.panels[0].widthIn, heightIn: design.panels[0].heightIn, fabricId: design.panels[0].fabricId }],
+        design, panels: design.panels.map(p => ({ label: p.label, widthIn: p.widthIn, heightIn: p.heightIn, fabricId: p.fabricId })),
         warnings: priced.warnings, capturedFabrics: [], snapshot: '',
         standardSku: skuCode,
     };

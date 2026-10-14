@@ -32,6 +32,8 @@
 //
 // Pure: no imports, no Firestore, no Date. Proven by scripts/pillowPricing.test.mjs.
 
+import { treatmentOf, isTreatmentCode, treatmentWordsOf, treatmentsOfDesign } from './pillowTreatments.js';
+
 export const PILLOW_PRICING_DOC = 'pillow_pricing';   // system/pillow_pricing
 export const PILLOW_DIVISION = 'SEW';                 // the Stitch & Sew floor (S2/S3 build the floor)
 export const PILLOW_HANDLING = 'Custom';              // made-to-order, never a shelf pull
@@ -52,6 +54,8 @@ export const DEFAULT_PILLOW_PRICING = {
     // Custom details: the code the design produces → { price, per: 'EACH' | 'YARD' }.
     //   FLANGE / WELT (edge treatment, EACH) · OUTER_TRIM (trim on the outer edges, YARD)
     //   · FRINGE_SEAM (fringe / trim laid on a drawn seam, YARD)
+    //   · STITCH_RAILROAD / STITCH_BLANKET / LEATHER_WELT / LEATHER_MINI_WELT (Shared/pillowTreatments:
+    //     round the four sides = design.edgeTreatment, or on a seam = seam.treatment; EACH, once per placement)
     details: {},
     // Consumption arithmetic.
     seamAllowanceIn: 0.5,   // added to every panel edge before the cut
@@ -194,13 +198,14 @@ export const designFromPillowData = (pillowData, { pxPerIn = 7 } = {}) => {
         flange: pd.flange || 'NONE',
         flangeSize: num(pd.flangeSize) || 0,
         stitch: pd.stitch || '',
+        edgeTreatment: pd.edgeTreatment && isTreatmentCode(pd.edgeTreatment.code) ? { code: String(pd.edgeTreatment.code).toUpperCase(), colour: String(pd.edgeTreatment.colour || '') } : null,
         panels: fabrics.map((fabricId, i) => ({
             label: String.fromCharCode(65 + i), fabricId: fabricId || '',
             widthIn: one && dims ? dims.w : null, heightIn: one && dims ? dims.h : null,
         })),
         back: pd.back && pd.back.fabricId ? { fabricId: pd.back.fabricId } : null,
         seams: (Array.isArray(pd.seams) ? pd.seams : []).map(s => ({
-            id: s.id, treatment: s.treatment || 'STANDARD', trimId: s.trimId || '',
+            id: s.id, treatment: s.treatment || 'STANDARD', trimId: s.trimId || '', colour: s.colour || '', ...(s.middle ? { middle: true } : {}), ...(s.included ? { included: true } : {}),
             lengthIn: num(s.lengthIn) !== null ? num(s.lengthIn)
                 : (pxPerIn > 0 && [s.x1, s.y1, s.x2, s.y2].every(v => num(v) !== null)
                     ? Math.round(Math.hypot(s.x2 - s.x1, s.y2 - s.y1) / pxPerIn * 100) / 100 : null),
@@ -280,9 +285,11 @@ export function pricePillow({ design, findPart, config = DEFAULT_PILLOW_PRICING,
 
     // ── labour per custom seam ──────────────────────────────────────────────────────────────────
     const seams = Array.isArray(d.seams) ? d.seams : [];
+    // an `included` seam (the counter's DOWN THE MIDDLE) carries no labour — its treatment's upcharge is the price
+    const labourSeams = seams.filter(s => !s.included);
     const perSeam = num(cfg.seamLabor && cfg.seamLabor.perSeam);
-    if (seams.length && perSeam === null) errors.push({ code: 'SEAM_UNPRICED', message: 'The price table has no labour per custom seam' });
-    const seamCharge = seams.length && perSeam !== null ? cents(seams.length * perSeam) : 0;
+    if (labourSeams.length && perSeam === null) errors.push({ code: 'SEAM_UNPRICED', message: 'The price table has no labour per custom seam' });
+    const seamCharge = labourSeams.length && perSeam !== null ? cents(labourSeams.length * perSeam) : 0;
 
     // ── the custom details ──────────────────────────────────────────────────────────────────────
     const details = [];
@@ -296,6 +303,12 @@ export function pricePillow({ design, findPart, config = DEFAULT_PILLOW_PRICING,
     };
     const edge = up(d.flange);
     if (edge && edge !== 'NONE') addDetail(edge, 1, `${edge} edge${num(d.flangeSize) ? ` ${d.flangeSize}"` : ''}`);
+    // the stitch / leather treatments (Shared/pillowTreatments): round the four sides, down the middle, or on a
+    // drawn seam — each one charged once, the same price every colour; the colour is WORDS on the line
+    treatmentsOfDesign(d).forEach(t => {
+        if (!t.colour) errors.push({ code: 'TREATMENT_NO_COLOUR', message: `${treatmentOf(t.code).label}: pick the colour — it goes on the sewing document` });
+        addDetail(t.code, 1, treatmentWordsOf(t));
+    });
     const trim = trimInchesOf(d, dims);
     if (d.outerTrim && d.outerTrim.trimId && trim.outer > 0) {
         const yards = trim.outer / 36;
@@ -345,6 +358,6 @@ export function pricePillow({ design, findPart, config = DEFAULT_PILLOW_PRICING,
     return {
         ok: errors.length === 0, errors, warnings,
         sizeKey, group, groupOf, unitPrice, total, holder, rows,
-        breakdown: { sizePrice, seams: { count: seams.length, each: perSeam, total: seamCharge }, details, detailTotal: detailCharge },
+        breakdown: { sizePrice, seams: { count: labourSeams.length, each: perSeam, total: seamCharge }, details, detailTotal: detailCharge, treatments: treatmentsOfDesign(d) },
     };
 }

@@ -112,7 +112,7 @@ ok('rows round-trip: blanks write no row, a new detail is coded BUTTON_TUFT', ba
 ok('a duplicate code refuses', !detailsFromRows([{ code: 'X', price: 1 }, { code: 'x', price: 2 }]).ok);
 ok('a non-price refuses and names the row', detailsFromRows([{ code: 'X', price: 'ten' }]).errors[0].message.includes('row 1'));
 ok('a row with a label but no code refuses', !detailsFromRows([{ code: '', label: 'Mystery', price: 5 }]).ok);
-ok('the merged editor rows survive a second detailRowsOf (an added detail lists after the built-ins)', detailRowsOf({ details: back.details }).map(r => r.code).join() === 'FLANGE,WELT,OUTER_TRIM,FRINGE_SEAM,BUTTON_TUFT');
+ok('the merged editor rows survive a second detailRowsOf (an added detail lists after the built-ins)', detailRowsOf({ details: back.details }).map(r => r.code).join() === 'FLANGE,WELT,OUTER_TRIM,FRINGE_SEAM,STITCH_RAILROAD,STITCH_BLANKET,LEATHER_WELT,LEATHER_MINI_WELT,BUTTON_TUFT');
 const n1 = numbersPatchOf({ perSeam: '15', seamAllowanceIn: '', yardRounding: '', rollupCode: 'custom pillow' });
 ok('labour 15, defaults for the allowances, rollup upper-cased', n1.ok && n1.patch.seamLabor.perSeam === 15 && n1.patch.seamAllowanceIn === 0.5 && n1.patch.yardRounding === 0.125 && n1.patch.rollupItem.legacyErpId === 'CUSTOM PILLOW');
 ok('a blank labour writes null (refuses at pricing), not 0', numbersPatchOf({ perSeam: '' }).patch.seamLabor.perSeam === null);

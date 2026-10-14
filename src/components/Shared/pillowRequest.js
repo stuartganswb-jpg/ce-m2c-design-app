@@ -19,6 +19,7 @@
 // deletes those). Pure: no imports past the pricing module. Proven by scripts/pillowRequest.test.mjs.
 
 import { PILLOW_DIVISION, PILLOW_HANDLING } from './pillowPricing.js';
+import { treatmentWordsOfDesign } from './pillowTreatments.js';
 
 export const PILLOW_REQUEST_STATUS = 'PILLOW_REQUEST';
 export const PILLOW_REQUEST_KIND = 'PILLOW';
@@ -40,6 +41,8 @@ export const pillowSummaryOf = ({ priced, geometry, design } = {}) => {
     const seams = (design && design.seams && design.seams.length) || 0;
     if (seams) parts.push(`${seams} seam${seams === 1 ? '' : 's'}`);
     if (design && design.flange && up(design.flange) !== 'NONE') parts.push(up(design.flange).toLowerCase());
+    const tw = treatmentWordsOfDesign(design);   // the stitch / leather words, with the colour — they ride to the sewing document
+    if (tw) parts.push(tw);
     if (design && design.fill) parts.push(String(design.fill).toLowerCase());
     return parts.join(' · ');
 };
