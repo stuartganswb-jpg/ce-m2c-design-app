@@ -22,6 +22,7 @@ import { buildSheet2dFlow } from '../Shared/sheet2dFlow';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { SHOP_TABS } from '../ShopFloor/shopShared';
 import { ROD_MATERIALS, itemRodMaterials } from '../Shared/flowExtras';
+import FloorMetricsPanel from './FloorMetricsPanel';   // 🏆 Floor Metrics — admins only (Stuart 2026-10-14)
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -70,7 +71,7 @@ const SIZE_STAMP_RULES = {
     'H2-RND': { rx: SIZE_FAMILIES['H2-RND'].codeRx, note: 'H2-<dia><style> · dia 05 / 75 / 1 / 138 · Simple Elegance' },
 };
 
-const AdminTab = ({ currentUser, activeBrand, TABS }) => {
+const AdminTab = ({ currentUser, activeBrand, TABS, writeLog }) => {   // writeLog = HQ's logHqAction (HQ.js passes it)
     // ===== 🧬 SIZE-FAMILY STAMPER (Stuart 2026-07-22) =====
     // Stamps manufacturingSpecs.customData.sizeKey onto every item matching the family's code
     // grammar — the ONLY missing piece for combining sibling assemblies (H2-05/75/1/138) into
@@ -233,6 +234,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
 
   const currentActiveUser = users.find(u => u.name === currentUser);
   const isSuperAdmin = currentActiveUser?.role === "superadmin" || currentActiveUser?.superAdmin === true;
+  // Floor Metrics holds payroll hours — admins only (Stuart 2026-10-13). hq_users is admin-read, so nobody else resolves here.
+  const isAdminUser = isSuperAdmin || String(currentActiveUser?.role || '').toLowerCase() === 'admin';
 
   // Roles the permission matrices + user dropdown expose. The managed list (dynamicRoles) UNION every
   // role actually assigned to a user (hq_users + legacy fin_users) — lowercased to match how PickPack /
@@ -2209,6 +2212,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           <AdminNavButton active={activeSection === "USERS"} onClick={() => setActiveSection("USERS")} label="User Matrix" icon="🔐" />
           <AdminNavButton active={activeSection === "PLATING_FEES"} onClick={() => setActiveSection("PLATING_FEES")} label="Plating Fees" icon="🧪" />
           <AdminNavButton active={activeSection === "INTEGRATIONS"} onClick={() => setActiveSection("INTEGRATIONS")} label="Integrations" icon="🔌" />
+          {isAdminUser && <AdminNavButton active={activeSection === "FLOOR_METRICS"} onClick={() => setActiveSection("FLOOR_METRICS")} label="Floor Metrics" icon="🏆" />}
           
           
           {isSuperAdmin && (
@@ -3464,6 +3468,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                  prove a vendor pipe works before any screen depends on it. No card data, no
                  orders, no NetSuite. (Stuart 2026-09-23: put it on 11.) --- */}
           {activeSection === "INTEGRATIONS" && <IntegrationsPanel />}
+          {activeSection === "FLOOR_METRICS" && isAdminUser && <FloorMetricsPanel currentUser={currentUser} writeLog={writeLog} />}
 
           {/* --- FORMS & BRANDING VIEW --- */}
           {activeSection === "PLATING_FEES" && (() => {
