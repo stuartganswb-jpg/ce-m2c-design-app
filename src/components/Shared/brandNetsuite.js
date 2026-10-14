@@ -21,4 +21,9 @@ export const BRAND_NETSUITE_FORMS = {
     // follows what the order sells (Shared/nsHeader.orderClassOf): Lighting when every classed product line is a
     // lighting item, otherwise Hardware.
     'm2c': { estimate: '187', salesorder: '281', class: '2', classByItem: { Hardware: '2', Lighting: '3' } },
+    // UNIQUITY (S7, 2026-10-14, read from NetSuite's own Uniquity transactions through SuiteQL before the first counter
+    // order): every subsidiary-6 sales order since January carries form 275 "Unique - Sales Order Form", every quote
+    // form 276 "Unique Quote"; the lines are classed 17 "Throw/Pillow" (fabric 22 and trim 7 exist for yardage sold
+    // as such — a pillow order's holder, its $0 parts and its throws all ride the one class).
+    'uniquity': { estimate: '276', salesorder: '275', class: '17' },
 };
