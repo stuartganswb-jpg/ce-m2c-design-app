@@ -16,6 +16,7 @@ import { fetchCustomerPriceLevel, priceLevelNoteOf, mayAutoSetDiscount } from '.
 import { nsCustomerIdOf } from '../Shared/nsHeader';   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
 import { QUICK_SELL_REQUEST_ID } from '../Shared/pillowQuickSell';
 import { fabricNsLineOf } from '../Shared/pillowCatalog';   // an app-only fabric pushes as a fraction of its throw (Stuart 2026-10-12)
+import { oneOfAKindCartPlanOf, oneOfAKindSoldPatchOf } from '../Shared/oneOfAKind';   // a piece made at the show sells once (S7, 2026-10-14)
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
@@ -570,6 +571,21 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
         if (!cartPlan.ok) { addLog(`⛔ Not added — ${cartPlan.errors.map(e => e.message).join(' ')}`, 'error'); return; }
         pushPillowPlan({ plan: cartPlan, line: plan.mto.line, requestId: `${QUICK_SELL_REQUEST_ID}${Date.now()}`, index: 0 });
     };
+    // a ONE-OF-A-KIND piece from the counter's tile: the piece at its price (as its own NetSuite item, else on the CUSTOM
+    // PILLOW holder with the tag in the description) + its making beneath at $0 (yards, or a non-inventory making × 1)
+    const addOneOfAKind = (item) => {
+        const holderCode = 'CUSTOM PILLOW';
+        const plan = oneOfAKindCartPlanOf({ item, findByCode: pillowByCode, holder: pillowByCode(holderCode) });
+        if (!plan.ok) { plan.errors.forEach(e => addLog(`⛔ ${e.message}`, 'error')); return; }
+        if (cart.some(l => l.oneOfAKind && l.oneOfAKind.itemId === item.id)) { addLog(`⚠ ${item.legacyErpId} is already in the cart — there is only one.`, 'warn'); return; }
+        const key = `ooak-${item.id}`;
+        pushLine(plan.piece.item, 1, plan.piece.via || '', null, { rateOverride: plan.piece.price, noPack: true, ...(plan.piece.via ? { nsId: plan.piece.nsId, nsQtyFactor: 1, nsVia: plan.piece.via } : {}), oneOfAKind: { itemId: item.id, code: item.legacyErpId, key } });
+        const m = plan.making;
+        pushLine(m.item, 1, m.note, null, m.uom === 'YARD'
+            ? { rateOverride: 0, noPack: true, inKit: true, kitOf: key, perFoot: true, feetPer: m.yards, unitWord: 'yd', ooakPart: true, ...(m.nsQtyFactor ? { nsId: m.nsId, nsQtyFactor: m.nsQtyFactor, nsVia: m.nsVia } : {}) }
+            : { rateOverride: 0, noPack: true, inKit: true, kitOf: key, ooakPart: true });
+        addLog(`🎁 Added ${item.legacyErpId} — ${item.itemName} at $${plan.piece.price}${plan.piece.via ? ' (sold on the CUSTOM PILLOW holder)' : ''} · ${m.uom === 'YARD' ? `${m.yards} yd of ${m.item.legacyErpId}` : `${m.item.legacyErpId} × 1`} beneath at $0`, 'success');
+    };
     // the counter's custom board hands its priced line straight here (VisionPillow onAddToCart)
     const addCounterCustom = (line) => {
         const cartPlan = pillowCartPlanOf({ line, findByCode: pillowByCode });
@@ -922,6 +938,9 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
             // AN APP-ONLY FABRIC (Stuart 2026-10-12): the NetSuite line is its THROW × (yards ÷ yards-per-throw) — the
             // app's documents keep the fabric in yards; only the NetSuite identity and quantity change.
             ...(opts && opts.nsQtyFactor ? { nsQtyFactor: opts.nsQtyFactor, nsVia: opts.nsVia || '' } : {}),
+            // A ONE-OF-A-KIND piece made at the show (Shared/oneOfAKind): sold once — the save marks the item SOLD; its making rides beneath at $0.
+            ...(opts && opts.oneOfAKind ? { oneOfAKind: opts.oneOfAKind } : {}),
+            ...(opts && opts.ooakPart ? { ooakPart: true } : {}),
             // Customer-facing alias: shown on the quote/SO/invoice and priced from. The REAL item
             // above is what we stock, pick, barcode and send to NetSuite.
             // opts.aliasErp: the customer's part# straight from a clientPricing row (traverse
@@ -1830,7 +1849,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 // NetSuite ($0 lines) and prints them on the documents, but they never reached lines[] — so the SO Pack
                 // never listed the track, fascia and brackets to pick. Each goes on as the item NetSuite consumes, in
                 // NetSuite's unit, a shelf pick of its kit (trvComponent) — exactly what leaves the shelf.
-                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}), ...(l.lineImage && l.lineImage.url ? { lineImage: l.lineImage } : {}), ...(l.nsQtyFactor ? { nsQtyFactor: l.nsQtyFactor, nsVia: l.nsVia || '' } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
+                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}), ...(l.lineImage && l.lineImage.url ? { lineImage: l.lineImage } : {}), ...(l.nsQtyFactor ? { nsQtyFactor: l.nsQtyFactor, nsVia: l.nsVia || '' } : {}), ...(l.oneOfAKind ? { oneOfAKind: l.oneOfAKind } : {}), ...(l.ooakPart ? { ooakPart: true } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -1913,6 +1932,11 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 setEditingSo(null);
             }
 
+            // A ONE-OF-A-KIND piece is sold once: its item reads SOLD from this moment (the counter's tile drops it).
+            for (const l of lines.filter(x => x.oneOfAKind && x.oneOfAKind.itemId)) {
+                try { await updateDoc(doc(db, 'Approved_Designs', l.oneOfAKind.itemId), oneOfAKindSoldPatchOf({ soId: hqId, by: currentUser || '', at: stamp })); addLog(`🎁 ${l.oneOfAKind.code} marked SOLD on ${hqId}.`, 'info'); }
+                catch (e) { addLog(`⚠ ${l.oneOfAKind.code} could not be marked sold (${e.message || e}) — mark it in the Library so it leaves the counter.`, 'warn'); }
+            }
             setLastCreated({ kind: 'SALES ORDER', id: hqId, total: cartTotal, customerName: selectedCustomer?.name || customerId });
             resetOrderEntry();
         } catch (e) {
@@ -2084,6 +2108,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                     items={allItems} findPart={(id) => allItems.find(x => x.id === id) || pillowByCode(id)} rateFor={rateFor}
                     onAddQuickSell={addQuickSell} onAddCustomPillow={addCounterCustom} addLog={addLog} cartCount={cart.length} cartTotal={cartTotal}
                     priceNote={priceLevelInfo ? (priceLevelInfo.read ? priceLevelNoteOf(priceLevelInfo) : 'NetSuite price level not read') : ''}
+                    onAddOneOfAKind={addOneOfAKind}
                     onShowCart={() => { const el = document.getElementById('counter-cart'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }} />
                 {cartCard}
                 {lastCreated && cart.length === 0 && Number(lastCreated.total) > 0 && (

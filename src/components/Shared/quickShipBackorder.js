@@ -28,7 +28,8 @@ export function quickShipPullLines(lines = [], trvDocLines = []) {
         // A MADE-TO-ORDER PILLOW HOLDER (Shared/sewRouteShape.isSewLine) the same: it is sewn, never pulled — the first
         // live counter order (2026-10-14, SOUNIQ-3985) read its two CUSTOM PILLOW holders as painted stock parts with
         // none on hand and wrote two false TRUE BACKORDERS; its $0 fabric / insert lines beneath are the pull.
-        if (!l || !l.erp || isKitLine(l) || isSewLine(l)) return;
+        // A ONE-OF-A-KIND piece made at the show (Shared/oneOfAKind) and the making beneath it are already made — never pulled.
+        if (!l || !l.erp || isKitLine(l) || isSewLine(l) || l.oneOfAKind || l.ooakPart) return;
         const qty = l.perFoot ? num(l.qty) : num(l.eachQty != null ? l.eachQty : l.qty);
         if (qty <= 0) return;
         // A TO-BE-FINISHED LINE IS CHECKED AS THE PIECE IT BECOMES (Stuart 2026-09-27): its finished code

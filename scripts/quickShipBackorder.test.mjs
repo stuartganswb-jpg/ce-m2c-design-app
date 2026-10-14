@@ -18,6 +18,8 @@ const lines = [
     { erp: 'HCUMB410', name: 'Raw bracket', eachQty: 6, qty: 6, toBeFinished: true, finishCode: 'CP' },   // made to order, painted
     { erp: 'HCUFN1', name: 'Finial to plate', eachQty: 2, qty: 2, toBeFinished: true, finishCode: 'EP4', finishOutsourced: true },
     { erp: 'CUSTOM PILLOW', name: 'Pillow with customized options', eachQty: 1, qty: 1, pillow: { requestId: 'COUNTER1', line: 0, madeToOrder: 'SEW' }, madeToOrder: 'SEW' },   // a made-to-order pillow holder: sewn, never pulled
+    { erp: 'SHOW-0412', name: 'One of a kind', eachQty: 1, qty: 1, oneOfAKind: { itemId: 'X', code: 'SHOW-0412' } },   // made at the show: never pulled
+    { erp: 'BRIDSML', name: 'its making', eachQty: 1, qty: 1, inKit: true, kitOf: 'ooak-X', ooakPart: true },
     { erp: '', name: 'blank', eachQty: 1 },
     { erp: 'ZERO', name: 'zero qty', eachQty: 0 },
 ];
