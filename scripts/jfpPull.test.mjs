@@ -1,7 +1,7 @@
 // A paint-run pull takes the pieces out of the bin NetSuite holds them in — offline.
 //   node scripts/jfpPull.test.mjs
 // Stuart 2026-10-14: "go ahead on all fixes". Each case below is one of the nine pulls NetSuite refused 10-09…10-13.
-import { jfpPullBinOf, jfpAdjustmentOf, jfpSkipText } from '../src/components/Shared/jfpPull.js';
+import { jfpPullBinOf, jfpAdjustmentOf, jfpSkipText, pullBinOf, adjustmentOutOf, notAdjustedText } from '../src/components/Shared/jfpPull.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
@@ -33,6 +33,16 @@ const adj = jfpAdjustmentOf({ nsId: 21561, qty: 7, bin: { id: '12', name: 'Produ
 eq('out of the bin by its id, at the location, −qty', adj, { account: { id: '254' }, subsidiary: { id: '2' }, memo: 'JFP pull', inventory: { items: [{ item: { id: '21561' }, location: { id: '17' }, adjustQtyBy: -7, inventoryDetail: { quantity: -7, inventoryAssignment: { items: [{ binNumber: { id: '12' }, quantity: -7 }] } } }] } });
 eq('no id read: NetSuite\'s own spelling, never the scan', jfpAdjustmentOf({ nsId: 1, qty: 2, bin: { id: '', name: 'Wands' }, subsidiary: '2', location: '17' }).inventory.items[0].inventoryDetail.inventoryAssignment.items[0].binNumber, { refName: 'Wands' });
 ok('the picker is told the pick stands and NetSuite was not adjusted', /^Pick recorded — but NetSuite was NOT adjusted for −5 × HCUMWND40 \(WO-JFP-1\): NetSuite holds only 4 in Wands, 5 were pulled\./.test(jfpSkipText({ code: 'HCUMWND40', qty: 5, ref: 'WO-JFP-1', why: 'NetSuite holds only 4 in Wands, 5 were pulled' })));
+
+// ── the same rule for the packing scrap and the substitute pull (Stuart 2026-10-14: "fix the other bin issues") ──
+ok('one rule, three pulls', pullBinOf === jfpPullBinOf && adjustmentOutOf === jfpAdjustmentOf && notAdjustedText === jfpSkipText);
+// Packing scrap after the put-away: the bin it was put away into, spelt the app's way; NetSuite spells it its own way.
+eq('a scrap out of the put-away bin, by its id', pullBinOf({ scanned: 'rts-cus', qty: 2, live: live([['RTS-CUS', '88', 192]]) }), { ok: true, bin: { id: '88', name: 'RTS-CUS' } });
+// A stored home bin the item is no longer in.
+eq('a stored home bin it is no longer in: not sent, and where it is', pullBinOf({ scanned: 'HOME-1', qty: 2, live: live([['RTS-CUS', '88', 192]]) }).why, 'NetSuite shows none in "HOME-1" — it holds RTS-CUS 192');
+ok('the scrap is told as a scrap', /^⚠ 2 scrap recorded — but NetSuite was NOT adjusted for −2 × HCUSR1\/N25-EA \(WO11648\)/.test(notAdjustedText({ code: 'HCUSR1/N25-EA', qty: 2, ref: 'WO11648', why: 'x', done: '⚠ 2 scrap recorded' })));
+// The substitute pull: a typed bin.
+eq('a typed substitute bin in any case', pullBinOf({ scanned: 'raw', qty: 6, live: live([['RAW', '5', 40]]) }).bin, { id: '5', name: 'RAW' });
 
 console.log(`jfpPull: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

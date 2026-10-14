@@ -54,7 +54,7 @@ import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i18n';
 import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutYieldLinesOf, cutYieldText, cutReleaseText, cutReleaseLog } from '../Shared/poleCut';
-import { jfpPullBinOf, jfpAdjustmentOf, jfpSkipText } from '../Shared/jfpPull';
+import { jfpPullBinOf, jfpAdjustmentOf, jfpSkipText, pullBinOf, adjustmentOutOf, notAdjustedText } from '../Shared/jfpPull';
 import { binsSql, GOOD_STATUS_ID } from '../Shared/fulfilmentBins';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { platingLineRateOf } from '../Shared/platingRate';
@@ -2628,22 +2628,28 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 const erp = String(job.stockErpId || job.type || '').toUpperCase();
                 const part = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === erp);
                 const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
-                const bin = part ? String(part.binLocation || part.manufacturingSpecs?.binLocation || '').toUpperCase() : '';
                 if (part?.netSuiteInternalId) {
+                    // OUT OF THE BIN NETSUITE HOLDS THEM IN, BY ITS ID (Stuart 2026-10-14 · Shared/jfpPull): the bin the
+                    // put-away posted them into (else the item's home bin), found among the item's bins read fresh. It used to
+                    // send the stored home bin as typed text, which NetSuite refuses unless the spelling and the stock match.
+                    const fresh = await fetchLiveBins([erp]);
+                    const where = String(job.putawayBin || job.jfpAdjBin || (part.binLocation || part.manufacturingSpecs?.binLocation) || '');
+                    const plan = pullBinOf({ scanned: where, qty: n, live: fresh ? (fresh[erp] || null) : null });
+                    if (!plan.ok) {
+                        writeLog(`⚠ Pack scrap −${n} × ${erp} on ${packRef(job)} — NetSuite NOT adjusted: ${plan.why}. Adjust it by hand.`, 'alert');
+                        alert(`${notAdjustedText({ code: erp, qty: n, ref: packRef(job), why: plan.why, done: `⚠ ${n} scrap recorded` })}\n\nRe-make: Finishing → Setup Queue → ⟲ Scrap Re-make.`);
+                        return;
+                    }
                     await enqueueNsWrite({
                         kind: 'inventoryadjustment',
                         label: `Pack scrap −${n} × ${erp} (${packRef(job)})`,
                         sourceApp: 'WMS', createdBy: operator?.name || '',
                         targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
                         method: 'POST',
-                        payload: {
-                            account: { id: "254" }, subsidiary: { id: nsCfg.subsidiary },
-                            memo: nsMemo(`Packing scrap ${packRef(job)}: ${note}`),
-                            inventory: { items: [{ item: { id: String(part.netSuiteInternalId) }, location: { id: nsCfg.location }, adjustQtyBy: -n, ...((bin && bin !== 'UNASSIGNED') ? { inventoryDetail: { quantity: -n, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: -n }] } } } : {}) }] }
-                        },
+                        payload: adjustmentOutOf({ nsId: part.netSuiteInternalId, qty: n, bin: plan.bin, subsidiary: nsCfg.subsidiary, location: nsCfg.location, memo: nsMemo(`Packing scrap ${packRef(job)}: ${note}`) }),
                         writeBack: { collection: 'fin_workorders', docId: job.id, patch: { packScrapAdjPosted: true }, idField: 'packScrapAdjId', tranField: 'packScrapAdjTran' }
                     });
-                    alert(`⚠ ${n} scrap recorded on ${packRef(job)}.\n\n− ${n} × ${erp} finished-goods adjustment queued to NetSuite (11.1 / transmit log).\n\nRe-make: Finishing → Setup Queue → ⟲ Scrap Re-make.`);
+                    alert(`⚠ ${n} scrap recorded on ${packRef(job)}.\n\n− ${n} × ${erp} finished-goods adjustment queued to NetSuite out of ${plan.bin.name} (11.1 / transmit log).\n\nRe-make: Finishing → Setup Queue → ⟲ Scrap Re-make.`);
                 } else {
                     alert(`⚠ ${n} scrap recorded on ${packRef(job)} — no NetSuite id on ${erp || 'the item'}, adjust finished goods manually.\n\nRe-make: Finishing → Setup Queue → ⟲ Scrap Re-make.`);
                 }
@@ -5100,11 +5106,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const qty = parseInt(window.prompt(`How many ${code} did you pull?`, String(Number(lineItem.quantity ?? lineItem.qty) || 1))) || 0;
         if (qty <= 0) return;
         const subBin = String(window.prompt(`Which bin did you pull ${code} from? (leave blank if unbinned)`, '') || '').trim().toUpperCase();
-        const postAdj = activePickJob.paintOnly === true || !activePickJob.nsWoId;
-        if (!window.confirm(`⇄ Pull ${qty} × ${code}${subBin ? ` from ${subBin}` : ''} in place of ${target}?\n\n${postAdj ? `A −${qty} inventory adjustment for ${code} queues to NetSuite so stock stays true.` : `Recorded on the order for review — this order's NetSuite WO consumes the STATED component, so no adjustment posts here; reconcile the variance in NetSuite.`}`)) return;
+        const wantsAdj = activePickJob.paintOnly === true || !activePickJob.nsWoId;
+        // OUT OF THE BIN NETSUITE HOLDS THEM IN, BY ITS ID (Stuart 2026-10-14 · Shared/jfpPull): the typed bin is found among
+        // the substitute's bins read fresh. When NetSuite cannot take the pull, the substitution is still recorded, no
+        // doomed adjustment is queued, and the person is told.
+        let plan = null;
+        if (wantsAdj) { const fresh = await fetchLiveBins([code]); plan = pullBinOf({ scanned: subBin, qty, live: fresh ? (fresh[code] || null) : null }); }
+        const postAdj = wantsAdj && !!(plan && plan.ok);
+        if (!window.confirm(`⇄ Pull ${qty} × ${code}${subBin ? ` from ${subBin}` : ''} in place of ${target}?\n\n${wantsAdj && !postAdj ? `⚠ NetSuite cannot take the −${qty} adjustment: ${plan.why}. The substitution is recorded; the office adjusts NetSuite by hand.` : postAdj ? `A −${qty} inventory adjustment for ${code} queues to NetSuite out of ${plan.bin.name} so stock stays true.` : `Recorded on the order for review — this order's NetSuite WO consumes the STATED component, so no adjustment posts here; reconcile the variance in NetSuite.`}`)) return;
         try {
             await updateDoc(doc(db, 'fin_workorders', activePickJob.id), {
-                pickSubstitutions: arrayUnion({ forCode: target, code, qty, bin: subBin || null, adjustedOut: postAdj, by: operator?.name || '', at: Date.now() })
+                pickSubstitutions: arrayUnion({ forCode: target, code, qty, bin: (postAdj ? plan.bin.name : subBin) || null, adjustedOut: postAdj, ...(wantsAdj && !postAdj ? { notAdjusted: plan.why } : {}), by: operator?.name || '', at: Date.now() })
             });
             if (postAdj) {
                 const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
@@ -5114,14 +5126,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     sourceApp: 'WMS', createdBy: operator?.name || '',
                     targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
                     method: 'POST',
-                    payload: {
-                        account: { id: "254" }, subsidiary: { id: nsCfg.subsidiary },
-                        memo: `Substitute pull on ${packRef(activePickJob)}: took ${qty} × ${code} in place of ${target}`,
-                        inventory: { items: [{ item: { id: String(part.netSuiteInternalId) }, location: { id: nsCfg.location }, adjustQtyBy: -qty, ...((subBin && subBin !== 'UNASSIGNED') ? { inventoryDetail: { quantity: -qty, inventoryAssignment: { items: [{ binNumber: { refName: subBin }, quantity: -qty }] } } } : {}) }] }
-                    },
+                    payload: adjustmentOutOf({ nsId: part.netSuiteInternalId, qty, bin: plan.bin, subsidiary: nsCfg.subsidiary, location: nsCfg.location, memo: `Substitute pull on ${packRef(activePickJob)}: took ${qty} × ${code} in place of ${target}` }),
                 });
             }
-            writeLog(`⇄ SUBSTITUTE PULL on ${packRef(activePickJob)}: ${qty} × ${code} taken in place of ${target}${subBin ? ` (bin ${subBin})` : ''}${postAdj ? ` — −${qty} adjustment queued` : ' — recorded for NS review (order has an NS WO)'}.`, 'wms');
+            if (wantsAdj && !postAdj) writeLog(`⚠ Substitute pull −${qty} × ${code} on ${packRef(activePickJob)} — NetSuite NOT adjusted: ${plan.why}. Adjust it by hand.`, 'alert');
+            writeLog(`⇄ SUBSTITUTE PULL on ${packRef(activePickJob)}: ${qty} × ${code} taken in place of ${target}${subBin ? ` (bin ${postAdj ? plan.bin.name : subBin})` : ''}${postAdj ? ` — −${qty} adjustment queued` : wantsAdj ? ' — NetSuite NOT adjusted (adjust by hand)' : ' — recorded for NS review (order has an NS WO)'}.`, 'wms');
         } catch (e) { return alert('Substitute failed: ' + (e.message || e)); }
         setValidation({ bin: '', qty: '' });
         if (currentPickLine + 1 < activePickJob.partsList.length) setCurrentPickLine(prev => prev + 1);

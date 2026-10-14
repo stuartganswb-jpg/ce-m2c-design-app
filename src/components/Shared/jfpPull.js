@@ -47,6 +47,13 @@ export const jfpAdjustmentOf = ({ nsId, qty, bin, subsidiary, location, memo = '
     }] },
 });
 
-/** What the picker is told when no adjustment is sent. */
-export const jfpSkipText = ({ code = '', qty = 0, ref = '', why = '' }) =>
-    `Pick recorded — but NetSuite was NOT adjusted for −${qty} × ${code} (${ref}): ${why}.\n\nThe pieces are off the shelf; NetSuite still counts them. Tell the office — it needs a NetSuite adjustment by hand.`;
+/** What the person is told when no adjustment is sent. `done` = what was recorded anyway ('Pick recorded', 'Scrap recorded'…). */
+export const jfpSkipText = ({ code = '', qty = 0, ref = '', why = '', done = 'Pick recorded' }) =>
+    `${done} — but NetSuite was NOT adjusted for −${qty} × ${code} (${ref}): ${why}.\n\nThe pieces are off the shelf; NetSuite still counts them. Tell the office — it needs a NetSuite adjustment by hand.`;
+
+// ── THE SAME RULE FOR EVERY PULL OUT OF A BIN (Stuart 2026-10-14: "go ahead and fix the other bin issues") ──────────
+// The packing scrap adjustment sent the library's stored home bin, upper-cased; the substitute pull sent the bin typed
+// into a prompt, upper-cased — the same fault as the paint-run pull. Both now read fresh and send the bin's NetSuite id.
+export const pullBinOf = jfpPullBinOf;
+export const adjustmentOutOf = jfpAdjustmentOf;
+export const notAdjustedText = jfpSkipText;
