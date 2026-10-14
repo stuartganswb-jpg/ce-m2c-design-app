@@ -23,6 +23,7 @@ import { mirrorCustomStatusToSibling, releaseSiblingToPickPack, woItemCodeOf, CU
 import { shopLeadCodeOf, shopFeetPerPieceOf } from '../Shared/splitPlan';
 import { isHeld, holdFirst, HOLD_STAGES } from '../Shared/orderHold';
 import OrderStatusChips from '../Shared/OrderStatusChips';
+import { coatCountsOf } from '../Shared/floorActivity';
 import MaterialGridCard from '../Shared/MaterialGridCard';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { qtyText, multiplierNote } from '../Shared/configQty';
@@ -248,6 +249,20 @@ const ShopFloor = () => {
         }));
         return () => unsubs.forEach(u => u());
     }, [user, sibKey]);
+    // EACH TRACK AGAINST ITS OWN RECIPE, ON THE SHOP CARD TOO (Stuart 2026-10-13: "wrap up the pole coat counts on the RTG,
+    // WMS, shop and Setup Queue urgent-strip chips"). The chip for a job's finishing half was drawn with no coat count, so
+    // a coat read "of ?". The recipes are read once here (about 125 small documents — not the finishing collection the
+    // sibling listener above was narrowed away from) and counted by the one reading, Shared/floorActivity.coatCountsOf:
+    // small parts on -S, poles on -P, and the copy an order keeps once it has begun.
+    const [finRecipes, setFinRecipes] = useState({});
+    useEffect(() => {
+        if (!user) return undefined;
+        const unsub = onSnapshot(collection(db, 'fin_recipes'),
+            snap => { const r = {}; snap.docs.forEach(d => { r[d.id] = d.data(); }); setFinRecipes(r); },
+            () => {});
+        return () => unsub();
+    }, [user]);
+    const coatsOf = (wo) => coatCountsOf(finRecipes, wo);
 
     const writeLog = async (msg, cat) => {
         try {
@@ -1287,7 +1302,7 @@ const ShopFloor = () => {
                 {cutSheetMissing(order) && (
                     <div style={{ marginBottom: '10px', padding: '6px 10px', background: '#fdf2f2', border: '1px solid #d9534f', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>⚠ No cut sheet from Vision — confirm the numbers with HQ before starting</div>
                 )}
-                {finSibs[order.finSiblingId] && <div style={{ marginBottom: '10px' }}><OrderStatusChips wo={finSibs[order.finSiblingId]} showWho={false} /></div>}
+                {finSibs[order.finSiblingId] && <div style={{ marginBottom: '10px' }}><OrderStatusChips wo={finSibs[order.finSiblingId]} {...coatsOf(finSibs[order.finSiblingId])} showWho={false} /></div>}
                 <div style={{ display: 'flex', gap: '8px' }}>
                     <button onClick={() => startOrder(order)} style={{ flex: 1.4, background: 'var(--ink)', color: '#fff', border: 'none', padding: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>▶ Start</button>
                     {order.quoteId && (
@@ -1629,7 +1644,7 @@ const ShopFloor = () => {
                     {finSibs[order.finSiblingId] && (
                         <div style={{ margin: '0 0 16px 0', padding: '10px 12px', border: '1px solid var(--line)', background: 'var(--paper-2)' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '7px' }}>Rest of this order</div>
-                            <OrderStatusChips wo={finSibs[order.finSiblingId]} />
+                            <OrderStatusChips wo={finSibs[order.finSiblingId]} {...coatsOf(finSibs[order.finSiblingId])} />
                         </div>
                     )}
                     <div style={{ display: 'flex', gap: '12px', margin: '0 0 20px 0' }}>
@@ -1890,7 +1905,7 @@ const ShopFloor = () => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                   {/* Same lookup as finishing/WMS — searches the orders this screen already
                       subscribes to (shop customs + their fin siblings), zero new listeners. */}
-                  <WhereIsIt orders={[...customOrdersRaw, ...Object.values(finSibs)]} compact />
+                  <WhereIsIt orders={[...customOrdersRaw, ...Object.values(finSibs)]} compact recipeLenOf={(o) => coatsOf(o).recipeLen} poleRecipeLenOf={(o) => coatsOf(o).poleRecipeLen} />
                   <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Operator: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{user.name}</strong></span>
                   <button onClick={handleLogout} style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Return to Hub</button>
                 </div>

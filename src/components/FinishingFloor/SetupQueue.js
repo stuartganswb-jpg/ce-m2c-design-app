@@ -646,7 +646,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                 </div>
                 <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginTop: '6px' }}>{wo.customer || wo.clientName || ''}</div>
                 <div style={{ fontSize: '0.85rem', color: '#8a6d3b', marginTop: '6px' }}>{(holdGateOf(wo) || {}).reason}</div>
-                <OrderStatusChips wo={wo} style={{ marginTop: '10px' }} />
+                <OrderStatusChips wo={wo} {...coatCountsOf(recipes, wo)} style={{ marginTop: '10px' }} />
                 <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
                   <button onClick={() => setActiveSpecs(wo)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>Specs</button>
                   <span style={{ ...btnStyle, flex: 2, textAlign: 'center', background: 'transparent', color: '#8a6d3b', border: '1px dashed #d9a648', cursor: 'default' }}>⏸ Waiting — no setup until RTG lifts the hold</span>

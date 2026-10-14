@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips from '../Shared/OrderStatusChips';
+import { coatCountsOf } from '../Shared/floorActivity';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, deleteField, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
 import { classifyLine, isDisplayOnlyLine, isParkedGeometryLine, DIVISION_CUSTOM, customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
@@ -336,6 +337,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     const [liveWO, setLiveWO] = useState([]);
     const [liveShop, setLiveShop] = useState([]);
     const [liveFin, setLiveFin] = useState([]);
+    // EACH TRACK AGAINST ITS OWN RECIPE, ON RTG TOO (Stuart 2026-10-13: "wrap up the pole coat counts on the RTG, WMS, shop
+    // and Setup Queue urgent-strip chips"). The board's chips were drawn with no coat count, so a coat read "of ?". The
+    // finish recipes are read once (as the CRM reads them) and counted by the one reading, Shared/floorActivity.coatCountsOf:
+    // small parts on -S, poles on -P, and the copy an order keeps once it has begun. Display only — no release reads it.
+    const [finRecipes, setFinRecipes] = useState({});
+    useEffect(() => {
+        const unsub = onSnapshot(collection(db, 'fin_recipes'),
+            snap => { const r = {}; snap.docs.forEach(d => { r[d.id] = d.data(); }); setFinRecipes(r); },
+            () => {});
+        return () => unsub();
+    }, []);
+    const coatsOf = (wo) => coatCountsOf(finRecipes, wo);
     const [stockRefresh, setStockRefresh] = useState(null);   // hq_config/floor_stock_refresh[brand] — the morning run's record
     const stockRefreshBusyRef = useRef(false);
     // Demand documents ride beside the orders and orphan just as easily (2026-08-29: eleven
@@ -3199,7 +3212,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     const buildRepair = buildRepairOf(fin);
                     return (
                         <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                            <OrderStatusChips wo={fin} showWho={false} />
+                            <OrderStatusChips wo={fin} {...coatsOf(fin)} showWho={false} />
                             {place && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink)', letterSpacing: '.03em' }}>📍 {place}</span>}
                             {buildRepair && (
                                 <button onClick={async () => {
@@ -3532,7 +3545,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                         style={{ ...btnStyle, padding: '8px 14px', fontSize: '10px' }}>📋 Day summary</button>
                     {/* WHERE IS IT — from RTG it sees EVERYTHING: every floor job, board record,
                         shop job, demand, rod cut AND inbound PO (with delivery status/ETA). */}
-                    <WhereIsIt compact
+                    <WhereIsIt compact recipeLenOf={(o) => coatsOf(o).recipeLen} poleRecipeLenOf={(o) => coatsOf(o).poleRecipeLen}
                         orders={[...liveFin, ...liveWO.filter(w => !liveFin.some(f => f.id === w.id || f.id === (w.finPayload && w.finPayload.id))), ...liveSO, ...liveShop]}
                         extras={[
                             ...liveConvD.map(d => ({ ...d, __kind: 'CONVERT' })),
@@ -4127,7 +4140,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                             </td>
                                             <td style={{ padding: '12px 16px', color: 'var(--ink-soft)', fontSize: '0.8rem' }}>
                                                 {/* Same chips as the floor and the WMS — HQ reads the status it reads. */}
-                                                {job.finDoc ? <OrderStatusChips wo={job.finDoc} showWho={false} /> : (statusBits || '—')}
+                                                {job.finDoc ? <OrderStatusChips wo={job.finDoc} {...coatsOf(job.finDoc)} showWho={false} /> : (statusBits || '—')}
                                             </td>
                                             <td style={{ padding: '12px 16px', color: 'var(--ink-soft)', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{job.latestTs ? new Date(job.latestTs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                                         </tr>

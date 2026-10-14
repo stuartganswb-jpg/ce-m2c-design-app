@@ -13,7 +13,7 @@ import MaterialGridCard from '../Shared/MaterialGridCard';
 import { coverArrival } from '../Shared/backorderCover';
 import { uomOf, uomLabel } from '../Shared/uom';
 import { orderStatusOf, customPartsReady, liftPatchFor, nothingToPick, stagingMatched, floorWaitsOf } from '../Shared/orderStatus';
-import { asksSprayStation, sprayStationOf, sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS, WINDOW_LABEL, TASK_LABEL } from '../Shared/floorActivity';
+import { asksSprayStation, sprayStationOf, sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS, WINDOW_LABEL, TASK_LABEL, coatCountsOf } from '../Shared/floorActivity';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { pairWaitsOf, waitedText } from '../Shared/stagingPairs';
@@ -218,6 +218,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [finRecipes, setFinRecipes] = useState([]); // paint recipes (P01, P02…) for the painting step
     // The same recipes keyed by id — the shape the shared recipe resolver reads (Spin | Booth at the pick).
     const finRecipeMap = useMemo(() => Object.fromEntries((finRecipes || []).map(r => [r.id, r])), [finRecipes]);
+    // EACH TRACK AGAINST ITS OWN RECIPE, HERE TOO (Stuart 2026-10-13: "wrap up the pole coat counts on the RTG, WMS, shop and
+    // Setup Queue urgent-strip chips") — the chips on this screen were drawn with no coat count, so a coat read "of ?".
+    // One reading, Shared/floorActivity.coatCountsOf: small parts on -S, poles on -P, and the copy an order keeps once begun.
+    const coatsOf = (wo) => coatCountsOf(finRecipeMap, wo);
     const [chipForm, setChipForm] = useState({ customer: '', qty: 1, recipe: '', notes: '' });
     const [chipShowDone, setChipShowDone] = useState(false);
     const [batchQty, setBatchQty] = useState({}); // assign-amount per `${orderId}::${finish}` (default 200)
@@ -5976,7 +5980,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </button>
                     ))}
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
-                    <WhereIsIt orders={finAll} compact extras={[
+                    <WhereIsIt orders={finAll} compact recipeLenOf={(o) => coatsOf(o).recipeLen} poleRecipeLenOf={(o) => coatsOf(o).poleRecipeLen} extras={[
                         ...convertDemands.map(d => ({ ...d, __kind: 'CONVERT' })),
                         ...platingDemands.map(d => ({ ...d, __kind: 'PLATING' })),
                         ...rodCutOrders.filter(o => o.status !== 'DONE' && o.status !== 'CANCELLED').map(o => ({ ...o, __kind: 'RODCUT' })),
@@ -6087,7 +6091,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 })()}
                                                 {/* WHAT IT IS MADE OF · WHICH LINES · THE ORDER'S OTHER WORK ORDERS (Shared/partFacts, 2026-10-07) */}
                                                 <PartFactsStrip doc={job} docs={finAll} refOf={packRef} style={{ marginTop: '8px' }} />
-                                                <OrderStatusChips wo={job} style={{ marginTop: '8px' }} />
+                                                <OrderStatusChips wo={job} {...coatsOf(job)} style={{ marginTop: '8px' }} />
                                                 {renderSprayStationChoice(job)}
                                                 {renderClaimLine(job, 'pick')}
                                                 <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Item{pickable.length === 1 ? '' : 's'}{grouping.changed ? ` (${grouping.from} BOM lines grouped into ${grouping.to} picks)` : ''}{rawPickable.length !== (job.partsList?.length || 0) ? ` · ${(job.partsList?.length || 0) - rawPickable.length} return/fee line(s) ride the shop order` : ''} · tap for parts</div>
@@ -6231,7 +6235,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 </div>
                                                 {/* The same chips as everywhere else — this panel said only "small-only",
                                                     so a row gave no clue whether finishing had moved on (2026-08-03). */}
-                                                <div style={{ padding: '0 12px 10px' }}><OrderStatusChips wo={job} showWho={false} /></div>
+                                                <div style={{ padding: '0 12px 10px' }}><OrderStatusChips wo={job} {...coatsOf(job)} showWho={false} /></div>
                                                 {/* The handshake by material: wood with wood, metal with metal (Shared/partFacts, 2026-10-07). */}
                                                 <PartFactsStrip doc={job} docs={finAll} refOf={packRef} style={{ padding: '0 12px 10px' }} />
                                                 {open && (
@@ -6579,7 +6583,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         // packer ticks at Packaging Prep (a packed document's poles come off its own stamp, so only an
                                         // open document asks the shop order for them).
                                         const soBoxes = orderBoxesOf(so);
-                                        const board = soPackBoardOf({ docs, refOf: woRefOf, boxes: soBoxes, linesOf: packLinesAsPacked });
+                                        const board = soPackBoardOf({ docs, refOf: woRefOf, boxes: soBoxes, linesOf: packLinesAsPacked, coatsOf });
                                         const allPacked = board.verdict === ORDER_VERDICT.ALL_PACKED;
                                         const readyToPack = board.verdict === ORDER_VERDICT.READY;
                                         const hidden = !!soLinesHidden[so.id];
@@ -6792,7 +6796,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     const active = packOrderId === j.id;
                                     return (
                                         <button key={j.id} onClick={() => { if (active) closePackCard(j); else openPackOrder(j); }} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
-                                            {!active && <OrderStatusChips wo={j} showWho={false} style={{ marginBottom: '6px' }} />}
+                                            {!active && <OrderStatusChips wo={j} {...coatsOf(j)} showWho={false} style={{ marginBottom: '6px' }} />}
                                             {/* A paint run looks like a stock build until you read the code — say so. */}
                                             {isPaintOnlyOrder(j) && <div title={`Legacy NetSuite item ${j.jfpItemCode || ''} — no assembly. Scanning the bin adjusts the painted pieces into it.`} style={{ display: 'inline-block', marginBottom: '6px', background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE} · {j.jfpItemCode || ''}</div>}
                                             <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 'bold' }}>{packRef(j)}{isQsOrder(j) && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : theme.brass, border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : theme.brass}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>QUICK SHIP</span>}{j.orderType === 'stock' && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : '#3a7d44', border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : '#3a7d44'}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>STOCK → BIN</span>}</div>
@@ -7008,7 +7012,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 <button onClick={(e) => { e.stopPropagation(); redoPutaway(j); }} title="NetSuite has not confirmed this put-away — re-post it against a corrected bin."
                                                     style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>↩ Re-post put-away</button>
                                             )}
-                                            <OrderStatusChips wo={j} showWho={false} />
+                                            <OrderStatusChips wo={j} {...coatsOf(j)} showWho={false} />
                                             {/* A build the force-complete skipped said nothing anywhere (Eric 2026-10-02,
                                                 WO11639): only the scrap posted. It says so here; RTG posts it. */}
                                             {buildSkippedAtForceComplete(j) && (
