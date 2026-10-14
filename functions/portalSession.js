@@ -27,6 +27,11 @@
 //     offered here and is refused if named (the test tab 7's refusal uses: Shared/materialTwin).
 //   · 10-13 a customer adds NO items by hand (the engine adds the splice a long pole needs; staff add the
 //     rest on review); a line with no firm price reads "priced on review" and the request still goes through.
+//   · 10-14 (step 4, "yes go on A to D" · "yes love the preview idea"): solid brass is held back on EVERY flow,
+//     not only where a pinned part swaps to its brass item; a finish click follows CPQ's own "this part only"
+//     rule (Shared/finishScope); the screen gets what it needs to draw with HQ's own drawing code (the nodes of
+//     each option for its picture, how each finish catches the light, the scale); a removed part is explained in
+//     the customer's words; and a product can be on PREVIEW — seen only by the logins ticked for it.
 //
 // Pure but for loadEngine (which reads the copy from disk): the Cloud Functions in index.js fetch the
 // records and call these. Harness: scripts/portalSession.test.mjs.
@@ -47,14 +52,19 @@ const loadedFrom = new Map();
 async function loadEngine(dir = path.join(__dirname, 'engine')) {
     if (loadedFrom.has(dir)) return loadedFrom.get(dir);
     const at = (f) => pathToFileURL(path.join(dir, f)).href;
-    const [session, pricing, levels, twin, handoff, itemKit, model] = await Promise.all([
+    const [session, pricing, levels, twin, handoff, itemKit, model, pbr, scope, span, size] = await Promise.all([
         import(at('hardwareSession.js')), import(at('hardwarePricing.js')), import(at('priceLevels.js')), import(at('materialTwin.js')),
-        import(at('hardwareHandoff.js')), import(at('itemKit.js')), import(at('hardwareModel.js'))]);
+        import(at('hardwareHandoff.js')), import(at('itemKit.js')), import(at('hardwareModel.js')),
+        import(at('finishPbr.js')), import(at('finishScope.js')), import(at('bracketSpan.js')), import(at('sizeMatrix.js'))]);
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'MANIFEST.json'), 'utf8'));
     const engine = {
         sessionOf: session.sessionOf, offeredFinishesOf: session.offeredFinishesOf, stepHintOf: session.stepHintOf, valueLabel: session.valueLabel, AXIS_LABEL: session.AXIS_LABEL,
+        finishGroupLabel: session.finishGroupLabel, lengthInchesOf: session.lengthInchesOf,
         aliasFor: pricing.aliasFor, PRICE_SOURCES: pricing.PRICE_SOURCES, customerPriceLevel: levels.customerPriceLevel,
-        wearsAsTwin: twin.wearsAsTwin, customerLines: handoff.customerLines, isItemKit: itemKit.isItemKit, takesQty: model.takesQty,
+        wearsAsTwin: twin.wearsAsTwin, customerLines: handoff.customerLines, isItemKit: itemKit.isItemKit,
+        takesQty: model.takesQty, companionsFor: model.companionsFor,
+        pbrMapOf: pbr.pbrMapOf, FABRIC_CLASSES: span.FABRIC_CLASSES, renderScaleOf: size.renderScaleOf,
+        scope: { scopeTargetsOf: scope.scopeTargetsOf, scopeInForce: scope.scopeInForce, swatchActionOf: scope.swatchActionOf, highlightOf: scope.highlightOf },
         stamp: { engineVersion: String(manifest.engineVersion || ''), closureHash: String(manifest.closureHash || ''), files: Object.keys(manifest.files || {}).length },
     };
     loadedFrom.set(dir, engine);
@@ -101,15 +111,14 @@ function levelsFor(engine, customer) {
 }
 
 // ── THE FINISHES THE PORTAL OFFERS ───────────────────────────────────────────────────────────
-// The flow's own list (as CPQ narrows it), less any finish that would turn a part this assembly pins into
-// its other-material item — solid brass is one item per part in another material, and it is CPQ-only.
+// The flow's own list (as CPQ narrows it), less SOLID BRASS — on every flow and at every step ("cpq only",
+// Stuart 2026-10-12). A brass finish is known by its MATERIAL, the word the engine itself groups it by
+// (hardwareSession.finishGroupLabel: a material that says BRASS is "Solid brass"). Until 2026-10-14 this held it
+// back only where a part the assembly pins would swap to its brass item, and LBR showed on H1-75, H1-138 and
+// H1-2TRV before anything was picked — CPQ lists a flow's whole list until a part is chosen.
+const CPQ_ONLY_MATERIAL = /BRASS/;
 function portalFinishesOf(engine, data) {
-    const offered = engine.offeredFinishesOf(data.finishes, data.flowFinishes);
-    const index = new Map();
-    (data.parts || []).forEach((p) => [p.id, p.itemId, p.legacyErpId].forEach((k) => { const kk = U(k); if (kk && kk !== 'PENDING' && !index.has(kk)) index.set(kk, p); }));
-    const find = (id) => index.get(U(id)) || null;
-    const pinned = [...new Set((data.pins || []).map((pn) => U(pn.partId)).filter(Boolean))].map(find).filter(Boolean);
-    return offered.filter((f) => !pinned.some((p) => engine.wearsAsTwin(p, f, find)));
+    return engine.offeredFinishesOf(data.finishes, data.flowFinishes).filter((f) => !CPQ_ONLY_MATERIAL.test(U(f.material || f.type)));
 }
 const codeOfFinish = (f) => U(f && (f.code || f.name));
 
@@ -119,13 +128,18 @@ const codeOfFinish = (f) => U(f && (f.code || f.name));
 // traverse components (the engine seeds them from the chart), shop notes, a price level.
 const FABRICS = ['SHEER', 'PRINT', 'BLACKOUT'];
 class Refused extends Error { constructor(code, message) { super(message); this.code = code; } }
-function stateFromClient(raw, { finishCodes = new Set() } = {}) {
+function stateFromClient(raw, { finishCodes = new Set(), lengthOf = null } = {}) {
     const r = isObj(raw) ? raw : {};
     const flat = (o, max, val) => { const out = {}; if (isObj(o)) Object.entries(o).slice(0, max).forEach(([k, v]) => { const x = val(v); if (x !== undefined && String(k).length <= 160) out[String(k)] = x; }); return out; };
     const scalar = (v) => (typeof v === 'string' ? v.slice(0, 160) : (typeof v === 'number' && Number.isFinite(v) ? v : undefined));
     const str = (v) => (typeof v === 'string' && v ? v.slice(0, 200) : undefined);
     const fin = (v) => { const c = U(v); if (!c) return undefined; if (!finishCodes.has(c)) throw new Refused('FINISH_NOT_OFFERED', `The finish ${c} is not offered on the portal.`); return c; };
-    const length = Number(r.lengthInches);
+    // The length as the customer TYPED it — whole inches and a fraction, the way an installer measures — is turned into
+    // inches here by the engine's own rule (hardwareSession.lengthInchesOf), so the screen never works a length out.
+    const typedIn = (typeof r.poleIn === 'string' || typeof r.poleIn === 'number') ? String(r.poleIn).slice(0, 12) : '';
+    const typedFrac = typeof r.poleFrac === 'string' ? r.poleFrac.slice(0, 12) : '';
+    const typed = (typedIn || typedFrac) && typeof lengthOf === 'function' ? lengthOf(typedIn, typedFrac) : null;
+    const length = typed !== null && typed !== undefined ? Number(typed) : Number(r.lengthInches);
     const stepQty = flat(r.stepQty, 60, (v) => { const n = parseInt(v, 10); return n > 0 && n <= 9999 ? String(n) : undefined; });
     const finishAnswers = {};
     if (isObj(r.finishAnswers)) Object.entries(r.finishAnswers).slice(0, 12).forEach(([code, a]) => { const c = U(code); if (finishCodes.has(c) && isObj(a)) finishAnswers[c] = flat(a, 8, str); });
@@ -142,6 +156,26 @@ function stateFromClient(raw, { finishCodes = new Set() } = {}) {
     };
 }
 
+// WHERE THE CUSTOMER IS — the step on screen and what they last said a finish click applies to there. Not part of
+// the configuration (nothing is priced from it): it only decides what a swatch click would set (Shared/finishScope).
+const SCOPES = ['PART', 'COLLAR', 'WHOLE'];
+function uiFromClient(raw) {
+    const r = isObj(raw) ? raw : {};
+    return { step: typeof r.step === 'string' ? r.step.slice(0, 160) : '', scope: SCOPES.includes(U(r.scope)) ? U(r.scope) : '' };
+}
+
+// WHICH PRODUCTS A LOGIN MAY OPEN (CRM → Portal Access): every flow set LIVE; and, for the logins ticked "sees
+// previews", the flows set to PREVIEW — so a product is tried on the customer's own account, exactly as they will
+// see it, before any of their people can (Stuart 2026-10-14: "yes love the preview idea"). The same answer whether
+// or not a flow exists, so nobody can probe for flows.
+function flowIdsFor(crm, uid) {
+    const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : []);
+    const live = list(crm && crm.portalFlowIds);
+    const previewer = !!uid && list(crm && crm.portalPreviewUids).includes(String(uid));
+    const preview = previewer ? list(crm && crm.portalPreviewFlowIds).filter((id) => !live.includes(id)) : [];
+    return { live, preview, all: [...live, ...preview] };
+}
+
 // ── THE VIEW ─────────────────────────────────────────────────────────────────────────────────
 // Everything the portal draws for one set of answers, built field by field from the engine's answer.
 const REFUSAL_WORDS = {
@@ -150,11 +184,25 @@ const REFUSAL_WORDS = {
     BARE_WOOD: 'Choose a wood finish — the wood parts on this order have none yet.',
     FINISH_QUESTIONS: 'One of your finishes has a question still to answer.',
 };
-function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = true } = {}) {
+// The words for a finish group that a CUSTOMER reads: CPQ's own for what it knows (Painted · Plated · Wood · Solid
+// brass — hardwareSession.finishGroupLabel), and an unfamiliar material by its own name, never "In house" /
+// "Outsourced", which are ours to know.
+const titled = (v) => txt(String(v || '').toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase()));
+const groupWord = (engine, material, kind) => (/METAL|WOOD|BRASS/.test(U(material)) ? engine.finishGroupLabel(material, kind) : titled(material));
+// Why a pick was taken off, in the customer's words. The engine's reason is written for the shop ("mount — tagged
+// CEILING, this order is WALL", "its tag in 1.6 was changed …"); what the customer needs is what it means for them.
+const removalWords = (reason) => (/not made in the size now chosen/i.test(String(reason || '')) ? 'it is not made in the size now chosen'
+    : /no longer on this assembly|re-made since this line was saved/i.test(String(reason || '')) ? 'it is no longer offered on this step'
+        : 'it does not go with a choice made after it');
+
+function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = true, ui = {} } = {}) {
     const s = engine.sessionOf({ ...data, priceLevel: level }, state);
     const part = (id) => s.findPart(id);
     const their = (id) => engine.aliasFor(part(id), s.priceCtx) || '';
-    const option = (o, key) => ({ id: o.id, code: s.ourId(o.partId), sku: their(o.partId), name: txt((part(o.partId) || {}).itemName || o.name), noFinish: !!o.noFinish, on: s.livePicks[key] === o.id });
+    // An option: our number, theirs, our description — and the nodes it owns in the model, which is what HQ's own picture
+    // of it is photographed from (Shared/hardwareThumbs). Node names are already what the drawing below is made of.
+    const option = (o, key) => ({ id: o.id, code: s.ourId(o.partId), sku: their(o.partId), name: txt((part(o.partId) || {}).itemName || o.name), noFinish: !!o.noFinish, on: s.livePicks[key] === o.id,
+        nodes: (Array.isArray(o.nodes) ? o.nodes : []).slice(0, 60).map((n) => txt(n, 160)) });
     const slotView = (slot) => (slot ? { key: slot.key, notAsked: slot.suppressedBy ? txt(slot.suppressedReason, 240) : '', options: (slot.options || []).map((o) => option(o, slot.key)) } : null);
     const steps = s.steps.map((st) => {
         const base = { key: st.key, kind: st.kind, label: st.label, answer: s.answerOf(st) || '', hint: engine.stepHintOf(st) };
@@ -167,25 +215,62 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
             const picked = (st.slot.options || []).find((o) => o.id === s.livePicks[st.slot.key]) || null;
             const asksQty = !!picked && engine.takesQty(st.slot);
             return { ...base, ...slotView(st.slot), sub: st.sub ? { label: 'Matching backplate', ...slotView(st.sub) } : null,
+                // A CHOSEN RETURN COLLAPSES THE REST (CPQ, Stuart 2026-08-20): the plate picker it brings sits under the other ends.
+                collapse: !!(picked && picked.role === 'RETURN' && st.sub),
                 qty: asksQty ? { typed: state.stepQty[st.slot.key] || '', recommended: s.recommendFor(st.slot, picked) || null } : null };
         }
-        if (st.kind === 'LENGTH') return { ...base, lengthInches: s.lengthInches || null, feetBilled: s.lengthFeet || null, fabricId: state.fabricId,
+        if (st.kind === 'LENGTH') return { ...base, lengthInches: s.lengthInches || null, exactFeet: s.lengthFeetExact || null, feetBilled: s.lengthFeet || null, fabricId: state.fabricId,
+            fabrics: engine.FABRIC_CLASSES.map((f) => ({ id: f.id, label: txt(f.label) })),
             splice: s.spliceNeeded ? { overInches: s.spliceOverIn, included: !!s.spliceSatisfied } : null,
             support: s.advice ? { everyInches: s.advice.spanInches, supports: s.advice.brackets } : null };
         if (st.kind === 'CARRIERS') return { ...base, rows: st.carriers.map((c) => ({ code: s.ourId(c.partId), name: txt((part(c.partId) || {}).itemName || c.name) })) };
         return base;                               // TRV: the track's components — shown as the engine seeds them (the customer's own picks come with the traverse step)
     });
-    // the finishes: what this configuration can wear among what the portal offers, grouped as the engine groups them
-    const allowed = new Set(portalFinishesOf(engine, data).map(codeOfFinish));
+    // ── THE FINISHES: what this configuration can wear among what the portal offers, grouped as the engine groups them ──
+    const offered = portalFinishesOf(engine, data);
+    const allowed = new Set(offered.map(codeOfFinish));
     const swatch = (f) => ({ code: codeOfFinish(f), name: txt(f.name && f.name !== f.code ? f.name : ''), theirs: txt(s.clientFinishName(f) || ''), swatch: String(f.textureUrl || f.finalImageUrl || '') });
-    const groups = (s.finishGroups || []).map(([material, g]) => ({ material, inHouse: g.inHouse.filter((f) => allowed.has(codeOfFinish(f))).map(swatch), out: g.out.filter((f) => allowed.has(codeOfFinish(f))).map(swatch) }))
-        .filter((g) => g.inHouse.length + g.out.length > 0);
+    // WHAT A SWATCH CLICK APPLIES TO, by CPQ's own rule (Shared/finishScope — Stuart 2026-10-02: "when i change left to EP1
+    // then right changes … this needs to work for all steps"): on a part's step, that part (once the configuration has a
+    // finish for it), the collar a two-part finial brings, or the whole configuration. The screen says which step it is on
+    // and what it last chose there; this works out what a click sets, and which swatch each group shows as chosen.
+    const sc = engine.scope;
+    const stepNow = s.steps.find((st) => st.key === (ui && ui.step)) || null;
+    const stepOption = (stepNow && stepNow.kind === 'SLOT' && s.livePicks[stepNow.slot.key]) ? ((stepNow.slot.options || []).find((x) => x.id === s.livePicks[stepNow.slot.key]) || null) : null;
+    const stepCollar = (stepOption && stepOption.requiresCollar) ? (engine.companionsFor(s.model.choices, [stepOption.id])[0] || null) : null;
+    const targets = sc.scopeTargetsOf({ option: stepOption, collar: stepCollar, wears: (c) => offered.some((f) => s.wearsFinish(c, f)) });
+    const now = sc.scopeInForce({ targets, picked: (ui && ui.scope) ? { step: ui.step || '', scope: ui.scope } : null, stepKey: (stepNow && stepNow.key) || '', configFinishOf: s.globalFinishFor });
+    const target = targets.find((t) => t.scope === now) || targets[targets.length - 1];
+    const wearsMaterial = (c, mat) => s.wearsFinish(c, { material: mat });
+    const groups = (s.finishGroups || []).map(([material, g]) => {
+        const lists = [['in', g.inHouse], ['out', g.out]].map(([kind, list]) => ({ label: groupWord(engine, material, kind), swatches: list.filter((f) => allowed.has(codeOfFinish(f))).map(swatch) }))
+            .filter((l) => l.swatches.length);
+        const act = sc.swatchActionOf({ target, material, code: '', wearsMaterial });
+        return { material, heading: titled(material), lists,
+            sel: sc.highlightOf({ target, material, partFinish: s.partFinish, configFinishOf: s.globalFinishFor, globalFinishes: s.globalFinishes, wearsMaterial }),
+            applies: act.kind === 'PART' ? { part: act.id } : { whole: true } };
+    }).filter((g) => g.lists.length);
+    const scope = {
+        step: (stepNow && stepNow.key) || '', now,
+        targets: targets.map((t) => ({ scope: t.scope, code: t.choice ? txt(s.ourId(t.choice.partId)) : '', sku: t.choice ? txt(their(t.choice.partId)) : '' })),
+        // the part this step's click would set, when it is wearing a finish of its own — "back to the configuration finish"
+        exception: (target.choice && s.partFinish[target.choice.id]) ? { id: target.choice.id, code: txt(s.ourId(target.choice.partId)), finish: txt(s.partFinish[target.choice.id]) } : null,
+        exceptions: Object.keys(s.partFinish || {}).length,
+    };
     const asking = (s.askingFinishes || []).map((a) => ({ code: a.code, name: txt(a.finish && a.finish.name), questions: (a.questions || []).map((q) => ({ label: q.label, choices: q.choices })), answers: (state.finishAnswers || {})[a.code] || {} }));
-    // the price: the customer's lines at the level this portal shows; a line no rule priced firmly reads "priced on review"
+    // ── THE PRICE: the customer's lines at the level this portal shows; a line no rule priced firmly reads "priced on review" ──
     const onReview = (l) => l.source === engine.PRICE_SOURCES.NONE || l.source === engine.PRICE_SOURCES.FALLBACK;
-    const finishOf = (l) => { const f = l.finishCode ? s.finishByCode.get(U(l.finishCode)) : null; return f ? txt(s.clientFinishName(f) || (f.name && f.name !== f.code ? f.name : '') || f.code) : (l.subFinishCode ? txt(l.subFinishCode) : ''); };
+    // A finish is NAMED — their word for it first, else ours (as CPQ's pricing panel names it); a part made in a stock colour
+    // says the colour's name, not its code (TCP, TBR), and a clear part says it takes none.
+    const finishName = (f) => txt(s.clientFinishName(f) || (f.name && f.name !== f.code ? f.name : '') || f.code);
+    const finishOf = (l) => {
+        const f = l.finishCode ? s.finishByCode.get(U(l.finishCode)) : null;
+        if (f) return { finish: finishName(f) };
+        if (l.subFinishCode) { const sub = s.finishByCode.get(U(l.subFinishCode)); return { finish: sub ? finishName(sub) : txt(l.subFinishCode), stock: true }; }
+        return { finish: '', ...(l.noFinish ? { clear: true } : {}) };
+    };
     const line = (l, extra = {}) => ({ code: txt(l.billedId || s.ourId(l.partId)), sku: txt(l.sku || l.aliasCode || ''), name: txt((part((l.twinOf && l.soldPartId) || l.partId) || {}).itemName || l.name), qty: l.qty,
-        ...(l.perFoot ? { feet: l.billedFeet !== undefined ? l.billedFeet : l.feet } : {}), finish: finishOf(l), ...extra,
+        ...(l.perFoot ? { feet: l.billedFeet !== undefined ? l.billedFeet : l.feet } : {}), ...finishOf(l), ...extra,
         ...(showMoney && !onReview(l) ? { unit: money(l.unit), total: money(l.total) } : { onReview: true }) });
     const takenExtras = s.extraLines.filter((l) => Number((s.extras.find((x) => x.code === l.partId && (x.slot || '') === (l.slot || '')) || {}).qty) > 0);
     const lines = [...engine.customerLines(s.priced.lines).map((l) => line(l)), ...takenExtras.map((l) => line(l, { added: true })), ...(s.trvLines || []).map((l) => line(l))];
@@ -194,16 +279,30 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
     const everyLine = [...s.priced.lines, ...takenExtras, ...(s.trvLines || [])];
     const hasReview = everyLine.some(onReview);
     const firmTotal = money(s.grandTotal - everyLine.filter(onReview).reduce((n, l) => n + (Number(l.total) || 0), 0));
+    // ── THE DRAWING: what HQ's own drawing code (Shared/DynamicModel) is handed, and how each finish on screen catches the
+    // light — the same numbers HQ's registry holds, worked out from the same two finish lists (Shared/finishPbr.pbrMapOf) ──
+    let render = null;
+    if (s.renderState) {
+        const textures = s.renderState.textureEntries || [];
+        const outsourced = data.outsourceCodes || [];
+        const master = (data.finishes || []).filter((f) => !outsourced.includes(f));
+        const all = engine.pbrMapOf(master, outsourced);
+        const pbr = {};
+        textures.forEach((e) => { if (e && e.url && all[e.url]) pbr[e.url] = all[e.url]; });
+        render = { visible: s.renderState.visibilityEntries.filter((e) => e.visible).map((e) => e.target), clear: s.renderState.clearNodes, textures,
+            cloneSpecs: s.renderState.cloneSpecs, stretchSpec: s.renderState.stretchSpec, spliceMarks: s.renderState.spliceMarks,
+            pbr, scale: engine.renderScaleOf(data.flow, state.sizePick || {}, data.assembly) };
+    }
     return {
         engine: engine.stamp,
         flow: { id: String((data.flow && data.flow.id) || ''), name: txt(data.flow && data.flow.name) },
         assembly: { name: txt(data.assembly && data.assembly.itemName), cadUrl: String((data.assembly && data.assembly.manufacturingSpecs && data.assembly.manufacturingSpecs.cadUrl) || '') },
         steps,
-        finishes: { groups, chosen: { ...s.globalFinishes }, byPart: { ...s.partFinish }, asking },
-        render: s.renderState ? { visible: s.renderState.visibilityEntries.filter((e) => e.visible).map((e) => e.target), clear: s.renderState.clearNodes, textures: s.renderState.textureEntries,
-            cloneSpecs: s.renderState.cloneSpecs, stretchSpec: s.renderState.stretchSpec, spliceMarks: s.renderState.spliceMarks } : null,
+        finishes: { groups, chosen: { ...s.globalFinishes }, byPart: { ...s.partFinish }, asking, scope },
+        render,
         price: { level: showMoney ? s.effectiveLevel : '', lines, ...(showMoney ? { total: firmTotal, totalForAll: money(firmTotal * s.qty) } : {}), hasReview: hasReview || !showMoney, qty: s.qty },
-        removals: s.drops.map((d) => ({ key: d.key, step: d.step, part: txt(d.partName), reason: txt(d.reason, 240), acked: !!d.acked })),
+        // what a later choice took off: our number and our description, and why in the customer's words — Understood clears it
+        removals: s.drops.map((d) => ({ key: d.key, step: txt(d.step), code: d.partCode ? txt(s.ourId(d.partCode)) : '', part: txt((part(d.partCode) || {}).itemName || d.partName), why: removalWords(d.reason), acked: !!d.acked })),
         refusal: s.refusal ? { kind: s.refusal.kind, message: REFUSAL_WORDS[s.refusal.kind] || 'This configuration cannot be requested yet.' } : null,
     };
 }
@@ -222,4 +321,4 @@ function requestLineOf(engine, data, state, { level = 'STANDARD' } = {}) {
 // the OLD engine until it is deployed. Two halves that disagree must not quote — said, never guessed.
 const inLine = (serverStamp, siteStamp) => !!serverStamp && !!siteStamp && !!serverStamp.closureHash && serverStamp.closureHash === siteStamp.closureHash && serverStamp.engineVersion === siteStamp.engineVersion;
 
-module.exports = { loadEngine, worldFor, trvFamilyOf, levelsFor, portalFinishesOf, stateFromClient, viewOf, requestLineOf, inLine, Refused, REFUSAL_WORDS, SHOWABLE };
+module.exports = { loadEngine, worldFor, trvFamilyOf, levelsFor, portalFinishesOf, stateFromClient, uiFromClient, flowIdsFor, viewOf, requestLineOf, inLine, Refused, REFUSAL_WORDS, SHOWABLE };

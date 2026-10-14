@@ -12,6 +12,10 @@ import { join } from 'node:path';
 import { mirrorPlan, writeMirror } from './sync-engine.mjs';
 import { sessionOf } from '../src/components/Shared/hardwareSession.js';
 import { customerPriceLevel } from '../src/components/Shared/priceLevels.js';
+import { scopeTargetsOf, scopeInForce, swatchActionOf, highlightOf } from '../src/components/Shared/finishScope.js';
+import { companionsFor } from '../src/components/Shared/hardwareModel.js';
+import { pbrMapOf } from '../src/components/Shared/finishPbr.js';
+import { FABRIC_CLASSES } from '../src/components/Shared/bracketSpan.js';
 import { ASSEMBLY, PINS } from './hardwareAutoPicks.fixture.mjs';
 
 const require = createRequire(import.meta.url);
@@ -82,8 +86,14 @@ ok('…loaded once per instance', (await P.loadEngine(copy)) === engine);
 // ── solid brass is CPQ-only ──
 {
     const offered = P.portalFinishesOf(engine, world()).map(f => f.code);
-    eq('a finish that turns a pinned part into its other-material item is not offered on the portal', offered, ['P14', 'P25', 'S04', 'EP4']);
-    eq('…it is, on a flow where no pinned part has such a twin', P.portalFinishesOf(engine, world(fabricut, { records: records.filter(r => r.id !== 'X-TWIN-BRASS') })).map(f => f.code), ['P14', 'P25', 'S04', 'LBR', 'EP4']);
+    eq('solid brass is not offered on the portal', offered, ['P14', 'P25', 'S04', 'EP4']);
+    // ⚠ CHANGED 2026-10-14 (step 4, piece B): until then a brass finish was held back only where a part the assembly pins
+    // would swap to its brass item, and LBR showed on H1-75 / H1-138 / H1-2TRV before anything was picked. Now: everywhere.
+    eq('…nor on a flow where no pinned part has a brass twin', P.portalFinishesOf(engine, world(fabricut, { records: records.filter(r => r.id !== 'X-TWIN-BRASS') })).map(f => f.code), ['P14', 'P25', 'S04', 'EP4']);
+    const opening = P.viewOf(engine, world(), P.stateFromClient({}), { level: 'FAB_RETAIL', money: true });
+    ok('…nor on the opening screen, before anything is picked (when CPQ lists the flow\'s whole list)', opening.finishes.groups.length > 0 && opening.finishes.groups.every(g => g.material !== 'BRASS' && g.lists.every(l => l.swatches.every(f => f.code !== 'LBR'))));
+    const withClear = P.viewOf(engine, world(fabricut, { finishes: [...FIN, { id: 'F-AC', code: 'AC', name: 'Clear Acrylic', material: 'CLEAR', textureUrl: 't://ac' }] }), P.stateFromClient({}), { level: 'FAB_RETAIL', money: true });
+    eq('a material CPQ has no word for is called by its own name — never "In house"', withClear.finishes.groups.filter(g => g.material === 'CLEAR').map(g => [g.heading, g.lists.map(l => l.label)]), [['Clear', ['Clear']]]);
     eq('the flow\'s own finish list narrows it first', P.portalFinishesOf(engine, { ...world(), flowFinishes: ['P14', 'LBR'] }).map(f => f.code), ['P14']);
 }
 
@@ -170,10 +180,130 @@ ok(`the set-ups take each road — lines ${t.lines}, refused ${JSON.stringify(t.
     const withTwin = (() => { for (const answers of framings) { const s0 = direct('FAB_RETAIL', { answers, picks: {} }); const slot = s0.model.slots.find(x => x.options.some(o => o.partId === twinPart)); if (slot) return { answers, picks: { [slot.key]: slot.options.find(o => o.partId === twinPart).id } }; } return null; })();
     const twinState = P.stateFromClient({ ...withTwin, lengthInches: 96 }, { finishCodes: allowed });
     const hqGroups = direct('FAB_RETAIL', twinState).finishGroups.flatMap(([, g]) => [...g.inHouse, ...g.out]).map(f => f.code);
-    const portalGroups = P.viewOf(engine, w0, twinState, { level: 'FAB_RETAIL', money: true }).finishes.groups.flatMap(g => [...g.inHouse, ...g.out]).map(f => f.code);
+    const portalGroups = P.viewOf(engine, w0, twinState, { level: 'FAB_RETAIL', money: true }).finishes.groups.flatMap(g => g.lists.flatMap(l => l.swatches)).map(f => f.code);
     eq('with the part that has a brass twin chosen, CPQ itself offers the brass — the portal\'s view does not', [hqGroups.includes('LBR'), portalGroups.includes('LBR'), portalGroups.includes('P14')], [true, false, true]);
-    ok('the finishes offered are grouped as CPQ groups them, in the customer\'s own words where they have one, and never the brass', view.finishes.groups.length > 0 && view.finishes.groups.every(g => [...g.inHouse, ...g.out].every(f => f.code !== 'LBR')) && view.finishes.groups.some(g => g.inHouse.some(f => f.code === 'P14' && f.theirs === 'Black')) && JSON.stringify(view.finishes.chosen) === JSON.stringify({ METAL: 'P14', WOOD: 'S04' }));
+    ok('the finishes offered are grouped as CPQ groups them, in the customer\'s own words where they have one, and never the brass', view.finishes.groups.length > 0 && view.finishes.groups.every(g => g.lists.every(l => l.swatches.every(f => f.code !== 'LBR'))) && view.finishes.groups.some(g => g.lists.some(l => l.swatches.some(f => f.code === 'P14' && f.theirs === 'Black'))) && JSON.stringify(view.finishes.chosen) === JSON.stringify({ METAL: 'P14', WOOD: 'S04' }));
+    ok('a group is headed by its material and its lists by CPQ\'s words — never "In house" / "Outsourced"', view.finishes.groups.every(g => g.heading && g.lists.every(l => l.label && !/in house|outsourced/i.test(l.label))) && view.finishes.groups.some(g => g.lists.some(l => l.label === 'Painted')) && view.finishes.groups.some(g => g.lists.some(l => l.label === 'Plated')));
     ok('what is drawn is the engine\'s additive render: the nodes of what was chosen, by name', !!view.render && view.render.visible.length > 0 && view.render.visible.every(n => typeof n === 'string'));
+}
+// ── STEP 4 (2026-10-14): what the portal's screen needs to be CPQ's walk, each held against HQ's own modules ──
+{
+    // the length as typed — whole inches and a fraction — worked out by the engine's own rule
+    const L = (raw) => P.stateFromClient(raw, { finishCodes: allowed, lengthOf: engine.lengthInchesOf }).lengthInches;
+    eq('a length typed as inches and a fraction is the engine\'s inches; a number still works; nonsense is no length', [L({ poleIn: '96', poleFrac: '1/2' }), L({ poleIn: '96', poleFrac: '' }), L({ poleIn: 120 }), L({ lengthInches: 84 }), L({ poleIn: 'x', poleFrac: 'y' }), L({ poleIn: '9000' }), L({ poleIn: '96', poleFrac: '3/16', lengthInches: 10 })], [96.5, 96, 120, 84, null, null, 96.1875]);
+    eq('where the customer is: the step and what a click applies to, nothing else', [P.uiFromClient({ step: 'ROD||', scope: 'part', x: 1 }), P.uiFromClient({ scope: 'EVERYTHING' }), P.uiFromClient(null)], [{ step: 'ROD||', scope: 'PART' }, { step: '', scope: '' }, { step: '', scope: '' }]);
+    // which products a login may open: live, and preview for the logins ticked for previews
+    const crm = { portalFlowIds: ['A', 'B', 7], portalPreviewFlowIds: ['B', 'C', ''], portalPreviewUids: ['uid-stuart'] };
+    eq('a login sees the LIVE products; one ticked for previews also sees the PREVIEW ones (once, live winning)', [P.flowIdsFor(crm, 'uid-other'), P.flowIdsFor(crm, 'uid-stuart'), P.flowIdsFor(crm, ''), P.flowIdsFor(null, 'uid-stuart')],
+        [{ live: ['A', 'B'], preview: [], all: ['A', 'B'] }, { live: ['A', 'B'], preview: ['C'], all: ['A', 'B', 'C'] }, { live: ['A', 'B'], preview: [], all: ['A', 'B'] }, { live: [], preview: [], all: [] }]);
+
+    // Two assemblies: the H1-2TRV pins above, and a small made-up one with what they lack — finials (wood and clear, each with
+    // a collar), a miter return that is a fee, a cast return, an inside mount and a plate behind every arm (the same assembly
+    // scripts/hardwareSession.test.mjs walks), so a return that collapses its step, a collar and a removal are all reached.
+    const fcl = (id, category, position, extra = {}) => ({ id, name: id, category, position, location: 'WALL', nodes: [`${id}_mesh`], ...extra });
+    const FIN_ASM = { id: 'ASM-FIN', itemId: 'ASM-FIN', itemName: 'Ends and plates', partClass: 'Assembly', brandId: 'ce', manufacturingSpecs: { cadUrl: 'https://models.test/fin.glb' },
+        nodeClusters: [fcl('F-ROD', 'POLE', 'CENTER'), fcl('F-EL', 'FINIAL', 'LEFT'), fcl('F-ER', 'FINIAL', 'RIGHT'), fcl('F-BL', 'BRACKET', 'LEFT'), fcl('F-BC', 'BRACKET', 'CENTER'), fcl('F-BR', 'BRACKET', 'RIGHT'),
+            fcl('F-PL', 'BACKPLATE', 'LEFT'), fcl('F-PC', 'BACKPLATE', 'CENTER'), fcl('F-PR', 'BACKPLATE', 'RIGHT'), fcl('F-RG', 'RING', 'SHARED')] };
+    let fp = 0;
+    const fpin = (clusterId, code, extra = {}) => ({ id: `FPIN-${String(++fp).padStart(2, '0')}-${code}`, assemblyId: 'ASM-FIN', clusterId, partId: `FD-${code}`, partName: code, legacyErpId: code, targetNode: `${clusterId}_mesh`, defaultQty: 1, choiceSort: fp, ...extra });
+    const endPins = (c) => [fpin(c, 'MF', { endTreatment: 'FINIAL' }), fpin(c, 'WF', { endTreatment: 'FINIAL', materials: 'WOOD', requiresCollar: 'COL' }), fpin(c, 'AF', { endTreatment: 'FINIAL', materials: 'CLEAR (NO FINISH)', requiresCollar: 'COL' }),
+        fpin(c, 'COL', { endTreatment: 'FINIAL', isCollar: true }), fpin(c, 'MRF', { endTreatment: 'MITER_RETURN' }), fpin(c, 'CR', { endTreatment: 'FRENCH_RETURN' }), fpin(c, 'IM', { endTreatment: 'INSIDE_MOUNT' })];
+    const FIN_PINS = [fpin('F-ROD', 'MR'), fpin('F-ROD', 'WR', { materials: 'WOOD' }), ...endPins('F-EL'), ...endPins('F-ER'),
+        ...['F-BL', 'F-BC', 'F-BR'].flatMap(c => [fpin(c, 'BS'), fpin(c, 'BE')]), ...['F-PL', 'F-PC', 'F-PR'].flatMap(c => [fpin(c, 'BP'), fpin(c, 'BP2')]), fpin('F-RG', 'RG'), fpin('F-RG', 'WRG', { materials: 'WOOD' })];
+    const fpart = (code, extra = {}) => ({ id: `FD-${code}`, itemId: `FD-${code}`, legacyErpId: code, itemName: `Item ${code}`, partClass: 'Inventory', brandId: 'ce', manufacturingSpecs: { basePrice: 10 + code.length }, ...extra });
+    const FIN_PARTS = ['MR', 'WR', 'MF', 'WF', 'AF', 'COL', 'CR', 'IM', 'BE', 'BP', 'BP2', 'RG', 'WRG', 'BS'].map(c => fpart(c)).concat([fpart('MRF', { partClass: 'Fee' })]);
+    const FIN_FLOW = { id: 'FLOW-FIN', name: 'Ends and plates', brandId: 'ce', linkedAssemblyId: 'ASM-FIN', extraItems: [], flowFinishes: [] };
+    const TBR = { id: 'F-TBR', code: 'TBR', name: 'Track Bronze', material: 'METAL', textureUrl: 't://tbr', clientMapping: [{ customerId: 'FABRICUT', clientFinishName: 'Bronze' }] };
+    const S11 = { id: 'F-S11', code: 'S11', name: 'Dark Walnut', material: 'WOOD', textureUrl: 't://s11' };
+    const WORLDS = [
+        { name: 'H1-2TRV', data: world(fabricut, { finishes: [...FIN, TBR] }), finishes: [...FIN, TBR] },
+        { name: 'ends and plates', data: P.worldFor(engine, { flow: FIN_FLOW, records: [...FIN_PARTS, FIN_ASM], pins: FIN_PINS, finishes: [...FIN, TBR, S11], outsourceFinishes: OUT, spanDoc: null, trvRules: null, customer: fabricut, customerId: fabricut.id }), finishes: [...FIN, TBR, S11] },
+    ];
+    const allowedHere = new Set([...allowed, 'TBR', 'S11']);
+    const tt = { views: 0, nodes: 0, collapse: 0, collapsed: 0, length: 0, pbr: 0, scale: 0, scope: 0, collarScope: 0, clicks: 0, words: 0, removals: 0, stock: 0 };
+    const bad = [];
+    for (const W of WORLDS) {
+        const dOf = (level, state) => sessionOf({ ...W.data, priceLevel: level }, state);
+        const frs = [];
+        (function walk(answers) { const open = dOf('STANDARD', { answers, picks: {} }).model.axes.find(a => !a.implied && a.values.length > 1 && answers[a.key] == null); if (!open) { frs.push(answers); return; } open.values.forEach(v => walk({ ...answers, [open.key]: v })); })({});
+        const pickIn = (answers, seed) => { const rand = rng(seed); let picks = {}; for (let g = 0; g < 40; g++) { const s0 = dOf('STANDARD', { answers, picks }); const slot = s0.model.slots.find(x => !s0.livePicks[x.key] && !picks[x.key] && x.options.length && !x.suppressedBy); if (!slot) break; picks[slot.key] = slot.options[Math.floor(rand() * slot.options.length)].id; } return picks; };
+        const runs = W.name === 'H1-2TRV' ? 4 : 24;
+        frs.forEach((answers, fi) => {
+            for (let v = 0; v < runs; v++) {
+                let picks = pickIn(answers, `s4|${W.name}|${fi}|${v}`);
+                if (v % 4 === 3) {
+                    // a later choice that takes something off: another framing's picks (the traverse pins), or an end turned into a
+                    // return while its bracket stays picked (the made-up assembly)
+                    if (W.name === 'H1-2TRV') picks = pickIn(frs[(fi + 1) % frs.length], `s4x|${fi}|${v}`);
+                    else { const m0 = dOf('STANDARD', { answers, picks }).model; m0.slots.filter(sl => sl.kind === 'END').forEach(sl => { const ret = sl.options.find(o => o.role === 'RETURN'); if (ret) picks[sl.key] = ret.id; }); }
+                }
+                const raw = { answers, picks, poleIn: String([36, 96, 150, 60][(fi + v) % 4]), poleFrac: ['', '1/2', '3/8', ''][v % 4], globalFinishes: [{ METAL: 'P14', WOOD: 'S04' }, { METAL: 'EP4' }, {}, { METAL: 'P25', WOOD: 'S11' }][(fi + v) % 4].WOOD === 'S11' && W.name === 'H1-2TRV' ? { METAL: 'P25' } : [{ METAL: 'P14', WOOD: 'S04' }, { METAL: 'EP4' }, {}, { METAL: 'P25', WOOD: 'S11' }][(fi + v) % 4],
+                    partFinish: v % 4 === 2 ? { [Object.values(picks)[0]]: 'EP4' } : {} };
+                const state = P.stateFromClient(raw, { finishCodes: allowedHere, lengthOf: engine.lengthInchesOf });
+                const hq = dOf('FAB_RETAIL', state);
+                const offeredHere = P.portalFinishesOf(engine, W.data);
+                hq.steps.forEach((st, si) => {
+                    for (const pickedScope of [null, 'WHOLE', 'PART', 'COLLAR']) {
+                        const ui = { step: st.key, scope: pickedScope || '' };
+                        const view = P.viewOf(engine, W.data, state, { level: 'FAB_RETAIL', money: true, ui });
+                        tt.views++;
+                        if (pickedScope === null) {
+                            // option nodes = the choice's own nodes; the collapse = CPQ's rule; the length step = the engine's figures
+                            const vs = view.steps[si];
+                            if (st.kind === 'SLOT') {
+                                const wantNodes = (st.slot.options || []).map(o => (o.nodes || []).slice(0, 60));
+                                if (JSON.stringify(wantNodes) !== JSON.stringify(vs.options.map(o => o.nodes))) bad.push(`nodes ${W.name} ${fi}.${v}.${si}`); else tt.nodes++;
+                                const picked = (st.slot.options || []).find(o => o.id === hq.livePicks[st.slot.key]);
+                                const want = !!(picked && picked.role === 'RETURN' && st.sub);
+                                if (vs.collapse !== want) bad.push(`collapse ${W.name} ${fi}.${v}.${si}`); else { tt.collapse++; if (want) tt.collapsed++; }
+                            }
+                            if (st.kind === 'LENGTH') {
+                                if (vs.lengthInches !== (hq.lengthInches || null) || vs.exactFeet !== (hq.lengthFeetExact || null) || vs.feetBilled !== (hq.lengthFeet || null) || JSON.stringify(vs.fabrics) !== JSON.stringify(FABRIC_CLASSES.map(f => ({ id: f.id, label: f.label })))) bad.push(`length ${W.name} ${fi}.${v}`); else tt.length++;
+                            }
+                            if (si === 0) {
+                                // the drawing's light: the very numbers HQ's registry holds for each texture on screen; the scale
+                                const all = pbrMapOf(W.finishes, OUT);
+                                const want = {}; (hq.renderState ? hq.renderState.textureEntries : []).forEach(e => { if (all[e.url]) want[e.url] = all[e.url]; });
+                                if (view.render && JSON.stringify(view.render.pbr) === JSON.stringify(want)) tt.pbr++; else bad.push(`pbr ${W.name} ${fi}.${v}`);
+                                if (view.render && view.render.scale === 1) tt.scale++; else bad.push(`scale ${W.name} ${fi}.${v}`);
+                                // a removed part is said in the customer's words, by our number; a stock colour by its name
+                                tt.removals += view.removals.length;
+                                if (view.removals.every(r => ['it is not made in the size now chosen', 'it is no longer offered on this step', 'it does not go with a choice made after it'].includes(r.why) && !/tagged|1\.6|carries the rod/i.test(JSON.stringify(r))
+                                    && r.code === hq.ourId((hq.drops.find(d => d.key === r.key) || {}).partCode))) tt.words++; else bad.push(`words ${W.name} ${fi}.${v}`);   // by OUR number (a pin that names its item by number reads the same)
+                                view.price.lines.filter(l => l.stock).forEach(l => { if (l.finish === 'Bronze') tt.stock++; else bad.push(`stock ${W.name} ${fi}.${v} ${l.finish}`); });
+                            }
+                        }
+                        // WHAT A SWATCH CLICK APPLIES TO — the scope CPQ's own module works out for this step and this choice
+                        const stepOption = (st.kind === 'SLOT' && hq.livePicks[st.slot.key]) ? ((st.slot.options || []).find(x => x.id === hq.livePicks[st.slot.key]) || null) : null;
+                        const stepCollar = (stepOption && stepOption.requiresCollar) ? (companionsFor(hq.model.choices, [stepOption.id])[0] || null) : null;
+                        const targets = scopeTargetsOf({ option: stepOption, collar: stepCollar, wears: (c) => offeredHere.some(f => hq.wearsFinish(c, f)) });
+                        const now = scopeInForce({ targets, picked: pickedScope ? { step: st.key, scope: pickedScope } : null, stepKey: st.key, configFinishOf: hq.globalFinishFor });
+                        const target = targets.find(x => x.scope === now) || targets[targets.length - 1];
+                        const wearsMaterial = (c, mat) => hq.wearsFinish(c, { material: mat });
+                        const wantGroups = view.finishes.groups.map(g => [g.material, highlightOf({ target, material: g.material, partFinish: hq.partFinish, configFinishOf: hq.globalFinishFor, globalFinishes: hq.globalFinishes, wearsMaterial }), (x => (x.kind === 'PART' ? { part: x.id } : { whole: true }))(swatchActionOf({ target, material: g.material, code: '', wearsMaterial }))]);
+                        const gotGroups = view.finishes.groups.map(g => [g.material, g.sel, g.applies]);
+                        if (view.finishes.scope.now !== now || JSON.stringify(view.finishes.scope.targets.map(x => x.scope)) !== JSON.stringify(targets.map(x => x.scope)) || JSON.stringify(gotGroups) !== JSON.stringify(wantGroups)) { if (bad.length < 12) bad.push(`scope ${W.name} ${fi}.${v}.${si}.${pickedScope}`); }
+                        else { tt.scope++; if (targets.some(x => x.scope === 'COLLAR')) tt.collarScope++; }
+                        // …and a click on each group's first swatch, applied the way the portal's screen applies it, sets what CPQ's own click sets
+                        view.finishes.groups.forEach((g) => {
+                            const code = g.lists[0].swatches[0].code;
+                            const next = g.sel === code ? '' : code;
+                            const pf = { ...state.partFinish }, gf = { ...state.globalFinishes };
+                            if (g.applies.part) { if (next) pf[g.applies.part] = next; else delete pf[g.applies.part]; } else { if (next) gf[g.material] = next; else delete gf[g.material]; }
+                            const x = swatchActionOf({ target, material: g.material, code: next, wearsMaterial });
+                            const pf2 = { ...state.partFinish }, gf2 = { ...state.globalFinishes };
+                            if (x.kind === 'PART') { if (x.code) pf2[x.id] = x.code; else delete pf2[x.id]; } else { if (x.code) gf2[g.material] = x.code; else delete gf2[g.material]; }
+                            if (JSON.stringify([pf, gf]) !== JSON.stringify([pf2, gf2])) { if (bad.length < 12) bad.push(`click ${W.name} ${fi}.${v}.${si}.${g.material}`); } else tt.clicks++;
+                        });
+                    }
+                });
+            }
+        });
+    }
+    if (process.env.PS_VERBOSE) console.log(JSON.stringify(tt));
+    eq(`step 4: option nodes, the collapse, the length step, the light, the scale, the words, a stock colour by name, the finish switch and its clicks — all CPQ's (${tt.views} views)${bad.length ? ` — first: ${bad.slice(0, 6).join(', ')}` : ''}`, bad.length, 0);
+    ok(`…and each road was taken — nodes ${tt.nodes}, collapse ${tt.collapse} (a return collapsing ${tt.collapsed}), length ${tt.length}, light ${tt.pbr}, scale ${tt.scale}, removals ${tt.removals} in words ${tt.words}, stock colours ${tt.stock}, scope ${tt.scope} (a collar among the targets ${tt.collarScope}), clicks ${tt.clicks}`,
+        tt.nodes > 50 && tt.collapsed > 5 && tt.length > 10 && tt.pbr > 10 && tt.scale > 10 && tt.removals > 5 && tt.words > 10 && tt.stock > 0 && tt.scope > 200 && tt.collarScope > 10 && tt.clicks > 200);
 }
 eq('in line: the server\'s copy and the site\'s bundle carry the same engine and the same files — anything else is behind', [P.inLine(engine.stamp, { ...engine.stamp }), P.inLine(engine.stamp, { ...engine.stamp, closureHash: 'x' }), P.inLine(engine.stamp, { ...engine.stamp, engineVersion: 'y' }), P.inLine(engine.stamp, null), P.inLine(null, engine.stamp), P.inLine({ engineVersion: '', closureHash: '' }, { engineVersion: '', closureHash: '' })], [true, false, false, false, false, false]);
 

@@ -5,6 +5,7 @@ import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, query, where, doc, getDoc, getDocs, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
 import { portalRequestLines } from '../Shared/portalRequestLines';
+import { FLOW_MODE, flowModeOf, groupModeOf, withFlowMode, withPreviewer } from '../Shared/portalAccess';
 import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { quoteDisplayNo, quoteAuthorLine, docDateOf, orderSidemarkOf } from '../Shared/quoteDisplay';
@@ -107,22 +108,39 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
     return unsub;
   }, [customerId, customer?.brandId, activeBrand]);
 
-  const saveFlowIds = async (next) => {
-    setAssignedFlowIds(next);
-    try { await updateDoc(doc(db, 'crm_records', customerId), { portalFlowIds: next }); }
-    catch (e) { setAssignedFlowIds(assignedFlowIds); alert('Could not update flow access: ' + (e.message || e)); }
+  // ── OFF · PREVIEW · LIVE (Stuart 2026-10-14: "yes love the preview idea" · Shared/portalAccess) ─────────────
+  // LIVE is the tick it always was (portalFlowIds). PREVIEW (portalPreviewFlowIds) puts a product on THIS customer's
+  // portal — their numbers, their level — for the logins ticked "sees previews" below (portalPreviewUids) and nobody
+  // else, so it is proved as they will see it before any of their people can. The portal's server reads the same fields.
+  const [previewFlowIds, setPreviewFlowIds] = useState([]);
+  const [previewUids, setPreviewUids] = useState([]);
+  useEffect(() => { setPreviewFlowIds(customer?.portalPreviewFlowIds || []); setPreviewUids(customer?.portalPreviewUids || []); }, [customerId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const accessNow = { portalFlowIds: assignedFlowIds, portalPreviewFlowIds: previewFlowIds, portalPreviewUids: previewUids };
+  // A single-assembly SIZE GROUP (H2 pivot: four per-diameter flows stamped sizeGroupLabel) entitles as ONE product — the
+  // portal presents it as one top-level card with a rod-diameter landing — so its mode is set on every sibling together.
+  const setFlowMode = async (ids, mode) => {
+    const next = withFlowMode(accessNow, ids, mode);
+    setAssignedFlowIds(next.portalFlowIds); setPreviewFlowIds(next.portalPreviewFlowIds);
+    try { await updateDoc(doc(db, 'crm_records', customerId), next); }
+    catch (e) { setAssignedFlowIds(assignedFlowIds); setPreviewFlowIds(previewFlowIds); alert('Could not update flow access: ' + (e.message || e)); }
   };
-  const toggleFlow = (flowId) => saveFlowIds(assignedFlowIds.includes(flowId)
-    ? assignedFlowIds.filter(f => f !== flowId)
-    : [...assignedFlowIds, flowId]);
-  // A single-assembly SIZE GROUP (H2 pivot: four per-diameter flows stamped sizeGroupLabel)
-  // entitles as ONE product — the portal presents it as one top-level card with a rod-diameter
-  // landing, so the checkbox toggles every sibling flow id together.
-  const toggleFlowGroup = (list) => {
-    const ids = list.map(f => f.id);
-    const allOn = ids.every(id => assignedFlowIds.includes(id));
-    saveFlowIds(allOn ? assignedFlowIds.filter(id => !ids.includes(id)) : [...new Set([...assignedFlowIds, ...ids])]);
+  const setPreviewer = async (uid, on) => {
+    const next = withPreviewer(accessNow, uid, on);
+    setPreviewUids(next);
+    try { await updateDoc(doc(db, 'crm_records', customerId), { portalPreviewUids: next }); }
+    catch (e) { setPreviewUids(previewUids); alert('Could not update who sees previews: ' + (e.message || e)); }
   };
+  const modeSwitch = (mode, onSet, title) => (
+    <span title={title} style={{ display: 'inline-flex', border: '1px solid var(--line)', flex: '0 0 auto' }}>
+      {[FLOW_MODE.OFF, FLOW_MODE.PREVIEW, FLOW_MODE.LIVE].map(m => (
+        <button key={m} onClick={() => { if (m !== mode) onSet(m); }}
+          style={{ padding: '4px 9px', border: 'none', borderLeft: m === FLOW_MODE.OFF ? 'none' : '1px solid var(--line)', cursor: m === mode ? 'default' : 'pointer', fontFamily: 'var(--mono)', fontSize: '8.5px', textTransform: 'uppercase', letterSpacing: '.08em',
+            background: m === mode ? (m === FLOW_MODE.LIVE ? 'var(--ink)' : (m === FLOW_MODE.PREVIEW ? 'var(--brass)' : 'var(--paper-2)')) : '#fff', color: (m === mode && m !== FLOW_MODE.OFF) ? '#fff' : 'var(--ink-soft)' }}>
+          {m === FLOW_MODE.OFF ? 'Off' : (m === FLOW_MODE.PREVIEW ? 'Preview' : 'Live')}
+        </button>
+      ))}
+    </span>
+  );
 
   // The price level THIS customer sees in the portal. Customer-safe options only — FAB_COST
   // (CE→Fabricut cost) is intentionally NOT offered, so a customer can never see cost.
@@ -396,6 +414,10 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
                       : <span title="No team role assigned below — this login sees the whole account (today's behavior)" style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginLeft: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>account-wide</span>; })()}
                     {!u.active && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginLeft: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Disabled</span>}
                   </div>
+                  <label title="This login also sees the products set to PREVIEW below — to try a product as this customer will see it before it goes live" style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: previewUids.includes(u.uid) ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', flex: '0 0 auto' }}>
+                    <input type="checkbox" checked={previewUids.includes(u.uid)} onChange={e => setPreviewer(u.uid, e.target.checked)} style={{ accentColor: 'var(--brass)' }} />
+                    sees previews
+                  </label>
                   <button disabled={busy} onClick={() => handleReinvite(u)} title="Generate a fresh set-password link (re-invite / forgot password)" style={{ padding: '6px 10px', background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Setup Link</button>
                   <button disabled={busy} onClick={() => call('setPortalUserStatus', { uid: u.uid, active: !u.active })} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: u.active ? '#a05a2c' : 'var(--brass)' }}>{u.active ? 'Disable' : 'Enable'}</button>
                   <button disabled={busy} onClick={() => { if (window.confirm(`Remove portal access for ${u.email}? They can no longer sign in.`)) call('deletePortalUser', { uid: u.uid }); }} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f' }}>Remove</button>
@@ -512,7 +534,7 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
           <div style={{ marginTop: '22px', paddingTop: '16px', borderTop: '1px solid var(--line)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.14em', color: 'var(--ink-soft)' }}>Available CPQ Flows</span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: assignedFlowIds.length ? 'var(--brass)' : 'var(--ink-soft)' }}>{assignedFlowIds.length ? `${assignedFlowIds.length} assigned` : 'none — portal shows nothing'}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: (assignedFlowIds.length || previewFlowIds.length) ? 'var(--brass)' : 'var(--ink-soft)' }}>{(assignedFlowIds.length || previewFlowIds.length) ? `${assignedFlowIds.length} live${previewFlowIds.length ? ` · ${previewFlowIds.length} on preview` : ''}` : 'none — portal shows nothing'}</span>
             </div>
             {brandFlows.length === 0 ? (
               <div style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No CPQ flows exist for this brand yet.</div>
@@ -525,34 +547,42 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
                   const groups = {}; const flat = [];
                   brandFlows.forEach(f => { if (f.sizeGroupLabel) (groups[f.sizeGroupLabel] = groups[f.sizeGroupLabel] || []).push(f); else flat.push(f); });
                   Object.values(groups).forEach(l => l.sort((a, b) => (a.sizeGroupSort ?? 99) - (b.sizeGroupSort ?? 99)));
-                  const rowStyle = (on) => ({ display: 'flex', alignItems: 'center', gap: '10px', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer', padding: '6px 8px', border: '1px solid var(--line-soft, rgba(28,26,22,.07))', background: on ? 'var(--paper)' : 'transparent' });
+                  const rowStyle = (on) => ({ display: 'flex', alignItems: 'center', gap: '10px', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)', padding: '6px 8px', border: '1px solid var(--line-soft, rgba(28,26,22,.07))', background: on ? 'var(--paper)' : 'transparent' });
                   return (
                     <>
                       {Object.keys(groups).sort().map(label => {
                         const list = groups[label];
-                        const onCount = list.filter(f => assignedFlowIds.includes(f.id)).length;
-                        const allOn = onCount === list.length;
+                        const ids = list.map(f => f.id);
+                        const mode = groupModeOf(accessNow, ids);
+                        const liveCount = list.filter(f => flowModeOf(accessNow, f.id) === FLOW_MODE.LIVE).length;
+                        const previewCount = list.filter(f => flowModeOf(accessNow, f.id) === FLOW_MODE.PREVIEW).length;
                         return (
-                          <label key={`GROUP::${label}`} style={rowStyle(onCount > 0)}>
-                            <input type="checkbox" checked={allOn} ref={el => { if (el) el.indeterminate = onCount > 0 && !allOn; }} onChange={() => toggleFlowGroup(list)} style={{ accentColor: 'var(--brass)' }} />
+                          <div key={`GROUP::${label}`} style={rowStyle(mode !== FLOW_MODE.OFF)}>
                             <span style={{ flex: 1 }}>{label}</span>
-                            <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em' }}>{list.length} sizes · one product{onCount > 0 && !allOn ? ` · ${onCount}/${list.length} on` : ''}</span>
-                          </label>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em' }}>{list.length} sizes · one product{mode === 'MIXED' ? ` · ${liveCount} live · ${previewCount} preview` : ''}</span>
+                            {modeSwitch(mode, (m) => setFlowMode(ids, m), 'Off — not on this portal · Preview — only the logins ticked "sees previews" · Live — every login of this customer')}
+                          </div>
                         );
                       })}
-                      {flat.map(f => (
-                        <label key={f.id} style={rowStyle(assignedFlowIds.includes(f.id))}>
-                          <input type="checkbox" checked={assignedFlowIds.includes(f.id)} onChange={() => toggleFlow(f.id)} style={{ accentColor: 'var(--brass)' }} />
-                          <span style={{ flex: 1 }}>{f.name}</span>
-                          {!f.linkedAssemblyId && <span title="This flow has no linked assembly — nothing will render in the portal showroom" style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: '#a05a2c', textTransform: 'uppercase', letterSpacing: '.08em' }}>no assembly</span>}
-                        </label>
-                      ))}
+                      {flat.map(f => {
+                        const mode = flowModeOf(accessNow, f.id);
+                        return (
+                          <div key={f.id} style={rowStyle(mode !== FLOW_MODE.OFF)}>
+                            <span style={{ flex: 1 }}>{f.name}</span>
+                            {!f.linkedAssemblyId && <span title="This flow has no linked assembly — nothing will render in the portal showroom" style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: '#a05a2c', textTransform: 'uppercase', letterSpacing: '.08em' }}>no assembly</span>}
+                            {modeSwitch(mode, (m) => setFlowMode([f.id], m), 'Off — not on this portal · Preview — only the logins ticked "sees previews" · Live — every login of this customer')}
+                          </div>
+                        );
+                      })}
                     </>
                   );
                 })()}
               </div>
             )}
 
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.04em' }}>
+              Preview puts a product on this customer's portal for the logins ticked "sees previews" only{previewUids.length ? ` (${previewUids.length} ticked)` : ' — none ticked yet'}: their numbers, their level, as they will see it. Live is every login of this customer.
+            </div>
             <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--ink-soft)' }}>Portal price level</span>
               <select value={priceLevel} onChange={e => changePriceLevel(e.target.value)} style={{ flex: 1, padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem', background: '#fff', outline: 'none' }}>

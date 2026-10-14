@@ -1412,94 +1412,6 @@ exports.portalProfile = onCall({ cors: true }, async (request) => {
     };
 });
 
-// The customer's showroom, driven by their ASSIGNED CPQ FLOWS (crm_records.portalFlowIds — set in
-// the CRM Portal Access panel). The flow is the entitlement unit: its linked assembly (and later,
-// that assembly's BOM) defines everything the customer may see. Each assigned flow with a linked
-// assembly + GLB becomes one showroom item, further narrowed to the customer's allowed collections.
-// NEVER returns cost/vendor data — price shown is the customer's clientSalesPrice on the assembly
-// (fallback: item base price, else no price).
-exports.portalCatalog = onCall({ cors: true }, async (request) => {
-    const customerId = assertPortalCustomer(request);
-    const db = admin.firestore();
-
-    const crmSnap = await db.collection('crm_records').doc(customerId).get();
-    const crm = crmSnap.exists ? crmSnap.data() : {};
-    const crmName = String(crm.name || '').toLowerCase();
-    const flowIds = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds.filter(Boolean) : [];
-    const matchesCustomer = (row) => {
-        const rid = String((row && row.customerId) || '');
-        return rid === customerId || (!!crmName && rid.toLowerCase() === crmName);
-    };
-
-    // Sanitized finish palette — name/code/texture only; no vendor, multiplier, or cost.
-    const mf = await db.collection('system').doc('master_finishes').get();
-    const finishes = ((mf.exists && mf.data().finishes) || [])
-        .filter((f) => f && f.textureUrl)
-        .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', code: f.code || '', textureUrl: f.textureUrl }));
-
-    if (flowIds.length === 0) return { items: [], finishes, reason: 'NO_FLOWS' };
-
-    const flowSnaps = await db.getAll(...flowIds.map((id) => db.collection('cpq_flows').doc(id)));
-    const flows = flowSnaps.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() }));
-
-    const assemblyIds = [...new Set(flows.map((f) => f.linkedAssemblyId).filter(Boolean))];
-    const asmSnaps = assemblyIds.length ? await db.getAll(...assemblyIds.map((id) => db.collection('Approved_Designs').doc(id))) : [];
-    const assemblies = new Map(asmSnaps.filter((s) => s.exists).map((s) => [s.id, s.data()]));
-
-    const inCollection = collectionGateOf(crm);
-    const built = [];
-    let blockedByCollection = 0;
-    for (const flow of flows) {
-        const asm = flow.linkedAssemblyId ? assemblies.get(flow.linkedAssemblyId) : null;
-        const cadUrl = asm && asm.manufacturingSpecs && asm.manufacturingSpecs.cadUrl;
-        if (!cadUrl) continue; // a flow without a renderable assembly has nothing to show (yet)
-        if (inCollection && !inCollection(asm)) { blockedByCollection++; continue; }
-        const cp = Array.isArray(asm.clientPricing) ? asm.clientPricing.find(matchesCustomer) : null;
-        const base = asm.manufacturingSpecs && asm.manufacturingSpecs.basePrice;
-        const priceRaw = cp ? (cp.clientSalesPrice ?? cp.price ?? base) : base;
-        const price = (priceRaw === undefined || priceRaw === null || priceRaw === '') ? null : Number(priceRaw);
-        built.push({
-            groupLabel: flow.sizeGroupLabel || '', groupChoice: flow.sizeGroupChoice || '', groupSort: flow.sizeGroupSort ?? 99,
-            item: {
-                id: flow.linkedAssemblyId,
-                flowId: flow.id,
-                name: flow.name || asm.itemName || 'Product',
-                sku: (cp && cp.clientSku) || asm.legacyErpId || asm.itemId || '',
-                cadUrl,
-                price: Number.isFinite(price) ? price : null,
-            },
-        });
-    }
-    // Size-group flows (the per-assembly H2 model: four per-diameter flows stamped
-    // sizeGroupLabel/Choice/Sort) collapse into ONE top-level product — the showroom shows a
-    // single card whose Configure opens a rod-diameter landing, mirroring the internal CPQ's
-    // "pick rod diameter first". Flat flows are untouched.
-    const items = built.filter((b) => !b.groupLabel).map((b) => b.item);
-    const groupsMap = new Map();
-    built.filter((b) => b.groupLabel).forEach((b) => { const l = groupsMap.get(b.groupLabel) || []; l.push(b); groupsMap.set(b.groupLabel, l); });
-    groupsMap.forEach((list, label) => {
-        list.sort((a, b) => (a.groupSort ?? 99) - (b.groupSort ?? 99));
-        const prices = list.map((b) => b.item.price).filter((p) => p !== null);
-        items.push({
-            id: `GROUP-${label.replace(/[^A-Za-z0-9]+/g, '-')}`,
-            flowId: list[0].item.flowId,
-            isGroup: true,
-            name: label,
-            sku: `${list.length} sizes`,
-            cadUrl: (list.find((b) => b.item.cadUrl) || list[0]).item.cadUrl,
-            price: prices.length ? Math.min(...prices) : null,
-            sizes: list.map((b) => ({ flowId: b.item.flowId, choice: b.groupChoice || b.item.name })),
-        });
-    });
-    items.sort((a, b) => a.name.localeCompare(b.name));
-
-    // An empty showroom because the collection filter ate everything is a SETUP mistake, not an
-    // empty account — name it so the portal can say something useful instead of "nothing here".
-    if (!items.length && blockedByCollection) return { items, finishes, reason: 'NO_COLLECTIONS' };
-    return { items, finishes };
-});
-
-
 // ---- The portal configurator, on HQ's engine (the rebuild, step 3 — Stuart 2026-10-12 / 10-13) ----
 // The old configurator's server — portalFlow, portalResolve, portalQuoteRequest, portalVisionDraft and
 // functions/portalEngine.js, a port of CPQ's pricing that fell two months behind it — is gone ("the older
@@ -1509,19 +1421,36 @@ exports.portalCatalog = onCall({ cors: true }, async (request) => {
 // customer's own level; solid brass is CPQ-only; a customer adds no items by hand.
 const portalSession = require('./portalSession');
 
-// The brand's library is every Approved_Designs record — thousands — and a walk asks for a view on every
-// click, so what was read is kept per instance for a short while: a price or a tag changed in HQ reaches
-// the portal within LIBRARY_TTL_MS.
+// The brand's library is thousands of Approved_Designs records and a walk asks for a view on every click, so what
+// was read is kept per instance for a short while: a price or a tag changed in HQ reaches the portal within
+// LIBRARY_TTL_MS. Only THIS BRAND's records are read (2026-10-14): CPQ listens to the whole collection and keeps
+// those whose brandId is the brand or whose sharedBrands name it — the two queries below return exactly that set,
+// and worldFor applies the same filter again. Should either query be refused, the whole collection is read, as before.
 const LIBRARY_TTL_MS = 90 * 1000;
-let libraryKept = { at: 0, records: null, loading: null };
-const loadLibrary = async (db) => {
-    if (libraryKept.records && Date.now() - libraryKept.at < LIBRARY_TTL_MS) return libraryKept.records;
-    if (!libraryKept.loading) {
-        libraryKept.loading = db.collection('Approved_Designs').get()
-            .then((snap) => { libraryKept = { at: Date.now(), records: snap.docs.map((d) => ({ id: d.id, ...d.data() })), loading: null }; return libraryKept.records; })
-            .catch((e) => { libraryKept.loading = null; throw e; });
+const libraryKept = new Map();   // brand → { at, records, loading }
+const loadLibrary = async (db, brand) => {
+    const key = String(brand || '');
+    const hit = libraryKept.get(key) || { at: 0, records: null, loading: null };
+    if (hit.records && Date.now() - hit.at < LIBRARY_TTL_MS) return hit.records;
+    if (!hit.loading) {
+        const read = async () => {
+            const col = db.collection('Approved_Designs');
+            try {
+                const [own, shared] = await Promise.all([col.where('brandId', '==', key).get(), col.where('sharedBrands', 'array-contains', key).get()]);
+                const byId = new Map();
+                [...own.docs, ...shared.docs].forEach((d) => { if (!byId.has(d.id)) byId.set(d.id, { id: d.id, ...d.data() }); });
+                return [...byId.values()];
+            } catch (e) {
+                console.warn('portal library: the brand query was refused, reading every record', e && e.message);
+                return (await col.get()).docs.map((d) => ({ id: d.id, ...d.data() }));
+            }
+        };
+        hit.loading = read()
+            .then((records) => { libraryKept.set(key, { at: Date.now(), records, loading: null }); return records; })
+            .catch((e) => { libraryKept.set(key, { ...hit, loading: null }); throw e; });
+        libraryKept.set(key, hit);
     }
-    return libraryKept.loading;
+    return hit.loading;
 };
 // What CPQ reads for ONE flow: the flow, the pins of its assembly, the master and outsourced finishes,
 // 6.5's span map and the flow family's traverse chart — from the same documents, by the same keys.
@@ -1549,16 +1478,17 @@ const loadFlowRecords = async (db, flowId) => {
     return kept;
 };
 // One customer, one flow: entitled (the SAME answer whether or not the flow exists, so nobody can probe for
-// flows), then the world CPQ hands the engine for it. The customer is the CLAIM's, never the browser's.
-const portalWorldFor = async (db, engine, customerId, flowId) => {
+// flows), then the world CPQ hands the engine for it. The customer is the CLAIM's, never the browser's; a flow on
+// PREVIEW opens only for the logins Portal Access ticked for previews (portalSession.flowIdsFor).
+const portalWorldFor = async (db, engine, customerId, flowId, uid) => {
     const fid = String(flowId || '');
     const crmSnap = await db.collection('crm_records').doc(customerId).get();
     const crm = crmSnap.exists ? crmSnap.data() : {};
-    const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
+    const allowed = portalSession.flowIdsFor(crm, uid).all;
     if (!fid || !allowed.includes(fid)) throw new HttpsError('permission-denied', 'This product is not enabled on your account.');
     const kept = await loadFlowRecords(db, fid);
     await assertCollectionAllowed(db, crm, kept.flow, fid);
-    const records = await loadLibrary(db);
+    const records = await loadLibrary(db, (kept.flow && kept.flow.brandId) || crm.brandId || '');
     const customer = { id: customerId, ...crm };
     const data = portalSession.worldFor(engine, { flow: kept.flow, records, pins: kept.pins, finishes: kept.finishes, outsourceFinishes: kept.outsourceFinishes, spanDoc: kept.spanDoc, trvRules: kept.trvRules, customer, customerId });
     if (!data.assembly || !data.pins.length) throw new HttpsError('failed-precondition', 'This product is not ready on the portal yet.');
@@ -1567,7 +1497,7 @@ const portalWorldFor = async (db, engine, customerId, flowId) => {
 // The customer's answers, field by field — a finish the portal does not offer is refused by name.
 const portalStateOf = (engine, data, raw) => {
     const finishCodes = new Set(portalSession.portalFinishesOf(engine, data).map((f) => String(f.code || f.name || '').trim().toUpperCase()).filter(Boolean));
-    try { return portalSession.stateFromClient(raw, { finishCodes }); } catch (e) {
+    try { return portalSession.stateFromClient(raw, { finishCodes, lengthOf: engine.lengthInchesOf }); } catch (e) {
         if (e instanceof portalSession.Refused) throw new HttpsError('invalid-argument', e.message);
         throw e;
     }
@@ -1580,16 +1510,47 @@ const assertInLine = (engine, site) => {
     }
 };
 
+// THE PRODUCTS THIS LOGIN MAY CONFIGURE — the portal's Configure tab (step 4, 2026-10-14). Every flow Portal Access set
+// LIVE for the customer and, for a login ticked "sees previews", the flows set to PREVIEW (marked, so the screen can say
+// only they see it). Each must be ready on the portal: its assembly has a model and pins, inside the customer's
+// collections. Names and a picture only — nothing is priced here.
+exports.portalConfigFlows = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const db = admin.firestore();
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const ids = portalSession.flowIdsFor(crm, request.auth.uid);
+    if (!ids.all.length) return { flows: [] };
+    const flowSnaps = await db.getAll(...ids.all.map((id) => db.collection('cpq_flows').doc(id)));
+    const flows = flowSnaps.filter((x) => x.exists).map((x) => ({ id: x.id, ...x.data() }));
+    const asmIds = [...new Set(flows.map((f) => String(f.linkedAssemblyId || '')).filter(Boolean))];
+    const asmSnaps = asmIds.length ? await db.getAll(...asmIds.map((id) => db.collection('Approved_Designs').doc(id))) : [];
+    const assemblies = new Map(asmSnaps.filter((x) => x.exists).map((x) => [x.id, x.data()]));
+    const inCollection = collectionGateOf(crm);
+    const out = [];
+    for (const f of flows) {
+        const asm = assemblies.get(String(f.linkedAssemblyId || ''));
+        const ms = (asm && asm.manufacturingSpecs) || {};
+        if (!asm || !ms.cadUrl) continue;                       // nothing to draw — not ready on the portal
+        if (inCollection && !inCollection(asm)) continue;
+        const pin = await db.collection('assembly_pins').where('assemblyId', '==', String(f.linkedAssemblyId)).limit(1).get();
+        if (pin.empty) continue;                                // no pins — the engine has nothing to offer
+        out.push({ id: f.id, name: String(f.name || asm.itemName || 'Product').slice(0, 120), picture: String(asm.finalImageUrl || ''), preview: ids.preview.includes(f.id) });   // the assembly's own picture (on the record, as HQ keeps it)
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return { flows: out };
+});
+
 // EVERYTHING THE PORTAL DRAWS for one set of answers: the steps and what each offers, what is drawn, the
 // money at the level this customer's portal shows, why it cannot be requested yet. Called on every click.
 exports.portalConfigView = onCall({ cors: true, memory: '512MiB' }, async (request) => {
     const customerId = assertPortalCustomer(request);
-    const { flowId, state, site } = request.data || {};
+    const { flowId, state, site, ui } = request.data || {};
     const engine = await portalSession.loadEngine();
     assertInLine(engine, site);
-    const { data, customer } = await portalWorldFor(admin.firestore(), engine, customerId, flowId);
+    const { data, customer } = await portalWorldFor(admin.firestore(), engine, customerId, flowId, request.auth.uid);
     const levels = portalSession.levelsFor(engine, customer);
-    return portalSession.viewOf(engine, data, portalStateOf(engine, data, state), { level: levels.chosenForShown, money: levels.money });
+    return portalSession.viewOf(engine, data, portalStateOf(engine, data, state), { level: levels.chosenForShown, money: levels.money, ui: portalSession.uiFromClient(ui) });
 });
 
 // A REQUEST. Every line is worked out again here at the customer's OWN level — the cart line CPQ itself
@@ -1614,7 +1575,7 @@ exports.portalConfigRequest = onCall({ cors: true, memory: '512MiB' }, async (re
     const built = [];
     let crm = {};
     for (let i = 0; i < rawLines.length; i++) {
-        const world = await portalWorldFor(db, engine, customerId, rawLines[i].flowId);
+        const world = await portalWorldFor(db, engine, customerId, rawLines[i].flowId, request.auth.uid);
         crm = world.crm;
         const state = portalStateOf(engine, world.data, rawLines[i].state);
         const req = portalSession.requestLineOf(engine, world.data, state, { level: 'STANDARD' });
@@ -1694,9 +1655,9 @@ exports.portalConfigCheck = onCall({ enforceAppCheck: true, memory: '512MiB', ti
     const engine = await portalSession.loadEngine();
     const db = admin.firestore();
     const kept = await loadFlowRecords(db, String(flowId || ''));
-    const records = await loadLibrary(db);
     const crmSnap = customerId ? await db.collection('crm_records').doc(String(customerId)).get() : null;
     const customer = (crmSnap && crmSnap.exists) ? { id: crmSnap.id, ...crmSnap.data() } : null;
+    const records = await loadLibrary(db, (kept.flow && kept.flow.brandId) || (customer && customer.brandId) || '');
     const data = portalSession.worldFor(engine, { flow: kept.flow, records, pins: kept.pins, finishes: kept.finishes, outsourceFinishes: kept.outsourceFinishes, spanDoc: kept.spanDoc, trvRules: kept.trvRules, customer, customerId: customer ? customer.id : '' });
     const results = (Array.isArray(states) ? states : []).slice(0, 60).map((raw) => {
         try {
