@@ -41,6 +41,7 @@ import { CATEGORY_NAME_RX } from '../Shared/itemCodeMatch';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
+import WallboardScreen from '../Shared/WallboardScreen';   // 📺 the bench's wallboard (Stuart 2026-10-13)
 import { resolveStagingScan, stagingKeyOf, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf, mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
 import { hardDeleteWithLedger, propagateFloorState, closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { startReadyLinesOf, startReadyLinesText } from '../Shared/oeAsAvailable';
@@ -9511,6 +9512,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     <div style={{ background: '#fff', border: `1px solid ${theme.line}`, height: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                         <SharedMessaging currentUser={operator?.name || 'Unknown'} currentApp="PICK_PACK" writeLog={writeLog} />
                     </div>
+                )}
+
+                {/* 📺 TAB: WALLBOARD — the large-monitor screen (Stuart 2026-10-13): the bench now, fed this tab's own lists, and the
+                    week's hall of fame / shame (Shared/WallboardScreen). Reads only. */}
+                {activeTab === 'WALLBOARD' && (
+                    <WallboardScreen side="wms" db={db} wms={{
+                        openPicks: jobs.filter(isOpenPick),
+                        staging: jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging' && j.packStatus !== 'Packed' && j.currentPhase !== 'Closed'),
+                        packQueue, docs: [...finAll, ...quickShipOrders], refOf: packRef,
+                    }} />
                 )}
 
                 {/* 🛠️ TAB: APP IMP — bug reports & improvement requests */}

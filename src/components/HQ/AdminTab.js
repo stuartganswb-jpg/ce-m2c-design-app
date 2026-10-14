@@ -41,7 +41,7 @@ const stripUndefined = (v) => {
 // had drifted ('app imp' missing, so the permissions editor could never grant it).
 // Mirrors the Finishing app's TABS (FinishingFloor.js). 'MANAGEMENT' was retired (its user/perms
 // admin moved here to HQ); 'PRODUCTION TIMES' is the finishing timers + time-matrix config tab.
-const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
+const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY', 'WALLBOARD'];
 
 
 // Roles treated as OFFICE (not floor). Kept OUT of fin_users so they don't clutter the finishing/chip

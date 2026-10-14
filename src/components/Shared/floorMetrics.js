@@ -83,6 +83,8 @@ const NOBODY = new Set(['', '?', 'floor', 'tablet', 'manual', 'unattributed', 'u
 /** One person, however their name was typed ("stuart" and "Stuart" are one key). */
 export const personKeyOf = (name) => String(name == null ? '' : name).trim().toLowerCase().replace(/\s+/g, ' ');
 const isPerson = (name) => !NOBODY.has(personKeyOf(name));
+/** A real person's name — not "Tablet", "Floor", "Packer", "Unattributed" or blank. */
+export const isPersonName = isPerson;
 
 // The two boards a person is ranked on. BOTH is a person on each (Stuart 2026-10-14: "Sandra G needs to be on both as
 // she is charge of set up and organizing / scheduling the paint jobs (which goes to which station)") — a row on each

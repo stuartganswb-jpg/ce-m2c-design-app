@@ -16,6 +16,7 @@ import Summary from './Summary';
 import { MixModal, QcModal } from './Modals';
 import { woRecipeCode, isPendingRecipe } from '../Shared/finishingTime';
 import { coatCountsOf } from '../Shared/floorActivity';
+import WallboardScreen from '../Shared/WallboardScreen';   // 📺 the floor's wallboard (Stuart 2026-10-13)
 
 // 🚀 SHARED APPS
 import FloorAssetViewer from './FloorAssetViewer';
@@ -24,7 +25,8 @@ import AppImprovementTab from '../Shared/AppImprovementTab';
 
 // REMOVED 'MANAGEMENT' FROM THIS ARRAY (user/permission admin now lives in the HQ Admin tab).
 // PRODUCTION TIMES is the focused finishing-config tab: production timers + the time matrix.
-const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY', 'APP IMP'];
+// WALLBOARD (2026-10-14): the large-monitor screen — the floor now on the left, the week's hall of fame / shame on the right.
+const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY', 'WALLBOARD', 'APP IMP'];
 
 const FinishingFloor = () => {
   const navigate = useNavigate();
@@ -222,6 +224,7 @@ const FinishingFloor = () => {
           {activeTab === 'PRODUCTION TIMES' && <ProductionTimes sysConfig={sysConfig} capacityMatrix={capacityMatrix} recipes={recipes} workOrders={workOrders} prodTypes={prodTypes} writeLog={writeLog} user={user} />}
           {activeTab === 'SUPPLIES' && <Supplies supplies={supplies} writeLog={writeLog} user={user} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}
+          {activeTab === 'WALLBOARD' && <WallboardScreen side="finishing" db={db} workOrders={workOrders} sysConfig={sysConfig} />}
           
           {/* 🚀 SHARED APPS */}
           {activeTab === 'ASSET GALLERY' && <FloorAssetViewer activeBrand={null} />}

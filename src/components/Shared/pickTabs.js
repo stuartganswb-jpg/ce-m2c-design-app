@@ -12,7 +12,8 @@
 // 'BUILD' (2026-09-30): stock an assembly by an ASSEMBLY BUILD — components consumed, the assembly received.
 // 'TRAVERSE' (2026-10-07): the traverse station — picks the parts loaded onto the track AFTER finishing, loads the
 // tracks, confirms; an order with such parts cannot pack or ship until it has (Shared/traverseStation). Granted per role.
-export const PICK_TABS = ['QUEUE', 'STOCK', 'TRAVERSE', 'FULFILMENT', 'PACKING', 'COUNT', 'BUILD', 'CONVERT', 'RECEIVING', 'ROD CUTS', 'TRANSFER', 'PLATING', 'LABELS', 'CHIPS', 'GALLERY', 'MESSAGING', 'APP IMP'];
+// 'WALLBOARD' (2026-10-14): the large-monitor screen — the bench now on the left, the week's hall of fame / shame on the right.
+export const PICK_TABS = ['QUEUE', 'STOCK', 'TRAVERSE', 'FULFILMENT', 'PACKING', 'COUNT', 'BUILD', 'CONVERT', 'RECEIVING', 'ROD CUTS', 'TRANSFER', 'PLATING', 'LABELS', 'CHIPS', 'GALLERY', 'MESSAGING', 'WALLBOARD', 'APP IMP'];
 
 // Display name for a tab key — used by the WMS nav and by the permission matrix, so an admin
 // ticking a row sees exactly the words the operator sees on the floor.
