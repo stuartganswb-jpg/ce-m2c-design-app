@@ -327,6 +327,8 @@ either posts (ids on file) or refuses with `NO_NS_FORM_FOR_BRAND` — and the CE
   (`name`, `qty`, `price`, `total`, `partHandling`, `partId`, `legacyErpId`, `finishCode`, `isFee`).
 
 ## 7. Status log
+- **2026-10-14 · 49e95ae4 — stitch & leather upgrades (sweep pending).** Stuart: $50 railroad / blanket stitch, $65 leather welt / mini welt, 4 sides or down the middle on the counter, any seam or the edge on the board; "just put the nau items and stitch colors onto the work orders, later maybe we will add to netsuite lines"; down the middle = ONE real seam, same fabric both sides and back; same price all colours. Built as `Shared/pillowTreatments` + a TREATMENT detail kind (Stuart types 50 / 50 / 65 / 65 on 6.5 Pillow Pricing → Save labour + details — until then step 4 does not show). Open: the sewing floor card (SewFloor) names the pillow by size · group only — the words are on the queue card and in the document's design; NAU items as NetSuite $0 lines later.
+- **2026-10-14 · b890e2f7 — the four polish items, LIVE (swept: served main b890e2f7; `STITCH & SEW` in 350 / 976 chunks + main; the review note in main).** (a) the review's nsPlan for a sewing job reads flow SEW — "Stitch & Sew — no NetSuite work order for a pillow; the sales order is the record" (`oeReviewPlan`, before the rider branch); (b) `appUnitOf` reads `stockUnit || uom` and RY counts as yards, so no YD-vs-EA question on a fabric line; (c) RTG's card says STITCH & SEW ✓ for division SEW; (d) the Order Entry Needs board badges STITCH & SEW. Finishing-floor and App-Imp sessions were alerted before the push (no conflict). Next: the stitch + leather-welt upgrades (plan posted, waiting for the go) and the first one-of-a-kind import from `Fabricut/October26/Uniquity`.
 
 *(newest first)*
 
