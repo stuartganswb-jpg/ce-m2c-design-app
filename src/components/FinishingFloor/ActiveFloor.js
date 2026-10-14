@@ -8,7 +8,7 @@ import { normalMinutesOf, punchCheckOf, catchUpRunOf, punchWarning, punchFlagTex
 import { startStopOf, bakeStopOf, stepStopText, stepOverrideText, stepStopLogText } from '../Shared/stepOrder';
 import { typedWoNumber } from '../Shared/skippedBuild';
 import { finishingDb as db } from '../../firebase';
-import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
+import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp, deleteField } from "firebase/firestore";
 import { recipeCopyInForce, liveRecipeOfWo, partsRecipeOfWo, poleRecipeOfWo, coatCountsOf, takesSled, sledReleasePatchOf } from '../Shared/floorActivity';
 import { sameSteps } from '../Shared/recipeCopy';
 import TraverseColourTag from '../Shared/TraverseColourTag';
@@ -18,6 +18,7 @@ import PartFactsStrip from '../Shared/PartFactsStrip';
 import { pickGateOf } from '../Shared/orderStatus';
 import PullLinesLive from '../Shared/PullLinesLive';
 import { woRefOf } from '../Shared/woRef';
+import { CHORE_KINDS, CHORE_ACTION, CHORE_END_WHY, openChoresOf, openChoreFor, choreStartRefusal, choreRecordOf, choreLogOf, choreLabelOf, fieldOf } from '../Shared/floorChores';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
 // Source numbers first: the REAL NetSuite WO # leads wherever it exists; long app id is the fallback.
@@ -627,6 +628,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               return;
           }
       }
+      // 🧰 PINNING ONTO A STEP CLOSES THIS PERSON'S CHORE (Stuart 2026-10-14: "once a pin starts a job the chore is automatically
+      // closed out") — wherever the chore is, after every stop above has let the start through.
+      if (action === 'START') await endChoreOnFloor(openChoreFor(workOrders, actor || user?.name || ''), CHORE_END_WHY.STEP);
       const startedMs = t.startTime || null;
       const elapsedMs = (action !== 'START' && t.status === 'Running' && startedMs) ? (Date.now() - startedMs) : null;
       const updates = { [`tasks.${taskKey}.manual`]: true };
@@ -857,6 +861,32 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       );
   };
   // ===== END MANUAL MODE =====
+
+  // ===== 🧰 CHORES — work in between the steps (Stuart 2026-10-14 · Shared/floorChores) =====
+  // "when their job / step is in the oven / bake they are free and should be expected to do other chores … paint prep and
+  // set up prep that they pin in on and it does not start the job just tracks that they are doing something". A chore is
+  // PINned onto the order open here; it touches none of the order's steps. One per person — starting another closes the
+  // first; PINning onto any step closes it (manualTask, the machine cards). Refused while the person has a hands-on step
+  // running (a bake never counts).
+  const startChore = async (wo, kind) => {
+      const actor = await pinActor();
+      if (!actor) return;
+      const refusal = choreStartRefusal({ actor, kind, openStep: openStepFor(actor) });
+      if (refusal) { alert(refusal.text); return; }
+      await endChoreOnFloor(openChoreFor(workOrders, actor), CHORE_END_WHY.SWITCH);
+      const nowMs = Date.now();
+      try {
+          await updateDoc(doc(db, 'fin_workorders', wo.id), { [fieldOf(actor)]: choreRecordOf({ actor, kind, nowMs }) });
+          await addDoc(collection(db, 'fin_logs'), { ...choreLogOf({ action: CHORE_ACTION.START, actor, kind, wo, nowMs }), t: serverTimestamp() });
+      } catch (e) { alert('The chore was not recorded: ' + (e.message || e)); }
+  };
+  // Ended by hand — by the person doing it, or a manager (the list Force Complete reads).
+  const endChoreByPin = async (c) => {
+      const actor = await pinActor();
+      if (!actor) return;
+      if (choreKeyMatch(actor, c.by) || actorIsManager(actor)) { await endChoreOnFloor(c, CHORE_END_WHY.ENDED); return; }
+      alert(`${c.by}'s chore — ${c.by} or a manager ends it.`);
+  };
   // Which WO tasks a station's panel controls.
   const stationTargets = (st) => {
       const out = [];
@@ -1065,13 +1095,19 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                             const tk = (w.tasks || {})[k];
                             if (tk && tk.status === 'Running' && tk.assignedTo) open.push({ w, k, tk });
                         }));
-                        if (!open.length) return null;
+                        const chores = openChoresOf(activeWOs);   // 🧰 chores open now — they close when that person PINs onto a step
+                        if (!open.length && !chores.length) return null;
                         return (
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.04em', lineHeight: 1.7 }}>
                                 <span style={{ color: 'var(--brass)' }}>OPEN NOW</span> — one step per person; stop it before starting the next (the oven does not count):
                                 {open.map(({ w, k, tk }, i) => (
                                     <span key={i} style={{ display: 'block', color: 'var(--ink)' }}>
                                         • {tk.assignedTo} · {TASK_LABEL[k] || k} on {woRef(w)}{tk.startTime ? ` · ${Math.floor((now - tk.startTime) / 60000)}m` : ''}
+                                    </span>
+                                ))}
+                                {chores.map((c, i) => (
+                                    <span key={`c${i}`} style={{ display: 'block', color: 'var(--ink)' }}>
+                                        • {c.by} · 🧰 {choreLabelOf(c.kind)} on {woRef(c.wo)}{c.startedAt ? ` · ${Math.floor((now - c.startedAt) / 60000)}m` : ''} <span style={{ color: 'var(--ink-soft)' }}>(chore — closes when {c.by} starts a step)</span>
                                     </span>
                                 ))}
                             </div>
@@ -1147,6 +1183,23 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 </span>
                             </div>
                         )}
+                        {/* 🧰 CHORES (Stuart 2026-10-14 · Shared/floorChores) — in between the steps: PIN in, nothing on the order starts. */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '12px 14px', border: '1px dashed var(--line)', marginTop: '10px' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', width: '92px' }}>🧰 Chores</span>
+                            {Object.entries(CHORE_KINDS).map(([k, c]) => (
+                                <button key={k} onClick={() => startChore(manualWo, k)} title="PIN in on a chore for this order — it does not start the job; it closes when you PIN onto a step"
+                                    style={{ padding: '10px 16px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+                                    {c.label} · <span style={{ textTransform: 'none' }}>{c.es}</span>
+                                </button>
+                            ))}
+                            {openChoresOf([manualWo]).map(c => (
+                                <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', border: '1px solid var(--brass)', padding: '6px 10px', background: 'var(--paper)' }}>
+                                    {c.by} · {choreLabelOf(c.kind)}{c.startedAt ? ` · ${Math.floor((now - c.startedAt) / 60000)}m` : ''}
+                                    <button onClick={() => endChoreByPin(c)} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', padding: '3px 8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>End · Terminar</button>
+                                </span>
+                            ))}
+                            <span style={{ marginLeft: 'auto', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>does not start the job · no inicia el trabajo</span>
+                        </div>
                     </div>
                 );
             })() : (
@@ -1912,6 +1965,18 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   );
 };
 
+// 🧰 A CHORE ENDS — one writer for every place a chore closes (Shared/floorChores): its slot on the order is cleared and the
+// floor log gets its end, how long it ran and why it ended. Nothing else on the order is touched.
+const choreKeyMatch = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+async function endChoreOnFloor(c, why) {
+    if (!c || !c.wo) return;
+    const nowMs = Date.now();
+    try {
+        await updateDoc(doc(db, 'fin_workorders', c.wo.id), { [`chores.${c.key}`]: deleteField() });
+        await addDoc(collection(db, 'fin_logs'), { ...choreLogOf({ action: CHORE_ACTION.END, actor: c.by, kind: c.kind, wo: c.wo, nowMs, startedAt: c.startedAt, why }), t: serverTimestamp() });
+    } catch (e) { console.warn('chore end failed', e); }
+}
+
 const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, activePots, now, aiRec, users, activeWOs, cfg, sled, blockReason: blockReasonProp, onViewWo }) => {
     // A held document's card shows the hold where the START button would be (S1 spec 2026-09-15).
     const hold = holdGateOf(wo);
@@ -2067,6 +2132,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                         const gate = pickGateOf(wo);
                         if (gate.blocked && !window.confirm(`⛔ This step is GATED on ${woRef(wo)}:\n\nSteps run in unison — ${gate.reason}.\n\nPress Cancel to hold (normal). Press OK ONLY as a supervisor override.`)) return;
                     }
+                    endChoreOnFloor(openChoreFor(activeWOs, currentOp), CHORE_END_WHY.STEP);   // 🧰 a start closes their chore (2026-10-14)
                     updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() });
                 }} style={{ width: '100%', padding: '12px', background: disabledStart ? 'var(--paper-2)' : 'var(--ink)', color: disabledStart ? 'var(--ink-soft)' : '#fff', border: disabledStart ? '1px solid var(--line)' : 'none', cursor: disabledStart ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>{btnText}</button>
             ) : (

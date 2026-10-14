@@ -16,7 +16,7 @@ const mono = "'IBM Plex Mono', monospace";
 const sectionHead = { fontFamily: mono, fontSize: T.h, letterSpacing: '.12em', textTransform: 'uppercase', color: C.brass, margin: '0 0 0.6vw 0', display: 'flex', alignItems: 'baseline', gap: '0.8vw' };
 const es = { fontSize: T.small, color: C.soft, letterSpacing: '.06em', textTransform: 'none' };
 const panel = { background: C.panel, border: `1px solid ${C.line}`, padding: '1vw 1.2vw', minHeight: 0, overflow: 'hidden' };
-const STATE_COLOUR = { overdue: C.bad, running: C.ink, untimed: C.soft, baking: C.oven };
+const STATE_COLOUR = { overdue: C.bad, running: C.ink, untimed: C.soft, baking: C.oven, chore: C.brass };
 
 const Counter = ({ label, es: sub, value, tone }) => (
     <div style={{ ...panel, padding: '0.8vw 1vw', display: 'flex', flexDirection: 'column', gap: '0.2vw' }}>
@@ -48,7 +48,7 @@ function FloorLeft({ s }) {
                 {!s.working.length ? <Empty>No hands-on step running.</Empty> : s.working.slice(0, 8).map((w, i) => (
                     <div key={i} style={{ display: 'grid', gridTemplateColumns: '22% 30% 1fr 17%', gap: '0.8vw', alignItems: 'center', padding: '0.45vw 0', borderTop: i ? `1px solid ${C.line}` : 'none' }}>
                         <div style={{ fontSize: T.name, fontWeight: 600 }}>{w.who || '—'}</div>
-                        <div style={{ fontSize: T.body }}>{w.step}<div style={{ fontSize: T.small, color: C.soft }}>{w.window}</div></div>
+                        <div style={{ fontSize: T.body, color: w.chore ? C.brass : C.ink }}>{w.chore ? '🧰 ' : ''}{w.step}<div style={{ fontSize: T.small, color: C.soft }}>{w.chore ? 'chore · tarea' : w.window}</div></div>
                         <div style={{ fontFamily: mono, fontSize: T.body }}>{w.ref}<div style={{ fontSize: T.small, color: C.soft, fontFamily: 'inherit' }}>{w.item}</div></div>
                         <div style={{ textAlign: 'right', fontSize: T.body, color: STATE_COLOUR[w.state] || C.ink }}>
                             {sayMins(w.elapsedMins)}{w.estMins ? <span style={{ color: C.soft }}> / {sayMins(w.estMins)}</span> : null}

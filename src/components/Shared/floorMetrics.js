@@ -226,8 +226,11 @@ export function clockIndexOf(timecardDays = [], nameMap = {}) {
 }
 
 // ── a person's day ────────────────────────────────────────────────────────────────────────────────────────
-/** Half-hours: a stretch of the clocked day is WORKING when anything was done in it or a step was running. */
+/** Half-hours: a stretch of the clocked day is WORKING when anything was done in it, or a step or a chore was running. */
 export const SLOT_MINS = 30;
+/** The first day the floor could punch a chore (Shared/floorChores, shipped 2026-10-14 afternoon) — from then on, oven time
+ *  with nothing else done is idle; before it there was nothing to punch, so it is shown as oven-free and never scored. */
+export const CHORES_FROM = '2026-10-15';
 /** A gap to the next order longer than this is not "between orders" (lunch, a meeting, another job). */
 export const NEXT_ORDER_MAX_MINS = 240;
 
@@ -246,14 +249,16 @@ const minsOf = (ivs) => ivs.reduce((t, [s, e]) => t + (e - s), 0) / MIN;
 
 // The day's unpaid break (lunch — Shared/timecardImport.breakMinsOf) is taken out of the idle half-hours and out of
 // the longest idle stretch: the export cannot say WHEN lunch was, only how long, so it is not held against anyone.
-function slotsOf({ inMs, outMs, eventAts, workIvs, freeIvs, breakMins = 0 }) {
+// `freeIsIdle`: once there are chores to punch (CHORES_FROM), a half-hour with the product in the oven and nothing else
+// done is idle, not free — "should be expected to do other chores" (Stuart 2026-10-13).
+function slotsOf({ inMs, outMs, eventAts, workIvs, freeIvs, breakMins = 0, freeIsIdle = false }) {
     const slotMs = SLOT_MINS * MIN;
     const n = Math.max(1, Math.ceil((outMs - inMs) / slotMs));
     let working = 0, free = 0, run = 0, longest = 0;
     for (let i = 0; i < n; i++) {
         const a = inMs + i * slotMs, b = Math.min(outMs, a + slotMs);
         const w = eventAts.some(t => t >= a && t < b) || workIvs.some(([s, e]) => s < b && e > a);
-        const f = !w && freeIvs.some(([s, e]) => s < b && e > a);
+        const f = !w && !freeIsIdle && freeIvs.some(([s, e]) => s < b && e > a);
         if (w) { working++; run = 0; } else if (f) { free++; run = 0; } else { run++; longest = Math.max(longest, run); }
     }
     const lunch = Math.min(n - working - free, Math.round(breakMins / SLOT_MINS));
@@ -267,18 +272,20 @@ const RELEVANT_SRC = { [GROUP.FINISHING]: [SRC.FLOOR, SRC.FLOOR_APP], [GROUP.WMS
  * Every person-day: what they did, against their clock.
  * @param boardOf    personKey → a board setting (role + Floor Metrics' moves); BOTH gives a day row on each board
  * @param nameOf     personKey → the name to show
+ * @param chores     finished chores (Shared/floorChores.choreIntervalsOf) — work, like a step
  * @returns [{ pk, who, date, week, group, clock, firstMs, startLagMins, steps, short, overruns, ratios, gaps,
- *             busyMins, ovenFreeMins, clockedMins, slots, picks, packs, actions, done, orders, setups, setupRefs, unclocked }]
+ *             busyMins, choreMins, ovenFreeMins, clockedMins, slots, picks, packs, actions, done, orders, setups, setupRefs, unclocked }]
  */
-export function personDaysOf({ steps = [], events = [], clockByPerson = new Map(), boardOf = () => GROUP.NONE, nameOf = (pk) => pk } = {}) {
+export function personDaysOf({ steps = [], events = [], chores = [], clockByPerson = new Map(), boardOf = () => GROUP.NONE, nameOf = (pk) => pk } = {}) {
     const days = new Map();
     const dayOf = (pk, date) => {
         const k = `${pk}|${date}`;
-        if (!days.has(k)) days.set(k, { pk, date, events: [], steps: [] });
+        if (!days.has(k)) days.set(k, { pk, date, events: [], steps: [], chores: [] });
         return days.get(k);
     };
     events.forEach(e => dayOf(personKeyOf(e.who), dateKeyOf(e.at)).events.push(e));
     steps.forEach(s => dayOf(personKeyOf(s.who), dateKeyOf(s.startMs)).steps.push(s));
+    chores.forEach(c => dayOf(personKeyOf(c.who), dateKeyOf(c.startMs)).chores.push(c));
     clockByPerson.forEach((byDate, pk) => byDate.forEach((_, date) => dayOf(pk, date)));
 
     return [...days.values()].flatMap(d => boardsOf(boardOf(d.pk)).map(group => {
@@ -292,7 +299,10 @@ export function personDaysOf({ steps = [], events = [], clockByPerson = new Map(
         const own = d.steps.filter(s => s.person);
         const timed = own.filter(s => !s.overrun);
         const busy = clipTo(unionOf(timed.map(s => [s.startMs, s.endMs])), win);
-        const oven = minus(clipTo(unionOf(d.steps.filter(s => s.oven && !s.overrun).map(s => [s.startMs, s.endMs])), win), busy);
+        // chores are work too (Shared/floorChores) — the time they cover is neither idle nor oven-free
+        const choreIvs = minus(clipTo(unionOf(d.chores.map(c => [c.startMs, c.endMs])), win), busy);
+        const working = unionOf([...busy, ...choreIvs]);
+        const oven = minus(clipTo(unionOf(d.steps.filter(s => s.oven && !s.overrun).map(s => [s.startMs, s.endMs])), win), working);
         const gaps = [];
         let last = null;
         own.slice().sort((a, b) => a.startMs - b.startMs).forEach(s => {
@@ -315,13 +325,13 @@ export function personDaysOf({ steps = [], events = [], clockByPerson = new Map(
             if (!distinct.some(same)) distinct.push(e);
         });
 
-        const slots = win ? slotsOf({ inMs: win[0], outMs: win[1], eventAts: rel.map(e => e.at), workIvs: busy, freeIvs: oven, breakMins: breakMinsOf(clock) }) : null;
+        const slots = win ? slotsOf({ inMs: win[0], outMs: win[1], eventAts: rel.map(e => e.at), workIvs: working, freeIvs: oven, breakMins: breakMinsOf(clock), freeIsIdle: d.date >= CHORES_FROM }) : null;
         return {
             pk: d.pk, who: nameOf(d.pk), date: d.date, week: weekKeyOf(d.date), group, clock,
             firstMs, startLagMins: (win && firstMs) ? Math.max(0, (firstMs - win[0]) / MIN) : null,
             steps: own.length, short: own.filter(s => s.short).length, overruns: own.filter(s => s.overrun).length,
             ratios: timed.filter(s => !s.short && s.normalMins > 0).map(s => s.ranMins / s.normalMins),
-            gaps, busyMins: minsOf(busy), ovenFreeMins: minsOf(oven), clockedMins: clockedMinsOf(clock), slots,
+            gaps, busyMins: minsOf(busy), choreMins: minsOf(choreIvs), chores: d.chores.length, ovenFreeMins: minsOf(oven), clockedMins: clockedMinsOf(clock), slots,
             picks: refsOf(WMS_KIND.PICK).size, packs: refsOf(WMS_KIND.PACK).size, actions: distinct.length, done,
             orders: [...new Set(own.map(s => s.woId).filter(Boolean))],
             // the Setup Queue: the orders this person started setup on or staged to the floor
@@ -371,7 +381,7 @@ export function weekRowsOf({ personDays = [], week, wosById = {} } = {}) {
             realShare: steps ? (steps - short) / steps : null,
             paceRatio: median(ds.flatMap(d => d.ratios)),
             nextGapMins: median(ds.flatMap(d => d.gaps)),
-            busyMins: sum(d => d.busyMins), ovenFreeMins: sum(d => d.ovenFreeMins), clockedMins,
+            busyMins: sum(d => d.busyMins), choreMins: sum(d => d.choreMins), chores: sum(d => d.chores), ovenFreeMins: sum(d => d.ovenFreeMins), clockedMins,
             steadyShare: totalSlots - freeSlots - lunchSlots > 0 ? workingSlots / (totalSlots - freeSlots - lunchSlots) : null,
             freeShare: totalSlots ? freeSlots / totalSlots : null,
             longestIdleMins: median(slots.map(d => d.slots.longestIdleMins)),   // the usual day's, not the worst

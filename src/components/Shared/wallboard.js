@@ -17,6 +17,7 @@ import { runningStepsOf, activityOf, isOvenTask, TASK_LABEL, windowOfTask, WINDO
 import { woRefOf } from './woRef.js';
 import { dateKeyOf } from './timecardImport.js';
 import { msOf, personKeyOf, isPersonName, GROUP } from './floorMetrics.js';
+import { openChoresOf, choreLabelOf } from './floorChores.js';
 
 const MIN = 60000;
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -31,7 +32,7 @@ export const CLAIM_STALE_MS = 4 * 60 * MIN;
  * @param workOrders  the floor's documents (the finishing app's own subscription)
  * @param cfg         the floor's timers (Shared/floorMetrics.floorTimersOf — the Active Floor's figures)
  * @returns { working, oven, crew, counts }
- *   working  hands-on steps running: [{ who, ref, item, step, window, elapsedMins, estMins, state }]
+ *   working  hands-on steps and chores running: [{ who, ref, item, step, window, elapsedMins, estMins, state, chore? }]
  *   oven     product in the oven:    [{ ref, item, step, who, elapsedMins, estMins, leftMins, done }]
  *   crew     everyone who touched a step today or is running one: [{ name, state: 'working' | 'free' | 'none', doing, ovenRefs }]
  *   counts   { onFloor, inOven, setupQueue, finishedToday, dueToday, late }
@@ -43,7 +44,13 @@ export function floorNowOf({ workOrders = [], cfg = {}, nowMs = Date.now() } = {
     const working = running.filter(({ s }) => !isOvenTask(s.key)).map(({ s, a }) => ({
         who: String(s.operator || '').trim(), ref: woRefOf(s.wo), item: itemOf(s.wo), step: TASK_LABEL[s.key] || s.key,
         window: WINDOW_LABEL[windowOfTask(s.key, s.wo)] || '', elapsedMins: a.elapsedMins, estMins: a.estMins, state: a.state,
-    })).sort((x, y) => (y.elapsedMins || 0) - (x.elapsedMins || 0));
+    }));
+    // 🧰 chores in between the steps (Shared/floorChores) — someone working, on an order, with no step started
+    openChoresOf(workOrders.filter(w => w && w.currentPhase === 'Painting')).forEach(c => working.push({
+        who: c.by, ref: woRefOf(c.wo), item: itemOf(c.wo), step: choreLabelOf(c.kind), window: 'Chore', chore: true,
+        elapsedMins: c.startedAt ? Math.max(0, Math.floor((nowMs - c.startedAt) / MIN)) : null, estMins: 0, state: 'chore',
+    }));
+    working.sort((x, y) => (y.elapsedMins || 0) - (x.elapsedMins || 0));
     const oven = running.filter(({ s }) => isOvenTask(s.key)).map(({ s, a }) => ({
         ref: woRefOf(s.wo), item: itemOf(s.wo), step: TASK_LABEL[s.key] || s.key, who: String(s.operator || '').trim(),
         elapsedMins: a.elapsedMins, estMins: a.estMins,

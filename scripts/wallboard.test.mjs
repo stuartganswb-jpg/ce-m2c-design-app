@@ -66,6 +66,13 @@ eq('the halls of fame and shame, one each side of two', [fin.fame.map(x => x.nam
 eq('the WMS half', boardHalfOf(published, GROUP.WMS).ranked.map(r => r.name), ['Hal', 'Ivy']);
 eq('nothing published yet, or a board that does not exist', [boardHalfOf(null, GROUP.FINISHING), boardHalfOf({}, GROUP.WMS), boardHalfOf(published, 'both')], [null, null, null]);
 
+// ── chores on the wallboard (Stuart 2026-10-14) ─────────────────────────────────────────────────────────────────
+const withChore = [...floor, { id: 'k', nsWoTran: 'WO110', currentPhase: 'Painting', totalParts: 5, chores: { kim: { kind: 'paintPrep', by: 'Kim', startedAt: NOW - 7 * MIN } } },
+    { id: 'z', nsWoTran: 'WO111', currentPhase: 'Complete', chores: { ann: { kind: 'setupPrep', by: 'Ann', startedAt: NOW - 90 * MIN } } }];
+const fc = floorNowOf({ workOrders: withChore, cfg, nowMs: NOW });
+eq('a chore is working now — on its order, with no step started (an order off the floor is not the floor\'s)', fc.working.filter(w => w.chore).map(w => `${w.who}:${w.step}:${w.ref}:${w.elapsedMins}:${w.state}`), ['Kim:Paint prep:WO110:7:chore']);
+eq('the person on a chore is working, not free — even with their product in the oven', fc.crew.find(c => c.name === 'Kim').state, 'working');
+
 eq('minutes, said for a wall', [sayMins(0), sayMins(8.4), sayMins(80), sayMins(null)], ['0 min', '8 min', '1 h 20', '—']);
 
 console.log(`wallboard: ${pass} passed, ${fail} failed`);

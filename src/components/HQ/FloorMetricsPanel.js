@@ -14,6 +14,7 @@ import {
     floorTimersOf, floorStepsOf, activityOf, clockIndexOf, personDaysOf, weekRowsOf, rankWeek, wallboardDocOf, weeksOf,
     boardOfRole, personKeyOf, standardsCheckOf, GROUP, GROUP_LABEL, SCORE_PARTS, RANK_MIN,
 } from '../Shared/floorMetrics';
+import { choreIntervalsOf } from '../Shared/floorChores';
 
 const box = { background: '#fff', border: '1px solid var(--line)', padding: '20px', marginBottom: '20px' };
 const h4 = { margin: '0 0 12px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', fontWeight: 500 };
@@ -90,7 +91,8 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
         const firstName = new Map(); events.forEach(e => { const k = personKeyOf(e.who); if (!firstName.has(k)) firstName.set(k, e.who); });
         const nameOf = (pk) => (directory.get(pk) || {}).name || firstName.get(pk) || pk;
         const clock = clockIndexOf(timecards.filter(d => d.date >= fromKey), cfg.map);
-        const personDays = personDaysOf({ steps, events, clockByPerson: clock, boardOf, nameOf });
+        const chores = choreIntervalsOf(data.finLogs).filter(c => c.startMs >= fromMs);
+        const personDays = personDaysOf({ steps, events, chores, clockByPerson: clock, boardOf, nameOf });
         return { wosById, steps, events, personDays, weeks: weeksOf(personDays), nameOf, standards: standardsCheckOf(steps, wosById) };
     }, [data, timecards, cfg.map, boardOf, directory, fromMs, fromKey]);
     useEffect(() => { if (!week || !computed.weeks.includes(week)) setWeek(computed.weeks[0] || ''); }, [computed.weeks, week]);
@@ -176,7 +178,7 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                                 {parts.map(p => <th key={p.key} style={th} title={`weight ${p.weight}`}>{p.label}</th>)}
                                 <th style={th}>Days</th><th style={th}>Hours</th><th style={th}>First touch</th>
                                 {g === GROUP.FINISHING ? (<>
-                                    <th style={th}>Steps</th><th style={th} title="Setup Queue: started setup or staged to the floor">Setups</th><th style={th}>Real</th><th style={th}>Pace</th><th style={th}>Next order</th><th style={th}>Oven-free</th>
+                                    <th style={th}>Steps</th><th style={th} title="Setup Queue: started setup or staged to the floor">Setups</th><th style={th}>Real</th><th style={th}>Pace</th><th style={th}>Next order</th><th style={th} title="Chores punched in between the steps">Chores</th><th style={th}>Oven-free</th>
                                 </>) : (<>
                                     <th style={th}>Picks</th><th style={th}>Packs</th><th style={th}>Actions</th><th style={th}>Per hour</th>
                                 </>)}
@@ -198,6 +200,7 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                                             <td style={td}>{pct(r.realShare)}</td>
                                             <td style={td}>{r.paceRatio == null ? '—' : `${r.paceRatio.toFixed(1)}×`}</td>
                                             <td style={td}>{mins(r.nextGapMins)}</td>
+                                            <td style={td}>{r.chores ? `${r.chores} · ${mins(r.choreMins)}` : '—'}</td>
                                             <td style={td}>{mins(r.ovenFreeMins)}</td>
                                         </>) : (<>
                                             <td style={td}>{r.picks}</td><td style={td}>{r.packs}</td><td style={td}>{r.actions}</td>
@@ -373,7 +376,7 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                         <li><strong>Real punches</strong> — steps that ran at least what the floor's punch check accepts (a quarter of the step's standard, never under a minute). A step left running past three times its standard is not timed.</li>
                         <li><strong>Pace</strong> — real steps against the floor's own standard (Production Times); 1.0× is on standard.</li>
                         <li><strong>Next order</strong> — from finishing a step on one order to starting a step on the next.</li>
-                        <li><strong>Steady</strong> — the clocked half-hours with something done or a step running, less the half-hours their product was in the oven with nothing else to do (shown as oven-free, not scored — there are no chores to punch yet) and less the day's unpaid break.</li>
+                        <li><strong>Steady</strong> — the clocked half-hours with something done or a step running, a chore running, less the day's unpaid break. Oven time with nothing else done is shown as oven-free; before chores could be punched (until 2026-10-14) it is not scored, from 2026-10-15 it counts as idle — the operator is free and expected to do chores.</li>
                         <li><strong>Due dates</strong> — finishing: the orders they worked that the floor finished by their due date; WMS: picks and packs done by the due date.</li>
                         <li>Not in the history: the machine cards' Start / Complete (only Manual Control is logged); when a pick or pack STARTED (the WMS keeps only when it finished); lunch punches; chores.</li>
                         <li>Hours are shown here only. The wallboard gets names, scores and the facts behind them — never hours or clock times.</li>

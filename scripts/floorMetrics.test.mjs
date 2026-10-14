@@ -6,7 +6,7 @@ import {
 } from '../src/components/Shared/timecardImport.js';
 import {
     floorTimersOf, standardMinsOf, floorStepsOf, activityOf, wmsKindOf, isWmsLog, clockIndexOf, personDaysOf, weekRowsOf,
-    rankWeek, wallboardDocOf, weeksOf, boardOfRole, boardsOf, personKeyOf, msOf, GROUP, WMS_KIND, SRC, SCORE_PARTS, standardsCheckOf,
+    rankWeek, wallboardDocOf, weeksOf, boardOfRole, boardsOf, personKeyOf, CHORES_FROM, msOf, GROUP, WMS_KIND, SRC, SCORE_PARTS, standardsCheckOf,
 } from '../src/components/Shared/floorMetrics.js';
 
 let pass = 0, fail = 0;
@@ -234,6 +234,21 @@ const sidWeek = (o) => ({ pk: 'sid', who: 'Sid', group: GROUP.FINISHING, week: '
 const sidRank = rankWeek([sidWeek(), fin('Ace'), fin('Bea', { realShare: 0.5 })]);
 eq('a setup manager is ranked on the finishing board by start, steady and due dates — punches, pace and next order left out', [sidRank.finishing.find(r => r.who === 'Sid').score, sidRank.finishing.find(r => r.who === 'Sid').parts.filter(p => p.value == null).map(p => p.key)], [94, ['punches', 'pace', 'next']]);
 eq('…and not without the setups', rankWeek([sidWeek({ setups: 3 })]).unranked.map(r => r.who), ['Sid']);
+
+// ── chores (Stuart 2026-10-14) — work like a step; from the day they exist, oven time with nothing done is idle ─────
+eq('chores count from the day after they shipped', CHORES_FROM, '2026-10-15');
+const day = (y, m, d) => (h, mi = 0) => new Date(y, m - 1, d, h, mi).getTime();
+const choreDay = (D, date) => {
+    const bake = { who: 'Pat', woId: 'W1', task: 'spinBake', person: false, oven: true, startMs: D(8, 0), endMs: D(9, 0), ranMins: 60, normalMins: 6, short: false, overrun: false };
+    const spray = { who: 'Pat', woId: 'W1', task: 'spinSpray', person: true, oven: false, startMs: D(7, 0), endMs: D(7, 50), ranMins: 50, normalMins: 30, short: false, overrun: false };
+    const chore = { who: 'Pat', woId: 'W1', kind: 'paintPrep', startMs: D(8, 0), endMs: D(8, 25) };
+    const clk = clockIndexOf([{ number: '1', date, totalHours: 3, inMs: D(7, 0), outMs: D(10, 0) }], { pat: '1' });
+    return personDaysOf({ steps: [spray, bake], chores: [chore], clockByPerson: clk, boardOf: () => GROUP.FINISHING })[0];
+};
+const before = choreDay(day(2026, 10, 14), '2026-10-14'), after = choreDay(day(2026, 10, 15), '2026-10-15');
+eq('a chore is work: its minutes, and the oven-free time is what the chore did not cover', [Math.round(after.choreMins), Math.round(after.ovenFreeMins), after.chores], [25, 35, 1]);
+eq('before chores existed: the half-hour with only the product in the oven is free, not scored', [before.slots.working, before.slots.free, before.slots.idle], [3, 1, 2]);
+eq('from CHORES_FROM: that half-hour is idle — "should be expected to do other chores"', [after.slots.working, after.slots.free, after.slots.idle], [3, 0, 3]);
 
 console.log(`floorMetrics: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
