@@ -11,7 +11,7 @@ import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { runOeAuto, oeInventoryOf, loadOeFinishes } from '../Shared/oeGenerate';
 import { startReadyLinesOf } from '../Shared/oeAsAvailable';
 import { restampBreakdownLines, splitLineFinishOf, isUnfinishedFinish } from '../Shared/subFinish';
-import { oeIsTbf, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';
+import { oeIsStartable, oeLineFinish, oeCoverageOf, uncoveredTbfOf, oeAutoSig, oeLineStateOf } from '../Shared/oeLines';   // oeIsStartable: a pillow line starts too (S7, 2026-10-14)
 import { isOrderEntryOrder } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey , stockHolderIdOf, withShelfFigures, neverRefreshed } from '../Shared/materialGrid';
@@ -554,7 +554,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         demands: livePlatD.filter(d => d.soAppId === so.id),
         any: true,
     });
-    const oeOpenOf = (so) => ((so.lines || []).some(oeIsTbf) ? uncoveredTbfOf(so, oeLinksOf(so)) : []);
+    const oeOpenOf = (so) => ((so.lines || []).some(oeIsStartable) ? uncoveredTbfOf(so, oeLinksOf(so)) : []);
     useEffect(() => {
         const cfg = autoRelease;
         if (!cfg || !cfg.enabled || oeAutoBusyRef.current) return;
@@ -1168,7 +1168,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         const tone = stageTone(st.stage);
         const wos = liveWO.filter(w => w.soAppId === so.id && !w.deleted);
         // THE TO-BE-FINISHED LINES, EACH WITH ITS STATE (Stuart 2026-09-20: these orders must not get lost).
-        const tbf = (so.lines || []).map((line, lineIdx) => ({ line, lineIdx })).filter(x => oeIsTbf(x.line));
+        const tbf = (so.lines || []).map((line, lineIdx) => ({ line, lineIdx })).filter(x => oeIsStartable(x.line));
         const links = tbf.length ? oeLinksOf(so) : null;
         const reviewOf = (idx) => ((so.oeAuto && so.oeAuto.review) || []).find(r => r.lineIdx === idx) || null;
         const tbfRows = tbf.map(x => {

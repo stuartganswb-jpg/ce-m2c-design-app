@@ -32,7 +32,7 @@ import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { holdSplitGroups } from '../Shared/rowPairShape';
-import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf, oeLinePlansOf, oeStartsLine } from '../Shared/oeGenerate';
+import { oeIsStartable, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, resolveOePart as resolveOePartIn, loadOeLinks, buildOeJobs, executeOeJobs, oeDoorOf, oeLinePlansOf, oeStartsLine } from '../Shared/oeGenerate';
 import { isReleaseByCount, lineDueOf } from '../Shared/rowRelease';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import { runChunked, fetchPositionById, fetchInboundById, backorderTallyOf, uncoveredOf, suggestedOf, shortfallToFloorOf, uncoveredWords } from '../Shared/stockPosition';
@@ -2420,7 +2420,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // …except the ONE a 10.5 row's Review → named (2026-09-26): it is loaded for that review
                 // only, and the unscoped Generate below never touches a rows-released order.
                 .filter(o => !o.displayRelease || (keepSoId && o.id === keepSoId))
-                .filter(o => (o.lines || []).some(oeIsTbf));
+                .filter(o => (o.lines || []).some(oeIsStartable));   // a pillow line starts too (S7, 2026-10-14)
             // Live work linked to each order — work orders, purchase orders AND plating demands, by the
             // one loader RTG's automatic start reads too (Shared/oeGenerate.loadOeLinks). A closed or
             // deleted order does not COVER a line (2026-08-29 / 08-30).
@@ -3088,7 +3088,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid var(--line)', color: 'var(--ink-soft)', marginLeft: 'auto' }}>{so.status === 'NS_QUEUED' ? 'AWAITING NETSUITE' : (so.status || 'Pending')}</span>
                                                     </div>
                                                     {so.productionNotes && <div style={{ padding: '8px 18px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }}>📝 {so.productionNotes}</div>}
-                                                    {(so.lines || []).filter(oeIsTbf).map((l, li) => {
+                                                    {(so.lines || []).filter(oeIsStartable).map((l, li) => {
                                                         const link = oeLinkFor({ so, wos, pos, demands }, l);
                                                         const fin = oeLineFinish(l);
                                                         return (

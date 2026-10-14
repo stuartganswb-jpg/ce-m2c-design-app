@@ -16,6 +16,11 @@ export const oeIsTbf = (l) => !!(l && (l.toBeFinished || /TO BE FINISHED/i.test(
 export const oeIsFloorLine = (l) => !!l && (oeIsTbf(l) || Number(l.cutLength) > 0 || !!l.isFee || !!l.shopOnly
     || String(l.madeToOrder || '').toUpperCase() === 'SEW' || !!l.pillow   // a custom pillow (Stitch & Sew, S7 2026-10-11)
     || /custom/i.test(String(l.customOverrideHandling || '')) || /custom/i.test(String(l.partHandling || '')));
+// A line the Order Entry route STARTS (the automatic start on RTG, Stock View's Order Entry Needs, the card's
+// line list): to be finished, OR a custom pillow (madeToOrder SEW / `pillow` — the Stitch & Sew route). The
+// first live counter order (SOUNIQ-3985, 2026-10-14) sat as a record only: every reader that finds a line to
+// start keyed on `oeIsTbf`, so a pillow-only order was never offered to the planner that knows it.
+export const oeIsStartable = (l) => !!l && (oeIsTbf(l) || String(l.madeToOrder || '').toUpperCase() === 'SEW' || !!l.pillow);
 export const oeLineFinish = (l) => (l && (l.finishCode || (String(l.note || '').match(/TO BE FINISHED\s*·\s*([A-Z0-9-]+)/i) || [])[1])) || '';
 // The need-by a sales order states, whichever door wrote it (Brief E's alias window, eb5cb6b).
 export const soNeedBy = (so) => String((so && (so.needBy || so.needByDate)) || '');
@@ -84,7 +89,7 @@ export const oeCoverageOf = ({ so, line, lineIdx, wos = [], pos = [], demands = 
 // Every to-be-finished line of a sales order that nothing covers yet: [{ line, lineIdx }].
 export const uncoveredTbfOf = (so, links = {}, opts = {}) => ((so && so.lines) || [])
     .map((line, lineIdx) => ({ line, lineIdx }))
-    .filter(x => oeIsTbf(x.line))
+    .filter(x => oeIsStartable(x.line))
     .filter(x => !oeCoverageOf({ so, line: x.line, lineIdx: x.lineIdx, ...links, ...opts }));
 
 // The signature of "these lines, at these quantities" — an answer already given for a signature is

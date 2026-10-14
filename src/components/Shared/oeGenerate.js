@@ -30,7 +30,7 @@ import { releaseFinWoToFloor } from './finishedRunPrecheck';
 import { buildOeReviewPlan, actionsOfReviewedJob } from './oeReviewPlan';
 import { createDraftPurchaseOrders } from './purchaseOrders';
 import { isAssemblyPart } from './finishedGoodsRun';
-import { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig, rowBackorderPatchOf } from './oeLines';
+import { oeIsTbf, oeIsStartable, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig, rowBackorderPatchOf } from './oeLines';
 import { sewPartsOf, isSewGroup, SEW_FINISH } from './sewRouteShape.js';   // the Stitch & Sew route (S7, 2026-10-11)
 import { parkSewDoc } from './sewRoute.js';
 import { floorGroupsOf, parkRowPair } from './rowPair.js';
@@ -42,7 +42,7 @@ import { isKitLine, itemKitOfCode, isOffOrderLine, kitRodLinePatchOf } from './i
 import { STOCK_COLOUR_SUFFIX } from './finishVariant.js';
 import { isReleaseByCount, lineDueOf, releaseRunOf, releaseRowKeyOf, releaseStampOf } from './rowRelease.js';
 
-export { oeIsTbf, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig };
+export { oeIsTbf, oeIsStartable, oeLineFinish, soNeedBy, oeJobBlocked, oeCoverageOf, uncoveredTbfOf, autoRunnable, oeAutoSig };
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const LIVE_DOC = (d) => !d.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(d.status || ''));
