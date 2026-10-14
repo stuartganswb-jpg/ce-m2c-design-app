@@ -53,6 +53,7 @@ import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i18n';
 import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutYieldLinesOf, cutYieldText, cutReleaseText, cutReleaseLog } from '../Shared/poleCut';
+import { jfpPullBinOf, jfpAdjustmentOf, jfpSkipText } from '../Shared/jfpPull';
 import { binsSql, GOOD_STATUS_ID } from '../Shared/fulfilmentBins';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { platingLineRateOf } from '../Shared/platingRate';
@@ -4998,23 +4999,30 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             const nsId = lineItem.jfpSourceNsId || (hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === code) || {}).netSuiteInternalId;
             if (nsId) {
                 const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
-                const adjBin = scanned && scanned !== 'UNASSIGNED' ? scanned : '';
-                try {
-                    await enqueueNsWrite({
-                        kind: 'inventoryadjustment',
-                        label: `JFP pull −${entered} × ${code} (${packRef(activePickJob)})`,
-                        sourceApp: 'WMS', createdBy: operator?.name || '',
-                        targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
-                        method: 'POST',
-                        payload: {
-                            account: { id: "254" }, subsidiary: { id: nsCfg.subsidiary },
-                            memo: `JFP pull for ${packRef(activePickJob)}: −${entered} × ${code} (repaint source)`,
-                            inventory: { items: [{ item: { id: String(nsId) }, location: { id: nsCfg.location }, adjustQtyBy: -entered, ...(adjBin ? { inventoryDetail: { quantity: -entered, inventoryAssignment: { items: [{ binNumber: { refName: adjBin }, quantity: -entered }] } } } : {}) }] }
-                        },
-                    });
-                    writeLog(`JFP pull: −${entered} × ${code} adjustment queued (${packRef(activePickJob)}${adjBin ? ` · bin ${adjBin}` : ''}).`, 'wms');
-                } catch (adjErr) {
-                    alert(`Pick recorded, but the −${entered} × ${code} NetSuite adjustment could not be queued: ${adjErr.message || adjErr}\n\nAdjust it manually (11.1 / NetSuite).`);
+                // THE BIN NETSUITE HOLDS THEM IN, BY ITS ID (Stuart 2026-10-14 · Shared/jfpPull): read the item's bins fresh
+                // and send the scanned bin's NetSuite id. Nine pulls failed sending the scan as typed ("PRODUCTION STOCK"
+                // for "Production Stock", "UNASSIGND", no bin, more than the bin held, an inactive kit record). When
+                // NetSuite cannot take it, nothing doomed is queued and the picker is told; the pick stands either way.
+                const fresh = await fetchLiveBins([code]);
+                const plan = jfpPullBinOf({ scanned, qty: entered, live: fresh ? (fresh[code] || null) : null });
+                if (plan.ok) {
+                    try {
+                        await enqueueNsWrite({
+                            kind: 'inventoryadjustment',
+                            label: `JFP pull −${entered} × ${code} (${packRef(activePickJob)})`,
+                            sourceApp: 'WMS', createdBy: operator?.name || '',
+                            targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
+                            method: 'POST',
+                            payload: jfpAdjustmentOf({ nsId, qty: entered, bin: plan.bin, subsidiary: nsCfg.subsidiary, location: nsCfg.location,
+                                memo: `JFP pull for ${packRef(activePickJob)}: −${entered} × ${code} (repaint source)` }),
+                        });
+                        writeLog(`JFP pull: −${entered} × ${code} adjustment queued (${packRef(activePickJob)} · bin ${plan.bin.name}).`, 'wms');
+                    } catch (adjErr) {
+                        alert(`Pick recorded, but the −${entered} × ${code} NetSuite adjustment could not be queued: ${adjErr.message || adjErr}\n\nAdjust it manually (11.1 / NetSuite).`);
+                    }
+                } else {
+                    writeLog(`⚠ JFP pull of ${entered} × ${code} on ${packRef(activePickJob)} — NetSuite NOT adjusted: ${plan.why}. Adjust it by hand.`, 'alert');
+                    alert(jfpSkipText({ code, qty: entered, ref: packRef(activePickJob), why: plan.why }));
                 }
             } else {
                 writeLog(`⚠ JFP pull of ${entered} × ${code} on ${packRef(activePickJob)} — no NetSuite id resolved, NO adjustment queued (adjust manually).`, 'alert');

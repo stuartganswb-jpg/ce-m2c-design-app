@@ -26,7 +26,7 @@ eq('CUST- prefix stripped', [nsCustomerIdOf('CUST-4720'), nsCustomerIdOf('4720')
 }
 // ── the refusal ──────────────────────────────────────────────────────────────────────────────
 {
-    ['uniquity', 'leyla'].forEach(b => {
+    ['leyla'].forEach(b => {
         const r = nsTransactionHeader({ brand: b, asType: 'estimate', customerId: '1', memo: 'x' });
         eq(`${b}: refuses with a named code until Eric's ids are on file`, [r.ok, r.error.code], [false, 'NO_NS_FORM_FOR_BRAND']);
         ok(`${b}: the message names the brand and where the ids go`, r.error.message.includes(`"${b}"`) && /BRAND_NETSUITE_FORMS/.test(r.error.message));
@@ -34,11 +34,11 @@ eq('CUST- prefix stripped', [nsCustomerIdOf('CUST-4720'), nsCustomerIdOf('4720')
     });
     eq('unknown brand: refuses on the subsidiary map first', nsTransactionHeader({ brand: 'nope', customerId: '1' }).error.code, 'NO_NS_SUBSIDIARY_FOR_BRAND');
     eq('no customer: NO_CUSTOMER', nsTransactionHeader({ brand: 'ce', customerId: '' }).error.code, 'NO_CUSTOMER');
-    eq('CE and M2C have ids today', Object.keys(BRAND_NETSUITE_FORMS), ['ce', 'm2c']);
+    eq('CE, M2C and Uniquity have ids today (Uniquity: S7, 37acc191)', Object.keys(BRAND_NETSUITE_FORMS), ['ce', 'm2c', 'uniquity']);
     // the day a brand's ids land, the refusal lifts with no code change
-    BRAND_NETSUITE_FORMS.uniquity = { estimate: '900', salesorder: '901', class: '9' };
-    eq('an added brand row builds at once', nsTransactionHeader({ brand: 'uniquity', asType: 'salesorder', customerId: '1', memo: 'x' }).header.customForm.id, '901');
-    delete BRAND_NETSUITE_FORMS.uniquity;
+    BRAND_NETSUITE_FORMS.leyla = { estimate: '900', salesorder: '901', class: '9' };
+    eq('an added brand row builds at once', nsTransactionHeader({ brand: 'leyla', asType: 'salesorder', customerId: '1', memo: 'x' }).header.customForm.id, '901');
+    delete BRAND_NETSUITE_FORMS.leyla;
 }
 // ── M2C (Stuart 2026-10-14: quote form 187, sales order form 281, class Hardware 2 / Lighting 3) ─────────────────────
 // The four M2C saves refused since 9/12 (Dahle Barn, Cresthaven, Laprade, Henningsen) were all Flat Iron hardware.
