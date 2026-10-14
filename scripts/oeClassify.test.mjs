@@ -1,7 +1,7 @@
 // node scripts/oeClassify.test.mjs — ONE CLASSIFIER FOR EVERY DOOR (Stuart 2026-09-27, SO60551): the Order Entry
 // route and 10.5's rows decide shop-or-small with CPQ's own classifyLine, read a row's cut facts off its own fees,
 // and give a rider (and a custom line quoted with no finish) its rod's finish.
-import { fabKindOf, rowFabOf, oeDivisionOf, rowFinishesOf, isFeePart, DIVISION_CUSTOM, DIVISION_SMALL } from '../src/components/Shared/oeClassify.js';
+import { fabKindOf, rowFabOf, oeDivisionOf, rowFinishesOf, isFeePart, DIVISION_CUSTOM, DIVISION_SMALL, DIVISION_SEW } from '../src/components/Shared/oeClassify.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
@@ -58,4 +58,13 @@ eq('a fee cut into an unfinished rod rides it UNFINISHED', acr[1].finish, 'UNFIN
 eq('a small line with no finish is not started (a shelf pick)', rowFinishesOf([{ lineIdx: 0, ownFinish: '', division: DIVISION_SMALL }])[0].finish, '');
 eq('the traverse track keeps CPQ\'s Custom handling in its sub finish (not the /C suffix rule)', oeDivisionOf({ line: { cutLength: 17.5 }, basePart: P('H1-2TRV', { productType: 'Pole', partHandling: 'Custom' }), erp: 'H1-2TRV', finish: 'TCP', trvCut: true }).division, DIVISION_CUSTOM);
 
+
+// ── a custom pillow holder is the sewing floor's, whatever part stands behind it (2026-10-14, SOUNIQ-3985) ──
+{
+    const holder = { id: 'cp', legacyErpId: 'CUSTOM PILLOW', itemName: 'Pillow with customized options', manufacturingSpecs: { productType: 'Pillow', partHandling: 'Small Parts' } };
+    const r1 = oeDivisionOf({ line: { erp: 'CUSTOM PILLOW', qty: 1, madeToOrder: 'SEW', pillow: { requestId: 'COUNTER1', line: 0 } }, basePart: holder, erp: 'CUSTOM PILLOW' });
+    const r2 = oeDivisionOf({ line: { erp: 'CUSTOM PILLOW', qty: 1, pillow: { requestId: 'X', line: 1 } }, basePart: holder, erp: 'CUSTOM PILLOW' });
+    const r3 = oeDivisionOf({ line: { erp: 'CUSTOM PILLOW', qty: 1 }, basePart: holder, erp: 'CUSTOM PILLOW' });
+    eq('madeToOrder SEW → sew; the pillow design alone → sew; the bare holder line → small parts', [r1.division, r2.division, r3.division], [DIVISION_SEW, DIVISION_SEW, DIVISION_SMALL]);
+}
 console.log(`oeClassify: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

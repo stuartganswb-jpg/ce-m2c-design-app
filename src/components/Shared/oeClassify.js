@@ -74,6 +74,10 @@ export const oeDivisionOf = ({ line = {}, basePart = null, finishedPart = null, 
         partId: line.partId || (part && part.id) || U(erp || line.erp),
         isFee: fee, lineIsFee: fee,
         partHandling: line.partHandling || '', customOverrideHandling: line.customOverrideHandling || '',
+        // A CUSTOM PILLOW's marks ride through to the classifier's sewing step (Shared/lineClassification −2): this copy
+        // used to drop them, so every Order Entry plan read a pillow holder as a small part (found starting the first
+        // live counter order, SOUNIQ-3985, 2026-10-14).
+        madeToOrder: line.madeToOrder || '', pillow: line.pillow || null,
     };
     let division = classifyLine(cls, part, fab || {});
     const pole = !fee && (isPoleCategory(typeOf(basePart)) || isPoleCategory(typeOf(finishedPart)));
