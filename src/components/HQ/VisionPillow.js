@@ -13,6 +13,7 @@ import { isFabricItem, isTrimItem } from '../Shared/pillowFabricSheet';
 import { isRailroad, fabricWidthOf } from '../Shared/pillowCuts';
 import { saveGuideCapture } from '../Shared/guideCapture';   // the ONE Asset Gallery writer — a photographed fabric files as kind FABRIC
 import { pillowRequestOf } from '../Shared/pillowRequest';
+import { readPhotoAsDataUrl, PHOTO_ACCEPT } from '../Shared/photoFile';   // a HEIC from the phone converts to JPEG first (2026-10-15)
 import { treatmentsOffered, coloursOf, isTreatmentCode } from '../Shared/pillowTreatments';   // the show upgrades on the board: round the 4 sides, or on any drawn seam (Stuart 2026-10-14)   // step 3c: the board → Order Entry (tab 7) as a jobs PILLOW_REQUEST
 
 // `counter` + `onAddToCart(line)` (the show counter, 2026-10-12): the board inside the counter page — no Vision quote
@@ -48,13 +49,14 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
   // the stitch / leather treatments the price table offers (a blank price = not offered), for the edge and any drawn seam
   const treatments = useMemo(() => treatmentsOffered(pricing), [pricing]);
   const groupCodes = useMemo(() => Object.entries((pricing && pricing.fabricGroups) || {}).sort((a, b) => (a[1].rank || 0) - (b[1].rank || 0)).map(([code, g]) => ({ code, label: g.label || '' })), [pricing]);
-  const onCapturePhoto = (e) => {
+  const onCapturePhoto = async (e) => {
       const f = e.target.files && e.target.files[0];
       e.target.value = '';
       if (!f) return;
-      const reader = new FileReader();
-      reader.onload = () => setCapForm(prev => ({ ...prev, open: true, dataUrl: String(reader.result || ''), fileName: f.name, err: '' }));
-      reader.readAsDataURL(f);
+      try {
+          const dataUrl = await readPhotoAsDataUrl(f);   // a HEIC is converted to JPEG here, so the capture and the gallery asset display
+          setCapForm(prev => ({ ...prev, open: true, dataUrl, fileName: f.name, err: '' }));
+      } catch (err) { setCapForm(prev => ({ ...prev, open: true, err: `The photo could not be read (${err.message || err}).` })); }
   };
   const saveCapturedFabric = async () => {
       const patternId = String(capForm.patternId || '').trim().toUpperCase();
@@ -556,7 +558,7 @@ const VisionPillow = ({ currentUser, activeBrand, visionConfigs, libraryParts, g
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                             <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>2. Fabric Panels ({pillowData.fabrics.length})</h4>
                             <label style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', marginLeft: 'auto', marginRight: '8px' }} title="Photograph a fabric that is not in the library — it files in the Asset Gallery and prices at the group you pick">
-                                📷 Photo a fabric<input type="file" accept="image/*" capture="environment" onChange={onCapturePhoto} style={{ display: 'none' }} />
+                                📷 Photo a fabric<input type="file" accept={PHOTO_ACCEPT} capture="environment" onChange={onCapturePhoto} style={{ display: 'none' }} />
                             </label>
                             <button onClick={addFabricPanel} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Add Panel</button>
                         </div>

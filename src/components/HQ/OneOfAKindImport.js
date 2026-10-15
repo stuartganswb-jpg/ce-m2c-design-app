@@ -12,7 +12,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, query, where, getDocs, setDoc, updateDoc, doc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, newOneOfAKindId, OOAK_KINDS, OOAK_MAKINGS, isOneOfAKindItem, oneOfAKindOf, oneOfAKindEditableOf, oneOfAKindEditCardOf, oneOfAKindEditPatchOf } from '../Shared/oneOfAKind';
+import { readPhotoAsDataUrl, isHeicFile, PHOTO_ACCEPT } from '../Shared/photoFile';   // a HEIC converts to JPEG before anything reads it (2026-10-15)
+import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, newOneOfAKindId, OOAK_KINDS, OOAK_MAKINGS, isOneOfAKindItem, oneOfAKindOf, oneOfAKindEditableOf, oneOfAKindEditCardOf, oneOfAKindEditPatchOf, oneOfAKindRestorePatchOf, oneOfAKindQtyOf } from '../Shared/oneOfAKind';
 import { isFabricItem } from '../Shared/pillowFabricSheet';
 import { sizeKeysOf } from '../Shared/pillowCuts';
 import { DEFAULT_PILLOW_PRICING, PILLOW_PRICING_DOC } from '../Shared/pillowPricing';
@@ -26,7 +27,6 @@ const btn = (primary, disabled) => ({ padding: '10px 16px', background: disabled
 const chip = (on) => ({ padding: '9px 12px', border: `1px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: on ? 'var(--ink)' : '#fff', cursor: 'pointer', ...mono, color: on ? '#fff' : 'var(--ink)' });
 const BRAND = 'uniquity';
 
-const readFileAsDataUrl = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result || '')); r.onerror = rej; r.readAsDataURL(file); });
 const dataUrlToBlob = async (dataUrl) => (await fetch(dataUrl)).blob();
 const resized = (dataUrl, maxPx) => new Promise((res) => {
     const img = new Image();
@@ -71,7 +71,8 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
         try {
             const next = [];
             for (const f of files) {
-                const raw = await readFileAsDataUrl(f);
+                if (isHeicFile(f)) say(`converting HEIC ${f.name} to JPEG…`, 'info');
+                const raw = await readPhotoAsDataUrl(f);
                 const dataUrl = await resized(raw, 1600);
                 next.push(oneOfAKindCardOf({ fileName: f.name, dataUrl }));
             }
@@ -97,6 +98,19 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
     const cancelEdit = (id) => setEdits(prev => { const n = { ...prev }; delete n[id]; return n; });
     const setEdit = (id, patch) => setEdits(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
     const setEditMaking = (id, patch) => setEdits(prev => ({ ...prev, [id]: { ...prev[id], making: { ...prev[id].making, ...patch } } }));
+    // A sold piece back on the wall (Stuart 2026-10-15: the NetSuite order was cancelled) — two presses, the sale kept as history
+    const [restoreArmed, setRestoreArmed] = useState('');
+    const restore = async (it) => {
+        if (restoreArmed !== it.id) { setRestoreArmed(it.id); return; }
+        setRestoreArmed('');
+        setBusy(true);
+        try {
+            await updateDoc(doc(db, 'Approved_Designs', it.id), oneOfAKindRestorePatchOf(it, { by: currentUser || '' }));
+            say(`✅ ${it.legacyErpId} is back on the wall (its sale on ${(oneOfAKindOf(it) || {}).soldOn || '?'} kept as history).`, 'ok');
+            await readLibrary();
+        } catch (err) { say(`⛔ ${it.legacyErpId}: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
     const saveEdit = async (it) => {
         const e = edits[it.id];
         if (!e) return;
@@ -156,10 +170,11 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
     // The one form, for a new card and for a filed piece being edited (on.codeLocked: the code is the identity)
     const formFields = (c, on) => (
         <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 120px', gap: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 110px 90px', gap: '10px' }}>
                 <label><div style={mono}>Code (from the tag)</div><input value={c.code} disabled={on.disabled || on.codeLocked} onChange={e => on.set({ code: e.target.value })} placeholder="SHOW-0412" style={{ ...field, fontFamily: 'var(--mono)' }} /></label>
                 <label><div style={mono}>Name</div><input value={c.name} disabled={on.disabled} onChange={e => on.set({ name: e.target.value })} placeholder="what the customer reads on the quote" style={field} /></label>
                 <label><div style={mono}>Sale price $</div><input value={c.price} disabled={on.disabled} onChange={e => on.set({ price: e.target.value })} inputMode="decimal" style={{ ...field, textAlign: 'right' }} /></label>
+                <label><div style={mono}>Qty on hand</div><input value={c.qty === undefined ? 1 : c.qty} disabled={on.disabled} onChange={e => on.set({ qty: e.target.value })} inputMode="numeric" title="How many of this one were made — usually 1" style={{ ...field, textAlign: 'right' }} /></label>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 2fr', gap: '10px' }}>
                 <label><div style={mono}>Size</div>
@@ -197,7 +212,7 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
                     Drop the photos (each pillow with its tag). One card per photo: type the code from the tag, the name, the sale price, the size, and what it was made from — a fabric and the yards used, or one of the makings at one per piece. Create files each as a Uniquity item, stocked one in bin SHOW, with its photo as the picture; it then sells on the Show Counter's <b>One of a kind</b> tile at its price with its making beneath at $0. No NetSuite item is made per piece: each sells as a pre-configured CUSTOM PILLOW — the holder line at its price with the tag in the description, the making beneath at $0. A filed piece can be changed below until it is sold.
                 </p>
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <label style={btn(true, busy)}>＋ Drop the photos<input type="file" accept="image/*" multiple capture="environment" onChange={onFiles} disabled={busy} style={{ display: 'none' }} /></label>
+                    <label style={btn(true, busy)}>＋ Drop the photos<input type="file" accept={PHOTO_ACCEPT} multiple capture="environment" onChange={onFiles} disabled={busy} style={{ display: 'none' }} /></label>
                     <span style={mono}>{items === null ? 'reading the library…' : `${items.length} Uniquity items · ${fabrics.length} fabrics`}</span>
                     <span style={mono}>makings: {[...OOAK_MAKINGS.PILLOW, ...OOAK_MAKINGS.WALL].map(mk => `${mk.code} ${makingState[mk.code] === 'ok' ? '✓' : makingState[mk.code] === 'no-ns' ? '⚠ no NetSuite id' : '✗ not in the library'}`).join(' · ')}</span>
                 </div>
@@ -239,7 +254,7 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
             {filed.length > 0 && (
                 <div style={card}>
                     <h3 style={h}>Filed pieces · {filed.length}</h3>
-                    <p style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Made a mistake? Change the making, the price, the size or the name until the piece is sold. The code is the tag and stays. A sold piece is read-only — the order carried the making it sold with.</p>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Made a mistake? Change the making, the price, the size, the name or the quantity on hand until the piece is sold. The code is the tag and stays. A sold piece is read-only — the order carried the making it sold with; if that order was cancelled, <b>Put back on the wall</b> (two presses) lists it again with the sale kept as history.</p>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         {filed.map(it => {
                             const o = oneOfAKindOf(it) || {};
@@ -255,9 +270,10 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
                                         <span>{it.itemName}</span>
                                         <span style={mono}>{o.kind === 'WALL' ? 'wall art' : 'pillow'}{o.sizeKey ? ` · ${o.sizeKey}` : ''}</span>
                                         <span style={mono}>${it.manufacturingSpecs && it.manufacturingSpecs.basePrice}</span>
-                                        <span style={mono}>{words}</span>
+                                        <span style={mono}>{words}{oneOfAKindQtyOf(it) > 1 ? ` · ${oneOfAKindQtyOf(it)} on hand` : ''}</span>
                                         <span style={{ ...mono, marginLeft: 'auto', color: editable ? '#2e7d32' : '#a86b00' }}>{editable ? 'on the wall' : `SOLD${o.soldOn ? ` · ${o.soldOn}` : ''} · read-only`}</span>
                                         {editable && !e && <button onClick={() => startEdit(it)} disabled={busy} style={btn(false, busy)}>Change</button>}
+                                        {!editable && <button onClick={() => restore(it)} disabled={busy} style={btn(restoreArmed === it.id, busy)}>{restoreArmed === it.id ? 'Press again — back on the wall' : 'Put back on the wall'}</button>}
                                     </div>
                                     {e && (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>

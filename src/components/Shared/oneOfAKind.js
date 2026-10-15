@@ -38,7 +38,7 @@ export const oneOfAKindCardOf = ({ id, fileName = '', dataUrl = '', kind = 'PILL
     id: id || `card-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
     fileName: str(fileName), dataUrl: dataUrl || '',
     kind: up(kind) === 'WALL' ? 'WALL' : 'PILLOW',
-    code: '', name: '', price: '', sizeKey: '', bin: OOAK_DEFAULT_BIN, note: '',
+    code: '', name: '', price: '', qty: 1, sizeKey: '', bin: OOAK_DEFAULT_BIN, note: '',   // qty: how many of this one were made (Stuart 2026-10-15: "two could be close enough to sell as same")
     making: { type: '', fabricCode: '', yards: '', noninvCode: '' },   // type: 'FABRIC' | 'NONINV'
     state: 'DRAFT', result: null,
 });
@@ -46,6 +46,8 @@ export const oneOfAKindCardOf = ({ id, fileName = '', dataUrl = '', kind = 'PILL
 /** A library item that is a one-of-a-kind piece, and whether it is still on the shelf. */
 export const oneOfAKindOf = (it) => (it && it.manufacturingSpecs && it.manufacturingSpecs.customData && it.manufacturingSpecs.customData.oneOfAKind) || null;
 export const isOneOfAKindItem = (it) => !!oneOfAKindOf(it);
+/** How many of the piece are on hand (a record before 2026-10-15 carries no qty = 1). */
+export const oneOfAKindQtyOf = (it) => { const o = oneOfAKindOf(it); const q = o ? num(o.qty) : null; return q === null ? 1 : Math.max(0, Math.floor(q)); };
 export const oneOfAKindAvailableOf = (items = []) => (items || []).filter(it => { const o = oneOfAKindOf(it); return o && up(o.status || OOAK_STATUS.AVAILABLE) === OOAK_STATUS.AVAILABLE && !(it.manufacturingSpecs && it.manufacturingSpecs.isRetired); });
 
 /**
@@ -63,6 +65,9 @@ export function cardReadinessOf(card, { findByCode, takenCodes = [] } = {}) {
     const price = num(card && card.price);
     if (price === null || price <= 0) errors.push({ code: 'NO_PRICE', message: 'Type the sale price.' });
     if (!(card && card.dataUrl)) warnings.push('no photo on this card');
+    const qtyRaw = card && card.qty;
+    const qty = qtyRaw === undefined || qtyRaw === '' || qtyRaw === null ? 1 : num(qtyRaw);
+    if (qty === null || qty < 1 || Math.floor(qty) !== qty) errors.push({ code: 'BAD_QTY', message: 'Quantity on hand must be a whole number, 1 or more.' });
     const m = (card && card.making) || {};
     const kind = up(card && card.kind) === 'WALL' ? 'WALL' : 'PILLOW';
     if (m.type === 'FABRIC') {
@@ -104,7 +109,7 @@ export function oneOfAKindDocOf(card, { id, brandId = 'uniquity', by = '', at = 
             basePrice: num(card.price), isStocked: true, isInHouse: true, partHandling: 'Small Parts',
             homeBin: up(card.bin) || OOAK_DEFAULT_BIN, binLocation: up(card.bin) || OOAK_DEFAULT_BIN,
             customData: {
-                oneOfAKind: { kind, making, status: OOAK_STATUS.AVAILABLE, sizeKey: str(card.sizeKey), note: str(card.note), photoFile: str(card.fileName), importedAt: now, importedBy: by, nsCreated: !!nsId },
+                oneOfAKind: { kind, making, qty: Math.max(1, Math.floor(num(card.qty) || 1)), status: OOAK_STATUS.AVAILABLE, sizeKey: str(card.sizeKey), note: str(card.note), photoFile: str(card.fileName), importedAt: now, importedBy: by, nsCreated: !!nsId },
             },
         },
         createdAt: now, updatedAt: now, author: by, oneOfAKindAt: now,
@@ -133,7 +138,7 @@ export function oneOfAKindEditCardOf(item) {
     return {
         id: item.id, fileName: str(o.photoFile), dataUrl: item.componentImageUrl || item.finalImageUrl || '',
         kind: up(o.kind) === 'WALL' ? 'WALL' : 'PILLOW',
-        code: str(item.legacyErpId || item.itemId), name: str(item.itemName), price: num(specs.basePrice) === null ? '' : num(specs.basePrice),
+        code: str(item.legacyErpId || item.itemId), name: str(item.itemName), price: num(specs.basePrice) === null ? '' : num(specs.basePrice), qty: oneOfAKindQtyOf(item),
         sizeKey: str(o.sizeKey), bin: str(specs.homeBin || specs.binLocation) || OOAK_DEFAULT_BIN, note: str(o.note),
         making: { type: m.type === 'FABRIC' ? 'FABRIC' : (m.type === 'NONINV' ? 'NONINV' : ''), fabricCode: str(m.fabricCode), yards: num(m.yards) === null ? '' : num(m.yards), noninvCode: str(m.noninvCode) },
         state: 'EDIT', result: null,
@@ -158,6 +163,7 @@ export function oneOfAKindEditPatchOf(card, item, { findByCode, by = '', at = 0 
             'manufacturingSpecs.homeBin': up(card.bin) || OOAK_DEFAULT_BIN,
             'manufacturingSpecs.binLocation': up(card.bin) || OOAK_DEFAULT_BIN,
             'manufacturingSpecs.customData.oneOfAKind.making': making,
+            'manufacturingSpecs.customData.oneOfAKind.qty': Math.max(1, Math.floor(num(card.qty) || 1)),
             'manufacturingSpecs.customData.oneOfAKind.sizeKey': str(card.sizeKey),
             'manufacturingSpecs.customData.oneOfAKind.note': str(card.note),
             'manufacturingSpecs.customData.oneOfAKind.editedAt': now,
@@ -181,6 +187,7 @@ export function oneOfAKindCartPlanOf({ item, findByCode, holder = null } = {}) {
     if (up(o.status || 'AVAILABLE') !== 'AVAILABLE') errors.push({ code: 'SOLD', message: `${item.legacyErpId} is already sold.` });
     const price = num(item.manufacturingSpecs && item.manufacturingSpecs.basePrice);
     if (price === null || price <= 0) errors.push({ code: 'NO_PRICE', message: `${item.legacyErpId} carries no price.` });
+    const onHand = oneOfAKindQtyOf(item);
     let piece = null;
     if (str(item.netSuiteInternalId)) piece = { item, price, nsId: str(item.netSuiteInternalId), via: '' };
     else if (holder && str(holder.netSuiteInternalId)) piece = { item, price, nsId: str(holder.netSuiteInternalId), via: `one of a kind ${item.legacyErpId} — sold on ${holder.legacyErpId}` };
@@ -203,15 +210,56 @@ export function oneOfAKindCartPlanOf({ item, findByCode, holder = null } = {}) {
         else if (!str(n.netSuiteInternalId)) errors.push({ code: 'MAKING_NO_NS_ID', message: `${m.noninvCode} carries no NetSuite id.` });
         else making = { item: n, uom: 'EACH', each: 1, note: `1 ea · made into ${item.legacyErpId}` };
     } else errors.push({ code: 'NO_MAKING', message: `${item.legacyErpId} records no making.` });
-    return { ok: errors.length === 0, errors, piece, making };
+    return { ok: errors.length === 0, errors, piece, making, onHand };
 }
 
-/** The item patch when the piece is sold (the sales order's own id on it). */
-export const oneOfAKindSoldPatchOf = ({ soId = '', by = '', at = 0 } = {}) => ({
-    'manufacturingSpecs.customData.oneOfAKind.status': OOAK_STATUS.SOLD,
-    'manufacturingSpecs.customData.oneOfAKind.soldOn': str(soId),
-    'manufacturingSpecs.customData.oneOfAKind.soldAt': at || Date.now(),
-    'manufacturingSpecs.customData.oneOfAKind.soldBy': str(by),
-    'manufacturingSpecs.isStocked': false,
-    updatedAt: at || Date.now(),
-});
+/**
+ * The item patch when the piece is sold (the sales order's own id on it). `sold` of `onHand`: when some
+ * remain the piece stays on the wall with the count down (the sale is noted); the last one marks it SOLD.
+ */
+export const oneOfAKindSoldPatchOf = ({ soId = '', by = '', at = 0, sold = 1, onHand = 1 } = {}) => {
+    const n = Math.max(1, Math.floor(num(sold) || 1));
+    const had = Math.max(1, Math.floor(num(onHand) || 1));
+    const left = Math.max(0, had - n);
+    const now = at || Date.now();
+    if (left > 0) {
+        return {
+            'manufacturingSpecs.customData.oneOfAKind.qty': left,
+            'manufacturingSpecs.customData.oneOfAKind.lastSoldOn': str(soId),
+            'manufacturingSpecs.customData.oneOfAKind.lastSoldAt': now,
+            'manufacturingSpecs.customData.oneOfAKind.lastSoldBy': str(by),
+            'manufacturingSpecs.customData.oneOfAKind.lastSoldQty': n,
+            updatedAt: now,
+        };
+    }
+    return {
+        'manufacturingSpecs.customData.oneOfAKind.status': OOAK_STATUS.SOLD,
+        'manufacturingSpecs.customData.oneOfAKind.qty': 0,
+        'manufacturingSpecs.customData.oneOfAKind.soldOn': str(soId),
+        'manufacturingSpecs.customData.oneOfAKind.soldAt': now,
+        'manufacturingSpecs.customData.oneOfAKind.soldBy': str(by),
+        'manufacturingSpecs.customData.oneOfAKind.soldQty': n,
+        'manufacturingSpecs.isStocked': false,
+        updatedAt: now,
+    };
+};
+
+/**
+ * A sold piece back on the wall (Stuart 2026-10-15: the NetSuite order was cancelled). The sale stays as
+ * history (restoredFrom); the count returns to what that sale took (1 when unknown).
+ */
+export const oneOfAKindRestorePatchOf = (item, { by = '', at = 0 } = {}) => {
+    const o = oneOfAKindOf(item) || {};
+    const now = at || Date.now();
+    const back = Math.max(1, Math.floor(num(o.soldQty) || 1));
+    return {
+        'manufacturingSpecs.customData.oneOfAKind.status': OOAK_STATUS.AVAILABLE,
+        'manufacturingSpecs.customData.oneOfAKind.qty': back,
+        'manufacturingSpecs.customData.oneOfAKind.soldOn': '',
+        'manufacturingSpecs.customData.oneOfAKind.restoredFrom': str(o.soldOn),
+        'manufacturingSpecs.customData.oneOfAKind.restoredAt': now,
+        'manufacturingSpecs.customData.oneOfAKind.restoredBy': str(by),
+        'manufacturingSpecs.isStocked': true,
+        updatedAt: now,
+    };
+};

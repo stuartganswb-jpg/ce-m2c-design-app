@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, serverTimestamp, setDoc, writeBatch } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { photoFileOf } from './photoFile';   // a HEIC converts to JPEG before the watermark / upload (2026-10-15)
 import {
     buildPartIndex, assetSearchBlob, buildComboMeta, buildSingleMeta, resolveBaseDoc,
     pairedCandidatesFor, pairedInfoOf, partCodeOf, END_TREATMENT_LABELS,
@@ -369,7 +370,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             const brandFolder = activeBrand ? String(activeBrand) : 'global';
             
             setUploadProgress(10);
-            const { hiResBlob, thumbBlob } = await generateWatermarkedImages(uploadFile, displayId);
+            const photo = await photoFileOf(uploadFile);   // a HEIC from the phone becomes a JPEG the browser can draw
+            const { hiResBlob, thumbBlob } = await generateWatermarkedImages(photo, displayId);
             setUploadProgress(30);
 
             const uniqueTimestamp = Date.now();
@@ -390,7 +392,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 hiResUrl = urls[0];
                 thumbUrl = urls[1];
             } else {
-                const fallbackUpload = await uploadBytes(hiResRef, uploadFile);
+                const fallbackUpload = await uploadBytes(hiResRef, photo);
                 hiResUrl = await getDownloadURL(fallbackUpload.ref);
                 thumbUrl = hiResUrl;
             }
@@ -701,7 +703,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 <div style={{ width: '350px', background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '15px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                     <div style={{ fontFamily: theme.serif, fontWeight: 500, fontSize: '1.4rem', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>Upload New Asset</div>
                     
-                    <input type="file" accept="image/png, image/jpeg" ref={fileInputRef} onChange={e => setUploadFile(e.target.files[0])} style={{ padding: '10px', border: `1px dashed ${theme.brass}`, background: theme.paper, cursor: 'pointer', width: '100%', boxSizing: 'border-box', fontFamily: theme.sans, fontSize: '0.85rem' }} />
+                    <input type="file" accept="image/png, image/jpeg, image/webp, image/heic, image/heif, .heic, .heif" ref={fileInputRef} onChange={e => setUploadFile(e.target.files[0])} style={{ padding: '10px', border: `1px dashed ${theme.brass}`, background: theme.paper, cursor: 'pointer', width: '100%', boxSizing: 'border-box', fontFamily: theme.sans, fontSize: '0.85rem' }} />
                     <input type="text" placeholder="Friendly Name (Optional)" value={metaForm.name} onChange={e => setMetaForm({...metaForm, name: e.target.value})} style={{ width: '100%', padding: '10px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans }} />
                     
                     <div style={{ display: 'flex', gap: '10px' }}>

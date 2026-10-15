@@ -577,9 +577,18 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
         const holderCode = 'CUSTOM PILLOW';
         const plan = oneOfAKindCartPlanOf({ item, findByCode: pillowByCode, holder: pillowByCode(holderCode) });
         if (!plan.ok) { plan.errors.forEach(e => addLog(`⛔ ${e.message}`, 'error')); return; }
-        if (cart.some(l => l.oneOfAKind && l.oneOfAKind.itemId === item.id)) { addLog(`⚠ ${item.legacyErpId} is already in the cart — there is only one.`, 'warn'); return; }
+        // Already in the cart: a second tap adds ONE MORE when more than one was made (Stuart 2026-10-15: "two could be
+        // close enough to sell as same"); its making line follows. Beyond what is on hand it refuses.
+        const inCart = cart.find(l => l.oneOfAKind && l.oneOfAKind.itemId === item.id);
+        if (inCart) {
+            const want = (parseInt(inCart.qty) || 1) + 1;
+            if (want > plan.onHand) { addLog(`⚠ ${item.legacyErpId} is already in the cart — ${plan.onHand === 1 ? 'there is only one' : `only ${plan.onHand} on hand`}.`, 'warn'); return; }
+            setCart(prev => prev.map(l => (l.key === inCart.key || (l.ooakPart && l.kitOf === inCart.oneOfAKind.key)) ? { ...l, qty: want } : l));
+            addLog(`🎁 ${item.legacyErpId} × ${want} (${plan.onHand} on hand).`, 'info');
+            return;
+        }
         const key = `ooak-${item.id}`;
-        pushLine(plan.piece.item, 1, plan.piece.via || '', null, { rateOverride: plan.piece.price, noPack: true, ...(plan.piece.via ? { nsId: plan.piece.nsId, nsQtyFactor: 1, nsVia: plan.piece.via } : {}), oneOfAKind: { itemId: item.id, code: item.legacyErpId, key } });
+        pushLine(plan.piece.item, 1, plan.piece.via || '', null, { rateOverride: plan.piece.price, noPack: true, ...(plan.piece.via ? { nsId: plan.piece.nsId, nsQtyFactor: 1, nsVia: plan.piece.via } : {}), oneOfAKind: { itemId: item.id, code: item.legacyErpId, key, onHand: plan.onHand } });
         const m = plan.making;
         pushLine(m.item, 1, m.note, null, m.uom === 'YARD'
             ? { rateOverride: 0, noPack: true, inKit: true, kitOf: key, perFoot: true, feetPer: m.yards, unitWord: 'yd', ooakPart: true, ...(m.nsQtyFactor ? { nsId: m.nsId, nsQtyFactor: m.nsQtyFactor, nsVia: m.nsVia } : {}) }
@@ -1299,7 +1308,15 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
 
     // (a packaging line the rule added becomes the operator's own when its quantity is typed — `autoPack` comes off)
     const [packOff, setPackOff] = useState(false);     // the operator removed the automatic packaging fee on THIS order
-    const setQty = (key, q) => setCart(prev => prev.map(l => l.key === key ? { ...l, qty: Math.max(1, parseInt(q) || 1), ...(l.autoPack ? { autoPack: false } : {}) } : l));
+    const setQty = (key, q) => setCart(prev => {
+        const line = prev.find(l => l.key === key);
+        // a one-of-a-kind piece: capped at what is on hand, and its $0 making line follows the count
+        if (line && line.oneOfAKind) {
+            const n = Math.min(Math.max(1, parseInt(q) || 1), Math.max(1, line.oneOfAKind.onHand || 1));
+            return prev.map(l => (l.key === key || (l.ooakPart && l.kitOf === line.oneOfAKind.key)) ? { ...l, qty: n } : l);
+        }
+        return prev.map(l => l.key === key ? { ...l, qty: Math.max(1, parseInt(q) || 1), ...(l.autoPack ? { autoPack: false } : {}) } : l);
+    });
     // ── EVERY LINE CAN NAME ITS ROOM (Stuart 2026-08-31) ────────────────────────────────────
     // One order covers several windows, so the room belongs on the LINE, not only in the header
     // sidemark. The memo prints on the customer's quote beside the line it describes, rides that
@@ -1934,7 +1951,11 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
 
             // A ONE-OF-A-KIND piece is sold once: its item reads SOLD from this moment (the counter's tile drops it).
             for (const l of lines.filter(x => x.oneOfAKind && x.oneOfAKind.itemId)) {
-                try { await updateDoc(doc(db, 'Approved_Designs', l.oneOfAKind.itemId), oneOfAKindSoldPatchOf({ soId: hqId, by: currentUser || '', at: stamp })); addLog(`🎁 ${l.oneOfAKind.code} marked SOLD on ${hqId}.`, 'info'); }
+                try {
+                    const sold = Math.max(1, parseInt(l.qty) || 1), onHand = Math.max(1, l.oneOfAKind.onHand || 1);
+                    await updateDoc(doc(db, 'Approved_Designs', l.oneOfAKind.itemId), oneOfAKindSoldPatchOf({ soId: hqId, by: currentUser || '', at: stamp, sold, onHand }));
+                    addLog(onHand - sold > 0 ? `🎁 ${l.oneOfAKind.code} × ${sold} sold on ${hqId} — ${onHand - sold} still on the wall.` : `🎁 ${l.oneOfAKind.code} marked SOLD on ${hqId}.`, 'info');
+                }
                 catch (e) { addLog(`⚠ ${l.oneOfAKind.code} could not be marked sold (${e.message || e}) — mark it in the Library so it leaves the counter.`, 'warn'); }
             }
             setLastCreated({ kind: 'SALES ORDER', id: hqId, total: cartTotal, customerName: selectedCustomer?.name || customerId });

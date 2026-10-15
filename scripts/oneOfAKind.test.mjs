@@ -1,7 +1,7 @@
 // One-of-a-kind pillows and wall art, pinned (S7, 2026-10-14): a card's readiness by name, the library record
 // (stocked one, the photo, the making), the NetSuite item body from a template, the cart plan (the piece at its
 // price as itself or on the CUSTOM PILLOW holder; its making beneath at $0 — yards or one unit), sold once.
-import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, oneOfAKindCartPlanOf, oneOfAKindEditCardOf, oneOfAKindEditPatchOf, oneOfAKindEditableOf, oneOfAKindSoldPatchOf, oneOfAKindAvailableOf, isOneOfAKindItem, OOAK_MAKINGS } from '../src/components/Shared/oneOfAKind.js';
+import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, oneOfAKindCartPlanOf, oneOfAKindEditCardOf, oneOfAKindEditPatchOf, oneOfAKindEditableOf, oneOfAKindSoldPatchOf, oneOfAKindRestorePatchOf, oneOfAKindQtyOf, oneOfAKindAvailableOf, isOneOfAKindItem, OOAK_MAKINGS } from '../src/components/Shared/oneOfAKind.js';
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { if (cond) { pass++; } else { fail++; console.error('  ✗', name, extra); } };
 const item = (code, extra = {}) => ({ id: `ID-${code}`, legacyErpId: code, itemName: extra.name || code, netSuiteInternalId: extra.ns === undefined ? '1' : extra.ns, manufacturingSpecs: { ...(extra.specs || {}) } });
@@ -58,6 +58,20 @@ const epF = oneOfAKindEditPatchOf({ ...ec, making: { type: 'FABRIC', fabricCode:
 ok('back to a fabric making: the fabric and yards whole, no noninv code lingers', epF.ok && epF.patch['manufacturingSpecs.customData.oneOfAKind.making'].type === 'FABRIC' && epF.patch['manufacturingSpecs.customData.oneOfAKind.making'].yards === 1.5 && !('noninvCode' in epF.patch['manufacturingSpecs.customData.oneOfAKind.making']));
 ok('a wrong making for the kind refuses', !oneOfAKindEditPatchOf({ ...ec, making: { type: 'NONINV', noninvCode: 'BRIDWALLSML' } }, d, { findByCode: by }).ok);
 ok('a sold piece refuses', !oneOfAKindEditPatchOf(ec, { ...d, manufacturingSpecs: { ...d.manufacturingSpecs, customData: { oneOfAKind: { ...d.manufacturingSpecs.customData.oneOfAKind, status: 'SOLD' } } } }, { findByCode: by }).ok && !oneOfAKindEditableOf({ ...d, manufacturingSpecs: { ...d.manufacturingSpecs, customData: { oneOfAKind: { ...d.manufacturingSpecs.customData.oneOfAKind, status: 'SOLD' } } } }));
+
+// ── quantity on hand, sold by count, back on the wall (2026-10-15) ───────────────────────────
+ok('a fresh card is qty 1; a record before the field counts as 1; the doc carries the qty', c.qty === 1 && oneOfAKindQtyOf(d) === 1 && oneOfAKindDocOf({ ...good, qty: '2' }, { id: 'Q' }).manufacturingSpecs.customData.oneOfAKind.qty === 2);
+ok('a bad qty refuses by name', cardReadinessOf({ ...good, qty: '0' }, { findByCode: by }).errors[0].code === 'BAD_QTY' && cardReadinessOf({ ...good, qty: '1.5' }, { findByCode: by }).errors[0].code === 'BAD_QTY' && cardReadinessOf({ ...good, qty: '' }, { findByCode: by }).ok);
+const two = oneOfAKindDocOf({ ...good, qty: 2 }, { id: 'TWO' });
+ok('the cart plan says how many are on hand', oneOfAKindCartPlanOf({ item: two, findByCode: by, holder: by('Custom Pillow') }).onHand === 2 && oneOfAKindCartPlanOf({ item: d, findByCode: by, holder: by('Custom Pillow') }).onHand === 1);
+const spOne = oneOfAKindSoldPatchOf({ soId: 'QS-2', by: 'Liz', at: 9, sold: 1, onHand: 2 });
+ok('one of two sold: stays on the wall with 1 left, the sale noted, not SOLD', spOne['manufacturingSpecs.customData.oneOfAKind.qty'] === 1 && spOne['manufacturingSpecs.customData.oneOfAKind.lastSoldOn'] === 'QS-2' && !('manufacturingSpecs.customData.oneOfAKind.status' in spOne) && !('manufacturingSpecs.isStocked' in spOne));
+const spAll = oneOfAKindSoldPatchOf({ soId: 'QS-3', by: 'Liz', at: 9, sold: 2, onHand: 2 });
+ok('both sold: SOLD, qty 0, off the shelf', spAll['manufacturingSpecs.customData.oneOfAKind.status'] === 'SOLD' && spAll['manufacturingSpecs.customData.oneOfAKind.qty'] === 0 && spAll['manufacturingSpecs.customData.oneOfAKind.soldQty'] === 2 && spAll['manufacturingSpecs.isStocked'] === false);
+const soldOne = { ...d, manufacturingSpecs: { ...d.manufacturingSpecs, isStocked: false, customData: { oneOfAKind: { ...d.manufacturingSpecs.customData.oneOfAKind, status: 'SOLD', qty: 0, soldOn: 'QS-9', soldQty: 1 } } } };
+const rp = oneOfAKindRestorePatchOf(soldOne, { by: 'stuart', at: 77 });
+ok('back on the wall: AVAILABLE, the count the sale took, the sale kept as restoredFrom, stocked again', rp['manufacturingSpecs.customData.oneOfAKind.status'] === 'AVAILABLE' && rp['manufacturingSpecs.customData.oneOfAKind.qty'] === 1 && rp['manufacturingSpecs.customData.oneOfAKind.restoredFrom'] === 'QS-9' && rp['manufacturingSpecs.customData.oneOfAKind.soldOn'] === '' && rp['manufacturingSpecs.isStocked'] === true && rp.updatedAt === 77);
+ok('the edit card carries the qty and the edit patch writes it', oneOfAKindEditCardOf(two).qty === 2 && oneOfAKindEditPatchOf({ ...oneOfAKindEditCardOf(two), qty: '3' }, two, { findByCode: by }).patch['manufacturingSpecs.customData.oneOfAKind.qty'] === 3);
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

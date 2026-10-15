@@ -14,7 +14,7 @@ import PillowQuickSell from './PillowQuickSell';
 import VisionPillow from './VisionPillow';
 import { customerPayloadOf, createNsCustomer, crmRecordOf, crmRecordAppOnlyOf } from '../Shared/nsCustomer';   // a new customer is made in NetSuite FIRST (its id is the app's id)
 import { nsProxyFetch } from '../Shared/nsProxy';
-import { oneOfAKindAvailableOf, oneOfAKindOf } from '../Shared/oneOfAKind';   // the pieces made at the show (S7, 2026-10-14)
+import { oneOfAKindAvailableOf, oneOfAKindOf, oneOfAKindQtyOf } from '../Shared/oneOfAKind';   // the pieces made at the show (S7, 2026-10-14)
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
 const card = { background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' };
@@ -168,7 +168,7 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
                             <button key={it.id} onClick={() => onAddOneOfAKind(it)} style={{ width: '200px', border: '1px solid var(--line)', background: '#fff', cursor: 'pointer', padding: '6px', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                 <div style={{ width: '100%', height: '150px', background: '#efe9e0', overflow: 'hidden' }}>{pic ? <img src={pic} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ ...mono, padding: '12px' }}>{it.legacyErpId}</div>}</div>
                                 <div style={{ fontSize: '0.95rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.itemName}</div>
-                                <div style={{ ...mono }}>{it.legacyErpId} · {o.kind === 'WALL' ? 'wall art' : 'pillow'}{o.sizeKey ? ` · ${o.sizeKey}` : ''}</div>
+                                <div style={{ ...mono }}>{it.legacyErpId} · {o.kind === 'WALL' ? 'wall art' : 'pillow'}{o.sizeKey ? ` · ${o.sizeKey}` : ''}{oneOfAKindQtyOf(it) > 1 ? ` · ${oneOfAKindQtyOf(it)} on hand` : ''}</div>
                                 <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>${Number((it.manufacturingSpecs && it.manufacturingSpecs.basePrice) || 0).toLocaleString()}</div>
                             </button>); })}
                         {pieces.length === 0 && <div style={{ color: 'var(--ink-soft)' }}>Nothing on the shelf — import the show pieces on 6.5 Tools → One-of-a-kind.</div>}

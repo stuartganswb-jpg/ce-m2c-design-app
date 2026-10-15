@@ -29,6 +29,7 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { canonicalCollection } from '../Shared/collectionName';
 import { materialTwinsOf, withTwin, twinRefusal } from '../Shared/materialTwin';
 import { packagingOf, packagingImagesIn, withPackagingImage, withoutPackagingImage, packagingImageRefusal, PACKAGING_IMAGES_KEY, PACKAGING_NOTE_KEY, PACKAGING_IMAGES_MAX } from '../Shared/productPackaging';
+import { photoFileOf, PHOTO_ACCEPT } from '../Shared/photoFile';   // a HEIC converts to JPEG before the resize / upload (2026-10-15)
 
 
 const AVAILABLE_BRANDS = [
@@ -733,8 +734,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       }
   };
 
-  const handleDynamicFileUpload = async (key, file) => {
-      if (!file) return;
+  const handleDynamicFileUpload = async (key, fileIn) => {
+      if (!fileIn) return;
+      let file = fileIn;
+      try { file = await photoFileOf(fileIn); } catch (e) { alert(`The photo could not be converted (${e.message || e}) — it was uploaded as is.`); }
       const safeId = activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId;
       const storageRef = ref(storage, `dynamic_assets/${activeBrand}_${safeId}_${key}_${Date.now()}`);
       const uploadTask = uploadBytesResumable(storageRef, file);
@@ -774,7 +777,9 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       const safeId = String(activePart.legacyErpId !== "PENDING" ? activePart.legacyErpId : activePart.itemId).replace(/[^A-Za-z0-9_-]+/g, '_');
       try {
           for (let i = 0; i < Math.min(room, picked.length); i++) {
-              const blob = await smaller(picked[i]);
+              let src = picked[i];
+              try { src = await photoFileOf(picked[i]); } catch (e) { alert(`${picked[i].name}: the HEIC could not be converted (${e.message || e}) — uploaded as is.`); }
+              const blob = await smaller(src);
               const task = uploadBytesResumable(ref(storage, `dynamic_assets/${activeBrand}_${safeId}_packaging_${Date.now()}_${i}`), blob);
               const url = await new Promise((resolve, reject) => task.on("state_changed",
                   (snap) => setDynamicUploadProgress(prev => ({ ...prev, [PACKAGING_IMAGES_KEY]: Math.max(1, Math.round((snap.bytesTransferred / snap.totalBytes) * 100)) })),
@@ -2619,7 +2624,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                                       ))}
                                       <label style={{ width: '110px', height: '110px', border: '1px dashed var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', cursor: pct ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.06em', color: 'var(--ink-soft)', background: '#fff' }}>
                                           {pct ? `Uploading… ${pct}%` : '+ Add picture'}
-                                          <input type="file" accept="image/*" multiple disabled={!!pct} style={{ display: 'none' }} onChange={(e) => { handlePackagingImageUpload(e.target.files); e.target.value = ''; }} />
+                                          <input type="file" accept={PHOTO_ACCEPT} multiple disabled={!!pct} style={{ display: 'none' }} onChange={(e) => { handlePackagingImageUpload(e.target.files); e.target.value = ''; }} />
                                       </label>
                                   </div>
                                   {borrowed.length > 0 && <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px' }}>Until this item has its own, the packer is shown the {borrowed.join(' and the ')}.</div>}
