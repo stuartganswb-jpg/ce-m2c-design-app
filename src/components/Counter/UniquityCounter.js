@@ -7,7 +7,7 @@
 // the counter's screens (HQ/CounterScreens — customer → Throws / Pillows / Custom pillow / Samples →
 // tiles → Add), then tab 7's own cart, Create Sales Order / Create Quote, and the pay-link QR. Every
 // rule, every document and every NetSuite write is tab 7's — a counter order IS an Order Entry order.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { auth, functions, getOuterIdToken } from '../../firebase';
 import { signInWithCustomToken } from 'firebase/auth';
@@ -25,6 +25,18 @@ const UniquityCounter = () => {
     const [user, setUser] = useState(null);
     const [pinInput, setPinInput] = useState('');
     useEffect(() => { setAuditPage({ app: 'Show Counter', tab: 'Counter', user: (user && user.name) || '' }); }, [user]);
+    const headerRef = useRef(null);
+    const [headerH, setHeaderH] = useState(64);
+    useEffect(() => {
+        const el = headerRef.current;
+        if (!el) return undefined;
+        const measure = () => setHeaderH(el.offsetHeight || 64);
+        measure();
+        const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+        if (ro) ro.observe(el);
+        window.addEventListener('resize', measure);
+        return () => { if (ro) ro.disconnect(); window.removeEventListener('resize', measure); };
+    }, [user]);
 
     const attemptLogin = async (e) => {
         e.preventDefault();
@@ -58,8 +70,9 @@ const UniquityCounter = () => {
     }
 
     return (
-        <div style={{ minHeight: '100vh', background: '#faf8f5', fontFamily: 'var(--sans, sans-serif)', color: '#1a1a1a' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '12px 20px', background: '#fff', borderBottom: '1px solid #ddd', flexWrap: 'wrap', position: 'sticky', top: 0, zIndex: 50 }}>
+        <div style={{ minHeight: '100vh', background: '#faf8f5', fontFamily: 'var(--sans, sans-serif)', color: '#1a1a1a', '--counter-header-h': `${headerH}px` }}>
+            {/* the header's measured height rides a CSS variable: the counter's own bar (Customer · Menu · $$ Price list · Cart) sticks right beneath it (Stuart 2026-10-15) */}
+            <div ref={headerRef} style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '12px 20px', background: '#fff', borderBottom: '1px solid #ddd', flexWrap: 'wrap', position: 'sticky', top: 0, zIndex: 50 }}>
                 <div style={{ fontFamily: 'var(--serif, serif)', fontSize: '1.3rem' }}>🛋 Uniquity · Show Counter</div>
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
                     <span style={mono}>{user.name}</span>

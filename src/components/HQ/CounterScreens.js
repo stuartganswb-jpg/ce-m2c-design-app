@@ -78,8 +78,10 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
         setBusy(false);
     };
 
+    // the bar stays in reach at every point of a sale — sticky beneath the counter's header (Stuart 2026-10-15: "we need the menu
+    // button at the top to stay visible so we can go back to just the price list")
     const crumb = (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', position: 'sticky', top: 'var(--counter-header-h, 64px)', zIndex: 40, background: '#faf8f5', padding: '8px 0', margin: '-8px 0' }}>
             <button onClick={() => setScreen('CUSTOMER')} style={btn(false)}>👤 {selectedCustomer ? selectedCustomer.name : 'Customer'}</button>
             {selectedCustomer && priceNote && <span style={{ ...mono, color: /not read|carries no percent/.test(priceNote) ? '#a86b00' : 'var(--ink-soft)' }}>💲 {priceNote.replace(/^NetSuite price level /, '')}</span>}
             {screen !== 'CUSTOMER' && screen !== 'HOME' && <button onClick={() => setScreen('HOME')} style={btn(false)}>← Menu</button>}

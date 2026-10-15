@@ -1342,6 +1342,10 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
     // THAT order goes.
     const resetOrderEntry = () => {
         setCart([]); setJobName('');
+        // THE COUNTER STARTS FRESH (Stuart 2026-10-15: "once a sale or quote is saved, it clears and starts fresh"): the customer
+        // goes too, back to "Who is this for?"; the pay card of the order just made stays pinned up there until the next
+        // customer is picked or Done. HQ's tab 7 keeps the customer (the office runs several orders for one account).
+        if (counterMode) { setCustomerId(''); setCustSearch(''); }
         setSoExtras({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '', orderDiscountPercent: '' });
         setShip({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
         setTrvCfg(null); setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
@@ -2128,22 +2132,25 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
     if (counterMode) {
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '16px', maxWidth: '1400px', margin: '0 auto' }}>
+                {lastCreated && cart.length === 0 && Number(lastCreated.total) > 0 && (
+                    <div style={{ ...card, padding: '20px 24px', border: '2px solid var(--brass)' }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem' }}>Turn the screen to the customer</div>
+                            <button onClick={() => setLastCreated(null)} style={{ marginLeft: 'auto', padding: '10px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase' }} title="Put this away — the order is saved and on the CRM card; picking the next customer puts it away too">Done</button>
+                        </div>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '12px' }}>Make the link and they scan the QR to pay on their own phone. {lastCreated.kind} <b>{lastCreated.id}</b> is on their CRM card; the office can email it from there.</div>
+                        <PayLinkPanel docType={lastCreated.kind === 'QUOTE' ? 'QUOTE' : 'SALES_ORDER'} collection={lastCreated.kind === 'QUOTE' ? 'jobs' : 'hq_sales_orders'} docId={lastCreated.id}
+                            reference={lastCreated.id} customerName={lastCreated.customerName || ''} totalAmount={Number(lastCreated.total) || 0} brand={activeBrand} />
+                    </div>
+                )}
                 <CounterScreens currentUser={currentUser} customers={customers} customerId={customerId} selectedCustomer={selectedCustomer}
-                    onPickCustomer={(c) => { setCustomerId(c.id); setCustSearch(`${c.name} (${c.id})`); }} jobName={jobName} setJobName={setJobName}
+                    onPickCustomer={(c) => { setCustomerId(c.id); setCustSearch(`${c.name} (${c.id})`); setLastCreated(null); }} jobName={jobName} setJobName={setJobName}
                     items={allItems} findPart={(id) => allItems.find(x => x.id === id) || pillowByCode(id)} rateFor={rateFor}
                     onAddQuickSell={addQuickSell} onAddCustomPillow={addCounterCustom} addLog={addLog} cartCount={cart.length} cartTotal={cartTotal}
                     priceNote={priceLevelInfo ? (priceLevelInfo.read ? priceLevelNoteOf(priceLevelInfo) : 'NetSuite price level not read') : ''}
                     onAddOneOfAKind={addOneOfAKind}
                     onShowCart={() => { const el = document.getElementById('counter-cart'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }} />
                 {cartCard}
-                {lastCreated && cart.length === 0 && Number(lastCreated.total) > 0 && (
-                    <div style={{ ...card, padding: '20px 24px', border: '2px solid var(--brass)' }}>
-                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem', marginBottom: '6px' }}>Turn the screen to the customer</div>
-                        <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '12px' }}>Make the link and they scan the QR to pay on their own phone. {lastCreated.kind} <b>{lastCreated.id}</b> is on their CRM card; the office can email it from there.</div>
-                        <PayLinkPanel docType={lastCreated.kind === 'QUOTE' ? 'QUOTE' : 'SALES_ORDER'} collection={lastCreated.kind === 'QUOTE' ? 'jobs' : 'hq_sales_orders'} docId={lastCreated.id}
-                            reference={lastCreated.id} customerName={lastCreated.customerName || ''} totalAmount={Number(lastCreated.total) || 0} brand={activeBrand} />
-                    </div>
-                )}
                 {log.length > 0 && (
                     <div style={{ ...card, background: 'var(--dark)', overflow: 'hidden' }}>
                         <div style={{ padding: '10px 16px', maxHeight: '200px', overflowY: 'auto', fontFamily: 'var(--mono)', fontSize: '11px' }}>
