@@ -251,7 +251,7 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
                         counter onAddToCart={(line) => onAddCustomPillow(line)} />
                 </div>
             ) : (
-                <PillowQuickSell items={items} findPart={findPart} rateFor={rateFor} onAdd={onAddQuickSell} addLog={addLog} counter fixedMode={fixedMode} />
+                <PillowQuickSell currentUser={currentUser} items={items} findPart={findPart} rateFor={rateFor} onAdd={onAddQuickSell} addLog={addLog} counter fixedMode={fixedMode} />
             )}
         </div>
     );

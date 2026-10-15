@@ -69,11 +69,15 @@ async function thumbOf(dataUrl, maxPx = 420) {
 // pleat style's own picture, files here too — pattern = the fabric (or the style), finish = the colour, and
 // the chart's own words in `curtain` ({ fabric, colour } or { style }). Flag `curtainSwatch`; the product
 // type is the library's own curtain type when the caller passes it (`productType`), else CURTAIN SWATCH.
-export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '', collection = '', user = '', kind = 'GUIDE', finishId = '', fabric = null, notes = '', productType = '', curtain = null }) {
+// `kind: 'PRODUCT'` (2026-10-15, the show counter's camera): a product photographed at the counter — attached to the
+// colourway's items (`associatedParts`), flag `productPhoto`, product type PRODUCT PHOTO; the first shot is also stamped on
+// the library items by the caller (Shared/counterPhoto).
+export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '', collection = '', user = '', kind = 'GUIDE', finishId = '', fabric = null, notes = '', productType = '', curtain = null, associatedParts = [] }) {
     const isDisplay = String(kind).toUpperCase() === 'DISPLAY';
     const isFabric = String(kind).toUpperCase() === 'FABRIC';
     const isSwatch = String(kind).toUpperCase() === 'SWATCH';
-    const tag = isDisplay ? 'DISPLAY' : (isFabric ? 'FABRIC' : (isSwatch ? 'SWATCH' : 'GUIDE'));
+    const isProduct = String(kind).toUpperCase() === 'PRODUCT';
+    const tag = isDisplay ? 'DISPLAY' : (isFabric ? 'FABRIC' : (isSwatch ? 'SWATCH' : (isProduct ? 'PRODUCT' : 'GUIDE')));
     const safe = String(code || name || 'CAPTURE').toUpperCase().replace(/[^A-Z0-9-]/g, '') || 'CAPTURE';
     const brandFolder = brandId ? String(brandId) : 'global';
     const ts = Date.now();
@@ -90,13 +94,13 @@ export async function saveGuideCapture({ dataUrl, name, code = '', brandId = '',
         id,
         name: String(name || safe).toUpperCase(),
         collection: collection || '',
-        productType: isDisplay ? 'DISPLAY CAPTURE' : (isFabric ? 'FABRIC CAPTURE' : (isSwatch ? (productType || 'CURTAIN SWATCH') : 'GUIDE CAPTURE')),
+        productType: isDisplay ? 'DISPLAY CAPTURE' : (isFabric ? 'FABRIC CAPTURE' : (isSwatch ? (productType || 'CURTAIN SWATCH') : (isProduct ? (productType || 'PRODUCT PHOTO') : 'GUIDE CAPTURE'))),
         patternId: String(code || '').toUpperCase(),
         finishId: String(finishId || '').toUpperCase(),
-        customerId: '', clientSku: '', notes: notes || (isDisplay ? 'Captured from CPQ for a sales display board' : (isFabric ? 'Fabric photographed on the pillow board' : (isSwatch ? 'Curtain swatch loaded on Curtain Pricing' : 'Captured from CPQ for guide books'))),
-        associatedParts: [], associatedFinishes: [],
+        customerId: '', clientSku: '', notes: notes || (isDisplay ? 'Captured from CPQ for a sales display board' : (isFabric ? 'Fabric photographed on the pillow board' : (isProduct ? 'Photographed at the show counter' : (isSwatch ? 'Curtain swatch loaded on Curtain Pricing' : 'Captured from CPQ for guide books')))),
+        associatedParts: Array.isArray(associatedParts) ? associatedParts.map(x => String(x || '').trim()).filter(Boolean) : [], associatedFinishes: [],
         originalUrl, thumbnailUrl, url: thumbnailUrl,
-        ...(isDisplay ? { displayCapture: true } : (isFabric ? { fabricCapture: true, fabric: fabric || {} } : (isSwatch ? { curtainSwatch: true, curtain: curtain || {} } : { guideCapture: true }))),
+        ...(isDisplay ? { displayCapture: true } : (isFabric ? { fabricCapture: true, fabric: fabric || {} } : (isSwatch ? { curtainSwatch: true, curtain: curtain || {} } : (isProduct ? { productPhoto: true } : { guideCapture: true })))),
         brandId: brandId || 'ALL',
         uploadedBy: user || 'Unknown',
         createdAt: serverTimestamp(),

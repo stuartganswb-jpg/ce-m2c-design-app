@@ -11,9 +11,9 @@
 // (no dropdowns — "some of the sales team would react a lot better if they drove thru the menus by
 // choosing icons"), − n + for the quantity; `fixedMode` = PILLOW / THROW / SAMPLE chosen on the screen
 // before, so the card is one thing at a time. Same rule, same Add.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { db } from '../../firebase';
-import { doc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where, getDocs, updateDoc } from 'firebase/firestore';
 import { DEFAULT_PILLOW_PRICING, PILLOW_PRICING_DOC } from '../Shared/pillowPricing';
 import { colourwaysOf, tilePictureOf, fabricCodeOf } from '../Shared/pillowCatalog';
 import { quickSellSizesOf, quickSellEdgesOf, quickSellPlanOf, quickSellTilesOf, honestThrowsOf, quickSellTreatmentsOf } from '../Shared/pillowQuickSell';
@@ -22,6 +22,9 @@ import { isTrimItem } from '../Shared/pillowFabricSheet';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { yardsPerThrowOf } from '../Shared/fabricPieces';
+import { saveGuideCapture } from '../Shared/guideCapture';          // the ONE Asset Gallery writer — a counter photo files as kind PRODUCT (2026-10-15)
+import { photoFileOf, readFileAsDataUrl, PHOTO_ACCEPT } from '../Shared/photoFile';
+import { photoTargetsOf, itemPicturePatchOf } from '../Shared/counterPhoto';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
 const lbl = { ...mono, fontSize: '9px', display: 'block', marginBottom: '6px' };
@@ -30,7 +33,7 @@ const chip = (on, big) => ({ padding: big ? '14px 18px' : '7px 12px', border: `1
 const money = (v) => (v === null || v === undefined ? '—' : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`);
 const EDGE_GLYPH = { NONE: '▢', FLANGE: '▣', WELT: '◫' };
 
-const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => {}, counter = false, fixedMode = '' }) => {
+const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => {}, counter = false, fixedMode = '', currentUser = '' }) => {
     const [pricing, setPricing] = useState(null);
     const [fillTypes, setFillTypes] = useState([]);
     const [mode, setMode] = useState(fixedMode || 'PILLOW');
@@ -47,6 +50,35 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
     const [q, setQ] = useState('');
     const [group, setGroup] = useState('');
     const [busy, setBusy] = useState(false);
+    // 📷 THE COUNTER'S CAMERA (Stuart 2026-10-15): a tile with no picture → the tablet camera; the first shot becomes the
+    // item's picture in the master library, every shot files in the Asset Gallery attached to the colourway's items.
+    const camRef = useRef(null);
+    const camFor = useRef(null);   // the colourway the camera was opened for
+    const [camBusy, setCamBusy] = useState('');
+    const openCamera = (c) => { camFor.current = c; if (camRef.current) camRef.current.click(); };
+    const onCameraFiles = async (e) => {
+        const files = [...(e.target.files || [])];
+        e.target.value = '';
+        const c = camFor.current;
+        if (!files.length || !c) return;
+        const { items: targets, codes } = photoTargetsOf(c);
+        if (!targets.length) { addLog(`⛔ ${c.label}: no library item to put the picture on.`, 'error'); return; }
+        setCamBusy(c.key);
+        let n = 0;
+        try {
+            for (const f of files) {
+                const dataUrl = await readFileAsDataUrl(await photoFileOf(f));
+                const asset = await saveGuideCapture({ dataUrl, name: `${c.patternRaw || c.pattern} ${c.colourName || `#${c.colour}`}`, code: c.key, brandId: 'uniquity', user: currentUser || '', kind: 'PRODUCT', associatedParts: codes, notes: `Photographed at the show counter — ${c.label}` });
+                n += 1;
+                if (n === 1) {
+                    const patch = itemPicturePatchOf({ originalUrl: asset.originalUrl, thumbnailUrl: asset.thumbnailUrl, by: currentUser || '' });
+                    await Promise.all(targets.map(it => updateDoc(doc(db, 'Approved_Designs', it.id), patch)));
+                }
+            }
+            addLog(`📷 ${c.label}: ${n} photo${n === 1 ? '' : 's'} filed in the Asset Gallery (attached to ${codes.length} item${codes.length === 1 ? '' : 's'}); the first is now the picture on ${targets.map(t => t.legacyErpId).join(', ')}.`, 'success');
+        } catch (err) { addLog(`⛔ ${c.label}: the photo could not be filed${n ? ` (${n} filed before it)` : ''} — ${err.message || err}`, 'error'); }
+        setCamBusy('');
+    };
     const [last, setLast] = useState(null);   // what the last Add resolved to
 
     useEffect(() => { if (fixedMode) { setMode(fixedMode); setCwKey(''); setVariant(fixedMode === 'SAMPLE' ? 'S' : 'STD'); } }, [fixedMode]);
@@ -130,6 +162,11 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
                 style={{ width: `${118 * S}px`, border: `1px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: '#fff', cursor: 'pointer', padding: '4px', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: '3px', outline: on ? '2px solid var(--ink)' : 'none' }}>
                 <div style={{ position: 'relative', width: '100%', height: `${74 * S}px`, background: '#efe9e0', overflow: 'hidden' }}>
                     {c.picture ? <img src={c.picture} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ ...mono, padding: '8px', fontSize: counter ? '11px' : '9px', color: 'var(--ink-soft)' }}>{c.patternRaw}<br />{c.colourName || `#${c.colour}`}</div>}
+                    {counter && !c.picture && (
+                        <span role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); if (!camBusy) openCamera(c); }} onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); openCamera(c); } }}
+                            title="No picture yet — take one: the first shot becomes the item's picture, every shot files in the Asset Gallery"
+                            style={{ position: 'absolute', bottom: '3px', right: '3px', background: camBusy === c.key ? 'var(--brass)' : 'var(--ink)', color: '#fff', fontSize: '16px', lineHeight: 1, padding: '5px 7px', borderRadius: '3px', cursor: 'pointer' }}>{camBusy === c.key ? '…' : '📷'}</span>
+                    )}
                     <span style={{ position: 'absolute', top: '3px', right: '3px', background: c.group ? 'var(--ink)' : '#d9534f', color: '#fff', fontFamily: 'var(--mono)', fontSize: counter ? '12px' : '10px', padding: '1px 5px' }}>{c.group || '?'}</span>
                     {hasSku && <span style={{ position: 'absolute', bottom: '3px', left: '3px', background: '#2e7d32', color: '#fff', fontFamily: 'var(--mono)', fontSize: '8px', padding: '1px 4px', letterSpacing: '.08em' }}>SKU</span>}
                 </div>
@@ -189,6 +226,7 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
     return (
         <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line)', background: 'var(--paper)', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                {counter && <input ref={camRef} type="file" accept={PHOTO_ACCEPT} capture="environment" multiple onChange={onCameraFiles} style={{ display: 'none' }} />}
                 <span style={{ fontFamily: 'var(--serif)', fontSize: counter ? '1.4rem' : '1.15rem', fontWeight: 500, color: 'var(--ink)' }}>{fixedMode === 'THROW' ? '🧣 Throws' : fixedMode === 'SAMPLE' ? '🗂 Samples' : fixedMode === 'PILLOW' ? '🛋 Pillows' : '🛋 Pillows & throws'}</span>
                 {!fixedMode && (
                     <div style={{ display: 'flex', gap: '6px' }}>
