@@ -182,12 +182,38 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                     ))}
                 </tbody>
             </table>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #1c1a16', marginTop: '8px', paddingTop: '10px' }}>
-                <div style={{ textAlign: 'right' }}>
-                    <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.14em', color: '#8a857c', marginRight: '16px' }}>Total Due</span>
-                    <span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px' }}>${total.toFixed(2)}</span>
-                </div>
-            </div>
+            {/* WHAT IS ACTUALLY OWED (Stuart 2026-10-15). This said "Total Due $6,460.00" on an
+                order the customer had already paid in full — a document we would have emailed them.
+                When something has been paid, the page states the order total, what was received and
+                what remains; when nothing has, it reads exactly as it always did. The paid figure is
+                the order's OWN paymentsTotal, the same number the CRM chip shows. */}
+            {(() => {
+                const paid = Number(order.paymentsTotal || (pay && pay.paidTotal) || 0);
+                const balance = Math.round((total - paid) * 100) / 100;
+                const lbl = { fontFamily: 'var(--mono, monospace)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.14em', color: '#8a857c', marginRight: '16px' };
+                if (!(paid > 0)) {
+                    return (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #1c1a16', marginTop: '8px', paddingTop: '10px' }}>
+                            <div style={{ textAlign: 'right' }}>
+                                <span style={lbl}>Total Due</span>
+                                <span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px' }}>${total.toFixed(2)}</span>
+                            </div>
+                        </div>
+                    );
+                }
+                return (
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #1c1a16', marginTop: '8px', paddingTop: '10px' }}>
+                        <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <div><span style={lbl}>Order total</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px' }}>${total.toFixed(2)}</span></div>
+                            <div><span style={lbl}>Paid</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px', color: '#3a7d44' }}>−${paid.toFixed(2)}</span></div>
+                            <div style={{ borderTop: '1px solid #ddd', paddingTop: '5px' }}>
+                                <span style={lbl}>{balance > 0.005 ? 'Balance due' : 'Paid in full'}</span>
+                                <span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px' }}>${Math.max(balance, 0).toFixed(2)}</span>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
             {/* PAY THIS DOCUMENT — only while an OPEN pay link exists for this order (Stuart
                 2026-09-23: printed "when decided to add it"). Made on the CRM row's 💳 Payment panel. */}
             {pay && pay.url && (
