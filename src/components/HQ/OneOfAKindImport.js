@@ -13,7 +13,7 @@ import { db, storage } from '../../firebase';
 import { collection, query, where, getDocs, setDoc, updateDoc, doc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { readPhotoAsDataUrl, isHeicFile, PHOTO_ACCEPT } from '../Shared/photoFile';   // a HEIC converts to JPEG before anything reads it (2026-10-15)
-import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, newOneOfAKindId, OOAK_KINDS, OOAK_MAKINGS, isOneOfAKindItem, oneOfAKindOf, oneOfAKindEditableOf, oneOfAKindEditCardOf, oneOfAKindEditPatchOf, oneOfAKindRestorePatchOf, oneOfAKindQtyOf } from '../Shared/oneOfAKind';
+import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, newOneOfAKindId, OOAK_KINDS, OOAK_MAKINGS, OOAK_ALL_MAKINGS, isOneOfAKindItem, oneOfAKindOf, oneOfAKindEditableOf, oneOfAKindEditCardOf, oneOfAKindEditPatchOf, oneOfAKindRestorePatchOf, oneOfAKindQtyOf } from '../Shared/oneOfAKind';
 import { isFabricItem } from '../Shared/pillowFabricSheet';
 import { sizeKeysOf } from '../Shared/pillowCuts';
 import { DEFAULT_PILLOW_PRICING, PILLOW_PRICING_DOC } from '../Shared/pillowPricing';
@@ -165,7 +165,7 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
     };
 
     if (activeBrand !== BRAND) return <div style={{ ...card, color: 'var(--ink-soft)' }}>One-of-a-kind pieces are Uniquity's — switch the brand to Uniquity.</div>;
-    const makingsFor = (kind) => OOAK_MAKINGS[kind === 'WALL' ? 'WALL' : 'PILLOW'];
+    const makingsFor = () => OOAK_ALL_MAKINGS;   // every making on every card — a pillow may be cut from a wall making (2026-10-15)
 
     // The one form, for a new card and for a filed piece being edited (on.codeLocked: the code is the identity)
     const formFields = (c, on) => (

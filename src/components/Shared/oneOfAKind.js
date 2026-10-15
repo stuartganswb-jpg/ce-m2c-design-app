@@ -30,6 +30,8 @@ export const OOAK_MAKINGS = {
     PILLOW: [{ code: 'SCRAPFAB', label: 'Scrap fabric' }, { code: 'BRIDSML', label: 'Bridget small' }, { code: 'BRIDLRG', label: 'Bridget large' }],
     WALL: [{ code: 'BRIDWALLSML', label: 'Bridget wall small' }, { code: 'BRIDWALLMED', label: 'Bridget wall medium' }, { code: 'BRIDWALLLRG', label: 'Bridget wall large' }],
 };
+/** Every making, offered on every card (Stuart 2026-10-15: a pillow may be made from a wall making — "i do not see the bridwallmed"). */
+export const OOAK_ALL_MAKINGS = [...OOAK_MAKINGS.PILLOW, ...OOAK_MAKINGS.WALL];
 export const OOAK_STATUS = { AVAILABLE: 'AVAILABLE', SOLD: 'SOLD' };
 export const OOAK_DEFAULT_BIN = 'SHOW';
 
@@ -77,8 +79,8 @@ export function cardReadinessOf(card, { findByCode, takenCodes = [] } = {}) {
         const y = num(m.yards);
         if (y === null || y <= 0) errors.push({ code: 'NO_YARDS', message: 'Type the yards used.' });
     } else if (m.type === 'NONINV') {
-        const allowed = OOAK_MAKINGS[kind].map(x => x.code);
-        if (!allowed.includes(up(m.noninvCode))) errors.push({ code: 'MAKING_NOT_FOR_KIND', message: `${up(m.noninvCode) || '(none)'} is not a ${kind === 'WALL' ? 'wall art' : 'pillow'} making (${allowed.join(', ')}).` });
+        const allowed = OOAK_ALL_MAKINGS.map(x => x.code);   // any making on any kind (2026-10-15)
+        if (!allowed.includes(up(m.noninvCode))) errors.push({ code: 'MAKING_UNKNOWN_CODE', message: `${up(m.noninvCode) || '(none)'} is not one of the makings (${allowed.join(', ')}).` });
         else {
             const it = lookup(m.noninvCode);
             if (!it) errors.push({ code: 'MAKING_UNKNOWN', message: `${up(m.noninvCode)} is not in the Uniquity library — sync it from NetSuite (11.1) first.` });
