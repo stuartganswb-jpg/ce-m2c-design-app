@@ -26,7 +26,7 @@ import {
 import { parseFabricSheet, planFabricRows, fabricUpdatePatchOf, fabricCreateDocOf, newFabricItemId, fabricPlanSummary } from '../Shared/pillowFabricSheet';
 import { downloadFabricTemplate, readFabricWorkbook, FABRIC_TEMPLATE_NAME } from '../Shared/pillowFabricXlsx';
 import { sizeCutTableOf, minCutPatchOf, sizesWithMinCuts, allowanceOf } from '../Shared/pillowCuts';
-import { catalogTagPlanOf, catalogTagPatchesOf, sizesWithFillItems, missingYardageRowsOf, fabricCreatePlanOf, DEFAULT_FABRIC_WIDTH_IN, DEFAULT_YARDS_PER_THROW } from '../Shared/pillowCatalog';   // the catalog tags itself + the fabric items from the throws (S7, 2026-10-12)
+import { catalogTagPlanOf, catalogTagPatchesOf, colourwayGradeWritesOf, sizesWithFillItems, missingYardageRowsOf, fabricCreatePlanOf, DEFAULT_FABRIC_WIDTH_IN, DEFAULT_YARDS_PER_THROW } from '../Shared/pillowCatalog';   // the catalog tags itself + the fabric items from the throws (S7, 2026-10-12)
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
 const card = { background: '#fff', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' };
@@ -216,6 +216,31 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
         } catch (err) { setCatPlan(null); say(`Could not read the catalog: ${err.message || err}`, 'err'); }
         setBusy(false);
     };
+    // A hand grade (2026-10-15): pick a letter on a colourway (or a whole pattern) → written now, the plan re-read
+    const setGradeNow = async (cws, group) => {
+        const writes = cws.flatMap(cw => colourwayGradeWritesOf(cw, group));
+        if (!writes.length) { say(`${cws.length === 1 ? cws[0].key : `${cws.length} colourways`}: already ${group || 'blank'} — nothing to write.`, 'info'); return; }
+        setBusy(true);
+        try {
+            const at = Date.now();
+            const patches = catalogTagPatchesOf(writes, { by: currentUser || '', at });
+            for (let i = 0; i < patches.length; i += 400) {
+                const batch = writeBatch(db);
+                patches.slice(i, i + 400).forEach(p => batch.update(doc(db, 'Approved_Designs', p.id), p.patch));
+                await batch.commit();
+            }
+            say(`Grade ${group || 'cleared'}: ${patches.length} item(s) written for ${cws.length === 1 ? cws[0].key : `${cws.length} colourways`} (${patches.map(p => p.code).slice(0, 6).join(', ')}${patches.length > 6 ? '…' : ''}).`, 'ok');
+            const items = await readLibrary();
+            setCatPlan(catalogTagPlanOf({ items, config: cfg, matchRest })); setCatArmed(false);
+        } catch (err) { say(`Grade write failed: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
+    const gradeSelect = (value, onPick, title) => (
+        <select value={value || ''} disabled={busy} onChange={e => onPick(e.target.value)} title={title} onClick={e => e.stopPropagation()} style={{ ...field, width: '64px', padding: '3px 4px', fontWeight: 700 }}>
+            <option value="">—</option>
+            {liveGroups.map(g => <option key={g.code} value={g.code}>{g.code}</option>)}
+        </select>
+    );
     const applyCatalogTags = async () => {
         if (!catPlan || !catPlan.writes.length) return;
         if (!catArmed) { setCatArmed(true); return; }
@@ -444,7 +469,7 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
                                                 <tr onClick={() => setCatOpen(prev => ({ ...prev, [r.pattern]: !open }))} style={{ cursor: 'pointer', borderBottom: '1px solid var(--paper-2)' }}>
                                                     <td style={{ padding: '5px 6px', fontWeight: 600 }}>{open ? '▾' : '▸'} {r.label}</td>
                                                     <td style={{ padding: '5px 6px' }}>{r.colourways.length}</td>
-                                                    <td style={{ padding: '5px 6px', fontWeight: 700, color: tone }}>{r.agree === 'SPLIT' ? r.groups.join(' / ') : (r.group || '—')}</td>
+                                                    <td style={{ padding: '5px 6px', fontWeight: 700, color: tone }} onClick={e => e.stopPropagation()}><span style={{ marginRight: '8px' }}>{r.agree === 'SPLIT' ? r.groups.join(' / ') : (r.group || '—')}</span>{gradeSelect(r.colourways.every(c => c.cw.group === r.colourways[0].cw.group) ? r.colourways[0].cw.group : '', (g) => setGradeNow(r.colourways.map(c => c.cw), g), 'Grade every colourway of this pattern — written now')}</td>
                                                     <td style={{ padding: '5px 6px', color: 'var(--ink-soft)' }}>{r.agree === 'ALL' ? 'every colourway agrees' : (r.agree === 'SPLIT' ? 'colourways differ — written per colourway' : 'no group can be read')}{mism ? ` · ${mism} price(s) off the column` : ''}</td>
                                                     <td style={{ padding: '5px 6px' }}>{nWrites || '—'}</td>
                                                     <td style={{ padding: '5px 6px', color: nMissing ? '#a86b00' : 'var(--ink-soft)' }}>{nMissing || '—'}</td>
@@ -453,7 +478,7 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
                                                     <tr key={c.cw.key} style={{ background: 'var(--paper)', borderBottom: '1px solid var(--paper-2)' }}>
                                                         <td style={{ padding: '4px 6px 4px 24px', fontFamily: 'var(--mono)', fontSize: '11px' }}>{c.cw.key}{c.cw.colourName ? <span style={{ color: 'var(--ink-soft)' }}> · {c.cw.colourName}</span> : null}</td>
                                                         <td style={{ padding: '4px 6px', color: 'var(--ink-soft)' }}>{Object.keys(c.cw.pillows).length} pillow(s){c.cw.throws.STD ? ' · throw' : ''}{c.cw.throws.XL ? ' · XL' : ''}{c.cw.fabric ? ' · fabric' : ''}</td>
-                                                        <td style={{ padding: '4px 6px', fontWeight: 600 }}>{c.derived.group || '—'}{c.cw.group && c.cw.group !== c.derived.group ? <span style={{ color: '#a86b00', fontWeight: 400 }}> (was {c.cw.group})</span> : null}</td>
+                                                        <td style={{ padding: '4px 6px', fontWeight: 600 }}>{gradeSelect(c.cw.group, (g) => setGradeNow([c.cw], g), 'Grade this colourway — written now onto its fabric and throws (its pillows when it has neither)')} <span style={{ color: 'var(--ink-soft)', fontWeight: 400 }}>prices say</span> {c.derived.group || '—'}{c.cw.group && c.cw.group !== c.derived.group ? <span style={{ color: '#a86b00', fontWeight: 400 }}> (was {c.cw.group})</span> : null}</td>
                                                         <td style={{ padding: '4px 6px', color: 'var(--ink-soft)' }}>
                                                             {c.derived.reason === 'NEAREST' ? `nearest column ${c.derived.group} — ${c.derived.agree} of ${c.derived.priced} exact, $${c.derived.distance} off in all` : c.derived.reason === 'PATTERN' ? `no priced pillow — the pattern's group ${c.derived.group}` : c.derived.reason === 'ONE' ? `${c.derived.agree} of ${c.derived.priced} prices in column ${c.derived.group}` : c.derived.reason === 'MOST' ? `${c.derived.agree} of ${c.derived.priced} in ${c.derived.group} — off: ${c.derived.mismatches.map(m => `${m.sizeKey} ${money(m.price)} (chart ${money(m.expected)})`).join(', ')}` : c.derived.reason === 'TIE' ? `tie between ${Object.keys(c.derived.candidates).join(' / ')} — nothing chosen` : c.derived.reason === 'NO_FIT' ? 'prices fit no column' : 'no priced pillow'}
                                                         </td>

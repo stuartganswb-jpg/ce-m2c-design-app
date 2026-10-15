@@ -247,6 +247,19 @@ export function catalogTagPlanOf({ items = [], config = {}, matchRest = false } 
     return { rows, writes, fill, missing, counts: { patterns: rows.length, colourways: cat.list.length, derived: derivedN, writes: writes.length, missing: missing.length, fill: fill.length, tagged: taggedN } };
 }
 
+/**
+ * A HAND grade on a colourway (Stuart 2026-10-15: "no way to change price tags on each one, can you make it so i can
+ * quickly enter grade there"): the writes that put `group` on the colourway's fabric and throws — or on its pillow
+ * items when it has neither — the same write shape the plan makes, so catalogTagPatchesOf writes them. '' clears.
+ */
+export const colourwayGradeWritesOf = (cw, group) => {
+    const to = up(group);
+    if (!cw) return [];
+    let targets = [['FABRIC', cw.fabric], ['THROW', cw.throws && cw.throws.STD], ['THROW', cw.throws && cw.throws.XL], ['THROW', cw.throws && cw.throws.XXL]].filter(([, it]) => it);
+    if (!targets.length) targets = Object.values(cw.pillows || {}).map(it => ['PILLOW', it]);
+    return targets.filter(([, it]) => (priceGroupOf(it) || '') !== to).map(([kind, it]) => ({ id: it.id, code: codeOf(it), kind, path: 'manufacturingSpecs.priceGroup', from: priceGroupOf(it) || '', to }));
+};
+
 /** The updateDoc patches, one per item, from the plan's writes (several writes to one item merge). */
 export const catalogTagPatchesOf = (writes = [], { by = '', at = 0 } = {}) => {
     const byId = new Map();

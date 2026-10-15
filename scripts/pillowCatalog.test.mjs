@@ -3,7 +3,7 @@
 // pillow prices sit in; the plan writes the group onto the fabric and the throws, links the fabric
 // to its throw, proposes the fill inserts, and NAMES the colourways with no yardage item.
 import {
-    parseUniquityCode, colourwaysOf, groupFromPillowPrices, catalogTagPlanOf, catalogTagPatchesOf,
+    parseUniquityCode, colourwaysOf, groupFromPillowPrices, catalogTagPlanOf, catalogTagPatchesOf, colourwayGradeWritesOf,
     sizesWithFillItems, insertForSize, missingYardageRowsOf, pillowCodeOf, fabricCodeOf, KINDS,
     fabricStockAliasOf, fabricNsLineOf, fabricAliasesOf, withFabricAliases,
 } from '../src/components/Shared/pillowCatalog.js';
@@ -169,6 +169,10 @@ const tieRow = tiePlan.rows.find(r => r.pattern === 'TIE').colourways[0];
 ok('pillows with no fabric and no throw: the group is written on the pillow items', tieRow.writes.length === 2 && tieRow.writes.every(w => w.kind === 'PILLOW' && w.path === 'manufacturingSpecs.priceGroup' && w.to === tieRow.derived.group));
 const tagged = colourwaysOf(lib.map(it => (/^Tie\/01P/.test(it.legacyErpId) ? { ...it, manufacturingSpecs: { ...it.manufacturingSpecs, priceGroup: 'A' } } : it)));
 ok('…and the catalog reads it back from the pillows', tagged.byKey.get('TIE/01').group === 'A' && tagged.byKey.get('TIE/01').groupFrom === 'PILLOW');
+
+// ── a hand grade (2026-10-15) ────────────────────────────────────────────────────────────────
+ok('a hand grade writes onto the fabric and the throws, skipping ones already there', colourwayGradeWritesOf(cat.byKey.get('BELL/10'), 'b').map(w => `${w.code}:${w.to}`).join() === 'Bell/10F:B,Bell/10T:B,Bell/10T-XL:B' && colourwayGradeWritesOf(cat.byKey.get('NASH/01'), 'A').map(w => w.code).join() === 'Nash/01T');
+ok('with no fabric and no throw it writes onto the pillows; a blank clears; nothing when already so', colourwayGradeWritesOf(cat.byKey.get('TIE/01'), 'D').every(w => w.kind === 'PILLOW' && w.to === 'D') && colourwayGradeWritesOf(cat.byKey.get('NASH/01'), '').length === 1 && colourwayGradeWritesOf(cat.byKey.get('SAVERY/05'), 'A').length === 0 && colourwayGradeWritesOf(null, 'A').length === 0);
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);
