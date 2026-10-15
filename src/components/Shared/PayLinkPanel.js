@@ -44,6 +44,11 @@ export default function PayLinkPanel({ docType, collection, docId, reference, cu
     const [pct, setPct] = useState('50');
     const [flat, setFlat] = useState('');
     const [showQr, setShowQr] = useState(null);
+    // The URL stays folded away by default — the QR is what the customer uses, and the address is
+    // on the CE portal domain whatever brand is selling (Stuart 2026-10-14).
+    const [showUrl, setShowUrl] = useState(false);
+    // Who is taking the money, as the server says it — not a second brand-name map over here.
+    const [merchantName, setMerchantName] = useState('');
 
     const load = useCallback(async () => {
         try {
@@ -65,6 +70,7 @@ export default function PayLinkPanel({ docType, collection, docId, reference, cu
                 ...(mode === 'PCT' ? { depositPct: Number(pct) } : {}),
             });
             setShowQr(res.data.url);
+            setMerchantName(res.data.merchantName || '');
             if (onLink) onLink(res.data);
             await load();
         } catch (e) { setErr(e.message || String(e)); }
@@ -123,12 +129,22 @@ export default function PayLinkPanel({ docType, collection, docId, reference, cu
                 <div style={{ display: 'flex', gap: '14px', alignItems: 'center', padding: '10px 0', borderTop: `1px solid ${theme.line}` }}>
                     <PayQr url={showQr} />
                     <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: '12.5px', marginBottom: '6px' }}>Have them scan this, or send the link:</div>
-                        <input style={{ ...input, width: '100%', fontFamily: theme.mono, fontSize: '11px' }} readOnly value={showQr} onFocus={(e) => e.target.select()} />
+                        {/* THE QR IS WHAT THE CUSTOMER SEES, NOT THE URL. The address is on the CE
+                            portal domain whatever brand is selling, so showing it beside the code
+                            while a Uniq'uity customer looks on only raises a question nobody wants
+                            asked at a counter (Stuart 2026-10-14). It is one click away for the
+                            times staff genuinely need to send it. */}
+                        <div style={{ fontSize: '12.5px', marginBottom: '6px' }}>Have them scan this to pay on their own phone.</div>
+                        {showUrl
+                            ? <input style={{ ...input, width: '100%', fontFamily: theme.mono, fontSize: '11px' }} readOnly value={showQr} onFocus={(e) => e.target.select()} />
+                            : null}
                         <div style={{ display: 'flex', gap: '6px', marginTop: '6px', flexWrap: 'wrap' }}>
+                            <button style={btn(false)} onClick={() => setShowUrl(!showUrl)}>{showUrl ? 'Hide link' : 'Show link'}</button>
                             <button style={btn(false)} onClick={() => navigator.clipboard && navigator.clipboard.writeText(showQr)}>Copy</button>
-                            <a style={{ ...btn(false), textDecoration: 'none' }} href={`mailto:?subject=${encodeURIComponent(`Payment for ${reference || 'your order'}`)}&body=${encodeURIComponent(`You can pay securely here:\n\n${showQr}\n\nClassical Elements`)}`}>Email</a>
-                            <button style={btn(false)} onClick={() => setShowQr(null)}>Hide</button>
+                            {/* The sign-off is the company TAKING the money — it said Classical
+                                Elements on every brand's email until today. */}
+                            <a style={{ ...btn(false), textDecoration: 'none' }} href={`mailto:?subject=${encodeURIComponent(`Payment for ${reference || 'your order'}`)}&body=${encodeURIComponent(`You can pay securely here:\n\n${showQr}${merchantName ? `\n\n${merchantName}` : ''}`)}`}>Email</a>
+                            <button style={btn(false)} onClick={() => { setShowQr(null); setShowUrl(false); }}>Hide</button>
                         </div>
                     </div>
                 </div>
@@ -147,7 +163,7 @@ export default function PayLinkPanel({ docType, collection, docId, reference, cu
                             </span>
                             {(l.status === 'OPEN' || l.status === 'CHARGING') && (
                                 <>
-                                    <button style={btn(false)} onClick={() => setShowQr(l.url)}>Show QR</button>
+                                    <button style={btn(false)} onClick={() => { setShowQr(l.url); setMerchantName(l.merchantName || ''); setShowUrl(false); }}>Show QR</button>
                                     <button style={btn(false)} onClick={() => voidLink(l.token)}>Cancel</button>
                                 </>
                             )}

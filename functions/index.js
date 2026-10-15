@@ -2392,6 +2392,19 @@ const money = (v) => Math.round(Number(v) * 100) / 100;
 
 // Staff mint a link for a document. The amount rules are stored ON the link, so the payer cannot
 // alter them later.
+// THE MERCHANT OF RECORD, per brand — the company whose merchant account takes the money, and so
+// the name that appears on the cardholder's statement. The pay page must say the SAME name: a page
+// headed "Classical Elements" against a statement line reading MC America is how a customer decides
+// they do not recognise a charge, and a chargeback follows (Stuart 2026-10-08, MC America dba
+// Uniq'uity going live). This is deliberately the LEGAL entity, not the trading name the packing
+// lists use.
+const PAY_MERCHANT_NAME = {
+    ce: 'Classical Elements',
+    uniquity: "MC America dba Uniq'uity",
+    m2c: 'M2C Studio',
+    leyla: 'Leyla Gans LLC',
+};
+
 exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
     assertStaffAdmin(request);
     const { docType, collection, docId, brand, reference, customerName, totalAmount, depositPct } = request.data || {};
@@ -2422,7 +2435,14 @@ exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
         status: 'OPEN', createdAt: now, createdBy: (request.auth && request.auth.token && request.auth.token.name) || '',
         expiresAt: now + PAY_LINK_DAYS * 86400000,
     });
-    return { token, url: `https://portal.classicalelements.com/#/pay/${token}`, amountDue: due, totalAmount: total, expiresAt: now + PAY_LINK_DAYS * 86400000 };
+    // merchantName travels with the link so the staff screen signs an email with the company that
+    // is actually taking the money — ONE definition of the merchant of record, here on the server,
+    // rather than another brand-name map in the browser that drifts from this one.
+    return {
+        token, url: `https://portal.classicalelements.com/#/pay/${token}`,
+        amountDue: due, totalAmount: total, expiresAt: now + PAY_LINK_DAYS * 86400000,
+        merchantName: PAY_MERCHANT_NAME[String(brand || '').toLowerCase()] || '',
+    };
 });
 
 // Every link a document has ever had, newest first — what the staff panel on the CRM card, the
@@ -2444,6 +2464,8 @@ exports.payLinksFor = onCall({ enforceAppCheck: true }, async (request) => {
             createdAt: l.createdAt || 0, createdBy: l.createdBy || '', expiresAt: l.expiresAt || 0,
             paidAt: l.paidAt || 0, paidAmount: l.paidAmount || 0, transactionId: l.transactionId || '',
             lastError: l.lastError || '',
+            // So a link reopened later signs its email with the same company that minted it.
+            merchantName: PAY_MERCHANT_NAME[String(l.brand || '').toLowerCase()] || '',
         };
     }).sort((a, b) => b.createdAt - a.createdAt);
     return { links, paidTotal: links.filter((l) => l.status === 'PAID').reduce((s, l) => s + Number(l.paidAmount || 0), 0) };
@@ -2476,19 +2498,6 @@ const payLinkOf = async (token) => {
 
 // What the pay page shows. Public by design (the token IS the credential) — it returns only what a
 // payer must see: who it is for, which document, and what is owed.
-// THE MERCHANT OF RECORD, per brand — the company whose merchant account takes the money, and so
-// the name that appears on the cardholder's statement. The pay page must say the SAME name: a page
-// headed "Classical Elements" against a statement line reading MC America is how a customer decides
-// they do not recognise a charge, and a chargeback follows (Stuart 2026-10-08, MC America dba
-// Uniq'uity going live). This is deliberately the LEGAL entity, not the trading name the packing
-// lists use.
-const PAY_MERCHANT_NAME = {
-    ce: 'Classical Elements',
-    uniquity: "MC America dba Uniq'uity",
-    m2c: 'M2C Studio',
-    leyla: 'Leyla Gans LLC',
-};
-
 exports.payIntent = onCall({ cors: true }, async (request) => {
     const link = await payLinkOf((request.data || {}).token);
     const cfg = await nmiConfig();
