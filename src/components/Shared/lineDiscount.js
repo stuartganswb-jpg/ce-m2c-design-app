@@ -150,6 +150,20 @@ export const orderPercentRate = (rate, percent) => {
  */
 export const orderDiscountApplies = (line, isFee = false) => !isFee && !!line && (line.rateOverride == null || line.discountable === true);
 
+/**
+ * A stored cart reopened (a quote or a sales order saved before 2026-10-15) comes back without the mark, so its
+ * pillow lines still read list. On the way in every pillow line is marked: the one-of-a-kind piece (`oneOfAKind`),
+ * the custom pillow holder (`pillow`), and a standard pillow at the chart price — a Uniquity pillow code
+ * (Pattern/NNPWxH) with a rule price. The $0 making / fabric lines and everything else are left exactly as stored.
+ *   isPillowCode(code) → true for a Uniquity pillow item code (the caller's parser, so this module stays pure)
+ */
+export const withPillowDiscountMarks = (cart = [], isPillowCode = () => false) => (cart || []).map(l => {
+    if (!l || l.discountable === true || l.rateOverride == null || !(Number(l.rateOverride) > 0)) return l;
+    if (l.inKit || l.ooakPart) return l;
+    const pillow = !!l.oneOfAKind || !!l.pillow || isPillowCode(l.erp || l.aliasErp || '');
+    return pillow ? { ...l, discountable: true } : l;
+});
+
 /** One informational row for the documents: the item prices above are already net of it. */
 export function orderPercentInfoRow({ percent, saved }) {
     const p = num(percent) || 0, s = round2(saved);

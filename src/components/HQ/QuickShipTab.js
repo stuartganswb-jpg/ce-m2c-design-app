@@ -15,12 +15,12 @@ import PayLinkPanel from '../Shared/PayLinkPanel';   // the QR the customer scan
 import { fetchCustomerPriceLevel, priceLevelNoteOf, mayAutoSetDiscount } from '../Shared/nsPriceLevel';   // the customer's NetSuite price level → the order discount (Stuart 2026-10-12)
 import { nsCustomerIdOf } from '../Shared/nsHeader';   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
 import { QUICK_SELL_REQUEST_ID } from '../Shared/pillowQuickSell';
-import { fabricNsLineOf } from '../Shared/pillowCatalog';   // an app-only fabric pushes as a fraction of its throw (Stuart 2026-10-12)
+import { fabricNsLineOf, parseUniquityCode, KINDS as PILLOW_KINDS } from '../Shared/pillowCatalog';   // an app-only fabric pushes as a fraction of its throw (Stuart 2026-10-12); a reopened cart's pillow lines are marked discountable (2026-10-15)
 import { oneOfAKindCartPlanOf, oneOfAKindSoldPatchOf } from '../Shared/oneOfAKind';   // a piece made at the show sells once (S7, 2026-10-14)
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
-import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp, orderDiscountApplies } from '../Shared/lineDiscount';
+import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp, orderDiscountApplies, withPillowDiscountMarks } from '../Shared/lineDiscount';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
@@ -39,6 +39,7 @@ import { isItemKit, itemKitOrderLinesOf } from "../Shared/itemKit";
 import { FINISH_MODE, finishModeStampOf, tbfLineCountOf } from "../Shared/orderStatus";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
 import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode, isAliasDoc, realPartOf, aliasTargetIdOf } from "../Shared/aliasIdentity";
+const isUniquityPillowCode = (code) => { const p = parseUniquityCode(code); return !!p.ok && p.kind === PILLOW_KINDS.PILLOW; };   // a standard Uniquity pillow (Pattern/NNPWxH)
 
 // Stocked / pre-finished items are sold flat — each line goes to NetSuite as its own sales-order
 // line (NO assembly/BOM rollup like the CPQ does). Quick Ship is the fast counter for that stock.
@@ -450,7 +451,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 setJobName(ex.jobName || j.jobName || '');
                 if (ex.soExtras) setSoExtras(p2 => ({ ...p2, ...ex.soExtras }));
                 if (ex.ship) setShip(p2 => ({ ...p2, ...ex.ship }));
-                setCart(saved.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })));
+                // a quote saved before 2026-10-15 carries no discount mark on its pillow lines — marked on the way in, so the order % reaches them
+                setCart(withPillowDiscountMarks(saved.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })), isUniquityPillowCode));
                 setReopenedQuote(j.jobId || j.id);
                 addLog(`✎ Quote ${j.jobId || j.id} reopened — ${saved.length} line(s). Saving creates the corrected quote and supersedes this one.`, 'info');
             } catch (e) { console.warn('quote reopen failed', e); alert(`Could not reopen that quote: ${e.message || e}`); }
@@ -478,7 +480,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 // 2026-08-31 — and it cannot hold a traverse kit, so it says so rather than
                 // quietly handing back an order worth less than the one being edited.
                 if (Array.isArray(so.quickShipCart) && so.quickShipCart.length) {
-                    setCart(so.quickShipCart.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })));
+                    setCart(withPillowDiscountMarks(so.quickShipCart.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })), isUniquityPillowCode));
                     // Same slim shape the legacy path sets — the banner and the supersede write
                     // read exactly these three fields.
                     setEditingSo({ id: so.id, soId: so.soId || so.id, customer: so.customer || '' });

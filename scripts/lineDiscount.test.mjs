@@ -7,7 +7,7 @@
 // overwritten; the net derives. Rows are display-only (isDiscount / isNetLine). NetSuite scales
 // the discounted item's own rates by netFactorOf.
 
-import { orderDiscountApplies } from '../src/components/Shared/lineDiscount.js';
+import { orderDiscountApplies, withPillowDiscountMarks } from '../src/components/Shared/lineDiscount.js';
 import {
     canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount,
     cartHasLineDiscounts, discountModeOf, lineDiscountRows, netFactorOf, orderDiscountStamp,
@@ -107,6 +107,21 @@ eq('…and says the saving', info.name.trim(), 'Order Discount - (20%) · item p
 eq('an ordinary item line, and a rule-priced line marked discountable (a pillow), are reached; a fee, a $0 making and a rule-priced kit line are not',
     [orderDiscountApplies({ rateOverride: null }), orderDiscountApplies({ rateOverride: 850, discountable: true }), orderDiscountApplies({ rateOverride: null }, true), orderDiscountApplies({ rateOverride: 0, inKit: true }), orderDiscountApplies({ rateOverride: 120 }), orderDiscountApplies(null)],
     [true, true, false, false, false, false]);
+
+const isPillow = (c) => /^[A-Za-z]+\/\d+P\d+x\d+$/.test(String(c || ''));
+const reopened = withPillowDiscountMarks([
+    { erp: 'CUSTOM PILLOW', rateOverride: 850, oneOfAKind: { itemId: 'x' } },
+    { erp: 'BRIDLRG', rateOverride: 0, inKit: true, ooakPart: true },
+    { erp: 'CUSTOM PILLOW', rateOverride: 500, pillow: { requestId: 'q' } },
+    { erp: 'Bell/10F', rateOverride: 0, inKit: true },
+    { erp: 'Bell/10P19x19', rateOverride: 500 },
+    { erp: 'Bell/10T', rateOverride: null },
+    { erp: 'RUSH', rateOverride: 120 },
+    { erp: 'Bell/22P19x19', rateOverride: 500, discountable: true },
+], isPillow);
+eq('a reopened cart: the piece, the holder and the chart pillow are marked; the $0 makings, the throw, the rush fee are left; an already-marked line unchanged',
+    reopened.map(l => l.discountable === true), [true, false, true, false, true, false, false, true]);
+eq('nothing else on a line changes', reopened[4].rateOverride === 500 && reopened[5].rateOverride === null && !('discountable' in reopened[5]), true);
 
 console.log(`\nlineDiscount: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
