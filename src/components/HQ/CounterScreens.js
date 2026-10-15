@@ -33,7 +33,8 @@ const HOME = [
 
 const CounterScreens = ({ currentUser, customers = [], customerId = '', selectedCustomer = null, onPickCustomer = () => {}, jobName = '', setJobName = () => {}, items = [], findPart, rateFor, onAddQuickSell = () => {}, onAddCustomPillow = () => {}, addLog = () => {}, cartCount = 0, cartTotal = 0, onShowCart = () => {}, priceNote = '', onAddOneOfAKind = () => {} }) => {
     const [screen, setScreen] = useState(customerId ? 'HOME' : 'CUSTOMER');
-    const [q, setQ] = useState('');
+    const [q, setQ] = useState('');          // the CUSTOMER search — cleared when a customer is picked
+    const [wallQ, setWallQ] = useState('');  // the One of a kind wall's own search (Stuart 2026-10-15: "Pat" carried over from the customer search and hid every piece)
     const [newCust, setNewCust] = useState(null);   // { name, email, phone } while the form is open
     const [busy, setBusy] = useState(false);
     const [globalLists, setGlobalLists] = useState({ pillowSizes: [], fillTypes: ['DOWN', 'POLY'], flangeStyles: ['NONE', 'FLANGE'], stitchTypes: ['STANDARD'] });
@@ -111,7 +112,7 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
                             <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Type a name, a company, an email…" style={inp} />
                             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '12px' }}>
                                 {matches.map(c => (
-                                    <button key={c.id} onClick={() => { onPickCustomer(c); setScreen('HOME'); }} style={{ ...bigTile(customerId === c.id), minHeight: '90px', fontSize: '1.05rem', flex: '1 1 220px', alignItems: 'flex-start', padding: '14px', textAlign: 'left' }}>
+                                    <button key={c.id} onClick={() => { onPickCustomer(c); setQ(''); setScreen('HOME'); }} style={{ ...bigTile(customerId === c.id), minHeight: '90px', fontSize: '1.05rem', flex: '1 1 220px', alignItems: 'flex-start', padding: '14px', textAlign: 'left' }}>
                                         <span>{c.name}</span>
                                         <span style={{ ...mono, color: customerId === c.id ? '#ddd' : 'var(--ink-soft)' }}>{c.id}{c.email ? ` · ${c.email}` : ''}</span>
                                     </button>
@@ -165,14 +166,14 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
     }
 
     if (screen === 'OOAK') {
-        const pieces = oneOfAKindAvailableOf(items).filter(it => !q || `${it.legacyErpId} ${it.itemName}`.toLowerCase().includes(q.toLowerCase()));
+        const pieces = oneOfAKindAvailableOf(items).filter(it => !wallQ || `${it.legacyErpId} ${it.itemName}`.toLowerCase().includes(wallQ.toLowerCase()));
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {crumb}
                 <div style={{ ...card, padding: '20px' }}>
                     <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' }}>
                         <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem' }}>🎁 One of a kind</div>
-                        <input value={q} onChange={e => setQ(e.target.value)} placeholder="tag · name" style={{ ...inp, width: '260px', padding: '10px 12px', fontSize: '1rem' }} />
+                        <input value={wallQ} onChange={e => setWallQ(e.target.value)} placeholder="tag · name" style={{ ...inp, width: '260px', padding: '10px 12px', fontSize: '1rem' }} />
                         <span style={mono}>{pieces.length} on the shelf · tap one to add it</span>
                     </div>
                     <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
