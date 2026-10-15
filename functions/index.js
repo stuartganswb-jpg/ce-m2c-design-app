@@ -836,6 +836,18 @@ const assertStaffAdmin = (request) => {
     }
 };
 
+// TAKING A PAYMENT is for CSR, manager and admin (Stuart 2026-10-15) — a narrower door than
+// assertStaffAdmin, which guards twenty-one functions including NetSuite posting and user
+// administration. A rep at the show counter needs to charge a card, not to run the company.
+const { canTakePayment } = require('./payRoles');
+const assertCanTakePayment = (request) => {
+    const role = String((request.auth && request.auth.token && request.auth.token.role) || '').toLowerCase();
+    if (!canTakePayment(role)) {
+        // Name the roles, so the next person reads the answer instead of guessing at it.
+        throw new HttpsError('permission-denied', `Taking a payment is for CSR, manager and admin users — this login is "${role || 'none'}".`);
+    }
+};
+
 const assertPortalCustomer = (request) => {
     const t = (request.auth && request.auth.token) || {};
     if (t.customer !== true || !t.customerId) {
@@ -2423,7 +2435,7 @@ const PAY_MERCHANT_NAME = {
 };
 
 exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
-    assertStaffAdmin(request);
+    assertCanTakePayment(request);
     const { docType, collection, docId, brand, reference, customerName, totalAmount, depositPct } = request.data || {};
     const type = String(docType || '').toUpperCase();
     if (!['QUOTE', 'SALES_ORDER', 'INVOICE'].includes(type)) throw new HttpsError('invalid-argument', 'docType must be QUOTE, SALES_ORDER or INVOICE.');
@@ -2466,7 +2478,7 @@ exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
 // Every link a document has ever had, newest first — what the staff panel on the CRM card, the
 // invoice and Order Entry all read. Amounts and status only; no card data exists to leak.
 exports.payLinksFor = onCall({ enforceAppCheck: true }, async (request) => {
-    assertStaffAdmin(request);
+    assertCanTakePayment(request);
     const { collection, docId, reference } = request.data || {};
     const cfg = await nmiConfig();   // a link is shown at its brand's own pay domain
     const col = admin.firestore().collection('pay_links');
@@ -2493,7 +2505,7 @@ exports.payLinksFor = onCall({ enforceAppCheck: true }, async (request) => {
 // Cancel a link that should no longer be payable (wrong amount, resent, order changed). A PAID link
 // is never voided — the money happened, and the record says so.
 exports.payLinkVoid = onCall({ enforceAppCheck: true }, async (request) => {
-    assertStaffAdmin(request);
+    assertCanTakePayment(request);
     const token = String((request.data || {}).token || '');
     const ref = admin.firestore().collection('pay_links').doc(token);
     const snap = await ref.get();
