@@ -25,9 +25,24 @@ export function usePayBlock({ collection, docId, reference, label, enabled = tru
             try {
                 const res = await httpsCallable(functions, 'payLinksFor')({ collection, docId, reference });
                 const link = payableLinkOf(res.data.links);
-                if (!alive || !link) { if (alive) setPay(null); return; }
-                const qrSvg = await QRCode.toString(link.url, { type: 'svg', margin: 1, width: 104, errorCorrectionLevel: 'M' }).catch(() => '');
-                if (alive) setPay({ url: link.url, qrSvg, amountDue: link.amountDue, label: label || '' });
+                // WHAT HAS BEEN PAID IS PART OF THE DOCUMENT, not only what is still wanted
+                // (Stuart 2026-10-15). This used to return nothing the moment an order was paid —
+                // the link went PAID, the block vanished, and the printed sales order said nothing
+                // about the deposit the customer had just handed over. A block is now returned when
+                // there is EITHER something still payable OR something already paid.
+                const paidTotal = Number(res.data.paidTotal || 0);
+                if (!alive) return;
+                if (!link && !(paidTotal > 0)) { setPay(null); return; }
+                const qrSvg = link
+                    ? await QRCode.toString(link.url, { type: 'svg', margin: 1, width: 104, errorCorrectionLevel: 'M' }).catch(() => '')
+                    : '';
+                if (alive) {
+                    setPay({
+                        url: link ? link.url : '', qrSvg,
+                        amountDue: link ? link.amountDue : 0,
+                        paidTotal, label: label || '',
+                    });
+                }
             } catch (e) {
                 if (alive) setPay(null);   // a document must still print when payments are unreachable
             }

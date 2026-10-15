@@ -941,6 +941,22 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   };
   const createdDateOf = (job) => job.createdAt?.seconds ? new Date(job.createdAt.seconds * 1000).toLocaleDateString()
       : (typeof job.createdAt === 'number' ? new Date(job.createdAt).toLocaleDateString() : (job.dateSaved || '—'));
+  // WHAT HAS BEEN PAID, ON THE ORDER ITSELF (Stuart 2026-10-15: "it should go back to the CRM and
+  // show on the sale chip next to the payment link"). Both payment doors stamp paymentsTotal onto
+  // the document — the pay link and the portal — so this reads the order's own figure and needs no
+  // extra read of its own. One helper, so the quote card and the Order Entry row cannot drift.
+  const paidChip = (doc) => {
+      const paid = Number((doc && doc.paymentsTotal) || 0);
+      if (!(paid > 0)) return null;
+      return (
+          <span
+              title={`Paid ${doc.lastPaymentAt ? `· last payment ${new Date(doc.lastPaymentAt).toLocaleDateString()}` : ''}`}
+              style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', padding: '3px 8px', border: '1px solid #3a7d44', color: '#3a7d44', background: '#f3f8f4', whiteSpace: 'nowrap' }}
+          >
+              💳 Paid ${paid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+      );
+  };
   const [platingPOs, setPlatingPOs] = useState([]);          // every hq_purchase_orders doc — plating shipments AND the stock/component buys (A4)
   const [activePlatingPO, setActivePlatingPO] = useState(null); // shipment detail modal
   const [recordingReceipt, setRecordingReceipt] = useState(false);
@@ -2226,7 +2242,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                   <div key={job.id} id={`crm-order-${job.id}`} style={{ border: `1px solid ${job.portalDeleted ? '#e2b8b8' : 'var(--line)'}`, borderLeft: job.portalDeleted ? '4px solid #d9534f' : undefined, padding: '16px', background: job.portalDeleted ? '#fdf3f3' : 'var(--paper)', ...focusStyle(job.id) }}>
                                                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                           <span title={job.jobId || job.id} style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', textDecoration: job.portalDeleted ? 'line-through' : 'none', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{quoteDisplayNo(job)}</span>
+                                                          <span style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                                          {paidChip(job)}
                                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 8px', border: `1px solid ${job.portalDeleted ? '#d9534f' : 'var(--line)'}`, background: job.portalDeleted ? '#d9534f' : '#fff', color: job.portalDeleted ? '#fff' : 'var(--ink)' }}>{job.portalDeleted ? '🗑 Deleted by client' : job.status.replace(/_/g, ' ')}</span>
+                                                          </span>
                                                       </div>
                                                       <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.03em' }}>Created {createdDateOf(job)}</div>
                                                       {/* The customer withdrew this from their portal. The record is KEPT — this is the
@@ -2424,6 +2443,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '10px' }}>{o.createdAt ? new Date(o.createdAt).toLocaleDateString() : ''}{o.jobName ? ` · ${o.jobName}` : ''} · ${Number(o.invoiceTotal || 0).toFixed(2)}</span>
                                                           </div>
                                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid var(--line)', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{state}</span>
+                                                          {paidChip(o)}
                                                           {fulfilled && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid', borderColor: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', color: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', whiteSpace: 'nowrap' }}>{o.nsInvoiceNo ? `INV ${o.nsInvoiceNo}` : 'NO NS INV #'}</span>}
                                                           <button onClick={() => setQsInvoice(o)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>{fulfilled ? '🧾 Invoice' : '📄 Order'}</button>
                                                           {/* The packing list for an Order Entry order: its own SO doc is the pack document (lines[] dialect). */}

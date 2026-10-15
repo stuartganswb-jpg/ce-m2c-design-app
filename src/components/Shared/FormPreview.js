@@ -251,18 +251,38 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
       {/* PAY THIS DOCUMENT — printed ONLY when staff added a link (Stuart 2026-09-23: "when decided
           to add it"). `pay` = { url, qrSvg, amountDue, label } from Shared/PayLinkPanel; without it
           the document prints exactly as it always has. */}
-      {pay && pay.url && (
+      {pay && (pay.url || Number(pay.paidTotal) > 0) && (
         <div style={{ marginTop: '24px', border: '1px solid var(--line)', padding: '14px 16px', display: 'flex', gap: '16px', alignItems: 'center' }}>
           {pay.qrSvg ? <div style={{ width: '104px', height: '104px', flex: '0 0 104px' }} dangerouslySetInnerHTML={{ __html: pay.qrSvg }} /> : null}
           <div style={{ minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--brass)', marginBottom: '4px' }}>
-              Pay {pay.label || 'this document'}
+              {pay.url ? <>Pay {pay.label || 'this document'}</> : 'Payment received'}
             </div>
-            <div style={{ fontSize: '13px', marginBottom: '4px' }}>
-              {pay.amountDue ? <>Amount due now <strong>{money(pay.amountDue)}</strong>. </> : null}
-              Scan the code, or visit:
-            </div>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: '10.5px', wordBreak: 'break-all' }}>{pay.url}</div>
+            {/* WHAT THEY HAVE ALREADY PAID, and what is left of the document's total. A customer
+                holding this page should be able to see the deposit they handed over without
+                ringing to ask (Stuart 2026-10-15). */}
+            {showMoney && Number(pay.paidTotal) > 0 && (() => {
+              // The balance is measured against the SAME total this page prints below — never a
+              // second reckoning of it, or the document would argue with itself.
+              const paid = Number(pay.paidTotal);
+              const balance = total > 0 ? Math.round((total - paid) * 100) / 100 : null;
+              return (
+                <div style={{ fontSize: '13px', marginBottom: '4px' }}>
+                  Paid to date <strong>{money(paid)}</strong>
+                  {balance !== null && balance > 0.005 ? <> · Balance <strong>{money(balance)}</strong></> : null}
+                  {balance !== null && balance <= 0.005 ? <> — <strong>paid in full</strong>, thank you</> : null}
+                </div>
+              );
+            })()}
+            {pay.url && (
+              <>
+                <div style={{ fontSize: '13px', marginBottom: '4px' }}>
+                  {pay.amountDue ? <>Amount due now <strong>{money(pay.amountDue)}</strong>. </> : null}
+                  Scan the code, or visit:
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '10.5px', wordBreak: 'break-all' }}>{pay.url}</div>
+              </>
+            )}
             <div style={{ fontSize: '9.5px', color: 'var(--ink-soft)', marginTop: '4px' }}>
               Paid securely by card through our payment provider — we never see or store your card number.
             </div>
