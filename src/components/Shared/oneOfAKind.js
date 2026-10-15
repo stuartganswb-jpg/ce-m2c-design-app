@@ -118,6 +118,56 @@ export const newOneOfAKindId = (brandId = 'uniquity', at = 0, i = 0) => `${Strin
 // CUSTOM PILLOW holder with its tag in the description and its making beneath at $0 — oneOfAKindCartPlanOf below.
 
 /**
+ * EDITING A FILED PIECE (Stuart 2026-10-14: "what if i made a mistake and need to change from bridlrg to
+ * bridsml?"). The record → a card the same form edits (the code is its identity and stays); the card → the
+ * dotted patch updateDoc writes (the making map is REPLACED, so a fabric making's yards never linger under a
+ * Bridget one). A SOLD piece is read-only: the order carried the making it sold with.
+ */
+export const oneOfAKindEditableOf = (item) => { const o = oneOfAKindOf(item); return !!o && up(o.status || OOAK_STATUS.AVAILABLE) === OOAK_STATUS.AVAILABLE; };
+
+export function oneOfAKindEditCardOf(item) {
+    const o = oneOfAKindOf(item);
+    if (!o) return null;
+    const specs = item.manufacturingSpecs || {};
+    const m = o.making || {};
+    return {
+        id: item.id, fileName: str(o.photoFile), dataUrl: item.componentImageUrl || item.finalImageUrl || '',
+        kind: up(o.kind) === 'WALL' ? 'WALL' : 'PILLOW',
+        code: str(item.legacyErpId || item.itemId), name: str(item.itemName), price: num(specs.basePrice) === null ? '' : num(specs.basePrice),
+        sizeKey: str(o.sizeKey), bin: str(specs.homeBin || specs.binLocation) || OOAK_DEFAULT_BIN, note: str(o.note),
+        making: { type: m.type === 'FABRIC' ? 'FABRIC' : (m.type === 'NONINV' ? 'NONINV' : ''), fabricCode: str(m.fabricCode), yards: num(m.yards) === null ? '' : num(m.yards), noninvCode: str(m.noninvCode) },
+        state: 'EDIT', result: null,
+    };
+}
+
+export function oneOfAKindEditPatchOf(card, item, { findByCode, by = '', at = 0 } = {}) {
+    if (!oneOfAKindEditableOf(item)) return { ok: false, errors: [{ code: 'SOLD', message: `${(item && item.legacyErpId) || '?'} is sold — the order carried its making; it cannot be changed.` }], patch: null };
+    // the code stays: readiness is checked with the piece's own code allowed
+    const r = cardReadinessOf({ ...card, code: str(item.legacyErpId || item.itemId), dataUrl: card.dataUrl || 'kept' }, { findByCode, takenCodes: [] });
+    if (!r.ok) return { ok: false, errors: r.errors, patch: null };
+    const m = card.making || {};
+    const making = m.type === 'FABRIC'
+        ? { type: 'FABRIC', fabricCode: up(m.fabricCode), yards: r3(num(m.yards) || 0) }
+        : { type: 'NONINV', noninvCode: up(m.noninvCode), each: 1 };
+    const now = at || Date.now();
+    return {
+        ok: true, errors: [],
+        patch: {
+            itemName: str(card.name) || str(item.legacyErpId || item.itemId),
+            'manufacturingSpecs.basePrice': num(card.price),
+            'manufacturingSpecs.homeBin': up(card.bin) || OOAK_DEFAULT_BIN,
+            'manufacturingSpecs.binLocation': up(card.bin) || OOAK_DEFAULT_BIN,
+            'manufacturingSpecs.customData.oneOfAKind.making': making,
+            'manufacturingSpecs.customData.oneOfAKind.sizeKey': str(card.sizeKey),
+            'manufacturingSpecs.customData.oneOfAKind.note': str(card.note),
+            'manufacturingSpecs.customData.oneOfAKind.editedAt': now,
+            'manufacturingSpecs.customData.oneOfAKind.editedBy': str(by),
+            updatedAt: now,
+        },
+    };
+}
+
+/**
  * The cart plan for selling one: the piece as ONE line at its price (as its own NetSuite item, else as the
  * CUSTOM PILLOW holder with the tag in the description) and its making beneath at $0.
  *   item        the library record · findByCode(code) → item · holder = the CUSTOM PILLOW library record (for the alias)

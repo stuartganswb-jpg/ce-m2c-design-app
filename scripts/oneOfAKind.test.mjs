@@ -1,7 +1,7 @@
 // One-of-a-kind pillows and wall art, pinned (S7, 2026-10-14): a card's readiness by name, the library record
 // (stocked one, the photo, the making), the NetSuite item body from a template, the cart plan (the piece at its
 // price as itself or on the CUSTOM PILLOW holder; its making beneath at $0 — yards or one unit), sold once.
-import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, oneOfAKindCartPlanOf, oneOfAKindSoldPatchOf, oneOfAKindAvailableOf, isOneOfAKindItem, OOAK_MAKINGS } from '../src/components/Shared/oneOfAKind.js';
+import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, oneOfAKindCartPlanOf, oneOfAKindEditCardOf, oneOfAKindEditPatchOf, oneOfAKindEditableOf, oneOfAKindSoldPatchOf, oneOfAKindAvailableOf, isOneOfAKindItem, OOAK_MAKINGS } from '../src/components/Shared/oneOfAKind.js';
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { if (cond) { pass++; } else { fail++; console.error('  ✗', name, extra); } };
 const item = (code, extra = {}) => ({ id: `ID-${code}`, legacyErpId: code, itemName: extra.name || code, netSuiteInternalId: extra.ns === undefined ? '1' : extra.ns, manufacturingSpecs: { ...(extra.specs || {}) } });
@@ -48,5 +48,16 @@ ok('a sold piece refuses; no holder id refuses by name', oneOfAKindCartPlanOf({ 
 const sp = oneOfAKindSoldPatchOf({ soId: 'QS-1', by: 'Liz', at: 9 });
 ok('the sold patch: SOLD, the SO, unstocked', sp['manufacturingSpecs.customData.oneOfAKind.status'] === 'SOLD' && sp['manufacturingSpecs.customData.oneOfAKind.soldOn'] === 'QS-1' && sp['manufacturingSpecs.isStocked'] === false);
 ok('the makings lists', OOAK_MAKINGS.PILLOW.length === 3 && OOAK_MAKINGS.WALL.length === 3);
+// ── editing a filed piece ─────────────────────────────────────────────────────────────────────
+const ec = oneOfAKindEditCardOf(d);
+ok('a filed piece becomes a card with its fields', ec && ec.code === d.legacyErpId && ec.name === d.itemName && ec.price === d.manufacturingSpecs.basePrice && ec.making.type === 'FABRIC' && ec.making.fabricCode === 'BELL/10F' && ec.making.yards === 1.25 && ec.sizeKey === '20x12' && ec.state === 'EDIT');
+ok('a plain item is not editable as one', oneOfAKindEditCardOf(lib[0]) === null && !oneOfAKindEditableOf(lib[0]));
+const ep = oneOfAKindEditPatchOf({ ...ec, making: { type: 'NONINV', noninvCode: 'BRIDSML', fabricCode: '', yards: '' }, price: '725', note: 'was bridlrg by mistake' }, d, { findByCode: by, by: 'stuart', at: 5000 });
+ok('a fabric making → BRIDSML writes the making map whole, the price and the note, dotted for updateDoc', ep.ok && ep.patch['manufacturingSpecs.customData.oneOfAKind.making'].noninvCode === 'BRIDSML' && ep.patch['manufacturingSpecs.customData.oneOfAKind.making'].each === 1 && ep.patch['manufacturingSpecs.basePrice'] === 725 && ep.patch['manufacturingSpecs.customData.oneOfAKind.note'] === 'was bridlrg by mistake' && ep.patch['manufacturingSpecs.customData.oneOfAKind.editedBy'] === 'stuart' && ep.patch.updatedAt === 5000 && !('legacyErpId' in ep.patch));
+const epF = oneOfAKindEditPatchOf({ ...ec, making: { type: 'FABRIC', fabricCode: 'Bell/10F', yards: '1.5', noninvCode: '' } }, d, { findByCode: by });
+ok('back to a fabric making: the fabric and yards whole, no noninv code lingers', epF.ok && epF.patch['manufacturingSpecs.customData.oneOfAKind.making'].type === 'FABRIC' && epF.patch['manufacturingSpecs.customData.oneOfAKind.making'].yards === 1.5 && !('noninvCode' in epF.patch['manufacturingSpecs.customData.oneOfAKind.making']));
+ok('a wrong making for the kind refuses', !oneOfAKindEditPatchOf({ ...ec, making: { type: 'NONINV', noninvCode: 'BRIDWALLSML' } }, d, { findByCode: by }).ok);
+ok('a sold piece refuses', !oneOfAKindEditPatchOf(ec, { ...d, manufacturingSpecs: { ...d.manufacturingSpecs, customData: { oneOfAKind: { ...d.manufacturingSpecs.customData.oneOfAKind, status: 'SOLD' } } } }, { findByCode: by }).ok && !oneOfAKindEditableOf({ ...d, manufacturingSpecs: { ...d.manufacturingSpecs, customData: { oneOfAKind: { ...d.manufacturingSpecs.customData.oneOfAKind, status: 'SOLD' } } } }));
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

@@ -10,9 +10,9 @@
 // description and its making beneath at $0, the CPQ rollup shape. The counter's "One of a kind" tile sells them.
 import React, { useEffect, useMemo, useState } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, query, where, getDocs, setDoc, doc } from 'firebase/firestore';
+import { collection, query, where, getDocs, setDoc, updateDoc, doc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, newOneOfAKindId, OOAK_KINDS, OOAK_MAKINGS } from '../Shared/oneOfAKind';
+import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, newOneOfAKindId, OOAK_KINDS, OOAK_MAKINGS, isOneOfAKindItem, oneOfAKindOf, oneOfAKindEditableOf, oneOfAKindEditCardOf, oneOfAKindEditPatchOf } from '../Shared/oneOfAKind';
 import { isFabricItem } from '../Shared/pillowFabricSheet';
 import { sizeKeysOf } from '../Shared/pillowCuts';
 import { DEFAULT_PILLOW_PRICING, PILLOW_PRICING_DOC } from '../Shared/pillowPricing';
@@ -42,6 +42,7 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
     const [busy, setBusy] = useState(false);
     const [armed, setArmed] = useState(false);
     const [log, setLog] = useState([]);
+    const [edits, setEdits] = useState({});   // filed piece id → the card being edited (Stuart 2026-10-14: "change from bridlrg to bridsml")
     const say = (msg, tone = 'info') => setLog(prev => [{ t: new Date().toLocaleTimeString(), msg, tone }, ...prev].slice(0, 60));
 
     const readLibrary = async () => {
@@ -55,6 +56,7 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
     const findByCode = useMemo(() => { const m = new Map(); (items || []).forEach(it => { [it.legacyErpId, it.itemId].forEach(c => { if (c) m.set(String(c).toUpperCase(), it); }); }); return (c) => m.get(String(c || '').toUpperCase()) || null; }, [items]);
     const fabrics = useMemo(() => (items || []).filter(isFabricItem).sort((a, b) => String(a.legacyErpId || '').localeCompare(String(b.legacyErpId || ''))), [items]);
     const sizes = useMemo(() => sizeKeysOf(pricing || DEFAULT_PILLOW_PRICING), [pricing]);
+    const filed = useMemo(() => (items || []).filter(isOneOfAKindItem).sort((a, b) => (Number(b.oneOfAKindAt) || 0) - (Number(a.oneOfAKindAt) || 0)), [items]);
     const makingState = useMemo(() => {
         const out = {};
         [...OOAK_MAKINGS.PILLOW, ...OOAK_MAKINGS.WALL].forEach(mk => { const it = findByCode(mk.code); out[mk.code] = it ? (it.netSuiteInternalId ? 'ok' : 'no-ns') : 'missing'; });
@@ -90,6 +92,26 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
         }));
     }, [cards, items, findByCode]);
     const readyCards = cards.filter(c => c.state !== 'DONE' && readiness[c.id] && readiness[c.id].ok);
+
+    const startEdit = (it) => setEdits(prev => ({ ...prev, [it.id]: oneOfAKindEditCardOf(it) }));
+    const cancelEdit = (id) => setEdits(prev => { const n = { ...prev }; delete n[id]; return n; });
+    const setEdit = (id, patch) => setEdits(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+    const setEditMaking = (id, patch) => setEdits(prev => ({ ...prev, [id]: { ...prev[id], making: { ...prev[id].making, ...patch } } }));
+    const saveEdit = async (it) => {
+        const e = edits[it.id];
+        if (!e) return;
+        const r = oneOfAKindEditPatchOf(e, it, { findByCode, by: currentUser || '' });
+        if (!r.ok) { r.errors.forEach(x => say(`⛔ ${it.legacyErpId}: ${x.message}`, 'err')); return; }
+        setBusy(true);
+        try {
+            await updateDoc(doc(db, 'Approved_Designs', it.id), r.patch);
+            const mk = r.patch['manufacturingSpecs.customData.oneOfAKind.making'];
+            say(`✅ ${it.legacyErpId} changed — $${r.patch['manufacturingSpecs.basePrice']} · ${mk.type === 'FABRIC' ? `${mk.yards} yd of ${mk.fabricCode}` : `${mk.noninvCode} × 1`}`, 'ok');
+            cancelEdit(it.id);
+            await readLibrary();
+        } catch (err) { say(`⛔ ${it.legacyErpId}: ${err.message || err}`, 'err'); }
+        setBusy(false);
+    };
 
     const createAll = async () => {
         if (!readyCards.length) return;
@@ -131,12 +153,48 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
     if (activeBrand !== BRAND) return <div style={{ ...card, color: 'var(--ink-soft)' }}>One-of-a-kind pieces are Uniquity's — switch the brand to Uniquity.</div>;
     const makingsFor = (kind) => OOAK_MAKINGS[kind === 'WALL' ? 'WALL' : 'PILLOW'];
 
+    // The one form, for a new card and for a filed piece being edited (on.codeLocked: the code is the identity)
+    const formFields = (c, on) => (
+        <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 120px', gap: '10px' }}>
+                <label><div style={mono}>Code (from the tag)</div><input value={c.code} disabled={on.disabled || on.codeLocked} onChange={e => on.set({ code: e.target.value })} placeholder="SHOW-0412" style={{ ...field, fontFamily: 'var(--mono)' }} /></label>
+                <label><div style={mono}>Name</div><input value={c.name} disabled={on.disabled} onChange={e => on.set({ name: e.target.value })} placeholder="what the customer reads on the quote" style={field} /></label>
+                <label><div style={mono}>Sale price $</div><input value={c.price} disabled={on.disabled} onChange={e => on.set({ price: e.target.value })} inputMode="decimal" style={{ ...field, textAlign: 'right' }} /></label>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 2fr', gap: '10px' }}>
+                <label><div style={mono}>Size</div>
+                    <select value={c.sizeKey} disabled={on.disabled} onChange={e => on.set({ sizeKey: e.target.value })} style={field}>
+                        <option value="">—</option>
+                        {sizes.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select></label>
+                <label><div style={mono}>Bin</div><input value={c.bin} disabled={on.disabled} onChange={e => on.set({ bin: e.target.value })} style={{ ...field, fontFamily: 'var(--mono)' }} /></label>
+                <label><div style={mono}>Note</div><input value={c.note} disabled={on.disabled} onChange={e => on.set({ note: e.target.value })} style={field} /></label>
+            </div>
+            <div>
+                <div style={mono}>Made from</div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
+                    <button disabled={on.disabled} onClick={() => on.setMk({ type: 'FABRIC', noninvCode: '' })} style={chip(c.making.type === 'FABRIC')}>🧵 A fabric + yards</button>
+                    {makingsFor(c.kind).map(mk => <button key={mk.code} disabled={on.disabled} onClick={() => on.setMk({ type: 'NONINV', noninvCode: mk.code })} style={{ ...chip(c.making.type === 'NONINV' && c.making.noninvCode === mk.code), opacity: makingState[mk.code] === 'ok' ? 1 : 0.5 }} title={makingState[mk.code] === 'ok' ? '' : (makingState[mk.code] === 'no-ns' ? 'no NetSuite id on this item' : 'not in the library — sync 11.1')}>{mk.label} <span style={{ opacity: 0.7 }}>({mk.code} × 1)</span></button>)}
+                </div>
+                {c.making.type === 'FABRIC' && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 120px', gap: '10px', marginTop: '8px' }}>
+                        <select value={c.making.fabricCode} disabled={on.disabled} onChange={e => on.setMk({ fabricCode: e.target.value })} style={field}>
+                            <option value="">-- the fabric --</option>
+                            {fabrics.map(f => <option key={f.id} value={f.legacyErpId || f.itemId}>{f.legacyErpId || f.itemId} — {f.itemName}{f.manufacturingSpecs && f.manufacturingSpecs.priceGroup ? ` · group ${f.manufacturingSpecs.priceGroup}` : ''}</option>)}
+                        </select>
+                        <input value={c.making.yards} disabled={on.disabled} onChange={e => on.setMk({ yards: e.target.value })} placeholder="yards" inputMode="decimal" style={{ ...field, textAlign: 'right' }} />
+                    </div>
+                )}
+            </div>
+        </>
+    );
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div style={card}>
                 <h3 style={h}>🎁 One-of-a-kind pillows &amp; wall art — made at the show</h3>
                 <p style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
-                    Drop the photos (each pillow with its tag). One card per photo: type the code from the tag, the name, the sale price, the size, and what it was made from — a fabric and the yards used, or one of the makings at one per piece. Create files each as a Uniquity item, stocked one in bin SHOW, with its photo as the picture; it then sells on the Show Counter's <b>One of a kind</b> tile at its price with its making beneath at $0. A NetSuite item is created for each unless you untick it; if NetSuite refuses, the piece is filed in the app and sells on the CUSTOM PILLOW holder with its tag in the description.
+                    Drop the photos (each pillow with its tag). One card per photo: type the code from the tag, the name, the sale price, the size, and what it was made from — a fabric and the yards used, or one of the makings at one per piece. Create files each as a Uniquity item, stocked one in bin SHOW, with its photo as the picture; it then sells on the Show Counter's <b>One of a kind</b> tile at its price with its making beneath at $0. No NetSuite item is made per piece: each sells as a pre-configured CUSTOM PILLOW — the holder line at its price with the tag in the description, the making beneath at $0. A filed piece can be changed below until it is sold.
                 </p>
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <label style={btn(true, busy)}>＋ Drop the photos<input type="file" accept="image/*" multiple capture="environment" onChange={onFiles} disabled={busy} style={{ display: 'none' }} /></label>
@@ -160,36 +218,7 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
                                 <span style={{ ...mono, marginLeft: 'auto' }}>{done ? `✅ filed · ${c.result && c.result.id} · sells as a pre-configured CUSTOM PILLOW` : c.state === 'FAILED' ? `⛔ ${c.result && c.result.error}` : c.state === 'BUSY' ? 'creating…' : r.ok ? 'ready' : `${r.errors.length} to fix`}</span>
                                 {!done && <button onClick={() => dropCard(c.id)} style={{ ...btn(false, busy), color: '#d9534f' }}>remove</button>}
                             </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 120px', gap: '10px' }}>
-                                <label><div style={mono}>Code (from the tag)</div><input value={c.code} disabled={done} onChange={e => setCard(c.id, { code: e.target.value })} placeholder="SHOW-0412" style={{ ...field, fontFamily: 'var(--mono)' }} /></label>
-                                <label><div style={mono}>Name</div><input value={c.name} disabled={done} onChange={e => setCard(c.id, { name: e.target.value })} placeholder="what the customer reads on the quote" style={field} /></label>
-                                <label><div style={mono}>Sale price $</div><input value={c.price} disabled={done} onChange={e => setCard(c.id, { price: e.target.value })} inputMode="decimal" style={{ ...field, textAlign: 'right' }} /></label>
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 2fr', gap: '10px' }}>
-                                <label><div style={mono}>Size</div>
-                                    <select value={c.sizeKey} disabled={done} onChange={e => setCard(c.id, { sizeKey: e.target.value })} style={field}>
-                                        <option value="">—</option>
-                                        {sizes.map(s => <option key={s} value={s}>{s}</option>)}
-                                    </select></label>
-                                <label><div style={mono}>Bin</div><input value={c.bin} disabled={done} onChange={e => setCard(c.id, { bin: e.target.value })} style={{ ...field, fontFamily: 'var(--mono)' }} /></label>
-                                <label><div style={mono}>Note</div><input value={c.note} disabled={done} onChange={e => setCard(c.id, { note: e.target.value })} style={field} /></label>
-                            </div>
-                            <div>
-                                <div style={mono}>Made from</div>
-                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
-                                    <button disabled={done} onClick={() => setMaking(c.id, { type: 'FABRIC', noninvCode: '' })} style={chip(c.making.type === 'FABRIC')}>🧵 A fabric + yards</button>
-                                    {makingsFor(c.kind).map(mk => <button key={mk.code} disabled={done} onClick={() => setMaking(c.id, { type: 'NONINV', noninvCode: mk.code })} style={{ ...chip(c.making.type === 'NONINV' && c.making.noninvCode === mk.code), opacity: makingState[mk.code] === 'ok' ? 1 : 0.5 }} title={makingState[mk.code] === 'ok' ? '' : (makingState[mk.code] === 'no-ns' ? 'no NetSuite id on this item' : 'not in the library — sync 11.1')}>{mk.label} <span style={{ opacity: 0.7 }}>({mk.code} × 1)</span></button>)}
-                                </div>
-                                {c.making.type === 'FABRIC' && (
-                                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 120px', gap: '10px', marginTop: '8px' }}>
-                                        <select value={c.making.fabricCode} disabled={done} onChange={e => setMaking(c.id, { fabricCode: e.target.value })} style={field}>
-                                            <option value="">-- the fabric --</option>
-                                            {fabrics.map(f => <option key={f.id} value={f.legacyErpId || f.itemId}>{f.legacyErpId || f.itemId} — {f.itemName}{f.manufacturingSpecs && f.manufacturingSpecs.priceGroup ? ` · group ${f.manufacturingSpecs.priceGroup}` : ''}</option>)}
-                                        </select>
-                                        <input value={c.making.yards} disabled={done} onChange={e => setMaking(c.id, { yards: e.target.value })} placeholder="yards" inputMode="decimal" style={{ ...field, textAlign: 'right' }} />
-                                    </div>
-                                )}
-                            </div>
+                            {formFields(c, { disabled: done, codeLocked: false, set: (p) => setCard(c.id, p), setMk: (p) => setMaking(c.id, p) })}
                             <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
                                 {r.errors.map((e, i) => <span key={i} style={{ fontSize: '0.82rem', color: '#d9534f' }}>{e.message}</span>)}
                                 {r.ok && r.warnings.map((w, i) => <span key={i} style={{ fontSize: '0.82rem', color: '#a86b00' }}>⚠ {w}</span>)}
@@ -204,6 +233,45 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
                     <button onClick={createAll} disabled={busy || !readyCards.length} style={btn(true, busy || !readyCards.length)}>{busy ? 'Creating…' : armed ? `Press again to create ${readyCards.length} piece(s)` : `Create ${readyCards.length} ready piece(s)`}</button>
                     <span style={mono}>{cards.filter(c => c.state === 'DONE').length} created · {readyCards.length} ready · {cards.filter(c => c.state !== 'DONE' && !(readiness[c.id] && readiness[c.id].ok)).length} to fix</span>
                     <button onClick={() => setCards(prev => prev.filter(c => c.state !== 'DONE'))} disabled={busy} style={btn(false, busy)}>Clear the created cards</button>
+                </div>
+            )}
+
+            {filed.length > 0 && (
+                <div style={card}>
+                    <h3 style={h}>Filed pieces · {filed.length}</h3>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Made a mistake? Change the making, the price, the size or the name until the piece is sold. The code is the tag and stays. A sold piece is read-only — the order carried the making it sold with.</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {filed.map(it => {
+                            const o = oneOfAKindOf(it) || {};
+                            const mk = o.making || {};
+                            const e = edits[it.id];
+                            const editable = oneOfAKindEditableOf(it);
+                            const words = mk.type === 'FABRIC' ? `${mk.yards} yd of ${mk.fabricCode}` : `${mk.noninvCode || '?'} × 1`;
+                            return (
+                                <div key={it.id} style={{ border: '1px solid var(--line)', background: e ? '#fff' : 'var(--paper-2)', padding: '10px 12px', opacity: editable ? 1 : 0.7 }}>
+                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                        {it.componentImageUrl || it.finalImageUrl ? <img src={it.componentImageUrl || it.finalImageUrl} alt="" style={{ width: '64px', height: '48px', objectFit: 'cover', border: '1px solid var(--line)' }} /> : <div style={{ width: '64px', height: '48px', background: '#eee' }} />}
+                                        <span style={{ fontFamily: 'var(--mono)', fontWeight: 700 }}>{it.legacyErpId}</span>
+                                        <span>{it.itemName}</span>
+                                        <span style={mono}>{o.kind === 'WALL' ? 'wall art' : 'pillow'}{o.sizeKey ? ` · ${o.sizeKey}` : ''}</span>
+                                        <span style={mono}>${it.manufacturingSpecs && it.manufacturingSpecs.basePrice}</span>
+                                        <span style={mono}>{words}</span>
+                                        <span style={{ ...mono, marginLeft: 'auto', color: editable ? '#2e7d32' : '#a86b00' }}>{editable ? 'on the wall' : `SOLD${o.soldOn ? ` · ${o.soldOn}` : ''} · read-only`}</span>
+                                        {editable && !e && <button onClick={() => startEdit(it)} disabled={busy} style={btn(false, busy)}>Change</button>}
+                                    </div>
+                                    {e && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+                                            {formFields(e, { disabled: busy, codeLocked: true, set: (p) => setEdit(it.id, p), setMk: (p) => setEditMaking(it.id, p) })}
+                                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                <button onClick={() => saveEdit(it)} disabled={busy} style={btn(true, busy)}>Save the change</button>
+                                                <button onClick={() => cancelEdit(it.id)} disabled={busy} style={btn(false, busy)}>Cancel</button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
                 </div>
             )}
 
