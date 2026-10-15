@@ -31,10 +31,17 @@ const HOME = [
     { key: 'OOAK', glyph: '🎁', label: 'One of a kind', sub: 'made at the show, one each' },
 ];
 
-const CounterScreens = ({ currentUser, customers = [], customerId = '', selectedCustomer = null, onPickCustomer = () => {}, jobName = '', setJobName = () => {}, items = [], findPart, rateFor, onAddQuickSell = () => {}, onAddCustomPillow = () => {}, addLog = () => {}, cartCount = 0, cartTotal = 0, onShowCart = () => {}, priceNote = '', onAddOneOfAKind = () => {} }) => {
+const CounterScreens = ({ currentUser, customers = [], customerId = '', selectedCustomer = null, onPickCustomer = () => {}, jobName = '', setJobName = () => {}, items = [], findPart, rateFor, onAddQuickSell = () => {}, onAddCustomPillow = () => {}, addLog = () => {}, cartCount = 0, cartTotal = 0, onShowCart = () => {}, priceNote = '', onAddOneOfAKind = () => {}, onListReopenable = null, onReopen = null }) => {
     const [screen, setScreen] = useState(customerId ? 'HOME' : 'CUSTOMER');
     const [q, setQ] = useState('');          // the CUSTOMER search — cleared when a customer is picked
-    const [wallQ, setWallQ] = useState('');  // the One of a kind wall's own search (Stuart 2026-10-15: "Pat" carried over from the customer search and hid every piece)
+    const [wallQ, setWallQ] = useState('');
+    const [reopenRows, setReopenRows] = useState(null);   // ⟲ Reopen: the last 30 days' quotes + orders, read on open
+    const [reopenQ, setReopenQ] = useState('');
+    const loadReopenable = async () => {
+        if (!onListReopenable) return;
+        setReopenRows(null);
+        try { setReopenRows(await onListReopenable()); } catch (e) { setReopenRows([]); addLog(`⛔ Could not read the quotes and orders: ${e.message || e}`, 'error'); }
+    };  // the One of a kind wall's own search (Stuart 2026-10-15: "Pat" carried over from the customer search and hid every piece)
     const [newCust, setNewCust] = useState(null);   // { name, email, phone } while the form is open
     const [busy, setBusy] = useState(false);
     const [globalLists, setGlobalLists] = useState({ pillowSizes: [], fillTypes: ['DOWN', 'POLY'], flangeStyles: ['NONE', 'FLANGE'], stitchTypes: ['STANDARD'] });
@@ -83,15 +90,55 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
     const crumb = (
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', position: 'sticky', top: 'var(--counter-header-h, 64px)', zIndex: 40, background: '#faf8f5', padding: '8px 0', margin: '-8px 0' }}>
             <button onClick={() => setScreen('CUSTOMER')} style={btn(false)}>👤 {selectedCustomer ? selectedCustomer.name : 'Customer'}</button>
+            {selectedCustomer && (
+                // the email (and phone) on file — "a lot of customers don't know which email they gave us" (Stuart 2026-10-15)
+                <span style={{ ...mono, textTransform: 'none', letterSpacing: 0, fontSize: '12px', color: selectedCustomer.email ? 'var(--ink)' : '#a86b00' }} title="What the CRM holds for this customer">
+                    ✉ {selectedCustomer.email || 'no email on file'}{selectedCustomer.phone ? ` · ☎ ${selectedCustomer.phone}` : ''}
+                </span>
+            )}
             {selectedCustomer && priceNote && <span style={{ ...mono, color: /not read|carries no percent/.test(priceNote) ? '#a86b00' : 'var(--ink-soft)' }}>💲 {priceNote.replace(/^NetSuite price level /, '')}</span>}
             {screen !== 'CUSTOMER' && screen !== 'HOME' && <button onClick={() => setScreen('HOME')} style={btn(false)}>← Menu</button>}
             <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
                 <button onClick={() => setScreen(screen === 'PRICES' ? (customerId ? 'HOME' : 'CUSTOMER') : 'PRICES')} style={btn(screen === 'PRICES')} title="Base prices, and less 10–60% at a tick">$$ Price list</button>
+                {onListReopenable && <button onClick={() => { if (screen === 'REOPEN') { setScreen(customerId ? 'HOME' : 'CUSTOMER'); return; } setScreen('REOPEN'); loadReopenable(); }} style={btn(screen === 'REOPEN')} title="Reopen a quote or sales order made in the last 30 days">⟲ Reopen</button>}
                 <span style={mono}>{cartCount} line{cartCount === 1 ? '' : 's'} · ${Number(cartTotal || 0).toFixed(2)}</span>
                 <button onClick={onShowCart} style={btn(true)}>🛒 Cart</button>
             </div>
         </div>
     );
+
+    if (screen === 'REOPEN') {
+        const t = reopenQ.trim().toLowerCase();
+        const rows = (reopenRows || []).filter(r => !t || `${r.number} ${r.customer} ${r.kind}`.toLowerCase().includes(t));
+        const when = (ms) => (ms ? new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {crumb}
+                <div style={{ ...card, padding: '20px' }}>
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' }}>
+                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem' }}>⟲ Reopen</div>
+                        <input value={reopenQ} onChange={e => setReopenQ(e.target.value)} placeholder="customer · number" style={{ ...inp, width: '280px', padding: '10px 12px', fontSize: '1rem' }} />
+                        <span style={mono}>{reopenRows === null ? 'reading…' : `${rows.length} of the last 30 days · tap one to load it into the cart`}</span>
+                        <button onClick={loadReopenable} disabled={busy} style={btn(false)}>⟳</button>
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '12px' }}>A reopened <b>quote</b> saves as the corrected quote and supersedes the old one (close the old estimate in NetSuite by hand). A reopened <b>sales order</b> saves as its replacement and closes the old one with a pointer.</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: 'calc(100vh - 320px)', overflowY: 'auto' }}>
+                        {rows.map(r => (
+                            <button key={`${r.kind}-${r.id}`} disabled={busy} onClick={async () => { setBusy(true); try { await onReopen(r); setScreen('HOME'); onShowCart(); } finally { setBusy(false); } }}
+                                style={{ display: 'flex', gap: '14px', alignItems: 'center', textAlign: 'left', padding: '12px 14px', border: '1px solid var(--line)', background: '#fff', cursor: 'pointer', fontFamily: 'var(--sans)' }}>
+                                <span style={{ ...mono, width: '96px', color: r.kind === 'QUOTE' ? 'var(--brass)' : '#2e7d32' }}>{r.kind}</span>
+                                <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, minWidth: '180px' }}>{r.number}</span>
+                                <span style={{ fontSize: '1.05rem', flex: 1 }}>{r.customer || '—'}</span>
+                                <span style={mono}>{r.lines} line{r.lines === 1 ? '' : 's'}{r.total ? ` · $${Number(r.total).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : ''}</span>
+                                <span style={mono}>{when(r.at)}{r.by ? ` · ${r.by}` : ''}</span>
+                            </button>
+                        ))}
+                        {reopenRows !== null && rows.length === 0 && <div style={{ color: 'var(--ink-soft)' }}>Nothing to reopen in the last 30 days.</div>}
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     if (screen === 'PRICES') {
         return (

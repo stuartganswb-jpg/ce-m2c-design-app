@@ -18,7 +18,7 @@ import { QUICK_SELL_REQUEST_ID } from '../Shared/pillowQuickSell';
 import { fabricNsLineOf, parseUniquityCode, KINDS as PILLOW_KINDS } from '../Shared/pillowCatalog';   // an app-only fabric pushes as a fraction of its throw (Stuart 2026-10-12); a reopened cart's pillow lines are marked discountable (2026-10-15)
 import { oneOfAKindCartPlanOf, oneOfAKindSoldPatchOf } from '../Shared/oneOfAKind';   // a piece made at the show sells once (S7, 2026-10-14)
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
 import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp, orderDiscountApplies, withPillowDiscountMarks } from '../Shared/lineDiscount';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
@@ -430,88 +430,110 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
     // quote as its successor and marks this one superseded, so two live quotes never chase the
     // same job — the confusion the Fabricut re-quotes caused on 2026-08-31.
     const [reopenedQuote, setReopenedQuote] = useState('');
+    // ONE loader for a stored QUOTE — the CRM's handoff and the counter's ⟲ Reopen both call it (2026-10-15)
+    const reopenQuoteById = async (jobId) => {
+        try {
+            const snap = await getDoc(doc(db, 'jobs', jobId));
+            if (!snap.exists()) return alert('That quote no longer exists.');
+            const j = { id: snap.id, ...snap.data() };
+            const saved = Array.isArray(j.quickShipCart) ? j.quickShipCart : null;
+            if (!saved || !saved.length) {
+                return alert(`Quote ${j.jobId || j.id} was saved before Order Entry started keeping its cart (2026-08-31), so there is nothing to reopen — the printed lines are prose, not a cart. Rebuild it here and every quote from now on will reopen.`);
+            }
+            setCustomerId(j.customer?.id || '');
+            setCustSearch(j.customer?.name ? `${j.customer.name} (${j.customer.id || ''})` : '');
+            const ex = j.quickShipExtras || {};
+            setJobName(ex.jobName || j.jobName || '');
+            if (ex.soExtras) setSoExtras(p2 => ({ ...p2, ...ex.soExtras }));
+            if (ex.ship) setShip(p2 => ({ ...p2, ...ex.ship }));
+            // a quote saved before 2026-10-15 carries no discount mark on its pillow lines — marked on the way in, so the order % reaches them
+            setCart(withPillowDiscountMarks(saved.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })), isUniquityPillowCode));
+            setReopenedQuote(j.jobId || j.id);
+            addLog(`✎ Quote ${j.jobId || j.id} reopened — ${saved.length} line(s). Saving creates the corrected quote and supersedes this one.`, 'info');
+        } catch (e) { console.warn('quote reopen failed', e); alert(`Could not reopen that quote: ${e.message || e}`); }
+    };
     useEffect(() => {
         if (!allItems.length) return;
         let h = null;
         try { h = JSON.parse(localStorage.getItem('hq_reopen_qs_quote') || 'null'); } catch (e) { h = null; }
         if (!h || !h.jobId) return;
         localStorage.removeItem('hq_reopen_qs_quote');
-        (async () => {
-            try {
-                const snap = await getDoc(doc(db, 'jobs', h.jobId));
-                if (!snap.exists()) return alert('That quote no longer exists.');
-                const j = { id: snap.id, ...snap.data() };
-                const saved = Array.isArray(j.quickShipCart) ? j.quickShipCart : null;
-                if (!saved || !saved.length) {
-                    return alert(`Quote ${j.jobId || j.id} was saved before Order Entry started keeping its cart (2026-08-31), so there is nothing to reopen — the printed lines are prose, not a cart. Rebuild it here and every quote from now on will reopen.`);
-                }
-                setCustomerId(j.customer?.id || '');
-                setCustSearch(j.customer?.name ? `${j.customer.name} (${j.customer.id || ''})` : '');
-                const ex = j.quickShipExtras || {};
-                setJobName(ex.jobName || j.jobName || '');
-                if (ex.soExtras) setSoExtras(p2 => ({ ...p2, ...ex.soExtras }));
-                if (ex.ship) setShip(p2 => ({ ...p2, ...ex.ship }));
-                // a quote saved before 2026-10-15 carries no discount mark on its pillow lines — marked on the way in, so the order % reaches them
-                setCart(withPillowDiscountMarks(saved.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })), isUniquityPillowCode));
-                setReopenedQuote(j.jobId || j.id);
-                addLog(`✎ Quote ${j.jobId || j.id} reopened — ${saved.length} line(s). Saving creates the corrected quote and supersedes this one.`, 'info');
-            } catch (e) { console.warn('quote reopen failed', e); alert(`Could not reopen that quote: ${e.message || e}`); }
-        })();
+        reopenQuoteById(h.jobId);
     }, [allItems.length]); // eslint-disable-line react-hooks/exhaustive-deps
+    // ONE loader for a stored SALES ORDER — the CRM's ✎ Edit handoff and the counter's ⟲ Reopen both call it (2026-10-15)
+    const reopenSoById = async (soId) => {
+        try {
+            const snap = await getDoc(doc(db, 'hq_sales_orders', soId));
+            if (!snap.exists()) return alert('That sales order no longer exists.');
+            const so = { id: snap.id, ...snap.data() };
+            setCustomerId(so.customerId || '');
+            setCustSearch(so.customer ? `${so.customer} (${so.customerId || ''})` : '');
+            const ex = so.quickShipExtras || {};
+            setJobName(ex.jobName || so.jobName || '');
+            if (ex.soExtras) setSoExtras(p2 => ({ ...p2, ...ex.soExtras }));
+            if (ex.ship) setShip(p2 => ({ ...p2, ...ex.ship }));
+            // THE CART AS TYPED, when the order carries it: kits, footage, configurator picks
+            // and per-line memos all return. `lines` is the fallback for orders written before
+            // 2026-08-31 — and it cannot hold a traverse kit, so it says so rather than
+            // quietly handing back an order worth less than the one being edited.
+            if (Array.isArray(so.quickShipCart) && so.quickShipCart.length) {
+                setCart(withPillowDiscountMarks(so.quickShipCart.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })), isUniquityPillowCode));
+                // Same slim shape the legacy path sets — the banner and the supersede write
+                // read exactly these three fields.
+                setEditingSo({ id: so.id, soId: so.soId || so.id, customer: so.customer || '' });
+                addLog(`✎ Editing SO ${so.soId || so.id} — restored from its stored cart (${so.quickShipCart.length} line(s), kits and footage included). Pushing this cart SUPERSEDES the original.`, 'warn');
+                return;
+            }
+            if ((so.invoiceLines || []).some(x => x && x.type === 'KIT')) {
+                alert(`⚠ SO ${so.soId || so.id} was written before Order Entry stored its cart (2026-08-31), and it contains a KIT.\n\nThe rebuilt cart below carries the component lines only — the kit and any additional-foot charge are NOT in it, and pushing as-is would supersede this order with a cheaper one. Re-add the kit before saving, or cancel the edit.`);
+            }
+            setCart((so.lines || []).map((l, i) => {
+                const erp = String(l.erp || '').toUpperCase();
+                const it = allItems.find(x => erpOf(x) === erp) || null;
+                return {
+                    key: `${erp}-${Date.now()}-${i}`,
+                    itemId: it?.itemId || it?.id || '', erp, nsId: it ? nsIdOf(it) : '',
+                    name: l.name || it?.itemName || erp,
+                    aliasErp: l.aliasErp || '', aliasItemId: null,
+                    qty: Math.max(1, parseInt(l.packs != null && l.packUom ? l.packs : l.qty) || 1),
+                    note: l.note || '',
+                    bin: l.bin || it?.manufacturingSpecs?.homeBin || '',
+                    packUom: l.packUom || '', packSize: l.packSize || 1,
+                    rateOverride: null, kitKey: null, kitName: null, kitBrand: null, kitFinish: '',
+                    ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}),
+                };
+            }));
+            setEditingSo({ id: so.id, soId: so.soId || so.id, customer: so.customer || '' });
+            addLog(`✎ Editing SO ${so.soId || so.id} — pushing this cart SUPERSEDES the original (it closes with a pointer here).`, 'warn');
+        } catch (e) { alert('Could not load the sales order for editing: ' + (e.message || e)); }
+    };
     useEffect(() => {
         if (!allItems.length) return;
         let handoff = null;
         try { handoff = JSON.parse(localStorage.getItem('hq_reopen_qs_so') || 'null'); } catch (e) { handoff = null; }
         if (!handoff || !handoff.soId) return;
         localStorage.removeItem('hq_reopen_qs_so');
-        (async () => {
-            try {
-                const snap = await getDoc(doc(db, 'hq_sales_orders', handoff.soId));
-                if (!snap.exists()) return alert('That sales order no longer exists.');
-                const so = { id: snap.id, ...snap.data() };
-                setCustomerId(so.customerId || '');
-                setCustSearch(so.customer ? `${so.customer} (${so.customerId || ''})` : '');
-                const ex = so.quickShipExtras || {};
-                setJobName(ex.jobName || so.jobName || '');
-                if (ex.soExtras) setSoExtras(p2 => ({ ...p2, ...ex.soExtras }));
-                if (ex.ship) setShip(p2 => ({ ...p2, ...ex.ship }));
-                // THE CART AS TYPED, when the order carries it: kits, footage, configurator picks
-                // and per-line memos all return. `lines` is the fallback for orders written before
-                // 2026-08-31 — and it cannot hold a traverse kit, so it says so rather than
-                // quietly handing back an order worth less than the one being edited.
-                if (Array.isArray(so.quickShipCart) && so.quickShipCart.length) {
-                    setCart(withPillowDiscountMarks(so.quickShipCart.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })), isUniquityPillowCode));
-                    // Same slim shape the legacy path sets — the banner and the supersede write
-                    // read exactly these three fields.
-                    setEditingSo({ id: so.id, soId: so.soId || so.id, customer: so.customer || '' });
-                    addLog(`✎ Editing SO ${so.soId || so.id} — restored from its stored cart (${so.quickShipCart.length} line(s), kits and footage included). Pushing this cart SUPERSEDES the original.`, 'warn');
-                    return;
-                }
-                if ((so.invoiceLines || []).some(x => x && x.type === 'KIT')) {
-                    alert(`⚠ SO ${so.soId || so.id} was written before Order Entry stored its cart (2026-08-31), and it contains a KIT.\n\nThe rebuilt cart below carries the component lines only — the kit and any additional-foot charge are NOT in it, and pushing as-is would supersede this order with a cheaper one. Re-add the kit before saving, or cancel the edit.`);
-                }
-                setCart((so.lines || []).map((l, i) => {
-                    const erp = String(l.erp || '').toUpperCase();
-                    const it = allItems.find(x => erpOf(x) === erp) || null;
-                    return {
-                        key: `${erp}-${Date.now()}-${i}`,
-                        itemId: it?.itemId || it?.id || '', erp, nsId: it ? nsIdOf(it) : '',
-                        name: l.name || it?.itemName || erp,
-                        aliasErp: l.aliasErp || '', aliasItemId: null,
-                        qty: Math.max(1, parseInt(l.packs != null && l.packUom ? l.packs : l.qty) || 1),
-                        note: l.note || '',
-                        bin: l.bin || it?.manufacturingSpecs?.homeBin || '',
-                        packUom: l.packUom || '', packSize: l.packSize || 1,
-                        rateOverride: null, kitKey: null, kitName: null, kitBrand: null, kitFinish: '',
-                        ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}),
-                    };
-                }));
-                setEditingSo({ id: so.id, soId: so.soId || so.id, customer: so.customer || '' });
-                addLog(`✎ Editing SO ${so.soId || so.id} — pushing this cart SUPERSEDES the original (it closes with a pointer here).`, 'warn');
-            } catch (e) { alert('Could not load the sales order for editing: ' + (e.message || e)); }
-        })();
+        reopenSoById(handoff.soId);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [allItems.length]);
+    // THE COUNTER'S ⟲ REOPEN (Stuart 2026-10-15: "now if we save as quote we need to go to HQ crm to reopen, would be much
+    // easier to stay in counter"): the last 30 days' Order Entry quotes and sales orders of this brand that carry their
+    // cart, newest first — superseded quotes and closed / superseded orders left out. Read on demand, not listened to.
+    const listReopenable = async () => {
+        const since = Date.now() - 30 * 24 * 3600 * 1000;
+        const ms = (v) => (v && typeof v.toMillis === 'function' ? v.toMillis() : (typeof v === 'number' ? v : (v ? Date.parse(v) || 0 : 0)));
+        const [qs, ss] = await Promise.all([
+            getDocs(query(collection(db, 'jobs'), where('brandId', '==', activeBrand), where('source', '==', 'QUICKSHIP'))),
+            getDocs(query(collection(db, 'hq_sales_orders'), where('brand', '==', activeBrand), where('orderClass', '==', ORDER_ENTRY_CLASS))),
+        ]);
+        const quotes = qs.docs.map(d => ({ id: d.id, ...d.data() }))
+            .filter(j => Array.isArray(j.quickShipCart) && j.quickShipCart.length && String(j.status || '') !== 'SUPERSEDED' && !j.supersededBy)
+            .map(j => ({ kind: 'QUOTE', id: j.id, number: j.jobId || j.id, customer: (j.customer && j.customer.name) || '', at: ms(j.createdAt) || Date.parse(j.dateSaved || '') || 0, lines: j.quickShipCart.length, total: Number((j.pricing && j.pricing.total) || j.invoiceTotal || j.total || 0) || null, by: j.author || '' }));
+        const orders = ss.docs.map(d => ({ id: d.id, ...d.data() }))
+            .filter(o => Array.isArray(o.quickShipCart) && o.quickShipCart.length && !o.supersededBy && !/CLOSED|CANCEL|SUPERSEDED/i.test(String(o.status || '')))
+            .map(o => ({ kind: 'SALES ORDER', id: o.id, number: o.nsTranId || o.soId || o.id, customer: o.customer || '', at: ms(o.nsQueuedAt) || ms(o.createdAt) || 0, lines: o.quickShipCart.length, total: Number(o.invoiceTotal || 0) || null, by: o.author || o.createdBy || '' }));
+        return [...quotes, ...orders].filter(r => !r.at || r.at >= since).sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 80);
+    };
     useEffect(() => {
         if (!activeBrand) { setPortalReqs([]); return; }
         const unsub = onSnapshot(query(collection(db, 'jobs'), where('brandId', '==', activeBrand), where('status', '==', 'PORTAL_REQUEST')),
@@ -2149,6 +2171,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                     onAddQuickSell={addQuickSell} onAddCustomPillow={addCounterCustom} addLog={addLog} cartCount={cart.length} cartTotal={cartTotal}
                     priceNote={priceLevelInfo ? (priceLevelInfo.read ? priceLevelNoteOf(priceLevelInfo) : 'NetSuite price level not read') : ''}
                     onAddOneOfAKind={addOneOfAKind}
+                    onListReopenable={listReopenable} onReopen={(row) => { setLastCreated(null); return row.kind === 'QUOTE' ? reopenQuoteById(row.id) : reopenSoById(row.id); }}
                     onShowCart={() => { const el = document.getElementById('counter-cart'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }} />
                 {cartCard}
                 {log.length > 0 && (
