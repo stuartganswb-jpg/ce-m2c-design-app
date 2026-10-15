@@ -1,7 +1,7 @@
 // One-of-a-kind pillows and wall art, pinned (S7, 2026-10-14): a card's readiness by name, the library record
 // (stocked one, the photo, the making), the NetSuite item body from a template, the cart plan (the piece at its
 // price as itself or on the CUSTOM PILLOW holder; its making beneath at $0 — yards or one unit), sold once.
-import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, nsOneOfAKindItemOf, oneOfAKindCartPlanOf, oneOfAKindSoldPatchOf, oneOfAKindAvailableOf, isOneOfAKindItem, OOAK_MAKINGS } from '../src/components/Shared/oneOfAKind.js';
+import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, oneOfAKindCartPlanOf, oneOfAKindSoldPatchOf, oneOfAKindAvailableOf, isOneOfAKindItem, OOAK_MAKINGS } from '../src/components/Shared/oneOfAKind.js';
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { if (cond) { pass++; } else { fail++; console.error('  ✗', name, extra); } };
 const item = (code, extra = {}) => ({ id: `ID-${code}`, legacyErpId: code, itemName: extra.name || code, netSuiteInternalId: extra.ns === undefined ? '1' : extra.ns, manufacturingSpecs: { ...(extra.specs || {}) } });
@@ -15,7 +15,7 @@ const by = (c) => lib.find(x => x.legacyErpId.toUpperCase() === String(c || '').
 
 // ── the card ─────────────────────────────────────────────────────────────────────────────────
 const c = oneOfAKindCardOf({ id: 'c1', fileName: 'IMG_1.jpg', dataUrl: 'data:image/jpeg;base64,AA' });
-ok('a fresh card: pillow, bin SHOW, NetSuite create on, no making', c.kind === 'PILLOW' && c.bin === 'SHOW' && c.createInNetSuite && c.making.type === '');
+ok('a fresh card: pillow, bin SHOW, no making, no NetSuite item field', c.kind === 'PILLOW' && c.bin === 'SHOW' && c.createInNetSuite === undefined && c.making.type === '');
 ok('empty card refuses by name: code, price, making', (() => { const r = cardReadinessOf(c, { findByCode: by }); return !r.ok && r.errors.map(e => e.code).join(',') === 'NO_CODE,NO_PRICE,NO_MAKING'; })());
 const good = { ...c, code: 'SHOW-0412', name: 'Bell stripe lumbar', price: '350', making: { type: 'NONINV', noninvCode: 'bridsml' } };
 ok('code + price + a pillow making = ready', cardReadinessOf(good, { findByCode: by }).ok);
@@ -33,10 +33,6 @@ const w = oneOfAKindDocOf({ ...good, kind: 'WALL', making: { type: 'NONINV', non
 ok('wall art: WALL ART, the making × 1, the NetSuite id when created', w.manufacturingSpecs.productType === 'WALL ART' && w.manufacturingSpecs.customData.oneOfAKind.making.noninvCode === 'BRIDWALLMED' && w.manufacturingSpecs.customData.oneOfAKind.making.each === 1 && w.netSuiteInternalId === '9009' && w.manufacturingSpecs.customData.oneOfAKind.nsCreated === true);
 ok('isOneOfAKindItem / available', isOneOfAKindItem(d) && !isOneOfAKindItem(lib[0]) && oneOfAKindAvailableOf([d, w, lib[0]]).length === 2);
 
-// ── the NetSuite item ────────────────────────────────────────────────────────────────────────
-const body = nsOneOfAKindItemOf(good, { template: { subsidiary: { items: [{ id: '6', refName: 'Unique' }] }, taxSchedule: { id: '2' }, class: { id: '17' }, incomeAccount: { id: '54' } } });
-ok('the NetSuite body copies subsidiary / tax / class / income from the template and names the tag', body.itemId === 'SHOW-0412' && body.displayName === 'Bell stripe lumbar' && body.subsidiary.items[0].id === '6' && body.taxSchedule.id === '2' && body.class.id === '17' && body.incomeAccount.id === '54' && /made at the show/.test(body.salesDescription) && body.isInactive === false);
-ok('with no template only the tag and name go', Object.keys(nsOneOfAKindItemOf(good)).sort().join(',') === 'displayName,includeChildren,isInactive,itemId,salesDescription');
 
 // ── the cart plan ────────────────────────────────────────────────────────────────────────────
 const holder = by('Custom Pillow');

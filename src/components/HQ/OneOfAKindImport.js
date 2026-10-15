@@ -4,17 +4,15 @@
 // see the pillow image and enter in a sales price and the fabric used and amount used … scrap, bridsml or
 // bridlrg … 1 per pillow … wall art the same but bridwall". Drop the photos → one card each (the picture
 // large; the code typed from the tag, the name, the price, the size, the bin, and the MAKING as tiles: a
-// fabric + its yards, or a non-inventory making × 1) → Create: the photo to Storage, the NetSuite item
-// (optional per card — a non-inventory sale item modelled on a making the screen reads back; a refusal is
-// said in NetSuite's words and the piece is filed app-only, selling on the CUSTOM PILLOW holder), then the
-// Uniquity library record (Shared/oneOfAKind.oneOfAKindDocOf). The counter's "One of a kind" tile sells them.
+// fabric + its yards, or a non-inventory making × 1) → Create: the photo to Storage, then the Uniquity library
+// record (Shared/oneOfAKind.oneOfAKindDocOf). NO NetSuite item per piece (Stuart 2026-10-14: "ideally we sell
+// these as 'preconfigured' custom pillows"): each sells as the CUSTOM PILLOW holder with its tag in the
+// description and its making beneath at $0, the CPQ rollup shape. The counter's "One of a kind" tile sells them.
 import React, { useEffect, useMemo, useState } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, query, where, getDocs, setDoc, doc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { nsProxyFetch } from '../Shared/nsProxy';
-import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, newOneOfAKindId, nsOneOfAKindItemOf, OOAK_KINDS, OOAK_MAKINGS } from '../Shared/oneOfAKind';
-import { nsIdOfCreateAnswer, nsErrorOf } from '../Shared/nsCustomer';
+import { oneOfAKindCardOf, cardReadinessOf, oneOfAKindDocOf, newOneOfAKindId, OOAK_KINDS, OOAK_MAKINGS } from '../Shared/oneOfAKind';
 import { isFabricItem } from '../Shared/pillowFabricSheet';
 import { sizeKeysOf } from '../Shared/pillowCuts';
 import { DEFAULT_PILLOW_PRICING, PILLOW_PRICING_DOC } from '../Shared/pillowPricing';
@@ -93,26 +91,10 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
     }, [cards, items, findByCode]);
     const readyCards = cards.filter(c => c.state !== 'DONE' && readiness[c.id] && readiness[c.id].ok);
 
-    // A non-inventory making the screen reads back from NetSuite — the template the new item is modelled on.
-    const readTemplate = async () => {
-        const first = [...OOAK_MAKINGS.PILLOW, ...OOAK_MAKINGS.WALL].map(mk => findByCode(mk.code)).find(it => it && it.netSuiteInternalId);
-        if (!first) return { template: null, note: 'no making with a NetSuite id in the library — the item body carries the tag and name only' };
-        for (const type of ['nonInventorySaleItem', 'nonInventoryResaleItem', 'nonInventoryItem']) {
-            try {
-                const r = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${type}/${first.netSuiteInternalId}`, method: 'GET' });
-                const d = await r.json().catch(() => ({}));
-                if (r.ok && d && (d.subsidiary || d.taxSchedule)) return { template: d, type, note: `modelled on ${first.legacyErpId} (${type})` };
-            } catch (e) { /* try the next record type */ }
-        }
-        return { template: null, note: `${first.legacyErpId} could not be read back from NetSuite — the item body carries the tag and name only` };
-    };
-
     const createAll = async () => {
         if (!readyCards.length) return;
         if (!armed) { setArmed(true); return; }
         setBusy(true); setArmed(false);
-        let tpl = { template: null, type: 'nonInventorySaleItem', note: '' };
-        if (readyCards.some(c => c.createInNetSuite)) { tpl = await readTemplate(); say(`NetSuite item template: ${tpl.note}`, tpl.template ? 'info' : 'warn'); }
         const at = Date.now();
         let i = 0;
         for (const c of readyCards) {
@@ -131,23 +113,12 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
                     const [u1, u2] = await Promise.all([uploadBytes(hiRef, hi), uploadBytes(thRef, th)]);
                     [photoUrl, thumbUrl] = await Promise.all([getDownloadURL(u1.ref), getDownloadURL(u2.ref)]);
                 }
-                // 2 · the NetSuite item (optional; a refusal files the piece app-only)
-                let nsId = '', nsNote = '';
-                if (c.createInNetSuite) {
-                    const body = nsOneOfAKindItemOf(c, { template: tpl.template, brand: BRAND });
-                    try {
-                        const r = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${tpl.type || 'nonInventorySaleItem'}`, method: 'POST', payload: body });
-                        const d = await r.json().catch(() => ({}));
-                        if (r.ok) { nsId = nsIdOfCreateAnswer(d, (r.headers && r.headers.get && r.headers.get('location')) || ''); nsNote = nsId ? `NetSuite item ${nsId}` : 'NetSuite took it but gave no id — sync 11.1 later'; }
-                        else nsNote = `NetSuite refused the item (${nsErrorOf(d, r.status)}) — filed app-only; it sells on the CUSTOM PILLOW holder`;
-                    } catch (e) { nsNote = `NetSuite unreachable (${e.message || e}) — filed app-only; it sells on the CUSTOM PILLOW holder`; }
-                }
-                // 3 · the library record
+                // 2 · the library record — no NetSuite item: the piece sells as a pre-configured CUSTOM PILLOW
                 const id = newOneOfAKindId(BRAND, at, idx);
-                const rec = oneOfAKindDocOf(c, { id, brandId: BRAND, by: currentUser || '', at, nsId, photoUrl, thumbUrl });
+                const rec = oneOfAKindDocOf(c, { id, brandId: BRAND, by: currentUser || '', at, photoUrl, thumbUrl });
                 await setDoc(doc(db, 'Approved_Designs', id), rec);
-                setCards(prev => prev.map(x => (x.id === c.id ? { ...x, state: 'DONE', result: { id, nsId, nsNote } } : x)));
-                say(`✅ ${code} — ${rec.itemName} · $${rec.manufacturingSpecs.basePrice} · ${rec.manufacturingSpecs.customData.oneOfAKind.making.type === 'FABRIC' ? `${rec.manufacturingSpecs.customData.oneOfAKind.making.yards} yd of ${rec.manufacturingSpecs.customData.oneOfAKind.making.fabricCode}` : `${rec.manufacturingSpecs.customData.oneOfAKind.making.noninvCode} × 1`}${nsNote ? ` · ${nsNote}` : ' · app-only (sells on the CUSTOM PILLOW holder)'}`, nsNote.includes('refused') || nsNote.includes('unreachable') ? 'warn' : 'ok');
+                setCards(prev => prev.map(x => (x.id === c.id ? { ...x, state: 'DONE', result: { id } } : x)));
+                say(`✅ ${code} — ${rec.itemName} · $${rec.manufacturingSpecs.basePrice} · ${rec.manufacturingSpecs.customData.oneOfAKind.making.type === 'FABRIC' ? `${rec.manufacturingSpecs.customData.oneOfAKind.making.yards} yd of ${rec.manufacturingSpecs.customData.oneOfAKind.making.fabricCode}` : `${rec.manufacturingSpecs.customData.oneOfAKind.making.noninvCode} × 1`}} · sells as a pre-configured CUSTOM PILLOW with its tag in the description`, 'ok');
             } catch (err) {
                 setCards(prev => prev.map(x => (x.id === c.id ? { ...x, state: 'FAILED', result: { error: err.message || String(err) } } : x)));
                 say(`⛔ ${c.code}: ${err.message || err}`, 'err');
@@ -186,7 +157,7 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                                 {OOAK_KINDS.map(k => <button key={k.code} disabled={done} onClick={() => { setCard(c.id, { kind: k.code }); setMaking(c.id, { type: '', noninvCode: '' }); }} style={chip(c.kind === k.code)}>{k.label}</button>)}
-                                <span style={{ ...mono, marginLeft: 'auto' }}>{done ? `✅ created · ${c.result && c.result.id}${c.result && c.result.nsId ? ` · NetSuite ${c.result.nsId}` : ' · app-only'}` : c.state === 'FAILED' ? `⛔ ${c.result && c.result.error}` : c.state === 'BUSY' ? 'creating…' : r.ok ? 'ready' : `${r.errors.length} to fix`}</span>
+                                <span style={{ ...mono, marginLeft: 'auto' }}>{done ? `✅ filed · ${c.result && c.result.id} · sells as a pre-configured CUSTOM PILLOW` : c.state === 'FAILED' ? `⛔ ${c.result && c.result.error}` : c.state === 'BUSY' ? 'creating…' : r.ok ? 'ready' : `${r.errors.length} to fix`}</span>
                                 {!done && <button onClick={() => dropCard(c.id)} style={{ ...btn(false, busy), color: '#d9534f' }}>remove</button>}
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 120px', gap: '10px' }}>
@@ -220,7 +191,6 @@ const OneOfAKindImport = ({ currentUser, activeBrand }) => {
                                 )}
                             </div>
                             <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                <label style={{ ...mono, display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' }}><input type="checkbox" checked={!!c.createInNetSuite} disabled={done} onChange={e => setCard(c.id, { createInNetSuite: e.target.checked })} /> create the NetSuite item</label>
                                 {r.errors.map((e, i) => <span key={i} style={{ fontSize: '0.82rem', color: '#d9534f' }}>{e.message}</span>)}
                                 {r.ok && r.warnings.map((w, i) => <span key={i} style={{ fontSize: '0.82rem', color: '#a86b00' }}>⚠ {w}</span>)}
                             </div>

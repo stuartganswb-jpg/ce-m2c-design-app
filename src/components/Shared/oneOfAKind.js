@@ -40,7 +40,6 @@ export const oneOfAKindCardOf = ({ id, fileName = '', dataUrl = '', kind = 'PILL
     kind: up(kind) === 'WALL' ? 'WALL' : 'PILLOW',
     code: '', name: '', price: '', sizeKey: '', bin: OOAK_DEFAULT_BIN, note: '',
     making: { type: '', fabricCode: '', yards: '', noninvCode: '' },   // type: 'FABRIC' | 'NONINV'
-    createInNetSuite: true,
     state: 'DRAFT', result: null,
 });
 
@@ -113,22 +112,10 @@ export function oneOfAKindDocOf(card, { id, brandId = 'uniquity', by = '', at = 
 }
 export const newOneOfAKindId = (brandId = 'uniquity', at = 0, i = 0) => `${String(brandId).toUpperCase()}-OOAK-${at || Date.now()}-${i}`;
 
-/**
- * The NetSuite item to create — a NON-INVENTORY SALE item in the brand's subsidiary, modelled on an existing
- * making (its subsidiary, tax schedule, class and income account are copied from the template the screen
- * read back), named by the tag. Price rides the sales order line, not the item.
- */
-export function nsOneOfAKindItemOf(card, { template = null, brand = 'uniquity' } = {}) {
-    const t = template || {};
-    const pick = (v) => (v && typeof v === 'object' ? (v.id ? { id: String(v.id) } : (Array.isArray(v.items) ? { items: v.items.map(x => ({ id: String(x.id) })) } : null)) : null);
-    const body = { itemId: up(card.code), displayName: (str(card.name) || up(card.code)).slice(0, 40), isInactive: false, includeChildren: false };
-    const sub = pick(t.subsidiary); if (sub) body.subsidiary = sub;
-    const tax = pick(t.taxSchedule); if (tax) body.taxSchedule = tax;
-    const cls = pick(t.class); if (cls) body.class = cls;
-    const inc = pick(t.incomeAccount); if (inc) body.incomeAccount = inc;
-    body.salesDescription = `One of a kind ${up(card.kind) === 'WALL' ? 'wall art' : 'pillow'} made at the show — ${str(card.name) || up(card.code)}`.slice(0, 999);
-    return body;
-}
+// No NetSuite item per piece (Stuart 2026-10-14: "we would just make a roll up item like we do in cpq and include the
+// non inventory item listed as a component … all would just sell as custom pillow with the description push the item
+// id of the one time pillow … ideally we sell these as 'preconfigured' custom pillows"): every piece sells on the
+// CUSTOM PILLOW holder with its tag in the description and its making beneath at $0 — oneOfAKindCartPlanOf below.
 
 /**
  * The cart plan for selling one: the piece as ONE line at its price (as its own NetSuite item, else as the
