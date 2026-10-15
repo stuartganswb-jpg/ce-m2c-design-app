@@ -12,6 +12,7 @@ import { db } from '../../firebase';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import PillowQuickSell from './PillowQuickSell';
 import VisionPillow from './VisionPillow';
+import CounterPriceList from './CounterPriceList';   // $$ price list — quick reference at the show (2026-10-15)
 import { customerPayloadOf, createNsCustomer, crmRecordOf, crmRecordAppOnlyOf } from '../Shared/nsCustomer';   // a new customer is made in NetSuite FIRST (its id is the app's id)
 import { nsProxyFetch } from '../Shared/nsProxy';
 import { oneOfAKindAvailableOf, oneOfAKindOf, oneOfAKindQtyOf } from '../Shared/oneOfAKind';   // the pieces made at the show (S7, 2026-10-14)
@@ -82,11 +83,21 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
             {selectedCustomer && priceNote && <span style={{ ...mono, color: /not read|carries no percent/.test(priceNote) ? '#a86b00' : 'var(--ink-soft)' }}>💲 {priceNote.replace(/^NetSuite price level /, '')}</span>}
             {screen !== 'CUSTOMER' && screen !== 'HOME' && <button onClick={() => setScreen('HOME')} style={btn(false)}>← Menu</button>}
             <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <button onClick={() => setScreen(screen === 'PRICES' ? (customerId ? 'HOME' : 'CUSTOMER') : 'PRICES')} style={btn(screen === 'PRICES')} title="Base prices, and less 10–60% at a tick">$$ Price list</button>
                 <span style={mono}>{cartCount} line{cartCount === 1 ? '' : 's'} · ${Number(cartTotal || 0).toFixed(2)}</span>
                 <button onClick={onShowCart} style={btn(true)}>🛒 Cart</button>
             </div>
         </div>
     );
+
+    if (screen === 'PRICES') {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {crumb}
+                <div style={{ ...card, padding: '20px' }}><CounterPriceList items={items} rateFor={rateFor} /></div>
+            </div>
+        );
+    }
 
     if (screen === 'CUSTOMER' || !customerId) {
         return (
