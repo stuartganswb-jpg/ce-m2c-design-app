@@ -66,6 +66,7 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
     const [catArmed, setCatArmed] = useState(false);
     const [fillArmed, setFillArmed] = useState(false);
     const [catOpen, setCatOpen] = useState({});
+    const [matchRest, setMatchRest] = useState(false);   // match the rest: nearest column · a pattern's group for a colourway with no priced pillow (2026-10-15)
     const [fabPlan, setFabPlan] = useState(null);     // the fabric items from the throws (Stuart 2026-10-12)
     const [fabCreateArmed, setFabCreateArmed] = useState(false);
 
@@ -207,7 +208,7 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
         setBusy(true); setCatArmed(false); setFillArmed(false);
         try {
             const items = await readLibrary();
-            const plan = catalogTagPlanOf({ items, config: cfg });
+            const plan = catalogTagPlanOf({ items, config: cfg, matchRest });
             setCatPlan(plan);
             setFabPlan(fabricCreatePlanOf({ items, config: cfg })); setFabCreateArmed(false);
             const c = plan.counts;
@@ -422,6 +423,7 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
                 </p>
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <button onClick={readCatalog} disabled={busy || liveSizes.length === 0} style={btn(false, busy || liveSizes.length === 0)}>⟳ Read the catalog</button>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer' }} title="A colourway whose prices fit no column takes the nearest column (the mismatch shown per size); a colourway with no priced pillow takes its pattern's group when the other colourways agree; a colourway with pillows but no fabric or throw carries the group on its pillows"><input type="checkbox" checked={matchRest} onChange={e => { setMatchRest(e.target.checked); setCatPlan(null); setCatArmed(false); }} /> match the rest to the nearest column / the pattern's group</label>
                     {liveSizes.length === 0 && <span style={{ ...mono, color: '#a86b00' }}>apply the price chart first — the groups come from it</span>}
                     {catPlan && <span style={mono}>{catPlan.counts.patterns} patterns · {catPlan.counts.colourways} colourways · {catPlan.counts.derived} priced to a group · {catPlan.counts.tagged} tagged today · {catPlan.counts.missing} with no yardage item</span>}
                 </div>
@@ -453,7 +455,7 @@ const PillowPricingAdmin = ({ currentUser, activeBrand }) => {
                                                         <td style={{ padding: '4px 6px', color: 'var(--ink-soft)' }}>{Object.keys(c.cw.pillows).length} pillow(s){c.cw.throws.STD ? ' · throw' : ''}{c.cw.throws.XL ? ' · XL' : ''}{c.cw.fabric ? ' · fabric' : ''}</td>
                                                         <td style={{ padding: '4px 6px', fontWeight: 600 }}>{c.derived.group || '—'}{c.cw.group && c.cw.group !== c.derived.group ? <span style={{ color: '#a86b00', fontWeight: 400 }}> (was {c.cw.group})</span> : null}</td>
                                                         <td style={{ padding: '4px 6px', color: 'var(--ink-soft)' }}>
-                                                            {c.derived.reason === 'ONE' ? `${c.derived.agree} of ${c.derived.priced} prices in column ${c.derived.group}` : c.derived.reason === 'MOST' ? `${c.derived.agree} of ${c.derived.priced} in ${c.derived.group} — off: ${c.derived.mismatches.map(m => `${m.sizeKey} ${money(m.price)} (chart ${money(m.expected)})`).join(', ')}` : c.derived.reason === 'TIE' ? `tie between ${Object.keys(c.derived.candidates).join(' / ')} — nothing chosen` : c.derived.reason === 'NO_FIT' ? 'prices fit no column' : 'no priced pillow'}
+                                                            {c.derived.reason === 'NEAREST' ? `nearest column ${c.derived.group} — ${c.derived.agree} of ${c.derived.priced} exact, $${c.derived.distance} off in all` : c.derived.reason === 'PATTERN' ? `no priced pillow — the pattern's group ${c.derived.group}` : c.derived.reason === 'ONE' ? `${c.derived.agree} of ${c.derived.priced} prices in column ${c.derived.group}` : c.derived.reason === 'MOST' ? `${c.derived.agree} of ${c.derived.priced} in ${c.derived.group} — off: ${c.derived.mismatches.map(m => `${m.sizeKey} ${money(m.price)} (chart ${money(m.expected)})`).join(', ')}` : c.derived.reason === 'TIE' ? `tie between ${Object.keys(c.derived.candidates).join(' / ')} — nothing chosen` : c.derived.reason === 'NO_FIT' ? 'prices fit no column' : 'no priced pillow'}
                                                         </td>
                                                         <td style={{ padding: '4px 6px', color: 'var(--ink-soft)' }}>{c.writes.length ? c.writes.map(w => `${w.code}: ${w.path.endsWith('priceGroup') ? 'group' : 'throw'} ${w.from || '—'} → ${w.to}`).join(' · ') : '—'}</td>
                                                         <td style={{ padding: '4px 6px', color: '#a86b00' }}>{catPlan.missing.some(m => m.key === c.cw.key) ? 'no yardage item' : ''}</td>

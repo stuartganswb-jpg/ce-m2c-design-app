@@ -19,7 +19,7 @@
 //
 // Pure: no imports past the pricing module, no Firestore, no Date. Proven by scripts/pillowCatalog.test.mjs.
 
-import { sizeKeyOf, priceGroupOf, sizePriceOf } from './pillowPricing.js';
+import { sizeKeyOf, priceGroupOf, sizePriceOf, groupRankOf } from './pillowPricing.js';
 import { yardsPerThrowOf } from './fabricPieces.js';
 
 const str = (v) => String(v == null ? '' : v).trim();
@@ -109,8 +109,10 @@ export function colourwaysOf(items = []) {
         cw.label = str(named && named.itemName) || cw.key;
         cw.colourName = colourNameOf(cw.label, cw.pattern, cw.colour) || colourNameOf(cw.fabric && cw.fabric.itemName) || colourNameOf(Object.values(cw.pillows)[0] && Object.values(cw.pillows)[0].itemName) || '';
         const gF = priceGroupOf(cw.fabric), gT = priceGroupOf(cw.throws.STD) || priceGroupOf(cw.throws.XL) || priceGroupOf(cw.throws.XXL);
-        cw.group = gF || gT || '';
-        cw.groupFrom = gF ? 'FABRIC' : (gT ? 'THROW' : '');
+        // a colourway with pillows but no fabric and no throw carries its group on the pillow items (2026-10-15)
+        const gP = Object.values(cw.pillows).map(priceGroupOf).find(Boolean) || '';
+        cw.group = gF || gT || gP || '';
+        cw.groupFrom = gF ? 'FABRIC' : (gT ? 'THROW' : (gP ? 'PILLOW' : ''));
         const pic = [['FABRIC', cw.fabric], ['THROW', cw.throws.STD], ['THROW', cw.throws.XL], ...Object.values(cw.pillows).map(x => ['PILLOW', x]), ['SAMPLE', cw.samples.S], ['SAMPLE', cw.samples.L]].find(([, x]) => tilePictureOf(x));
         cw.picture = pic ? tilePictureOf(pic[1]) : '';
         cw.pictureFrom = pic ? pic[0] : '';
@@ -133,7 +135,7 @@ const groupCodesOf = (config) => Object.keys((config && config.fabricGroups) || 
  * than half, mismatches listed) · 'TIE' (two columns fit equally — nothing chosen) · 'NO_PRICES'
  * (no pillow of a table size carries a price) · 'NO_FIT' (prices fit no column anywhere).
  */
-export function groupFromPillowPrices({ pillows = {}, config = {} } = {}) {
+export function groupFromPillowPrices({ pillows = {}, config = {}, nearest = false } = {}) {
     const groups = groupCodesOf(config);
     const evidence = [];
     Object.entries(pillows || {}).forEach(([sizeKey, it]) => {
@@ -149,11 +151,21 @@ export function groupFromPillowPrices({ pillows = {}, config = {} } = {}) {
     evidence.forEach(e => e.matches.forEach(g => { counts[g] = (counts[g] || 0) + 1; }));
     out.candidates = counts;
     const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-    if (!ranked.length) { out.reason = 'NO_FIT'; return out; }
+    // NEAREST (Stuart 2026-10-15, at the show: "for now just match up as best as we can so we can sell"): when no
+    // column fits exactly, or two tie, the column whose prices sit closest to the pillows' (least total
+    // difference; a tie on that falls to the lower rank) — every size's difference is named as a mismatch.
+    const byNearest = () => {
+        const scored = groups.map(g => ({ g, d: evidence.reduce((s, e) => { const c = sizePriceOf(config, e.sizeKey, g); return s + (c === null ? 1e9 : Math.abs(c - e.price)); }, 0), rank: groupRankOf(config, g) === null ? Infinity : groupRankOf(config, g) }))
+            .filter(x => x.d < 1e9).sort((a, b) => a.d - b.d || a.rank - b.rank || a.g.localeCompare(b.g));
+        if (!scored.length) return null;
+        const g = scored[0].g;
+        return { group: g, reason: 'NEAREST', agree: evidence.filter(e => e.matches.includes(g)).length, distance: scored[0].d, mismatches: evidence.filter(e => !e.matches.includes(g)).map(e => ({ sizeKey: e.sizeKey, code: e.code, price: e.price, expected: sizePriceOf(config, e.sizeKey, g) })) };
+    };
+    if (!ranked.length) { if (nearest) { const n = byNearest(); if (n) return { ...out, ...n }; } out.reason = 'NO_FIT'; return out; }
     const [bestG, bestN] = ranked[0];
     const tied = ranked.filter(([, n]) => n === bestN);
     if (bestN === evidence.length && tied.length === 1) { out.group = bestG; out.reason = 'ONE'; out.agree = bestN; return out; }
-    if (tied.length > 1) { out.reason = 'TIE'; out.agree = bestN; return out; }
+    if (tied.length > 1) { if (nearest) { const n = byNearest(); if (n) return { ...out, ...n }; } out.reason = 'TIE'; out.agree = bestN; return out; }
     if (bestN * 2 > evidence.length) {
         out.group = bestG; out.reason = 'MOST'; out.agree = bestN;
         out.mismatches = evidence.filter(e => !e.matches.includes(bestG)).map(e => ({ sizeKey: e.sizeKey, code: e.code, price: e.price, expected: sizePriceOf(config, e.sizeKey, bestG) }));
@@ -184,17 +196,26 @@ export const insertForSize = (sizeKey, items = []) => {
  *   fill        [{ sizeKey, code, current }]  — the fill inserts proposed where the table has none
  *   missing     [{ key, pattern, colour, label, group, throwCode, fabricCode }]  — colourways with pillows / a throw and no yardage item
  *   counts      { patterns, colourways, derived, writes, missing, fill, tagged }
+ *   matchRest   (Stuart 2026-10-15) a colourway whose prices fit no column takes the NEAREST column; a colourway with
+ *               no priced pillow takes its PATTERN's group when the pattern's other colourways agree on one
+ *               (reason 'PATTERN'); a colourway with pillows but no fabric and no throw gets the group written on
+ *               its pillow items (the catalog reads it from there).
  */
-export function catalogTagPlanOf({ items = [], config = {} } = {}) {
+export function catalogTagPlanOf({ items = [], config = {}, matchRest = false } = {}) {
     const cat = colourwaysOf(items);
     const writes = [], missing = [];
     const rows = cat.patterns.map(p => {
+        const derivedByKey = new Map(p.colourways.map(cw => [cw.key, groupFromPillowPrices({ pillows: cw.pillows, config, nearest: matchRest })]));
+        const siblingGroups = [...new Set([...derivedByKey.values()].map(d => d.group).filter(Boolean))];
+        const patternGroup = matchRest && siblingGroups.length === 1 ? siblingGroups[0] : '';
         const cws = p.colourways.map(cw => {
-            const derived = groupFromPillowPrices({ pillows: cw.pillows, config });
+            let derived = derivedByKey.get(cw.key);
+            if (!derived.group && derived.reason === 'NO_PRICES' && patternGroup) derived = { ...derived, group: patternGroup, reason: 'PATTERN' };
             const w = [];
             const to = derived.group;
             if (to) {
-                const targets = [['FABRIC', cw.fabric], ['THROW', cw.throws.STD], ['THROW', cw.throws.XL], ['THROW', cw.throws.XXL]].filter(([, it]) => it);
+                let targets = [['FABRIC', cw.fabric], ['THROW', cw.throws.STD], ['THROW', cw.throws.XL], ['THROW', cw.throws.XXL]].filter(([, it]) => it);
+                if (!targets.length) targets = Object.values(cw.pillows).map(it => ['PILLOW', it]);
                 targets.forEach(([kind, it]) => {
                     const from = priceGroupOf(it);
                     if (from !== to) w.push({ id: it.id, code: codeOf(it), kind, path: 'manufacturingSpecs.priceGroup', from, to });

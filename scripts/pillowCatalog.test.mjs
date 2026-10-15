@@ -148,5 +148,27 @@ ok('the yardage-to-create rows follow the fabric sheet columns: code, throw, nam
     ok('the fold: the fabric answers from its throw in yards (3 throws = 6 yd, 2 on order = 4 yd); the throw row stays; an answered fabric is left alone', folded['BELL/22F'].available === 6 && folded['BELL/22F'].onOrder === 4 && folded['BELL/22F'].unit === 'YD' && folded['BELL/22F'].viaThrow === 'BELL/22T' && folded['BELL/22T'].available === 3 && folded['SAVERY/05F'].available === 9);
     ok('a throw NetSuite did not answer leaves the fabric unanswered (short, honestly)', withFabricAliases({}, al)['BELL/22F'] === undefined);
 }
+// ── match the rest (Stuart 2026-10-15, at the show: "just match up as best as we can so we can sell") ──
+const gTn = groupFromPillowPrices({ pillows: cat.byKey.get('TIE/01').pillows, config, nearest: true });
+ok('a tie resolves to the nearest column with every off size named', gTn.group !== '' && gTn.reason === 'NEAREST' && gTn.mismatches.length === 1 && typeof gTn.distance === 'number');
+const gX = groupFromPillowPrices({ pillows: { '19x19': pillow('X', '1', '19x19', 999) }, config, nearest: true });
+ok('a price fitting no column takes the nearest one (the dearest column here)', gX.reason === 'NEAREST' && gX.group === 'E' && gX.mismatches[0].expected === CHART.E[SIZES.indexOf('19x19')]);
+ok('without the switch nothing changes', groupFromPillowPrices({ pillows: cat.byKey.get('TIE/01').pillows, config }).reason === 'TIE');
+const griffinLib = [
+    ...['19x19', '23x23'].map(sz => pillow('Griffin', '11', sz, CHART.C[SIZES.indexOf(sz)])), item('Griffin/11T'), item('Griffin/11F', { specs: { productType: 'FABRIC' } }),
+    ...['19x19', '23x23'].map(sz => pillow('Griffin', '41', sz, CHART.C[SIZES.indexOf(sz)])), item('Griffin/41T'),
+    item('Griffin/99T'), item('Griffin/99F', { specs: { productType: 'FABRIC' } }),   // the throw and the fabric, no pillow
+];
+const gPlan = catalogTagPlanOf({ items: griffinLib, config, matchRest: true });
+const g99 = gPlan.rows[0].colourways.find(c => c.cw.key === 'GRIFFIN/99');
+ok('a colourway with no priced pillow takes its pattern\'s group when the siblings agree, written onto its fabric and throw', g99.derived.reason === 'PATTERN' && g99.derived.group === 'C' && g99.writes.filter(w => w.path.endsWith('priceGroup')).map(w => w.code).sort().join() === 'Griffin/99F,Griffin/99T' && g99.writes.some(w => w.path.endsWith('convertedFrom') && w.to === 'Griffin/99T') && gPlan.rows[0].agree === 'ALL');
+ok('…and not without the switch', catalogTagPlanOf({ items: griffinLib, config }).rows[0].colourways.find(c => c.cw.key === 'GRIFFIN/99').derived.group === '');
+ok('a pattern whose siblings disagree lends nothing', catalogTagPlanOf({ items: [...griffinLib.filter(x => !/41/.test(x.legacyErpId)), pillow('Griffin', '41', '19x19', CHART.A[SIZES.indexOf('19x19')]), item('Griffin/41T')], config, matchRest: true }).rows[0].colourways.find(c => c.cw.key === 'GRIFFIN/99').derived.group === '');
+const tiePlan = catalogTagPlanOf({ items: lib, config, matchRest: true });
+const tieRow = tiePlan.rows.find(r => r.pattern === 'TIE').colourways[0];
+ok('pillows with no fabric and no throw: the group is written on the pillow items', tieRow.writes.length === 2 && tieRow.writes.every(w => w.kind === 'PILLOW' && w.path === 'manufacturingSpecs.priceGroup' && w.to === tieRow.derived.group));
+const tagged = colourwaysOf(lib.map(it => (/^Tie\/01P/.test(it.legacyErpId) ? { ...it, manufacturingSpecs: { ...it.manufacturingSpecs, priceGroup: 'A' } } : it)));
+ok('…and the catalog reads it back from the pillows', tagged.byKey.get('TIE/01').group === 'A' && tagged.byKey.get('TIE/01').groupFrom === 'PILLOW');
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);
