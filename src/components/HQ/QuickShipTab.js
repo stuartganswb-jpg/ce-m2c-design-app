@@ -1437,6 +1437,11 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
         if (l.aliasItemId) { const a = itemById(l.aliasItemId); if (a) { const r = rateFor(a); if (r > 0) return r; } }
         return rateForId(l.itemId);
     };
+    // THE COUNTER HIDES THE $0 MAKINGS (Stuart 2026-10-15: "the items that are included at $0 should be hidden it is
+    // confusing to the customer … those lines will need to carry on to rtg and stitch and sew"): on the show counter the
+    // fabric, insert, zipper and Bridget / scrap lines beneath a pillow or a one-of-a-kind piece are not DRAWN; the cart
+    // itself, the save, NetSuite, RTG, the sewing document and the pick read `cart` / `pricedCart` exactly as before.
+    const isHiddenMaking = (l) => !!(l && l.inKit && (l.ooakPart || /^(pillow|ooak)-/.test(String(l.kitOf || ''))));
     const pricedCart = useMemo(() => {
         const rateMap = new Map();
         const byKit = {};
@@ -2036,11 +2041,11 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 <div style={{ ...card, display: 'flex', flexDirection: 'column', minHeight: '400px' }}>
                     <div style={{ ...cardHd, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span>Order Cart</span>
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{cart.length} line(s)</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{(counterMode ? cart.filter(l => !isHiddenMaking(l)) : cart).length} line(s)</span>
                     </div>
                     <div style={{ padding: '12px 16px', flex: 1, overflowY: 'auto' }}>
                         {cart.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', padding: '20px', textAlign: 'center' }}>Empty — add stocked items or a kit.</div>}
-                        {pricedCart.map(l => (
+                        {(counterMode ? pricedCart.filter(l => !isHiddenMaking(l)) : pricedCart).map(l => (
                             <div key={l.key} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 74px auto', gap: '10px', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--paper-2)' }}>
                                 <div style={{ minWidth: 0 }}>
                                     {/* Customer-facing code leads; the real stocked code rides small
@@ -2168,7 +2173,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 <CounterScreens currentUser={currentUser} customers={customers} customerId={customerId} selectedCustomer={selectedCustomer}
                     onPickCustomer={(c) => { setCustomerId(c.id); setCustSearch(`${c.name} (${c.id})`); setLastCreated(null); }} jobName={jobName} setJobName={setJobName}
                     items={allItems} findPart={(id) => allItems.find(x => x.id === id) || pillowByCode(id)} rateFor={rateFor}
-                    onAddQuickSell={addQuickSell} onAddCustomPillow={addCounterCustom} addLog={addLog} cartCount={cart.length} cartTotal={cartTotal}
+                    onAddQuickSell={addQuickSell} onAddCustomPillow={addCounterCustom} addLog={addLog} cartCount={cart.filter(l => !isHiddenMaking(l)).length} cartTotal={cartTotal}
                     priceNote={priceLevelInfo ? (priceLevelInfo.read ? priceLevelNoteOf(priceLevelInfo) : 'NetSuite price level not read') : ''}
                     onAddOneOfAKind={addOneOfAKind}
                     onListReopenable={listReopenable} onReopen={(row) => { setLastCreated(null); return row.kind === 'QUOTE' ? reopenQuoteById(row.id) : reopenSoById(row.id); }}
