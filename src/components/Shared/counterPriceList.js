@@ -47,7 +47,8 @@ export const pillowPriceGridOf = (config, ticked = []) => {
 
 /**
  * The throw rows: one per colourway that carries a throw, the variant's base price in each cell, searched by
- * pattern, colour name or number. `rateFor(item)` (the counter's price rule) wins over the item's own base price.
+ * pattern, colour name or number. `rateFor(item)` wins over the item's own base price when a caller passes one; the
+ * counter passes NONE (Stuart 2026-10-15: the list shows the LIST price, a customer's level made a $700 throw read $420).
  */
 export const throwPriceRowsOf = (catalog, { ticked = [], q = '', rateFor = null } = {}) => {
     const t = up(q);

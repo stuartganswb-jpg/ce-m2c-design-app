@@ -3,7 +3,8 @@
 // Stuart: "a simple tab as a price list for quick reference, just show the category throws or pillows, and
 // displays prices at base price, then a check box to show the prices at less 10%, 20%, 30%, 40%, 50% or 60%
 // … needs to be really quick to look at". Read-only. Pillows = the price chart (size × group) the quick sell
-// charges; Throws = each throw's own price per colourway. A ticked level prints under the base in every cell,
+// charges; Throws = each throw's own LIST price per colourway (never the picked customer's level — the counter's
+// rate rule applies that at the cart). A ticked level prints the NET price under the list in every cell,
 // rounded as the order discount rounds. The rule is Shared/counterPriceList (pure).
 import React, { useEffect, useMemo, useState } from 'react';
 import { db } from '../../firebase';
@@ -20,7 +21,7 @@ const td = { padding: '10px 12px', borderBottom: '1px solid var(--line)', vertic
 const Cell = ({ cell }) => (
     <div>
         <div style={{ fontSize: '1.25rem', fontWeight: 600, color: cell.base === null ? 'var(--ink-soft)' : 'var(--ink)' }}>{money(cell.base)}</div>
-        {cell.less.map(l => <div key={l.pct} style={{ fontSize: '1rem', color: 'var(--brass)', whiteSpace: 'nowrap' }}>{money(l.price)} <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)' }}>−{l.pct}%</span></div>)}
+        {cell.less.map(l => <div key={l.pct} style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--brass)', whiteSpace: 'nowrap' }}>{money(l.price)} <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)' }}>net at {l.pct}% off</span></div>)}
     </div>
 );
 
@@ -42,7 +43,7 @@ const CounterPriceList = ({ items = [], rateFor = null }) => {
                 <button onClick={() => setTab('PILLOWS')} style={chip(tab === 'PILLOWS')}>🛋 Pillows</button>
                 <button onClick={() => setTab('THROWS')} style={chip(tab === 'THROWS')}>🧣 Throws</button>
                 {tab === 'THROWS' && <input value={q} onChange={e => setQ(e.target.value)} placeholder="pattern · colour · number" style={{ boxSizing: 'border-box', padding: '12px 14px', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', width: '260px' }} />}
-                <span style={{ ...mono, marginLeft: 'auto' }}>base price{ticked.length ? ` · less ${[...ticked].sort((a, b) => a - b).map(p => `${p}%`).join(' / ')}` : ''}</span>
+                <span style={{ ...mono, marginLeft: 'auto' }}>list price{ticked.length ? ` · net at ${[...ticked].sort((a, b) => a - b).map(p => `${p}%`).join(' / ')} off` : ''}</span>
             </div>
             <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={mono}>Show less</span>

@@ -94,7 +94,8 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {crumb}
-                <div style={{ ...card, padding: '20px' }}><CounterPriceList items={items} rateFor={rateFor} /></div>
+                {/* the LIST price: the item's own base, never the picked customer's level (that is what the counter's rate rule applies) */}
+                <div style={{ ...card, padding: '20px' }}><CounterPriceList items={items} /></div>
             </div>
         );
     }
