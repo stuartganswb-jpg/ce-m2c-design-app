@@ -42,6 +42,12 @@ function PaySettings() {
         }, () => setCfg({ environment: 'SANDBOX', tokenizationKeys: {} })), []);
     // Follow the chosen brand, and never let a half-typed key for one brand be saved onto another.
     useEffect(() => { setKey(((cfg && cfg.tokenizationKeys) || {})[keyBrand] || ''); }, [cfg, keyBrand]);
+    // THE ADDRESS THE CUSTOMER LANDS ON when they scan. A payer should see the name of the company
+    // taking their money, so each brand may have its own pay domain — all pointing at the same
+    // portal in Vercel (Stuart 2026-10-15). Blank falls back to "default", then to the original
+    // portal domain, which must stay attached so links already issued keep working.
+    const [payUrl, setPayUrl] = useState('');
+    useEffect(() => { setPayUrl(((cfg && cfg.payBaseUrls) || {})[keyBrand] || ''); }, [cfg, keyBrand]);
 
     if (!cfg) return null;
     const isLive = cfg.environment === 'PRODUCTION';
@@ -99,6 +105,15 @@ function PaySettings() {
                 <button style={btn(false, saving)} disabled={saving} onClick={() => save({ tokenizationKeys: { ...(cfg.tokenizationKeys || {}), [keyBrand]: key.trim() } })}>Save key</button>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>
                     {Object.keys(cfg.tokenizationKeys || {}).filter((b) => (cfg.tokenizationKeys || {})[b]).join(' · ').toUpperCase() || 'none saved yet'}
+                </span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '14px' }}>
+                <span style={{ fontSize: '12px', color: 'var(--ink-soft)' }}>Pay link domain</span>
+                <input style={{ ...input, minWidth: '280px' }} value={payUrl} onChange={(e) => setPayUrl(e.target.value)} placeholder="https://pay.uniquitystyle.com" />
+                <button style={btn(false, saving)} disabled={saving} onClick={() => save({ payBaseUrls: { ...(cfg.payBaseUrls || {}), [keyBrand]: payUrl.trim().replace(/\/+$/, '') } })}>Save domain</button>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>
+                    {((cfg.payBaseUrls || {})[keyBrand] || (cfg.payBaseUrls || {}).default || 'portal.classicalelements.com (fallback)')}
                 </span>
             </div>
 

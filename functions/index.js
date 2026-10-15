@@ -2367,9 +2367,26 @@ const nmiConfig = async () => {
         return {
             environment: c.environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX',
             tokenizationKeys: c.tokenizationKeys || {},
+            payBaseUrls: c.payBaseUrls || {},
         };
-    } catch (e) { return { environment: 'SANDBOX', tokenizationKeys: {} }; }
+    } catch (e) { return { environment: 'SANDBOX', tokenizationKeys: {}, payBaseUrls: {} }; }
 };
+
+// WHICH ADDRESS THE CUSTOMER LANDS ON. A payer should see the name of the company taking their
+// money, so each brand may have its own pay domain — all pointing at the same portal, the brand
+// only deciding the name on the address bar (Stuart 2026-10-15). It is a SETTING, not code:
+// adding a brand's domain is a field in HQ 11, never a deploy.
+//
+// The fallback is the original portal domain, which must stay attached in Vercel regardless —
+// pay links already issued carry it for thirty days and have to keep working.
+const PAY_BASE_FALLBACK = 'https://portal.classicalelements.com';
+const payBaseUrlOf = (brand, cfg) => {
+    const m = (cfg && cfg.payBaseUrls) || {};
+    const pick = String(m[String(brand || '').toLowerCase()] || m.default || PAY_BASE_FALLBACK).trim();
+    // Only ever https, and never a trailing slash — the token is appended to it.
+    return (/^https:\/\/[^\s/]+$/.test(pick.replace(/\/+$/, '')) ? pick.replace(/\/+$/, '') : PAY_BASE_FALLBACK);
+};
+const payUrlOf = (token, brand, cfg) => `${payBaseUrlOf(brand, cfg)}/#/pay/${token}`;
 // One gateway key per brand — a brand with no key REFUSES rather than charging the wrong entity
 // (the UPS NO_UPS_ACCOUNT_FOR_BRAND rule; money must land in the right NetSuite subsidiary).
 const nmiKeyFor = (brand, environment) => {
@@ -2410,6 +2427,7 @@ exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
     const { docType, collection, docId, brand, reference, customerName, totalAmount, depositPct } = request.data || {};
     const type = String(docType || '').toUpperCase();
     if (!['QUOTE', 'SALES_ORDER', 'INVOICE'].includes(type)) throw new HttpsError('invalid-argument', 'docType must be QUOTE, SALES_ORDER or INVOICE.');
+    const cfg = await nmiConfig();   // for the brand's own pay domain
     const total = money(totalAmount);
     if (!(total > 0)) throw new HttpsError('invalid-argument', 'A total greater than zero is required.');
     // An invoice is paid in full. A quote / sales order asks for a deposit: 50% unless staff say
@@ -2439,7 +2457,7 @@ exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
     // is actually taking the money — ONE definition of the merchant of record, here on the server,
     // rather than another brand-name map in the browser that drifts from this one.
     return {
-        token, url: `https://portal.classicalelements.com/#/pay/${token}`,
+        token, url: payUrlOf(token, brand, cfg),
         amountDue: due, totalAmount: total, expiresAt: now + PAY_LINK_DAYS * 86400000,
         merchantName: PAY_MERCHANT_NAME[String(brand || '').toLowerCase()] || '',
     };
@@ -2450,6 +2468,7 @@ exports.payLinkCreate = onCall({ enforceAppCheck: true }, async (request) => {
 exports.payLinksFor = onCall({ enforceAppCheck: true }, async (request) => {
     assertStaffAdmin(request);
     const { collection, docId, reference } = request.data || {};
+    const cfg = await nmiConfig();   // a link is shown at its brand's own pay domain
     const col = admin.firestore().collection('pay_links');
     const q = (String(collection || '') && String(docId || ''))
         ? col.where('collection', '==', String(collection)).where('docId', '==', String(docId))
@@ -2458,7 +2477,7 @@ exports.payLinksFor = onCall({ enforceAppCheck: true }, async (request) => {
     const links = snap.docs.map((d) => {
         const l = d.data() || {};
         return {
-            token: l.token, url: `https://portal.classicalelements.com/#/pay/${l.token}`,
+            token: l.token, url: payUrlOf(l.token, l.brand, cfg),
             docType: l.docType, reference: l.reference || '', status: l.status || '',
             totalAmount: l.totalAmount || 0, amountDue: l.amountDue || 0, depositPct: l.depositPct || 0,
             createdAt: l.createdAt || 0, createdBy: l.createdBy || '', expiresAt: l.expiresAt || 0,
