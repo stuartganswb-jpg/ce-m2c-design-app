@@ -7,6 +7,7 @@
 // overwritten; the net derives. Rows are display-only (isDiscount / isNetLine). NetSuite scales
 // the discounted item's own rates by netFactorOf.
 
+import { orderDiscountApplies } from '../src/components/Shared/lineDiscount.js';
 import {
     canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount,
     cartHasLineDiscounts, discountModeOf, lineDiscountRows, netFactorOf, orderDiscountStamp,
@@ -101,6 +102,11 @@ eq('a string percent works (the input is a string)', orderPercentRate(100, '12.5
 const info = orderPercentInfoRow({ percent: '20', saved: 33.333 });
 eq('the info row bills nothing and is display-only', [info.price, info.total, info.isDiscount, info.isOrderDiscount, isDisplayOnlyLine(info)], [0, 0, true, true, true]);
 eq('…and says the saving', info.name.trim(), 'Order Discount - (20%) · item prices above are net of it · saved $33.33');
+
+// ── which lines the order % reaches (2026-10-15) ──────────────────────────────────────────────
+eq('an ordinary item line, and a rule-priced line marked discountable (a pillow), are reached; a fee, a $0 making and a rule-priced kit line are not',
+    [orderDiscountApplies({ rateOverride: null }), orderDiscountApplies({ rateOverride: 850, discountable: true }), orderDiscountApplies({ rateOverride: null }, true), orderDiscountApplies({ rateOverride: 0, inKit: true }), orderDiscountApplies({ rateOverride: 120 }), orderDiscountApplies(null)],
+    [true, true, false, false, false, false]);
 
 console.log(`\nlineDiscount: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

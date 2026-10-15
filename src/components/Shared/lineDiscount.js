@@ -141,6 +141,15 @@ export const orderPercentRate = (rate, percent) => {
     return round2(r * (1 - p / 100));
 };
 
+/**
+ * Which lines the order % reaches (Stuart 2026-10-15: "the customer discount does [not] apply to bridget pillows …
+ * make sure fixes all pillows, they are all showing at list"). A fee never. A line priced by a rule (rateOverride:
+ * kits, per-foot, rush, traverse) only when it says so — `discountable: true`, which every PILLOW line carries: the
+ * one-of-a-kind piece, the standard pillow at the chart price, the custom pillow holder. Their $0 making / fabric
+ * lines are priced by rule without the mark, so they stay $0. Every ordinary item line as before.
+ */
+export const orderDiscountApplies = (line, isFee = false) => !isFee && !!line && (line.rateOverride == null || line.discountable === true);
+
 /** One informational row for the documents: the item prices above are already net of it. */
 export function orderPercentInfoRow({ percent, saved }) {
     const p = num(percent) || 0, s = round2(saved);

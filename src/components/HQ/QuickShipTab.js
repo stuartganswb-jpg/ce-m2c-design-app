@@ -20,7 +20,7 @@ import { oneOfAKindCartPlanOf, oneOfAKindSoldPatchOf } from '../Shared/oneOfAKin
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
-import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp } from '../Shared/lineDiscount';
+import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp, orderDiscountApplies } from '../Shared/lineDiscount';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
@@ -536,7 +536,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
     // the holder (the design rides it), then each part at $0 beneath it (yards as 'yd').
     const pushPillowPlan = ({ plan, line, requestId, index }) => {
         const holderKey = `pillow-${requestId}-${index}`;
-        pushLine(plan.holder.item, plan.holder.qty, plan.holder.note, null, { rateOverride: plan.holder.rate, noPack: true, pillow: { requestId, line: index, madeToOrder: plan.holder.madeToOrder, summary: line.summary || '', sizeKey: line.sizeKey || '', group: line.group || '', design: line.design || null, panels: line.panels || [], sourced: plan.sourced, capturedFabrics: line.capturedFabrics || [], snapshot: line.snapshot || '', ...(line.standardSku ? { standardSku: line.standardSku } : {}) }, pillowKey: holderKey });
+        pushLine(plan.holder.item, plan.holder.qty, plan.holder.note, null, { rateOverride: plan.holder.rate, discountable: true, noPack: true, pillow: { requestId, line: index, madeToOrder: plan.holder.madeToOrder, summary: line.summary || '', sizeKey: line.sizeKey || '', group: line.group || '', design: line.design || null, panels: line.panels || [], sourced: plan.sourced, capturedFabrics: line.capturedFabrics || [], snapshot: line.snapshot || '', ...(line.standardSku ? { standardSku: line.standardSku } : {}) }, pillowKey: holderKey });
         plan.parts.forEach(part => {
             // a yardage part with no NetSuite item of its own goes to NetSuite as a fraction of its throw
             const ns = part.uom === 'YARD' ? fabricNsLineOf({ fabric: part.item, yards: part.yards, findByCode: pillowByCode }) : null;
@@ -566,7 +566,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
         if (!plan || !plan.ok) return;
         if (plan.kind === 'THROW') { pushLine(plan.throwItem, plan.qty, '', null, {}); return; }
         if (plan.kind === 'SAMPLE') { pushLine(plan.sampleItem, plan.qty, '', null, {}); return; }
-        if (plan.kind === 'SKU') { pushLine(plan.sku.item, plan.qty, plan.note || '', null, { rateOverride: plan.sku.chartPrice }); return; }
+        if (plan.kind === 'SKU') { pushLine(plan.sku.item, plan.qty, plan.note || '', null, { rateOverride: plan.sku.chartPrice, discountable: true }); return; }
         const cartPlan = pillowCartPlanOf({ line: plan.mto.line, findByCode: pillowByCode });
         if (!cartPlan.ok) { addLog(`⛔ Not added — ${cartPlan.errors.map(e => e.message).join(' ')}`, 'error'); return; }
         pushPillowPlan({ plan: cartPlan, line: plan.mto.line, requestId: `${QUICK_SELL_REQUEST_ID}${Date.now()}`, index: 0 });
@@ -588,7 +588,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
             return;
         }
         const key = `ooak-${item.id}`;
-        pushLine(plan.piece.item, 1, plan.piece.via || '', null, { rateOverride: plan.piece.price, noPack: true, ...(plan.piece.via ? { nsId: plan.piece.nsId, nsQtyFactor: 1, nsVia: plan.piece.via } : {}), oneOfAKind: { itemId: item.id, code: item.legacyErpId, key, onHand: plan.onHand } });
+        pushLine(plan.piece.item, 1, plan.piece.via || '', null, { rateOverride: plan.piece.price, discountable: true, noPack: true, ...(plan.piece.via ? { nsId: plan.piece.nsId, nsQtyFactor: 1, nsVia: plan.piece.via } : {}), oneOfAKind: { itemId: item.id, code: item.legacyErpId, key, onHand: plan.onHand } });
         const m = plan.making;
         pushLine(m.item, 1, m.note, null, m.uom === 'YARD'
             ? { rateOverride: 0, noPack: true, inKit: true, kitOf: key, perFoot: true, feetPer: m.yards, unitWord: 'yd', ooakPart: true, ...(m.nsQtyFactor ? { nsId: m.nsId, nsQtyFactor: m.nsQtyFactor, nsVia: m.nsVia } : {}) }
@@ -962,6 +962,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
             packUom: pack.uom, packSize: pack.size,
             // Fees priced off a master list (rush) bill at the list amount, not the item's price.
             rateOverride: (opts && opts.rateOverride != null) ? opts.rateOverride : null,
+            // A rule-priced line the order % still reaches (every pillow line — Shared/lineDiscount.orderDiscountApplies)
+            ...(opts && opts.discountable ? { discountable: true } : {}),
             // What the floor paints it (a to-be-finished line), and the fee rule that prices it.
             ...(opts && opts.finishCode ? { finishCode: opts.finishCode } : {}),
             ...(opts && opts.toBeFinished ? { toBeFinished: true } : {}),
@@ -1450,7 +1452,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
         const odp = parseFloat(soExtras.orderDiscountPercent) || 0;
         if (odp > 0 && odp <= 100) {
             cart.forEach(l => {
-                if (isFeeLine(l) || l.rateOverride != null) return;
+                if (!orderDiscountApplies(l, isFeeLine(l))) return;   // every pillow line is reached (discountable), the $0 makings and the rule-priced kit / fee lines are not
                 const g = rateMap.get(l.key) ?? 0;
                 grossMap.set(l.key, g);
                 rateMap.set(l.key, orderPercentRate(g, odp));
