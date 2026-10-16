@@ -55,7 +55,7 @@ import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i1
 import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutYieldLinesOf, cutYieldText, cutReleaseText, cutReleaseLog } from '../Shared/poleCut';
 import { jfpPullBinOf, jfpAdjustmentOf, jfpSkipText, pullBinOf, adjustmentOutOf, notAdjustedText } from '../Shared/jfpPull';
-import { binsSql, GOOD_STATUS_ID } from '../Shared/fulfilmentBins';
+import { binsSql, GOOD_STATUS_ID, fulfilmentTargetOf } from '../Shared/fulfilmentBins';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { platingLineRateOf } from '../Shared/platingRate';
 import { isKitLine, isOffOrderLine } from '../Shared/itemKit';
@@ -2236,7 +2236,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 kind: 'itemfulfillment', dedupeKey: `if:${d.nsInternalId}`,
                 label: `NS Fulfillment — ${packRef(d)} (display ${d.displayNo || '?'} of ${d.displayOfSoId || ''}) from ${d.fulfilFromBin || '—'}`,
                 sourceApp: 'WMS', createdBy: operator?.name || '',
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${d.nsInternalId}/!transform/itemFulfillment`,
+                // From the order's bin, replacing the bin NetSuite fills in itself (the preferred one) — Shared/fulfilmentBins.
+                targetUrl: fulfilmentTargetOf(d.nsInternalId, fulfilFromBinItems(ifItems.items, jq.items || [], d.fulfilFromBin)),
                 method: 'POST',
                 payload: { shipStatus: { id: 'B' }, memo: nsMemo(`Display ${d.displayNo || ''} ${d.displayOfSoId || ''}`), item: { items: fulfilFromBinItems(ifItems.items, jq.items || [], d.fulfilFromBin) } },
                 writeBack: [{ collection: 'hq_sales_orders', docId: d.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }],

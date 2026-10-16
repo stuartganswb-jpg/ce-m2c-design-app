@@ -12,7 +12,7 @@ import { doc, getDocs, query, collection, where, updateDoc } from 'firebase/fire
 import { nsProxyFetch } from './nsProxy';
 import { enqueueNsWrite } from './nsOutbox';
 import { soLinesSql, fulfilmentItemsOf, refusalText } from './fulfilmentLines';
-import { binsSql, fulfilItemIdsOf, binChoicesOf, fulfilmentItemsWithBins, binPickText } from './fulfilmentBins';
+import { binsSql, fulfilItemIdsOf, binChoicesOf, fulfilmentItemsWithBins, binPickText, fulfilmentTargetOf } from './fulfilmentBins';
 
 const SUITEQL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
 const suiteql = async (q, what) => {
@@ -55,13 +55,15 @@ export const queueSoFulfilment = async ({ nsSoId, ref = '', label = '', memo = '
         }
     } catch (e) { console.warn('could not cancel the failed fulfilment entry (the new one is still queued)', e); }
     const binText = binPickText(choices, picks);
+    const items = fulfilmentItemsWithBins(ifItems.items, choices, picks);
     await enqueueNsWrite({
         kind: 'itemfulfillment', dedupeKey,
         label: `${label}${binText ? ` · ${binText}` : ''}`,
         sourceApp, createdBy,
-        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${id}/!transform/itemFulfillment`,
+        // A line that names its bin replaces the bin NetSuite fills in itself (the preferred one) — Shared/fulfilmentBins.
+        targetUrl: fulfilmentTargetOf(id, items),
         method: 'POST',
-        payload: { shipStatus: { id: 'B' }, memo, item: { items: fulfilmentItemsWithBins(ifItems.items, choices, picks) } },
+        payload: { shipStatus: { id: 'B' }, memo, item: { items } },
         writeBack,
     });
     return { ok: true, binText, asked: choices.length };

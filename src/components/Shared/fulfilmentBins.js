@@ -91,6 +91,22 @@ export function fulfilmentItemsWithBins(items = [], choices = [], picks = {}) {
   });
 }
 
+// ── THE PREFERRED BIN NETSUITE FILLS IN BY ITSELF (Stuart 2026-10-16, SO61091 — Eric's App Imp card) ──────────────────
+// The first fulfilment the app ever sent naming a bin failed: "The total inventory detail quantity must be 1." HCUMB410
+// has a PREFERRED bin in NetSuite (U S19-E5L-R1). Creating the fulfilment from the sales order, NetSuite fills the line's
+// inventory detail with that bin itself — and the app's "1 from ORDER-001" was ADDED to it, not put in its place: two
+// against a line of one. A fulfilment that names a bin therefore asks NetSuite to REPLACE its own item lines with the
+// app's (the REST `replace` option): the lines are exactly the ones the app sends, each with only the bin it chose. A
+// fulfilment that names no bin is sent exactly as before — NetSuite still picks the only bin, or the preferred one.
+/** Does this fulfilment carry a bin on any line? */
+export const namesBins = (items = []) => (items || []).some(it => !!(it && it.inventoryDetail));
+/** Where the fulfilment is sent — with `replace=item` only when it names a bin. */
+export const fulfilmentTargetOf = (nsSoId, items = []) => {
+  const id = S(nsSoId);
+  if (!/^\d+$/.test(id)) throw new Error(`Not a NetSuite sales order id: "${nsSoId}"`);
+  return `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${id}/!transform/itemFulfillment${namesBins(items) ? '?replace=item' : ''}`;
+};
+
 /** "H1-75R × 12 from Production Stock" — for the log and the record on the document. */
 export const binPickText = (choices = [], picks = {}) => (choices || []).map(c => {
   const rows = (picks[c.orderLine] || []).filter(p => p && N(p.qty) > 0);

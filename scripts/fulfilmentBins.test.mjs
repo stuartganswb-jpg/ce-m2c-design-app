@@ -1,6 +1,6 @@
 // node scripts/fulfilmentBins.test.mjs — the bin a fulfilment takes from, asked when an item sits in more than one
 // (Stuart 2026-10-12). The rows are SO60991's, read live from NetSuite the day its fulfilment failed.
-import { binsSql, fulfilItemIdsOf, binChoicesOf, binPickRefusal, fulfilmentItemsWithBins, binPickText } from '../src/components/Shared/fulfilmentBins.js';
+import { binsSql, fulfilItemIdsOf, binChoicesOf, binPickRefusal, fulfilmentItemsWithBins, binPickText, namesBins, fulfilmentTargetOf } from '../src/components/Shared/fulfilmentBins.js';
 import { soLinesSql, fulfilmentItemsOf } from '../src/components/Shared/fulfilmentLines.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
@@ -49,4 +49,18 @@ eq('…every other line is sent exactly as it was', [sent[0], sent[2], sent[3]],
 eq('a split is two rows on the one line', fulfilmentItemsWithBins(ifItems.items, choices, { 2: [{ binId: '7957', qty: 8 }, { binId: '39694', qty: 4 }] })[1].inventoryDetail.inventoryAssignment.items, [{ binNumber: { id: '7957' }, quantity: 8 }, { binNumber: { id: '39694' }, quantity: 4 }]);
 eq('nothing asked → nothing changed', fulfilmentItemsWithBins(ifItems.items, [], {}), ifItems.items);
 eq('in words', [binPickText(choices, { 2: [{ binId: '7957', qty: 12 }] }), binPickText(choices, { 2: [{ binId: '7957', qty: 8 }, { binId: '39694', qty: 4 }] })], ['H1-75R × 12 from Production Stock', 'H1-75R × 12 from Production Stock (8) + ORDERS-COM1 (4)']);
+// ── THE PREFERRED BIN NETSUITE FILLS IN BY ITSELF (2026-10-16, SO61091: 1 × HCUMB410 from ORDER-001 refused — "the total
+// inventory detail quantity must be 1" — NetSuite had added its preferred bin, U S19-E5L-R1, to the app's choice) ──
+{
+    const so61091 = [{ orderLine: 1, location: { id: '17' }, itemReceive: true, quantity: 1, inventoryDetail: { quantity: 1, inventoryAssignment: { items: [{ binNumber: { id: '39708' }, quantity: 1 }] } } }];
+    const plain = [{ orderLine: 1, location: { id: '17' }, itemReceive: true }];
+    eq('a fulfilment that names a bin replaces NetSuite\'s own item lines', fulfilmentTargetOf('953616', so61091), 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/953616/!transform/itemFulfillment?replace=item');
+    eq('one that names none is sent exactly as before', fulfilmentTargetOf('953616', plain), 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/953616/!transform/itemFulfillment');
+    eq('one bin on any line is enough', namesBins([...plain, so61091[0]]), true);
+    eq('none, or nothing', [namesBins(plain), namesBins([]), namesBins(null)], [false, false, false]);
+    let threw = false; try { fulfilmentTargetOf('95; DROP', plain); } catch (e) { threw = true; }
+    ok('a sales order id that is not one is refused', threw);
+    const sent = fulfilmentItemsWithBins(ifItems.items, choices, { 2: [{ binId: '7957', qty: 12 }] });
+    ok('SO60991 with its bin chosen goes with replace', /\?replace=item$/.test(fulfilmentTargetOf('1', sent)) && !/replace/.test(fulfilmentTargetOf('1', fulfilmentItemsWithBins(ifItems.items, [], {}))));
+}
 console.log(`fulfilmentBins: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
