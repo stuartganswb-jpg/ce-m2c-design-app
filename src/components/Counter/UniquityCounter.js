@@ -80,7 +80,7 @@ const UniquityCounter = () => {
                     <button onClick={() => navigate('/')} style={btn(false)}>Hub</button>
                 </div>
             </div>
-            <QuickShipTab currentUser={user.name} activeBrand="uniquity" counterMode />
+            <QuickShipTab currentUser={user.name} activeBrand="uniquity" counterMode userRole={user.role} />
         </div>
     );
 };

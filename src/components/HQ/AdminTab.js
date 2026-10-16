@@ -11,6 +11,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import FormPreview from '../Shared/FormPreview';
 import IntegrationsPanel from '../Shared/IntegrationsPanel';
+import BaseShippingPanel from '../Shared/BaseShippingPanel';   // 🚚 base shipping rate per brand (Stuart 2026-10-16)
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printForm } from '../Shared/printForm';
 import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE, SIZE_FAMILIES, sizeKeyOf } from '../Shared/sizeMatrix';
@@ -3395,6 +3396,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS, writeLog }) => {   // writeL
                       <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>CRM & Sales Dictionaries</h3>
                   </div>
                   
+                  {/* 🚚 BASE SHIPPING RATE, PER BRAND — the percent the app fills into an EMPTY
+                      shipping charge so freight is never missed (Shared/BaseShippingPanel). */}
+                  <div style={{ marginBottom: '30px' }}><BaseShippingPanel /></div>
+
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
                       
                       {/* DISCOUNT CODES */}

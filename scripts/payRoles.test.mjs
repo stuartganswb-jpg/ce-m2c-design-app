@@ -37,4 +37,22 @@ ok(!canTakePayment('csr '.repeat(3)), 'nor a repeated one');
 ok(PAYMENT_ROLES.includes('superadmin'), 'super admin is included — it has been forgotten before');
 ok(PAYMENT_ROLES.length === 4, 'exactly the four named; adding a fifth is a decision, not a tweak');
 
+// ── THE DUPLICATE CANNOT DRIFT ───────────────────────────────────────────────
+// The list exists twice and cannot be helped: functions deploy only functions/ and cannot import
+// from src/, while the browser cannot import from functions/. src/components/Shared/payRoles.js is
+// the canonical one. This reads BOTH files and fails the moment they disagree — so the copy rots
+// loudly instead of quietly letting a rep charge a card in one half of the app and not the other.
+const { readFileSync } = await import('node:fs');
+const listIn = (p) => {
+    const m = /PAYMENT_ROLES\s*=\s*\[([^\]]*)\]/.exec(readFileSync(new URL(p, import.meta.url), 'utf8'));
+    assert.ok(m, `no PAYMENT_ROLES found in ${p}`);
+    return m[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+};
+assert.deepStrictEqual(
+    listIn('../src/components/Shared/payRoles.js'),
+    listIn('../functions/payRoles.js'),
+    'src/components/Shared/payRoles.js and functions/payRoles.js disagree — change BOTH',
+);
+n += 1;
+
 console.log(`payRoles: ${n} assertions passed`);

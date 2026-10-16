@@ -30,6 +30,8 @@ import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
 import { traverseOrderLinesOf } from '../Shared/subFinish';
 import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary, isCheckoutForCustomer } from '../Shared/feeRules';
+import { defaultShipping, defaultShippingNote } from '../Shared/baseShipping';   // 🚚 freight is never left at $0 by accident
+import { canOverrideShipping } from '../Shared/payRoles';   // who may change the freight: the roles who may charge
 import { isShippingItem, orderPackagingPlanOf, PACK_FEE_CODES } from '../Shared/flatRateShipping';
 import { priceChoice } from '../Shared/hardwarePricing';
 import { customerPriceLevel } from '../Shared/priceLevels';
@@ -170,7 +172,7 @@ const KIT_CFG_KEYS = Object.keys(EMPTY_KB).filter(k => !k.startsWith('rush'));
 
 // `counterMode` (the Uniquity show counter, 2026-10-12): the same tab — cart, customer, save, every rule — wearing the
 // counter's screens (HQ/CounterScreens) instead of the hardware catalog. One door, one spine.
-const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
+const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole = '' }) => {
     const [allItems, setAllItems] = useState([]);     // every brand part (for fee lookup)
     const [customers, setCustomers] = useState([]);
     const [kits, setKits] = useState([]);             // saved prebuilt kits
@@ -209,6 +211,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
     // becomes the order discount unless someone typed one; said on screen and in the log, never silent.
     const [priceLevelInfo, setPriceLevelInfo] = useState(null);
     const lastAutoPct = useRef(null);
+    const lastAutoShip = useRef(null);   // the shipping figure the APP last filled in (Shared/baseShipping)
     useEffect(() => {
         let alive = true;
         if (!customerId) { setPriceLevelInfo(null); return undefined; }
@@ -1548,6 +1551,46 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
     const orderDiscountSaved = Math.round((cartGross - cartTotal) * 100) / 100;
     const orderDiscountPct = parseFloat(soExtras.orderDiscountPercent) || 0;
 
+    // ── 🚚 THE SHIPPING CHARGE IS NEVER LEFT AT $0 BY ACCIDENT (Stuart 2026-10-16) ──────────────
+    // `ship.amount` starts EMPTY and quietly becomes nothing at all when a busy counter forgets it.
+    // The brand's base percent (tab 11 → CRM & Sales Config) fills it from the DISCOUNTED cart
+    // total — the same figure the pay card charges, so what the customer scans matches what they
+    // were quoted, placeholders and all. The rule and its order of precedence are
+    // Shared/baseShipping: a customer's own 4.6 programme (Fabricut's flat-rate boxes) ALWAYS wins,
+    // then the brand's percent, then nothing. A brand with no rate on file is untouched.
+    //
+    // It follows the cart while the box still holds what IT put there, and stops dead the moment a
+    // person types a figure — the same contract as the price level's order discount above, by
+    // design. MUST stay below cartTotal: reading it above its declaration is the throw that whited
+    // out a whole tab once before (2026-09-23).
+    const [shipCfg, setShipCfg] = useState(null);
+    useEffect(() => onSnapshot(doc(db, 'system', 'shipping_config'),
+        (d) => setShipCfg(d.exists() ? d.data() : { baseRatePct: {} }),
+        () => setShipCfg({ baseRatePct: {} })), []);
+    // Does 4.6 give this customer their own freight programme? Then the percentage keeps away.
+    const customerFlatRate = useMemo(
+        () => !!customerId && allItems.some(it => isShippingItem(it) && isCheckoutForCustomer(it, customerId)),
+        [allItems, customerId],
+    );
+    useEffect(() => {
+        if (!shipCfg) return;
+        const d = defaultShipping({
+            brand: activeBrand, cfg: shipCfg, typed: ship.amount,
+            goodsSubtotal: cartTotal, customerFlatRate, lastAuto: lastAutoShip.current,
+        });
+        if (!d.apply) return;
+        const next = d.amount.toFixed(2);
+        if (next === String(ship.amount)) return;
+        lastAutoShip.current = d.amount;
+        setShip(prev => ({ ...prev, amount: next }));
+        addLog(`🚚 ${defaultShippingNote(d, activeBrand)}`, 'info');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [shipCfg, activeBrand, cartTotal, customerFlatRate, ship.amount]);
+    // WHO MAY CHANGE THE FREIGHT: the roles who may take money (Stuart 2026-10-16, Shared/payRoles).
+    // A guard against a default being cleared by accident, NOT a security boundary — the figure is
+    // written by the browser, so this stops a slip, not a determined person. Stuart knows.
+    const mayOverrideShip = canOverrideShipping(userRole);
+
     const myKits = kits.filter(k => k.brand === activeBrand);
     // Collections this customer is entitled to in the PORTAL (CRM → Portal Access). Surfaced here
     // as guidance — the internal counter can still sell anything.
@@ -2191,7 +2234,9 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                         )}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                             <span style={{ ...lbl, marginBottom: 0 }}>Shipping charge $</span>
-                            <input type="number" min="0" step="0.01" value={ship.amount} onChange={e => setShip(prev => ({ ...prev, amount: e.target.value }))} placeholder="0.00" style={{ ...inp, width: '110px', textAlign: 'right' }} />
+                            <input type="number" min="0" step="0.01" value={ship.amount} onChange={e => setShip(prev => ({ ...prev, amount: e.target.value }))} placeholder="0.00" readOnly={!mayOverrideShip}
+                                title={mayOverrideShip ? 'The freight charge. A default fills an empty box; type over it when the real cost differs.' : `Changing the freight is for CSR, manager and admin — this login is "${userRole || 'none'}".`}
+                                style={{ ...inp, width: '110px', textAlign: 'right', ...(mayOverrideShip ? {} : { background: 'var(--paper-2)', cursor: 'not-allowed' }) }} />
                             <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>rides the SO header with an auto-resolved ship method</span>
                         </div>
                     </div>

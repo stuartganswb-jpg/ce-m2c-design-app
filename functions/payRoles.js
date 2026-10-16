@@ -11,6 +11,10 @@
 //
 // It reads the `role` claim that authenticatePin already mints, so nobody has to sign out and
 // back in for it to take effect.
+// ⚠ MIRROR of src/components/Shared/payRoles.js, which is the canonical list. The duplicate is
+// unavoidable — functions deploy only this directory and cannot import from src/, and the browser
+// cannot import from here. scripts/payRoles.test.mjs reads BOTH files and fails if they disagree,
+// so CHANGE BOTH.
 const PAYMENT_ROLES = ['admin', 'superadmin', 'manager', 'csr'];
 
 // `manager` only, NOT floor_manager / paint_manager: those run production, not the counter. If a

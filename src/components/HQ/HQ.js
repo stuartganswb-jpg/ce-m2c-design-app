@@ -488,7 +488,7 @@ function HQ() {
             {activeTab === '5. Marketing' && <DisplayDesignerTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} setCart={setGlobalCart} />}
             {activeTab === '6. Instructions' && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '6.5 Tools, Specs & FAQs' && <ToolsSpecsTab currentUser={user.name} activeBrand={activeBrand.id} userRole={safeUserRole} isSuperAdmin={user?.superAdmin === true || safeUserRole === 'superadmin'} />}
-            {activeTab === '7. Quick Ship' && <QuickShipTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '7. Quick Ship' && <QuickShipTab currentUser={user.name} activeBrand={activeBrand.id} userRole={safeUserRole} />}
             {activeTab === '15. Packaging' && <PackagingTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '8. CPQ Configurator' && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} setCart={setGlobalCart} isSuperAdmin={user?.superAdmin === true || safeUserRole === 'superadmin'} userRole={safeUserRole} />}
             {activeTab === '9. Client Vision' && <ClientVisionTab currentUser={user.name} activeBrand={activeBrand.id} />}
