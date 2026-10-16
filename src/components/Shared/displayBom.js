@@ -719,16 +719,21 @@ export function seededRowsLayout(rows, { widthIn = 24, heightIn = 24, baseIn = 0
 // configuration knows its length, so once the picture is cropped to the object (the screen does
 // that), the box is the rod's length in inches along its axis and the picture's own aspect the
 // other way. A row with no known length keeps whatever box it has.
+// AN UPRIGHT ROW STANDS UP (Stuart 2026-10-16): CPQ draws every rod lying down, so the picture of a pole that stands
+// in the tabletop's base is wider than it is tall — laid in an upright row it came out sideways, 2.5 times too wide
+// (Base Front 2, 7.5" tall, drawn 18.7" across the base). An upright row whose picture lies down is TURNED a quarter:
+// the box is the pole's height by the picture's own thickness, and `turned` tells the screen to draw it standing.
 export function fitRowToLength(row, { lengthInches, aspect, faceWidthIn = 24, faceHeightIn = 24 } = {}) {
     const L = N(lengthInches, 0), a = N(aspect, 0);   // aspect = image width / height after the crop
     if (!(L > 0) || !(a > 0) || !row) return row;
     const W = faceWidthIn * UNITS_PER_INCH, H = faceHeightIn * UNITS_PER_INCH;
     const cx = N(row.x) + N(row.w) / 2, cy = N(row.y) + N(row.h) / 2;
+    const turned = row.orientation === 'V' && a > 1;
     let w, h;
-    if (row.orientation === 'V') { h = Math.min(L * UNITS_PER_INCH, H * 0.9); w = h * a; }
+    if (row.orientation === 'V') { h = Math.min(L * UNITS_PER_INCH, H * 0.9); w = turned ? h / a : h * a; }
     else { w = Math.min(L * UNITS_PER_INCH, W * 0.96); h = w / a; }
     w = Math.round(w); h = Math.round(h);
     const x = Math.round(Math.min(Math.max(0, cx - w / 2), W - w));
     const y = Math.round(Math.min(Math.max(0, cy - h / 2), H - h));
-    return { ...row, x, y, w, h, trueScale: true };
+    return { ...row, x, y, w, h, trueScale: true, turned };
 }

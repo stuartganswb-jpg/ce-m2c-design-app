@@ -359,6 +359,13 @@ const cartBaseFront3 = {
     const pole = { id: 'p', label: 'Base Front 1', orientation: 'V', x: 100, y: 1000, w: 160, h: 600 };
     const vfit = fitRowToLength(pole, { lengthInches: 7.5, aspect: 0.2, faceWidthIn: 24, faceHeightIn: 24 });
     eq('a vertical 7.5" pole is 750 units tall, width from the aspect', [vfit.h, vfit.w], [750, 150]);
+    eq('…its picture already stands, so it is not turned', vfit.turned, false);
+    // CPQ draws every rod lying down: Base Front 2's 7.5" pole came out 18.7" across the base (2026-10-16)
+    const lying = fitRowToLength(pole, { lengthInches: 7.5, aspect: 2.5, faceWidthIn: 24, faceHeightIn: 24 });
+    eq('an upright row whose picture lies down is turned: the pole\'s height by the picture\'s thickness', [lying.h, lying.w, lying.turned], [750, 300, true]);
+    ok('…and it keeps its place (centre within a unit)', Math.abs(lying.x + lying.w / 2 - 180) <= 1 && Math.abs(lying.y + lying.h / 2 - 1300) <= 1, `${lying.x + lying.w / 2}, ${lying.y + lying.h / 2}`);
+    eq('a horizontal row is never turned', fit.turned, false);
+    eq('re-placing a turned row as a lying picture in a horizontal row clears the turn', fitRowToLength({ ...band, turned: true }, { lengthInches: 16.75, aspect: 8 }).turned, false);
     eq('a rod longer than the board is capped inside it', fitRowToLength(band, { lengthInches: 40, aspect: 8 }).w, Math.round(2400 * 0.96));
     eq('no length or no aspect → the row is untouched', [fitRowToLength(band, { lengthInches: 0, aspect: 8 }), fitRowToLength(band, { lengthInches: 10, aspect: 0 })], [band, band]);
     ok('never leaves the face', (() => { const r = fitRowToLength({ ...band, x: 2300 }, { lengthInches: 16.75, aspect: 8 }); return r.x >= 0 && r.x + r.w <= 2400; })());

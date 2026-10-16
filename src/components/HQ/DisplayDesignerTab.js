@@ -238,7 +238,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [], setCart }) =>
                 const W = (face.widthIn || 24) * UNITS_PER_INCH;
                 const bw = Math.round(Math.min(W, (Number(board.widthIn) || 24) * UNITS_PER_INCH));
                 const bh = Math.round(bw * (Number(board.heightIn) || 24) / (Number(board.widthIn) || 24));
-                const boardRow = { x: Math.round((W - bw) / 2), y: 0, w: bw, h: bh, imageUrl: a.thumbnailUrl, hiResUrl: a.originalUrl, boardFramed: true, trueScale: true, replacedAt: Date.now() };
+                const boardRow = { x: Math.round((W - bw) / 2), y: 0, w: bw, h: bh, imageUrl: a.thumbnailUrl, hiResUrl: a.originalUrl, boardFramed: true, trueScale: true, turned: false, replacedAt: Date.now() };
                 const config = { ...rowConfigFromCartItem(it), board };
                 if (target) await place(f => ({ ...f, rows: f.rows.map(r => (r.id === target.id ? { ...r, ...boardRow, config: { ...config, replacedSeed: r.config?.seededFrom || '' } } : r)) }));
                 else await place(f => ({ ...f, rows: [...(f.rows || []), { id: uid(), label, orientation: 'H', ...boardRow, config }] }));
@@ -494,7 +494,10 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [], setCart }) =>
                         {face?.kind === 'ROWS' && (face.rows || []).map(r => (
                             <g key={r.id}>
                                 {r.imageUrl
-                                    ? <image href={r.hiResUrl || r.imageUrl} x={r.x} y={r.y} width={r.w} height={r.h} preserveAspectRatio="xMidYMid meet" onPointerDown={e => startDrag(e, 'move', r.id, { ox: r.x, oy: r.y })} style={{ cursor: 'move' }} />
+                                    // a turned row (displayBom.fitRowToLength): the lying picture drawn standing in its box
+                                    ? (r.turned
+                                        ? <image href={r.hiResUrl || r.imageUrl} x={r.x + r.w / 2 - r.h / 2} y={r.y + r.h / 2 - r.w / 2} width={r.h} height={r.w} transform={`rotate(-90 ${r.x + r.w / 2} ${r.y + r.h / 2})`} preserveAspectRatio="xMidYMid meet" onPointerDown={e => startDrag(e, 'move', r.id, { ox: r.x, oy: r.y })} style={{ cursor: 'move' }} />
+                                        : <image href={r.hiResUrl || r.imageUrl} x={r.x} y={r.y} width={r.w} height={r.h} preserveAspectRatio="xMidYMid meet" onPointerDown={e => startDrag(e, 'move', r.id, { ox: r.x, oy: r.y })} style={{ cursor: 'move' }} />)
                                     : <rect x={r.x} y={r.y} width={r.w} height={r.h} fill={r.orientation === 'V' ? '#e9e2d3' : 'var(--paper-2)'} stroke="var(--line)" onPointerDown={e => startDrag(e, 'move', r.id, { ox: r.x, oy: r.y })} style={{ cursor: 'move' }} />}
                                 <rect x={r.x} y={r.y} width={r.w} height={r.h} fill="none" stroke="var(--brass)" strokeWidth="2" strokeDasharray="8 5" style={{ pointerEvents: 'none' }} />
                                 {r.orientation === 'V'
