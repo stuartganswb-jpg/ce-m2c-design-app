@@ -12,13 +12,14 @@ import PillowQuickSell from './PillowQuickSell';
 import CurtainQuickSell from './CurtainQuickSell';   // 🪟 M2C custom curtains — the chart's price + the workroom's line (the finder; Add waits for the workroom route)
 import CounterScreens from './CounterScreens';   // 🛋 the show counter's screens (counterMode)
 import PayLinkPanel from '../Shared/PayLinkPanel';   // the QR the customer scans at the counter
-import { fetchCustomerPriceLevel, priceLevelNoteOf, mayAutoSetDiscount } from '../Shared/nsPriceLevel';   // the customer's NetSuite price level → the order discount (Stuart 2026-10-12)
+import { fetchCustomerPriceLevel, priceLevelNoteOf, mayAutoSetDiscount, priceLevelCacheOf, fetchAllCustomerPriceLevels } from '../Shared/nsPriceLevel';
+import { chainOf, revisionStampOf, lineageWordsOf, convertedPatchesOf, fromQuoteStampOf } from '../Shared/quoteChain';   // a reopened quote's revisions; conversion closes the chain (2026-10-16)   // the customer's NetSuite price level → the order discount (Stuart 2026-10-12)
 import { nsCustomerIdOf } from '../Shared/nsHeader';   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
 import { QUICK_SELL_REQUEST_ID } from '../Shared/pillowQuickSell';
 import { fabricNsLineOf, parseUniquityCode, KINDS as PILLOW_KINDS } from '../Shared/pillowCatalog';   // an app-only fabric pushes as a fraction of its throw (Stuart 2026-10-12); a reopened cart's pillow lines are marked discountable (2026-10-15)
 import { oneOfAKindCartPlanOf, oneOfAKindSoldPatchOf } from '../Shared/oneOfAKind';   // a piece made at the show sells once (S7, 2026-10-14)
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, query, where, serverTimestamp, writeBatch } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
 import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp, orderDiscountApplies, withPillowDiscountMarks } from '../Shared/lineDiscount';
 import { placeholderLineOf, nsHoldOf, PLACEHOLDER_HELD_STATUS } from '../Shared/placeholderLine';   // ✚ Quick add: an item not yet in the system (2026-10-16)
@@ -215,6 +216,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
             const lvl = await fetchCustomerPriceLevel(nsCustomerIdOf(customerId));
             if (!alive) return;
             setPriceLevelInfo(lvl);
+            // the tile shows it next time (Stuart 2026-10-16): the read is cached on the CRM record
+            if (lvl.read) { try { await updateDoc(doc(db, 'crm_records', customerId), { nsPriceLevel: priceLevelCacheOf(lvl) }); } catch (e) { /* a record the rules refuse keeps its tile words */ } }
             if (!lvl.read) { addLog(`⚠ NetSuite price level not read for ${customerId} (${lvl.error || 'no answer'}) — set the order discount by hand if one applies.`, 'warn'); return; }
             addLog(`💲 ${priceLevelNoteOf(lvl)}`, lvl.reason === 'UNKNOWN' ? 'warn' : 'info');
             if (lvl.percent !== null && lvl.percent >= 0) {
@@ -544,8 +547,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
             getDocs(query(collection(db, 'hq_sales_orders'), where('brand', '==', activeBrand), where('orderClass', '==', ORDER_ENTRY_CLASS))),
         ]);
         const quotes = qs.docs.map(d => ({ id: d.id, ...d.data() }))
-            .filter(j => Array.isArray(j.quickShipCart) && j.quickShipCart.length && String(j.status || '') !== 'SUPERSEDED' && !j.supersededBy)
-            .map(j => ({ kind: 'QUOTE', id: j.id, number: j.jobId || j.id, customer: (j.customer && j.customer.name) || '', at: ms(j.createdAt) || Date.parse(j.dateSaved || '') || 0, lines: j.quickShipCart.length, total: Number((j.pricing && j.pricing.total) || j.invoiceTotal || j.total || 0) || null, by: j.author || '' }));
+            .filter(j => Array.isArray(j.quickShipCart) && j.quickShipCart.length && !['SUPERSEDED', 'CONVERTED'].includes(String(j.status || '')) && !j.supersededBy && !j.convertedTo)
+            .map(j => ({ kind: 'QUOTE', id: j.id, number: j.jobId || j.id, customer: (j.customer && j.customer.name) || '', at: ms(j.createdAt) || Date.parse(j.dateSaved || '') || 0, lines: j.quickShipCart.length, total: Number((j.pricing && j.pricing.total) || j.invoiceTotal || j.total || 0) || null, by: j.author || '', lineage: lineageWordsOf(j, qs.docs.map(d => ({ id: d.id, ...d.data() }))) }));
         const orders = ss.docs.map(d => ({ id: d.id, ...d.data() }))
             .filter(o => Array.isArray(o.quickShipCart) && o.quickShipCart.length && !o.supersededBy && !/CLOSED|CANCEL|SUPERSEDED/i.test(String(o.status || '')))
             .map(o => ({ kind: 'SALES ORDER', id: o.id, number: o.nsTranId || o.soId || o.id, customer: o.customer || '', at: ms(o.nsQueuedAt) || ms(o.createdAt) || 0, lines: o.quickShipCart.length, total: Number(o.invoiceTotal || 0) || null, by: o.author || o.createdBy || '' }));
@@ -640,6 +643,19 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
     // ✚ QUICK ADD (Stuart 2026-10-16: "items that are not yet in the system … prompt for description and sales price, no
     // item #"): a placeholder line at its price; the record saves, the NetSuite order waits until the item is identified
     // on RTG or the CRM card (Shared/placeholderLine).
+    // ↻ every customer's level in one read (SuiteQL, paged), stamped on the CRM records so every tile says it
+    const readAllPriceLevels = async () => {
+        const { levels, rows } = await fetchAllCustomerPriceLevels();
+        const at = Date.now();
+        const targets = customers.filter(c => levels.has(String(nsCustomerIdOf(c.id))));
+        for (let i = 0; i < targets.length; i += 400) {
+            const batch = writeBatch(db);
+            targets.slice(i, i + 400).forEach(c => batch.update(doc(db, 'crm_records', c.id), { nsPriceLevel: priceLevelCacheOf(levels.get(String(nsCustomerIdOf(c.id))), at) }));
+            await batch.commit();
+        }
+        addLog(`💲 Price levels read for ${targets.length} customer(s) (${rows} NetSuite rows).`, 'success');
+        return targets.length;
+    };
     const addPlaceholder = ({ description, price, qty }) => {
         const r = placeholderLineOf({ description, price, qty, by: currentUser || '' });
         if (!r.ok) { r.errors.forEach(e => addLog(`⛔ ${e.message}`, 'error')); return false; }
@@ -1778,6 +1794,9 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 // A Quick Ship QUOTE now leaves a real record: a jobs doc on the customer's CRM
                 // pipeline. (It used to exist ONLY in NetSuite — zero local persistence.)
                 const qJobId = `QSQUOTE-${stamp}`;
+                // the quote this one revises (its root and revision ride the new one — Shared/quoteChain)
+                let reopenedPrev = null;
+                if (reopenedQuote) { try { const ps = await getDoc(doc(db, 'jobs', reopenedQuote)); reopenedPrev = ps.exists() ? { id: ps.id, ...ps.data() } : null; } catch (e) { reopenedPrev = null; } }
                 await setDoc(doc(db, 'jobs', qJobId), {
                     jobId: qJobId, brandId: activeBrand, status: 'CONFIGURED', source: 'QUICKSHIP',
                     customer: { id: customerId, name: selectedCustomer?.name || customerId },
@@ -1846,7 +1865,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                     // here: the tab reprices on render, which is what it has always done.
                     quickShipCart: JSON.parse(JSON.stringify(cart || [])),
                     quickShipExtras: JSON.parse(JSON.stringify({ soExtras, ship, jobName: jobName || '' })),
-                    ...(reopenedQuote ? { supersedes: reopenedQuote } : {}),
+                    ...(reopenedQuote ? { supersedes: reopenedQuote, ...revisionStampOf(reopenedPrev, []) } : {}),
                     dateSaved: new Date().toISOString().split('T')[0], author: currentUser || '', createdAt: serverTimestamp(),
                 });
                 // The quote this one replaces stops being live paper.
@@ -2030,6 +2049,21 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                     addLog(onHand - sold > 0 ? `🎁 ${l.oneOfAKind.code} × ${sold} sold on ${hqId} — ${onHand - sold} still on the wall.` : `🎁 ${l.oneOfAKind.code} marked SOLD on ${hqId}.`, 'info');
                 }
                 catch (e) { addLog(`⚠ ${l.oneOfAKind.code} could not be marked sold (${e.message || e}) — mark it in the Library so it leaves the counter.`, 'warn'); }
+            }
+            // A REOPENED QUOTE BECAME THIS ORDER (Stuart 2026-10-16): every quote in its chain is marked Converted, closed out of
+            // the pipeline, and the order records where it came from (Shared/quoteChain).
+            if (reopenedQuote) {
+                try {
+                    const qs = await getDocs(query(collection(db, 'jobs'), where('brandId', '==', activeBrand), where('source', '==', 'QUICKSHIP')));
+                    const all = qs.docs.map(d => ({ id: d.id, ...d.data() }));
+                    const chain = chainOf(all, reopenedQuote);
+                    const patches = convertedPatchesOf(chain, { soId: hqId, soNumber: hqId, by: currentUser || '', at: stamp });
+                    const batch = writeBatch(db);
+                    patches.forEach(p => batch.update(doc(db, 'jobs', p.id), p.patch));
+                    batch.update(doc(db, 'hq_sales_orders', hqId), fromQuoteStampOf(chain, reopenedQuote));
+                    await batch.commit();
+                    addLog(`✅ Quote ${reopenedQuote}${chain.length > 1 ? ` and its ${chain.length - 1} earlier revision(s)` : ''} marked CONVERTED → ${hqId}; the order records the quote it came from.`, 'success');
+                } catch (e) { addLog(`⚠ The quote chain could not be marked converted (${e.message || e}) — mark ${reopenedQuote} from the CRM.`, 'warn'); }
             }
             setLastCreated({ kind: 'SALES ORDER', id: hqId, total: cartTotal, customerName: selectedCustomer?.name || customerId, toIdentify: phLines.length });
             resetOrderEntry();
@@ -2218,7 +2252,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                     onAddQuickSell={addQuickSell} onAddCustomPillow={addCounterCustom} addLog={addLog} cartCount={cart.filter(l => !isHiddenMaking(l)).length} cartTotal={cartTotal}
                     priceNote={priceLevelInfo ? (priceLevelInfo.read ? priceLevelNoteOf(priceLevelInfo) : 'NetSuite price level not read') : ''}
                     onAddOneOfAKind={addOneOfAKind}
-                    onAddPlaceholder={addPlaceholder}
+                    onAddPlaceholder={addPlaceholder} onReadPriceLevels={readAllPriceLevels}
                     onListReopenable={listReopenable} onReopen={(row) => { setLastCreated(null); return row.kind === 'QUOTE' ? reopenQuoteById(row.id) : reopenSoById(row.id); }}
                     onShowCart={() => { const el = document.getElementById('counter-cart'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }} />
                 {cartCard}

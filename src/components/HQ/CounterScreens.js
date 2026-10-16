@@ -16,6 +16,7 @@ import CounterPriceList from './CounterPriceList';   // $$ price list — quick 
 import { customerPayloadOf, createNsCustomer, crmRecordOf, crmRecordAppOnlyOf } from '../Shared/nsCustomer';   // a new customer is made in NetSuite FIRST (its id is the app's id)
 import { nsProxyFetch } from '../Shared/nsProxy';
 import { oneOfAKindAvailableOf, oneOfAKindOf, oneOfAKindQtyOf } from '../Shared/oneOfAKind';   // the pieces made at the show (S7, 2026-10-14)
+import { tileLevelWordsOf } from '../Shared/nsPriceLevel';   // the customer's level on the tile (2026-10-16)
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
 const card = { background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' };
@@ -32,7 +33,7 @@ const HOME = [
     { key: 'QUICKADD', glyph: '✚', label: 'Quick add', sub: 'not in the system yet — describe it, price it' },
 ];
 
-const CounterScreens = ({ currentUser, customers = [], customerId = '', selectedCustomer = null, onPickCustomer = () => {}, jobName = '', setJobName = () => {}, items = [], findPart, rateFor, onAddQuickSell = () => {}, onAddCustomPillow = () => {}, addLog = () => {}, cartCount = 0, cartTotal = 0, onShowCart = () => {}, priceNote = '', onAddOneOfAKind = () => {}, onListReopenable = null, onReopen = null, onAddPlaceholder = null }) => {
+const CounterScreens = ({ currentUser, customers = [], customerId = '', selectedCustomer = null, onPickCustomer = () => {}, jobName = '', setJobName = () => {}, items = [], findPart, rateFor, onAddQuickSell = () => {}, onAddCustomPillow = () => {}, addLog = () => {}, cartCount = 0, cartTotal = 0, onShowCart = () => {}, priceNote = '', onAddOneOfAKind = () => {}, onListReopenable = null, onReopen = null, onAddPlaceholder = null, onReadPriceLevels = null }) => {
     const [screen, setScreen] = useState(customerId ? 'HOME' : 'CUSTOMER');
     const [q, setQ] = useState('');          // the CUSTOMER search — cleared when a customer is picked
     const [wallQ, setWallQ] = useState('');
@@ -132,7 +133,7 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
                                 <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, minWidth: '180px' }}>{r.number}</span>
                                 <span style={{ fontSize: '1.05rem', flex: 1 }}>{r.customer || '—'}</span>
                                 <span style={mono}>{r.lines} line{r.lines === 1 ? '' : 's'}{r.total ? ` · $${Number(r.total).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : ''}</span>
-                                <span style={mono}>{when(r.at)}{r.by ? ` · ${r.by}` : ''}</span>
+                                <span style={mono}>{when(r.at)}{r.by ? ` · ${r.by}` : ''}{r.lineage ? ` · ${r.lineage}` : ''}</span>
                             </button>
                         ))}
                         {reopenRows !== null && rows.length === 0 && <div style={{ color: 'var(--ink-soft)' }}>Nothing to reopen in the last 30 days.</div>}
@@ -160,12 +161,16 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
                     <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', marginBottom: '12px' }}>Who is this for?</div>
                     {!newCust ? (
                         <>
-                            <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Type a name, a company, an email…" style={inp} />
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Type a name, a company, an email…" style={inp} />
+                                {onReadPriceLevels && <button onClick={async () => { setBusy(true); try { await onReadPriceLevels(); } catch (e) { addLog(`⛔ Price levels could not be read: ${e.message || e}`, 'error'); } setBusy(false); }} disabled={busy} style={{ ...btn(false), whiteSpace: 'nowrap' }} title="Read every customer's NetSuite price level in one go, so each tile says its discount">{busy ? 'reading…' : '↻ Read price levels'}</button>}
+                            </div>
                             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '12px' }}>
                                 {matches.map(c => (
                                     <button key={c.id} onClick={() => { onPickCustomer(c); setQ(''); setScreen('HOME'); }} style={{ ...bigTile(customerId === c.id), minHeight: '90px', fontSize: '1.05rem', flex: '1 1 220px', alignItems: 'flex-start', padding: '14px', textAlign: 'left' }}>
                                         <span>{c.name}</span>
                                         <span style={{ ...mono, color: customerId === c.id ? '#ddd' : 'var(--ink-soft)' }}>{c.id}{c.email ? ` · ${c.email}` : ''}</span>
+                                        {(() => { const lv = tileLevelWordsOf(c); return <span style={{ ...mono, marginTop: '4px', padding: '2px 6px', border: '1px solid', borderColor: lv.tone === 'discount' ? 'var(--brass)' : 'var(--line)', color: customerId === c.id ? '#fff' : (lv.tone === 'discount' ? 'var(--brass)' : 'var(--ink-soft)'), fontWeight: lv.tone === 'discount' ? 700 : 400 }}>💲 {lv.words}</span>; })()}
                                     </button>
                                 ))}
                                 {q && matches.length === 0 && <div style={{ color: 'var(--ink-soft)' }}>No customer matches.</div>}

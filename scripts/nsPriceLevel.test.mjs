@@ -1,5 +1,6 @@
 // The customer's NetSuite price level → the order discount, pinned (Stuart 2026-10-12): the record's own
 // discount % first, else the percent in the name, Base Price = 0, a level with no percent is UNKNOWN and said.
+import { priceLevelCacheOf, tileLevelWordsOf, priceLevelsBulkQuery } from '../src/components/Shared/nsPriceLevel.js';
 import { discountPctOfPriceLevel, priceLevelNoteOf, mayAutoSetDiscount, priceLevelQuery, NS_PRICE_LEVELS_KNOWN } from '../src/components/Shared/nsPriceLevel.js';
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { if (cond) { pass++; } else { fail++; console.error('  ✗', name, extra); } };
@@ -14,5 +15,11 @@ ok('no level at all → NONE', D({}).reason === 'NONE' && /no price level/.test(
 ok('the note says the level and the percent', priceLevelNoteOf(D({ id: '40', name: 'U - 50%' })) === 'NetSuite price level U - 50% → 50% order discount');
 ok('auto-set may write over a blank box or the last auto value, never a typed percent', mayAutoSetDiscount('', null) && mayAutoSetDiscount('30', 30) && !mayAutoSetDiscount('15', 30) && !mayAutoSetDiscount('15', null));
 ok('the query reads the customer joined to its level', /FROM customer c LEFT JOIN pricelevel pl/.test(priceLevelQuery('1234')) && /c\.id = 1234/.test(priceLevelQuery('1234')));
+// ── the level on the tile (2026-10-16) ───────────────────────────────────────────────────────
+const cache = priceLevelCacheOf(D({ id: '41', name: 'U - 60%' }), 7);
+ok('the cache keeps id, name, percent, reason and when', cache.id === '41' && cache.name === 'U - 60%' && cache.percent === 60 && cache.reason === 'NAME' && cache.readAt === 7);
+ok('tile words: a discount, base, none, unknown, not read', tileLevelWordsOf({ nsPriceLevel: cache }).words === 'U - 60% · 60% off' && tileLevelWordsOf({ nsPriceLevel: cache }).tone === 'discount' && tileLevelWordsOf({ nsPriceLevel: priceLevelCacheOf(D({ id: '1', name: 'Base Price' }), 1) }).words === 'Base Price · no discount' && tileLevelWordsOf({ nsPriceLevel: priceLevelCacheOf(D({}), 1) }).words === 'no price level' && tileLevelWordsOf({ nsPriceLevel: priceLevelCacheOf(D({ id: '36', name: 'R2 Wholesale' }), 1) }).tone === 'unknown' && tileLevelWordsOf({}).words === 'level not read yet');
+ok('the bulk query joins every active customer to its level', /FROM customer c LEFT JOIN pricelevel pl/.test(priceLevelsBulkQuery()) && /customerid/.test(priceLevelsBulkQuery()));
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

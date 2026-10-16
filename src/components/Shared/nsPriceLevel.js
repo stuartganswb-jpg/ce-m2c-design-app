@@ -81,3 +81,39 @@ export async function fetchCustomerPriceLevel(nsCustomerId) {
         }
     }
 }
+
+// ── THE LEVEL ON THE CUSTOMER'S TILE (Stuart 2026-10-16: "when selecting the customer in the card that comes up … add their
+// price level discount to show in the card so we know right away"). The CRM record caches the last read
+// (`nsPriceLevel`), stamped on every pick-time read and by the one-press bulk read of every customer's level. ─────
+export const priceLevelCacheOf = (lvl, at = 0) => ({ id: str(lvl && lvl.id), name: str(lvl && lvl.name), percent: lvl && lvl.percent === null ? null : (num(lvl && lvl.percent) === null ? null : num(lvl.percent)), reason: str(lvl && lvl.reason) || 'NONE', readAt: at || Date.now() });
+
+/** The words on the tile: "U - 60% · 60% off" · "Base Price · no discount" · "no price level" · "level not read yet". */
+export const tileLevelWordsOf = (rec) => {
+    const c = rec && rec.nsPriceLevel;
+    if (!c || !c.readAt) return { words: 'level not read yet', tone: 'unknown', percent: null };
+    if (c.reason === 'NONE' || (!c.id && !c.name)) return { words: 'no price level', tone: 'none', percent: null };
+    if (c.percent === null || c.percent === undefined) return { words: `${c.name || c.id} · no percent`, tone: 'unknown', percent: null };
+    if (c.percent === 0) return { words: `${c.name || 'Base Price'} · no discount`, tone: 'none', percent: 0 };
+    return { words: `${c.name || c.id} · ${c.percent}% off`, tone: 'discount', percent: c.percent };
+};
+
+/** One page of every customer's level (SuiteQL pages at 1000): id → { id, name, discountpct }. */
+export const priceLevelsBulkQuery = () => 'SELECT c.id AS customerid, c.pricelevel AS id, pl.name AS name, pl.discountpct AS discountpct FROM customer c LEFT JOIN pricelevel pl ON pl.id = c.pricelevel WHERE c.isinactive = \'F\' ORDER BY c.id';
+
+/** Reads every customer's level, paged. Returns Map(nsCustomerId → discountPctOfPriceLevel shape) and the row count. */
+export async function fetchAllCustomerPriceLevels({ pageSize = 1000, maxPages = 20 } = {}) {
+    const { nsProxyFetch } = await import('./nsProxy');
+    const out = new Map();
+    let offset = 0, pages = 0, total = 0;
+    for (; pages < maxPages; pages += 1) {
+        const resp = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql?limit=${pageSize}&offset=${offset}`, method: 'POST', payload: { q: priceLevelsBulkQuery() } });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 300));
+        const rows = data.items || [];
+        rows.forEach(r => { out.set(String(r.customerid), discountPctOfPriceLevel({ id: r.id, name: r.name, discountpct: r.discountpct })); });
+        total += rows.length;
+        if (rows.length < pageSize || data.hasMore === false) break;
+        offset += pageSize;
+    }
+    return { levels: out, rows: total, pages: pages + 1 };
+}

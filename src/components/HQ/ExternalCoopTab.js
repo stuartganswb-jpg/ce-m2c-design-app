@@ -19,6 +19,7 @@ import { reopenQuoteInCpq, reopenQuoteInVision, reopenQuoteInOrderEntry, wrongDo
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import PlaceholderResolve from './PlaceholderResolve';   // ✚ a quick-add item to identify (2026-10-16)
 import { hasPlaceholders, placeholdersOf } from '../Shared/placeholderLine';
+import { chainOf, lineageWordsOf, convertedPatchesOf, isQuoteArchived } from '../Shared/quoteChain';   // revisions + conversion (2026-10-16)
 import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction, canReopenPostedOrder, netSuiteOrderNoOf } from '../Shared/orderStatus';
@@ -1124,6 +1125,12 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       if (stale.length && !window.confirm(staleApprovalText(stale, { quoteNo: quoteDisplayNo(job) }))) return;
       if (!window.confirm(`Create the NetSuite Sales Order for ${quoteDisplayNo(job)} now?\n\nTransforms estimate ${job.netsuiteEstimateNo || job.netsuiteEstimateId} into a Sales Order (queued — posts in ~1 min, the SO # lands here and on the RTG board automatically).`)) return;
       await updateJobStatus(job.id, 'APPROVED');
+      // every EARLIER revision of this quote is converted with it (Shared/quoteChain) — the approved one keeps APPROVED
+      try {
+          const chain = chainOf(allBrandJobs, job.jobId || job.id).filter(j => j.id !== job.id);
+          const patches = convertedPatchesOf(chain, { soId: `SO-APP-${String(job.quoteNo || job.jobId || job.id).replace(/[^A-Za-z0-9-]/g, '')}`, soNumber: quoteDisplayNo(job), by: currentUser || '', at: Date.now() });
+          await Promise.all(patches.map(p => updateDoc(doc(db, 'jobs', p.id), p.patch)));
+      } catch (e) { console.warn('quote chain not marked converted', e); }
       if (stale.length) {
           try { await updateDoc(doc(db, 'jobs', job.id), { approvedWithStaleLines: stale.map(s => ({ line: s.index + 1, status: s.status, reasons: s.reasons })), approvedWithStaleLinesAt: Date.now(), approvedWithStaleLinesBy: currentUser || '' }); }
           catch (e) { console.warn('stale-line stamp not written', e); }
@@ -1378,14 +1385,14 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   const getCrmActivePipeline = (crmId) => {
       return allBrandJobs.filter(j => 
           !j.deleted && (j.customer?.id === crmId || j.vendorId === crmId) && 
-          !['COMPLETED', 'SHIPPED', 'CANCELLED', 'TRANSMITTED_TO_ERP'].includes(j.status)
+          !isQuoteArchived(j)   // superseded / converted quotes leave the active pipeline (2026-10-16)
       ).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
 
   const getCrmArchivedPipeline = (crmId) => {
       return allBrandJobs.filter(j =>
           !j.deleted && (j.customer?.id === crmId || j.vendorId === crmId) &&
-          ['COMPLETED', 'SHIPPED', 'CANCELLED', 'TRANSMITTED_TO_ERP'].includes(j.status)
+          isQuoteArchived(j)
       ).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
 
@@ -2255,6 +2262,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                           </span>
                                                       </div>
                                                       <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.03em' }}>Created {createdDateOf(job)}</div>
+                                                      {lineageWordsOf(job, allBrandJobs) && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: job.convertedTo ? '#2e7d32' : (job.supersededBy ? '#a86b00' : 'var(--ink-soft)'), marginTop: '4px', letterSpacing: '.03em' }}>↳ {lineageWordsOf(job, allBrandJobs)}</div>}
                                                       {/* The customer withdrew this from their portal. The record is KEPT — this is the
                                                           alert, so nobody chases a quote the client has already dropped. */}
                                                       {job.portalDeleted && (
