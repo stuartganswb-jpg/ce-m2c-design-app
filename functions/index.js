@@ -2217,6 +2217,9 @@ const NMI_SANDBOX_KEY_CE = defineSecret("NMI_SANDBOX_KEY_CE");
 // default. Uniq'uity (MC America LLC) goes live first (Stuart 2026-10-08); CE and M2C get theirs
 // when their keys exist, as one more line each plus a deploy.
 const NMI_LIVE_KEY_UNIQUITY = defineSecret("NMI_LIVE_KEY_UNIQUITY");
+// ✉️ Postmark, one sending server per brand — a brand with no token sends nothing rather than
+// borrowing another company's name (Stuart 2026-10-16).
+const POSTMARK_TOKEN_UNIQUITY = defineSecret("POSTMARK_TOKEN_UNIQUITY");
 // A SANDBOX key is refused by the production host ("Sandbox accounts must use a sandbox domain",
 // seen 2026-09-23) — the environment decides the host, exactly as UPS_HOSTS does for shipping.
 const NMI_HOSTS = { SANDBOX: 'https://sandbox.nmi.com', PRODUCTION: 'https://secure.nmi.com' };
@@ -2548,7 +2551,7 @@ exports.payIntent = onCall({ cors: true }, async (request) => {
 
 // The charge. The amount is re-checked against the link's own bounds; the browser's number is never
 // trusted on its own. The link is claimed in a transaction so a double-click cannot pay twice.
-exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET] }, async (request) => {
+exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY, POSTMARK_TOKEN_UNIQUITY, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET] }, async (request) => {
     const { token, paymentToken, amount, payerName, email } = request.data || {};
     const link = await payLinkOf(token);
     const cfg = await nmiConfig();
@@ -2609,6 +2612,7 @@ exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_
     await ref.update({ status: 'PAID', paidAt, paidAmount: amt, transactionId: res.transactionid || '' });
     const payRec = await db.collection('payments').add(payment);
     postPaymentSoon(payRec.id);   // deposit / payment into NetSuite, automatically (Stuart 2026-09-24)
+    emailPaymentReceived(payRec.id);   // ✉️ and tell the customer what we received (2026-10-16)
     if (link.collection && link.docId) {
         await db.doc(`${link.collection}/${link.docId}`).set({
             paymentsTotal: admin.firestore.FieldValue.increment(amt),
@@ -2627,6 +2631,7 @@ exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_
 // Writes go through the SAME ns_outbox every other NetSuite write uses — serial, retried, visible
 // in HQ 11.1, and refused twice by a dedupe key. A SANDBOX payment never posts.
 const nsPay = require('./nsPayment');
+const mail = require('./emailOutbox');
 
 // The brand's location, the same map the rest of the app pushes against.
 const NS_BRAND_LOCATION = { m2c: '19', ce: '17', uniquity: '20', leyla: '18' };
@@ -2868,12 +2873,13 @@ const payNsInvoices = async ({ brand, customerId, invoiceIds, paymentToken, vaul
         netsuiteKind: 'customerpayment', netsuitePosted: false,
     });
     postPaymentSoon(payRec.id);
+    emailPaymentReceived(payRec.id);   // ✉️
     return { ok: true, amount, transactionId: res.transactionid || '', invoices: chosen.map((i) => i.tranid), environment };
 };
 
 exports.portalPayInvoices = onCall({
     cors: true,
-    secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
+    secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY, POSTMARK_TOKEN_UNIQUITY, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
 }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const { invoiceIds, vaultId, paymentToken, saveCard } = request.data || {};
@@ -3031,7 +3037,7 @@ exports.portalDeleteCard = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NM
 });
 
 // Pay one of your own documents, with a saved card or a new one.
-exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET] }, async (request) => {
+exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_KEY_UNIQUITY, POSTMARK_TOKEN_UNIQUITY, NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET] }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const { collection, docId, amount, vaultId, paymentToken, saveCard } = request.data || {};
     const db = admin.firestore();
@@ -3090,6 +3096,7 @@ exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LI
         paymentEnvironment: cfg.environment,
     }, { merge: true });
     postPaymentSoon(portalPayRec.id);
+    emailPaymentReceived(portalPayRec.id);   // ✉️
 
     return { ok: true, amount: amt, transactionId: res.transactionid || '', balance: money(balance - amt), environment: cfg.environment };
 });
@@ -3427,3 +3434,181 @@ exports.clockDevice = onCall({ enforceAppCheck: true, cors: true }, async (reque
     }
     throw new HttpsError('invalid-argument', 'Unknown action.');
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// ✉️  THE EMAIL OUTBOX  (Stuart 2026-10-16)
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// The app had no transactional email: every document was printed through a browser and every
+// "email" was a mailto: draft a person had to finish. This is the engine — Postmark sends, and the
+// outbox is the same shape as ns_outbox, which has earned its keep: ONE ROW PER LETTER, a dedupe
+// key as the row's own id, a status, attempts, and a worker that drains it.
+//
+// Why an outbox rather than sending inline: a send that fails inline is a letter nobody knows was
+// lost, and a trigger that fires twice is a customer told twice. A row can be retried, read, and
+// resent by a person who can see what happened.
+//
+// `sendAfter` is honoured from the start even though nothing uses it yet — it is where the daily
+// invoice digest will hang when the invoice rules are built, and a scheduler with nowhere to land
+// is a second outbox later.
+
+const postmarkTokenFor = (brand) => {
+    const s = mail.senderFor(brand);                       // throws for a brand with no sender
+    if (s.tokenSecret === 'POSTMARK_TOKEN_UNIQUITY') return POSTMARK_TOKEN_UNIQUITY.value().trim();
+    throw new Error(`NO_POSTMARK_TOKEN: "${brand}" has a sender on file but no token bound in index.js.`);
+};
+const EMAIL_MAX_ATTEMPTS = 5;
+
+// Queue one. The dedupe key IS the document id, so the same event queued twice is the same row —
+// a replayed trigger cannot post a second letter.
+const enqueueEmail = async ({ brand, kind, dedupeKey, to, subject, html, text, from, replyTo, sendAfter = 0, meta = {} }) => {
+    const db = admin.firestore();
+    const id = String(dedupeKey || mail.dedupeKeyOf(kind, Date.now()));
+    const ref = db.collection('email_outbox').doc(id);
+    const existing = await ref.get();
+    if (existing.exists) return { id, already: true };      // already queued, sent, or being sent
+    await ref.set({
+        brand: String(brand || '').toLowerCase(), kind: String(kind || ''),
+        to: String(to || ''), subject: String(subject || ''), html: String(html || ''), text: String(text || ''),
+        from: String(from || ''), replyTo: String(replyTo || ''),
+        status: 'PENDING', attempts: 0, lastError: '', messageId: '',
+        sendAfter: Number(sendAfter) || 0, meta: meta || {},
+        createdAt: Date.now(), sentAt: 0,
+    });
+    return { id, already: false };
+};
+
+// Send one row. Returns nothing useful — the row records what happened, which is the point.
+const sendOneEmail = async (id) => {
+    const db = admin.firestore();
+    const ref = db.collection('email_outbox').doc(String(id));
+    const snap = await ref.get();
+    if (!snap.exists) return;
+    const e = snap.data() || {};
+    if (e.status === 'SENT' || e.status === 'SENDING') return;
+    if (Number(e.attempts || 0) >= EMAIL_MAX_ATTEMPTS) return;
+    if (!mail.looksLikeEmail(e.to)) {
+        await ref.set({ status: 'FAILED', lastError: `Not an email address: "${e.to}"`, attempts: EMAIL_MAX_ATTEMPTS }, { merge: true });
+        return;
+    }
+    await ref.set({ status: 'SENDING', attempts: Number(e.attempts || 0) + 1, lastTriedAt: Date.now() }, { merge: true });
+    try {
+        const token = postmarkTokenFor(e.brand);
+        const r = await fetch('https://api.postmarkapp.com/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Postmark-Server-Token': token },
+            body: JSON.stringify({
+                From: e.from, To: e.to, ReplyTo: e.replyTo || undefined,
+                Subject: e.subject, HtmlBody: e.html, TextBody: e.text,
+                MessageStream: 'outbound',       // the TRANSACTIONAL stream; marketing is a different one
+            }),
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok || Number(body.ErrorCode || 0) !== 0) {
+            throw new Error(`Postmark refused (${body.ErrorCode ?? r.status}): ${body.Message || 'no detail'}`);
+        }
+        await ref.set({ status: 'SENT', sentAt: Date.now(), messageId: String(body.MessageID || ''), lastError: '' }, { merge: true });
+    } catch (err) {
+        const msg = String((err && err.message) || err).slice(0, 400);
+        const attempts = Number(e.attempts || 0) + 1;
+        // A letter that has run out of attempts stops and SAYS so, rather than retrying for ever
+        // in silence. HQ 11 shows it with the reason and a Resend.
+        await ref.set({ status: attempts >= EMAIL_MAX_ATTEMPTS ? 'FAILED' : 'PENDING', lastError: msg }, { merge: true });
+    }
+};
+
+// Try it now, without making the caller wait or fail: a charge must never be undone because an
+// email did not go. Fire-and-forget with a catch, exactly as postPaymentSoon does — NOT a
+// setTimeout, which can be frozen with the instance before it ever fires. The five-minute worker
+// is the guarantee; this is only so a customer's receipt arrives in seconds rather than minutes.
+const sendEmailSoon = (id) => sendOneEmail(id)
+    .catch((e) => console.error('email send failed', id, e && e.message));
+
+exports.emailOutboxWorker = onSchedule({
+    schedule: 'every 5 minutes',
+    timeoutSeconds: 240,
+    maxInstances: 1,
+    secrets: [POSTMARK_TOKEN_UNIQUITY],
+}, async () => {
+    const db = admin.firestore();
+    const now = Date.now();
+    const due = await db.collection('email_outbox')
+        .where('status', '==', 'PENDING')
+        .orderBy('createdAt')
+        .limit(40)
+        .get();
+    for (const d of due.docs) {
+        const e = d.data() || {};
+        if (Number(e.sendAfter || 0) > now) continue;      // a digest waiting for its hour
+        await sendOneEmail(d.id);                          // serial: Postmark is not a race
+    }
+});
+
+// What has been sent, and what has not — HQ 11.
+exports.emailLog = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const snap = await admin.firestore().collection('email_outbox').orderBy('createdAt', 'desc').limit(30).get();
+    return {
+        emails: snap.docs.map((d) => {
+            const e = d.data() || {};
+            return {
+                id: d.id, brand: e.brand || '', kind: e.kind || '', to: e.to || '', subject: e.subject || '',
+                status: e.status || '', attempts: e.attempts || 0, lastError: e.lastError || '',
+                messageId: e.messageId || '', createdAt: e.createdAt || 0, sentAt: e.sentAt || 0,
+            };
+        }),
+    };
+});
+
+// Send it again — for the one that failed, and for the customer who says it never arrived.
+exports.emailResend = onCall({ enforceAppCheck: true, secrets: [POSTMARK_TOKEN_UNIQUITY] }, async (request) => {
+    assertStaffAdmin(request);
+    const id = String((request.data || {}).id || '');
+    const ref = admin.firestore().collection('email_outbox').doc(id);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError('not-found', 'No such email.');
+    await ref.set({ status: 'PENDING', attempts: 0, lastError: '' }, { merge: true });
+    await sendOneEmail(id);
+    const after = await ref.get();
+    const a = after.data() || {};
+    return { status: a.status || '', lastError: a.lastError || '', messageId: a.messageId || '' };
+});
+
+// ── THE FIRST LETTER: a payment landed ───────────────────────────────────────────────────────
+// Queued from every door that takes money. It reads the figures off the ORDER — the same ones the
+// CRM chip and the printed document show — so the three cannot tell a customer different stories.
+const emailPaymentReceived = async (paymentId) => {
+    try {
+        const db = admin.firestore();
+        const snap = await db.collection('payments').doc(String(paymentId)).get();
+        if (!snap.exists) return;
+        const p = snap.data() || {};
+        if (!mail.SENDERS[String(p.brand || '').toLowerCase()]) return;   // brand does not send yet
+        if (p.environment !== 'PRODUCTION') return;                        // a test payment writes no letters
+        let to = String(p.email || '').trim();
+        let orderTotal = 0; let paidTotal = Number(p.amount || 0); let customerName = String(p.payerName || '');
+        if (p.collection && p.docId) {
+            const d = await db.collection(String(p.collection)).doc(String(p.docId)).get();
+            const doc0 = d.exists ? (d.data() || {}) : {};
+            paidTotal = Number(doc0.paymentsTotal || p.amount || 0);
+            orderTotal = p.collection === 'jobs'
+                ? Number((doc0.cpqData && doc0.cpqData.totalPrice) || 0) + Number(doc0.shippingAmount || 0)
+                : Number(doc0.invoiceTotal || 0);
+            customerName = customerName || String(doc0.customer || (doc0.customer && doc0.customer.name) || '');
+            if (!to) to = String(doc0.email || doc0.customerEmail || '').trim();
+        }
+        if (!mail.looksLikeEmail(to)) return;    // nobody to write to; the payment stands regardless
+        const letter = mail.paymentReceivedEmail({
+            brand: p.brand, customerName, reference: p.reference,
+            amount: Number(p.amount || 0), paidTotal, orderTotal, transactionId: p.transactionId,
+        });
+        const { id, already } = await enqueueEmail({
+            brand: p.brand, kind: 'PAYMENT_RECEIVED',
+            dedupeKey: mail.dedupeKeyOf('PAYMENT_RECEIVED', paymentId),
+            to, ...letter, meta: { paymentId: String(paymentId), reference: p.reference || '' },
+        });
+        if (!already) sendEmailSoon(id);
+    } catch (e) {
+        // A letter never undoes a payment. It is logged and the row, if written, retries.
+        console.warn('emailPaymentReceived:', (e && e.message) || e);
+    }
+};

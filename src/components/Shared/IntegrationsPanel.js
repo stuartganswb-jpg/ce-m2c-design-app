@@ -8,6 +8,7 @@
 // test invoice whose real purpose is to learn whether NMI hands back a payment-page URL we can put
 // on our own quote/SO PDFs (Stuart's first payments use case) or only emails it itself.
 import React, { useEffect, useState } from 'react';
+import EmailLogPanel from './EmailLogPanel';   // ✉️ what the app has emailed (2026-10-16)
 import { httpsCallable } from 'firebase/functions';
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db, functions } from '../../firebase';
@@ -387,6 +388,7 @@ export default function IntegrationsPanel() {
 
             <PaySettings />
             <PaymentsQueue />
+            <EmailLogPanel />
             <WebhookEvents />
 
             <div style={{ ...card, background: 'var(--paper-2, #f2efe8)' }}>
