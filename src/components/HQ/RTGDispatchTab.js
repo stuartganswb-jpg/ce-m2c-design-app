@@ -56,6 +56,8 @@ import { printForm } from '../Shared/printForm';
 import { fetchPayBlock } from '../Shared/payBlock';   // what a printed document says about money already paid
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
+import PlaceholderResolve from './PlaceholderResolve';   // ✚ a quick-add item to identify before the order proceeds (2026-10-16)
+import { hasPlaceholders, placeholdersOf } from '../Shared/placeholderLine';
 import { queueNsAssemblyWorkOrder, pickNsWoItem, postNsAssemblyBuild, MILL_BUILD_BIN, millBuildBinSql } from "../Shared/nsWorkOrder";
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers and
@@ -1190,7 +1192,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     <div>
                         <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(so) ? '#d9534f' : 'var(--ink)' }}>SO: {so.soId || so.id} <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '2px 6px', marginLeft: '6px' }}>Order Entry · {tbf.length ? (tbf.length === (so.lines || []).length ? 'to be finished' : 'stocked + to be finished') : 'stocked'}</span></div>
                         <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Cust: {so.customer || so.customerName || 'N/A'}{so.sidemark ? ` · ${so.sidemark}` : ''}{(so.lines || []).length ? ` · ${so.lines.length} line${so.lines.length === 1 ? '' : 's'}` : ''}</div>
-                        {urgentControls(so, 'hq_sales_orders')}{finishAsAvailableControls(so)}{backorderChip(so)}
+                        {urgentControls(so, 'hq_sales_orders')}{finishAsAvailableControls(so)}{backorderChip(so)}{hasPlaceholders(so) && <span title="A quick-add item sold without an item # — identify it below; the NetSuite order waits" style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '2px 7px', border: '1px solid #b3362f', color: '#b3362f', marginLeft: '6px' }}>⚠ {placeholdersOf(so).length} to identify</span>}
                     </div>
                     <button onClick={() => deleteOrder('hq_sales_orders', so)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                 </div>
@@ -1203,6 +1205,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                         {st.by && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: tone }}>· {st.by}</span>}
                     </span>
                 </div>
+                {hasPlaceholders(so) && <PlaceholderResolve record={so} collection="hq_sales_orders" brand={so.brand || activeBrand} currentUser={currentUser} />}
                 {tbfRows.length > 0 && (
                     <div style={{ border: `1px solid ${tbfOpen.length ? '#b3362f' : 'var(--line)'}`, background: tbfOpen.length ? '#fdf3f3' : '#fff', padding: '7px 9px', marginBottom: '8px' }}>
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', fontWeight: 700, color: tbfOpen.length ? '#b3362f' : '#3a7d44', marginBottom: '4px' }}>

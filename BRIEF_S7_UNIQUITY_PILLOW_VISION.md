@@ -327,7 +327,8 @@ either posts (ids on file) or refuses with `NO_NS_FORM_FOR_BRAND` — and the CE
   (`name`, `qty`, `price`, `total`, `partHandling`, `partId`, `legacyErpId`, `finishCode`, `isFee`).
 
 ## 7. Status log
-- **2026-10-15 · counter hides $0 makings (sweep pending).** Display-only filter on the counter's cart list and counts; the order carries every line as before.
+- **2026-10-16 · ✚ Quick add placeholders (sweep pending).** Description + price + qty → a TBD line; the SO saves HELD (nsHold, status HELD_PLACEHOLDER) until identified on RTG / CRM (PlaceholderResolve), then the held NetSuite write queues itself; the day summary lists "To identify". An estimate pushes the placeholder on the rollup item 61502 as TO IDENTIFY. Named, not built: a resolver on the CRM QUOTE card (a quote's placeholder is resolved on the order it becomes).
+- **2026-10-15 · 5c4f7da6 — counter hides $0 makings, LIVE (swept: served main 5c4f7da6).** Display-only filter on the counter's cart list and counts; the order carries every line as before.
 - **2026-10-15 · 83e2b4fb — 📷 counter camera, LIVE (swept: served main 83e2b4fb).** 📷 on pictureless tiles; first shot = the items' picture (throws + fabric), every shot a PRODUCT asset attached to the colourway's items.
 - **2026-10-15 · 9b3bdee6 — email in the bar + ⟲ Reopen on the counter, LIVE (swept: served main 9b3bdee6).** Same loaders as the CRM (lifted into functions); last 30 days, searched; superseded / closed left out.
 - **2026-10-15 · 53724861 — fresh start + sticky bar, LIVE (swept: served main 53724861).** After a counter save: customer cleared, back to "Who is this for?", the pay card pinned on top until Done / the next customer. The counter bar is sticky under the header (CSS var from a measured header).

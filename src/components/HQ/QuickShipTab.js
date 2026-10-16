@@ -21,6 +21,7 @@ import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
 import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp, orderDiscountApplies, withPillowDiscountMarks } from '../Shared/lineDiscount';
+import { placeholderLineOf, nsHoldOf, PLACEHOLDER_HELD_STATUS } from '../Shared/placeholderLine';   // ✚ Quick add: an item not yet in the system (2026-10-16)
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
@@ -39,6 +40,22 @@ import { isItemKit, itemKitOrderLinesOf } from "../Shared/itemKit";
 import { FINISH_MODE, finishModeStampOf, tbfLineCountOf } from "../Shared/orderStatus";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
 import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode, isAliasDoc, realPartOf, aliasTargetIdOf } from "../Shared/aliasIdentity";
+// ✚ QUICK ADD — an item not yet in the system (Stuart 2026-10-16): description, price, quantity → a placeholder line
+const QuickAddCard = ({ onAdd }) => {
+    const [d, setD] = useState(''); const [p, setP] = useState(''); const [q, setQ] = useState('1');
+    const mono = { fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
+    const inp = { padding: '9px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', boxSizing: 'border-box' };
+    const go = () => { if (onAdd({ description: d, price: p, qty: q })) { setD(''); setP(''); setQ('1'); } };
+    return (
+        <div style={{ background: '#fff', border: '1px dashed var(--line)', padding: '14px 16px', display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div style={{ ...mono, width: '100%' }}>✚ Quick add — an item not yet in the system · it sells now, the NetSuite order waits until the office identifies it on RTG or the CRM card</div>
+            <label style={{ flex: '2 1 260px' }}><div style={mono}>Description</div><input value={d} onChange={e => setD(e.target.value)} placeholder="what the customer is buying" style={{ ...inp, width: '100%' }} onKeyDown={e => { if (e.key === 'Enter') go(); }} /></label>
+            <label style={{ width: '120px' }}><div style={mono}>Sale price $</div><input value={p} onChange={e => setP(e.target.value)} inputMode="decimal" style={{ ...inp, width: '100%', textAlign: 'right' }} onKeyDown={e => { if (e.key === 'Enter') go(); }} /></label>
+            <label style={{ width: '80px' }}><div style={mono}>Qty</div><input value={q} onChange={e => setQ(e.target.value)} inputMode="numeric" style={{ ...inp, width: '100%', textAlign: 'right' }} /></label>
+            <button onClick={go} style={{ padding: '10px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', ...mono }}>+ Add to cart</button>
+        </div>
+    );
+};
 const isUniquityPillowCode = (code) => { const p = parseUniquityCode(code); return !!p.ok && p.kind === PILLOW_KINDS.PILLOW; };   // a standard Uniquity pillow (Pattern/NNPWxH)
 
 // Stocked / pre-finished items are sold flat — each line goes to NetSuite as its own sales-order
@@ -620,6 +637,17 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
         addLog(`🎁 Added ${item.legacyErpId} — ${item.itemName} at $${plan.piece.price}${plan.piece.via ? ' (sold on the CUSTOM PILLOW holder)' : ''} · ${m.uom === 'YARD' ? `${m.yards} yd of ${m.item.legacyErpId}` : `${m.item.legacyErpId} × 1`} beneath at $0`, 'success');
     };
     // the counter's custom board hands its priced line straight here (VisionPillow onAddToCart)
+    // ✚ QUICK ADD (Stuart 2026-10-16: "items that are not yet in the system … prompt for description and sales price, no
+    // item #"): a placeholder line at its price; the record saves, the NetSuite order waits until the item is identified
+    // on RTG or the CRM card (Shared/placeholderLine).
+    const addPlaceholder = ({ description, price, qty }) => {
+        const r = placeholderLineOf({ description, price, qty, by: currentUser || '' });
+        if (!r.ok) { r.errors.forEach(e => addLog(`⛔ ${e.message}`, 'error')); return false; }
+        setLastCreated(null);
+        setCart(prev => [...prev, r.line]);
+        addLog(`✚ Quick add: ${r.line.qty} × "${r.line.name}" at $${r.line.rateOverride} — no item yet; the order's NetSuite push waits until it is identified on RTG or the CRM card.`, 'warn');
+        return true;
+    };
     const addCounterCustom = (line) => {
         const cartPlan = pillowCartPlanOf({ line, findByCode: pillowByCode });
         if (!cartPlan.ok) { addLog(`⛔ Not added — ${cartPlan.errors.map(e => e.message).join(' ')}`, 'error'); return; }
@@ -1521,11 +1549,14 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
         const trvOrder = pricedCart.filter(l => l.trvKitCode);
         // AN ITEM KIT has no NetSuite item BY DESIGN (Stuart 2026-09-28: "just push the 3 independant parts for consumption"):
         // its parts push as real lines at $0, and the kit's money rides the rollup holder — the CPQ push's shape.
-        const unmapped = pricedCart.filter(l => !l.nsId && !l.trvKitCode && !l.isKit);
+        const unmapped = pricedCart.filter(l => !l.nsId && !l.trvKitCode && !l.isKit && !l.placeholder);
         if (unmapped.length) {
             if (!window.confirm(`${unmapped.length} line(s) have no NetSuite ID and will be skipped:\n\n${unmapped.map(l => `• ${l.erp || l.name}`).join('\n')}\n\nContinue with the rest?`)) return;
         }
-        const lines = pricedCart.filter(l => l.nsId || l.isKit);
+        const lines = pricedCart.filter(l => l.nsId || l.isKit || l.placeholder);
+        // QUICK-ADD placeholders (Shared/placeholderLine): on a SALES ORDER the NetSuite write is HELD on the record until each is
+        // identified; on an ESTIMATE they ride the CPQ rollup item with a TO IDENTIFY description (a quote is paper — the order holds).
+        const phLines = lines.filter(l => l.placeholder);
         const kitSold = lines.filter(l => l.isKit);
         if (!lines.length && !trvOrder.length) return alert('No lines have a NetSuite item ID. Sync these items to NetSuite first.');
         if (!window.confirm(`Create a ${asLabel} for ${selectedCustomer?.name || customerId} with ${lines.length - kitSold.length} stock line(s)${kitSold.length ? ` (the parts of ${kitSold.length} kit${kitSold.length === 1 ? '' : 's'} at $0, each kit's price on the rollup)` : ''}${trvOrder.length ? ` + a traverse system (components consumed + $ holder)` : ''}?\n\nThe record is saved HERE first, and the NetSuite write rides the staged sync (posts in ~1 min — RTG Transmit Log / 11.1 Sync Queue show progress).`)) return;
@@ -1715,13 +1746,14 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                     // the pack only shows on the customer-facing quote/invoice. The description
                     // still names it so the SO reads the way the customer ordered.
                     items: lines.filter(l => !l.isKit).map(l => ({
-                        item: { id: l.nsId.toString() },
+                        item: { id: l.placeholder ? (asType === 'estimate' ? '61502' : '') : l.nsId.toString() },
+                        ...(l.placeholder && asType !== 'estimate' ? { _placeholderLineIdx: lines.indexOf(l) } : {}),
                         quantity: l.nsQtyFactor ? Math.round(l.eachQty * l.nsQtyFactor * 10000) / 10000 : l.eachQty,
                         rate: parseFloat((l.rate || 0).toFixed(2)),
                         price: { id: "-1" },
                         // The customer ordered the alias code — name it first so the SO reads the way
                         // they ordered, while the LINE ITEM stays the real stocked part.
-                        description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''}${l.nsVia ? ' [' + l.nsVia + ']' : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : l.feeRule ? ' [fee]' : ' [Quick Ship stock]'}`,
+                        description: `${l.placeholder ? 'TO IDENTIFY — ' : ''}${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''}${l.nsVia ? ' [' + l.nsVia + ']' : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : l.feeRule ? ' [fee]' : ' [Quick Ship stock]'}`,
                         ...((String(l.lineMemo || '').trim() || lineTag) ? { custcol3: String(l.lineMemo || '').trim().slice(0, 300) || lineTag } : {}),
                     })).concat(kitSold.map(l => ({
                         // THE KIT'S MONEY (Shared/itemKit): one rollup line per kit sold — its parts are the $0 lines above.
@@ -1887,7 +1919,9 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 memo: memoText,
                 // NS_QUEUED until NetSuite accepts — the writeBack flips it to 'Pending' and the real
                 // SO number replaces the app id, and only then does WMS list it (uniform 2026-08-25).
-                status: 'NS_QUEUED', pickStatus: 'Pending',
+                status: phLines.length ? PLACEHOLDER_HELD_STATUS : 'NS_QUEUED', pickStatus: 'Pending',
+                // the held NetSuite write, whole, until every placeholder is identified (Shared/placeholderLine)
+                ...(phLines.length ? { nsHold: nsHoldOf({ kind: 'salesorder', label: `Quick Ship SO · ${selectedCustomer?.name || customerId} · ${lines.length} line(s)`, targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesorder', method: 'POST', payload, sourceApp: 'QUICKSHIP', writeBack: [{ collection: 'hq_sales_orders', docId: hqId, idField: 'nsInternalId', tranField: 'soId', patch: { status: 'Pending' } }], at: stamp }), placeholderHeld: true } : {}),
                 totalParts: lines.reduce((s, l) => s + l.eachQty, 0),
                 // PICK/PACK reads lines[].qty — it must be the EACH count the warehouse pulls off
                 // the shelf (14 rings), never the pack count. packs/packUom ride alongside so the
@@ -1901,7 +1935,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 // NetSuite ($0 lines) and prints them on the documents, but they never reached lines[] — so the SO Pack
                 // never listed the track, fascia and brackets to pick. Each goes on as the item NetSuite consumes, in
                 // NetSuite's unit, a shelf pick of its kit (trvComponent) — exactly what leaves the shelf.
-                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}), ...(l.lineImage && l.lineImage.url ? { lineImage: l.lineImage } : {}), ...(l.nsQtyFactor ? { nsQtyFactor: l.nsQtyFactor, nsVia: l.nsVia || '' } : {}), ...(l.oneOfAKind ? { oneOfAKind: l.oneOfAKind } : {}), ...(l.ooakPart ? { ooakPart: true } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
+                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}), ...(l.lineImage && l.lineImage.url ? { lineImage: l.lineImage } : {}), ...(l.nsQtyFactor ? { nsQtyFactor: l.nsQtyFactor, nsVia: l.nsVia || '' } : {}), ...(l.oneOfAKind ? { oneOfAKind: l.oneOfAKind } : {}), ...(l.ooakPart ? { ooakPart: true } : {}), ...(l.placeholder ? { placeholder: l.placeholder } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -1963,13 +1997,17 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
             if (tbfLines.length) {
                 addLog(`📋 ${tbfLines.length} to-be-finished line(s) recorded — RTG starts them by itself when NetSuite accepts the order (Stuart 2026-09-20); a line that needs a decision is named in red on the order's RTG card, with the way into the review.`, 'info');
             }
-            const obId = await enqueueNsWrite({
-                kind: 'salesorder', label: `Quick Ship SO · ${selectedCustomer?.name || customerId} · ${lines.length} line(s)`,
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesorder`,
-                method: 'POST', payload, sourceApp: 'QUICKSHIP', createdBy: currentUser || '',
-                writeBack: [{ collection: 'hq_sales_orders', docId: hqId, idField: 'nsInternalId', tranField: 'soId', patch: { status: 'Pending' } }],
-            });
-            addLog(`✅ ${hqId} recorded and queued to NetSuite (outbox ${obId}) — enters the WMS Stock tab when NetSuite accepts.`, 'success');
+            if (phLines.length) {
+                addLog(`⏸ ${hqId} recorded and HELD — ${phLines.length} quick-add item${phLines.length === 1 ? '' : 's'} to identify (${phLines.map(l => `"${l.name}"`).join(', ')}). Identify them on the RTG card or the customer's CRM card; the NetSuite order is queued by itself when the last one is known.`, 'warn');
+            } else {
+                const obId = await enqueueNsWrite({
+                    kind: 'salesorder', label: `Quick Ship SO · ${selectedCustomer?.name || customerId} · ${lines.length} line(s)`,
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesorder`,
+                    method: 'POST', payload, sourceApp: 'QUICKSHIP', createdBy: currentUser || '',
+                    writeBack: [{ collection: 'hq_sales_orders', docId: hqId, idField: 'nsInternalId', tranField: 'soId', patch: { status: 'Pending' } }],
+                });
+                addLog(`✅ ${hqId} recorded and queued to NetSuite (outbox ${obId}) — enters the WMS Stock tab when NetSuite accepts.`, 'success');
+            }
 
             // SUPERSEDE (CRM ✎ Edit): the edited cart just became the real order — the original
             // closes with a pointer, so two live SOs can never both claim the same sale.
@@ -1993,7 +2031,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                 }
                 catch (e) { addLog(`⚠ ${l.oneOfAKind.code} could not be marked sold (${e.message || e}) — mark it in the Library so it leaves the counter.`, 'warn'); }
             }
-            setLastCreated({ kind: 'SALES ORDER', id: hqId, total: cartTotal, customerName: selectedCustomer?.name || customerId });
+            setLastCreated({ kind: 'SALES ORDER', id: hqId, total: cartTotal, customerName: selectedCustomer?.name || customerId, toIdentify: phLines.length });
             resetOrderEntry();
         } catch (e) {
             console.error('Quick Ship push error', e);
@@ -2166,6 +2204,10 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                             <button onClick={() => setLastCreated(null)} style={{ marginLeft: 'auto', padding: '10px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase' }} title="Put this away — the order is saved and on the CRM card; picking the next customer puts it away too">Done</button>
                         </div>
                         <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '12px' }}>Make the link and they scan the QR to pay on their own phone. {lastCreated.kind} <b>{lastCreated.id}</b> is on their CRM card; the office can email it from there.</div>
+                        {lastCreated.toIdentify > 0 && (
+                            // a quick-add item on this order (Payments session 2026-10-16): a payment taken now is captured, its NetSuite deposit waits with the order
+                            <div style={{ fontSize: '0.88rem', color: '#b3362f', border: '1px solid #b3362f', background: '#fdf3f3', padding: '8px 10px', marginBottom: '12px' }}>⚠ {lastCreated.toIdentify} quick-add item{lastCreated.toIdentify === 1 ? '' : 's'} to identify — the NetSuite order waits until the office identifies {lastCreated.toIdentify === 1 ? 'it' : 'them'} on RTG or the CRM. A payment taken now is charged for real; its NetSuite deposit posts by itself once the order reaches NetSuite.</div>
+                        )}
                         <PayLinkPanel docType={lastCreated.kind === 'QUOTE' ? 'QUOTE' : 'SALES_ORDER'} collection={lastCreated.kind === 'QUOTE' ? 'jobs' : 'hq_sales_orders'} docId={lastCreated.id}
                             reference={lastCreated.id} customerName={lastCreated.customerName || ''} totalAmount={Number(lastCreated.total) || 0} brand={activeBrand} />
                     </div>
@@ -2176,6 +2218,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
                     onAddQuickSell={addQuickSell} onAddCustomPillow={addCounterCustom} addLog={addLog} cartCount={cart.filter(l => !isHiddenMaking(l)).length} cartTotal={cartTotal}
                     priceNote={priceLevelInfo ? (priceLevelInfo.read ? priceLevelNoteOf(priceLevelInfo) : 'NetSuite price level not read') : ''}
                     onAddOneOfAKind={addOneOfAKind}
+                    onAddPlaceholder={addPlaceholder}
                     onListReopenable={listReopenable} onReopen={(row) => { setLastCreated(null); return row.kind === 'QUOTE' ? reopenQuoteById(row.id) : reopenSoById(row.id); }}
                     onShowCart={() => { const el = document.getElementById('counter-cart'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }} />
                 {cartCard}
@@ -2252,6 +2295,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false }) => {
             {activeBrand === 'uniquity' && (
                 <PillowQuickSell items={allItems} findPart={(id) => allItems.find(x => x.id === id) || pillowByCode(id)} rateFor={rateFor} onAdd={addQuickSell} addLog={addLog} />
             )}
+            {/* ✚ QUICK ADD on HQ's door too (rule 5: the counter and tab 7 take the same lines) */}
+            <QuickAddCard onAdd={addPlaceholder} />
             {activeBrand === 'm2c' && <CurtainQuickSell />}
             {portalReqs.length > 0 && (
                 <div style={{ ...card, padding: '20px 24px', border: '1px solid var(--brass)' }}>

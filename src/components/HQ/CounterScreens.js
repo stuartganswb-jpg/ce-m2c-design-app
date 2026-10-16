@@ -29,14 +29,16 @@ const HOME = [
     { key: 'CUSTOM', glyph: '✂️', label: 'Custom pillow', sub: 'draw it on the board' },
     { key: 'SAMPLES', glyph: '🗂', label: 'Samples', sub: 'swatches, small or large' },
     { key: 'OOAK', glyph: '🎁', label: 'One of a kind', sub: 'made at the show, one each' },
+    { key: 'QUICKADD', glyph: '✚', label: 'Quick add', sub: 'not in the system yet — describe it, price it' },
 ];
 
-const CounterScreens = ({ currentUser, customers = [], customerId = '', selectedCustomer = null, onPickCustomer = () => {}, jobName = '', setJobName = () => {}, items = [], findPart, rateFor, onAddQuickSell = () => {}, onAddCustomPillow = () => {}, addLog = () => {}, cartCount = 0, cartTotal = 0, onShowCart = () => {}, priceNote = '', onAddOneOfAKind = () => {}, onListReopenable = null, onReopen = null }) => {
+const CounterScreens = ({ currentUser, customers = [], customerId = '', selectedCustomer = null, onPickCustomer = () => {}, jobName = '', setJobName = () => {}, items = [], findPart, rateFor, onAddQuickSell = () => {}, onAddCustomPillow = () => {}, addLog = () => {}, cartCount = 0, cartTotal = 0, onShowCart = () => {}, priceNote = '', onAddOneOfAKind = () => {}, onListReopenable = null, onReopen = null, onAddPlaceholder = null }) => {
     const [screen, setScreen] = useState(customerId ? 'HOME' : 'CUSTOMER');
     const [q, setQ] = useState('');          // the CUSTOMER search — cleared when a customer is picked
     const [wallQ, setWallQ] = useState('');
     const [reopenRows, setReopenRows] = useState(null);   // ⟲ Reopen: the last 30 days' quotes + orders, read on open
     const [reopenQ, setReopenQ] = useState('');
+    const [qa, setQa] = useState({ description: '', price: '', qty: '1' });   // ✚ Quick add
     const loadReopenable = async () => {
         if (!onListReopenable) return;
         setReopenRows(null);
@@ -209,6 +211,29 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
                             <span style={{ ...mono, fontSize: '10px' }}>{h.sub}</span>
                         </button>
                     ))}
+                </div>
+            </div>
+        );
+    }
+
+    if (screen === 'QUICKADD') {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {crumb}
+                <div style={{ ...card, padding: '20px' }}>
+                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', marginBottom: '6px' }}>✚ Quick add</div>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '14px' }}>An item that is not in the system yet. Describe it and price it; it sells now at the customer's level. The order is recorded and its NetSuite push waits until the office identifies the item on RTG or the customer's CRM card — nothing starts or picks on a guess.</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '720px' }}>
+                        <label><div style={mono}>Description</div><input autoFocus value={qa.description} onChange={e => setQa({ ...qa, description: e.target.value })} placeholder="what the customer is buying — e.g. hand-loomed lumbar, oatmeal, 20 × 12" style={inp} /></label>
+                        <div style={{ display: 'flex', gap: '12px' }}>
+                            <label style={{ flex: 1 }}><div style={mono}>Sale price $</div><input value={qa.price} onChange={e => setQa({ ...qa, price: e.target.value })} inputMode="decimal" style={{ ...inp, textAlign: 'right' }} /></label>
+                            <label style={{ width: '140px' }}><div style={mono}>Qty</div><input value={qa.qty} onChange={e => setQa({ ...qa, qty: e.target.value })} inputMode="numeric" style={{ ...inp, textAlign: 'right' }} /></label>
+                        </div>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button onClick={() => { if (onAddPlaceholder && onAddPlaceholder(qa)) { setQa({ description: '', price: '', qty: '1' }); setScreen('HOME'); onShowCart(); } }} style={btn(true)}>+ Add to cart</button>
+                            <button onClick={() => setScreen('HOME')} style={btn(false)}>Cancel</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         );

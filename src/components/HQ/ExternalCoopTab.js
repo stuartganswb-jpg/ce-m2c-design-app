@@ -17,6 +17,8 @@ import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { reopenQuoteInCpq, reopenQuoteInVision, reopenQuoteInOrderEntry, wrongDoorReason, approveDoorReason } from '../Shared/reopenQuote';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
+import PlaceholderResolve from './PlaceholderResolve';   // ✚ a quick-add item to identify (2026-10-16)
+import { hasPlaceholders, placeholdersOf } from '../Shared/placeholderLine';
 import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction, canReopenPostedOrder, netSuiteOrderNoOf } from '../Shared/orderStatus';
@@ -2449,6 +2451,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                           </div>
                                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid var(--line)', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{state}</span>
                                                           {paidChip(o)}
+                                                          {hasPlaceholders(o) && <span title="A quick-add item sold without an item # — identify it below; the NetSuite order waits" style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid #b3362f', color: '#b3362f' }}>⚠ {placeholdersOf(o).length} to identify</span>}
                                                           {fulfilled && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid', borderColor: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', color: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', whiteSpace: 'nowrap' }}>{o.nsInvoiceNo ? `INV ${o.nsInvoiceNo}` : 'NO NS INV #'}</span>}
                                                           <button onClick={() => setQsInvoice(o)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>{fulfilled ? '🧾 Invoice' : '📄 Order'}</button>
                                                           {/* The packing list for an Order Entry order: its own SO doc is the pack document (lines[] dialect). */}
@@ -2465,6 +2468,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                               </>
                                                           )}
                                                       </div>
+                                                      {hasPlaceholders(o) && <PlaceholderResolve record={o} collection="hq_sales_orders" brand={o.brand || activeBrand} currentUser={currentUser} />}
                                                       {payRowId === o.id && (
                                                           <div style={{ marginBottom: '8px' }}>
                                                               <PayLinkPanel

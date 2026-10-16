@@ -304,6 +304,8 @@ export const quickShipStatusOf = (so) => {
     const st = String(so.status || so.pickStatus || '');
     if (so.currentPhase === 'Closed' || st === 'Closed' || so.closed === true || st === 'CANCELLED') return { ...S, stage: 'CLOSED', detail: 'closed', since: so.closedAt || null, by: so.closedBy || '' };
     if (st === 'NS_QUEUED') return { ...S, stage: 'AWAITING_NS', detail: '', since: so.nsQueuedAt || so.createdAt || null };
+    // a quick-add placeholder on the order (Shared/placeholderLine): the NetSuite write is held until every item is identified
+    if (st === 'HELD_PLACEHOLDER') return { ...S, stage: 'AWAITING_NS', detail: 'held — an item to identify', since: so.createdAt || null };
     if (st === 'Shipped') return { ...S, stage: 'SHIPPED', detail: so.nsIfTran ? `fulfilment ${so.nsIfTran}` : 'marked shipped', since: so.shippedAt || so.packedAt || null, by: so.shippedBy || so.packedBy || '' };
     if (so.packStatus === 'Packed') return { ...S, stage: 'PACKED', detail: so.nsIfTran ? `fulfilment ${so.nsIfTran} posted` : 'awaiting shipment', since: so.packedAt || null, by: so.packedBy || '' };
     // pick/packInProgress are CLAIMS ("this person has it open on a tablet"), not progress — cleared

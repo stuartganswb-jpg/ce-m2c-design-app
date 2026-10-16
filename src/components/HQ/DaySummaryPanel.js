@@ -8,6 +8,7 @@ import { fetchStockHolds } from '../Shared/stockHolds';
 import { stockToReallocateOf, REALLOCATE, REALLOCATE_WORD, orderLine, holdersText } from '../Shared/stockReallocate';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { openWorkOf, outOfStepOf, noMovementOf, nsIdsOfRows, fetchNsStatuses, NO_MOVEMENT_DAYS } from '../Shared/openWork';
+import { dayPlaceholdersOf } from '../Shared/placeholderLine';   // ✚ quick-add items still to identify (2026-10-16)
 
 // THE DAY'S ORDERS — a screen opened from RTG (Stuart 2026-10-12: "end of day summary of orders entered and their status
 // from both sales entry and cpq, so that management can see what has happened and overrule"). It reads the feeds the
@@ -144,6 +145,29 @@ const DaySummaryPanel = ({ onClose, orders = [], workOrders = [], finDocs = [], 
                             </div>
                         );
                     })}
+                    {/* ✚ TO IDENTIFY (Stuart 2026-10-16): every quick-add placeholder of the day — the order's NetSuite push waits on it */}
+                    {(() => { const { start, end } = dayBoundsOf(day); const ph = dayPlaceholdersOf(orders, { start, end }); return (
+                        <>
+                            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', color: ph.length ? '#b3362f' : 'var(--ink)', margin: '22px 0 8px' }}>To identify{ph.length ? ` · ${ph.length}` : ''}</div>
+                            {ph.length === 0
+                                ? <div style={{ padding: '14px', background: '#fff', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No quick-add item waiting to be identified that day.</div>
+                                : (
+                                    <div style={{ background: '#fff', border: '1px solid #b3362f' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '150px 2fr 70px 90px 1fr', gap: '10px', padding: '8px 14px', ...mono, fontSize: '9px', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)' }}><span>Order</span><span>Sold as</span><span>Qty</span><span>Price</span><span>Customer · by</span></div>
+                                        {ph.map((p, i) => (
+                                            <div key={`${p.recordId}-${p.lineIdx}-${i}`} style={{ display: 'grid', gridTemplateColumns: '150px 2fr 70px 90px 1fr', gap: '10px', padding: '8px 14px', borderBottom: '1px solid var(--line)', fontSize: '0.88rem' }}>
+                                                <div style={{ fontFamily: 'var(--mono)', fontWeight: 700 }}>{p.number}</div>
+                                                <div>{p.description}</div>
+                                                <div>{p.qty}</div>
+                                                <div>${Number(p.rate || 0).toLocaleString()}</div>
+                                                <div style={{ color: 'var(--ink-soft)' }}>{p.customer}{p.by ? ` · ${p.by}` : ''}</div>
+                                            </div>
+                                        ))}
+                                        <div style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)', padding: '8px 14px', textTransform: 'none', letterSpacing: 0 }}>Identify each on the order's RTG card or the customer's CRM card (add the item to the Master Library first if it is not there, and sync it to NetSuite). The NetSuite order is queued by itself when the last one is known.</div>
+                                    </div>
+                                )}
+                        </>
+                    ); })()}
                     <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)', margin: '22px 0 8px' }}>Backordered today</div>
                     {sum.backorders.length === 0
                         ? <div style={{ padding: '14px', background: '#fff', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No part went on backorder that day.</div>
