@@ -36,6 +36,8 @@ import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, 
 import { extrasFromSavedItem } from '../Shared/extrasRestore';
 import { readWorkspace, writeWorkspace, restorableWorkspace, workspaceSeedOf, workHasProgress, cleanStartOf, CLEAN_FLOW, CLEAN_ALL } from '../Shared/cpqWorkspace';
 import { shippingPlanOf, shippingChargeOf, FLAT_RATE_BOXES, packagingPlanOf, PACK_FEE_CODES } from '../Shared/flatRateShipping';
+import { defaultShipping, defaultShippingNote } from '../Shared/baseShipping';   // 🚚 freight is never left at $0 by accident
+import { canOverrideShipping } from '../Shared/payRoles';
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
@@ -1039,10 +1041,39 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   // (H1-PCKF1). It was $25 on every traverse and the $12 by hand (2026-09-30). Ticked only where the fee is
   // ASSIGNED TO THIS CUSTOMER in 4.6 (`via: 'CUSTOMER'`): "they only apply on these screens when the applicable
   // customer is logged in".
+  // 🚚 The brand's base shipping rate, and the figure the app itself last filled in
+  // (Shared/baseShipping). `cartMoney` is declared further down and is read only INSIDE the effect
+  // below, never in its dependency array — an effect body runs after the render that declares it,
+  // so that is safe; reading a later const in a dep array is the throw that whited out a tab
+  // (2026-09-23).
+  const [shipCfg, setShipCfg] = useState(null);
+  const [shipNote, setShipNote] = useState('');
+  const lastAutoShip = useRef(null);
+  useEffect(() => onSnapshot(doc(db, 'system', 'shipping_config'),
+      (d) => setShipCfg(d.exists() ? d.data() : { baseRatePct: {} }),
+      () => setShipCfg({ baseRatePct: {} })), []);
+  const mayOverrideShip = canOverrideShipping(userRole);
+
   useEffect(() => {
       if (!showCheckoutModal) return;
       if (flatRate && flatRate.total > 0) {
           setJobData(prev => (String(prev.shippingAmount ?? '').trim() === '' ? { ...prev, shippingAmount: flatRate.total.toFixed(2) } : prev));
+      } else {
+          // ── 🚚 NO FLAT-RATE PROGRAMME FOR THIS CUSTOMER → THE BRAND'S BASE PERCENT ─────────
+          // Same rule, same order of precedence, as the counter and Order Entry
+          // (Shared/baseShipping): 4.6 always wins — and it just did, in the branch above — then
+          // the brand's percent, then nothing. Uniq'uity is 8%; a brand with no rate on file is
+          // untouched, which is why CE sees no change. It fills only an empty box, follows the
+          // cart while the box still holds what IT put there, and says so.
+          const d = defaultShipping({
+              brand: activeBrand, cfg: shipCfg, typed: jobData.shippingAmount,
+              goodsSubtotal: cartMoney.net, customerFlatRate: false, lastAuto: lastAutoShip.current,
+          });
+          if (d.apply) {
+              lastAutoShip.current = d.amount;
+              setJobData(prev => ({ ...prev, shippingAmount: d.amount.toFixed(2) }));
+              setShipNote(defaultShippingNote(d, activeBrand));
+          }
       }
       const pack = packagingPlanOf(cart, { isFee: isFeeRow });
       PACK_FEE_CODES.forEach(code => {
@@ -1096,6 +1127,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       const amount = Math.round(base * percent) / 100; // base × percent%, rounded to cents
       return { code, percent, base, amount };
   };
+
+  // ── THE CART'S MONEY, WORKED OUT ONCE (2026-10-16) ─────────────────────────────────────────
+  // The checkout panel already did this arithmetic inline to print "Cart Total"; the shipping
+  // default needs the same net figure. Two reckonings of what a customer owes is how a document
+  // comes to argue with itself, so it is one memo and both read it.
+  const cartMoney = useMemo(() => {
+      const gross = cart.reduce((sum, item) => sum + (item.pricing.finalPrice * item.qty), 0);
+      const discTotal = cart.reduce((sum, item) => {
+          const d = tradeDiscountFor(item); const ld = lineDiscountOf(item);
+          return sum + (d ? d.amount * item.qty : 0) + (ld ? ld.amount * item.qty : 0);
+      }, 0);
+      return { gross, discTotal, net: gross - discTotal };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart, discountMode, customerDiscountCode, jobData.orderDiscountPercent]);
 
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
 
@@ -5477,8 +5522,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                 <div style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column', gap: '24px', maxHeight: '80vh', overflowY: 'auto' }}>
                     
                     {(() => {
-                        const gross = cart.reduce((sum, item) => sum + (item.pricing.finalPrice * item.qty), 0);
-                        const discTotal = cart.reduce((sum, item) => { const d = tradeDiscountFor(item); const ld = lineDiscountOf(item); return sum + (d ? d.amount * item.qty : 0) + (ld ? ld.amount * item.qty : 0); }, 0);
+                        const { gross, discTotal } = cartMoney;   // one reckoning, shared with the shipping default
                         const discWord = discountMode === 'LINES' ? 'Line discounts'
                             : discountMode === 'ORDER_PERCENT' ? `Order Discount (${parseFloat(jobData.orderDiscountPercent) || 0}%)`
                             : `Trade Discount${customerDiscountCode ? ` (${customerDiscountCode})` : ''}`;
@@ -5591,7 +5635,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
 
                             <div style={{ marginTop: '20px' }}>
                                 <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Shipping Charge ($, Optional)</label>
-                                <input type="number" min="0" step="0.01" placeholder="0.00" value={jobData.shippingAmount ?? ''} onChange={e => setJobData({...jobData, shippingAmount: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' }} />
+                                <input type="number" min="0" step="0.01" placeholder="0.00" value={jobData.shippingAmount ?? ''} onChange={e => setJobData({...jobData, shippingAmount: e.target.value})} readOnly={!mayOverrideShip}
+                                    title={mayOverrideShip ? 'The freight charge. A default fills an empty box; type over it when the real cost differs.' : `Changing the freight is for CSR, manager and admin — this login is "${userRole || 'none'}".`}
+                                    style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: mayOverrideShip ? '#fff' : 'var(--paper-2)', cursor: mayOverrideShip ? 'auto' : 'not-allowed' }} />
+                                {/* Say what was filled in and why — a number that appears by itself
+                                    and explains nothing is how the wrong one gets shipped. */}
+                                {shipNote && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', marginTop: '6px' }}>🚚 {shipNote}</div>}
                                 <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px', fontStyle: 'italic' }}>Charged on top of the quote total — lands in the NetSuite estimate's shipping cost field on push.</div>
                                 {/* 📦 THE BOXES THE CART SHIPS IN (Shared/flatRateShipping) — only for a customer on flat rate. */}
                                 {flatRate && (flatRate.rows.length > 0 || flatRate.missing.length > 0) && (() => {
