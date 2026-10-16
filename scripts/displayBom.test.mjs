@@ -88,6 +88,16 @@ const cartBaseFront3 = {
     eq('a wall board is two boards: product rows and chips', w.faces.map(f => [f.key, f.kind]), [['PRODUCT', 'ROWS'], ['CHIPS', 'CHIPS']]);
     w.faces = w.faces.filter(f => f.kind === 'ROWS');
     eq('no chips face, no chips', boardBom(w, finishes).chips.length, 0);
+
+    // a package of hand samples: one face of samples, nothing else (Fabricut PO 100926-CE, 2026-10-16)
+    const hs = newDisplay({ id: 'D3', name: 'Rep Hand Samples', style: 'HAND_SAMPLES' });
+    eq('hand samples: one face, its rows are the samples', hs.faces.map(f => [f.key, f.kind, f.rows.length]), [['SAMPLES', 'ROWS', 0]]);
+    eq('…no base band, no board or base extras', [hs.faces[0].baseIn, hs.extras], [undefined, []]);
+    hs.faces[0].rows = [{ id: 'r1', label: 'Hand Sample 1', config: rowConfigFromCartItem(cartTopRow1) }];
+    const hsLines = buildLinesFrom(hs, finishes);
+    ok('…its build order bills the samples\' parts', hsLines.parts.length > 0 && hsLines.parts.every(l => (l.rows || []).includes('Hand Sample 1')), JSON.stringify(hsLines.parts.map(l => l.rows)));
+    eq('…and no chips, no extras', [hsLines.chips.length, hsLines.extras.length], [0, 0]);
+    eq('…and no sample bin is assumed (typed on the build)', SAMPLE_BIN_BY_STYLE.HAND_SAMPLES, undefined);
 }
 
 // ── 4. chip grouping rules ───────────────────────────────────────────────────────────────────

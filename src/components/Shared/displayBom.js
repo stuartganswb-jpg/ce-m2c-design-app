@@ -53,6 +53,15 @@ export const DISPLAY_STYLES = {
             { text: 'Chip board — the sample chips mount on it', qty: 1 },
         ],
     },
+    // A PACKAGE OF HAND SAMPLES (Stuart 2026-10-16, Fabricut PO 100926-CE "Hardware Hand Samples"): loose samples,
+    // each one a ROW — its CPQ configuration, its picture, its row to release on 10.5. No board, no base, no chip face.
+    HAND_SAMPLES: {
+        label: 'Hand samples',
+        faces: [
+            { key: 'SAMPLES', label: 'Samples — one row per sample', kind: 'ROWS', widthIn: 24, heightIn: 24 },
+        ],
+        extras: [],
+    },
 };
 
 /** A fresh display record. */

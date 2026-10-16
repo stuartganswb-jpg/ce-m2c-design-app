@@ -81,6 +81,8 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [], setCart }) =>
     const svgRef = useRef(null);
     const dragRef = useRef(null);
     const seedFileRef = useRef(null);
+    const draftRef = useRef(null);                   // the display as it stands on screen — a placement saves THIS
+    draftRef.current = draft;
 
     // ── data ─────────────────────────────────────────────────────────────────────────────────
     useEffect(() => {
@@ -111,12 +113,16 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [], setCart }) =>
         try { await setDoc(doc(db, 'system', 'displays', 'entries', id), d); setNewForm(null); open(d); }
         catch (e) { alert('Create failed: ' + (e?.message || e)); }
     };
+    // The one write of an open display — Save display, and a row taking its picture (below).
+    const persist = async (d) => {
+        const out = { ...d, updatedAt: Date.now(), updatedBy: String(currentUser || '') };
+        await setDoc(doc(db, 'system', 'displays', 'entries', out.id), out);
+    };
     const save = async () => {
         if (!draft) return;
         setBusy('Saving…');
         try {
-            const d = { ...draft, updatedAt: Date.now(), updatedBy: String(currentUser || '') };
-            await setDoc(doc(db, 'system', 'displays', 'entries', d.id), d);
+            await persist(draft);
             setDirty(false);
         } catch (e) { alert('Save failed: ' + (e?.message || e)); }
         setBusy('');
@@ -198,6 +204,23 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [], setCart }) =>
     // which row to put the item"): an existing row — typically one seeded from the tracker — keeps
     // its label, place, size and orientation and takes the configuration's lines and picture
     // (the CPQ lines are the truth; the seeded lines were the placeholder); or a new row.
+    // A PLACED ROW IS SAVED AT ONCE (Stuart 2026-10-16: "those images seem to have disappeared"). Its picture is filed
+    // in the gallery the moment Place is pressed, but the row that shows it lived only on this screen until Save
+    // display — a tab change or a reload (every deploy reloads the app) dropped it without a word: the tabletop's Base
+    // Front 2 picture of 2026-09-16 4:00 PM reached the gallery four minutes after the display's last save and never
+    // reached its row. Now the display is written as it stands — the same write Save display makes — as the row lands.
+    const place = async (faceFn) => {
+        const cur = draftRef.current;
+        if (!cur) return;
+        const next = { ...cur, faces: (cur.faces || []).map((f, i) => (i === faceIx ? faceFn({ ...f, rows: [...(f.rows || [])] }) : f)) };
+        draftRef.current = next;
+        setDraft(next);
+        setDirty(true);
+        try { await persist(next); }
+        catch (e) { return alert(`The row is placed but the display could not be saved (${e?.message || e}) — press Save display.`); }
+        // an edit made while the write was out is not in it, and stays marked unsaved
+        if (draftRef.current === next) setDirty(false);
+    };
     const addRowFromCart = async (it, targetRowId = null) => {
         if (!face || face.kind !== 'ROWS') return alert('Open a products face first — chips faces lay themselves out.');
         setPlacing(null);
@@ -217,8 +240,8 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [], setCart }) =>
                 const bh = Math.round(bw * (Number(board.heightIn) || 24) / (Number(board.widthIn) || 24));
                 const boardRow = { x: Math.round((W - bw) / 2), y: 0, w: bw, h: bh, imageUrl: a.thumbnailUrl, hiResUrl: a.originalUrl, boardFramed: true, trueScale: true, replacedAt: Date.now() };
                 const config = { ...rowConfigFromCartItem(it), board };
-                if (target) mutateFace(f => ({ ...f, rows: f.rows.map(r => (r.id === target.id ? { ...r, ...boardRow, config: { ...config, replacedSeed: r.config?.seededFrom || '' } } : r)) }));
-                else mutateFace(f => ({ ...f, rows: [...(f.rows || []), { id: uid(), label, orientation: 'H', ...boardRow, config }] }));
+                if (target) await place(f => ({ ...f, rows: f.rows.map(r => (r.id === target.id ? { ...r, ...boardRow, config: { ...config, replacedSeed: r.config?.seededFrom || '' } } : r)) }));
+                else await place(f => ({ ...f, rows: [...(f.rows || []), { id: uid(), label, orientation: 'H', ...boardRow, config }] }));
                 return setBusy('');
             }
             // The picture: the view the operator FRAMED at Add configuration (`displaySnapshot`,
@@ -235,7 +258,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [], setCart }) =>
             const config = rowConfigFromCartItem(it);
             const fitOpts = { lengthInches: config.lengthInches, aspect, faceWidthIn: face.widthIn || 24, faceHeightIn: face.heightIn || 24 };
             if (target) {
-                mutateFace(f => ({ ...f, rows: f.rows.map(r => (r.id === target.id ? fitRowToLength({ ...r, imageUrl, hiResUrl, config: { ...config, replacedSeed: r.config?.seededFrom || '' }, replacedAt: Date.now() }, fitOpts) : r)) }));
+                await place(f => ({ ...f, rows: f.rows.map(r => (r.id === target.id ? fitRowToLength({ ...r, imageUrl, hiResUrl, config: { ...config, replacedSeed: r.config?.seededFrom || '' }, replacedAt: Date.now() }, fitOpts) : r)) }));
                 return setBusy('');
             }
             const W = (face.widthIn || 24) * UNITS_PER_INCH;
@@ -243,7 +266,7 @@ const DisplayDesignerTab = ({ currentUser, activeBrand, cart = [], setCart }) =>
             const h = Math.round(w / 4);
             const below = (face.rows || []).reduce((m, r) => Math.max(m, r.y + r.h), 0.6 * UNITS_PER_INCH);
             const row = fitRowToLength({ id: uid(), label, orientation: 'H', x: Math.round((W - w) / 2), y: Math.round(below + 0.4 * UNITS_PER_INCH), w, h, imageUrl, hiResUrl, config }, fitOpts);
-            mutateFace(f => ({ ...f, rows: [...(f.rows || []), row] }));
+            await place(f => ({ ...f, rows: [...(f.rows || []), row] }));
         } catch (e) { alert('Could not place the row: ' + (e?.message || e)); }
         setBusy('');
     };
