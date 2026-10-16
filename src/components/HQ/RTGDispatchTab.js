@@ -17,6 +17,10 @@ import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { materialRowsFromSplit, materialStampOf, refreshMaterialRows, materialRefreshable, materialCodesOf, refreshDue, refreshDayKey , stockHolderIdOf, withShelfFigures, neverRefreshed } from '../Shared/materialGrid';
 import { fetchShelfFigures } from '../Shared/shelfFigures';
 import { stillRealTargetOf, stillRealStamp, NO_MOVEMENT_DAYS } from '../Shared/openWork';
+import { nsSoLookupSql, nsSoOf, linkRefusalOf, linkPatchesOf, linkConfirmText } from '../Shared/nsLink';
+import { soHeaderOf } from '../Shared/salesOrderHeader';
+import { staleLinesOf, staleApprovalText } from '../Shared/cartStaleness';
+import { ENGINE_VERSION } from '../Shared/engineVersion';
 import { finishGroupsOf, docStreamsOf, poleCountRepairOf, poleTrackRepairOf } from '../Shared/rowPairShape';
 import { cancelReceiptGate } from '../Shared/workOrderCreate';
 import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc, isOutsourcedRecipe, writeShopDocOnce, claimRelease, endReleaseClaim, fetchMasterFinishes } from '../Shared/floorRelease';
@@ -216,6 +220,67 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     }, [txJobs, nsOutboxTail]);
     const txDataRef = useRef(null);
     const [queueingJobId, setQueueingJobId] = useState(null);
+    // 🔗 LINK TO THE SALES ORDER ALREADY IN NETSUITE (Stuart 2026-10-16: "go with option 2" · Shared/nsLink). M2C entered
+    // in NetSuite by hand the orders the app refused 9/12–10/14 (no M2C form on file); re-sending the quotes would make a
+    // second NetSuite order of each. This links the quote to the order that exists: the quote and its RTG card take its
+    // NetSuite id and number (the card is written the way the CRM's Approve writes it when there is none), NetSuite's
+    // order is stamped with the quote's id through the staged queue — and RTG releases it from the quote's configuration.
+    // Nothing new is created in NetSuite; a quote still a quote is checked for stale lines as Approve checks it.
+    const [linkingJobId, setLinkingJobId] = useState(null);
+    const linkExistingSo = async (j) => {
+        if (linkingJobId) return;
+        const typed = window.prompt(`🔗 ${j.quoteNo || j.jobId || j.id} — ${j.customer?.name || ''}${j.sidemark ? ` · ${j.sidemark}` : ''}\n\nType the number of the sales order ALREADY in NetSuite for this quote (e.g. SOM2C-1038). Nothing new is created in NetSuite.`, '');
+        if (!typed || !typed.trim()) return;
+        const q = nsSoLookupSql(typed);
+        if (!q) return alert(`"${typed}" is not a NetSuite order number. Nothing was changed.`);
+        setLinkingJobId(j.id);
+        try {
+            const resp = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q } });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(`NetSuite could not be read — ${JSON.stringify(data).slice(0, 200)}`);
+            const so = nsSoOf(data.items || []);
+            const holders = so ? (await getDocs(query(collection(db, 'hq_sales_orders'), where('nsInternalId', '==', String(so.id))))).docs.map(d => d.id) : [];
+            const js = await getDoc(doc(db, 'jobs', j.id));
+            const job = js.exists() ? { id: js.id, ...js.data() } : j;
+            const why = linkRefusalOf({ job, so, typed, brand: activeBrand, boardHolders: holders });
+            if (why) return alert(`🔗 Not linked — ${why}\n\nNothing was changed.`);
+            // A quote still a quote becomes a sales order here — the CRM's Approve check for lines built on an older engine.
+            if (!['APPROVED', 'SO_CONFIRMED'].includes(String(job.status || '').toUpperCase())) {
+                const cartItems = (job.cpqData && job.cpqData.cartItems) || [];
+                const pinsByAssembly = {};
+                for (const id of [...new Set(cartItems.filter(it => it && it.engine === 'TAGS' && it.assemblyId).map(it => it.assemblyId))]) {
+                    try { pinsByAssembly[id] = (await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', id)))).docs.map(d => ({ id: d.id, ...d.data() })); }
+                    catch (e) { console.warn('assembly_pins read failed for', id, e); }
+                }
+                const stale = staleLinesOf(cartItems, { engineVersion: ENGINE_VERSION, pinsByAssembly });
+                if (stale.length && !window.confirm(staleApprovalText(stale, { quoteNo: job.quoteNo || job.jobId || job.id }))) return;
+            }
+            if (!window.confirm(linkConfirmText({ job, so, quoteTotal: job.cpqData?.totalPrice, autoReleaseOn: autoRelease ? !!autoRelease.enabled : null }))) return;
+            const at = Date.now();
+            const p = linkPatchesOf({ job, so, by: currentUser || '', at });
+            const boardRef = doc(db, 'hq_sales_orders', p.boardId);
+            const bs = await getDoc(boardRef);
+            if (bs.exists()) await updateDoc(boardRef, p.boardPatch);
+            else {
+                const [mf, os] = await Promise.all([getDoc(doc(db, 'system', 'master_finishes')), getDocs(collection(db, 'hq_outsource_finishes'))]);
+                const outsourceFinishes = os.docs.map(d => ({ id: d.id, ...d.data() }));
+                const finishes = [...((mf.exists() && mf.data().finishes) || []), ...outsourceFinishes];
+                const header = soHeaderOf({ door: 'CRM', job, customer: job.customer || null, finishes, outsourceFinishes, by: currentUser || '' });
+                await setDoc(boardRef, { id: p.boardId, brand: activeBrand, status: 'Approved', type: 'Custom', ...header, totalParts: 1, length: 0, width: 0, height: 0, createdAt: at, ...p.boardPatch }, { merge: true });
+            }
+            await updateDoc(doc(db, 'jobs', job.id), { ...p.jobPatch, nsTransmitRefusedAt: deleteField(), nsTransmitRefusedCode: deleteField(), nsTransmitRefusedMessage: deleteField() });
+            let nsNote = '';
+            try {
+                await enqueueNsWrite({
+                    kind: 'salesorder-link', label: `Link ${so.tranid} ← ${job.quoteNo || job.jobId || job.id}`, sourceApp: 'HQ', createdBy: currentUser || '',
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${so.id}`, method: 'PATCH', payload: p.nsPatch,
+                });
+            } catch (e) { nsNote = ` ⚠ NetSuite's app-job field was not queued (${e.message || e}) — the link holds in the app.`; }
+            addLog(`🔗 ${job.quoteNo || job.jobId || job.id} linked to NetSuite ${so.tranid} — no new order; RTG card ${p.boardId}.${nsNote}`, nsNote ? 'warn' : 'success');
+            alert(`🔗 Linked — ${job.quoteNo || job.jobId || job.id} is ${so.tranid}.\n\nIts RTG card carries ${so.tranid}${autoRelease && autoRelease.enabled ? '; automatic release sends it to the floors once nothing holds it' : '; release it from its card (automatic release is off)'}.${nsNote}`);
+        } catch (e) { alert('Link failed: ' + (e.message || e) + '\n\nRe-press to retry — a link already written is recognised.'); }
+        finally { setLinkingJobId(null); }
+    };
     const loadTxData = async () => {
         if (txDataRef.current) return txDataRef.current;
         const [parts, flows, outs, fin] = await Promise.all([
@@ -4047,6 +4112,13 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                     <div style={{ flexBasis: '100%', fontSize: '11px', color: '#d9534f', lineHeight: 1.45, whiteSpace: 'pre-wrap' }} title={String(ob.lastError || '')}>
                                         NetSuite refused the write: {String(ob.lastError || '').slice(0, 300)} — fix the cause, then ↻ Retry in 11.1 → NetSuite Sync Queue.
                                     </div>
+                                )}
+                                {!j.netsuiteSalesOrderId && (
+                                    <button onClick={() => linkExistingSo(j)} disabled={!!linkingJobId}
+                                        title="The order is already in NetSuite (entered there by hand)? Link this quote to it — no second NetSuite order is made."
+                                        style={{ ...btnStyle, padding: '3px 10px', fontSize: '9px', cursor: linkingJobId ? 'wait' : 'pointer' }}>
+                                        {linkingJobId === j.id ? 'Linking…' : '🔗 Link existing NetSuite SO'}
+                                    </button>
                                 )}
                                 {refused && (
                                     <>
