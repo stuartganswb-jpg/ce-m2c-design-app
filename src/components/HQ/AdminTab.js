@@ -24,6 +24,7 @@ import { SHOP_TABS } from '../ShopFloor/shopShared';
 import { ROD_MATERIALS, itemRodMaterials } from '../Shared/flowExtras';
 import FloorMetricsPanel from './FloorMetricsPanel';   // 🏆 Floor Metrics — admins only (Stuart 2026-10-14)
 import TimeClockPanel from './TimeClockPanel';   // ⏱ Time Clock & Payroll — admins only (Stuart 2026-10-14)
+import SalesDashboardPanel from './SalesDashboardPanel';   // 📈 Sales Dashboard — admins only, read only (Stuart 2026-10-16)
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -2215,6 +2216,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS, writeLog }) => {   // writeL
           <AdminNavButton active={activeSection === "INTEGRATIONS"} onClick={() => setActiveSection("INTEGRATIONS")} label="Integrations" icon="🔌" />
           {isAdminUser && <AdminNavButton active={activeSection === "FLOOR_METRICS"} onClick={() => setActiveSection("FLOOR_METRICS")} label="Floor Metrics" icon="🏆" />}
           {isAdminUser && <AdminNavButton active={activeSection === "TIME_CLOCK"} onClick={() => setActiveSection("TIME_CLOCK")} label="Time Clock & Payroll" icon="⏱" />}
+          {isAdminUser && <AdminNavButton active={activeSection === "SALES_DASHBOARD"} onClick={() => setActiveSection("SALES_DASHBOARD")} label="Sales Dashboard" icon="📈" />}
           
           
           {isSuperAdmin && (
@@ -3472,6 +3474,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS, writeLog }) => {   // writeL
           {activeSection === "INTEGRATIONS" && <IntegrationsPanel />}
           {activeSection === "FLOOR_METRICS" && isAdminUser && <FloorMetricsPanel currentUser={currentUser} writeLog={writeLog} />}
           {activeSection === "TIME_CLOCK" && isAdminUser && <TimeClockPanel currentUser={currentUser} writeLog={writeLog} />}
+          {activeSection === "SALES_DASHBOARD" && isAdminUser && <SalesDashboardPanel activeBrand={activeBrand} />}
 
           {/* --- FORMS & BRANDING VIEW --- */}
           {activeSection === "PLATING_FEES" && (() => {
