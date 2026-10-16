@@ -807,7 +807,12 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       collection: (activeDocJob && (activeDocJob.orderClass === 'QUICKSHIP' || activeDocJob.soId)) ? 'hq_sales_orders' : 'jobs',
       docId: activeDocJob ? String(activeDocJob.jobId || activeDocJob.id || '') : '',
       label: activeDocType === 'INVOICE' ? 'this invoice' : (activeDocType === 'QUOTE' ? 'this quote' : 'this order'),
-      enabled: !!activeDocJob && ['QUOTE', 'INVOICE', 'FULL_PACKET'].includes(String(activeDocType || '')),
+      // EVERY DOCUMENT THAT CARRIES MONEY, named explicitly. SALES_ORDER is listed although the CRM
+      // does not raise that type today: leaving it out was a trap, because the day someone adds it
+      // the page would print the full total with no mention of a deposit already paid, and nobody
+      // would think to look here (Stuart 2026-10-16). A packing list and a work order stay off the
+      // list — they carry no money by design.
+      enabled: !!activeDocJob && ['QUOTE', 'SALES_ORDER', 'INVOICE', 'FULL_PACKET'].includes(String(activeDocType || '')),
   });
   // Flow + finish lists behind an OPEN portal-request doc, fetched on demand — an unpriced
   // PORTAL_REQUEST has no cpqData.breakdown, so its document lines come from

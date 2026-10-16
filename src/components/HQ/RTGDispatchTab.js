@@ -53,6 +53,7 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
 import { isBlindShipment, withBlindPacking } from '../Shared/blindShip';
 import { printForm } from '../Shared/printForm';
+import { fetchPayBlock } from '../Shared/payBlock';   // what a printed document says about money already paid
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
 import { queueNsAssemblyWorkOrder, pickNsWoItem, postNsAssemblyBuild, MILL_BUILD_BIN, millBuildBinSql } from "../Shared/nsWorkOrder";
@@ -3442,8 +3443,20 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
             try { const c = custId ? await getDoc(doc(db, 'crm_records', custId)) : null; custRec = c && c.exists() ? c.data() : null; } catch (e) { /* blind in their name alone */ }
             data = withBlindPacking({ ...data, lines: (data.lines || []).map(l => (l.custItem ? { ...l, item: l.custItem } : l)) }, { docs: [order, job], customer: custRec, name: custName });
         }
+        // ── WHAT HAS ALREADY BEEN PAID PRINTS HERE TOO (Stuart 2026-10-16) ──
+        // A sales order or invoice printed from RTG showed the full total with no mention of a
+        // deposit already taken — the same wrong page the Order Entry card produced for SOUNIQ-3996,
+        // which read "Total Due $6,460.00" on an order paid in full. One read, Shared/payBlock, the
+        // same one the CRM card and the counter document use, so the three cannot disagree. A pay
+        // link is made against the CPQ JOB when there is one and against the sales-order record
+        // otherwise, which is how the CRM creates them. A packing list stays moneyless.
+        const pay = ['SALES_ORDER', 'INVOICE'].includes(formType)
+            ? await fetchPayBlock(job
+                ? { collection: 'jobs', docId: String(job.jobId || job.id || ''), label: formType === 'INVOICE' ? 'this invoice' : 'this order' }
+                : { collection: 'hq_sales_orders', docId: String(order.id || ''), label: formType === 'INVOICE' ? 'this invoice' : 'this order' })
+            : null;
         printForm(
-            <FormPreview type={formType} brand={brand} logoUrl={brandLogos[brand]} header={tpl.header} footer={tpl.footer} terms={tpl.terms} docNumber={docNumber} data={data} />,
+            <FormPreview type={formType} brand={brand} logoUrl={brandLogos[brand]} header={tpl.header} footer={tpl.footer} terms={tpl.terms} docNumber={docNumber} data={data} pay={pay} />,
             `${formType.replace('_', ' ')} ${docNumber}`
         );
     };
