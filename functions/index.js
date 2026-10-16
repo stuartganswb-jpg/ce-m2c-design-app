@@ -3348,3 +3348,82 @@ exports.upsVoid = onCall({
     const status = body.VoidShipmentResponse && body.VoidShipmentResponse.SummaryResult && body.VoidShipmentResponse.SummaryResult.Status;
     return { environment: env, voided: true, status: (status && status.Description) || 'Voided' };
 });
+
+
+// ============================================================================
+// ⏱ THE TIME CLOCK — punches taken only on the shop's tablets, on the shop's network (Stuart 2026-10-16: "how can we
+// make sure it will only work onsite tablets and not offsite" · "both locks, so personal phones are refused. one wifi
+// network"). A browser cannot prove where it is, so the punch is written HERE: the kiosk (/time-clock, its own Firebase
+// instance, the person signed in by their PIN) asks; this checks the request came from a trusted network
+// (time_config/clock.networks) and carries the id of an enrolled tablet (time_devices/<id>, active), then writes the
+// punch with the server's time, the tablet and the network on it. Firestore rules no longer let a tablet write a punch
+// itself. An admin sets a tablet up AT the tablet (clockDevice), which also trusts the network it is on.
+// The rules: functions/timeClockGuard.js (harness scripts/timeClockGuard.test.mjs).
+// ============================================================================
+const timeClockGuard = require('./timeClockGuard');
+
+const clockConfigOf = async (db) => {
+    const s = await db.collection('time_config').doc('clock').get();
+    return s.exists ? s.data() : {};
+};
+const clockDeviceOf = async (db, deviceId) => {
+    if (!timeClockGuard.deviceIdValid(deviceId)) return null;
+    const s = await db.collection('time_devices').doc(String(deviceId)).get();
+    return s.exists ? s.data() : null;
+};
+
+// Before anyone types a PIN: is this a shop tablet, and is it on the shop network? No sign-in needed — it says only
+// what the tablet itself is, and the address the server sees (the setup screen shows it).
+exports.clockCheck = onCall({ enforceAppCheck: true, cors: true }, async (request) => {
+    const db = admin.firestore();
+    const ip = timeClockGuard.clientIpOf(request.rawRequest);
+    const [cfg, device] = await Promise.all([clockConfigOf(db), clockDeviceOf(db, (request.data || {}).deviceId)]);
+    return { ...timeClockGuard.deviceCheckOf({ ip, device, networks: cfg.networks }), chain: timeClockGuard.forwardedChainOf(request.rawRequest), networksSet: !!(cfg.networks && cfg.networks.length) };
+});
+
+// A punch — the person's own (the name on their PIN token), at the server's time, from an enrolled tablet on the shop network.
+exports.clockPunch = onCall({ enforceAppCheck: true, cors: true }, async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', timeClockGuard.REFUSAL.NOT_SIGNED_IN);
+    const db = admin.firestore();
+    const name = String(request.auth.token.name || '').trim();
+    const { kind, deviceId } = request.data || {};
+    const ip = timeClockGuard.clientIpOf(request.rawRequest);
+    const [cfg, device] = await Promise.all([clockConfigOf(db), clockDeviceOf(db, deviceId)]);
+    const refusal = timeClockGuard.punchRefusalOf({ name, kind, ip, device, networks: cfg.networks });
+    if (refusal) throw new HttpsError(refusal.code, refusal.message);
+    const nowMs = Date.now();
+    const punch = timeClockGuard.punchDocOf({ name, kind, nowMs, deviceId, device, ip });
+    const status = timeClockGuard.statusDocOf({ name, kind, nowMs });
+    const batch = db.batch();
+    batch.set(db.collection('time_punches').doc(), { ...punch, t: admin.firestore.FieldValue.serverTimestamp() });
+    batch.set(db.collection('time_status').doc(timeClockGuard.clockKeyOf(name)), status);
+    batch.update(db.collection('time_devices').doc(String(deviceId)), { lastPunchAt: nowMs, lastIp: ip });
+    await batch.commit();
+    return { ok: true, at: nowMs, status };
+});
+
+// Admins only, AT the tablet: set this tablet up as a time clock (and trust the network it is on), or trust this network.
+exports.clockDevice = onCall({ enforceAppCheck: true, cors: true }, async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', timeClockGuard.REFUSAL.NOT_SIGNED_IN);
+    if (!timeClockGuard.isAdminRole(request.auth.token.role)) throw new HttpsError('permission-denied', timeClockGuard.REFUSAL.NOT_ADMIN);
+    const db = admin.firestore();
+    const by = String(request.auth.token.name || '').trim();
+    const { action, name, label } = request.data || {};
+    const ip = timeClockGuard.clientIpOf(request.rawRequest);
+    const nowMs = Date.now();
+    const cfgRef = db.collection('time_config').doc('clock');
+    const trust = async () => {
+        const cfg = await clockConfigOf(db);
+        await cfgRef.set({ networks: timeClockGuard.withNetwork(cfg.networks, { ip, label, by, nowMs }), updatedBy: by, updatedAt: nowMs }, { merge: true });
+    };
+    if (action === 'trustNetwork') { await trust(); return { ok: true, ip }; }
+    if (action === 'enroll') {
+        const deviceName = String(name || '').trim();
+        if (!deviceName) throw new HttpsError('invalid-argument', 'Name the tablet. · Nombre la tableta.');
+        const deviceId = timeClockGuard.newDeviceId(crypto.randomBytes);
+        await db.collection('time_devices').doc(deviceId).set({ name: deviceName, active: true, enrolledBy: by, enrolledAt: nowMs, enrolledIp: ip });
+        await trust();
+        return { ok: true, deviceId, name: deviceName, ip };
+    }
+    throw new HttpsError('invalid-argument', 'Unknown action.');
+});

@@ -37,6 +37,31 @@ export default function TimeClockPanel({ currentUser, writeLog }) {
     const [form, setForm] = useState({ name: '', date: today, time: '07:00', kind: PUNCH.IN, reason: '' });
     const [busy, setBusy] = useState(false);
     const [reload, setReload] = useState(0);
+    // 🔒 where the clock works (2026-10-16): the trusted shop network(s) and the enrolled tablets (functions/timeClockGuard.js)
+    const [places, setPlaces] = useState({ networks: [], devices: [], error: '' });
+    const loadWhere = async () => {
+        try {
+            const [c, d] = await Promise.all([getDoc(doc(db, 'time_config', 'clock')), getDocs(collection(db, 'time_devices'))]);
+            setPlaces({ networks: (c.exists() && c.data().networks) || [], devices: d.docs.map(x => ({ id: x.id, ...x.data() })).sort((a, b) => String(a.name).localeCompare(String(b.name))), error: '' });
+        } catch (e) { setPlaces({ networks: [], devices: [], error: String(e.code || e.message).includes('permission') ? 'The rules for the tablets and networks are not deployed yet.' : (e.message || String(e)) }); }
+    };
+    useEffect(() => { loadWhere(); }, []);
+    const removeNetwork = async (n) => {
+        if (!window.confirm(`Stop taking punches from ${n.ip} (${n.label})?\n\nIf it is the shop's only network, no tablet can punch until an admin trusts the network again AT a shop tablet.`)) return;
+        try {
+            await setDoc(doc(db, 'time_config', 'clock'), { networks: places.networks.filter(x => x.ip !== n.ip), updatedBy: currentUser || '', updatedAt: Date.now() }, { merge: true });
+            if (writeLog) writeLog(currentUser, 'System Admin', `Time clock: stopped trusting network ${n.ip}`);
+            loadWhere();
+        } catch (e) { alert('Not saved: ' + (e.message || e)); }
+    };
+    const removeDevice = async (d) => {
+        if (!window.confirm(`Remove "${d.name}" as a time clock?\n\nIt will refuse punches until an admin sets it up again.`)) return;
+        try {
+            await updateDoc(doc(db, 'time_devices', d.id), { active: false, removedBy: currentUser || '', removedAt: Date.now() });
+            if (writeLog) writeLog(currentUser, 'System Admin', `Time clock: removed tablet "${d.name}"`);
+            loadWhere();
+        } catch (e) { alert('Not saved: ' + (e.message || e)); }
+    };
 
     useEffect(() => {
         (async () => {
@@ -117,9 +142,9 @@ export default function TimeClockPanel({ currentUser, writeLog }) {
             rows.forEach(r => r.days.forEach(d => daily.addRow([r.number, r.name, d.date, dayName(d.date), t12(firstOf(d.punches, PUNCH.IN)), t12(firstOf(d.punches, PUNCH.LUNCH_OUT)), t12(firstOf(d.punches, PUNCH.LUNCH_IN)), t12(d.outMs), d.lunchMins, d.hours, d.warnings.join('; ')])));
             daily.columns.forEach((c, i) => { c.width = [12, 24, 12, 14, 11, 11, 11, 11, 11, 9, 30][i] || 12; });
             const raw = wb.addWorksheet('Punches');
-            head(raw, ['Employee #', 'Name', 'Date', 'Time', 'Punch', 'Source', 'Corrected by', 'Reason', 'Void', 'Voided by', 'Void reason']);
-            rows.forEach(r => r.days.forEach(d => d.punches.slice().sort((a, b) => punchTimeOf(a) - punchTimeOf(b)).forEach(p => raw.addRow([r.number, r.name, d.date, t12(punchTimeOf(p)), PUNCH_LABEL[p.kind] ? PUNCH_LABEL[p.kind].en : p.kind, p.source === 'admin' ? 'correction' : 'clock', p.by || '', p.reason || '', p.void ? 'VOID' : '', p.voidBy || '', p.voidReason || '']))));
-            raw.columns.forEach((c, i) => { c.width = [12, 24, 12, 10, 12, 11, 16, 30, 6, 16, 30][i] || 12; });
+            head(raw, ['Employee #', 'Name', 'Date', 'Time', 'Punch', 'Source', 'Tablet', 'Network', 'Corrected by', 'Reason', 'Void', 'Voided by', 'Void reason']);
+            rows.forEach(r => r.days.forEach(d => d.punches.slice().sort((a, b) => punchTimeOf(a) - punchTimeOf(b)).forEach(p => raw.addRow([r.number, r.name, d.date, t12(punchTimeOf(p)), PUNCH_LABEL[p.kind] ? PUNCH_LABEL[p.kind].en : p.kind, p.source === 'admin' ? 'correction' : 'clock', p.source === 'admin' ? '' : (p.deviceId ? (p.device || '') : ''), p.ip || '', p.by || '', p.reason || '', p.void ? 'VOID' : '', p.voidBy || '', p.voidReason || '']))));
+            raw.columns.forEach((c, i) => { c.width = [12, 24, 12, 10, 12, 11, 20, 16, 16, 30, 6, 16, 30][i] || 12; });
             const buf = await wb.xlsx.writeBuffer();
             const url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
             const a = document.createElement('a'); a.href = url; a.download = `Payroll_${period.start}_${period.end}.xlsx`; document.body.appendChild(a); a.click(); a.remove();
@@ -177,6 +202,34 @@ export default function TimeClockPanel({ currentUser, writeLog }) {
                     : <>No conversion date set — the app's clock runs alongside the current one until a date is set.</>}
             </div>
 
+            <div style={box}>
+                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', marginBottom: '6px' }}>🔒 Where the clock works</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '10px' }}>Punches are taken only on a shop tablet that an admin has set up, on the shop network. To add a tablet: open the hub → Time Clock ON that tablet, at the shop → "Admin: set up this tablet" → your PIN → name it (that also trusts the network it is on).</div>
+                {places.error ? <div style={{ color: '#c62828', fontSize: '0.88rem' }}>{places.error}</div> : (
+                    <div style={{ display: 'flex', gap: '30px', flexWrap: 'wrap' }}>
+                        <div style={{ flex: '1 1 300px' }}>
+                            <div style={mono}>Shop network</div>
+                            {!places.networks.length ? <div style={{ fontSize: '0.88rem', color: '#c62828', marginTop: '6px' }}>None trusted yet — no tablet can punch.</div> : places.networks.map(n => (
+                                <div key={n.ip} style={{ fontSize: '0.88rem', padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
+                                    <strong>{n.label || 'Shop Wi-Fi'}</strong> · {n.ip} <span style={{ color: 'var(--ink-soft)' }}>· trusted by {n.trustedBy || '—'}{n.at ? ` ${new Date(n.at).toLocaleDateString('en-US')}` : ''}</span>
+                                    <button onClick={() => removeNetwork(n)} style={{ ...btnLight, padding: '2px 8px', marginLeft: '10px' }}>Remove</button>
+                                </div>
+                            ))}
+                        </div>
+                        <div style={{ flex: '1 1 380px' }}>
+                            <div style={mono}>Shop tablets</div>
+                            {!places.devices.filter(d => d.active !== false).length ? <div style={{ fontSize: '0.88rem', color: '#c62828', marginTop: '6px' }}>None set up yet — no device can punch.</div> : places.devices.filter(d => d.active !== false).map(d => (
+                                <div key={d.id} style={{ fontSize: '0.88rem', padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
+                                    <strong>{d.name}</strong> <span style={{ color: 'var(--ink-soft)' }}>· set up by {d.enrolledBy || '—'}{d.enrolledAt ? ` ${new Date(d.enrolledAt).toLocaleDateString('en-US')}` : ''}{d.lastPunchAt ? ` · last punch ${new Date(d.lastPunchAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : ' · no punch yet'}</span>
+                                    <button onClick={() => removeDevice(d)} style={{ ...btnLight, padding: '2px 8px', marginLeft: '10px' }}>Remove</button>
+                                </div>
+                            ))}
+                            {places.devices.some(d => d.active === false) && <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px' }}>Removed: {places.devices.filter(d => d.active === false).map(d => d.name).join(', ')}</div>}
+                        </div>
+                    </div>
+                )}
+            </div>
+
             {error && <div style={{ ...box, borderColor: '#c62828', color: '#c62828' }}>{error}</div>}
             {loading && <div style={box}>Reading the punches…</div>}
 
@@ -217,7 +270,7 @@ export default function TimeClockPanel({ currentUser, writeLog }) {
                                                         {d.warnings.length ? <span style={{ color: '#c62828' }}> · ⚠ {d.warnings.join(', ')}</span> : null}
                                                         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
                                                             {d.punches.slice().sort((a, b) => punchTimeOf(a) - punchTimeOf(b)).map(p => (
-                                                                <span key={p.id} title={p.source === 'admin' ? `added by ${p.by}: ${p.reason}` : 'from the clock'} style={{ fontSize: '0.82rem', border: `1px solid ${p.void ? 'var(--line)' : p.source === 'admin' ? '#b08d57' : 'var(--ink)'}`, padding: '3px 8px', textDecoration: p.void ? 'line-through' : 'none', color: p.void ? 'var(--ink-soft)' : 'var(--ink)' }}>
+                                                                <span key={p.id} title={p.source === 'admin' ? `added by ${p.by}: ${p.reason}` : `from the clock${p.device ? ` · ${p.device}` : ''}${p.ip ? ` · ${p.ip}` : ''}`} style={{ fontSize: '0.82rem', border: `1px solid ${p.void ? 'var(--line)' : p.source === 'admin' ? '#b08d57' : 'var(--ink)'}`, padding: '3px 8px', textDecoration: p.void ? 'line-through' : 'none', color: p.void ? 'var(--ink-soft)' : 'var(--ink)' }}>
                                                                     {PUNCH_LABEL[p.kind] ? PUNCH_LABEL[p.kind].en : p.kind} {t12(punchTimeOf(p))}{p.source === 'admin' ? ' ✎' : ''}{p.void ? ` (void: ${p.voidReason})` : ''}
                                                                     {!p.void && <button onClick={() => voidPunch(p, r.name)} disabled={busy} style={{ marginLeft: '6px', border: 'none', background: 'transparent', color: '#c62828', cursor: 'pointer', fontSize: '0.75rem' }}>void</button>}
                                                                 </span>
