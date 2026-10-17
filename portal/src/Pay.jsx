@@ -198,7 +198,19 @@ export default function Pay() {
           </label>
 
           <input placeholder="Name on card" value={name} onChange={(e) => setName(e.target.value)} autoComplete="cc-name" />
-          <input placeholder="Email for the receipt" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+          {/* WHERE THE RECEIPT GOES. When the office already has an address for this customer the
+              payer is told so — masked, because a pay link can be forwarded and the address on file
+              is the customer's, not the link-holder's — and need type nothing. Typing one sends it
+              there instead (Stuart 2026-10-17). */}
+          <input
+            placeholder={intent.receiptOnFile ? `Email for the receipt (optional)` : 'Email for the receipt'}
+            type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email"
+          />
+          {intent.receiptOnFile && !email.trim() && (
+            <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '-4px 0 0' }}>
+              Your receipt will go to {intent.receiptOnFile} — enter a different address above to change it.
+            </p>
+          )}
 
           <div id="cc-number" style={fieldBox} />
           <div style={{ display: 'flex', gap: 12 }}>

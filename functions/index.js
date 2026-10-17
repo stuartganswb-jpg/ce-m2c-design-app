@@ -2532,14 +2532,55 @@ const payLinkOf = async (token) => {
 
 // What the pay page shows. Public by design (the token IS the credential) — it returns only what a
 // payer must see: who it is for, which document, and what is owed.
+// WHERE A RECEIPT GOES — asked once, by the pay page and by the sender alike (Stuart 2026-10-17:
+// "i made sure the email address is loaded in crm and the payment link does not see it"). The
+// order first, then the CUSTOMER'S OWN RECORD and its contacts. Two separate lookups would be two
+// answers to the same question, and the payer would be promised one address and sent another.
+const receiptAddressFor = async ({ collection, docId }) => {
+    if (!collection || !docId) return { to: '', customerName: '' };
+    const db = admin.firestore();
+    const d = await db.collection(String(collection)).doc(String(docId)).get().catch(() => null);
+    const doc0 = d && d.exists ? (d.data() || {}) : {};
+    let to = String(doc0.email || doc0.customerEmail || '').trim();
+    const custField = doc0.customer;
+    let customerName = custField && typeof custField === 'object' ? String(custField.name || '') : String(custField || '');
+    if (!to) {
+        const custId = String(doc0.customerId || (custField && custField.id) || '');
+        if (custId) {
+            const crm = await db.collection('crm_records').doc(custId).get().catch(() => null);
+            const c = crm && crm.exists ? (crm.data() || {}) : {};
+            to = String(c.email || '').trim();
+            if (!mail.looksLikeEmail(to)) {
+                const contact = (Array.isArray(c.contacts) ? c.contacts : []).find((x) => mail.looksLikeEmail(x && x.email));
+                to = contact ? String(contact.email).trim() : '';
+            }
+            if (!customerName) customerName = String(c.name || '');
+        }
+    }
+    return { to: mail.looksLikeEmail(to) ? to : '', customerName };
+};
+
+// Shown to a payer as reassurance, never in full: a pay link can be forwarded, and the address on
+// file is the customer's, not the link-holder's. "st••••@classicalelements.com".
+const maskEmail = (v) => {
+    const m = /^([^@]+)@(.+)$/.exec(String(v || ''));
+    if (!m) return '';
+    const name = m[1];
+    return `${name.slice(0, 2)}${'•'.repeat(Math.max(name.length - 2, 1))}@${m[2]}`;
+};
+
 exports.payIntent = onCall({ cors: true }, async (request) => {
     const link = await payLinkOf((request.data || {}).token);
     const cfg = await nmiConfig();
     const tokenizationKey = cfg.tokenizationKeys[link.brand] || '';
     if (!tokenizationKey) throw new HttpsError('failed-precondition', 'Card payments are not configured for this brand yet.');
+    // Where a receipt would go if the payer types nothing — masked, so the page can reassure
+    // without handing a forwarded link the customer's address.
+    const onFile = await receiptAddressFor({ collection: link.collection, docId: link.docId });
     return {
         environment: cfg.environment,
         tokenizationKey,
+        receiptOnFile: maskEmail(onFile.to),
         merchantName: PAY_MERCHANT_NAME[link.brand] || String(link.brand || '').toUpperCase(),
         collectJsUrl: cfg.environment === 'PRODUCTION' ? 'https://secure.nmi.com/token/Collect.js' : 'https://sandbox.nmi.com/token/Collect.js',
         docType: link.docType, reference: link.reference, customerName: link.customerName,
@@ -3624,31 +3665,10 @@ const emailPaymentReceived = async (paymentId) => {
             orderTotal = p.collection === 'jobs'
                 ? Number((doc0.cpqData && doc0.cpqData.totalPrice) || 0) + Number(doc0.shippingAmount || 0)
                 : Number(doc0.invoiceTotal || 0);
-            // The two collections spell the customer differently — a CPQ job carries an OBJECT
-            // ({ id, name }), an Order Entry sales order a plain string. Reading them in the wrong
-            // order greets the customer as "[object Object]", which String() will do cheerfully.
-            const custField = doc0.customer;
-            const docCustName = custField && typeof custField === 'object' ? String(custField.name || '') : String(custField || '');
-            customerName = customerName || docCustName;
-            if (!to) to = String(doc0.email || doc0.customerEmail || '').trim();
-            // AND FAILING THAT, THE CUSTOMER'S OWN RECORD. Stuart 2026-10-17: "i made sure the
-            // email address is loaded in crm and the payment link does not see it" — it should.
-            // A payer at a counter will often not type one; the office already knows where this
-            // customer's paperwork goes.
-            if (!to) {
-                const custId = String(doc0.customerId || (doc0.customer && doc0.customer.id) || '');
-                if (custId) {
-                    const crm = await db.collection('crm_records').doc(custId).get().catch(() => null);
-                    const c = crm && crm.exists ? (crm.data() || {}) : {};
-                    to = String(c.email || '').trim();
-                    // Then any contact with an address — the first one is the office's own choice.
-                    if (!to) {
-                        const contact = (Array.isArray(c.contacts) ? c.contacts : []).find((x) => mail.looksLikeEmail(x && x.email));
-                        to = contact ? String(contact.email).trim() : '';
-                    }
-                    if (!customerName) customerName = String(c.name || '');
-                }
-            }
+            // The SAME lookup the pay page used to promise the payer where their receipt would go.
+            const onFile = await receiptAddressFor({ collection: p.collection, docId: p.docId });
+            if (!to) to = onFile.to;
+            customerName = customerName || onFile.customerName;
         }
         if (!mail.looksLikeEmail(to)) {
             // The commonest reason nothing arrives: nobody typed an address on the pay page and the
