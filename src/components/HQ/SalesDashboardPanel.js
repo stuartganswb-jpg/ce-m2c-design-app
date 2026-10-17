@@ -29,6 +29,7 @@ import { fetchAvailabilityUnits, fetchOrderCommitted, orderHeldOf } from '../Sha
 import { woItemCodeOf } from '../Shared/workOrderContract';
 import { isFeePart } from '../Shared/oeClassify';
 import MaterialGridCard from '../Shared/MaterialGridCard';
+import PaymentsWaitingNote from '../Shared/PaymentsWaitingNote';   // ⏳ card money NetSuite has not heard about for 24 h+ (Payments session, Stuart 2026-10-17)
 import {
     ymdOf, rangeMsOf, presetRangeOf, lastYearOf, rangeLabelOf, isYmd, PRESET, PRESET_LABEL, orderRowsOf, bookOf, doorSplitOf,
     quotePipelineOf, cpqLinesOf, oeLinesOf, periodSql, transactionsOf, basisOf, periodFiguresOf, compareRowsOf, cumulativeOf,
@@ -485,6 +486,10 @@ export default function SalesDashboardPanel({ activeBrand }) {
                     <button style={btnLight} onClick={refresh} title="Read the orders and NetSuite again">↻ Refresh</button>
                 </div>
             </div>
+
+            {/* MONEY OUT OF THE BOOKS FIRST (Stuart 2026-10-17: "have it keep popping up on end of day summary and sales
+                dashboard"): renders nothing unless a card payment has waited over 24 hours for NetSuite — every division. */}
+            <PaymentsWaitingNote compact />
 
             {/* KPI 1 + 6 — THE OPEN ORDER BOOK */}
             <div style={{ ...box, display: 'flex', gap: '22px', flexWrap: 'wrap' }}>
