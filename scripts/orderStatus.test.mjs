@@ -5,7 +5,8 @@
 // the ONE list's answers so a reader swap cannot change what releases. If a rule change breaks a
 // row here, the change is wrong, not the test — unless Stuart changed the rule.
 
-import { packReadinessOf, floorWaitsOf,
+import { ORDER_ENTRY_CLASS } from '../src/components/Shared/pickLines.js';
+import { packReadinessOf, floorWaitsOf, packedStateOf,
     GATES, gatesOf, openGatesOf, isReleasable, gateSummary,
     customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf, liftPatchFor, wholeOrderWait, canReopenPostedOrder, netSuiteOrderNoOf, setupWaitsOnShop, stageWaitsOnMatch, nothingToPick, isSalesDoc, stagingMatched } from '../src/components/Shared/orderStatus.js';
 
@@ -222,6 +223,18 @@ ok('a quote has none', netSuiteOrderNoOf({ status: 'CONFIGURED' }, null) === '')
     // …and the verdict reads the same words it always did.
     const r = packReadinessOf(poles, { recipeLen: 3, poleRecipeLen: 4 });
     eq('the pack verdict carries exactly those words', [r.ready, r.waits], [false, ['poles: painting (coat 2 of 4 · pole spray)']]);
+}
+// ── Step 2 (Shared/soPackStep, 2026-10-17): a CPQ order is packed on SO Pack ──────────────────────────────────────
+{
+    const pkg = { id: 'A', packStatus: 'Packed', packStage: 'PACKAGED', packedAt: 10 };
+    eq('a document packaged at Prep reads PACKAGED, done for the floor', [packReadinessOf(pkg).word, packReadinessOf(pkg).done], ['PACKAGED', true]);
+    eq('once its order is packed it reads PACKED', packReadinessOf({ ...pkg, packStage: 'ORDER_PACKED' }).word, 'PACKED');
+    const cpq = { id: 'SO-APP-1', soId: 'SO-APP-1' };
+    ok('CRM: packaged documents do not make the order packed', !packedStateOf(cpq, [pkg, { ...pkg, id: 'B' }]).packed);
+    const p2 = packedStateOf({ ...cpq, packStatus: 'Packed', packedAt: 20, trackingNumbers: ['1Z1'] }, [{ ...pkg, packStage: 'ORDER_PACKED', trackingNumbers: ['1Z2'] }]);
+    eq('CRM: packed on SO Pack — the sales order\'s stamp and time, every tracking number', [p2.packed, p2.packedAt, p2.tracking], [true, 20, ['1Z1', '1Z2']]);
+    ok('CRM: an order packed the old way still reads packed', packedStateOf(cpq, [{ id: 'A', packStatus: 'Packed', packedAt: 5 }]).packed);
+    eq('CRM: an Order Entry order reads its own stamp, as before', [packedStateOf({ id: 'QS-1', orderClass: ORDER_ENTRY_CLASS, packStatus: 'Packed' }).packed, packedStateOf({ id: 'QS-2', orderClass: ORDER_ENTRY_CLASS }).packed], [true, false]);
 }
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

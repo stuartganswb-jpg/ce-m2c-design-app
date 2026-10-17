@@ -108,5 +108,12 @@ const oe = { id: 'SO1', orderClass: 'QUICKSHIP', lines: [{ erp: 'A/BS', name: 'R
 const oeBoard = soPackBoardOf({ docs: [oe], linesOf: (d) => packLinesOf(d), refOf: () => 'SO 1' });
 eq('an Order Entry order, by its own lines (keys stay the sold line numbers)', oeBoard.rows.map(r => `${r.key} ${r.code} ${r.packed}/${r.ordered} ${r.box}`), ['L0 A/BS 6/6 Small Box A', 'L2 B/P 0/2 ']);
 
+// ── Step 2 (2026-10-17): every document PACKAGED at Prep → the order is boxed here (TO_BOX), not "all packed" ──────
+{
+    const pk = (d) => ({ ...d, currentPhase: 'Complete', packStatus: 'Packed', packStage: 'PACKAGED' });
+    eq('every document packaged → TO BOX', board([pk(ep5), pk(s11), pk(unf)]).verdict, ORDER_VERDICT.TO_BOX);
+    eq('once the order is packed here → ALL PACKED', board([ep5, s11, unf].map(d => ({ ...pk(d), packStage: 'ORDER_PACKED' }))).verdict, ORDER_VERDICT.ALL_PACKED);
+    eq('packed the old way (no stage) → ALL PACKED, as before', board([ep5, s11, unf].map(d => ({ ...d, currentPhase: 'Complete', packStatus: 'Packed' }))).verdict, ORDER_VERDICT.ALL_PACKED);
+}
 console.log(`soPackBoard: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -3,6 +3,7 @@ import { poleCoatIndexOf, woHasSmallParts } from './floorActivity.js';
 import { isStationPickLine, traverseWaitOf } from './trackLoaded.js';
 import { oeIsTbf } from './oeLines.js';
 import { isKitLine, isOffOrderLine } from './itemKit.js';
+import { awaitsOrderPack, orderPackedOnSoPack } from './soPackStep.js';
 // WHERE IS IT? — the one answer, derived (Stuart 2026-08-03: "of utmost importance is the clarity
 // on the status of an item, my team is confused and i want them to see clearly each stage exactly
 // where something is at… from the time an order hits the custom or finishing floor till the time
@@ -275,6 +276,8 @@ export function floorWaitsOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
 export function packReadinessOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
     if (!wo) return null;
     if (wo.currentPhase === 'Closed') return { ready: false, done: true, word: 'CLOSED', reason: 'out of production', waits: [] };
+    // Packaged at Prep, its order still to be boxed on SO Pack (Shared/soPackStep, 2026-10-17) — done for the floor, not packed to ship.
+    if (awaitsOrderPack(wo)) return { ready: false, done: true, word: 'PACKAGED', reason: 'packaged at Packaging Prep — the order is boxed and packed on SO Pack', waits: [] };
     if (wo.packStatus === 'Packed') return { ready: false, done: true, word: 'PACKED', reason: wo.nsIfTran ? `fulfilment ${wo.nsIfTran}` : 'packed — awaiting shipment', waits: [] };
     if (wo.packStatus === 'Gathered') return { ready: false, done: true, word: 'GATHERED', reason: 'gathered into its order at Packaging Prep', waits: [] };
     const waits = [];
@@ -555,11 +558,14 @@ export const packedStateOf = (so, packDocs = []) => {
         return { packed: so.packStatus === 'Packed', packedAt: so.packedAt || null, shipped: String(so.status || '') === 'Shipped' || !!so.nsIfTran, tracking: so.trackingNumbers || [] };
     }
     const docs = (packDocs || []).filter(Boolean);
-    const packed = docs.length > 0 && docs.every(d => d.packStatus === 'Packed');
+    // A CPQ ORDER IS PACKED ON SO PACK (Shared/soPackStep, 2026-10-17): its sales order carries the stamp, as an Order Entry
+    // order's does. Before that, a document merely PACKAGED at Prep does not make the order packed; an order packed before
+    // boxing moved (no stage on its documents) reads as it always has — every document packed.
+    const packed = orderPackedOnSoPack(so) || (docs.length > 0 && docs.every(d => d.packStatus === 'Packed' && !awaitsOrderPack(d)));
     return {
         packed,
-        packedAt: packed ? (docs.reduce((m, d) => Math.max(m, _ms(d.packedAt)), 0) || null) : null,
-        shipped: packed && docs.some(d => d.nsIfTran || d.shippedAt),
-        tracking: [...new Set(docs.flatMap(d => d.trackingNumbers || []))],
+        packedAt: packed ? ((orderPackedOnSoPack(so) && _ms(so.packedAt)) || docs.reduce((m, d) => Math.max(m, _ms(d.packedAt)), 0) || null) : null,
+        shipped: packed && (docs.some(d => d.nsIfTran || d.shippedAt) || !!so.nsIfTran || !!so.shippedAt),
+        tracking: [...new Set([...(so.trackingNumbers || []), ...docs.flatMap(d => d.trackingNumbers || [])])],
     };
 };

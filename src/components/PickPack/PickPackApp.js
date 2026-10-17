@@ -70,6 +70,7 @@ import { printForm } from '../Shared/printForm';
 import { packingListOf, packedQtyOf } from '../Shared/packingList';
 import { isBlindShipment, withBlindPacking } from '../Shared/blindShip';
 import { soPackBoardOf, lineBoxOf, LINE_STATE, ORDER_VERDICT } from '../Shared/soPackBoard';
+import { PACK_STAGE, orderAwaitsPackOf, orderPackBlockerOf, orderPackedPatchOf, docOrderPackedPatchOf, awaitsOrderPack } from '../Shared/soPackStep';   // a CPQ order is boxed and packed on SO Pack (step 2, 2026-10-17)
 import { boxHomeFor, boxOpenRefusal, isBoxShipped, spreadTrackingOf, orderBoxesOf, withNewBox, newBoxRefusal, boxOf, boxName, tickBoxesOf, tickIntoBox, moveIntoBox, unboxedQtyOf, boxSpreadLabel, boxContentsOf, boxRemovalRefusal, unboxedLinesOf, boxCompleteBlocker, packBoxesOfTicks, docBoxLinesOf } from '../Shared/orderBoxes';
 import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
 import { customerKeys } from '../Shared/clientPricing';
@@ -198,6 +199,10 @@ const isStockWoNumber = () => {
     const yy = String(d.getFullYear()).slice(-2);
     return `IS_${mm}${dd}${yy}`;
 };
+
+// A CPQ SALES-ORDER RECORD handled at SO Pack (step 2, 2026-10-17): the order itself is claimed, photographed and packed
+// there, so packDocOf must write hq_sales_orders for it. A Symbol key never reaches Firestore (writes never carry it).
+const SO_RECORD = Symbol('soRecord');
 
 const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBrandProp }) => {
     // Mounted standalone at /pick-pack with no props, so own the brand here (persisted) when no parent
@@ -847,6 +852,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // NUMBERED BOXES (Shared/orderBoxes, Stuart 2026-10-06): the box this tablet is packing INTO — a choice made on
     // this bench for the order that is open (`id`), never carried to another order — and the type of the next new box.
     const [openBoxSel, setOpenBoxSel] = useState({ id: null, no: null });
+    const [soPackOpenId, setSoPackOpenId] = useState(null);   // the CPQ order open for boxing on SO Pack (step 2) — its id
     const [newBoxType, setNewBoxType] = useState('');
     // TWO STATIONS IN ONE TAB (Stuart 2026-07-21): STOCK builds just get PUT AWAY — confirm the
     // pieces, scan the destination bin, done (no photo, no boxes). CUSTOM/QS orders are real
@@ -867,7 +873,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // Picked off the shelf). Writes land on whichever doc the order came from.
     // THE ONE TEST (Shared/pickLines.isQuickShip, 2026-09-23) — this used to be a local copy.
     const isQsOrder = isQuickShip;
-    const packDocOf = (j) => doc(db, isQsOrder(j) ? 'hq_sales_orders' : 'fin_workorders', j.id);
+    const isSoRecord = (j) => !!j && j[SO_RECORD] === true;
+    const soRecordOf = (so) => (so ? { ...so, [SO_RECORD]: true } : null);
+    const packDocOf = (j) => doc(db, (isQsOrder(j) || isSoRecord(j)) ? 'hq_sales_orders' : 'fin_workorders', j.id);
     // THE FLOOR SIGNS IT OFF BEFORE THE BENCH TOUCHES IT (Stuart 2026-10-13: "they should not be allowed to react on
     // something that is on the floor, they can't see it to pack"). The pack queue lists only documents the finishing floor
     // has finished, so this is never met on the normal road — it is the ACTION's own check, for a document sent back to
@@ -987,7 +995,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const trvGateOf = (so) => (hasTrackLine(so) ? oeTraverseGateOf({ so, isTrackCode, isFeeCode, boards: isReleaseByCount(so) ? so.releaseOf : 0 }) : NO_TRV_GATE);
     const feeLine = (o, l, i) => soLineIsFee(o, l, i, isFeeCode);
     const packLinesFor = (job) => packLinesOf(job, { poleRows: poleRowsForPack(job), isFeeCode });
-    const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : woRefOf(j);
+    const packRef = (j) => (isQsOrder(j) || isSoRecord(j)) ? `SO ${j.soId || j.id}` : woRefOf(j);
 
     // ── NUMBERED BOXES (Shared/orderBoxes, Stuart 2026-10-06: "add a field to create box#, it could be multiples") ──
     // An order's boxes are numbered on its SALES ORDER, so every document of the order shares Box 1, 2, 3; a packed
@@ -995,19 +1003,36 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // GATHERS into its order have no customer box here — the order is boxed when the order itself is packed.
     const usesBoxes = (job) => !!job && job.orderType !== 'stock' && !oeOrderOfDoc(job);
     const boxHomeOf = (job) => boxHomeFor(job, { soIndex, isOrderDoc: isQsOrder });   // ONE resolver — the Fulfilment tab stamps the same list
+    // STEP 2 (Shared/soPackStep, Stuart 2026-10-17): a CPQ floor document is PACKAGED at Packaging Prep — its lines and its
+    // product photo — and its ORDER is boxed, photographed and packed on SO Pack, which sends the one fulfilment. Not a stock
+    // run, not an Order Entry document (it gathers), not a display, and only with its sales order on file.
+    const packagesForSoPack = (job) => {
+        if (!job || isQsOrder(job) || isSoRecord(job) || job.orderType === 'stock' || oeOrderOfDoc(job)) return false;
+        if (String(job.packMode || '').toUpperCase() === 'DISPLAY') return false;
+        const so = (boxHomeOf(job) || {}).so;
+        return !!so && !isQsOrder(so) && !so.displayRelease && String(so.packMode || '').toUpperCase() !== 'DISPLAY';
+    };
+    // The CPQ order open for boxing on SO Pack that this document belongs to — its claim and its open box stand for every
+    // document of it there. Only on SO Pack: Packaging Prep keeps each document's own claim.
+    const soPackOrderOf = (job) => {
+        if (activeTab !== 'STOCK' || !soPackOpenId || !job || isQsOrder(job) || isSoRecord(job)) return null;
+        const so = (boxHomeOf(job) || {}).so;
+        return so && so.id === soPackOpenId ? so : null;
+    };
     const orderPackDocsOf = (job) => isQsOrder(job) ? [job] : finAll.filter(w => w.id === job.id || (job.orderKey && w.orderKey === job.orderKey) || (job.salesOrderId && w.salesOrderId === job.salesOrderId));
     // A packed document's poles come off its own stamp; only an open one asks the shop order for them.
     const packLinesAsPacked = (d) => (d.packStatus === 'Packed' && Array.isArray(d.poleLines) && d.poleLines.length) ? packLinesOf(d, { isFeeCode }) : packLinesFor(d);
     const openBoxNoOf = (job) => {
-        if (!job || openBoxSel.id !== job.id || !usesBoxes(job)) return null;
+        if (!job || openBoxSel.id !== (soPackOrderOf(job) ? soPackOpenId : job.id) || !usesBoxes(job)) return null;
         const b = boxOf(orderBoxesOf(boxHomeOf(job).data), openBoxSel.no);
         return b && !isBoxShipped(b) ? openBoxSel.no : null;   // a box that has shipped takes nothing more
     };
     // Pieces in a box that has SHIPPED are gone with it: they cannot be moved to another box or un-ticked here.
     const shippedBoxOfTick = (job, tick) => { const boxes = orderBoxesOf(boxHomeOf(job).data); return tickBoxesOf(tick).map(b => boxOf(boxes, b.no)).find(isBoxShipped) || null; };
     const packIsMine = (job) => {
-        if (claimIsMine(claimOf(job, 'pack'))) return true;
-        const c = claimOf(job, 'pack');
+        const owner = soPackOrderOf(job) || job;   // a document of the order open on SO Pack answers to the order's claim
+        if (claimIsMine(claimOf(owner, 'pack'))) return true;
+        const c = claimOf(owner, 'pack');
         alert(c ? `${c.by} ${t('is packing this')} — ${t('since')} ${claimSince(c)}.` : 'Press START PACKING first — this order is not yours yet.');
         return false;
     };
@@ -1026,7 +1051,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 tx.update(ref, { orderBoxes: made.list });
                 return made.no;
             });
-            setOpenBoxSel({ id: job.id, no });
+            setOpenBoxSel({ id: soPackOrderOf(job) ? soPackOpenId : job.id, no });
             writeLog(`Box ${no} (${type}) added for ${packRef(job)}`, 'packing');
         } catch (e) { alert('Could not add the box: ' + (e.message || e)); }
     };
@@ -3050,7 +3075,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const shortClose = closeShort && closeShort.short ? closeShort : null;
         const confirmMsg = isStockPutaway
             ? `Put away ${packRef(job)} to bin ${bin}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} confirmed · stocked goods to the shelf (no customer packing).${shortClose ? `\n\n⚖ CLOSES SHORT — ${closeShortLine(shortClose)}. ${closeShortNext(shortClose, { paintOnly: isPaintOnlyOrder(job), hasNsWo: !!job.nsWoId })}` : ''}`
-            : `Complete packing for ${packRef(job)}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} packed · ${(job.packPhotos || []).length} photo${(job.packPhotos || []).length === 1 ? '' : 's'}\n\n${docBoxLinesOf(job, lines, orderBoxesOf(boxHomeOf(job).data)).join('\n') || 'No box on record.'}`;
+            : packagesForSoPack(job)
+                ? `Packaged — ${packRef(job)}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} packaged · ${(job.packPhotos || []).length} photo${(job.packPhotos || []).length === 1 ? '' : 's'}\n\nThe order is boxed and packed on SO Pack once all its work orders are packaged — that sends the NetSuite fulfilment.`
+                : `Complete packing for ${packRef(job)}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} packed · ${(job.packPhotos || []).length} photo${(job.packPhotos || []).length === 1 ? '' : 's'}\n\n${docBoxLinesOf(job, lines, orderBoxesOf(boxHomeOf(job).data)).join('\n') || 'No box on record.'}`;
         // BOTH HALVES OR NEITHER. Staging matched poles to small parts on the way IN to finishing;
         // nothing re-checked them at the box, so one order's parts could ship with another's poles
         // and every screen would still read correct (Stuart 2026-08-03, WO-SO59176).
@@ -3066,8 +3093,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             return alert(`❌ ${packRef(job)}: custom parts are not ready (${job.customFabStatus || 'Pending'}).${job.customFabStatus === 'Sent to Plating' ? '\n\nThey are AT THE PLATER. The ready parts stay packed here; the box closes when the pole is received and put away on the Plating tab.' : '\n\nWait for the shop to finish + label them.'}`);
         }
         // A BOX IS A CHOICE, NOT A BLANK (Stuart 2026-09-11: "force box choice") — and since 2026-10-06 a NUMBERED one:
-        // every packed piece is in one of the order's boxes before the document closes (Shared/orderBoxes).
-        if (!isStockPutaway) {
+        // every packed piece is in one of the order's boxes before the document closes (Shared/orderBoxes). A CPQ document
+        // PACKAGED here is boxed with its order on SO Pack (Shared/soPackStep) — no box is asked of it here.
+        if (!isStockPutaway && !packagesForSoPack(job)) {
             const blk = boxCompleteBlocker(job, lines);
             if (blk) return alert(`${blk.charAt(0).toUpperCase()}${blk.slice(1)}.`);
         }
@@ -3079,7 +3107,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 ...(poleRowsAtPack.length ? { poleLines: poleLinesStamp(poleRowsAtPack) } : {}),
                 ...(job.hasCustomSibling && !job.packCustomMatchedAt ? { packCustomMatchedAt: Date.now(), packCustomMatchedBy: operator?.name || '', packCustomMatchedScan: custMatch } : {}),
                 // packBoxes — the box TYPE of each half, as the Fulfilment tab reads it — now comes from the numbered boxes.
-                ...(isStockPutaway ? { putawayBin: bin, packMode: 'PUTAWAY', putawayItemScan: putawayScanned } : { packBoxes: packBoxesOfTicks(job, lines, orderBoxesOf(boxHomeOf(job).data)) }),
+                ...(isStockPutaway ? { putawayBin: bin, packMode: 'PUTAWAY', putawayItemScan: putawayScanned }
+                    : packagesForSoPack(job) ? { packStage: PACK_STAGE.PACKAGED }   // its packBoxes are written when SO Pack packs the order
+                    : { packBoxes: packBoxesOfTicks(job, lines, orderBoxesOf(boxHomeOf(job).data)) }),
                 // The close, stamped in the SAME write the build trigger reads: RTG lists the balance once it posts.
                 ...(shortClose ? { closedShort: true, ...(job.nsWoId ? shortBuildStamps({ ordered: shortClose.ordered, built: shortClose.good }) : {}) } : {}) });
             setPackCustomScan('');
@@ -3155,7 +3185,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\nThe NetSuite assembly build is queued now and receives into ${bin} — watch it land in 11.1 → NetSuite Sync Queue (~1 min).${allocNote}${shortClose ? `\n\n⚖ Closed short — ${closeShortLine(shortClose)}.${scrapNote}${job.nsWoId ? `\nRTG lists the work order's balance of ${shortClose.balance} to close in NetSuite once the build lands.` : ''}` : ''}`);
                 return;
             }
-            try {
+            // PACKAGED, NOT SHIPPED (step 2, Shared/soPackStep): the order's one fulfilment is sent when SO Pack packs the order.
+            if (packagesForSoPack(job)) {
+                const so = (boxHomeOf(job) || {}).so;
+                nsNote = `\n\n📦 Next: SO Pack. When every work order of SO ${(so && (so.soId || so.id)) || ''} is packaged, the order is boxed there, photographed and ✓ Packed — that sends the NetSuite fulfilment.`;
+            } else try {
                 const soDoc = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || null);
                 const nsSoId = String((isQsOrder(job) ? (job.nsInternalId || job.soId) : (soDoc && soDoc.nsInternalId)) || '');
                 // ONE ORDER SHIPS ONCE (Stuart 2026-09-27): a CPQ order split into several finishes queues its
@@ -5961,6 +5995,186 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         );
     }
 
+    // THE ORDER'S BOXES, ONE STRIP IN TWO PLACES (step 2 · Stuart 2026-10-17): the Packaging Prep bench's box strip, and SO
+    // Pack's for a CPQ order boxed there (orderPackStepView). `anchor` is a document of the order (or the Order Entry order
+    // itself): the box list, the claim and the open box are all read through it (boxHomeOf · soPackOrderOf), so one strip
+    // serves both. `looseCount` / `onBoxAll` = the packed pieces in no box; `openWords` = what the open box is for, here.
+    const orderBoxStrip = ({ anchor, looseCount = 0, onBoxAll = () => {}, openWords = '' }) => {
+        const orderBoxes = orderBoxesOf(boxHomeOf(anchor).data);
+        const boxContents = boxContentsOf({ docs: orderPackDocsOf(anchor), linesOf: packLinesAsPacked });
+        const openBox = openBoxNoOf(anchor);
+        const packMine = claimIsMine(claimOf(soPackOrderOf(anchor) || anchor, 'pack'));
+        const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
+        const selId = soPackOrderOf(anchor) ? soPackOpenId : anchor.id;
+        return (
+            <div style={{ padding: '12px 16px', border: `1px solid ${openBox ? theme.ink : theme.brass}`, background: '#fff', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginRight: '4px' }}>📦 {t('Boxes')}{boxHomeOf(anchor).so ? ` · SO ${boxHomeOf(anchor).so.soId || boxHomeOf(anchor).so.id}` : ''}</span>
+                    {orderBoxes.length === 0 && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.brass }}>{t('No box yet — add the first one')} →</span>}
+                    {orderBoxes.map(b => {
+                        const isOpen = openBox === b.no, pcs = (boxContents[b.no] && boxContents[b.no].pcs) || 0, shipped = isBoxShipped(b);
+                        const last = b.no === orderBoxes[orderBoxes.length - 1].no;
+                        return (
+                            <span key={b.no} style={{ display: 'inline-flex', alignItems: 'stretch', border: `1px solid ${isOpen ? theme.ink : theme.line}` }}>
+                                <button onClick={() => { if (shipped) return alert(boxOpenRefusal(b)); setOpenBoxSel(isOpen ? { id: null, no: null } : { id: selId, no: b.no }); }} title={shipped ? boxOpenRefusal(b) : `${boxName(b)} — ${pcs} pc${pcs === 1 ? '' : 's'}${(boxContents[b.no] ? `: ${boxContents[b.no].items.map(i => `${i.code} ×${i.qty}`).join(', ')}` : '')}\n${isOpen ? 'Open — tap to close it' : 'Tap to pack into this box'}`} style={{ background: isOpen ? theme.ink : (shipped ? '#f0f7f1' : theme.paper), color: isOpen ? '#fff' : (shipped ? '#2e7d32' : theme.ink), border: 'none', padding: '9px 12px', fontFamily: theme.mono, fontSize: '11px', cursor: shipped ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
+                                    <b>{t('Box')} {b.no}</b>{b.type ? ` · ${b.type}` : ''} · {pcs} pc{pcs === 1 ? '' : 's'}{isOpen ? ` · ${t('OPEN')}` : ''}{shipped ? ` · 🚚 ${t('SHIPPED')}${b.trackingNumber ? ` ${b.trackingNumber}` : ''}` : ''}
+                                </button>
+                                <button onClick={() => printOrderBoxLabelsFor(anchor, b.no)} title={`Print the label for Box ${b.no} — "${t('Box')} ${b.no} of ${orderBoxes.length}"`} style={{ background: '#fff', color: theme.inkSoft, border: 'none', borderLeft: `1px solid ${theme.line}`, padding: '0 9px', cursor: 'pointer' }}>🖨</button>
+                                {last && pcs === 0 && <button onClick={() => removeOrderBox(anchor, b.no)} title={`Remove Box ${b.no} — it is empty`} style={{ background: '#fff', color: '#c0392b', border: 'none', borderLeft: `1px solid ${theme.line}`, padding: '0 9px', cursor: 'pointer', fontFamily: theme.mono }}>✕</button>}
+                            </span>
+                        );
+                    })}
+                    <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
+                        <select value={newBoxType} onChange={e => setNewBoxType(e.target.value)} style={{ padding: '8px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.85rem', background: '#fff', maxWidth: '260px' }}>
+                            <option value="">{brandBoxes.length ? `— ${t('box type')} —` : '— no boxes for this brand —'}</option>
+                            {brandBoxes.map(b => <option key={b.id} value={b.name}>{b.name} — {boxSizeLabel(b)}</option>)}
+                        </select>
+                        <button onClick={() => addOrderBox(anchor)} disabled={!newBoxType} title={`Add Box ${orderBoxes.length ? orderBoxes[orderBoxes.length - 1].no + 1 : 1} to this order and open it`} style={{ padding: '9px 14px', background: newBoxType ? theme.ink : theme.paper2, color: newBoxType ? '#fff' : theme.inkSoft, border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: newBoxType ? 'pointer' : 'default', whiteSpace: 'nowrap' }}>+ {t('New box')}</button>
+                        {orderBoxes.length > 1 && <button onClick={() => printOrderBoxLabelsFor(anchor)} title="Print a label for every box of this order — Box 1 of N … Box N of N" style={{ padding: '9px 12px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>🖨 {t('All box labels')}</button>}
+                    </span>
+                </div>
+                <div style={{ marginTop: '8px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', fontFamily: theme.sans, fontSize: '0.82rem', color: openBox ? theme.ink : theme.brass }}>
+                    <span>{openBox ? `${t('Packing into')} ${boxName(boxOf(orderBoxes, openBox))} — ${openWords || t('Packed puts the line in it; the arrow on a packed line moves pieces into it (some of them splits the line)')}.`
+                        : (packMine ? `${t('Open a box to pack into — tap one, or add a new one')}.` : `${t('The boxes of this order — start packing to use them')}.`)}</span>
+                    {openBox && looseCount > 0 && <button onClick={onBoxAll} title="Lines packed with no box on record — put every one of them in the open box" style={{ padding: '6px 10px', background: 'transparent', color: '#c0392b', border: '1px solid #c0392b', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', whiteSpace: 'nowrap' }}>→ {looseCount} {t('packed with no box')} → {t('Box')} {openBox}</button>}
+                    {!brandBoxes.length && <span style={{ color: '#d9534f' }}>add box types in HQ → 15. Packaging → Standard boxes</span>}
+                </div>
+            </div>
+        );
+    };
+
+    // ── SO PACK: A CPQ ORDER IS BOXED AND PACKED HERE (step 2 · Shared/soPackStep · Stuart 2026-10-17: "go ahead on step 2") ─
+    // Its work orders were packaged at Packaging Prep. Here the order is claimed (its sales order carries the claim), every
+    // packaged piece goes into one of its numbered boxes (the same list and box rules as the bench — orderBoxStrip), the
+    // closed boxes are photographed, and ✓ Packed marks the sales order Packed, each document ORDER_PACKED with its packBoxes,
+    // and sends the ONE NetSuite fulfilment (Shared/fulfilmentQueue — the queuer every packing uses).
+    const openSoPack = (so) => { setSoPackOpenId(so.id); setOpenBoxSel({ id: null, no: null }); setNewBoxType(''); };
+    const closeSoPack = (so) => {
+        const rec = soRecordOf(so), c = claimOf(rec, 'pack');
+        if (c && claimIsMine(c)) releaseClaim(rec, 'pack');
+        setSoPackOpenId(null); setOpenBoxSel({ id: null, no: null });
+    };
+    const startSoPack = async (so) => {
+        let r;
+        try { r = await claimOrder(soRecordOf(so), 'pack'); } catch (err) { return alert('Could not start packing: ' + (err.message || err)); }
+        if (!r.ok) return alert(`${r.claim.by} ${t('is packing this')} — ${t('since')} ${claimSince(r.claim)}.\n\n${t('Pick a different order, or ask them (or an admin) to release it.')}`);
+    };
+    const soPackLinesOf = (d) => packLinesAsPacked(d).filter(l => !l.rider);
+    const liveSoDocsOf = (docs) => (docs || []).filter(d => d && !d.deleted && d.currentPhase !== 'Closed');
+    const completeSoPack = async (so, docs) => {
+        if (packCompletingRef.current) return;
+        const rec = soRecordOf(so);
+        const live = liveSoDocsOf(docs);
+        const blocker = orderPackBlockerOf({ so, docs: live, linesOf: soPackLinesOf, refOf: woRefOf, mine: claimIsMine(claimOf(rec, 'pack')) });
+        if (blocker) return alert(`${blocker.charAt(0).toUpperCase()}${blocker.slice(1)}.`);
+        const boxes = orderBoxesOf(so), by = operator?.name || 'Packer', ref = `SO ${so.soId || so.id}`;
+        if (!window.confirm(`Pack ${ref}?\n\n${live.length} work order${live.length === 1 ? '' : 's'} · ${boxes.length} box${boxes.length === 1 ? '' : 'es'}${boxes.length ? ` (${boxes.map(boxName).join(', ')})` : ''} · ${(so.packPhotos || []).length} photo${(so.packPhotos || []).length === 1 ? '' : 's'}\n\nThis sends the NetSuite fulfilment for the whole order.`)) return;
+        packCompletingRef.current = true;
+        try {
+            const at = Date.now();
+            for (const d of live.filter(awaitsOrderPack)) {
+                await updateDoc(doc(db, 'fin_workorders', d.id), docOrderPackedPatchOf({ by, at, packBoxes: packBoxesOfTicks(d, soPackLinesOf(d), boxes) }));
+            }
+            await updateDoc(packDocOf(rec), orderPackedPatchOf({ by, at }));
+            writeLog(`Packed ${ref} on SO Pack — ${live.length} work order(s), ${boxes.length} box(es), ${(so.packPhotos || []).length} photo(s)`, 'packing');
+            let nsNote = '';
+            const nsSoId = String(so.nsInternalId || '');
+            if (!nsSoId) nsNote = '\n\n⚠ No NetSuite sales order linked to this order — fulfilment NOT queued. Fulfil it manually in NetSuite.';
+            else if (so.nsFulfillQueued || live.some(d => d.nsFulfillQueued)) nsNote = '\n\n📤 Its NetSuite fulfilment was already queued.';
+            else {
+                try {
+                    const writeBack = [{ collection: 'hq_sales_orders', docId: so.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' },
+                        ...live.map(d => ({ collection: 'fin_workorders', docId: d.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }))];
+                    const sent = await queueSoFulfilment({
+                        nsSoId, ref, label: `NS Fulfillment — ${ref} (${so.customer || so.customerName || ''})`,
+                        memo: nsMemo(`Packed in app by ${by}`), writeBack, createdBy: by, preferBin: so.committedBin || '', askBins,
+                    });
+                    if (sent.ok) {
+                        const stamp = { nsFulfillQueued: true, nsFulfillNeedsBins: false, ...(sent.binText ? { nsFulfilBins: sent.binText, nsFulfilBinsBy: by, nsFulfilBinsAt: Date.now() } : {}) };
+                        await updateDoc(packDocOf(rec), stamp);
+                        for (const d of live) await updateDoc(doc(db, 'fin_workorders', d.id), stamp);
+                        if (sent.binText) writeLog(`Fulfilment bins confirmed for ${ref} — ${sent.binText}`, 'packing');
+                        nsNote = `\n\n📤 NetSuite Item Fulfillment queued (status: Packed).${sent.binText ? ` Taken from: ${sent.binText}.` : ''} It ships from the FULFILMENT tab.`;
+                    } else if (sent.reason === 'NOT_CHOSEN') {
+                        for (const d of live) await updateDoc(doc(db, 'fin_workorders', d.id), { nsFulfillNeedsBins: true });
+                        nsNote = `\n\n⚠ ${sent.text}\n\nSend it from the FULFILMENT tab (📤 NetSuite fulfilment) once the bin is known.`;
+                        writeLog(`Fulfillment NOT sent for ${ref} — no bin chosen`, 'packing');
+                    } else {
+                        nsNote = `\n\n⚠ ${sent.text}`;
+                        writeLog(`Fulfillment NOT queued for ${ref} — ${sent.code}`, 'packing');
+                    }
+                } catch (obErr) { nsNote = `\n\n⚠ Could not queue the NetSuite fulfilment: ${obErr.message || obErr}. The packing stands — send it from the FULFILMENT tab (📤 NetSuite fulfilment), or fulfil it in NetSuite.`; }
+            }
+            setSoPackOpenId(null); setOpenBoxSel({ id: null, no: null });
+            alert(`📦 ${ref} packed.${nsNote}`);
+        } catch (e) { alert('Could not pack the order: ' + (e.message || e)); }
+        finally { packCompletingRef.current = false; }
+    };
+    // The step itself, beneath the order's board on SO Pack.
+    const orderPackStepView = (so, docs) => {
+        const rec = soRecordOf(so);
+        const c = claimOf(rec, 'pack'), mine = claimIsMine(c), held = !!c && !mine;
+        const live = liveSoDocsOf(docs);
+        const anchor = live[0] || null;
+        if (!anchor) return null;
+        const boxes = orderBoxesOf(so);
+        const openNo = openBoxNoOf(anchor);
+        const photos = so.packPhotos || [];
+        const blocker = orderPackBlockerOf({ so, docs: live, linesOf: soPackLinesOf, refOf: woRefOf, mine });
+        const rows = live.flatMap(d => soPackLinesOf(d).filter(l => d.packedLines && d.packedLines[l.key]).map(l => ({ d, l, tick: d.packedLines[l.key] })));
+        const looseDocs = live.filter(d => unboxedLinesOf(d, soPackLinesOf(d)).length > 0);
+        const looseCount = live.reduce((n, d) => n + unboxedLinesOf(d, soPackLinesOf(d)).length, 0);
+        const btn = (primary, extra = {}) => ({ padding: '9px 14px', background: primary ? theme.ink : 'transparent', color: primary ? '#fff' : theme.ink, border: primary ? 'none' : `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', ...extra });
+        const cell = { padding: '8px 10px', borderBottom: `1px solid ${theme.paper2}`, verticalAlign: 'middle' };
+        return (
+            <div style={{ border: `2px solid ${theme.ink}`, borderTop: 'none', background: '#fff', padding: '18px 20px', margin: '-14px 0 18px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', marginBottom: '14px', border: `1px solid ${held ? '#d9534f' : (mine ? '#3a7d44' : theme.line)}`, background: held ? '#fdf3f3' : (mine ? '#f0f7f1' : theme.paper) }}>
+                    <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: held ? '#c0392b' : (mine ? '#3a7d44' : theme.inkSoft) }}>
+                        📦 {t('Pack & ship')} · SO {so.soId || so.id} — {held ? `🔒 ${c.by} ${t('is packing this')} · ${t('since')} ${claimSince(c)}` : mine ? `🔒 ${t('You are packing this')}` : `👁 ${t('Looking only — nothing is changed until you start packing')}`}
+                    </span>
+                    <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        {!c && <button onClick={() => startSoPack(so)} style={btn(true)}>{t('Start packing')}</button>}
+                        {held && isPlatingAdmin && <button onClick={() => adminReleaseClaim(rec, 'pack')} style={btn(false, { color: '#d9534f', border: '1px solid #d9534f' })}>{t('Release')}</button>}
+                        <button onClick={() => closeSoPack(so)} style={btn(false, { color: theme.inkSoft })}>{t('Close')}</button>
+                    </span>
+                </div>
+                {orderBoxStrip({ anchor, looseCount, onBoxAll: async () => { for (const d of looseDocs) await boxAllUnboxed(d); }, openWords: t('the arrow on a line puts its pieces in (some of them splits the line)') })}
+                <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                        <thead><tr style={{ background: theme.paper2 }}>
+                            {['Item #', 'Description', 'Work order', 'Qty', 'Box', ''].map((h, k) => <th key={k} style={{ textAlign: k === 3 ? 'center' : 'left', padding: '7px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>{h ? t(h) : ''}</th>)}
+                        </tr></thead>
+                        <tbody>
+                            {rows.map(({ d, l, tick }) => {
+                                const where = boxSpreadLabel(tickBoxesOf(tick), boxes), loose = unboxedQtyOf(tick, l);
+                                return (
+                                    <tr key={`${d.id}-${l.key}`} style={{ background: loose ? '#fff' : '#f0f7f1' }}>
+                                        <td style={{ ...cell, fontFamily: theme.mono, color: theme.ink, whiteSpace: 'nowrap' }}>{l.erp || '—'}</td>
+                                        <td style={{ ...cell, color: theme.inkSoft }}>{l.name}</td>
+                                        <td style={{ ...cell, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, whiteSpace: 'nowrap' }}>{woRefOf(d)}</td>
+                                        <td style={{ ...cell, textAlign: 'center', fontFamily: theme.mono, fontWeight: 700 }}>{l.isPole ? `× ${l.qty}` : qtyLabel(l, l.qty)}</td>
+                                        <td style={{ ...cell, fontFamily: theme.mono, fontSize: '11px', color: loose ? '#c0392b' : theme.ink }}>{where ? `📦 ${where}` : ''}{where && loose ? ' · ' : ''}{loose ? `⚠ ${loose} ${t('not in a box yet')}` : ''}</td>
+                                        <td style={{ ...cell, textAlign: 'right' }}>
+                                            {openNo && moveIntoBox(tick, l, openNo, 1).movable > 0 && <button onClick={() => moveLineIntoBox(d, l)} title={`Put pieces of this line into Box ${openNo} — all of them, or some (a split)`} style={btn(false, { padding: '6px 10px' })}>→ {t('Box')} {openNo}</button>}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+                <div style={{ marginTop: '16px', border: `1px solid ${theme.line}`, background: theme.paper, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <label style={{ cursor: 'pointer', border: `1px solid ${theme.line}`, background: '#fff', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink }}>
+                        {packUploading ? '⏳ Uploading…' : `📷 ${t('Photo of the closed boxes (required)')}`}
+                        <input type="file" accept="image/*" capture="environment" multiple style={{ display: 'none' }} onChange={e => { uploadPackPhotos(rec, e.target.files); e.target.value = ''; }} />
+                    </label>
+                    {photos.map((u, i) => <img key={i} src={u} alt={`boxes ${i + 1}`} onClick={() => window.open(u, '_blank')} style={{ height: '54px', width: '76px', objectFit: 'cover', border: `1px solid ${theme.line}`, cursor: 'pointer' }} />)}
+                    <button onClick={() => completeSoPack(so, docs)} disabled={!!blocker || isSyncing} style={btn(!blocker, { marginLeft: 'auto', padding: '12px 18px', background: blocker ? theme.paper2 : theme.ink, color: blocker ? theme.inkSoft : '#fff', cursor: blocker ? 'not-allowed' : 'pointer' })}>✓ {t('Packed — send the fulfilment')}</button>
+                </div>
+                {blocker && <div style={{ marginTop: '8px', textAlign: 'right', fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>{t('Packed waits for')}: {blocker}</div>}
+            </div>
+        );
+    };
     // THE PACKING STATION, ONE BLOCK IN TWO PLACES (Stuart 2026-10-17, Eric's App Imp card: "It went to SO Pack. Marked it
     // Picked. It went back to PACK PREP to make box and pack … Wonky process" · Stuart: "i agree it is cumbersome"). Packaging
     // Prep renders it whole — its queue, the open order, the recently packed. SO Pack renders the open order's workspace ALONE
@@ -5989,15 +6203,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         // photo and its packaging are the SO Pack card's, when the whole order is packed.
         const gathersIntoOrder = !!oeOrderOfDoc(packJob);
         // NUMBERED BOXES (Shared/orderBoxes): every packed piece in one of the order's boxes before the document closes.
-        const boxed = !!(packJob && usesBoxes(packJob));
+        const boxed = !!(packJob && usesBoxes(packJob)) && !packagesForSoPack(packJob);   // a CPQ document is boxed with its order on SO Pack
         const openBox = boxed ? openBoxNoOf(packJob) : null;
         const packMine = !!(packJob && claimIsMine(claimOf(packJob, 'pack')));
         const boxBlock = boxed ? boxCompleteBlocker(packJob, lines) : '';
         const boxesChosen = !boxBlock;
         const canComplete = packJob && toPack.length === 0 && poleMatched && !poleAway && boxesChosen && (isStockJob ? stockStep === PUT_AWAY_STEP.READY : (gathersIntoOrder || photos.length > 0));
-        const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
-        const orderBoxes = boxed ? orderBoxesOf(boxHomeOf(packJob).data) : [];
-        const boxContents = boxed ? boxContentsOf({ docs: orderPackDocsOf(packJob), linesOf: packLinesAsPacked }) : {};
+        const orderBoxes = boxed ? orderBoxesOf(boxHomeOf(packJob).data) : [];   // the strip itself is orderBoxStrip
         // A GREY BUTTON SAYS WHY (Stuart on WO-SO60169, Andrea 09-14: "doesn't let me hit the complete
         // button"): the first unmet condition, in the order completePacking refuses them.
         const completeBlocker = (() => {
@@ -6144,41 +6356,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             multiples"). Numbered on the SALES ORDER, so a later document of the order sees Box 1 and 2 already
                             there. One box is OPEN at a time on this bench: ✓ Packed puts the line in it; → Box N on a packed
                             line moves pieces into it (some of them = a split). */}
-                        {boxed && (
-                            <div style={{ padding: '12px 16px', border: `1px solid ${openBox ? theme.ink : theme.brass}`, background: '#fff', marginBottom: '16px' }}>
-                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginRight: '4px' }}>📦 {t('Boxes')}{boxHomeOf(packJob).so ? ` · SO ${boxHomeOf(packJob).so.soId || boxHomeOf(packJob).so.id}` : ''}</span>
-                                    {orderBoxes.length === 0 && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.brass }}>{t('No box yet — add the first one')} →</span>}
-                                    {orderBoxes.map(b => {
-                                        const isOpen = openBox === b.no, pcs = (boxContents[b.no] && boxContents[b.no].pcs) || 0, shipped = isBoxShipped(b);
-                                        const last = b.no === orderBoxes[orderBoxes.length - 1].no;
-                                        return (
-                                            <span key={b.no} style={{ display: 'inline-flex', alignItems: 'stretch', border: `1px solid ${isOpen ? theme.ink : theme.line}` }}>
-                                                <button onClick={() => { if (shipped) return alert(boxOpenRefusal(b)); setOpenBoxSel(isOpen ? { id: null, no: null } : { id: packJob.id, no: b.no }); }} title={shipped ? boxOpenRefusal(b) : `${boxName(b)} — ${pcs} pc${pcs === 1 ? '' : 's'}${(boxContents[b.no] ? `: ${boxContents[b.no].items.map(i => `${i.code} ×${i.qty}`).join(', ')}` : '')}\n${isOpen ? 'Open — tap to close it' : 'Tap to pack into this box'}`} style={{ background: isOpen ? theme.ink : (shipped ? '#f0f7f1' : theme.paper), color: isOpen ? '#fff' : (shipped ? '#2e7d32' : theme.ink), border: 'none', padding: '9px 12px', fontFamily: theme.mono, fontSize: '11px', cursor: shipped ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
-                                                    <b>{t('Box')} {b.no}</b>{b.type ? ` · ${b.type}` : ''} · {pcs} pc{pcs === 1 ? '' : 's'}{isOpen ? ` · ${t('OPEN')}` : ''}{shipped ? ` · 🚚 ${t('SHIPPED')}${b.trackingNumber ? ` ${b.trackingNumber}` : ''}` : ''}
-                                                </button>
-                                                <button onClick={() => printOrderBoxLabelsFor(packJob, b.no)} title={`Print the label for Box ${b.no} — "${t('Box')} ${b.no} of ${orderBoxes.length}"`} style={{ background: '#fff', color: theme.inkSoft, border: 'none', borderLeft: `1px solid ${theme.line}`, padding: '0 9px', cursor: 'pointer' }}>🖨</button>
-                                                {last && pcs === 0 && <button onClick={() => removeOrderBox(packJob, b.no)} title={`Remove Box ${b.no} — it is empty`} style={{ background: '#fff', color: '#c0392b', border: 'none', borderLeft: `1px solid ${theme.line}`, padding: '0 9px', cursor: 'pointer', fontFamily: theme.mono }}>✕</button>}
-                                            </span>
-                                        );
-                                    })}
-                                    <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
-                                        <select value={newBoxType} onChange={e => setNewBoxType(e.target.value)} style={{ padding: '8px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.85rem', background: '#fff', maxWidth: '260px' }}>
-                                            <option value="">{brandBoxes.length ? `— ${t('box type')} —` : '— no boxes for this brand —'}</option>
-                                            {brandBoxes.map(b => <option key={b.id} value={b.name}>{b.name} — {boxSizeLabel(b)}</option>)}
-                                        </select>
-                                        <button onClick={() => addOrderBox(packJob)} disabled={!newBoxType} title={`Add Box ${orderBoxes.length ? orderBoxes[orderBoxes.length - 1].no + 1 : 1} to this order and open it`} style={{ padding: '9px 14px', background: newBoxType ? theme.ink : theme.paper2, color: newBoxType ? '#fff' : theme.inkSoft, border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: newBoxType ? 'pointer' : 'default', whiteSpace: 'nowrap' }}>+ {t('New box')}</button>
-                                        {orderBoxes.length > 1 && <button onClick={() => printOrderBoxLabelsFor(packJob)} title="Print a label for every box of this order — Box 1 of N … Box N of N" style={{ padding: '9px 12px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>🖨 {t('All box labels')}</button>}
-                                    </span>
-                                </div>
-                                <div style={{ marginTop: '8px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', fontFamily: theme.sans, fontSize: '0.82rem', color: openBox ? theme.ink : theme.brass }}>
-                                    <span>{openBox ? `${t('Packing into')} ${boxName(boxOf(orderBoxes, openBox))} — ${t('Packed puts the line in it; the arrow on a packed line moves pieces into it (some of them splits the line)')}.`
-                                        : (packMine ? `${t('Open a box to pack into — tap one, or add a new one')}.` : `${t('The boxes of this order — start packing to use them')}.`)}</span>
-                                    {openBox && unboxedLinesOf(packJob, lines).length > 0 && <button onClick={() => boxAllUnboxed(packJob)} title="Lines packed with no box on record — put every one of them in the open box" style={{ padding: '6px 10px', background: 'transparent', color: '#c0392b', border: '1px solid #c0392b', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', whiteSpace: 'nowrap' }}>→ {unboxedLinesOf(packJob, lines).length} {t('packed with no box')} → {t('Box')} {openBox}</button>}
-                                    {!brandBoxes.length && <span style={{ color: '#d9534f' }}>add box types in HQ → 15. Packaging → Standard boxes</span>}
-                                </div>
-                            </div>
-                        )}
+                        {boxed && orderBoxStrip({ anchor: packJob, looseCount: unboxedLinesOf(packJob, lines).length, onBoxAll: () => boxAllUnboxed(packJob) })}
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', alignItems: 'start' }}>
                             <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: theme.paper }}>
                                 <div style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', color: theme.ink, marginBottom: '14px' }}>{isStockJob ? t('To package') : 'To Pack'} ({toPack.length})</div>
@@ -6228,7 +6406,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 </button>
                             )}
                             <button onClick={() => completePacking(packJob)} disabled={!canComplete} style={{ marginLeft: isQsOrder(packJob) ? 'auto' : '0', background: canComplete ? theme.ink : theme.paper2, color: canComplete ? '#fff' : theme.inkSoft, border: `1px solid ${canComplete ? theme.ink : theme.line}`, padding: '14px 26px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: canComplete ? 'pointer' : 'default' }}>
-                                {isStockJob ? '✓ Put Away to Bin' : (oeOrderOfDoc(packJob) ? `✓ Gather into ${packRef(oeOrderOfDoc(packJob))}` : '✓ Complete Packing')}
+                                {isStockJob ? '✓ Put Away to Bin' : (oeOrderOfDoc(packJob) ? `✓ Gather into ${packRef(oeOrderOfDoc(packJob))}` : (packagesForSoPack(packJob) ? `✓ ${t('Packaged → SO Pack')}` : '✓ Complete Packing'))}
                             </button>
                         </div>
                         {completeBlocker && (
@@ -7007,7 +7185,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             {cpqOrders.length > 0 && (
                                 <div style={{ marginTop: '26px' }}>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '10px' }}>
-                                        {t('Configured orders in production')} · {cpqOrders.length} — {t('packed on Packaging Prep; this is where their pieces are')}
+                                        {t('Configured orders in production')} · {cpqOrders.length} — {t('each work order is packaged at Packaging Prep; the order is boxed and packed here')}
                                     </div>
                                     {cpqOrders.map(({ so, docs }) => {
                                         // LINE BY LINE (Shared/soPackBoard, Stuart 2026-10-06): every part of the order — ordered beside
@@ -7017,15 +7195,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         const soBoxes = orderBoxesOf(so);
                                         const board = soPackBoardOf({ docs, refOf: woRefOf, boxes: soBoxes, linesOf: packLinesAsPacked, coatsOf });
                                         const allPacked = board.verdict === ORDER_VERDICT.ALL_PACKED;
+                                        const toBox = board.verdict === ORDER_VERDICT.TO_BOX;   // packaged at Prep — boxed and packed here (step 2)
                                         const readyToPack = board.verdict === ORDER_VERDICT.READY;
+                                        const boxHere = orderAwaitsPackOf(so, docs) && soPackOpenId !== so.id;
                                         const hidden = !!soLinesHidden[so.id];
                                         // A HELD document says so above its lines, with the reason (a backorder names the material it waits for).
                                         const holdOfDoc = Object.fromEntries(docs.map(d => [d.id, (d.packStatus === 'Packed' || d.currentPhase === 'Closed') ? null : holdGateOf(d)]));
                                         const th = (h, align = 'left') => <th key={h} style={{ textAlign: align, padding: '7px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}`, whiteSpace: 'nowrap' }}>{t(h)}</th>;
                                         const rowBg = { [LINE_STATE.PACKED]: '#f0f7f1', [LINE_STATE.PART]: '#fdf6e3', [LINE_STATE.CLOSED]: theme.paper };
                                         const cell = { padding: '8px 10px', borderBottom: `1px solid ${theme.paper2}`, verticalAlign: 'middle' };
-                                        return (
-                                            <div key={so.id} style={{ border: `1px solid ${allPacked ? '#3a7d44' : theme.line}`, boxShadow: allPacked ? '0 0 0 2px rgba(58,125,68,0.18)' : 'none', marginBottom: '14px', background: '#fff' }}>
+                                        return (<React.Fragment key={so.id}>
+                                            <div style={{ border: `1px solid ${allPacked ? '#3a7d44' : theme.line}`, boxShadow: allPacked ? '0 0 0 2px rgba(58,125,68,0.18)' : 'none', marginBottom: '14px', background: '#fff' }}>
                                                 <div style={{ padding: '12px 18px', borderBottom: `1px solid ${theme.line}`, background: theme.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                                                     <div>
                                                         <span style={{ fontFamily: theme.serif, fontSize: '1.1rem', color: theme.ink, fontWeight: 500 }}>{so.customer || so.customerName || 'Customer'}</span>
@@ -7041,7 +7221,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             {soBoxes.length > 0 && <span title={soBoxes.map(b => `${boxName(b)}${isBoxShipped(b) ? ` — shipped ${b.trackingNumber || ''}` : ''}`).join('\n')}> · 📦 {soBoxes.length} {soBoxes.length === 1 ? t('box') : t('boxes')}{soBoxes.some(isBoxShipped) ? ` · 🚚 ${soBoxes.filter(isBoxShipped).length} ${t('shipped')}` : ''}</span>}
                                                         </span>
                                                         {committedBinOf(so) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#2e7d32' }}>📦 {t('BIN')} {committedBinOf(so)} · {totalGathered(so)}</span>}
-                                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: allPacked ? '#2e7d32' : (readyToPack ? '#3f7fc4' : theme.brass) }}>{allPacked ? `✓ ${t('ALL PACKED')} — ${t('READY TO SHIP')}` : (readyToPack ? t('READY TO PACK') : t('WAITING ON PARTS'))}</span>
+                                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: allPacked ? '#2e7d32' : (toBox ? theme.ink : (readyToPack ? '#3f7fc4' : theme.brass)) }}>{allPacked ? `✓ ${t('ALL PACKED')} — ${t('READY TO SHIP')}` : (toBox ? `📦 ${t('PACKAGED — BOX IT HERE')}` : (readyToPack ? t('READY TO PACK') : t('WAITING ON PARTS')))}</span>
+                                                        {boxHere && <button onClick={() => openSoPack(so)} title="Box the order, photograph the closed boxes and press ✓ Packed — that sends the NetSuite fulfilment" style={{ padding: '8px 14px', background: theme.brass, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📦 {t('Pack & ship')}</button>}
                                                         <span onClick={() => setSoLinesHidden(p => ({ ...p, [so.id]: !p[so.id] }))} title={hidden ? t('Show the lines') : t('Hide the lines')} style={{ cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{hidden ? '▸' : '▾'}</span>
                                                     </span>
                                                 </div>
@@ -7074,7 +7255,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     </div>
                                                 )}
                                             </div>
-                                        );
+                                            {soPackOpenId === so.id && orderPackStepView(so, docs)}
+                                        </React.Fragment>);
                                     })}
                                 </div>
                             )}

@@ -13,6 +13,9 @@ const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`
 const packed = { id: 'a', packStatus: 'Packed', packedAt: 2 };
 ok('packed is ready', isReadyToShip(packed));
 ok('unpacked is not', !isReadyToShip({ packStatus: 'Packing' }));
+// Step 2 (Shared/soPackStep, 2026-10-17): packaged at Prep, its order still to be boxed on SO Pack — not shippable yet.
+ok('a CPQ document only PACKAGED at Prep waits for its order', !isReadyToShip({ ...packed, packStage: 'PACKAGED' }));
+ok('once SO Pack packs the order, it ships as before', isReadyToShip({ ...packed, packStage: 'ORDER_PACKED' }));
 ok('put-away is not', !isReadyToShip({ ...packed, packMode: 'PUTAWAY' }));
 ok('put-away by bin is not', !isReadyToShip({ ...packed, putawayBin: 'A-1' }));
 ok('shipped is not', !isReadyToShip({ ...packed, shippedAt: 5 }));

@@ -20,6 +20,7 @@
 import { orderStatusOf, packReadinessOf } from './orderStatus.js';
 import { packedQtyOf } from './packingList.js';
 import { boxSlotOf, boxSpreadOf, boxSpreadLabel, spreadTrackingOf } from './orderBoxes.js';
+import { awaitsOrderPack } from './soPackStep.js';
 
 const num = (v) => Number(v) || 0;
 const str = (v) => String(v == null ? '' : v).trim();
@@ -31,7 +32,9 @@ export const LINE_STATE = Object.freeze({
     WAITING: 'WAITING',   // nothing ticked — still on a floor, at the plater, or its pick is open
     CLOSED: 'CLOSED',     // its document is out of production — not part of what ships
 });
-export const ORDER_VERDICT = Object.freeze({ ALL_PACKED: 'ALL_PACKED', READY: 'READY', WAITING: 'WAITING', NONE: 'NONE' });
+// TO_BOX (step 2, 2026-10-17 · Shared/soPackStep): every document packaged at Packaging Prep, the order not yet boxed and packed
+// on SO Pack — it is the boxes, the photo and ✓ Packed there that the order waits on.
+export const ORDER_VERDICT = Object.freeze({ ALL_PACKED: 'ALL_PACKED', TO_BOX: 'TO_BOX', READY: 'READY', WAITING: 'WAITING', NONE: 'NONE' });
 
 export { boxSlotOf };   // which half of a document a line is — the pack bench's grouping (Shared/orderBoxes)
 
@@ -87,13 +90,13 @@ export function lineStampsOf(doc, line, coats = {}) {
  */
 export function soPackBoardOf({ docs = [], linesOf = () => [], refOf = (d) => (d && d.id) || '', coatsOf = () => ({}), boxes = [] } = {}) {
     const rows = [];
-    let anyWaiting = false, live = 0, done = 0;
+    let anyWaiting = false, live = 0, done = 0, toBox = 0;
     (docs || []).forEach(doc => {
         if (!doc) return;
         const coats = coatsOf(doc) || {};
         const rd = packReadinessOf(doc, coats);
         const closed = doc.currentPhase === 'Closed';
-        if (!closed) { live++; if (rd && rd.done) done++; else if (!(rd && rd.ready)) anyWaiting = true; }
+        if (!closed) { live++; if (rd && rd.done) done++; else if (!(rd && rd.ready)) anyWaiting = true; if (awaitsOrderPack(doc)) toBox++; }
         const ref = refOf(doc);
         const lines = (linesOf(doc) || []).filter(l => l && !l.rider);
         // A DOCUMENT IS NEVER HIDDEN: one with no line detail still shows, with every stamp it has.
@@ -148,6 +151,6 @@ export function soPackBoardOf({ docs = [], linesOf = () => [], refOf = (d) => (d
     };
     // ALL PACKED is the DOCUMENTS' word, not the ticks': a document with every line ticked is still open until its
     // packing is completed (photo, box, the fulfilment to NetSuite) — and that is what "ready to ship" waits on.
-    const verdict = !live ? ORDER_VERDICT.NONE : done === live ? ORDER_VERDICT.ALL_PACKED : anyWaiting ? ORDER_VERDICT.WAITING : ORDER_VERDICT.READY;
+    const verdict = !live ? ORDER_VERDICT.NONE : done === live ? (toBox ? ORDER_VERDICT.TO_BOX : ORDER_VERDICT.ALL_PACKED) : anyWaiting ? ORDER_VERDICT.WAITING : ORDER_VERDICT.READY;
     return { rows, pieces, lines: { all: counted.length, packed: counted.filter(r => r.state === LINE_STATE.PACKED).length }, verdict };
 }

@@ -9,11 +9,14 @@
 // and overrule the standard box they started from.
 import { isClosedState } from './orderLifecycle.js';
 import { docBoxNosOf, boxOf, isBoxShipped, boxesAfterVoid } from './orderBoxes.js';
+import { awaitsOrderPack } from './soPackStep.js';
 
 // ── THE QUEUE ────────────────────────────────────────────────────────────────────────────────
-// A pack doc ships once: packed (not a stock put-away), not yet shipped, not closed or deleted.
+// A pack doc ships once: packed (not a stock put-away), not yet shipped, not closed or deleted — and not a CPQ document
+// merely PACKAGED at Prep, whose order is still to be boxed and packed on SO Pack (Shared/soPackStep, 2026-10-17).
 export const isReadyToShip = (d) => !!d
     && d.packStatus === 'Packed'
+    && !awaitsOrderPack(d)
     && d.packMode !== 'PUTAWAY' && !d.putawayBin
     && !d.shippedAt
     && !isClosedState(d);
