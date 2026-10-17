@@ -49,6 +49,7 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
     const [qty, setQty] = useState('1');
     const [q, setQ] = useState('');
     const [group, setGroup] = useState('');
+    const [pattern, setPattern] = useState('');   // the pattern row above the wall (Stuart 2026-10-17): tap a pattern, see only its colourways
     const [busy, setBusy] = useState(false);
     // 📷 THE COUNTER'S CAMERA (Stuart 2026-10-15): a tile with no picture → the tablet camera; the first shot becomes the
     // item's picture in the master library, every shot files in the Asset Gallery attached to the colourway's items.
@@ -95,7 +96,8 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
     const colours = useMemo(() => coloursOf(treatment), [treatment]);
     const trims = useMemo(() => items.filter(isTrimItem).sort((a, b) => String(a.legacyErpId || '').localeCompare(String(b.legacyErpId || ''))), [items]);
     const groups = useMemo(() => Object.keys(cfg.fabricGroups || {}).sort((a, b) => ((cfg.fabricGroups[a] || {}).rank || 0) - ((cfg.fabricGroups[b] || {}).rank || 0)), [cfg]);
-    const tiles = useMemo(() => quickSellTilesOf(catalog, { q, group, mode }), [catalog, q, group, mode]);
+    const tiles = useMemo(() => quickSellTilesOf(catalog, { q, group, mode }).filter(cw => !pattern || cw.pattern === pattern), [catalog, q, group, mode, pattern]);
+    const patternRow = useMemo(() => (catalog.patterns || []).map(p => ({ pattern: p.pattern, label: p.label })).sort((a, b) => a.label.localeCompare(b.label)), [catalog]);
     const cw = cwKey ? catalog.byKey.get(cwKey) || null : null;
     const qtyN = Math.max(1, parseInt(qty, 10) || 1);
     // the price before the shelf is read: the same rule with stock unknown
@@ -231,7 +233,7 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
                 {!fixedMode && (
                     <div style={{ display: 'flex', gap: '6px' }}>
                         <button onClick={() => { setMode('PILLOW'); setCwKey(''); }} style={chip(mode === 'PILLOW', counter)}>Pillow</button>
-                        <button onClick={() => { setMode('THROW'); setCwKey(''); setSizeKey(''); setEdge('NONE'); setTrimId(''); setTreatment(''); setColour(''); }} style={chip(mode === 'THROW', counter)}>Throw</button>
+                        <button onClick={() => { setMode('THROW'); setCwKey(''); setSizeKey(''); setEdge('NONE'); setTrimId(''); setTreatment(''); setColour(''); setPattern(''); }} style={chip(mode === 'THROW', counter)}>Throw</button>
                     </div>
                 )}
                 {!counter && <span style={mono}>{catalog.list.length} colourways · {sizes.length} sizes · a plain pillow on the shelf sells as its item at the chart price, anything else is made to order</span>}
@@ -254,6 +256,12 @@ const PillowQuickSell = ({ items = [], findPart, rateFor, onAdd, addLog = () => 
                         </div>
                         <span style={mono}>{tiles.length} shown{cw ? ` · ${cw.label}` : ''}</span>
                     </div>
+                    {patternRow.length > 1 && (
+                        <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', padding: '2px 2px 8px', marginBottom: '6px', scrollbarWidth: 'thin' }}>
+                            <button onClick={() => setPattern('')} style={{ ...chip(pattern === '', counter), whiteSpace: 'nowrap', flex: 'none' }}>All patterns</button>
+                            {patternRow.map(p => <button key={p.pattern} onClick={() => setPattern(pattern === p.pattern ? '' : p.pattern)} style={{ ...chip(pattern === p.pattern, counter), whiteSpace: 'nowrap', flex: 'none', textTransform: 'none', letterSpacing: 0, fontFamily: 'var(--sans)', fontSize: counter ? '0.95rem' : '0.8rem' }}>{p.label}</button>)}
+                        </div>
+                    )}
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', maxHeight: counter ? '420px' : '300px', overflowY: 'auto', padding: '2px' }}>
                         {tiles.slice(0, 240).map(fabricTile)}
                         {tiles.length === 0 && <div style={{ color: 'var(--ink-soft)', fontSize: '0.85rem' }}>No colourway matches.</div>}

@@ -121,22 +121,23 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
 
     // the bar stays in reach at every point of a sale — sticky beneath the counter's header (Stuart 2026-10-15: "we need the menu
     // button at the top to stay visible so we can go back to just the price list")
+    // THE BAR (Stuart 2026-10-17: "the top bar is crowded … we need an easy way to return Home … it should be more visible"):
+    // left — ⌂ HOME, big and brass, always; the customer with the email and level as one small line beneath; right — three
+    // buttons only. Sticky beneath the counter's header, so it is in reach at every point of a sale.
+    const homeScreen = customerId ? 'HOME' : 'CUSTOMER';
+    const levelWords = selectedCustomer ? tileLevelWordsOf(selectedCustomer) : null;
     const crumb = (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', position: 'sticky', top: 'var(--counter-header-h, 64px)', zIndex: 40, background: '#faf8f5', padding: '8px 0', margin: '-8px 0' }}>
-            <button onClick={() => setScreen('CUSTOMER')} style={btn(false)}>👤 {selectedCustomer ? selectedCustomer.name : 'Customer'}</button>
-            {selectedCustomer && (
-                // the email (and phone) on file — "a lot of customers don't know which email they gave us" (Stuart 2026-10-15)
-                <span style={{ ...mono, textTransform: 'none', letterSpacing: 0, fontSize: '12px', color: selectedCustomer.email ? 'var(--ink)' : '#a86b00' }} title="What the CRM holds for this customer">
-                    ✉ {selectedCustomer.email || 'no email on file'}{selectedCustomer.phone ? ` · ☎ ${selectedCustomer.phone}` : ''}
-                </span>
-            )}
-            {selectedCustomer && priceNote && <span style={{ ...mono, color: /not read|carries no percent/.test(priceNote) ? '#a86b00' : 'var(--ink-soft)' }}>💲 {priceNote.replace(/^NetSuite price level /, '')}</span>}
-            {screen !== 'CUSTOMER' && screen !== 'HOME' && <button onClick={() => setScreen('HOME')} style={btn(false)}>← Menu</button>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', position: 'sticky', top: 'var(--counter-header-h, 64px)', zIndex: 40, background: '#faf8f5', padding: '10px 0', margin: '-10px 0', borderBottom: '1px solid var(--line)' }}>
+            <button onClick={() => setScreen(homeScreen)} title="Back to the menu — throws, pillows, custom, samples, one of a kind, quick add, the price list"
+                style={{ padding: '14px 22px', background: screen === 'HOME' ? 'var(--ink)' : 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '14px', letterSpacing: '.12em', textTransform: 'uppercase', fontWeight: 700 }}>⌂ Home</button>
+            <button onClick={() => setScreen('CUSTOMER')} title="Change the customer" style={{ ...btn(false), display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px', textTransform: 'none', letterSpacing: 0, padding: '8px 14px', border: `1px solid ${selectedCustomer ? 'var(--ink)' : '#b3362f'}` }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: '1.05rem', fontWeight: 600 }}>👤 {selectedCustomer ? selectedCustomer.name : 'Pick the customer'}</span>
+                {selectedCustomer && <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: selectedCustomer.email ? 'var(--ink-soft)' : '#a86b00' }}>✉ {selectedCustomer.email || 'no email on file'}{levelWords ? ` · 💲 ${levelWords.words}` : ''}</span>}
+            </button>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <button onClick={() => setScreen(screen === 'PRICES' ? (customerId ? 'HOME' : 'CUSTOMER') : 'PRICES')} style={btn(screen === 'PRICES')} title="Base prices, and less 10–60% at a tick">$$ Price list</button>
-                {onListReopenable && <button onClick={() => { if (screen === 'REOPEN') { setScreen(customerId ? 'HOME' : 'CUSTOMER'); return; } setScreen('REOPEN'); loadReopenable(); }} style={btn(screen === 'REOPEN')} title="Reopen a quote or sales order made in the last 30 days">⟲ Reopen</button>}
-                <span style={mono}>{cartCount} line{cartCount === 1 ? '' : 's'} · ${Number(cartTotal || 0).toFixed(2)}</span>
-                <button onClick={onShowCart} style={btn(true)}>🛒 Cart</button>
+                <button onClick={() => setScreen(screen === 'PRICES' ? homeScreen : 'PRICES')} style={btn(screen === 'PRICES')} title="Base prices, and less 10–60% at a tick">$$ Price list</button>
+                {onListReopenable && <button onClick={() => { if (screen === 'REOPEN') { setScreen(homeScreen); return; } setScreen('REOPEN'); loadReopenable(); }} style={btn(screen === 'REOPEN')} title="Reopen a quote or sales order made in the last 30 days">⟲ Reopen</button>}
+                <button onClick={onShowCart} style={{ ...btn(true), padding: '14px 20px', fontSize: '12px' }} title={`${cartCount} line${cartCount === 1 ? '' : 's'} · $${Number(cartTotal || 0).toFixed(2)}`}>🛒 Cart{cartCount ? ` (${cartCount})` : ''}</button>
             </div>
         </div>
     );
@@ -198,9 +199,9 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
                             </div>
                             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '12px' }}>
                                 {matches.map(c => (
-                                    <button key={c.id} onClick={() => { onPickCustomer(c); setQ(''); setScreen('HOME'); }} style={{ ...bigTile(customerId === c.id), minHeight: '90px', fontSize: '1.05rem', flex: '1 1 220px', alignItems: 'flex-start', padding: '14px', textAlign: 'left' }}>
+                                    <button key={c.id} title={c.id} onClick={() => { onPickCustomer(c); setQ(''); setScreen('HOME'); }} style={{ ...bigTile(customerId === c.id), minHeight: '90px', fontSize: '1.05rem', flex: '1 1 220px', alignItems: 'flex-start', padding: '14px', textAlign: 'left' }}>
                                         <span>{c.name}</span>
-                                        <span style={{ ...mono, color: customerId === c.id ? '#ddd' : 'var(--ink-soft)' }}>{c.id}{c.email ? ` · ${c.email}` : ''}</span>
+                                        <span style={{ ...mono, textTransform: 'none', letterSpacing: 0, color: customerId === c.id ? '#ddd' : 'var(--ink-soft)' }}>{c.email || 'no email on file'}</span>
                                         {(() => { const lv = tileLevelWordsOf(c); return <span style={{ ...mono, marginTop: '4px', padding: '2px 6px', border: '1px solid', borderColor: lv.tone === 'discount' ? 'var(--brass)' : 'var(--line)', color: customerId === c.id ? '#fff' : (lv.tone === 'discount' ? 'var(--brass)' : 'var(--ink-soft)'), fontWeight: lv.tone === 'discount' ? 700 : 400 }}>💲 {lv.words}</span>; })()}
                                     </button>
                                 ))}

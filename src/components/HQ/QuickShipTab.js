@@ -250,7 +250,9 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // THE CUT, in inches (Stuart 2026-09-17: a 7.5" display pole bills as 1 ft — the form had feet and
     // no cut, so the shop had nothing to cut to). Blank = the piece is the full billed length, as before.
     const [tbfCut, setTbfCut] = useState('');
-    const [lastCreated, setLastCreated] = useState(null); // { kind, id } — the visible confirmation the button never gave (Stuart 2026-08-30)
+    const [lastCreated, setLastCreated] = useState(null);
+    const [checkoutOpen, setCheckoutOpen] = useState(false);   // the counter folds the order fields until "Check out" (Stuart 2026-10-17)
+    const [logOpen, setLogOpen] = useState(false);             // the counter shows the last message; the log behind a tap // { kind, id } — the visible confirmation the button never gave (Stuart 2026-08-30)
     // FEES as their own entry line — rush, freight, packaging, coatings. Priced the same way every
     // fee is priced everywhere else (Shared/feeRules), so tab 7 and CPQ can never disagree.
     const [feeItemId, setFeeItemId] = useState('');
@@ -1415,7 +1417,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         // THE COUNTER STARTS FRESH (Stuart 2026-10-15: "once a sale or quote is saved, it clears and starts fresh"): the customer
         // goes too, back to "Who is this for?"; the pay card of the order just made stays pinned up there until the next
         // customer is picked or Done. HQ's tab 7 keeps the customer (the office runs several orders for one account).
-        if (counterMode) { setCustomerId(''); setCustSearch(''); }
+        if (counterMode) { setCustomerId(''); setCustSearch(''); setCheckoutOpen(false); }
         setSoExtras({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '', orderDiscountPercent: '' });
         setShip({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
         setTrvCfg(null); setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
@@ -2196,6 +2198,17 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                             </div>
                         ))}
                     </div>
+                    {/* CHECK OUT (Stuart 2026-10-17: "this is important data but can it be collapsed and open at check out") — the counter
+                        folds these until the rep taps Check out; HQ's tab 7 shows them as always. */}
+                    {counterMode && (
+                        <div style={{ borderTop: '1px solid var(--line)', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', background: checkoutOpen ? '#fff' : 'var(--paper-2)' }}>
+                            <button onClick={() => setCheckoutOpen(o => !o)} style={{ padding: '12px 18px', background: checkoutOpen ? 'var(--ink)' : 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '12px', letterSpacing: '.1em', textTransform: 'uppercase', fontWeight: 700 }}>{checkoutOpen ? '▾ Check out — hide the fields' : '▸ Check out'}</button>
+                            {!checkoutOpen && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', letterSpacing: '.06em' }}>
+                                {[soExtras.sidemark ? `sidemark ${soExtras.sidemark}` : '', soExtras.po ? `PO ${soExtras.po}` : '', orderDiscountPct > 0 ? `${orderDiscountPct}% off` : '', parseFloat(ship.amount) > 0 ? `shipping $${parseFloat(ship.amount).toFixed(2)}` : '', soExtras.needBy ? `need by ${soExtras.needBy}` : ''].filter(Boolean).join(' · ') || 'PO · sidemark · memo · need-by · notes · discount · shipping — tap to open'}
+                            </span>}
+                        </div>
+                    )}
+                    {(!counterMode || checkoutOpen) && (
                     <div style={{ borderTop: '1px solid var(--line)', padding: '14px 20px' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
                             <div><span style={lbl}>Customer PO #</span><input value={soExtras.po} onChange={e => setSoExtras(p2 => ({ ...p2, po: e.target.value }))} placeholder="their PO number" style={{ ...inp, width: '100%' }} /></div>
@@ -2255,6 +2268,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                             <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>rides the SO header with an auto-resolved ship method</span>
                         </div>
                     </div>
+                    )}
                     <div style={{ borderTop: '1px solid var(--line)', padding: '16px 20px', background: 'var(--paper)' }}>
                         {/* THE CONFIRMATION (Stuart 2026-08-30: the button stayed lit "like you
                             need to push it again"). Unmissable, and it clears on the next add. */}
@@ -2290,9 +2304,12 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // ── THE SHOW COUNTER (Stuart 2026-10-12): the counter's screens + this tab's own cart, save and log ──
     if (counterMode) {
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', padding: '16px', maxWidth: '1400px', margin: '0 auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '28px', padding: '20px 16px 40px', maxWidth: '1400px', margin: '0 auto' }}>
+                {/* THE PAY CARD AS A POP-UP (Stuart 2026-10-17: "a pop up with main screen hidden behind so it is easy to see with
+                    nothing under or visible around it") — Done, or picking the next customer, puts it away. */}
                 {lastCreated && cart.length === 0 && Number(lastCreated.total) > 0 && (
-                    <div style={{ ...card, padding: '20px 24px', border: '2px solid var(--brass)' }}>
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(22, 19, 15, 0.82)', zIndex: 20000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                    <div style={{ ...card, width: 'min(820px, 100%)', maxHeight: '92vh', overflowY: 'auto', padding: '26px 30px', border: '2px solid var(--brass)', boxShadow: '0 30px 80px rgba(0,0,0,0.5)' }}>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap', marginBottom: '6px' }}>
                             <div style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem' }}>Turn the screen to the customer</div>
                             <button onClick={() => setLastCreated(null)} style={{ marginLeft: 'auto', padding: '10px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase' }} title="Put this away — the order is saved and on the CRM card; picking the next customer puts it away too">Done</button>
@@ -2305,6 +2322,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                         <PayLinkPanel docType={lastCreated.kind === 'QUOTE' ? 'QUOTE' : 'SALES_ORDER'} collection={lastCreated.kind === 'QUOTE' ? 'jobs' : 'hq_sales_orders'} docId={lastCreated.id}
                             reference={lastCreated.id} customerName={lastCreated.customerName || ''} totalAmount={Number(lastCreated.total) || 0} brand={activeBrand} />
                     </div>
+                    </div>
                 )}
                 <CounterScreens currentUser={currentUser} customers={customers} customerId={customerId} selectedCustomer={selectedCustomer}
                     onPickCustomer={(c) => { setCustomerId(c.id); setCustSearch(`${c.name} (${c.id})`); setLastCreated(null); }} jobName={jobName} setJobName={setJobName}
@@ -2316,11 +2334,19 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                     onListReopenable={listReopenable} onReopen={(row) => { setLastCreated(null); return row.kind === 'QUOTE' ? reopenQuoteById(row.id) : reopenSoById(row.id); }}
                     onShowCart={() => { const el = document.getElementById('counter-cart'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }} />
                 {cartCard}
+                {/* THE LOG AS ONE LINE (Stuart 2026-10-17): the last message in plain sight, the rest behind a tap */}
                 {log.length > 0 && (
                     <div style={{ ...card, background: 'var(--dark)', overflow: 'hidden' }}>
-                        <div style={{ padding: '10px 16px', maxHeight: '200px', overflowY: 'auto', fontFamily: 'var(--mono)', fontSize: '11px' }}>
-                            {log.slice(0, 20).map((l, i) => <div key={i} style={{ color: l.type === 'error' ? '#f28b82' : (l.type === 'warn' ? '#f6c768' : (l.type === 'success' ? '#9fd8a6' : '#cfcfcf')), padding: '2px 0' }}>{l.time} · {l.msg}</div>)}
+                        <div onClick={() => setLogOpen(o => !o)} style={{ padding: '10px 16px', fontFamily: 'var(--mono)', fontSize: '11px', cursor: 'pointer', display: 'flex', gap: '10px', alignItems: 'baseline' }}>
+                            <span style={{ color: '#9a948a' }}>{logOpen ? '▾' : '▸'}</span>
+                            <span style={{ color: log[0].type === 'error' ? '#f28b82' : (log[0].type === 'warn' ? '#f6c768' : (log[0].type === 'success' ? '#9fd8a6' : '#cfcfcf')), flex: 1, overflow: logOpen ? 'visible' : 'hidden', textOverflow: 'ellipsis', whiteSpace: logOpen ? 'normal' : 'nowrap' }}>{log[0].time} · {log[0].msg}</span>
+                            {!logOpen && log.length > 1 && <span style={{ color: '#9a948a' }}>+{log.length - 1}</span>}
                         </div>
+                        {logOpen && (
+                            <div style={{ padding: '0 16px 10px', maxHeight: '240px', overflowY: 'auto', fontFamily: 'var(--mono)', fontSize: '11px', borderTop: '1px solid #2a2622' }}>
+                                {log.slice(1, 40).map((l, i) => <div key={i} style={{ color: l.type === 'error' ? '#f28b82' : (l.type === 'warn' ? '#f6c768' : (l.type === 'success' ? '#9fd8a6' : '#cfcfcf')), padding: '3px 0' }}>{l.time} · {l.msg}</div>)}
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
