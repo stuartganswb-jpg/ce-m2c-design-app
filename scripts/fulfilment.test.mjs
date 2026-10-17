@@ -16,6 +16,9 @@ ok('unpacked is not', !isReadyToShip({ packStatus: 'Packing' }));
 // Step 2 (Shared/soPackStep, 2026-10-17): packaged at Prep, its order still to be boxed on SO Pack — not shippable yet.
 ok('a CPQ document only PACKAGED at Prep waits for its order', !isReadyToShip({ ...packed, packStage: 'PACKAGED' }));
 ok('once SO Pack packs the order, it ships as before', isReadyToShip({ ...packed, packStage: 'ORDER_PACKED' }));
+// The terms (Shared/shipClearance, 2026-10-17): an order held for payment is not offered a label; cleared or released, it is.
+ok('held for payment → not on the queue', !isReadyToShip({ ...packed, shipHold: { why: 'Pay Before Shipping — $169.00 still to be paid' } }));
+ok('cleared or released → back on it', isReadyToShip({ ...packed, shipHold: null, shipClearedAt: 1 }) && isReadyToShip({ ...packed, shipHold: null, shipRelease: { by: 'Stuart' } }));
 ok('put-away is not', !isReadyToShip({ ...packed, packMode: 'PUTAWAY' }));
 ok('put-away by bin is not', !isReadyToShip({ ...packed, putawayBin: 'A-1' }));
 ok('shipped is not', !isReadyToShip({ ...packed, shippedAt: 5 }));

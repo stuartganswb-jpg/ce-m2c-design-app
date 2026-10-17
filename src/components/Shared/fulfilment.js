@@ -10,13 +10,16 @@
 import { isClosedState } from './orderLifecycle.js';
 import { docBoxNosOf, boxOf, isBoxShipped, boxesAfterVoid } from './orderBoxes.js';
 import { awaitsOrderPack } from './soPackStep.js';
+import { isShipHeld } from './shipClearance.js';
 
 // ── THE QUEUE ────────────────────────────────────────────────────────────────────────────────
 // A pack doc ships once: packed (not a stock put-away), not yet shipped, not closed or deleted — and not a CPQ document
-// merely PACKAGED at Prep, whose order is still to be boxed and packed on SO Pack (Shared/soPackStep, 2026-10-17).
+// merely PACKAGED at Prep, whose order is still to be boxed and packed on SO Pack (Shared/soPackStep, 2026-10-17) — and not
+// one HELD by its terms (Shared/shipClearance, 2026-10-17): it waits on SO Pack until it is paid or a manager releases it.
 export const isReadyToShip = (d) => !!d
     && d.packStatus === 'Packed'
     && !awaitsOrderPack(d)
+    && !isShipHeld(d)
     && d.packMode !== 'PUTAWAY' && !d.putawayBin
     && !d.shippedAt
     && !isClosedState(d);

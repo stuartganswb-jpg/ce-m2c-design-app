@@ -1,0 +1,63 @@
+// 🧪 May this order ship? The customer's terms decide (Stuart 2026-10-17).   node scripts/shipClearance.test.mjs
+import { termRuleOf, TERM_RULE, PAY_FIRST_TERMS, CREDIT_TERMS, shipFactsSql, shipFactsOf, shipClearanceOf, fetchShipClearance,
+    shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, shipHoldText } from '../src/components/Shared/shipClearance.js';
+let pass = 0, fail = 0;
+const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
+const eq = (n, a, b) => ok(`${n}\n    got  ${JSON.stringify(a)}\n    want ${JSON.stringify(b)}`, JSON.stringify(a) === JSON.stringify(b));
+
+// Stuart's lists, as he gave them: 13 and 17-and-up check, except the four credit terms above 16; no term checks.
+eq('13 Credit Card and every pay-first term check', PAY_FIRST_TERMS.map(termRuleOf), PAY_FIRST_TERMS.map(() => TERM_RULE.PAY_FIRST));
+eq('the credit terms ship — Net 30 / 60 and 21, 23, 25, 27 among them', CREDIT_TERMS.map(termRuleOf), CREDIT_TERMS.map(() => TERM_RULE.CREDIT));
+eq('no term on the order = a payment check', [termRuleOf(''), termRuleOf(null)], ['PAY_FIRST', 'PAY_FIRST']);
+eq('a term NetSuite adds later follows the line: 28 checks, 9 ships', [termRuleOf('28'), termRuleOf(9)], ['PAY_FIRST', 'CREDIT']);
+ok('the two lists never overlap', !PAY_FIRST_TERMS.some(t => CREDIT_TERMS.includes(t)));
+
+const q = shipFactsSql('960034');
+ok('the order read: its terms (id and name) and total', /t\.terms AS termid/.test(q.so) && /BUILTIN\.DF\(t\.terms\)/.test(q.so) && /WHERE t\.id = 960034$/.test(q.so));
+ok('the paid read: deposits and invoices MADE FROM the order, mainline', /tl\.createdfrom = 960034/.test(q.paid) && /tl\.mainline = 'T'/.test(q.paid) && /'CustDep', 'CustInvc'/.test(q.paid));
+ok('no read without a NetSuite id (no injection either)', shipFactsSql('') === null && shipFactsSql('1 OR 1=1') === null);
+
+// SOUNIQ-4005 as NetSuite had it on 2026-10-17: Pay Before Shipping, $1,859, one deposit of $1,690.
+const so4005 = { id: '960034', tranid: 'SOUNIQ-4005', termid: '22', termname: 'Pay Before Shipping', total: '1859' };
+const f = shipFactsOf({ soRow: so4005, paidRows: [{ id: '960035', tranid: 'CDUNIQ-2978', ttype: 'CustDep', voided: 'F', total: '1690', unpaid: '0' }] });
+eq('the facts', [f.termId, f.termName, f.total, f.deposits, f.paid, f.depositRefs], ['22', 'Pay Before Shipping', 1859, 1690, 1690, ['CDUNIQ-2978']]);
+const c = shipClearanceOf(f);
+eq('SOUNIQ-4005 waits: $169 still to be paid', [c.clear, c.due, c.why], [false, 169, 'Pay Before Shipping — $169.00 still to be paid before it ships ($1,690.00 of $1,859.00 paid)']);
+eq('paid in full → clear', shipClearanceOf({ ...f, paid: 1859 }).clear, true);
+eq('a cent short of the cent is paid (rounding)', shipClearanceOf({ ...f, total: 100.004, paid: 100 }).clear, true);
+eq('Net 30 ships unpaid — the card on file decides nothing', shipClearanceOf({ ...f, termId: '2', termName: 'Net 30', paid: 0 }).why, 'Net 30 — ships before payment');
+eq('Credit Card (13) checks — the card is how they pay', shipClearanceOf({ ...f, termId: '13', termName: 'Credit Card', paid: 0 }).clear, false);
+eq('no term on the order checks, and says so', shipClearanceOf({ ...f, termId: '', termName: '', paid: 0 }).why, 'No terms on the order — $1,859.00 still to be paid before it ships ($0.00 of $1,859.00 paid)');
+eq('NetSuite not read → not clear, said', [shipClearanceOf(null).clear, shipClearanceOf(null).why], [false, 'NetSuite could not be read — the terms and what has been paid are not known yet']);
+// paid = the larger of deposits and what invoices have been paid — never more than the truth
+const g = shipFactsOf({ soRow: so4005, paidRows: [
+    { ttype: 'CustDep', voided: 'F', total: '500' }, { ttype: 'CustDep', voided: 'T', total: '900' },
+    { ttype: 'CustInvc', voided: 'F', total: '1859', unpaid: '859' } ] });
+eq('a voided deposit counts nothing; paid = max(deposits 500, invoice paid 1000)', [g.deposits, g.invoicePaid, g.paid], [500, 1000, 1000]);
+const h = shipFactsOf({ soRow: so4005, paidRows: [{ ttype: 'CustDep', voided: 'F', total: '1859' }, { ttype: 'CustInvc', voided: 'F', total: '1859', unpaid: '0' }] });
+eq('a deposit applied to the invoice is not counted twice', h.paid, 1859);
+
+// the read, with a stand-in proxy
+const res = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
+const seq = (answers) => { const calls = []; const fn = async (r) => { calls.push(r); const a = answers.shift(); if (a instanceof Error) throw a; return a; }; fn.calls = calls; return fn; };
+{
+    const fx = seq([res(200, { items: [so4005] }), res(200, { items: [{ ttype: 'CustDep', voided: 'F', total: '1690' }] })]);
+    const r = await fetchShipClearance({ nsProxyFetch: fx, nsSoId: '960034' });
+    eq('fetch: two SuiteQL reads, decided', [r.ok, r.clearance.clear, r.clearance.due, fx.calls.length, fx.calls.every(x => /suiteql/.test(x.targetUrl) && x.method === 'POST')], [true, false, 169, 2, true]);
+    const r2 = await fetchShipClearance({ nsProxyFetch: seq([new Error('503')]), nsSoId: '960034' });
+    eq('fetch: NetSuite down → not ok, not clear', [r2.ok, r2.clearance.clear], [false, false]);
+    const r3 = await fetchShipClearance({ nsProxyFetch: seq([res(200, { items: [] }), res(200, { items: [] })]), nsSoId: '960034' });
+    eq('fetch: no such order → not ok', r3.ok, false);
+}
+
+// the stamps
+const hold = shipHoldStampOf({ facts: f, clearance: c }, { at: 7, by: 'Eric' });
+eq('the hold', hold, { shipHold: { why: c.why, due: 169, rule: 'PAY_FIRST', termId: '22', termName: 'Pay Before Shipping', total: 1859, paid: 1690, at: 7, by: 'Eric' } });
+ok('held reads held; cleared and released do not', isShipHeld(hold) && !isShipHeld(shipClearedStampOf({ clearance: { why: 'paid' } })) && !isShipHeld(shipReleaseStampOf({ hold: hold.shipHold, reason: 'x' })));
+eq('a release keeps what it lifted and why', shipReleaseStampOf({ hold: hold.shipHold, reason: 'credit approved by phone' }, { at: 9, by: 'Stuart' }).shipRelease, { by: 'Stuart', at: 9, reason: 'credit approved by phone', was: hold.shipHold });
+eq('the words', shipHoldText(hold.shipHold), `⏸ ${c.why}`);
+eq('who may release', ['admin', 'superadmin', 'executive', 'manager', 'warehouse_manager', 'Paint_Manager', 'operator', 'painter', 'csr'].map(r => mayReleaseShipHold(r)), [true, true, true, true, true, true, false, false, false]);
+ok('a super admin flag releases whatever the role', mayReleaseShipHold('operator', true));
+
+console.log(`shipClearance: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
