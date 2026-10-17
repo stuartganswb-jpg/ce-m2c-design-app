@@ -84,6 +84,8 @@ const ES = {
     'Close order': 'Cerrar orden',
     'Close': 'Cerrar',
     'Start packing': 'Empezar embalaje',
+    'Pack & ship': 'Empacar y enviar',
+    'picked — pack & ship it here': 'surtido — empáquelo y envíelo aquí',
     'READY TO PACK': 'LISTO PARA EMBALAR',
     'waiting on parts': 'esperando piezas',
     'GATHERED': 'REUNIDO',

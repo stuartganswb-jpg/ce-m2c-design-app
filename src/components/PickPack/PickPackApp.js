@@ -1926,8 +1926,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             writeLog(`⚠ Pick CLEARED as overtaken on ${packRef(job)} — order already in production on the finishing floor.`, 'wms');
         } catch (e) { alert('Could not clear the pick: ' + (e.message || e)); }
     };
+    // An ORDER ENTRY order is packed and shipped on SO Pack, where it is picked (Stuart 2026-10-17 — packingStationView):
+    // this queue holds the floor's documents only. An Order Entry document still gathers into its order here.
     const packQueue = [
-        ...quickShipOrders.filter(o => o.status === 'Picked' && o.packStatus !== 'Packed'),
         // Custom orders AND stock builds (Stuart 2026-07-20): a finished stock build lands here
         // too — its "packing" is binning the finished goods back to the shelf, and this is the
         // only queue that keeps a completed WO visible after it leaves the finishing floor.
@@ -5960,6 +5961,404 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         );
     }
 
+    // THE PACKING STATION, ONE BLOCK IN TWO PLACES (Stuart 2026-10-17, Eric's App Imp card: "It went to SO Pack. Marked it
+    // Picked. It went back to PACK PREP to make box and pack … Wonky process" · Stuart: "i agree it is cumbersome"). Packaging
+    // Prep renders it whole — its queue, the open order, the recently packed. SO Pack renders the open order's workspace ALONE
+    // beneath an Order Entry order's card (soPackOrder), so that order is picked, packed and shipped where it stands: the same
+    // Start packing claim, numbered boxes, photo, ✓ Packed and fulfilment (completePacking), nothing copied.
+    const packingStationView = (soPackOrder = null) => {
+        const allLines = packJob ? packLinesFor(packJob) : [];
+        const lines = allLines.filter(l => !l.rider);   // riders show under their pole, never as rows
+        const riderNote = (l) => l.isPole && !l.rider ? ridersOf(allLines, l.key) : [];
+        const isPacked = (l) => !!(packJob.packedLines && packJob.packedLines[l.key]);
+        const toPack = packJob ? lines.filter(l => !isPacked(l)) : [];
+        const packed = packJob ? lines.filter(isPacked) : [];
+        const poleAway = !!(packJob && packJob.hasCustomSibling && !customPartsReady(packJob));
+        const photos = packJob ? (packJob.packPhotos || []) : [];
+        const isStockJob = !!(packJob && packJob.orderType === 'stock');
+        // A STOCK RUN: PACKAGE → ITEM → BIN → ✓ Put Away (Stuart 2026-10-08 · Shared/putAwayScan, productPackaging).
+        // Packaging Prep is where the product goes into its OWN packaging; the run is then scanned into its shelf bin.
+        const stockLine = isStockJob ? (lines[0] || null) : null;
+        const stockItemState = isStockJob ? itemScanOf(putawayItemScan, packJob, { runKeys: putAwayRunKeysOf(packJob) }) : null;
+        const stockStep = isStockJob ? putAwayStepOf({ packaged: lines.length > 0 && toPack.length === 0, itemOk: stockItemState.ok, bin: putawayBin }) : null;
+        // A custom order's poles come off the SHOP order, not this parts list — so
+        // "every line packed" says nothing about whether the right poles are in the box.
+        const needsPoleMatch = !!(packJob && packJob.hasCustomSibling && !packJob.packCustomMatchedAt && !packJob.packCustomMatchWaived);
+        const poleMatched = !needsPoleMatch || stagingScanMatches(packJob, packCustomScan);
+        // An Order Entry document GATHERS into its order here (gatherDocIntoOrder): the customer box, its
+        // photo and its packaging are the SO Pack card's, when the whole order is packed.
+        const gathersIntoOrder = !!oeOrderOfDoc(packJob);
+        // NUMBERED BOXES (Shared/orderBoxes): every packed piece in one of the order's boxes before the document closes.
+        const boxed = !!(packJob && usesBoxes(packJob));
+        const openBox = boxed ? openBoxNoOf(packJob) : null;
+        const packMine = !!(packJob && claimIsMine(claimOf(packJob, 'pack')));
+        const boxBlock = boxed ? boxCompleteBlocker(packJob, lines) : '';
+        const boxesChosen = !boxBlock;
+        const canComplete = packJob && toPack.length === 0 && poleMatched && !poleAway && boxesChosen && (isStockJob ? stockStep === PUT_AWAY_STEP.READY : (gathersIntoOrder || photos.length > 0));
+        const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
+        const orderBoxes = boxed ? orderBoxesOf(boxHomeOf(packJob).data) : [];
+        const boxContents = boxed ? boxContentsOf({ docs: orderPackDocsOf(packJob), linesOf: packLinesAsPacked }) : {};
+        // A GREY BUTTON SAYS WHY (Stuart on WO-SO60169, Andrea 09-14: "doesn't let me hit the complete
+        // button"): the first unmet condition, in the order completePacking refuses them.
+        const completeBlocker = (() => {
+            if (!packJob || canComplete) return null;
+            if (isStockJob && stockStep !== PUT_AWAY_STEP.READY) return putAwayBlockerOf(stockStep, runItemCodeOf(packJob));
+            if (toPack.length) return `${toPack.length} line${toPack.length === 1 ? '' : 's'} still on the TO PACK side`;
+            if (!isStockJob && !gathersIntoOrder && !photos.length) return 'take a photo of the packaged parts (📷 Add Photo)';
+            if (!poleMatched) return 'scan the CUSTOM SHOP label on the poles (or waive it)';
+            if (poleAway) return packJob.customFabStatus === 'Sent to Plating' ? 'the poles are AT THE PLATER — receive and put them away first' : `custom parts are not ready (${packJob.customFabStatus || 'Pending'})`;
+            if (!boxesChosen) return boxBlock;
+            return 'not ready';
+        })();
+        const lineRow = (l, side) => (
+            <div key={l.key} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', background: side === 'right' ? '#f0f7f1' : '#fff', border: `1px solid ${side === 'right' ? '#bcd8c0' : theme.line}`, marginBottom: '8px' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', color: theme.ink }}>
+                        {l.erp || '—'}
+                        {l.aliasErp && <span style={{ fontSize: '9px', color: theme.inkSoft, marginLeft: '8px', letterSpacing: '.04em' }}>alias {l.aliasErp}</span>}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</div>
+                    {riderNote(l).length > 0 && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '2px' }}>with {riderNote(l).map(r => `${r.qty} × ${r.erp}`).join(' + ')} — on the rod, packed with it</div>}
+                    {side === 'left' && l.isPole && poleAway && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '2px' }}>AT THE PLATER — ticks when the pole is received and put away</div>}
+                    {side === 'right' && packJob.packedLines[l.key] && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: '#3a7d44', marginTop: '2px' }}>✓ {packJob.packedLines[l.key].by} · {new Date(packJob.packedLines[l.key].at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
+                    {side === 'right' && boxed && (() => {
+                        const tick = packJob.packedLines[l.key], where = boxSpreadLabel(tickBoxesOf(tick), orderBoxes), loose = unboxedQtyOf(tick, l);
+                        return (<div style={{ fontFamily: theme.mono, fontSize: '10px', marginTop: '2px', color: loose ? '#c0392b' : theme.ink }}>
+                            {where ? `📦 ${where}` : ''}{where && loose ? ' · ' : ''}{loose ? `⚠ ${loose} ${t('not in a box yet')}` : ''}
+                        </div>);
+                    })()}
+                </div>
+                <span style={{ fontFamily: theme.mono, fontWeight: 'bold', fontSize: '1rem', color: theme.ink, whiteSpace: 'nowrap' }}>{l.isPole ? `× ${l.qty}` : qtyLabel(l, l.qty)}</span>
+                <button onClick={() => printPackLineLabel(packJob, l)} title={l.cat === 'POLE' ? 'Rod labels — sidemark · length · 1 of X per piece' : 'Item labels — one per piece'} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>🖨</button>
+                {side === 'left'
+                    ? <button onClick={() => confirmPackLine(packJob, l)} disabled={l.isPole && poleAway} style={{ background: l.isPole && poleAway ? theme.paper : theme.ink, color: l.isPole && poleAway ? theme.inkSoft : '#fff', border: l.isPole && poleAway ? `1px solid ${theme.line}` : 'none', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: l.isPole && poleAway ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>{l.isPole && poleAway ? 'At the plater' : (isStockJob ? `✓ ${t('Packaging finished')}` : `✓ Packed${openBox ? ` → ${t('Box')} ${openBox}` : ''}`)}</button>
+                    : (<>
+                        {boxed && openBox && moveIntoBox(packJob.packedLines[l.key], l, openBox, 1).movable > 0 && <button onClick={() => moveLineIntoBox(packJob, l)} title={`Put pieces of this line into Box ${openBox} — all of them, or some (a line can be split across boxes)`} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.ink}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', whiteSpace: 'nowrap' }}>→ {t('Box')} {openBox}</button>}
+                        <button onClick={() => unpackLine(packJob, l)} title="Undo — move back to TO PACK" style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>↩</button>
+                    </>)}
+            </div>
+        );
+        const groupBlock = (side, list) => PACK_GROUP_ORDER.map(g => {
+            const gl = list.filter(l => l.cat === g.cat);
+            if (!gl.length) return null;
+            return (
+                <div key={g.cat} style={{ marginBottom: '18px' }}>
+                    <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: g.box === 'POLE' ? theme.brass : theme.inkSoft, borderBottom: `1px solid ${theme.line}`, paddingBottom: '6px', marginBottom: '10px' }}>
+                        {g.title} · {g.box === 'POLE' ? 'LARGE BOX / TUBE' : 'SMALL BOX'}
+                    </div>
+                    {/* WHICH POLE IS THIS (Stuart 2026-09-09) — length, qty and sidemark,
+                        so a pole whose label fell off can still be matched to its order. */}
+                    {g.box === 'POLE' && (() => {
+                        const info = poleInfoOf(packJob);
+                        if (!info.rows.length && !info.sidemark) return null;
+                        return (
+                            <div style={{ margin: '0 0 10px', padding: '8px 10px', background: theme.paper, borderLeft: `3px solid ${theme.brass}` }}>
+                                {info.rows.map((r, i) => (
+                                    <div key={i} style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
+                                        <b style={{ fontSize: '14px' }}>{r.display}</b> · ×{r.qty}{r.name ? ` · ${r.name}` : ''}
+                                    </div>
+                                ))}
+                                {info.sidemark && <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '3px', letterSpacing: '.05em' }}>REF: {info.sidemark}</div>}
+                                {!info.rows.length && <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{t('no cut length recorded for this order')}</div>}
+                            </div>
+                        );
+                    })()}
+                    {gl.map(l => lineRow(l, side))}
+                </div>
+            );
+        });
+        const workspace = packJob ? (
+                    <>
+                        {/* WHO HAS THIS ORDER — and the way out. Opening is looking; START PACKING is
+                            taking. Everything that CHANGES the order is disabled until it is yours. */}
+                        {(() => {
+                            const c = claimOf(packJob, 'pack');
+                            const mine = claimIsMine(c);
+                            const held = !!c && !mine;
+                            return (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', marginBottom: '14px', border: `1px solid ${held ? '#d9534f' : (mine ? '#3a7d44' : theme.line)}`, background: held ? '#fdf3f3' : (mine ? '#f0f7f1' : theme.paper) }}>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', color: held ? '#c0392b' : (mine ? '#3a7d44' : theme.inkSoft), textTransform: 'uppercase' }}>
+                                        {committedBinOf(soIndex[String(packJob.salesOrderId || packJob.id)] || packJob) && `📦 ${t('Parts for this order are in bin')} ${committedBinOf(soIndex[String(packJob.salesOrderId || packJob.id)] || packJob)} · `}
+                                        {held ? `🔒 ${c.by} ${t('is packing this')} · ${t('since')} ${claimSince(c)}`
+                                            : mine ? `🔒 ${t('You are packing this')}`
+                                                : `👁 ${t('Looking only — nothing is changed until you start packing')}`}
+                                    </span>
+                                    <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                        <button onClick={() => printWmsPackingList(packJob)} disabled={isSyncing} title="The packing list — what was ordered beside what this station has packed, by item code. The same list the CRM card prints." style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: isSyncing ? 'wait' : 'pointer' }}>🖨 {t('Packing list')}</button>
+                                        <button onClick={() => printAllOrderLabels(packJob, packLinesOf(packJob))} title="Print item labels for every line on this order" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 {t('Labels')}</button>
+                                        {!c && <button onClick={() => startPacking(packJob)} style={{ padding: '9px 16px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Start packing')}</button>}
+                                        {held && isPlatingAdmin && <button onClick={() => adminReleaseClaim(packJob, 'pack')} style={{ padding: '9px 14px', background: 'transparent', border: '1px solid #d9534f', color: '#c0392b', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Release (admin)')}</button>}
+                                        <button onClick={() => closePackCard(packJob)} style={{ padding: '9px 16px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Close')}</button>
+                                    </span>
+                                </div>
+                            );
+                        })()}
+                        {needsPoleMatch && (
+                            <div style={{ background: poleMatched ? '#f0f7f1' : '#fdf3f3', border: `1px solid ${poleMatched ? '#3a7d44' : '#d9534f'}`, padding: '14px 16px', marginBottom: '16px' }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: poleMatched ? '#3a7d44' : '#d9534f', marginBottom: '6px' }}>
+                                    {poleMatched ? '✓ Both halves match' : '⚠ Match the poles to these small parts'}
+                                </div>
+                                <div style={{ fontFamily: theme.sans, fontSize: '0.88rem', color: theme.ink, marginBottom: '10px', lineHeight: 1.5 }}>
+                                    The poles for this order came off the CUSTOM SHOP order — they are not on the parts list you just packed. Scan the shop label on the poles to prove the two halves belong together before the box closes.
+                                </div>
+                                <input autoFocus value={packCustomScan} onChange={e => setPackCustomScan(e.target.value)} placeholder="SCAN CUSTOM SHOP LABEL…"
+                                    style={{ width: '100%', maxWidth: '420px', boxSizing: 'border-box', padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '1rem', outline: 'none' }} />
+                                {packCustomScan.trim() && !poleMatched && (
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: '#d9534f', marginTop: '8px' }}>
+                                        ✖ "{packCustomScan.trim()}" is a different order — these poles do NOT belong with these parts. Find the right ones.
+                                    </div>
+                                )}
+                                {/* THERE MAY BE NO POLES TO MATCH (Sandra 2026-08-17: "no permite completar
+                                    la operación de packing porque está pidiendo tubos y en este caso la orden
+                                    sólo lleva 3 anillos"). The demand rides `hasCustomSibling`, stamped when
+                                    the order was split — if the custom half was later replaced or removed,
+                                    the flag outlives it and the box can never close, with nothing on this
+                                    screen able to fix the record. So: an explicit way out that STATES what
+                                    happened, rather than a silent bypass. The reason is required and is
+                                    stored on the order and in the log. */}
+                                {!poleMatched && !poleAway && (
+                                    <button onClick={noPolesOnOrder}
+                                        title="Use this only when the order genuinely has no poles — it is recorded against the order with your name and reason."
+                                        style={{ marginTop: '10px', padding: '9px 12px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                        {t('This order has no poles — say why & continue')}
+                                    </button>
+                                )}
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px', background: theme.paper2, border: `1px solid ${theme.line}`, marginBottom: '16px' }}>
+                            <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{packRef(packJob)}</span>
+                            <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>{packJob.customerName || packJob.clientName || packJob.customer || ''}{packJob.recipe ? ` · ${packJob.recipe}` : ''}</span>
+                            {Number(packJob.packScrap) > 0 && <span style={{ fontFamily: theme.mono, fontSize: '10px', color: '#d9534f', border: '1px solid #d9534f', padding: '3px 8px' }}>⚠ {packJob.packScrap} scrap reported</span>}
+                            {packJob.packCustomMatchedAt && <span title={`Matched by ${packJob.packCustomMatchedBy || ''}`} style={{ fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44', border: '1px solid #3a7d44', padding: '3px 8px' }}>✓ poles matched</span>}
+                        </div>
+                        {/* A STOCK RUN (Stuart 2026-10-08): how THIS product is packaged — the item's picture and note
+                            (Shared/productPackaging: its own, else its base item's). The bin box that sat in the strip
+                            above is now the scan step beneath the line (./StockPutAwayPanel). */}
+                        {isStockJob && (
+                            <StockPutAwayPanel theme={theme} t={t} show="packaging" itemCode={runItemCodeOf(packJob)}
+                                qtyText={stockLine ? `${stockLine.qty} ${t('pcs')}` : ''}
+                                packaging={packagingOf(findPartByErpCode(runItemCodeOf(packJob)), findPartByErpCode, speciesBaseIdx)}
+                                packagedTick={toPack.length === 0 && stockLine ? ((packJob.packedLines && packJob.packedLines[stockLine.key]) || null) : null} />
+                        )}
+                        {/* 📦 THE ORDER'S BOXES (Shared/orderBoxes, Stuart 2026-10-06: "add a field to create box#, it could be
+                            multiples"). Numbered on the SALES ORDER, so a later document of the order sees Box 1 and 2 already
+                            there. One box is OPEN at a time on this bench: ✓ Packed puts the line in it; → Box N on a packed
+                            line moves pieces into it (some of them = a split). */}
+                        {boxed && (
+                            <div style={{ padding: '12px 16px', border: `1px solid ${openBox ? theme.ink : theme.brass}`, background: '#fff', marginBottom: '16px' }}>
+                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginRight: '4px' }}>📦 {t('Boxes')}{boxHomeOf(packJob).so ? ` · SO ${boxHomeOf(packJob).so.soId || boxHomeOf(packJob).so.id}` : ''}</span>
+                                    {orderBoxes.length === 0 && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.brass }}>{t('No box yet — add the first one')} →</span>}
+                                    {orderBoxes.map(b => {
+                                        const isOpen = openBox === b.no, pcs = (boxContents[b.no] && boxContents[b.no].pcs) || 0, shipped = isBoxShipped(b);
+                                        const last = b.no === orderBoxes[orderBoxes.length - 1].no;
+                                        return (
+                                            <span key={b.no} style={{ display: 'inline-flex', alignItems: 'stretch', border: `1px solid ${isOpen ? theme.ink : theme.line}` }}>
+                                                <button onClick={() => { if (shipped) return alert(boxOpenRefusal(b)); setOpenBoxSel(isOpen ? { id: null, no: null } : { id: packJob.id, no: b.no }); }} title={shipped ? boxOpenRefusal(b) : `${boxName(b)} — ${pcs} pc${pcs === 1 ? '' : 's'}${(boxContents[b.no] ? `: ${boxContents[b.no].items.map(i => `${i.code} ×${i.qty}`).join(', ')}` : '')}\n${isOpen ? 'Open — tap to close it' : 'Tap to pack into this box'}`} style={{ background: isOpen ? theme.ink : (shipped ? '#f0f7f1' : theme.paper), color: isOpen ? '#fff' : (shipped ? '#2e7d32' : theme.ink), border: 'none', padding: '9px 12px', fontFamily: theme.mono, fontSize: '11px', cursor: shipped ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
+                                                    <b>{t('Box')} {b.no}</b>{b.type ? ` · ${b.type}` : ''} · {pcs} pc{pcs === 1 ? '' : 's'}{isOpen ? ` · ${t('OPEN')}` : ''}{shipped ? ` · 🚚 ${t('SHIPPED')}${b.trackingNumber ? ` ${b.trackingNumber}` : ''}` : ''}
+                                                </button>
+                                                <button onClick={() => printOrderBoxLabelsFor(packJob, b.no)} title={`Print the label for Box ${b.no} — "${t('Box')} ${b.no} of ${orderBoxes.length}"`} style={{ background: '#fff', color: theme.inkSoft, border: 'none', borderLeft: `1px solid ${theme.line}`, padding: '0 9px', cursor: 'pointer' }}>🖨</button>
+                                                {last && pcs === 0 && <button onClick={() => removeOrderBox(packJob, b.no)} title={`Remove Box ${b.no} — it is empty`} style={{ background: '#fff', color: '#c0392b', border: 'none', borderLeft: `1px solid ${theme.line}`, padding: '0 9px', cursor: 'pointer', fontFamily: theme.mono }}>✕</button>}
+                                            </span>
+                                        );
+                                    })}
+                                    <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
+                                        <select value={newBoxType} onChange={e => setNewBoxType(e.target.value)} style={{ padding: '8px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.85rem', background: '#fff', maxWidth: '260px' }}>
+                                            <option value="">{brandBoxes.length ? `— ${t('box type')} —` : '— no boxes for this brand —'}</option>
+                                            {brandBoxes.map(b => <option key={b.id} value={b.name}>{b.name} — {boxSizeLabel(b)}</option>)}
+                                        </select>
+                                        <button onClick={() => addOrderBox(packJob)} disabled={!newBoxType} title={`Add Box ${orderBoxes.length ? orderBoxes[orderBoxes.length - 1].no + 1 : 1} to this order and open it`} style={{ padding: '9px 14px', background: newBoxType ? theme.ink : theme.paper2, color: newBoxType ? '#fff' : theme.inkSoft, border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: newBoxType ? 'pointer' : 'default', whiteSpace: 'nowrap' }}>+ {t('New box')}</button>
+                                        {orderBoxes.length > 1 && <button onClick={() => printOrderBoxLabelsFor(packJob)} title="Print a label for every box of this order — Box 1 of N … Box N of N" style={{ padding: '9px 12px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>🖨 {t('All box labels')}</button>}
+                                    </span>
+                                </div>
+                                <div style={{ marginTop: '8px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', fontFamily: theme.sans, fontSize: '0.82rem', color: openBox ? theme.ink : theme.brass }}>
+                                    <span>{openBox ? `${t('Packing into')} ${boxName(boxOf(orderBoxes, openBox))} — ${t('Packed puts the line in it; the arrow on a packed line moves pieces into it (some of them splits the line)')}.`
+                                        : (packMine ? `${t('Open a box to pack into — tap one, or add a new one')}.` : `${t('The boxes of this order — start packing to use them')}.`)}</span>
+                                    {openBox && unboxedLinesOf(packJob, lines).length > 0 && <button onClick={() => boxAllUnboxed(packJob)} title="Lines packed with no box on record — put every one of them in the open box" style={{ padding: '6px 10px', background: 'transparent', color: '#c0392b', border: '1px solid #c0392b', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', whiteSpace: 'nowrap' }}>→ {unboxedLinesOf(packJob, lines).length} {t('packed with no box')} → {t('Box')} {openBox}</button>}
+                                    {!brandBoxes.length && <span style={{ color: '#d9534f' }}>add box types in HQ → 15. Packaging → Standard boxes</span>}
+                                </div>
+                            </div>
+                        )}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', alignItems: 'start' }}>
+                            <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: theme.paper }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', color: theme.ink, marginBottom: '14px' }}>{isStockJob ? t('To package') : 'To Pack'} ({toPack.length})</div>
+                                {toPack.length === 0 ? <div style={{ color: '#3a7d44', fontFamily: theme.serif, fontStyle: 'italic' }}>{isStockJob ? t('Packaging finished — scan the item and its shelf bin below, then Put Away.') : 'Everything is packed — add the photo and complete below.'}</div> : groupBlock('left', toPack)}
+                            </div>
+                            <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: '#fff' }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', color: '#3a7d44', marginBottom: '14px' }}>{isStockJob ? t('Packaged') : 'Packed'} ({packed.length}/{lines.length})</div>
+                                {packed.length === 0 ? <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>{isStockJob ? t('Tick the line on the left when every piece is in its packaging.') : 'Confirm pieces on the left as you physically pack them.'}</div> : groupBlock('right', packed)}
+                            </div>
+                        </div>
+                        {/* …THEN SCANNED INTO ITS SHELF BIN (Stuart 2026-10-08 · Shared/putAwayScan): the item label, then
+                            the bin label. completePacking makes the same checks at the press. */}
+                        {isStockJob && (
+                            <div style={{ marginTop: '20px' }}>
+                                <StockPutAwayPanel theme={theme} t={t} show="putaway" itemCode={runItemCodeOf(packJob)} mine={packMine} step={stockStep}
+                                    packagedTick={toPack.length === 0 && stockLine ? ((packJob.packedLines && packJob.packedLines[stockLine.key]) || { at: null, by: '' }) : null}
+                                    itemScan={putawayItemScan} onItemScan={setPutawayItemScan} itemState={stockItemState}
+                                    bin={putawayBin} onBin={setPutawayBin} expectedText={expectedBinsText(putAwayExpectedOf(packJob))} />
+                            </div>
+                        )}
+
+                        {/* REQUIRED PHOTOS + COMPLETE */}
+                        <div style={{ marginTop: '20px', border: `1px solid ${theme.line}`, background: theme.paper, padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                            <label style={{ cursor: 'pointer', border: `1px solid ${theme.line}`, background: '#fff', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                {packUploading ? '⏳ Uploading…' : (isStockJob ? '📷 Add Photo (optional)' : '📷 Add Photo (required)')}
+                                <input type="file" accept="image/*" capture="environment" multiple style={{ display: 'none' }} onChange={e => { uploadPackPhotos(packJob, e.target.files); e.target.value = ''; }} />
+                            </label>
+                            {photos.map((u, i) => <img key={i} src={u} alt={`packed ${i + 1}`} onClick={() => window.open(u, '_blank')} style={{ height: '54px', width: '76px', objectFit: 'cover', border: `1px solid ${theme.line}`, cursor: 'zoom-in' }} />)}
+                            {photos.length === 0 && !isStockJob && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>No photo yet — a photo of the packaged parts is required.</span>}
+                            {packJob && isPaintOnlyOrder(packJob) && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.ink }}>{PAINT_ONLY_BADGE}: the bin you scan is where <b>{packJob.jfpItemCode}</b> gets adjusted in NetSuite — there is no assembly build.</span>}
+                            {isStockJob ? (
+                                <button onClick={() => {
+                                    const erp = String(packJob.stockErpId || packJob.type || '').toUpperCase();
+                                    const part = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === erp);
+                                    const copies = parseInt(window.prompt(`How many item labels for ${erp}?\n\nEach shows the item # (text + barcode), description, UOM — and WO ${packRef(packJob)} small on the right as the BATCH #.`, '1')) || 0;
+                                    if (copies > 0) printStockItemLabels({ itemId: erp, itemName: (part && part.itemName) || '', uom: uomOf(part), woNum: packRef(packJob), copies });
+                                }} title="Item labels with the WO # as batch reference" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
+                            ) : (<>
+                                {!isQsOrder(packJob) && (
+                                    <button onClick={() => printHandshakeLabels({ woRef: packRef(packJob), orderKey: stagingKeyOf(packJob), item: packJob.stockErpId || packJob.type || '', qty: packJob.totalParts || '', qtyLabel: `${packJob.totalParts || 0} pcs`, finish: packJob.recipe || '', customer: packJob.customerName || packJob.clientName || packJob.customer || '', hasCustom: !!packJob.hasCustomSibling, facts: labelFactsOf(packJob) })} title="Reprint both staging-handshake labels (small parts + custom shop when the order has one) — same barcode key the handshake scans" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Handshake Labels</button>
+                                )}
+                                <button onClick={() => { const ls = packLinesOf(packJob); if (ls.length) printItemLabels(ls.map(l => ({ itemId: l.erp, itemName: l.name }))); }} title="One 2×4 item label per line on this order" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
+                            </>)}
+                            {!isQsOrder(packJob) && (
+                                <button onClick={() => reportPackScrap(packJob)} title="Found bad pieces while bagging? Record scrap — stock builds queue the −qty NetSuite adjustment, customs red-flag the finishing supervisor" style={{ marginLeft: 'auto', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', padding: '14px 18px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
+                                    ⚠ Report Scrap
+                                </button>
+                            )}
+                            <button onClick={() => completePacking(packJob)} disabled={!canComplete} style={{ marginLeft: isQsOrder(packJob) ? 'auto' : '0', background: canComplete ? theme.ink : theme.paper2, color: canComplete ? '#fff' : theme.inkSoft, border: `1px solid ${canComplete ? theme.ink : theme.line}`, padding: '14px 26px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: canComplete ? 'pointer' : 'default' }}>
+                                {isStockJob ? '✓ Put Away to Bin' : (oeOrderOfDoc(packJob) ? `✓ Gather into ${packRef(oeOrderOfDoc(packJob))}` : '✓ Complete Packing')}
+                            </button>
+                        </div>
+                        {completeBlocker && (
+                            <div style={{ marginTop: '8px', textAlign: 'right', fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>
+                                {isStockJob ? 'Put Away' : 'Complete'} waits for: {completeBlocker}
+                            </div>
+                        )}
+                    </>
+        ) : null;
+        if (soPackOrder) return workspace ? (
+            <div style={{ border: `2px solid ${theme.ink}`, borderTop: 'none', background: '#fff', padding: '20px', margin: '-16px 0 18px' }}>
+                <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: theme.inkSoft, marginBottom: '12px' }}>📦 {t('Pack & ship')} · {packRef(soPackOrder)}</div>
+                {workspace}
+            </div>
+        ) : null;
+        return (
+            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                <div style={{ borderBottom: `1px solid ${theme.line}`, paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '10px' }}>
+                    <h2 style={{ color: theme.ink, fontFamily: theme.serif, fontWeight: 500, margin: 0 }}>{t('Packing Station')}</h2>
+                    <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.05em' }}>small parts first (brackets · rings · finials) → small box · poles last → large box · photo required</span>
+                </div>
+
+                {/* READY-TO-PACK QUEUE — compact strip up top */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '24px' }}>
+                    {packQueue.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No finished orders waiting to be packed.</span>}
+                    {packQueue.map(j => {
+                        const jl = packLinesOf(j);
+                        const done = jl.filter(l => j.packedLines && j.packedLines[l.key]).length;
+                        const active = packOrderId === j.id;
+                        return (
+                            <button key={j.id} onClick={() => { if (active) closePackCard(j); else openPackOrder(j); }} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
+                                {!active && <OrderStatusChips wo={j} {...coatsOf(j)} showWho={false} style={{ marginBottom: '6px' }} />}
+                                {/* A paint run looks like a stock build until you read the code — say so. */}
+                                {isPaintOnlyOrder(j) && <div title={`Legacy NetSuite item ${j.jfpItemCode || ''} — no assembly. Scanning the bin adjusts the painted pieces into it.`} style={{ display: 'inline-block', marginBottom: '6px', background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE} · {j.jfpItemCode || ''}</div>}
+                                <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 'bold' }}>{packRef(j)}{isQsOrder(j) && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : theme.brass, border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : theme.brass}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>QUICK SHIP</span>}{j.orderType === 'stock' && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : '#3a7d44', border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : '#3a7d44'}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>STOCK → BIN</span>}</div>
+                                <div style={{ fontFamily: theme.sans, fontSize: '0.75rem', color: active ? 'rgba(255,255,255,0.75)' : theme.inkSoft }}>
+                                    {j.customerName || j.clientName || j.customer || '—'} · {jl.length} line{jl.length === 1 ? '' : 's'}{done > 0 ? ` · ${done}/${jl.length} packed` : ''}
+                                </div>
+                                {!active && renderClaimLine(j, 'pack')}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {/* WORKSPACE — TO PACK left, physically confirmed pieces move right */}
+                {workspace || (
+                    packQueue.length > 0 && <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>Tap an order above to open the packing workspace.</div>
+                )}
+
+                {/* RECENTLY PACKED */}
+                {packedRecent.length > 0 && (
+                    <div style={{ marginTop: '30px' }}>
+                        <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '10px' }}>Recently Packed</div>
+                        {packedRecent.map(j => (
+                            <div key={j.id} style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', borderTop: `1px solid ${theme.paper2}`, fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>
+                                <span onClick={() => setExpandedPacked(expandedPacked === j.id ? null : j.id)} title="Show the lines that were packed" style={{ fontFamily: theme.mono, color: theme.ink, cursor: 'pointer' }}>
+                                    <span style={{ color: theme.inkSoft, marginRight: '6px' }}>{expandedPacked === j.id ? '▾' : '▸'}</span>{packRef(j)}
+                                </span>
+                                <span>{j.customerName || j.clientName || j.customer || ''}</span>
+                                {/* A put-away paint run was indistinguishable from a stock build once it
+                                    left the queue — the badge only ever rendered on the to-pack list
+                                    (Stuart 2026-08-18). */}
+                                {isPaintOnlyOrder(j) && <span title={`Paint run — the painted pieces are adjusted into the scanned bin as ${j.jfpItemCode || 'the item'}`} style={{ background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE}{j.jfpItemCode ? ` · ${j.jfpItemCode}` : ''}</span>}
+                                {/* The adjustment was queued but never confirmed — the pieces are away and
+                                    NetSuite has not got them (Eric 2026-08-24). */}
+                                {/* LABELS AFTER THE FACT (Sandra 2026-08-12: "need to add item
+                                    print label for packed orders please"). The Item Labels button
+                                    only ever existed on the order currently OPEN at the bench, so
+                                    once a box was packed there was no way to reprint for it — which
+                                    is exactly when a label goes missing or tears. */}
+                                <button onClick={(e) => { e.stopPropagation(); const ls = packLinesOf(j); if (!ls.length) return alert(`No packed lines recorded on ${packRef(j)}.`); printItemLabels(ls.map(l => ({ itemId: l.erp, itemName: l.name }))); writeLog(`🖨 Reprinted ${ls.length} item label(s) for ${packRef(j)}`, 'wms'); }}
+                                    title="Reprint one 2×4 item label per line on this packed order"
+                                    style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>🖨 {t('Item Labels')}</button>
+                                {isPaintOnlyOrder(j) && j.jfpAdjQueued && !j.jfpAdjPosted && (
+                                    <button onClick={(e) => { e.stopPropagation(); redoPutaway(j); }} title="NetSuite has not confirmed this put-away — re-post it against a corrected bin."
+                                        style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>↩ Re-post put-away</button>
+                                )}
+                                <OrderStatusChips wo={j} {...coatsOf(j)} showWho={false} />
+                                {/* A build the force-complete skipped said nothing anywhere (Eric 2026-10-02,
+                                    WO11639): only the scrap posted. It says so here; RTG posts it. */}
+                                {buildSkippedAtForceComplete(j) && (
+                                    <span title={`${j.forceCompletedBy ? `Force-completed by ${j.forceCompletedBy}, who marked it already built in NetSuite. ` : ''}${skippedBuildHint(j)}`}
+                                        style={{ fontFamily: theme.mono, fontSize: '9px', color: '#d9534f', border: '1px solid #d9534f', padding: '2px 7px', letterSpacing: '.04em' }}>{SKIPPED_BUILD_TEXT}</span>
+                                )}
+                                <span style={{ fontFamily: theme.mono, fontSize: '10px', color: j.nsIfTran ? '#3a7d44' : theme.inkSoft }}>
+                                    {j.nsIfTran ? `IF ${j.nsIfTran}${j.nsFulfillStatus ? ` · ${j.nsFulfillStatus}` : ''}` : (j.nsFulfillQueued ? 'IF queued…' : '')}
+                                </span>
+                                {(j.trackingNumbers || []).length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.ink }}>🚚 {j.trackingNumbers.join(', ')}</span>}
+                                <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '10px' }}>{j.packedBy || ''} · {j.packedAt ? new Date(j.packedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''} · {(j.packPhotos || []).length} 📷</span>
+                                    <button onClick={(e) => { e.stopPropagation(); printWmsPackingList(j); }} disabled={isSyncing} title="The packing list — ordered beside packed, by item code" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: isSyncing ? 'wait' : 'pointer' }}>🖨 {t('Packing list')}</button>
+                                    <button onClick={() => pullFulfillment(j)} title="Pull fulfillment status + tracking # from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⤓ Tracking</button>
+                                    {!isQsOrder(j) && <button onClick={() => reportPackScrap(j)} title="Bad pieces found after packing — record scrap" style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⚠ Scrap</button>}
+                                </span>
+                                {/* WHAT WAS IN THE BOX, AFTER THE FACT (Stuart 2026-08-03: "we need access here to be
+                                    able to see the order lines again and reprint labels"). A packed order used to be a
+                                    one-line receipt — no way to answer "what shipped?" or replace a label that tore,
+                                    short of hunting the order down on another screen. */}
+                                {expandedPacked === j.id && (
+                                    <div style={{ flexBasis: '100%', marginTop: '8px', padding: '12px 14px', background: theme.paper, border: `1px solid ${theme.line}` }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                                            <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>Packed lines</span>
+                                            <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                                <button onClick={() => printZebraLabel(j, 'SMALL_PARTS')} title="Reprint the small-parts / setup label" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Setup Label</button>
+                                                {j.orderType === 'stock' && <button onClick={() => printZebraLabel(j, 'PUT_AWAY')} title="Reprint the put-away label" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Put-Away</button>}
+                                                {j.hasCustomSibling && <button onClick={() => printZebraLabel(j, 'CUSTOM_SHOP')} title="Reprint the custom shop label (the poles' label)" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Shop Label</button>}
+                                            </span>
+                                        </div>
+                                        {packLinesOf(j).map(l => (
+                                            <div key={l.key} style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '5px 0', borderBottom: `1px dashed ${theme.line}`, fontSize: '0.85rem' }}>
+                                                <span style={{ fontFamily: theme.mono, fontSize: '11px', fontWeight: 600, color: theme.ink, minWidth: '110px' }}>{l.erp || '—'}</span>
+                                                <span style={{ flex: 1, color: theme.inkSoft }}>{l.name}</span>
+                                                <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>×{l.qty}</span>
+                                            </div>
+                                        ))}
+                                        {packLinesOf(j).length === 0 && <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No line detail recorded on this order.</div>}
+                                        <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '8px' }}>
+                                            {j.packCustomMatchedAt ? `poles matched by ${j.packCustomMatchedBy || '—'}` : (j.hasCustomSibling ? 'poles were NOT match-scanned at packing' : '')}
+                                            {j.putawayBin ? `${j.hasCustomSibling ? ' · ' : ''}bin ${j.putawayBin}` : ''}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     return (
         // THE WHOLE PAGE SCROLLS (Kevin, App Imp 2026-09-28: "top portion of screen takes up majority of
         // space … not able to scroll to use full page"). The page was exactly one screen tall with only
@@ -6342,7 +6741,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         // The traverse station first (Shared/traverseStation, 2026-10-07): an order with parts loaded onto the
                         // track moves on only once its tracks are confirmed loaded.
                         { const tg = trvGateOf(o); if (tg.wait) return alert(`SO ${o.soId || o.id} waits on the TRAVERSE STATION — ${tg.wait}.\n\nWMS → Traverse station: pick the track parts, load the tracks, confirm.`); }
-                        // Flow discipline: Pick (here) → Pack (PACKING tab, photo required) → Ship.
+                        // Flow discipline: Pick → Pack (📦 Pack & ship, here — photo required) → Ship.
                         // TO-BE-FINISHED LINES HOLD (Stuart 2026-08-30): production may still be
                         // running — this SO's completed work MEETS it here; marking it moved with
                         // made-to-order lines outstanding ships a box missing its parts. The linked
@@ -6357,7 +6756,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             .map(x => ({ code: lineCodeOf(x.l), qty: soCodeNeedOf(o, lineCodeOf(x.l), isFeeCode) || Number(x.l.qty) || 0, have: committedQtyOf(o, lineCodeOf(x.l)) }))
                             .filter((x, k, arr) => x.have < x.qty && arr.findIndex(y => y.code === x.code) === k);
                         if (waiting.length && !window.confirm(`⏳ SO ${o.soId || o.id} has ${waiting.length} to-be-finished line(s) NOT YET GATHERED into the order:\n\n${waiting.slice(0, 8).map(w => `• ${w.code} — ${w.have} of ${w.qty} gathered`).join('\n')}${waiting.length > 8 ? `\n…and ${waiting.length - 8} more` : ''}\n\nPACK & HOLD until every part arrives is the model. Mark it ${status} anyway?`)) return;
-                        if (status === 'Shipped' && o.packStatus !== 'Packed' && !window.confirm(`SO ${o.soId || o.id} has NOT been packed on the PACKING tab (piece-by-piece confirm + photo).\n\nShip anyway?`)) return;
+                        if (status === 'Shipped' && o.packStatus !== 'Packed' && !window.confirm(`SO ${o.soId || o.id} has NOT been packed (📦 Pack & ship — piece-by-piece confirm + photo).\n\nShip anyway?`)) return;
                         try {
                             await updateDoc(doc(db, "hq_sales_orders", o.id), { status, pickStatus: status });
                             writeLog(`Quick Ship ${o.id} → ${status}`, 'STOCK');
@@ -6390,8 +6789,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     if (queued || skipped.length) alert(`📦 ${queued} pack assembly build(s) queued to NetSuite (watch 11.1 → NetSuite Sync Queue).${skipped.length ? `\n\n⚠ Skipped — no NetSuite id (sync these items): ${skipped.join(', ')}` : ''}`);
                                 }
                             }
+                            return true;   // it went through — every refusal above returns nothing
                         }
                         catch (e) { alert('Update failed: ' + e.message); }
+                    };
+                    // 📦 PACK & SHIP, WHERE THE ORDER IS (Stuart 2026-10-17): an order not yet picked is marked Picked first —
+                    // the same gates (traverse station, lines not yet gathered) and the same ring-pack builds — and the packing
+                    // workspace opens beneath its card.
+                    const packAndShip = async (o) => {
+                        if (o.status !== 'Picked' && !(await setQSStatus(o, 'Picked'))) return;
+                        openPackOrder(o);
                     };
                     // ── SO PACK SHOWS BOTH DOORS (Stuart 2026-09-03: "so pack shows both, but
                     // packaging prep does the heavy lifting") ──────────────────────────────────────
@@ -6566,7 +6973,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <div style={{ padding: '12px 18px', display: 'flex', gap: '10px', justifyContent: 'flex-end', alignItems: 'center', borderTop: `1px solid ${theme.line}` }}>
                                     {o.packStatus === 'Packed'
                                         ? <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44' }}>📦 Packed · {(o.packPhotos || []).length} photo{(o.packPhotos || []).length === 1 ? '' : 's'} · {o.packedBy || ''}{o.nsIfTran ? ` · IF ${o.nsIfTran}${o.nsFulfillStatus ? ` (${o.nsFulfillStatus})` : ''}` : (o.nsFulfillQueued ? ' · IF queued…' : '')}{(o.trackingNumbers || []).length ? ` · 🚚 ${o.trackingNumbers.join(', ')}` : ''}</span>
-                                        : (o.status === 'Picked' && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: theme.brass }}>→ in the PACKING tab queue</span>)}
+                                        : (o.status === 'Picked' && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: theme.brass }}>{t('picked — pack & ship it here')}</span>)}
                                     {o.displayBuildId && (ready || canShip > 0 || (o.displayShipments || []).length > 0) && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#2e7d32' }}>📦 {(o.displayShipments || []).length} {t('display(s) shipped')}{byCount ? ` · ${canShip} ${t('complete display(s) in the bin — can ship now')}` : ''}</span>}
                                     {o.displayBuildId && (byCount ? (canShip > 0 || (ready && !gs.partial)) : ready) && <button onClick={() => openShipDisplay(o)} disabled={isSyncing || shipBusy} title="Pack one display into its box and ship it to a showroom — its own $0 sales order to the customer, with the showroom's address" style={{ padding: '9px 18px', background: '#2e7d32', color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📦 {t('Ship one display')}</button>}
                                     {committedBinOf(o) && nsBinPlanOf({ so: o, isFeeCode }).some(r => r.qty > 0) && <button onClick={() => syncOrderBinToNetSuite(o)} disabled={isSyncing} title={`Gathered pieces not yet in ${cBin} in NetSuite — move them there as the items the order bills`} style={{ padding: '9px 14px', background: 'transparent', color: '#2e7d32', border: '1px solid #2e7d32', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⇄ {t('Into')} {cBin} {t('in NetSuite')} ({nsBinPlanOf({ so: o, isFeeCode }).filter(r => r.qty > 0).length})</button>}
@@ -6579,6 +6986,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         stale order is actually noticed. */}
                                     <button onClick={() => closeStaleOrder(o)} title="Close this order in the app — it leaves the warehouse queues. Does NOT close it in NetSuite." style={{ padding: '9px 14px', background: 'transparent', color: '#c0392b', border: '1px solid #c0392b', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Close order')}</button>
                                     {o.packStatus === 'Packed' && <button onClick={() => pullFulfillment(o)} title="Pull fulfillment status + tracking # from NetSuite" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⤓ Tracking</button>}
+                                    {o.packStatus !== 'Packed' && !(packJob && packJob.id === o.id) && <button onClick={() => packAndShip(o)} disabled={isSyncing} title={o.status === 'Picked' ? 'Open the packing workspace beneath this order — boxes, photo, ✓ Packed and the fulfilment' : 'Mark it picked, then open the packing workspace beneath this order'} style={{ padding: '9px 18px', background: theme.brass, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📦 {t('Pack & ship')}</button>}
                                     {o.status !== 'Picked' && <button onClick={() => setQSStatus(o, 'Picked')} style={{ padding: '9px 18px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Picked</button>}
                                     <button onClick={() => setQSStatus(o, 'Shipped')} style={{ padding: '9px 18px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Shipped</button>
                                 </div>
@@ -6590,7 +6998,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             <div style={{ fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem', marginBottom: '6px' }}>Stock / Quick Ship Orders</div>
                             <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.05em', marginBottom: '24px' }}>Pre-finished stocked goods — pick off the shelf. Separate from custom orders.</div>
                             {open.length === 0 && <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No open stock orders.</div>}
-                            {open.map(o => <Card key={o.id} o={o} />)}
+                            {open.map(o => (
+                                <React.Fragment key={o.id}>
+                                    <Card o={o} />
+                                    {packJob && packJob.id === o.id && packingStationView(o)}
+                                </React.Fragment>
+                            ))}
                             {cpqOrders.length > 0 && (
                                 <div style={{ marginTop: '26px' }}>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '10px' }}>
@@ -6698,391 +7111,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     <FulfilmentPanel operator={operator} activeBrand={activeBrand} docs={[...finAll, ...quickShipOrders]}
                         soIndex={soIndex} stdBoxes={stdBoxes} isQsOrder={isQsOrder} packRefOf={packRef} writeLog={writeLog} />
                 )}
-                {activeTab === 'PACKING' && (() => {
-                    const allLines = packJob ? packLinesFor(packJob) : [];
-                    const lines = allLines.filter(l => !l.rider);   // riders show under their pole, never as rows
-                    const riderNote = (l) => l.isPole && !l.rider ? ridersOf(allLines, l.key) : [];
-                    const isPacked = (l) => !!(packJob.packedLines && packJob.packedLines[l.key]);
-                    const toPack = packJob ? lines.filter(l => !isPacked(l)) : [];
-                    const packed = packJob ? lines.filter(isPacked) : [];
-                    const poleAway = !!(packJob && packJob.hasCustomSibling && !customPartsReady(packJob));
-                    const photos = packJob ? (packJob.packPhotos || []) : [];
-                    const isStockJob = !!(packJob && packJob.orderType === 'stock');
-                    // A STOCK RUN: PACKAGE → ITEM → BIN → ✓ Put Away (Stuart 2026-10-08 · Shared/putAwayScan, productPackaging).
-                    // Packaging Prep is where the product goes into its OWN packaging; the run is then scanned into its shelf bin.
-                    const stockLine = isStockJob ? (lines[0] || null) : null;
-                    const stockItemState = isStockJob ? itemScanOf(putawayItemScan, packJob, { runKeys: putAwayRunKeysOf(packJob) }) : null;
-                    const stockStep = isStockJob ? putAwayStepOf({ packaged: lines.length > 0 && toPack.length === 0, itemOk: stockItemState.ok, bin: putawayBin }) : null;
-                    // A custom order's poles come off the SHOP order, not this parts list — so
-                    // "every line packed" says nothing about whether the right poles are in the box.
-                    const needsPoleMatch = !!(packJob && packJob.hasCustomSibling && !packJob.packCustomMatchedAt && !packJob.packCustomMatchWaived);
-                    const poleMatched = !needsPoleMatch || stagingScanMatches(packJob, packCustomScan);
-                    // An Order Entry document GATHERS into its order here (gatherDocIntoOrder): the customer box, its
-                    // photo and its packaging are the SO Pack card's, when the whole order is packed.
-                    const gathersIntoOrder = !!oeOrderOfDoc(packJob);
-                    // NUMBERED BOXES (Shared/orderBoxes): every packed piece in one of the order's boxes before the document closes.
-                    const boxed = !!(packJob && usesBoxes(packJob));
-                    const openBox = boxed ? openBoxNoOf(packJob) : null;
-                    const packMine = !!(packJob && claimIsMine(claimOf(packJob, 'pack')));
-                    const boxBlock = boxed ? boxCompleteBlocker(packJob, lines) : '';
-                    const boxesChosen = !boxBlock;
-                    const canComplete = packJob && toPack.length === 0 && poleMatched && !poleAway && boxesChosen && (isStockJob ? stockStep === PUT_AWAY_STEP.READY : (gathersIntoOrder || photos.length > 0));
-                    const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
-                    const orderBoxes = boxed ? orderBoxesOf(boxHomeOf(packJob).data) : [];
-                    const boxContents = boxed ? boxContentsOf({ docs: orderPackDocsOf(packJob), linesOf: packLinesAsPacked }) : {};
-                    // A GREY BUTTON SAYS WHY (Stuart on WO-SO60169, Andrea 09-14: "doesn't let me hit the complete
-                    // button"): the first unmet condition, in the order completePacking refuses them.
-                    const completeBlocker = (() => {
-                        if (!packJob || canComplete) return null;
-                        if (isStockJob && stockStep !== PUT_AWAY_STEP.READY) return putAwayBlockerOf(stockStep, runItemCodeOf(packJob));
-                        if (toPack.length) return `${toPack.length} line${toPack.length === 1 ? '' : 's'} still on the TO PACK side`;
-                        if (!isStockJob && !gathersIntoOrder && !photos.length) return 'take a photo of the packaged parts (📷 Add Photo)';
-                        if (!poleMatched) return 'scan the CUSTOM SHOP label on the poles (or waive it)';
-                        if (poleAway) return packJob.customFabStatus === 'Sent to Plating' ? 'the poles are AT THE PLATER — receive and put them away first' : `custom parts are not ready (${packJob.customFabStatus || 'Pending'})`;
-                        if (!boxesChosen) return boxBlock;
-                        return 'not ready';
-                    })();
-                    const lineRow = (l, side) => (
-                        <div key={l.key} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', background: side === 'right' ? '#f0f7f1' : '#fff', border: `1px solid ${side === 'right' ? '#bcd8c0' : theme.line}`, marginBottom: '8px' }}>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', color: theme.ink }}>
-                                    {l.erp || '—'}
-                                    {l.aliasErp && <span style={{ fontSize: '9px', color: theme.inkSoft, marginLeft: '8px', letterSpacing: '.04em' }}>alias {l.aliasErp}</span>}
-                                </div>
-                                <div style={{ fontSize: '0.8rem', color: theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</div>
-                                {riderNote(l).length > 0 && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '2px' }}>with {riderNote(l).map(r => `${r.qty} × ${r.erp}`).join(' + ')} — on the rod, packed with it</div>}
-                                {side === 'left' && l.isPole && poleAway && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginTop: '2px' }}>AT THE PLATER — ticks when the pole is received and put away</div>}
-                                {side === 'right' && packJob.packedLines[l.key] && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: '#3a7d44', marginTop: '2px' }}>✓ {packJob.packedLines[l.key].by} · {new Date(packJob.packedLines[l.key].at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
-                                {side === 'right' && boxed && (() => {
-                                    const tick = packJob.packedLines[l.key], where = boxSpreadLabel(tickBoxesOf(tick), orderBoxes), loose = unboxedQtyOf(tick, l);
-                                    return (<div style={{ fontFamily: theme.mono, fontSize: '10px', marginTop: '2px', color: loose ? '#c0392b' : theme.ink }}>
-                                        {where ? `📦 ${where}` : ''}{where && loose ? ' · ' : ''}{loose ? `⚠ ${loose} ${t('not in a box yet')}` : ''}
-                                    </div>);
-                                })()}
-                            </div>
-                            <span style={{ fontFamily: theme.mono, fontWeight: 'bold', fontSize: '1rem', color: theme.ink, whiteSpace: 'nowrap' }}>{l.isPole ? `× ${l.qty}` : qtyLabel(l, l.qty)}</span>
-                            <button onClick={() => printPackLineLabel(packJob, l)} title={l.cat === 'POLE' ? 'Rod labels — sidemark · length · 1 of X per piece' : 'Item labels — one per piece'} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>🖨</button>
-                            {side === 'left'
-                                ? <button onClick={() => confirmPackLine(packJob, l)} disabled={l.isPole && poleAway} style={{ background: l.isPole && poleAway ? theme.paper : theme.ink, color: l.isPole && poleAway ? theme.inkSoft : '#fff', border: l.isPole && poleAway ? `1px solid ${theme.line}` : 'none', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: l.isPole && poleAway ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>{l.isPole && poleAway ? 'At the plater' : (isStockJob ? `✓ ${t('Packaging finished')}` : `✓ Packed${openBox ? ` → ${t('Box')} ${openBox}` : ''}`)}</button>
-                                : (<>
-                                    {boxed && openBox && moveIntoBox(packJob.packedLines[l.key], l, openBox, 1).movable > 0 && <button onClick={() => moveLineIntoBox(packJob, l)} title={`Put pieces of this line into Box ${openBox} — all of them, or some (a line can be split across boxes)`} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.ink}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', whiteSpace: 'nowrap' }}>→ {t('Box')} {openBox}</button>}
-                                    <button onClick={() => unpackLine(packJob, l)} title="Undo — move back to TO PACK" style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>↩</button>
-                                </>)}
-                        </div>
-                    );
-                    const groupBlock = (side, list) => PACK_GROUP_ORDER.map(g => {
-                        const gl = list.filter(l => l.cat === g.cat);
-                        if (!gl.length) return null;
-                        return (
-                            <div key={g.cat} style={{ marginBottom: '18px' }}>
-                                <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: g.box === 'POLE' ? theme.brass : theme.inkSoft, borderBottom: `1px solid ${theme.line}`, paddingBottom: '6px', marginBottom: '10px' }}>
-                                    {g.title} · {g.box === 'POLE' ? 'LARGE BOX / TUBE' : 'SMALL BOX'}
-                                </div>
-                                {/* WHICH POLE IS THIS (Stuart 2026-09-09) — length, qty and sidemark,
-                                    so a pole whose label fell off can still be matched to its order. */}
-                                {g.box === 'POLE' && (() => {
-                                    const info = poleInfoOf(packJob);
-                                    if (!info.rows.length && !info.sidemark) return null;
-                                    return (
-                                        <div style={{ margin: '0 0 10px', padding: '8px 10px', background: theme.paper, borderLeft: `3px solid ${theme.brass}` }}>
-                                            {info.rows.map((r, i) => (
-                                                <div key={i} style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
-                                                    <b style={{ fontSize: '14px' }}>{r.display}</b> · ×{r.qty}{r.name ? ` · ${r.name}` : ''}
-                                                </div>
-                                            ))}
-                                            {info.sidemark && <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '3px', letterSpacing: '.05em' }}>REF: {info.sidemark}</div>}
-                                            {!info.rows.length && <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{t('no cut length recorded for this order')}</div>}
-                                        </div>
-                                    );
-                                })()}
-                                {gl.map(l => lineRow(l, side))}
-                            </div>
-                        );
-                    });
-                    return (
-                        <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
-                            <div style={{ borderBottom: `1px solid ${theme.line}`, paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '10px' }}>
-                                <h2 style={{ color: theme.ink, fontFamily: theme.serif, fontWeight: 500, margin: 0 }}>{t('Packing Station')}</h2>
-                                <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.05em' }}>small parts first (brackets · rings · finials) → small box · poles last → large box · photo required</span>
-                            </div>
-
-                            {/* READY-TO-PACK QUEUE — compact strip up top */}
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '24px' }}>
-                                {packQueue.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No finished orders waiting to be packed.</span>}
-                                {packQueue.map(j => {
-                                    const jl = packLinesOf(j);
-                                    const done = jl.filter(l => j.packedLines && j.packedLines[l.key]).length;
-                                    const active = packOrderId === j.id;
-                                    return (
-                                        <button key={j.id} onClick={() => { if (active) closePackCard(j); else openPackOrder(j); }} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
-                                            {!active && <OrderStatusChips wo={j} {...coatsOf(j)} showWho={false} style={{ marginBottom: '6px' }} />}
-                                            {/* A paint run looks like a stock build until you read the code — say so. */}
-                                            {isPaintOnlyOrder(j) && <div title={`Legacy NetSuite item ${j.jfpItemCode || ''} — no assembly. Scanning the bin adjusts the painted pieces into it.`} style={{ display: 'inline-block', marginBottom: '6px', background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE} · {j.jfpItemCode || ''}</div>}
-                                            <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 'bold' }}>{packRef(j)}{isQsOrder(j) && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : theme.brass, border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : theme.brass}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>QUICK SHIP</span>}{j.orderType === 'stock' && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : '#3a7d44', border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : '#3a7d44'}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>STOCK → BIN</span>}</div>
-                                            <div style={{ fontFamily: theme.sans, fontSize: '0.75rem', color: active ? 'rgba(255,255,255,0.75)' : theme.inkSoft }}>
-                                                {j.customerName || j.clientName || j.customer || '—'} · {jl.length} line{jl.length === 1 ? '' : 's'}{done > 0 ? ` · ${done}/${jl.length} packed` : ''}
-                                            </div>
-                                            {!active && renderClaimLine(j, 'pack')}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-
-                            {/* WORKSPACE — TO PACK left, physically confirmed pieces move right */}
-                            {packJob ? (
-                                <>
-                                    {/* WHO HAS THIS ORDER — and the way out. Opening is looking; START PACKING is
-                                        taking. Everything that CHANGES the order is disabled until it is yours. */}
-                                    {(() => {
-                                        const c = claimOf(packJob, 'pack');
-                                        const mine = claimIsMine(c);
-                                        const held = !!c && !mine;
-                                        return (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', marginBottom: '14px', border: `1px solid ${held ? '#d9534f' : (mine ? '#3a7d44' : theme.line)}`, background: held ? '#fdf3f3' : (mine ? '#f0f7f1' : theme.paper) }}>
-                                                <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', color: held ? '#c0392b' : (mine ? '#3a7d44' : theme.inkSoft), textTransform: 'uppercase' }}>
-                                                    {committedBinOf(soIndex[String(packJob.salesOrderId || packJob.id)] || packJob) && `📦 ${t('Parts for this order are in bin')} ${committedBinOf(soIndex[String(packJob.salesOrderId || packJob.id)] || packJob)} · `}
-                                                    {held ? `🔒 ${c.by} ${t('is packing this')} · ${t('since')} ${claimSince(c)}`
-                                                        : mine ? `🔒 ${t('You are packing this')}`
-                                                            : `👁 ${t('Looking only — nothing is changed until you start packing')}`}
-                                                </span>
-                                                <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                                    <button onClick={() => printWmsPackingList(packJob)} disabled={isSyncing} title="The packing list — what was ordered beside what this station has packed, by item code. The same list the CRM card prints." style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: isSyncing ? 'wait' : 'pointer' }}>🖨 {t('Packing list')}</button>
-                                                    <button onClick={() => printAllOrderLabels(packJob, packLinesOf(packJob))} title="Print item labels for every line on this order" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 {t('Labels')}</button>
-                                                    {!c && <button onClick={() => startPacking(packJob)} style={{ padding: '9px 16px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Start packing')}</button>}
-                                                    {held && isPlatingAdmin && <button onClick={() => adminReleaseClaim(packJob, 'pack')} style={{ padding: '9px 14px', background: 'transparent', border: '1px solid #d9534f', color: '#c0392b', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Release (admin)')}</button>}
-                                                    <button onClick={() => closePackCard(packJob)} style={{ padding: '9px 16px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Close')}</button>
-                                                </span>
-                                            </div>
-                                        );
-                                    })()}
-                                    {needsPoleMatch && (
-                                        <div style={{ background: poleMatched ? '#f0f7f1' : '#fdf3f3', border: `1px solid ${poleMatched ? '#3a7d44' : '#d9534f'}`, padding: '14px 16px', marginBottom: '16px' }}>
-                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: poleMatched ? '#3a7d44' : '#d9534f', marginBottom: '6px' }}>
-                                                {poleMatched ? '✓ Both halves match' : '⚠ Match the poles to these small parts'}
-                                            </div>
-                                            <div style={{ fontFamily: theme.sans, fontSize: '0.88rem', color: theme.ink, marginBottom: '10px', lineHeight: 1.5 }}>
-                                                The poles for this order came off the CUSTOM SHOP order — they are not on the parts list you just packed. Scan the shop label on the poles to prove the two halves belong together before the box closes.
-                                            </div>
-                                            <input autoFocus value={packCustomScan} onChange={e => setPackCustomScan(e.target.value)} placeholder="SCAN CUSTOM SHOP LABEL…"
-                                                style={{ width: '100%', maxWidth: '420px', boxSizing: 'border-box', padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '1rem', outline: 'none' }} />
-                                            {packCustomScan.trim() && !poleMatched && (
-                                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: '#d9534f', marginTop: '8px' }}>
-                                                    ✖ "{packCustomScan.trim()}" is a different order — these poles do NOT belong with these parts. Find the right ones.
-                                                </div>
-                                            )}
-                                            {/* THERE MAY BE NO POLES TO MATCH (Sandra 2026-08-17: "no permite completar
-                                                la operación de packing porque está pidiendo tubos y en este caso la orden
-                                                sólo lleva 3 anillos"). The demand rides `hasCustomSibling`, stamped when
-                                                the order was split — if the custom half was later replaced or removed,
-                                                the flag outlives it and the box can never close, with nothing on this
-                                                screen able to fix the record. So: an explicit way out that STATES what
-                                                happened, rather than a silent bypass. The reason is required and is
-                                                stored on the order and in the log. */}
-                                            {!poleMatched && !poleAway && (
-                                                <button onClick={noPolesOnOrder}
-                                                    title="Use this only when the order genuinely has no poles — it is recorded against the order with your name and reason."
-                                                    style={{ marginTop: '10px', padding: '9px 12px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
-                                                    {t('This order has no poles — say why & continue')}
-                                                </button>
-                                            )}
-                                        </div>
-                                    )}
-                                    <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px', background: theme.paper2, border: `1px solid ${theme.line}`, marginBottom: '16px' }}>
-                                        <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{packRef(packJob)}</span>
-                                        <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>{packJob.customerName || packJob.clientName || packJob.customer || ''}{packJob.recipe ? ` · ${packJob.recipe}` : ''}</span>
-                                        {Number(packJob.packScrap) > 0 && <span style={{ fontFamily: theme.mono, fontSize: '10px', color: '#d9534f', border: '1px solid #d9534f', padding: '3px 8px' }}>⚠ {packJob.packScrap} scrap reported</span>}
-                                        {packJob.packCustomMatchedAt && <span title={`Matched by ${packJob.packCustomMatchedBy || ''}`} style={{ fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44', border: '1px solid #3a7d44', padding: '3px 8px' }}>✓ poles matched</span>}
-                                    </div>
-                                    {/* A STOCK RUN (Stuart 2026-10-08): how THIS product is packaged — the item's picture and note
-                                        (Shared/productPackaging: its own, else its base item's). The bin box that sat in the strip
-                                        above is now the scan step beneath the line (./StockPutAwayPanel). */}
-                                    {isStockJob && (
-                                        <StockPutAwayPanel theme={theme} t={t} show="packaging" itemCode={runItemCodeOf(packJob)}
-                                            qtyText={stockLine ? `${stockLine.qty} ${t('pcs')}` : ''}
-                                            packaging={packagingOf(findPartByErpCode(runItemCodeOf(packJob)), findPartByErpCode, speciesBaseIdx)}
-                                            packagedTick={toPack.length === 0 && stockLine ? ((packJob.packedLines && packJob.packedLines[stockLine.key]) || null) : null} />
-                                    )}
-                                    {/* 📦 THE ORDER'S BOXES (Shared/orderBoxes, Stuart 2026-10-06: "add a field to create box#, it could be
-                                        multiples"). Numbered on the SALES ORDER, so a later document of the order sees Box 1 and 2 already
-                                        there. One box is OPEN at a time on this bench: ✓ Packed puts the line in it; → Box N on a packed
-                                        line moves pieces into it (some of them = a split). */}
-                                    {boxed && (
-                                        <div style={{ padding: '12px 16px', border: `1px solid ${openBox ? theme.ink : theme.brass}`, background: '#fff', marginBottom: '16px' }}>
-                                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                                <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginRight: '4px' }}>📦 {t('Boxes')}{boxHomeOf(packJob).so ? ` · SO ${boxHomeOf(packJob).so.soId || boxHomeOf(packJob).so.id}` : ''}</span>
-                                                {orderBoxes.length === 0 && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.brass }}>{t('No box yet — add the first one')} →</span>}
-                                                {orderBoxes.map(b => {
-                                                    const isOpen = openBox === b.no, pcs = (boxContents[b.no] && boxContents[b.no].pcs) || 0, shipped = isBoxShipped(b);
-                                                    const last = b.no === orderBoxes[orderBoxes.length - 1].no;
-                                                    return (
-                                                        <span key={b.no} style={{ display: 'inline-flex', alignItems: 'stretch', border: `1px solid ${isOpen ? theme.ink : theme.line}` }}>
-                                                            <button onClick={() => { if (shipped) return alert(boxOpenRefusal(b)); setOpenBoxSel(isOpen ? { id: null, no: null } : { id: packJob.id, no: b.no }); }} title={shipped ? boxOpenRefusal(b) : `${boxName(b)} — ${pcs} pc${pcs === 1 ? '' : 's'}${(boxContents[b.no] ? `: ${boxContents[b.no].items.map(i => `${i.code} ×${i.qty}`).join(', ')}` : '')}\n${isOpen ? 'Open — tap to close it' : 'Tap to pack into this box'}`} style={{ background: isOpen ? theme.ink : (shipped ? '#f0f7f1' : theme.paper), color: isOpen ? '#fff' : (shipped ? '#2e7d32' : theme.ink), border: 'none', padding: '9px 12px', fontFamily: theme.mono, fontSize: '11px', cursor: shipped ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>
-                                                                <b>{t('Box')} {b.no}</b>{b.type ? ` · ${b.type}` : ''} · {pcs} pc{pcs === 1 ? '' : 's'}{isOpen ? ` · ${t('OPEN')}` : ''}{shipped ? ` · 🚚 ${t('SHIPPED')}${b.trackingNumber ? ` ${b.trackingNumber}` : ''}` : ''}
-                                                            </button>
-                                                            <button onClick={() => printOrderBoxLabelsFor(packJob, b.no)} title={`Print the label for Box ${b.no} — "${t('Box')} ${b.no} of ${orderBoxes.length}"`} style={{ background: '#fff', color: theme.inkSoft, border: 'none', borderLeft: `1px solid ${theme.line}`, padding: '0 9px', cursor: 'pointer' }}>🖨</button>
-                                                            {last && pcs === 0 && <button onClick={() => removeOrderBox(packJob, b.no)} title={`Remove Box ${b.no} — it is empty`} style={{ background: '#fff', color: '#c0392b', border: 'none', borderLeft: `1px solid ${theme.line}`, padding: '0 9px', cursor: 'pointer', fontFamily: theme.mono }}>✕</button>}
-                                                        </span>
-                                                    );
-                                                })}
-                                                <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
-                                                    <select value={newBoxType} onChange={e => setNewBoxType(e.target.value)} style={{ padding: '8px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.85rem', background: '#fff', maxWidth: '260px' }}>
-                                                        <option value="">{brandBoxes.length ? `— ${t('box type')} —` : '— no boxes for this brand —'}</option>
-                                                        {brandBoxes.map(b => <option key={b.id} value={b.name}>{b.name} — {boxSizeLabel(b)}</option>)}
-                                                    </select>
-                                                    <button onClick={() => addOrderBox(packJob)} disabled={!newBoxType} title={`Add Box ${orderBoxes.length ? orderBoxes[orderBoxes.length - 1].no + 1 : 1} to this order and open it`} style={{ padding: '9px 14px', background: newBoxType ? theme.ink : theme.paper2, color: newBoxType ? '#fff' : theme.inkSoft, border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: newBoxType ? 'pointer' : 'default', whiteSpace: 'nowrap' }}>+ {t('New box')}</button>
-                                                    {orderBoxes.length > 1 && <button onClick={() => printOrderBoxLabelsFor(packJob)} title="Print a label for every box of this order — Box 1 of N … Box N of N" style={{ padding: '9px 12px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>🖨 {t('All box labels')}</button>}
-                                                </span>
-                                            </div>
-                                            <div style={{ marginTop: '8px', display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', fontFamily: theme.sans, fontSize: '0.82rem', color: openBox ? theme.ink : theme.brass }}>
-                                                <span>{openBox ? `${t('Packing into')} ${boxName(boxOf(orderBoxes, openBox))} — ${t('Packed puts the line in it; the arrow on a packed line moves pieces into it (some of them splits the line)')}.`
-                                                    : (packMine ? `${t('Open a box to pack into — tap one, or add a new one')}.` : `${t('The boxes of this order — start packing to use them')}.`)}</span>
-                                                {openBox && unboxedLinesOf(packJob, lines).length > 0 && <button onClick={() => boxAllUnboxed(packJob)} title="Lines packed with no box on record — put every one of them in the open box" style={{ padding: '6px 10px', background: 'transparent', color: '#c0392b', border: '1px solid #c0392b', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', whiteSpace: 'nowrap' }}>→ {unboxedLinesOf(packJob, lines).length} {t('packed with no box')} → {t('Box')} {openBox}</button>}
-                                                {!brandBoxes.length && <span style={{ color: '#d9534f' }}>add box types in HQ → 15. Packaging → Standard boxes</span>}
-                                            </div>
-                                        </div>
-                                    )}
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', alignItems: 'start' }}>
-                                        <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: theme.paper }}>
-                                            <div style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', color: theme.ink, marginBottom: '14px' }}>{isStockJob ? t('To package') : 'To Pack'} ({toPack.length})</div>
-                                            {toPack.length === 0 ? <div style={{ color: '#3a7d44', fontFamily: theme.serif, fontStyle: 'italic' }}>{isStockJob ? t('Packaging finished — scan the item and its shelf bin below, then Put Away.') : 'Everything is packed — add the photo and complete below.'}</div> : groupBlock('left', toPack)}
-                                        </div>
-                                        <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: '#fff' }}>
-                                            <div style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', color: '#3a7d44', marginBottom: '14px' }}>{isStockJob ? t('Packaged') : 'Packed'} ({packed.length}/{lines.length})</div>
-                                            {packed.length === 0 ? <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>{isStockJob ? t('Tick the line on the left when every piece is in its packaging.') : 'Confirm pieces on the left as you physically pack them.'}</div> : groupBlock('right', packed)}
-                                        </div>
-                                    </div>
-                                    {/* …THEN SCANNED INTO ITS SHELF BIN (Stuart 2026-10-08 · Shared/putAwayScan): the item label, then
-                                        the bin label. completePacking makes the same checks at the press. */}
-                                    {isStockJob && (
-                                        <div style={{ marginTop: '20px' }}>
-                                            <StockPutAwayPanel theme={theme} t={t} show="putaway" itemCode={runItemCodeOf(packJob)} mine={packMine} step={stockStep}
-                                                packagedTick={toPack.length === 0 && stockLine ? ((packJob.packedLines && packJob.packedLines[stockLine.key]) || { at: null, by: '' }) : null}
-                                                itemScan={putawayItemScan} onItemScan={setPutawayItemScan} itemState={stockItemState}
-                                                bin={putawayBin} onBin={setPutawayBin} expectedText={expectedBinsText(putAwayExpectedOf(packJob))} />
-                                        </div>
-                                    )}
-
-                                    {/* REQUIRED PHOTOS + COMPLETE */}
-                                    <div style={{ marginTop: '20px', border: `1px solid ${theme.line}`, background: theme.paper, padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-                                        <label style={{ cursor: 'pointer', border: `1px solid ${theme.line}`, background: '#fff', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
-                                            {packUploading ? '⏳ Uploading…' : (isStockJob ? '📷 Add Photo (optional)' : '📷 Add Photo (required)')}
-                                            <input type="file" accept="image/*" capture="environment" multiple style={{ display: 'none' }} onChange={e => { uploadPackPhotos(packJob, e.target.files); e.target.value = ''; }} />
-                                        </label>
-                                        {photos.map((u, i) => <img key={i} src={u} alt={`packed ${i + 1}`} onClick={() => window.open(u, '_blank')} style={{ height: '54px', width: '76px', objectFit: 'cover', border: `1px solid ${theme.line}`, cursor: 'zoom-in' }} />)}
-                                        {photos.length === 0 && !isStockJob && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>No photo yet — a photo of the packaged parts is required.</span>}
-                                        {packJob && isPaintOnlyOrder(packJob) && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.ink }}>{PAINT_ONLY_BADGE}: the bin you scan is where <b>{packJob.jfpItemCode}</b> gets adjusted in NetSuite — there is no assembly build.</span>}
-                                        {isStockJob ? (
-                                            <button onClick={() => {
-                                                const erp = String(packJob.stockErpId || packJob.type || '').toUpperCase();
-                                                const part = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === erp);
-                                                const copies = parseInt(window.prompt(`How many item labels for ${erp}?\n\nEach shows the item # (text + barcode), description, UOM — and WO ${packRef(packJob)} small on the right as the BATCH #.`, '1')) || 0;
-                                                if (copies > 0) printStockItemLabels({ itemId: erp, itemName: (part && part.itemName) || '', uom: uomOf(part), woNum: packRef(packJob), copies });
-                                            }} title="Item labels with the WO # as batch reference" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
-                                        ) : (<>
-                                            {!isQsOrder(packJob) && (
-                                                <button onClick={() => printHandshakeLabels({ woRef: packRef(packJob), orderKey: stagingKeyOf(packJob), item: packJob.stockErpId || packJob.type || '', qty: packJob.totalParts || '', qtyLabel: `${packJob.totalParts || 0} pcs`, finish: packJob.recipe || '', customer: packJob.customerName || packJob.clientName || packJob.customer || '', hasCustom: !!packJob.hasCustomSibling, facts: labelFactsOf(packJob) })} title="Reprint both staging-handshake labels (small parts + custom shop when the order has one) — same barcode key the handshake scans" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Handshake Labels</button>
-                                            )}
-                                            <button onClick={() => { const ls = packLinesOf(packJob); if (ls.length) printItemLabels(ls.map(l => ({ itemId: l.erp, itemName: l.name }))); }} title="One 2×4 item label per line on this order" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
-                                        </>)}
-                                        {!isQsOrder(packJob) && (
-                                            <button onClick={() => reportPackScrap(packJob)} title="Found bad pieces while bagging? Record scrap — stock builds queue the −qty NetSuite adjustment, customs red-flag the finishing supervisor" style={{ marginLeft: 'auto', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', padding: '14px 18px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
-                                                ⚠ Report Scrap
-                                            </button>
-                                        )}
-                                        <button onClick={() => completePacking(packJob)} disabled={!canComplete} style={{ marginLeft: isQsOrder(packJob) ? 'auto' : '0', background: canComplete ? theme.ink : theme.paper2, color: canComplete ? '#fff' : theme.inkSoft, border: `1px solid ${canComplete ? theme.ink : theme.line}`, padding: '14px 26px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: canComplete ? 'pointer' : 'default' }}>
-                                            {isStockJob ? '✓ Put Away to Bin' : (oeOrderOfDoc(packJob) ? `✓ Gather into ${packRef(oeOrderOfDoc(packJob))}` : '✓ Complete Packing')}
-                                        </button>
-                                    </div>
-                                    {completeBlocker && (
-                                        <div style={{ marginTop: '8px', textAlign: 'right', fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>
-                                            {isStockJob ? 'Put Away' : 'Complete'} waits for: {completeBlocker}
-                                        </div>
-                                    )}
-                                </>
-                            ) : (
-                                packQueue.length > 0 && <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>Tap an order above to open the packing workspace.</div>
-                            )}
-
-                            {/* RECENTLY PACKED */}
-                            {packedRecent.length > 0 && (
-                                <div style={{ marginTop: '30px' }}>
-                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '10px' }}>Recently Packed</div>
-                                    {packedRecent.map(j => (
-                                        <div key={j.id} style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', borderTop: `1px solid ${theme.paper2}`, fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>
-                                            <span onClick={() => setExpandedPacked(expandedPacked === j.id ? null : j.id)} title="Show the lines that were packed" style={{ fontFamily: theme.mono, color: theme.ink, cursor: 'pointer' }}>
-                                                <span style={{ color: theme.inkSoft, marginRight: '6px' }}>{expandedPacked === j.id ? '▾' : '▸'}</span>{packRef(j)}
-                                            </span>
-                                            <span>{j.customerName || j.clientName || j.customer || ''}</span>
-                                            {/* A put-away paint run was indistinguishable from a stock build once it
-                                                left the queue — the badge only ever rendered on the to-pack list
-                                                (Stuart 2026-08-18). */}
-                                            {isPaintOnlyOrder(j) && <span title={`Paint run — the painted pieces are adjusted into the scanned bin as ${j.jfpItemCode || 'the item'}`} style={{ background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE}{j.jfpItemCode ? ` · ${j.jfpItemCode}` : ''}</span>}
-                                            {/* The adjustment was queued but never confirmed — the pieces are away and
-                                                NetSuite has not got them (Eric 2026-08-24). */}
-                                            {/* LABELS AFTER THE FACT (Sandra 2026-08-12: "need to add item
-                                                print label for packed orders please"). The Item Labels button
-                                                only ever existed on the order currently OPEN at the bench, so
-                                                once a box was packed there was no way to reprint for it — which
-                                                is exactly when a label goes missing or tears. */}
-                                            <button onClick={(e) => { e.stopPropagation(); const ls = packLinesOf(j); if (!ls.length) return alert(`No packed lines recorded on ${packRef(j)}.`); printItemLabels(ls.map(l => ({ itemId: l.erp, itemName: l.name }))); writeLog(`🖨 Reprinted ${ls.length} item label(s) for ${packRef(j)}`, 'wms'); }}
-                                                title="Reprint one 2×4 item label per line on this packed order"
-                                                style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>🖨 {t('Item Labels')}</button>
-                                            {isPaintOnlyOrder(j) && j.jfpAdjQueued && !j.jfpAdjPosted && (
-                                                <button onClick={(e) => { e.stopPropagation(); redoPutaway(j); }} title="NetSuite has not confirmed this put-away — re-post it against a corrected bin."
-                                                    style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>↩ Re-post put-away</button>
-                                            )}
-                                            <OrderStatusChips wo={j} {...coatsOf(j)} showWho={false} />
-                                            {/* A build the force-complete skipped said nothing anywhere (Eric 2026-10-02,
-                                                WO11639): only the scrap posted. It says so here; RTG posts it. */}
-                                            {buildSkippedAtForceComplete(j) && (
-                                                <span title={`${j.forceCompletedBy ? `Force-completed by ${j.forceCompletedBy}, who marked it already built in NetSuite. ` : ''}${skippedBuildHint(j)}`}
-                                                    style={{ fontFamily: theme.mono, fontSize: '9px', color: '#d9534f', border: '1px solid #d9534f', padding: '2px 7px', letterSpacing: '.04em' }}>{SKIPPED_BUILD_TEXT}</span>
-                                            )}
-                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', color: j.nsIfTran ? '#3a7d44' : theme.inkSoft }}>
-                                                {j.nsIfTran ? `IF ${j.nsIfTran}${j.nsFulfillStatus ? ` · ${j.nsFulfillStatus}` : ''}` : (j.nsFulfillQueued ? 'IF queued…' : '')}
-                                            </span>
-                                            {(j.trackingNumbers || []).length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.ink }}>🚚 {j.trackingNumbers.join(', ')}</span>}
-                                            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                                <span style={{ fontFamily: theme.mono, fontSize: '10px' }}>{j.packedBy || ''} · {j.packedAt ? new Date(j.packedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''} · {(j.packPhotos || []).length} 📷</span>
-                                                <button onClick={(e) => { e.stopPropagation(); printWmsPackingList(j); }} disabled={isSyncing} title="The packing list — ordered beside packed, by item code" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: isSyncing ? 'wait' : 'pointer' }}>🖨 {t('Packing list')}</button>
-                                                <button onClick={() => pullFulfillment(j)} title="Pull fulfillment status + tracking # from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⤓ Tracking</button>
-                                                {!isQsOrder(j) && <button onClick={() => reportPackScrap(j)} title="Bad pieces found after packing — record scrap" style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⚠ Scrap</button>}
-                                            </span>
-                                            {/* WHAT WAS IN THE BOX, AFTER THE FACT (Stuart 2026-08-03: "we need access here to be
-                                                able to see the order lines again and reprint labels"). A packed order used to be a
-                                                one-line receipt — no way to answer "what shipped?" or replace a label that tore,
-                                                short of hunting the order down on another screen. */}
-                                            {expandedPacked === j.id && (
-                                                <div style={{ flexBasis: '100%', marginTop: '8px', padding: '12px 14px', background: theme.paper, border: `1px solid ${theme.line}` }}>
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                                                        <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>Packed lines</span>
-                                                        <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                                            <button onClick={() => printZebraLabel(j, 'SMALL_PARTS')} title="Reprint the small-parts / setup label" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Setup Label</button>
-                                                            {j.orderType === 'stock' && <button onClick={() => printZebraLabel(j, 'PUT_AWAY')} title="Reprint the put-away label" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Put-Away</button>}
-                                                            {j.hasCustomSibling && <button onClick={() => printZebraLabel(j, 'CUSTOM_SHOP')} title="Reprint the custom shop label (the poles' label)" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Shop Label</button>}
-                                                        </span>
-                                                    </div>
-                                                    {packLinesOf(j).map(l => (
-                                                        <div key={l.key} style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '5px 0', borderBottom: `1px dashed ${theme.line}`, fontSize: '0.85rem' }}>
-                                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', fontWeight: 600, color: theme.ink, minWidth: '110px' }}>{l.erp || '—'}</span>
-                                                            <span style={{ flex: 1, color: theme.inkSoft }}>{l.name}</span>
-                                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>×{l.qty}</span>
-                                                        </div>
-                                                    ))}
-                                                    {packLinesOf(j).length === 0 && <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No line detail recorded on this order.</div>}
-                                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '8px' }}>
-                                                        {j.packCustomMatchedAt ? `poles matched by ${j.packCustomMatchedBy || '—'}` : (j.hasCustomSibling ? 'poles were NOT match-scanned at packing' : '')}
-                                                        {j.putawayBin ? `${j.hasCustomSibling ? ' · ' : ''}bin ${j.putawayBin}` : ''}
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    );
-                })()}
+                {activeTab === 'PACKING' && packingStationView()}
 
                 {/* 📋 TAB: BIN COUNT */}
                 {/* 📦 SHIP ONE DISPLAY (Stuart 2026-09-30) — opened from a ready display order's SO Pack card. */}
@@ -9530,7 +9559,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     <WallboardScreen side="wms" db={db} wms={{
                         openPicks: jobs.filter(isOpenPick),
                         staging: jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging' && j.packStatus !== 'Packed' && j.currentPhase !== 'Closed'),
-                        packQueue, docs: [...finAll, ...quickShipOrders], refOf: packRef,
+                        // the bench's whole picture: Order Entry orders waiting to pack on SO Pack count with Packaging Prep's
+                        packQueue: [...quickShipOrders.filter(o => o.status === 'Picked' && o.packStatus !== 'Packed'), ...packQueue], docs: [...finAll, ...quickShipOrders], refOf: packRef,
                     }} />
                 )}
 
