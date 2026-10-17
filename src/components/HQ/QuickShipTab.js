@@ -1636,7 +1636,15 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
 
         setPushing(true);
         try {
-            let nsCustomerId = customerId.startsWith('CUST-') ? customerId.replace('CUST-', '') : customerId;
+            let nsCustomerId = nsCustomerIdOf(customerId);
+            // AN APP-ONLY CUSTOMER NEVER PUSHES (2026-10-17): no NetSuite entity can be derived from it — the sale is refused by name,
+            // not posted against a guessed account. Match the customer first (counter → Use <existing>; or 11.1 sync after NetSuite has it).
+            if (!nsCustomerId || (selectedCustomer && selectedCustomer.nsPending)) {
+                const who = selectedCustomer?.name || customerId;
+                addLog(`⛔ ${who} is an app-only customer (no NetSuite record yet) — the ${asType === 'estimate' ? 'quote' : 'order'} was NOT saved. Pick the customer's NetSuite record (Customer → Use <name>), or create it in NetSuite and sync 11.1, then save again.`, 'error');
+                alert(`⛔ ${who} has no NetSuite customer record yet.\n\nNothing was saved. Pick their NetSuite record on the Customer screen (Use <name>), or create it in NetSuite and sync 11.1, then save again.`);
+                setPushing(false); return;
+            }
             // Mainline memo = the sidemark/job — ONE value (the CPQ push's rule), Quick Ship label
             // only when neither is given.
             const memoText = (String(soExtras.sidemark || '').trim() || String(jobName || '').trim() || 'Quick Ship').slice(0, 40);

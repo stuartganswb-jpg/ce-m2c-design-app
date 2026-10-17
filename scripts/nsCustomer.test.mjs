@@ -1,5 +1,6 @@
 // A new customer in NetSuite first, pinned (the show counter, 2026-10-12): the body NetSuite takes, the id read
 // from its answer, the refusal in its words, and the CRM record in the 11.1 sync's own shape.
+import { isAppOnlyCustomerId } from '../src/components/Shared/nsCustomer.js';
 import { customerPayloadOf, nsIdOfCreateAnswer, nsErrorOf, crmRecordOf, crmRecordAppOnlyOf, customerByExternalIdSql, customerLookupSql, sameCustomersOf, existingCustomersOf, createNsCustomer } from '../src/components/Shared/nsCustomer.js';
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { if (cond) { pass++; } else { fail++; console.error('  ✗', name, extra); } };
@@ -12,7 +13,7 @@ ok('NetSuite\'s refusal in its words', nsErrorOf({ 'o:errorDetails': [{ detail: 
 const r = crmRecordOf({ nsId: '48877', name: 'Smith Design', email: 'a@b.c', phone: '555', brand: 'uniquity', by: 'Liz', at: 1000 });
 ok('the CRM record: id CUST-<nsid>, the sync\'s fields, the CRM\'s app fields, the rep, the counter named', r.id === 'CUST-48877' && r.type === 'CUSTOMER' && r.stage === 'CUSTOMER' && r.brandId === 'uniquity' && r.sharedBrands[0] === 'uniquity' && r.creditLimit === 0 && r.salesRep === 'Liz' && r.contact === 'Smith Design' && r.ytd === 0 && r.createdVia === 'SHOW_COUNTER' && r.nsInternalId === '48877');
 const a = crmRecordAppOnlyOf({ name: 'Walk-in', brand: 'uniquity', by: 'Liz', reason: 'proxy 503' });
-ok('an app-only record says it is pending NetSuite and why', /^CUST-\d{4}$/.test(a.id) && a.nsPending === true && a.nsPendingReason === 'proxy 503' && a.nsInternalId === '');
+ok('an app-only record says it is pending NetSuite and why, with an id that can never be a NetSuite number', /^CUST-APP-\d+$/.test(a.id) && isAppOnlyCustomerId(a.id) && !isAppOnlyCustomerId('CUST-48877') && a.nsPending === true && a.nsPendingReason === 'proxy 503' && a.nsInternalId === '');
 
 // ── 2026-10-17: the id NetSuite says only in its Location header, and one customer made once (Baker Stone Studio) ──
 ok('the id from the Location the proxy hands on in the body', nsIdOfCreateAnswer({ location: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/customer/76875' }) === '76875');

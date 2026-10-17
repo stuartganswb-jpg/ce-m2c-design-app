@@ -129,10 +129,18 @@ export function crmRecordOf({ nsId, name, email = '', phone = '', brand = 'uniqu
     };
 }
 
-/** The app-only record when NetSuite could not be reached — said on the record so the push refusal is understood. */
+/**
+ * The app-only record when NetSuite could not be reached — said on the record so the push refusal is understood.
+ * Its id can NEVER be a NetSuite number (Stuart 2026-10-17, after the App Improvement session measured it: the old
+ * CUST-<random 1000–9999> collided with 1,755 live NetSuite customer ids, and the push derives the entity from the
+ * id — an app-only sale could have posted against a stranger). CUST-APP-<time> keeps the CUST- prefix the counter's
+ * lists key on; nsHeader.nsCustomerIdOf reads it as NO entity, and the save refuses by name.
+ */
+export const APP_ONLY_CUSTOMER_PREFIX = 'CUST-APP-';
+export const isAppOnlyCustomerId = (id) => str(id).toUpperCase().startsWith(APP_ONLY_CUSTOMER_PREFIX);
 export const crmRecordAppOnlyOf = ({ name, email = '', phone = '', brand = 'uniquity', by = '', at = 0, reason = '' } = {}) => {
-    const id = `CUST-${Math.floor(1000 + Math.random() * 9000)}`;
-    return { ...crmRecordOf({ nsId: id.slice(5), name, email, phone, brand, by, at }), id, nsInternalId: '', nsPending: true, nsPendingReason: str(reason).slice(0, 300) };
+    const id = `${APP_ONLY_CUSTOMER_PREFIX}${at || Date.now()}`;
+    return { ...crmRecordOf({ nsId: '', name, email, phone, brand, by, at }), id, nsInternalId: '', nsPending: true, nsPendingReason: str(reason).slice(0, 300) };
 };
 
 /** POST the customer; returns { ok, nsId, error, made }. `made` true = NetSuite HAS the customer (never create it again). */

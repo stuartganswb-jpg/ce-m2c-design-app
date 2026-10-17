@@ -30,7 +30,9 @@ export const orderClassOf = (forms, itemClasses = []) => {
 export const itemClassOf = (part) => str((part && ((part.manufacturingSpecs && part.manufacturingSpecs.nsClass) || part.nsClass)) || '');
 
 /** The NetSuite customer id off the app's CUST-<id> convention. '' when there is none. */
-export const nsCustomerIdOf = (id) => { const s = str(id); return s.startsWith('CUST-') ? s.slice(5) : s; };
+// The NetSuite entity behind an app customer id: CUST-<n> → n. An id that is not a NetSuite number (CUST-APP-…, an
+// app-only record) yields '' — never a guess at an entity (2026-10-17).
+export const nsCustomerIdOf = (id) => { const s = str(id); const raw = s.startsWith('CUST-') ? s.slice(5) : s; return /^\d+$/.test(raw) ? raw : ''; };
 
 /**
  * Build the header block of an estimate / salesorder body.

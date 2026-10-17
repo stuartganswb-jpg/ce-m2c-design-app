@@ -327,7 +327,8 @@ either posts (ids on file) or refuses with `NO_NS_FORM_FOR_BRAND` — and the CE
   (`name`, `qty`, `price`, `total`, `partHandling`, `partId`, `legacyErpId`, `finishCode`, `isFee`).
 
 ## 7. Status log
-- **2026-10-17 · cart facts (sweep pending).** A pillow line shows its facts under its name (placement + colour bold) from line.pillow.design; one-of-a-kind shows its tag.
+- **2026-10-17 · app-only customer id (sweep pending).** CUST-APP-<time>; no entity derived; the save refuses an app-only customer by name. The existing CUST-3585 record stays (Stuart moves its sale to CUST-67685 by reopen).
+- **2026-10-17 · a0555eec — cart facts, LIVE (swept: served main a0555eec).** A pillow line shows its facts under its name (placement + colour bold) from line.pillow.design; one-of-a-kind shows its tag.
 - **2026-10-16 · 540a2dc2 — quote chain + tile price level, LIVE (swept: served main 540a2dc2).** New quotes keep coming; the chain is marked (rev / supersedes / superseded by / converted) and a conversion closes the chain on both doors and the CRM Approve. Customer tiles show the cached NetSuite level; ↻ Read price levels stamps all.
 - **2026-10-16 · ae570771 — ✚ Quick add placeholders, LIVE (swept: served main ae570771).** Description + price + qty → a TBD line; the SO saves HELD (nsHold, status HELD_PLACEHOLDER) until identified on RTG / CRM (PlaceholderResolve), then the held NetSuite write queues itself; the day summary lists "To identify". An estimate pushes the placeholder on the rollup item 61502 as TO IDENTIFY. Named, not built: a resolver on the CRM QUOTE card (a quote's placeholder is resolved on the order it becomes).
 - **2026-10-15 · 5c4f7da6 — counter hides $0 makings, LIVE (swept: served main 5c4f7da6).** Display-only filter on the counter's cart list and counts; the order carries every line as before.

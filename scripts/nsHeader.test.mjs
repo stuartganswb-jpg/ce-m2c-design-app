@@ -12,7 +12,7 @@ let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
 const ok = (name, cond) => { if (cond) { pass++; return; } fail++; console.log(`✗ ${name}`); };
 
-eq('CUST- prefix stripped', [nsCustomerIdOf('CUST-4720'), nsCustomerIdOf('4720'), nsCustomerIdOf('')], ['4720', '4720', '']);
+eq('CUST- prefix stripped; an app-only or non-numeric id is NO entity', [nsCustomerIdOf('CUST-4720'), nsCustomerIdOf('4720'), nsCustomerIdOf(''), nsCustomerIdOf('CUST-APP-1792250763005'), nsCustomerIdOf('CUST-abc')], ['4720', '4720', '', '', '']);
 
 // ── CE, both doors, both types ───────────────────────────────────────────────────────────────
 {
