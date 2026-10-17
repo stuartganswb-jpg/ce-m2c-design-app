@@ -9,11 +9,11 @@
 // shape (crm_records, the same record the CRM's + New makes).
 import React, { useEffect, useState } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, getDoc, onSnapshot } from 'firebase/firestore';
 import PillowQuickSell from './PillowQuickSell';
 import VisionPillow from './VisionPillow';
 import CounterPriceList from './CounterPriceList';   // $$ price list — quick reference at the show (2026-10-15)
-import { customerPayloadOf, createNsCustomer, crmRecordOf, crmRecordAppOnlyOf } from '../Shared/nsCustomer';   // a new customer is made in NetSuite FIRST (its id is the app's id)
+import { customerPayloadOf, createNsCustomer, crmRecordOf, crmRecordAppOnlyOf, existingCustomersOf } from '../Shared/nsCustomer';   // a new customer is made in NetSuite FIRST (its id is the app's id)
 import { nsProxyFetch } from '../Shared/nsProxy';
 import { oneOfAKindAvailableOf, oneOfAKindOf, oneOfAKindQtyOf } from '../Shared/oneOfAKind';   // the pieces made at the show (S7, 2026-10-14)
 import { tileLevelWordsOf } from '../Shared/nsPriceLevel';   // the customer's level on the tile (2026-10-16)
@@ -53,23 +53,54 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
     const matches = customers.filter(c => !q || `${c.name} ${c.id} ${c.email || ''} ${c.contact || ''}`.toLowerCase().includes(q.toLowerCase())).slice(0, 24);
 
     const [nsFail, setNsFail] = useState('');   // NetSuite's refusal, when it refused; offers the app-only save
+    const [nsMade, setNsMade] = useState(false);   // NetSuite HAS the customer though its id was not read — no app-only save, no second create
+    const [dupes, setDupes] = useState(null);   // { matches, nsChecked, nsError } — the customer may already be ours (2026-10-17)
     // A NEW CUSTOMER IS MADE IN NETSUITE FIRST (Stuart 2026-10-12): the app's customer id is the NetSuite id, so the
     // sales order can go straight to NetSuite. One synchronous POST, then the CRM record in the sync's own shape.
-    const createCustomer = async () => {
+    // ONE CUSTOMER, ONCE (Stuart 2026-10-17: Baker Stone Studio, a customer since 7/8 and on this list, was made a second
+    // time): before anything is made, the same email or company name is looked for — the brand's CRM list here and the
+    // brand's NetSuite subsidiary — and offered. "A different customer" goes on to create (`anyway`).
+    const createCustomer = async (anyway = false) => {
         const name = String((newCust && newCust.name) || '').trim();
         if (!name) { addLog('A new customer needs a name.', 'error'); return; }
-        setBusy(true); setNsFail('');
+        setBusy(true); setNsFail(''); setNsMade(false);
         try {
             const body = customerPayloadOf({ name, email: newCust.email, phone: newCust.phone, brand: 'uniquity', salesRep: currentUser || '' });
             if (!body.ok) { body.errors.forEach(e => addLog(`⛔ ${e.message}`, 'error')); setBusy(false); return; }
+            if (!anyway) {
+                const found = await existingCustomersOf({ nsProxyFetch, name, email: newCust.email, brand: 'uniquity', customers });
+                if (found.matches.length) { setDupes(found); setBusy(false); return; }
+            }
+            setDupes(null);
             const r = await createNsCustomer({ nsProxyFetch, payload: body.payload });
-            if (!r.ok) { setNsFail(r.error); addLog(`⛔ NetSuite did not create the customer: ${r.error}`, 'error'); setBusy(false); return; }
+            if (!r.ok) { setNsFail(r.error); setNsMade(!!r.made); addLog(`⛔ ${r.made ? '' : 'NetSuite did not create the customer: '}${r.error}`, 'error'); setBusy(false); return; }
             const rec = crmRecordOf({ nsId: r.nsId, name, email: newCust.email, phone: newCust.phone, brand: 'uniquity', by: currentUser || '' });
             await setDoc(doc(db, 'crm_records', rec.id), rec);
             addLog(`👤 New customer ${name} created in NetSuite (id ${r.nsId}) and filed in the CRM as ${rec.id}.`, 'success');
             onPickCustomer(rec);
             setNewCust(null); setScreen('HOME');
         } catch (e) { setNsFail(e.message || String(e)); addLog(`⛔ Could not create the customer in NetSuite: ${e.message || e}`, 'error'); }
+        setBusy(false);
+    };
+    // "Use this one": the customer already ours is PICKED, exactly as a tile is. One known only to NetSuite (not yet synced
+    // into the app) is filed under CUST-<its NetSuite id> first — never over a record the CRM already holds.
+    const pickExisting = async (m) => {
+        setBusy(true);
+        try {
+            let rec = m.rec;
+            if (!rec) {
+                const ref = doc(db, 'crm_records', `CUST-${m.nsId}`);
+                const snap = await getDoc(ref);
+                if (snap.exists()) rec = { id: snap.id, ...snap.data() };
+                else {
+                    rec = crmRecordOf({ nsId: m.nsId, name: m.name, email: m.email, phone: '', brand: 'uniquity', by: currentUser || '' });
+                    await setDoc(ref, rec);
+                    addLog(`👤 ${m.name} is already in NetSuite (#${m.entityId || m.nsId}) — filed in the CRM as ${rec.id}; nothing new was made in NetSuite.`, 'success');
+                }
+            }
+            onPickCustomer(rec);
+            setNewCust(null); setDupes(null); setNsFail(''); setNsMade(false); setQ(''); setScreen('HOME');
+        } catch (e) { addLog(`⛔ Could not use ${m.name}: ${e.message || e}`, 'error'); }
         setBusy(false);
     };
     // NetSuite unreachable at the show: the sale is still recorded — in the app only, said on the record, and the
@@ -179,14 +210,34 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
                         </>
                     ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '520px' }}>
-                            <input autoFocus value={newCust.name} onChange={e => setNewCust({ ...newCust, name: e.target.value })} placeholder="Name / company" style={inp} />
-                            <input value={newCust.email} onChange={e => setNewCust({ ...newCust, email: e.target.value })} placeholder="Email" inputMode="email" style={inp} />
-                            <input value={newCust.phone} onChange={e => setNewCust({ ...newCust, phone: e.target.value })} placeholder="Phone" inputMode="tel" style={inp} />
+                            <input autoFocus value={newCust.name} onChange={e => { setNewCust({ ...newCust, name: e.target.value }); setDupes(null); }} placeholder="Name / company" style={inp} />
+                            <input value={newCust.email} onChange={e => { setNewCust({ ...newCust, email: e.target.value }); setDupes(null); }} placeholder="Email" inputMode="email" style={inp} />
+                            <input value={newCust.phone} onChange={e => { setNewCust({ ...newCust, phone: e.target.value }); setDupes(null); }} placeholder="Phone" inputMode="tel" style={inp} />
                             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                                <button onClick={createCustomer} disabled={busy} style={btn(true)}>{busy ? 'Creating in NetSuite…' : 'Create customer (NetSuite + CRM)'}</button>
-                                <button onClick={() => { setNewCust(null); setNsFail(''); }} style={btn(false)}>Back</button>
+                                {!dupes && !nsMade && <button onClick={() => createCustomer(false)} disabled={busy} style={btn(true)}>{busy ? 'Checking, then creating in NetSuite…' : 'Create customer (NetSuite + CRM)'}</button>}
+                                <button onClick={() => { setNewCust(null); setNsFail(''); setNsMade(false); setDupes(null); }} style={btn(false)}>Back</button>
                             </div>
-                            {nsFail && (
+                            {dupes && (
+                                <div style={{ border: '1px solid var(--brass)', background: '#fbf7ef', padding: '12px', fontSize: '0.95rem' }}>
+                                    <div style={{ marginBottom: '10px' }}>Already a customer? The same {dupes.matches.some(m => m.email && String(m.email).toLowerCase() === String(newCust.email || '').trim().toLowerCase()) ? 'email or name' : 'name'} is on file. Use them, rather than making a second one.</div>
+                                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                        {dupes.matches.map(m => (
+                                            <button key={`${m.nsId}-${m.rec ? m.rec.id : 'ns'}`} onClick={() => pickExisting(m)} disabled={busy} style={{ ...bigTile(false), minHeight: '80px', fontSize: '1rem', flex: '1 1 220px', alignItems: 'flex-start', padding: '12px', textAlign: 'left' }}>
+                                                <span>Use {m.name}</span>
+                                                <span style={mono}>{m.entityId ? `NetSuite #${m.entityId}` : (m.rec ? m.rec.id : '')}{m.email ? ` · ${m.email}` : ''}</span>
+                                                <span style={{ ...mono, marginTop: '4px' }}>{m.inApp ? 'in the app and NetSuite' : 'in NetSuite — filed in the app when used'}</span>
+                                                {m.rec && <span style={{ ...mono, marginTop: '4px' }}>💲 {tileLevelWordsOf(m.rec).words}</span>}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {!dupes.nsChecked && <div style={{ ...mono, textTransform: 'none', letterSpacing: 0, marginTop: '8px', color: '#a86b00' }}>NetSuite could not be checked{dupes.nsError ? ` (${dupes.nsError})` : ''} — only the app's list was.</div>}
+                                    <button onClick={() => createCustomer(true)} disabled={busy} style={{ ...btn(false), marginTop: '10px' }}>{busy ? 'Creating in NetSuite…' : 'It is a different customer — create a new one'}</button>
+                                </div>
+                            )}
+                            {nsFail && nsMade && (
+                                <div style={{ border: '1px solid #d9534f', background: '#fdf3f3', padding: '12px', fontSize: '0.9rem', color: '#8a1f1f' }}>{nsFail}</div>
+                            )}
+                            {nsFail && !nsMade && (
                                 <div style={{ border: '1px solid #d9534f', background: '#fdf3f3', padding: '12px', fontSize: '0.9rem' }}>
                                     <div style={{ color: '#8a1f1f', marginBottom: '8px' }}>NetSuite did not create the customer: {nsFail}</div>
                                     <div style={{ color: 'var(--ink-soft)', marginBottom: '8px' }}>Fix it and try again, or file the customer in the app only — the sale is recorded, and its NetSuite push waits until the customer exists in NetSuite and is synced on 11.1.</div>

@@ -367,7 +367,7 @@ exports.netsuiteProxy = onRequest({
                 }
                 const response = await fetch(targetUrl, fetchOptions);
                 const text = await response.text();
-                last = { status: response.status, ok: response.ok, text };
+                last = { status: response.status, ok: response.ok, text, location: response.headers.get('location') || '' };
                 if (response.status !== 429 && response.status !== 503) break;
             }
             return last;
@@ -393,7 +393,12 @@ exports.netsuiteProxy = onRequest({
             else nsReadCache.clear(); // a write changed NetSuite state — never serve a pre-write read
         }
 
-        const data = result.text ? JSON.parse(result.text) : {};
+        // NetSuite answers a record it has just MADE with no body and the new record's address in its Location
+        // header (it does not honour return=representation on a create). That header is the only place the new id
+        // is said, and it stopped here — so a body-less write answer carries it on as `location` (Stuart 2026-10-17:
+        // the counter made Baker Stone Studio twice after the first answer said nothing). The outbox worker below
+        // reads the same header for its own writes.
+        const data = result.text ? JSON.parse(result.text) : (!isRead && result.location ? { location: result.location } : {});
         return res.status(result.ok ? 200 : result.status).send(data);
 
     } catch (error) {
