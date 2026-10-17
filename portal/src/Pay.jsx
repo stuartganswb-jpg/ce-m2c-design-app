@@ -75,8 +75,19 @@ export default function Pay() {
     document.body.appendChild(s);
   }, [intent]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ⚠ WHAT THE PAYER TYPED, READ AT THE MOMENT WE CHARGE — not at the moment we set the form up.
+  // CollectJS.configure() runs ONCE and keeps the callback it was given, so that callback closed
+  // over `amount`, `name` and `email` as they were on the first render: empty. Every charge sent an
+  // empty email and an empty payer name — which is why no receipt ever arrived — and would have
+  // charged the DEPOSIT to a customer who typed a larger figure, because the typed one never left
+  // the page (Stuart 2026-10-17, found from two SKIPPED rows saying "the payer gave none").
+  // A ref is read when the callback fires, so it always holds what is on the screen now.
+  const typed = useRef({ amount: '', name: '', email: '' });
+  useEffect(() => { typed.current = { amount, name, email }; }, [amount, name, email]);
+
   const charge = (paymentToken) => {
-    httpsCallable(functions, 'payCharge')({ token, paymentToken, amount, payerName: name, email })
+    const now = typed.current;
+    httpsCallable(functions, 'payCharge')({ token, paymentToken, amount: now.amount, payerName: now.name, email: now.email })
       .then((res) => setDone(res.data))
       .catch((e) => setErr(sayable(e, 'The payment could not be completed. Your card has not been charged — please try again or contact us.')))
       .finally(() => setBusy(false));

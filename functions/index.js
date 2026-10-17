@@ -3631,11 +3631,29 @@ const emailPaymentReceived = async (paymentId) => {
             const docCustName = custField && typeof custField === 'object' ? String(custField.name || '') : String(custField || '');
             customerName = customerName || docCustName;
             if (!to) to = String(doc0.email || doc0.customerEmail || '').trim();
+            // AND FAILING THAT, THE CUSTOMER'S OWN RECORD. Stuart 2026-10-17: "i made sure the
+            // email address is loaded in crm and the payment link does not see it" — it should.
+            // A payer at a counter will often not type one; the office already knows where this
+            // customer's paperwork goes.
+            if (!to) {
+                const custId = String(doc0.customerId || (doc0.customer && doc0.customer.id) || '');
+                if (custId) {
+                    const crm = await db.collection('crm_records').doc(custId).get().catch(() => null);
+                    const c = crm && crm.exists ? (crm.data() || {}) : {};
+                    to = String(c.email || '').trim();
+                    // Then any contact with an address — the first one is the office's own choice.
+                    if (!to) {
+                        const contact = (Array.isArray(c.contacts) ? c.contacts : []).find((x) => mail.looksLikeEmail(x && x.email));
+                        to = contact ? String(contact.email).trim() : '';
+                    }
+                    if (!customerName) customerName = String(c.name || '');
+                }
+            }
         }
         if (!mail.looksLikeEmail(to)) {
             // The commonest reason nothing arrives: nobody typed an address on the pay page and the
             // order carries none. The payment stands; the receipt has nowhere to go, and now says so.
-            await skip(`No email address to send to — the payer gave none and the order carries none${to ? ` ("${to}")` : ''}. Add one to the customer and press Resend.`);
+            await skip(`No email address to send to — the payer typed none, the order carries none, and the customer record has none${to ? ` (found "${to}", which is not an address)` : ''}. Add one to the customer in the CRM and press Resend.`);
             return;
         }
         const letter = mail.paymentReceivedEmail({
