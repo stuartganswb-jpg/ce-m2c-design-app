@@ -9,6 +9,7 @@ import { stockToReallocateOf, REALLOCATE, REALLOCATE_WORD, orderLine, holdersTex
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { openWorkOf, outOfStepOf, noMovementOf, nsIdsOfRows, fetchNsStatuses, NO_MOVEMENT_DAYS } from '../Shared/openWork';
 import { dayPlaceholdersOf } from '../Shared/placeholderLine';   // ✚ quick-add items still to identify (2026-10-16)
+import PaymentsWaitingNote from '../Shared/PaymentsWaitingNote';   // money taken that NetSuite has not been told about, past 24 h (Payments session; Stuart 2026-10-17)
 
 // THE DAY'S ORDERS — a screen opened from RTG (Stuart 2026-10-12: "end of day summary of orders entered and their status
 // from both sales entry and cpq, so that management can see what has happened and overrule"). It reads the feeds the
@@ -145,6 +146,8 @@ const DaySummaryPanel = ({ onClose, orders = [], workOrders = [], finDocs = [], 
                             </div>
                         );
                     })}
+                    {/* 💲 MONEY TAKEN THAT NETSUITE HAS NOT BEEN TOLD ABOUT (Stuart 2026-10-17: "the money will post the next day and need to be addressed") — renders nothing when nothing is overdue */}
+                    <PaymentsWaitingNote />
                     {/* ✚ TO IDENTIFY (Stuart 2026-10-16): every quick-add placeholder of the day — the order's NetSuite push waits on it */}
                     {(() => { const { start, end } = dayBoundsOf(day); const ph = dayPlaceholdersOf(orders, { start, end }); return (
                         <>

@@ -327,7 +327,7 @@ either posts (ids on file) or refuses with `NO_NS_FORM_FOR_BRAND` — and the CE
   (`name`, `qty`, `price`, `total`, `partHandling`, `partId`, `legacyErpId`, `finishCode`, `isFee`).
 
 ## 7. Status log
-- **2026-10-17 · Match to NetSuite (sweep pending).** App-only CRM card → search → pick → orders + quotes re-stamped, record marked matched, counter list drops it; no payments writes (Payments session's rule). Proof to run: an app-only sale with a small deposit, matched, watched through 11.1.
+- **2026-10-17 · bd82d759 — Match to NetSuite, LIVE (swept: served main bd82d759).** App-only CRM card → search → pick → orders + quotes re-stamped, record marked matched, counter list drops it; no payments writes (Payments session's rule). Proof to run: an app-only sale with a small deposit, matched, watched through 11.1.
 - **2026-10-17 · a1708dbe — app-only customer id, LIVE (swept: served main a1708dbe).** CUST-APP-<time>; no entity derived; the save refuses an app-only customer by name. The existing CUST-3585 record stays (Stuart moves its sale to CUST-67685 by reopen).
 - **2026-10-17 · a0555eec — cart facts, LIVE (swept: served main a0555eec).** A pillow line shows its facts under its name (placement + colour bold) from line.pillow.design; one-of-a-kind shows its tag.
 - **2026-10-16 · 540a2dc2 — quote chain + tile price level, LIVE (swept: served main 540a2dc2).** New quotes keep coming; the chain is marked (rev / supersedes / superseded by / converted) and a conversion closes the chain on both doors and the CRM Approve. Customer tiles show the cached NetSuite level; ↻ Read price levels stamps all.
