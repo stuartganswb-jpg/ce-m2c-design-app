@@ -3165,6 +3165,30 @@ exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LI
 
 // What has been taken and where each payment stands with NetSuite — the HQ 11 queue. A deposit
 // whose sales order has not reached NetSuite yet reads as WAITING, not as a failure.
+// ⏳ MONEY TAKEN THAT NETSUITE HAS NOT HEARD ABOUT. The queue above shows the last 25 of
+// everything; this answers one question only — what is still out — so a dashboard can say it
+// without reading the whole ledger. Unposted payments are rare, so a hundred is more than enough
+// and the caller says so if it is not (Stuart 2026-10-17, after learning an app-only customer's
+// deposit waits for ever unless a person matches the customer).
+exports.paymentsWaiting = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const snap = await admin.firestore().collection('payments')
+        .where('netsuitePosted', '==', false)
+        .orderBy('paidAt', 'desc')
+        .limit(100)
+        .get();
+    const rows = snap.docs.map((d) => {
+        const p = d.data() || {};
+        return {
+            id: d.id, amount: Number(p.amount || 0), reference: p.reference || '',
+            paidAt: Number(p.paidAt || 0), environment: p.environment || '',
+            netsuitePosted: p.netsuitePosted === true, netsuiteQueued: p.netsuiteQueued === true,
+            netsuiteWaiting: p.netsuiteWaiting || '', brand: p.brand || '',
+        };
+    });
+    return { payments: rows, truncated: snap.size >= 100 };
+});
+
 exports.paymentsQueue = onCall({ enforceAppCheck: true }, async (request) => {
     assertStaffAdmin(request);
     const snap = await admin.firestore().collection('payments').orderBy('paidAt', 'desc').limit(25).get();
