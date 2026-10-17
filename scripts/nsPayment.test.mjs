@@ -2,8 +2,7 @@
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const {
-  nsCustomerIdOf, paymentMemo, postabilityOf, customerDepositPayload, customerPaymentPayload, nsPaymentUrl, NS_MEMO_MAX,
-} = require('../functions/nsPayment.js');
+  nsCustomerIdOf, paymentMemo, postabilityOf, customerDepositPayload, customerPaymentPayload, nsPaymentUrl, NS_MEMO_MAX, paymentKindOf } = require('../functions/nsPayment.js');
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -52,5 +51,17 @@ eq('applies to every invoice selected', many.apply.items, [{ doc: '921725', appl
 eq('payment is the sum of them', many.payment, 150.25);
 eq('one invoice still works the old way', customerPaymentPayload({ customerId: '1', invoiceNsId: '9', locationId: '17', amount: 10 }).apply.items, [{ doc: '9', apply: true, amount: 10 }]);
 
-console.log(`nsPayment: ${pass} passed, ${fail} failed`);
+// moved
 if (fail) process.exit(1);
+
+// ── WHICH RECORD A PAYMENT BECOMES (2026-10-17) ──────────────────────────────
+// The rule that bit us: packing is NOT billing. A payment taken between the two posted as a
+// customer payment with no invoice to apply to, and parked as WAITING with the money captured.
+eq('a billed sales order takes a customer PAYMENT', paymentKindOf({ collection: 'hq_sales_orders', nsInvoiceNo: 'INV-9' }), 'customerpayment');
+eq('an unbilled one takes a DEPOSIT, which can actually post', paymentKindOf({ collection: 'hq_sales_orders', nsInvoiceNo: '' }), 'customerdeposit');
+eq('PACKED IS NOT BILLED — a packed order with no invoice is still a deposit', paymentKindOf({ collection: 'hq_sales_orders', nsInvoiceNo: '', packStatus: 'Packed' }), 'customerdeposit');
+eq('a CPQ job is a deposit — the invoice lives on the sales order', paymentKindOf({ collection: 'jobs', nsInvoiceNo: 'INV-9' }), 'customerdeposit');
+eq('named NetSuite invoices are always a payment', paymentKindOf({ collection: '', invoices: [{ id: '1' }] }), 'customerpayment');
+eq('an empty invoice list is not an invoice', paymentKindOf({ collection: 'hq_sales_orders', invoices: [] }), 'customerdeposit');
+
+console.log(`nsPayment: ${pass} passed, ${fail} failed`);

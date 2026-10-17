@@ -2935,11 +2935,17 @@ exports.portalPayables = onCall({ cors: true }, async (request) => {
     const db = admin.firestore();
     const cfg = await nmiConfig();
     const out = [];
-    const push = (d, collection, docType, reference, total) => {
+    // TWO DIFFERENT QUESTIONS, told apart 2026-10-17. "How much must they pay" and "which NetSuite
+    // record is this" were both being answered by `packStatus === 'Packed'`, and they are not the
+    // same question. An order that is packed and about to ship SHOULD be paid in full — that rule
+    // stays, as `fullOnly`. But packing is not billing: the record type follows whether an invoice
+    // actually exists, because a customer payment with no invoice cannot post at all and parks as
+    // WAITING with the money already taken.
+    const push = (d, collection, docType, reference, total, fullOnly = false) => {
         const paid = Number(d.paymentsTotal || 0);
         const balance = money(Number(total || 0) - paid);
         if (!(balance > 0)) return;
-        const min = docType === 'INVOICE' ? balance : money(Math.min(balance, Number(total) * 0.5));
+        const min = (fullOnly || docType === 'INVOICE') ? balance : money(Math.min(balance, Number(total) * 0.5));
         out.push({
             collection, docId: d.id, docType, reference, total: money(total), paid: money(paid),
             balance, suggested: min, minAmount: min, maxAmount: balance,
@@ -2957,8 +2963,12 @@ exports.portalPayables = onCall({ cors: true }, async (request) => {
 
     const qsSnap = await db.collection('hq_sales_orders').where('customerId', '==', customerId).get();
     qsSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((o) => !o.deleted).forEach((o) => {
-        const invoiced = !!o.nsInvoiceNo || o.packStatus === 'Packed';
-        push(o, 'hq_sales_orders', invoiced ? 'INVOICE' : 'SALES_ORDER', `SO ${o.soId || o.id}`, Number(o.invoiceTotal || 0));
+        // It is an INVOICE when NetSuite has actually billed it; it must be paid in full once it is
+        // billed OR packed. A packed-but-unbilled order is still a sales order, and is named as one
+        // rather than shown to a customer as an invoice that does not exist.
+        const billed = !!o.nsInvoiceNo;
+        const fullOnly = billed || o.packStatus === 'Packed';
+        push(o, 'hq_sales_orders', billed ? 'INVOICE' : 'SALES_ORDER', `SO ${o.soId || o.id}`, Number(o.invoiceTotal || 0), fullOnly);
     });
 
     const crmSnap = await db.collection('crm_records').doc(customerId).get();
@@ -3087,7 +3097,12 @@ exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LI
         brand, docType: collection === 'jobs' ? 'QUOTE_OR_SO' : 'SALES_ORDER', collection, docId: d.id, reference,
         payerName: '', email: (request.auth.token && request.auth.token.email) || '', customerId,
         environment: cfg.environment, method: 'CARD', gateway: 'NMI', source: 'PORTAL',
-        netsuiteKind: collection === 'hq_sales_orders' && (d.nsInvoiceNo || d.packStatus === 'Packed') ? 'customerpayment' : 'customerdeposit',
+        // A CUSTOMER PAYMENT NEEDS AN INVOICE TO APPLY TO. Packing is not billing: inferring one
+        // from the other meant a payment taken between packing and billing posted as a payment with
+        // nothing to apply to, and parked as WAITING with the money already captured (2026-10-17).
+        // A deposit attaches to the sales order and posts straight away; the invoice, when it comes,
+        // is settled against it.
+        netsuiteKind: nsPay.paymentKindOf({ collection, nsInvoiceNo: d.nsInvoiceNo }),
         netsuitePosted: false,
     });
     await db.collection(String(collection)).doc(d.id).set({

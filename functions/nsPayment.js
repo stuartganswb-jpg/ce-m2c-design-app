@@ -40,6 +40,17 @@ function postabilityOf({ kind, customerId, salesOrderNsId, invoiceNsId, location
     return { ready: true, waiting: false, reason: '' };
 }
 
+// WHICH RECORD A PAYMENT BECOMES. A CUSTOMER PAYMENT needs an invoice to apply to; a DEPOSIT
+// attaches to the sales order. Packing is NOT billing, and inferring one from the other meant a
+// payment taken between packing and billing posted as a payment with nothing to apply to, and
+// parked as WAITING with the money already captured (Stuart 2026-10-17). Only an invoice that
+// actually exists makes it a payment.
+function paymentKindOf({ collection, nsInvoiceNo, invoices }) {
+    if (Array.isArray(invoices) && invoices.length) return 'customerpayment';   // named NetSuite invoices
+    if (str(collection) === 'hq_sales_orders' && str(nsInvoiceNo)) return 'customerpayment';
+    return 'customerdeposit';
+}
+
 function customerDepositPayload({ customerId, salesOrderNsId, locationId, amount, reference, transactionId }) {
     return {
         customer: { id: nsCustomerIdOf(customerId) },
@@ -77,6 +88,7 @@ const nsPaymentUrl = (kind) =>
     `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${kind === 'customerpayment' ? 'customerPayment' : 'customerDeposit'}`;
 
 module.exports = {
+    paymentKindOf,
     NS_PAYMENT_METHOD_ID, NS_MEMO_MAX, nsCustomerIdOf, paymentMemo,
     postabilityOf, customerDepositPayload, customerPaymentPayload, nsPaymentUrl,
 };
