@@ -54,6 +54,24 @@ eq('one invoice still works the old way', customerPaymentPayload({ customerId: '
 // moved
 if (fail) process.exit(1);
 
+// ── AN APP-ONLY CUSTOMER HAS NO NETSUITE ID (2026-10-17) ─────────────────────
+// CUST-APP-<time> is a customer created in the app and never pushed. Stripping the prefix left
+// "APP-1792249886", which read as an id, passed every check, and would have posted a deposit
+// NetSuite cannot accept — a hard failure AFTER the card was charged.
+eq('a real customer id survives', nsCustomerIdOf('CUST-16118'), '16118');
+eq('an app-only customer has NO id', nsCustomerIdOf('CUST-APP-1792249886'), '');
+eq('nor does anything else non-numeric', nsCustomerIdOf('APP-123'), '');
+eq('a bare number is still an id', nsCustomerIdOf('4720'), '4720');
+{
+  const base = { kind: 'customerdeposit', salesOrderNsId: '99', locationId: '20', amount: 50, environment: 'PRODUCTION' };
+  const appOnly = postabilityOf({ ...base, customerId: 'CUST-APP-1792249886' });
+  ok('an app-only customer is not ready to post', appOnly.ready === false);
+  ok('but WAITS — they will get an id when someone pushes them', appOnly.waiting === true);
+  ok('and says so in words', /reach NetSuite/.test(appOnly.reason));
+  const none = postabilityOf({ ...base, customerId: '' });
+  ok('a payment with no customer at all is a fault, not a wait', none.waiting === false);
+}
+
 // ── WHICH RECORD A PAYMENT BECOMES (2026-10-17) ──────────────────────────────
 // The rule that bit us: packing is NOT billing. A payment taken between the two posted as a
 // customer payment with no invoice to apply to, and parked as WAITING with the money captured.

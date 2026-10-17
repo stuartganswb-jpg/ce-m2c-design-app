@@ -18,7 +18,16 @@ const NS_MEMO_MAX = 90;
 
 const str = (v) => String(v === undefined || v === null ? '' : v).trim();
 // The CRM id IS the NetSuite customer, prefixed — the same rule nsHeader.nsCustomerIdOf applies.
-const nsCustomerIdOf = (id) => { const s = str(id); return s.startsWith('CUST-') ? s.slice(5) : s; };
+// A NETSUITE CUSTOMER ID IS A NUMBER. An app-only customer's record is CUST-APP-<time> and has no
+// NetSuite id at all — stripping the prefix left "APP-1792249886", which read as an id, passed
+// every check, and would have POSTED a deposit NetSuite cannot accept, as a hard failure, after the
+// card was charged (2026-10-17, found when S7 made app-only customers visible). Anything that is
+// not digits is NOT an id.
+const nsCustomerIdOf = (id) => {
+    const s = str(id);
+    const bare = s.startsWith('CUST-') ? s.slice(5) : s;
+    return /^\d+$/.test(bare) ? bare : '';
+};
 const paymentMemo = ({ reference, transactionId }) =>
     `Card payment${reference ? ` · ${str(reference)}` : ''}${transactionId ? ` · NMI ${str(transactionId)}` : ''}`.slice(0, NS_MEMO_MAX);
 
@@ -29,7 +38,14 @@ function postabilityOf({ kind, customerId, salesOrderNsId, invoiceNsId, location
         return { ready: false, waiting: true, reason: 'test payment — nothing posts to NetSuite' };
     }
     if (!(Number(amount) > 0)) return { ready: false, waiting: false, reason: 'no amount' };
-    if (!nsCustomerIdOf(customerId)) return { ready: false, waiting: false, reason: 'no NetSuite customer id on the order' };
+    if (!nsCustomerIdOf(customerId)) {
+        // An app-only customer WILL get a NetSuite id when someone pushes them, so this waits and
+        // posts itself — it is not a fault to be chased. A payment with no customer at all is.
+        const appOnly = /^CUST-APP-/i.test(str(customerId));
+        return appOnly
+            ? { ready: false, waiting: true, reason: 'waiting for the customer to reach NetSuite — they were created in the app' }
+            : { ready: false, waiting: false, reason: 'no NetSuite customer id on the order' };
+    }
     if (!str(locationId)) return { ready: false, waiting: false, reason: 'no location for this brand' };
     if (kind === 'customerdeposit' && !str(salesOrderNsId)) {
         return { ready: false, waiting: true, reason: 'waiting for the sales order to reach NetSuite' };
