@@ -16,6 +16,8 @@ const TONE = {
     PENDING: { color: '#9b6a2c', border: '#9b6a2c' },
     SENDING: { color: '#9b6a2c', border: '#9b6a2c' },
     FAILED: { color: '#9b2c2c', border: '#9b2c2c' },
+    // Not a failure — a reason we chose not to write, said out loud rather than left to silence.
+    SKIPPED: { color: '#524e46', border: 'rgba(28,26,22,.14)' },
 };
 
 export default function EmailLogPanel() {

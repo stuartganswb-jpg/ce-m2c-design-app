@@ -3582,8 +3582,23 @@ const emailPaymentReceived = async (paymentId) => {
         const snap = await db.collection('payments').doc(String(paymentId)).get();
         if (!snap.exists) return;
         const p = snap.data() || {};
-        if (!mail.SENDERS[String(p.brand || '').toLowerCase()]) return;   // brand does not send yet
-        if (p.environment !== 'PRODUCTION') return;                        // a test payment writes no letters
+        // A SKIP SAYS WHY. The first live test sent nothing and left nothing behind to explain it
+        // (Stuart 2026-10-17), which is the very thing the outbox exists to prevent. These three
+        // are legitimate reasons not to write, and each now leaves a row saying so.
+        const skip = async (why) => {
+            await admin.firestore().collection('email_outbox').doc(mail.dedupeKeyOf('PAYMENT_RECEIVED', paymentId)).set({
+                brand: String(p.brand || ''), kind: 'PAYMENT_RECEIVED', to: String(p.email || ''),
+                subject: `(not sent) payment ${p.reference || ''}`, status: 'SKIPPED', attempts: 0,
+                lastError: why, createdAt: Date.now(), sentAt: 0,
+                meta: { paymentId: String(paymentId), reference: p.reference || '' },
+            }, { merge: true }).catch(() => {});
+        };
+        if (!mail.SENDERS[String(p.brand || '').toLowerCase()]) {
+            await skip(`No email sender is on file for "${p.brand}" — only Uniq'uity sends so far.`); return;
+        }
+        if (p.environment !== 'PRODUCTION') {
+            await skip('A test payment writes no letters.'); return;
+        }
         let to = String(p.email || '').trim();
         let orderTotal = 0; let paidTotal = Number(p.amount || 0); let customerName = String(p.payerName || '');
         if (p.collection && p.docId) {
@@ -3593,10 +3608,20 @@ const emailPaymentReceived = async (paymentId) => {
             orderTotal = p.collection === 'jobs'
                 ? Number((doc0.cpqData && doc0.cpqData.totalPrice) || 0) + Number(doc0.shippingAmount || 0)
                 : Number(doc0.invoiceTotal || 0);
-            customerName = customerName || String(doc0.customer || (doc0.customer && doc0.customer.name) || '');
+            // The two collections spell the customer differently — a CPQ job carries an OBJECT
+            // ({ id, name }), an Order Entry sales order a plain string. Reading them in the wrong
+            // order greets the customer as "[object Object]", which String() will do cheerfully.
+            const custField = doc0.customer;
+            const docCustName = custField && typeof custField === 'object' ? String(custField.name || '') : String(custField || '');
+            customerName = customerName || docCustName;
             if (!to) to = String(doc0.email || doc0.customerEmail || '').trim();
         }
-        if (!mail.looksLikeEmail(to)) return;    // nobody to write to; the payment stands regardless
+        if (!mail.looksLikeEmail(to)) {
+            // The commonest reason nothing arrives: nobody typed an address on the pay page and the
+            // order carries none. The payment stands; the receipt has nowhere to go, and now says so.
+            await skip(`No email address to send to — the payer gave none and the order carries none${to ? ` ("${to}")` : ''}. Add one to the customer and press Resend.`);
+            return;
+        }
         const letter = mail.paymentReceivedEmail({
             brand: p.brand, customerName, reference: p.reference,
             amount: Number(p.amount || 0), paidTotal, orderTotal, transactionId: p.transactionId,
