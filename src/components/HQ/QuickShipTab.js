@@ -294,7 +294,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         }, e => console.warn('Quick Ship parts listen failed', e));
         const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
             setCustomers(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r =>
-                r.type === 'CUSTOMER' && (r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand)))));
+                r.type === 'CUSTOMER' && !r.matchedTo && (r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand)))));   // a matched app-only record has left the list (Shared/customerMatch)
         }, e => console.warn('Quick Ship crm listen failed', e));
         const unsubKits = onSnapshot(doc(db, KITS_DOC.col, KITS_DOC.id), (s) => {
             setKits(s.exists() && Array.isArray(s.data().kits) ? s.data().kits : []);

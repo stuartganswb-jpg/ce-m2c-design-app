@@ -3,7 +3,7 @@ import { lineImageStripOf } from '../Shared/lineImage';   // 🖼 line pictures 
 import { poEmailDraft, markPoSent, acknowledgePurchaseOrder, hasNsNumber, poRef } from '../Shared/purchaseOrders';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, onSnapshot, query, where, doc, getDoc, getDocs, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, getDoc, getDocs, updateDoc, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
 import { portalRequestLines } from '../Shared/portalRequestLines';
 import { FLOW_MODE, flowModeOf, groupModeOf, withFlowMode, withPreviewer } from '../Shared/portalAccess';
 import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -20,6 +20,7 @@ import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import PlaceholderResolve from './PlaceholderResolve';   // ✚ a quick-add item to identify (2026-10-16)
 import { hasPlaceholders, placeholdersOf } from '../Shared/placeholderLine';
 import { chainOf, lineageWordsOf, convertedPatchesOf, isQuoteArchived } from '../Shared/quoteChain';   // revisions + conversion (2026-10-16)
+import { matchPatchesOf } from '../Shared/customerMatch';   // an app-only customer → its NetSuite record (2026-10-17)
 import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone, inProduction, packedStateOf, canReopenInProduction, canReopenPostedOrder, netSuiteOrderNoOf } from '../Shared/orderStatus';
@@ -914,6 +915,34 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   // The customer's SALES-ORDER records (hq_sales_orders, both doors — soHeaderOf writes customerId):
   // the card reads `inProduction` / `packedStateOf` off the record, never off the job (S2, 2026-09-11).
   const [custSos, setCustSos] = useState([]);
+  // MATCH AN APP-ONLY CUSTOMER TO NETSUITE (Shared/customerMatch): the orders and quotes carrying its id are re-stamped
+  // in one batch, the app-only record is marked matched (kept as the audit), and the card moves to the real record.
+  const [matchQ, setMatchQ] = useState('');
+  const [matchBusy, setMatchBusy] = useState(false);
+  const [matchMsg, setMatchMsg] = useState('');
+  const matchAppOnlyTo = async (target) => {
+      const appOnly = activeCrmRecord;
+      if (!appOnly || !target) return;
+      if (!window.confirm(`Match ${appOnly.name} (${appOnly.id}, app-only) to ${target.name} (${target.id})?\n\nEvery order and quote on the app-only record is re-stamped to ${target.id}; a deposit waiting on one of them posts by itself. The app-only record is kept, marked matched, and leaves the counter's list.`)) return;
+      setMatchBusy(true); setMatchMsg('');
+      try {
+          const [os, qs] = await Promise.all([
+              getDocs(query(collection(db, 'hq_sales_orders'), where('customerId', '==', appOnly.id))),
+              getDocs(query(collection(db, 'jobs'), where('customer.id', '==', appOnly.id))),
+          ]);
+          const r = matchPatchesOf({ appOnly, target, orders: os.docs.map(d => ({ id: d.id, ...d.data() })), quotes: qs.docs.map(d => ({ id: d.id, ...d.data() })), by: currentUser || '' });
+          if (!r.ok) { setMatchMsg(r.errors.map(e => e.message).join(' ')); setMatchBusy(false); return; }
+          const batch = writeBatch(db);
+          r.orders.forEach(p => batch.update(doc(db, 'hq_sales_orders', p.id), p.patch));
+          r.quotes.forEach(p => batch.update(doc(db, 'jobs', p.id), p.patch));
+          r.crm.forEach(p => batch.update(doc(db, 'crm_records', p.id), p.patch));
+          await batch.commit();
+          setMatchMsg(`✓ matched — ${r.orders.length} order(s) and ${r.quotes.length} quote(s) now carry ${target.id}.`);
+          setMatchQ('');
+          setActiveCrmRecord(crmData[target.id] || target);
+      } catch (e) { setMatchMsg(`⛔ ${e.message || e}`); }
+      setMatchBusy(false);
+  };
   useEffect(() => {
       const id = activeCrmRecord?.id;
       setCustSos([]);
@@ -1967,6 +1996,26 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
                                               <div>
                                                   <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>{activeCrmRecord.name}</h3>
+                                                  {/* AN APP-ONLY CUSTOMER (filed at the counter when NetSuite could not be reached): match it to its NetSuite record —
+                                                      every order and quote carrying its id is re-stamped, a waiting deposit then posts by itself (Stuart 2026-10-17). */}
+                                                  {activeCrmRecord.nsPending && (
+                                                      activeCrmRecord.matchedTo
+                                                          ? <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#2e7d32', marginTop: '6px' }}>✓ App-only record — matched to {activeCrmRecord.matchedTo}{activeCrmRecord.matchedBy ? ` by ${activeCrmRecord.matchedBy}` : ''}; its orders and quotes now carry that customer.</div>
+                                                          : (
+                                                              <div style={{ marginTop: '8px', padding: '10px 12px', border: '1px solid #b3362f', background: '#fdf3f3', maxWidth: '640px' }}>
+                                                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#b3362f', marginBottom: '6px' }}>⚠ App-only customer — not in NetSuite{activeCrmRecord.nsPendingReason ? ` (${activeCrmRecord.nsPendingReason})` : ''}. Its orders cannot push and a deposit on them waits. Match it to the NetSuite record it is:</div>
+                                                                  <input value={matchQ} onChange={e => setMatchQ(e.target.value)} placeholder="search the customers in NetSuite — name, company, email" style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
+                                                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' }}>
+                                                                      {matchQ.trim() && Object.values(crmData).filter(r => r.type === 'CUSTOMER' && !r.nsPending && r.id !== activeCrmRecord.id && (r.brandId === activeBrand || (r.sharedBrands || []).includes(activeBrand)) && `${r.name} ${r.id} ${r.email || ''}`.toLowerCase().includes(matchQ.trim().toLowerCase())).slice(0, 8).map(r => (
+                                                                          <button key={r.id} disabled={matchBusy} onClick={() => matchAppOnlyTo(r)} style={{ textAlign: 'left', padding: '6px 8px', border: '1px solid var(--line)', background: '#fff', cursor: 'pointer', fontFamily: 'var(--sans)', fontSize: '0.85rem', display: 'flex', gap: '10px' }}>
+                                                                              <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, minWidth: '110px' }}>{r.id}</span><span style={{ flex: 1 }}>{r.name}</span><span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{r.email || ''}</span>
+                                                                          </button>
+                                                                      ))}
+                                                                  </div>
+                                                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px' }}>Not in the list? Create the customer in NetSuite, sync 11.1, then match here. {matchMsg}</div>
+                                                              </div>
+                                                          )
+                                                  )}
                                                   <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>{activeCrmRecord.type} ID: {activeCrmRecord.id}</span>
                                               </div>
                                           </div>
