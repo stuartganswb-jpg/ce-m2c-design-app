@@ -22,7 +22,8 @@ import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, query, where, serverTimestamp, writeBatch } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
 import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp, orderDiscountApplies, withPillowDiscountMarks } from '../Shared/lineDiscount';
-import { placeholderLineOf, nsHoldOf, PLACEHOLDER_HELD_STATUS } from '../Shared/placeholderLine';   // ✚ Quick add: an item not yet in the system (2026-10-16)
+import { placeholderLineOf, nsHoldOf, PLACEHOLDER_HELD_STATUS } from '../Shared/placeholderLine';
+import { cartLineFactsOf } from '../Shared/cartLineFacts';   // a pillow line's facts in full on the cart row (Stuart 2026-10-17)   // ✚ Quick add: an item not yet in the system (2026-10-16)
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
@@ -2167,6 +2168,12 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                                         beneath it, since that's what we pick and barcode. */}
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--ink)' }}>{l.aliasErp || l.erp || '—'} {!l.nsId && <span style={{ color: '#d9534f' }} title="No NetSuite ID — will be skipped on push">⚠</span>}</div>
                                     {l.aliasErp && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>ships as {l.erp}</div>}
+                                    {/* A PILLOW'S FACTS IN FULL (Stuart 2026-10-17: "no way to check again on the stitch and welt selections … seam down the
+                                        middle rather than the edge") — read from the design the line carries, each on its own row, never clipped. */}
+                                    {(() => { const facts = cartLineFactsOf(l, { findPart: (id) => allItems.find(x => x.id === id) || pillowByCode(id) }); return facts.length ? (
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '2px 10px', margin: '4px 0 6px', padding: '6px 8px', background: 'var(--paper-2)', border: '1px solid var(--line)', fontSize: counterMode ? '0.9rem' : '0.8rem' }}>
+                                            {facts.map((f, i) => <React.Fragment key={i}><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', alignSelf: 'center' }}>{f.label}</span><span style={{ color: 'var(--ink)', fontWeight: /middle|sides|seam/.test(f.label) ? 700 : 400 }}>{f.value}</span></React.Fragment>)}
+                                        </div>) : null; })()}
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.packUom && <span style={{ color: 'var(--brass)' }}> · {l.qty} × {l.packUom} = {l.eachQty} ea</span>}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}{l.kitFinish ? ` · ${l.kitFinish}` : ''}</span>}</div>
                                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '4px' }}>
                                         {l.lineImage && l.lineImage.url ? <img src={l.lineImage.url} alt="" title={l.lineImage.name || ''} style={{ width: '34px', height: '34px', objectFit: 'cover', border: '1px solid var(--line)' }} /> : null}
