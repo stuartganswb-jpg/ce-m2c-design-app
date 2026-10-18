@@ -25,6 +25,7 @@ import { collection, onSnapshot, query, where, doc, getDoc, setDoc, updateDoc, w
 import { explodeTraverse } from '../Shared/traverseExplode';
 import { configuratorOffer } from '../Shared/traverseConfigurator';
 import { parseControlWorkbook, workbookFileToSheets, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
+import { aliasFillOf, aliasFillPlanOf, isFabricutCustomer } from '../Shared/fabAliasFill';   // Fabricut's # and prices into Customer Alias & Pricing (2026-10-18)
 import { parseTraverseKitSheets, diffTraverseKits, kitPricingRow, BILLABLE_ACCESSORY_SEED } from '../Shared/traverseKitImport';
 import { fabricutCodeOf, isPlatedSuffix, PRICE_LEVELS, customerPriceLevel } from '../Shared/priceLevels';
 import { tierRowOf, seedPlanOf, seedConfirmText, seedRowDoc, stockedVariantsOf, tierSavePatchOf } from '../Shared/tierRows';
@@ -156,6 +157,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false
     // built HERE in bulk, not one at a time in the Master Library (same ruling as fees, 07-30).
     const [newKit, setNewKit] = useState(null);            // ＋ New kit form (KITS mode)
     const [kitImp, setKitImp] = useState(null);            // kit-sheet import preview { parsed, kitEntries, compEntries, fileName }
+    const [aliasPlan, setAliasPlan] = useState(null);      // Fabricut rows → Customer Alias & Pricing preview (Shared/fabAliasFill)
     const kitFileRef = useRef(null);
     const [kitRow, setKitRow] = useState(null);            // docId of the open contents editor
     const [kitEditRows, setKitEditRows] = useState([]);    // working copy of kitComponents while open
@@ -893,6 +895,27 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false
         setBusy('');
     };
 
+    // 🔁 FABRICUT ROWS → CUSTOMER ALIAS & PRICING (Stuart 2026-10-18: "the fabricut information was entered in the wrong alias
+    // area … run a search to find all of these" · "go ahead on item 2"). The preview IS the plan (Shared/fabAliasFill.aliasFillPlanOf
+    // over this brand's library); Apply writes exactly those rows, each a dotted update of the box only.
+    const openAliasPlan = () => setAliasPlan(aliasFillPlanOf({ items: inventory, customerId: custId, by: currentUser }));
+    const applyAliasPlan = async () => {
+        const plan = aliasPlan || [];
+        if (!plan.length) return;
+        if (!window.confirm(`Write Fabricut's pattern # and prices into Customer Alias & Pricing on ${plan.length} item(s)?\n\nNothing else on the items changes — their Fabricut rows stay as they are.`)) return;
+        setBusy('Writing Customer Alias & Pricing…');
+        try {
+            for (let i = 0; i < plan.length; i += 400) {
+                const batch = writeBatch(db);
+                plan.slice(i, i + 400).forEach(r => batch.update(doc(db, 'Approved_Designs', r.id), { ...r.patch, updatedAt: new Date().toISOString() }));
+                await batch.commit();
+            }
+            alert(`✅ ${plan.length} item(s): ${plan.filter(r => r.kind === 'NEW').length} box(es) filled, ${plan.filter(r => r.kind === 'CODE').length} pattern #(s) added.`);
+            setAliasPlan(null);
+        } catch (e) { console.error(e); alert(`Could not write them: ${e?.message || e}`); }
+        setBusy('');
+    };
+
     const applyKitImport = async () => {
         const { parsed, kitEntries, compEntries } = kitImp;
         setBusy('Writing kits…');
@@ -938,10 +961,20 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false
             // on both the main tab and Carrier Parts).
             const compByDoc = new Map();
             compEntries.filter(c => c.status === 'ALIGN').forEach(c => compByDoc.set(c.docId, c));
+            // …and for FABRICUT, a component whose Customer Alias & Pricing box is empty gets Fabricut's # and prices there
+            // too (Stuart 2026-10-18 — the box is what the price levels read; Shared/fabAliasFill never writes over a box).
+            let boxesFilled = 0;
+            const byCodeInv = new Map(inventory.map(x => [codeOf(x), x]));
             compByDoc.forEach((c, docId) => {
                 const p = inventory.find(x => x.id === docId);
+                const newRow = kitPricingRow(c, { customerId: custId, customerName: customer?.name, user: currentUser });
+                const code = p ? codeOf(p) : '';
+                const base = code.includes('/') ? byCodeInv.get(code.split('/')[0]) : null;
+                const fill = isFabricutCustomer(customer) && p ? aliasFillOf({ part: p, row: newRow, baseFab: base?.manufacturingSpecs?.fabricut || null, by: currentUser }) : null;
+                if (fill) boxesFilled++;
                 batch.update(doc(db, 'Approved_Designs', docId), {
-                    clientPricing: [...otherRows(p), kitPricingRow(c, { customerId: custId, customerName: customer?.name, user: currentUser })],
+                    clientPricing: [...otherRows(p), newRow],
+                    ...(fill ? fill.patch : {}),
                     updatedAt: new Date().toISOString(),
                 });
             });
@@ -967,7 +1000,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false
             });
             await batch.commit();
             const missing = compEntries.filter(c => c.status === 'MISSING');
-            alert(`✅ Applied: ${kitEntries.length} kit(s) (${families.map(f => `${f.family} ${kitEntries.filter(k => (k.family || parsed.family) === f.family).length}`).join(', ')}), ${compByDoc.size} component(s) priced for ${customer?.name}, rules doc written for ${rulesWritten.join(', ') || 'no family'}.${rulesSkipped.length ? `\n\n⚠ No rules doc for ${rulesSkipped.join(', ')} — its usage table was empty; the explosion falls back to defaults until one is imported.` : ''}${missing.length ? `\n\n⚠ ${missing.length} component code(s) not in the library — not created, price them once the items exist:\n${[...new Set(missing.map(m => m.code))].join(', ')}` : ''}${parsed.warnings.length ? `\n\nWarnings:\n• ${parsed.warnings.join('\n• ')}` : ''}`);
+            if (boxesFilled) console.info(`kit sheet: ${boxesFilled} component box(es) filled from Fabricut's rows`);
+            alert(`${boxesFilled ? `🔁 ${boxesFilled} component(s) had no Customer Alias & Pricing — Fabricut's # and prices are now there too.\n\n` : ''}✅ Applied: ${kitEntries.length} kit(s) (${families.map(f => `${f.family} ${kitEntries.filter(k => (k.family || parsed.family) === f.family).length}`).join(', ')}), ${compByDoc.size} component(s) priced for ${customer?.name}, rules doc written for ${rulesWritten.join(', ') || 'no family'}.${rulesSkipped.length ? `\n\n⚠ No rules doc for ${rulesSkipped.join(', ')} — its usage table was empty; the explosion falls back to defaults until one is imported.` : ''}${missing.length ? `\n\n⚠ ${missing.length} component code(s) not in the library — not created, price them once the items exist:\n${[...new Set(missing.map(m => m.code))].join(', ')}` : ''}${parsed.warnings.length ? `\n\nWarnings:\n• ${parsed.warnings.join('\n• ')}` : ''}`);
             setKitImp(null);
         } catch (e) { console.error(e); alert(`Apply failed: ${e?.message || e}`); }
         setBusy('');
@@ -1345,6 +1379,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false
                         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', background: theme.paper2, border: `1px solid ${theme.line}`, padding: '14px 18px' }}>
                             <button onClick={() => { setKitSearch(''); setNewKit({ code: '', name: '', basePrice: '', theirSku: '', theirNet: '', theirSales: '', components: [] }); }} style={btn(true, { background: theme.green, borderColor: theme.green })}>＋ New kit</button>
                             <input ref={kitFileRef} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={e => { onKitSheetFile(e.target.files[0]); e.target.value = ''; }} />
+                            {isFabricutCustomer(customer) && <button onClick={openAliasPlan} disabled={!!busy} title="Items whose Fabricut pattern # and prices sit only on Fabricut's row — copy them into the item's Customer Alias & Pricing, where the price levels read them" style={btn(false)}>🔁 Fabricut rows → Customer Alias & Pricing</button>}
                             <button onClick={() => kitFileRef.current?.click()} disabled={!custId || !!busy} title="Read a traverse kit workbook (Fabricut_Traverse.xlsx shape) and preview what it would create/update — kit records, component pricing, and the per-length usage rules. Nothing is written until you apply." style={btn(false)}>⬆ Import kit sheet</button>
                             <span style={{ fontSize: '0.88rem', color: theme.ink, flex: 1, minWidth: '420px' }}>
                                 A kit is the <b>sales face of a set</b> — a customer part# wrapping real component items (the 4ft traverse starter: fascia + track + 2 brackets). Give {customer?.name || 'the customer'} their SKU and pricing on the row, exactly like any item.
@@ -1883,6 +1918,36 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand, isSuperAdmin = false
             )}
 
             {/* KIT SHEET IMPORT — preview before anything is written */}
+            {aliasPlan && (
+                <div onClick={() => setAliasPlan(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '900px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: `1px solid ${theme.line}` }}>
+                        <div style={{ padding: '20px 26px', borderBottom: `1px solid ${theme.line}`, background: theme.paper2 }}>
+                            <div style={{ fontFamily: theme.serif, fontSize: '1.4rem' }}>Fabricut rows → Customer Alias & Pricing</div>
+                            <div style={{ fontSize: '0.88rem', color: theme.inkSoft, marginTop: '6px' }}>
+                                {aliasPlan.length ? `${aliasPlan.length} item(s) keep Fabricut's pattern # or prices only on Fabricut's row. Apply copies them into the item's box — the row stays; a box that already has its numbers, a kit, and a finish variant whose base carries the tiers are left alone.` : 'Nothing to copy — every item with a Fabricut row has its Customer Alias & Pricing.'}
+                            </div>
+                        </div>
+                        <div style={{ overflowY: 'auto', padding: '10px 26px' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                <thead><tr>{['Item', 'Name', 'Writes', 'Fabricut #', 'Cost', 'Wholesale', 'Retail'].map(h => <th key={h} style={{ ...th, textAlign: 'left' }}>{h}</th>)}</tr></thead>
+                                <tbody>{aliasPlan.map(r => (
+                                    <tr key={r.id} style={{ borderBottom: `1px solid ${theme.paper2}` }}>
+                                        <td style={{ padding: '6px 8px', fontFamily: theme.mono }}>{r.code}</td>
+                                        <td style={{ padding: '6px 8px', color: theme.inkSoft }}>{r.name}</td>
+                                        <td style={{ padding: '6px 8px', fontFamily: theme.mono, fontSize: '10px' }}>{r.kind === 'NEW' ? 'THE BOX' : '# ONLY'}</td>
+                                        <td style={{ padding: '6px 8px', fontFamily: theme.mono }}>{r.sku || '—'}</td>
+                                        {[r.cost, r.wholesale, r.retail].map((v, k) => <td key={k} style={{ padding: '6px 8px', fontFamily: theme.mono }}>{v == null ? '—' : `$${Number(v).toFixed(2)}`}</td>)}
+                                    </tr>
+                                ))}</tbody>
+                            </table>
+                        </div>
+                        <div style={{ padding: '14px 26px', borderTop: `1px solid ${theme.line}`, display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                            <button onClick={() => setAliasPlan(null)} style={btn(false)}>Close</button>
+                            {aliasPlan.length > 0 && <button onClick={applyAliasPlan} disabled={!!busy} style={btn(true)}>Apply to {aliasPlan.length} item(s)</button>}
+                        </div>
+                    </div>
+                </div>
+            )}
             {kitImp && (
                 <div onClick={() => setKitImp(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px' }}>
                     <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '1000px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: `1px solid ${theme.line}` }}>
