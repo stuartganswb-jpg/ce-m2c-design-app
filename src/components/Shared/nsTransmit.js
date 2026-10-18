@@ -38,7 +38,7 @@ export const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpp
 export function resolveJobLines(job, data) {
   const { libraryParts, cpqFlows, outsourceFinishes, globalFinishes } = data;
       // kitCodes: the traverse kit(s) on this quote (isKit rows) — the push names them on the holder line.
-      const result = { lines: [], stepsConsidered: 0, unresolved: [], hasConfig: false, kitCodes: [] };
+      const result = { lines: [], stepsConsidered: 0, unresolved: [], hasConfig: false, kitCodes: [], groups: [], grouped: false };
       if (!job || !job.cpqData) return result;
 
       // Resolve a CPQ selection to its real library part. STYLE_SWAP selections are per-instance
@@ -110,7 +110,14 @@ export function resolveJobLines(job, data) {
       // into one because the merged maps are keyed by stepId (last write wins), and (b) per-assembly
       // component quantities were never multiplied by the number of assemblies ordered.
       const carts = (Array.isArray(job.cpqData.cartItems) && job.cpqData.cartItems.length)
-          ? job.cpqData.cartItems.map(ci => ({
+          ? job.cpqData.cartItems.map((ci, cartIndex) => ({
+              // ── EACH CPQ LINE IS ITS OWN GROUP IN NETSUITE (Stuart 2026-10-18: "items come in from app at fabricut sales
+              // price to netsuite, the fee's, fabrication, custom, etc. roll into the roll up item … the main roll up item
+              // prints first and all the components immediately under it … in grouped order to match the cpq lines
+              // entered"). What the configuration was quoted at — finalPrice is per assembly, × the assemblies ordered.
+              cartIndex,
+              money: (Number(ci.pricing && ci.pricing.finalPrice) || 0) * (parseInt(ci.qty) || 1),
+              assemblyName: String(ci.assemblyName || '').trim(),
               config: ci.dynamicConfigParams || {},
               quantities: ci.stepQuantities || {},
               dimensions: ci.dimensionInputs || {},
@@ -272,6 +279,9 @@ export function resolveJobLines(job, data) {
                       sidemark: cart.sidemark || '',
                       // Paid for by the kit → pushes at $0 (the holder line carries the money).
                       ...(l.inKit ? { inKit: true } : {}),
+                      // What CPQ quoted this line at, for every assembly ordered — the NetSuite rate is this ÷ the
+                      // NetSuite quantity (a pole's feet), so the line lands at the Fabricut sales price it was sold at.
+                      quoted: (Number(l.total) || 0) * cart.assemblyQty,
                   });
               });
               // …and then fall through to the traverse loop, which is shared.
@@ -433,6 +443,7 @@ export function resolveJobLines(job, data) {
               rawLines.push({
                   stepId: `trvcfg:${part.id}`, masterPart: part,
                   qty: (parseInt(c.qty) || 1) * cart.assemblyQty,
+                  quoted: (c.billable ? (Number(c.rate) || 0) * (parseInt(c.qty) || 1) : 0) * cart.assemblyQty,
                   nsId: part.netSuiteInternalId || part.legacyErpId || part.itemId || 'UNMAPPED',
                   finishedErpId: '', finishUnmapped: '',
                   partCategory: part.manufacturingSpecs?.partHandling || 'Small Parts', projection: '',
@@ -442,6 +453,10 @@ export function resolveJobLines(job, data) {
           if (cart.netFactor && cart.netFactor !== 1) {
               for (let i = firstLineOfCart; i < rawLines.length; i++) rawLines[i].netFactor = cart.netFactor;
           }
+          for (let i = firstLineOfCart; i < rawLines.length; i++) rawLines[i].group = cart.cartIndex == null ? 0 : cart.cartIndex;
+          const kitsOfCart = cart.engine === 'TAGS' ? cart.breakdown.filter(l => l && l.isKit && !l.itemKit).map(l => String(l.legacyErpId || l.partId || l.name || 'KIT')) : [];
+          result.groups.push({ group: cart.cartIndex == null ? 0 : cart.cartIndex, engine: cart.engine, flowId: cart.flowId, sidemark: cart.sidemark || '',
+              assemblyName: cart.assemblyName || '', money: Number(cart.money) || 0, netFactor: cart.netFactor || 1, kitCodes: kitsOfCart });
       });
 
       // CHECKOUT ADD-ON ITEMS (Eric 2026-08-13: "the order came in without the Wand item on a
@@ -457,6 +472,7 @@ export function resolveJobLines(job, data) {
               rawLines.push({
                   stepId: `addon:${part.id}`,
                   masterPart: part,
+                  group: 'ADDONS', quoted: Number(l.total) || 0,
                   qty: Number(l.qty) || 1,
                   nsId: part.netSuiteInternalId || part.legacyErpId || part.itemId || 'UNMAPPED',
                   finishedErpId: '',
@@ -470,6 +486,14 @@ export function resolveJobLines(job, data) {
       // Aggregate identical resolved lines across assemblies (same NetSuite item + finished variant +
       // projection) into one summed-quantity line, so 3× + 2× of the same pole become a single line. Keep
       // UNMAPPED/PENDING lines distinct per part so their skip-warnings still name each one.
+      // GROUPED (every cart from the tag engine — every quote since 2026-08): a line merges only inside its own CPQ line,
+      // and only with a twin quoted at the same unit; the quoted money travels with it. An older step-walk quote keeps
+      // the order-wide merge it was built with.
+      result.grouped = carts.length > 0 && carts.every(c => c.engine === 'TAGS' && c.cartIndex != null);
+      const addOnRows = ((job.cpqData && job.cpqData.breakdown) || []).filter(l => l && l.isAddOn);
+      if (result.grouped && addOnRows.length) result.groups.push({ group: 'ADDONS', engine: 'ADDONS', flowId: job.flowId, sidemark: '', assemblyName: 'Add-ons & Fees',
+          money: addOnRows.reduce((sum, l) => sum + (Number(l.total) || 0), 0), netFactor: 1, kitCodes: [] });
+      const unitOf = (l) => (Number(l.qty) > 0 ? Math.round(((Number(l.quoted) || 0) / Number(l.qty)) * 10000) / 10000 : 0);
       const agg = new Map();
       rawLines.forEach(l => {
           const unmapped = (l.nsId === 'UNMAPPED' || l.nsId === 'PENDING');
@@ -478,9 +502,10 @@ export function resolveJobLines(job, data) {
           // A discounted cart line never merges with a full-price twin of the same item (its rate differs).
           // …and a part the kit paid for ($0) never merges with a paid twin of the same item.
           const key = `${l.nsId}|${l.finishedErpId}|${l.finishNote || ''}|${l.projection}|${l.sidemark || ''}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}|${(l.netFactor && l.netFactor !== 1) ? l.netFactor : ''}|${l.inKit ? 'kit' : ''}|${l.finishDetail || ''}`;
-          const cur = agg.get(key);
-          if (cur) cur.qty += l.qty;
-          else agg.set(key, { ...l });
+          const gkey = result.grouped ? `${l.group}|${unitOf(l)}|` : '';
+          const cur = agg.get(gkey + key);
+          if (cur) { cur.qty += l.qty; if (l.quoted != null) cur.quoted = (Number(cur.quoted) || 0) + (Number(l.quoted) || 0); }
+          else agg.set(gkey + key, { ...l });
       });
       result.lines = Array.from(agg.values());
       return result;
@@ -512,8 +537,65 @@ export async function resolveShipMethod() {
  * form. Returns { ok:false, error } with a specific code, or { ok:true, payload, meta }.
  * Never confirms and never alerts — interactive callers read `meta` and ask their own questions.
  */
+// ── ONE GROUP PER CPQ LINE: ITS ROLL-UP FIRST, ITS ITEMS UNDER IT (Stuart 2026-10-18) ─────────────────────────────────
+// "the plan was always items come in from app at fabricut sales price to netsuite, the fee's, fabrication, custom, etc. roll
+// into the roll up item. It is also important on all forms that the main roll up item prints first and all the components
+// immediately under it, so the sales order, packing slip, invoice are in grouped order to match the cpq lines entered."
+// Each configuration's roll-up carries what the configuration was quoted at less its items at their quoted prices — its
+// fees, fabrication and labor (a traverse kit's dollars ride the CE-TRV-SYSTEM holder, as before). The checkout's add-ons
+// and fees are the last group. An order-wide discount (a set % or the customer's code) scales every line to land at the
+// quoted total; any cent of rounding rides the first roll-up. Pure: no I/O.
+export function groupedItemsOf({ job, groups = [], lineItems = [], lineGroups = [], cpqGrandTotal = 0, data = {}, log = () => {} }) {
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const fl2 = (n) => Math.floor((Number(n) || 0) * 100 + 1e-6) / 100;
+    const flows = data.cpqFlows || [];
+    const holder = (data.libraryParts || []).find(p => String(p.legacyErpId || p.itemId || '').trim().toUpperCase() === 'CE-TRV-SYSTEM' && p.netSuiteInternalId);
+    const quoteNo = job.jobId || job.id;
+    const out = groups.map((g, n) => {
+        const items = lineItems.filter((_, i) => lineGroups[i] === g.group);
+        const flow = flows.find(f => f.id === g.flowId) || flows.find(f => f.id === job.flowId) || null;
+        const label = g.sidemark || g.assemblyName || (g.group === 'ADDONS' ? 'Add-ons & Fees' : `line ${n + 1}`);
+        const kit = (g.kitCodes || []).length > 0;
+        const itemId = kit && holder ? String(holder.netSuiteInternalId) : String((flow && flow.nsRollupItemId) || '61502');
+        const description = g.group === 'ADDONS'
+            ? `Add-ons & fees · quote# ${quoteNo} Job: ${job.jobName || 'N/A'}`
+            : kit
+                ? `${[...new Set(g.kitCodes)].join(' + ')} [traverse system — components below at $0] · ${label} · quote# ${quoteNo} Job: ${job.jobName || 'N/A'}`
+                : `${(flow && flow.name) || 'Custom Assembly'} — ${label} · fees, fabrication & labor · quote# ${quoteNo} Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`;
+        const target = r2((Number(g.money) || 0) * (Number(g.netFactor) || 1));
+        let itemsMoney = r2(items.reduce((s, l) => s + l.rate * l.quantity, 0));
+        // Items quoted above their group (never, from CPQ — but a hand-edited cart): scale this group's items to fit.
+        if (itemsMoney - target > 0.005 && itemsMoney > 0) {
+            const f = target / itemsMoney;
+            items.forEach(l => { l.rate = fl2(l.rate * f); });
+            itemsMoney = r2(items.reduce((s, l) => s + l.rate * l.quantity, 0));
+        }
+        return { g, items, rollup: { item: { id: itemId }, quantity: 1, rate: Math.max(0, r2(target - itemsMoney)), price: { id: '-1' }, description }, kit, holderMissing: kit && !holder };
+    });
+    const sumAll = () => r2(out.reduce((s, o) => s + o.rollup.rate + o.items.reduce((t, l) => t + l.rate * l.quantity, 0), 0));
+    const before = sumAll();
+    if (cpqGrandTotal - before < -0.005 && before > 0) {
+        const f = cpqGrandTotal / before;
+        out.forEach(o => { o.rollup.rate = fl2(o.rollup.rate * f); o.items.forEach(l => { l.rate = fl2(l.rate * f); }); });
+        log(`Discounted quote: every line scaled to ${(f * 100).toFixed(1)}% so the transaction lands at $${Number(cpqGrandTotal).toFixed(2)}.`, 'info');
+    }
+    const residue = r2(cpqGrandTotal - sumAll());
+    if (out.length && residue > 0.005) {
+        out[0].rollup.rate = r2(out[0].rollup.rate + residue);
+        if (residue > 0.05) log(`$${residue.toFixed(2)} of the quote is on no CPQ line — it rides the first roll-up.`, 'warn');
+    }
+    out.filter(o => o.holderMissing).forEach(() => log(`⚠️ No CE-TRV-SYSTEM holder item with a NetSuite id — a kit's dollars ride its flow roll-up. Create it with the 11.1 tool and sync.`, 'warn'));
+    const kept = out.filter(o => o.g.group !== 'ADDONS' || o.items.length || o.rollup.rate > 0);
+    log(`NetSuite lines grouped by CPQ line: ${kept.map(o => `${o.rollup.description.split(' · ')[0]} $${o.rollup.rate.toFixed(2)} + ${o.items.length} item(s)`).join(' | ')}.`, 'info');
+    return {
+        items: kept.flatMap(o => [o.rollup, ...o.items]),
+        rollupTotal: r2(kept.reduce((s, o) => s + o.rollup.rate, 0)),
+        summary: kept.map(o => ({ group: o.g.group, rollup: o.rollup.rate, items: o.items.length })),
+    };
+}
+
 export async function buildNsTransaction({ job, asType = 'estimate', brand, data, ctx, log = () => {} }) {
-    const { lines: linesToPush, stepsConsidered, unresolved, hasConfig, kitCodes = [] } = resolveJobLines(job, data);
+    const { lines: linesToPush, stepsConsidered, unresolved, hasConfig, kitCodes = [], groups = [], grouped = false } = resolveJobLines(job, data);
     if (linesToPush.length === 0) {
         if (!hasConfig) return { ok: false, error: { code: 'NO_CONFIG', message: 'This quote has no CPQ configuration data attached — re-save it as a fresh quote.' } };
         if (stepsConsidered === 0) return { ok: false, error: { code: 'NO_LINKED_PARTS', message: "This flow's steps aren't linked to physical parts (no Linked Item / Auto-Sync BOM)." } };
@@ -537,6 +619,7 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     const finishFallbacks = linesToPush.filter(l => l.finishUnmapped).map(l => l.finishUnmapped);
 
     const lineItems = [];
+    const lineGroups = [];   // the CPQ line (group) each pushed line belongs to — parallel to lineItems
     let physicalItemsTotal = 0;
     let lineDiscounted = 0;
     let kitZeroed = 0;
@@ -555,6 +638,10 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
             let itemRate = parseFloat(line.masterPart.manufacturingSpecs?.basePrice || 0) || 0;
             const cpPrice = clientPriceFor(line.masterPart.clientPricing, custKeys);
             if (cpPrice != null) itemRate = cpPrice;
+            // GROUPED: the line goes in at what CPQ quoted it at — the Fabricut sales price it was sold at — floored to the
+            // cent so the configuration's roll-up takes the residue (Stuart 2026-10-18). Not a library rate, not a second
+            // price chain: the cart already priced it.
+            if (grouped && line.quoted != null && Number(line.qty) > 0) itemRate = Math.floor((Number(line.quoted) / Number(line.qty)) * 100) / 100;
             // A part the kit already paid for: on the transaction at $0, the kit's money on the holder.
             if (line.inKit) { itemRate = 0; kitZeroed++; }
             // A cart line discounted in CPQ (percent off / net price set by a manager) lands in
@@ -584,6 +671,7 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
             if (line.projection) linePayload.custcol_bracket_projection = line.projection.toString();
             if (line.sidemark) linePayload.custcol3 = String(line.sidemark).slice(0, 300);
             lineItems.push(linePayload);
+            lineGroups.push(line.group);
         } else {
             unmappedNames.push(line.masterPart.itemName || line.masterPart.id);
             log(`WARNING: Skipping "${line.masterPart.itemName}" — no NetSuite ID mapped.`, 'warn');
@@ -604,7 +692,9 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     let silentFeeBalance = Math.max(0, cpqGrandTotal - physicalItemsTotal);
     // Discounted quotes net BELOW the items' standard-rate sum — scale rates down so the
     // transaction lands exactly at the quoted total (rollup absorbs rounding, never negative).
-    if (cpqGrandTotal - physicalItemsTotal < -0.005 && physicalItemsTotal > 0) {
+    // (A GROUPED transaction squares each CPQ line and the whole order itself — groupedItemsOf — so this order-wide scale is the
+    // older step-walk quotes' only.)
+    if (!grouped && cpqGrandTotal - physicalItemsTotal < -0.005 && physicalItemsTotal > 0) {
         const factor = cpqGrandTotal / physicalItemsTotal;
         let scaledSum = 0;
         lineItems.forEach(li => { const r = Math.floor(li.rate * factor * 100) / 100; li.rate = r; scaledSum += r * li.quantity; });
@@ -649,6 +739,11 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     if (!hdr.ok) return { ok: false, error: hdr.error };
     hdr.warnings.forEach(w => log(`⚠️ ${w}`, 'warn'));
 
+    if (grouped && groups.length) {
+        const built = groupedItemsOf({ job, groups, lineItems, lineGroups, cpqGrandTotal, data, log });
+        const payload = withLineLocations({ ...hdr.header, item: { items: built.items } }, asType);
+        return { ok: true, payload, meta: { silentFeeBalance: built.rollupTotal, unmappedNames, finishFallbacks, lineCount: lineItems.length, quotedTotal: cpqGrandTotal, groups: built.summary } };
+    }
     const payload = withLineLocations({
         ...hdr.header,
         item: {

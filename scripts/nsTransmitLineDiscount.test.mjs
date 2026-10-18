@@ -45,7 +45,8 @@ eq('four aggregated lines: the pair at full price and the pair at .8', r1.lines.
 
 // ── 2. the same two lines, undiscounted, still merge as before ───────────────────────────────
 const r2 = resolveJobLines(job([cartItem('a'), cartItem('b')], 220), data);
-eq('undiscounted twins merge into two lines at doubled qty (unchanged behaviour)', r2.lines.map(l => [l.nsId, l.qty]).sort(), [['101', 2], ['102', 4]].sort());
+// GROUPED since 2026-10-18 (Stuart: "in grouped order to match the cpq lines entered"): two CPQ lines are two groups — never merged.
+eq('two undiscounted CPQ lines stay two groups, each with its own lines', r2.lines.map(l => [l.group, l.nsId, l.qty]).sort(), [[0, '101', 1], [0, '102', 2], [1, '101', 1], [1, '102', 2]].sort());
 
 // ── 3. buildNsTransaction: own rates for the discounted item, net total, no whole-quote scale ──
 const logs = [];
@@ -53,7 +54,7 @@ const b1 = await buildNsTransaction({ job: j1, asType: 'estimate', brand: 'ce', 
 ok('builds', b1.ok);
 const items = b1.ok ? b1.payload.item.items : [];
 const rollup = items[0];
-const lines = items.slice(1).map(l => [l.item.id, l.quantity, l.rate]).sort();
+const lines = items.filter(l => l.item.id !== '999').map(l => [l.item.id, l.quantity, l.rate]).sort();
 eq('rates: 101 at 10 and 8, 102 at 50 and 40', lines, [['101', 1, 10], ['101', 1, 8], ['102', 2, 50], ['102', 2, 40]].sort());
 eq('rollup carries nothing — the items already sum to the net', [rollup.item.id, rollup.rate], ['999', 0]);
 eq('meta quotedTotal is the net', b1.meta?.quotedTotal, 198);
@@ -68,7 +69,7 @@ const j4 = job([cartItem('a'), cartItem('b')], 176, { orderDiscount: { mode: 'OR
 const b4 = await buildNsTransaction({ job: j4, asType: 'estimate', brand: 'ce', data, ctx: null, log: (m) => logs4.push(String(m)) });
 ok('builds', b4.ok);
 ok('order percent named in the log', logs4.some(m => /Order discount 20% set at checkout/.test(m)));
-ok('whole-quote scale fires for the set %', logs4.some(m => /item rates scaled to 80\.0%/.test(m)));
+ok('whole-quote scale fires for the set %', logs4.some(m => /every line scaled to 80\.0%/.test(m)));
 const sum4 = b4.payload.item.items.reduce((s, l) => s + l.rate * l.quantity, 0);
 eq('lands at 176', Math.round(sum4 * 100) / 100, 176);
 
@@ -80,7 +81,7 @@ ok('code named in the log', logs5.some(m => /Customer discount code D20 \(20%\)/
 // ── 6. a net price set ABOVE the configured price scales that item UP, nothing else moves ─────
 const j6 = job([cartItem('a'), cartItem('b', { lineDiscount: { mode: 'NET', netPrice: 132, by: 'Stuart', at: 1 } })], 242);
 const b6 = await buildNsTransaction({ job: j6, asType: 'estimate', brand: 'ce', data, ctx: null });
-eq('rates: the set line at ×1.2', b6.payload.item.items.slice(1).map(l => [l.item.id, l.rate]).sort(), [['101', 10], ['101', 12], ['102', 50], ['102', 60]].sort());
+eq('rates: the set line at ×1.2', b6.payload.item.items.filter(l => l.item.id !== '999').map(l => [l.item.id, l.rate]).sort(), [['101', 10], ['101', 12], ['102', 50], ['102', 60]].sort());
 
 // ── 7. THE ONE HEADER (E3, 2026-09-12): CE carries its form + class; a brand with no ids REFUSES ──
 {
@@ -141,6 +142,58 @@ eq('rates: the set line at ×1.2', b6.payload.item.items.slice(1).map(l => [l.it
     twin.job.cpqData.totalPrice = 1084;
     const bt = await buildNsTransaction({ ...twin, asType: 'estimate', brand: 'ce', ctx: null });
     eq('a 4th bracket above the kit bills at 45 on its own line beside the three at $0', bt.payload.item.items.slice(1).filter(l => l.item.id === '103').map(l => [l.quantity, l.rate]).sort(), [[1, 45], [3, 0]].sort());
+}
+
+// ── 10. GROUPED: the Fabricut sales price per item, fees in the roll-up, each CPQ line's roll-up first (Stuart 2026-10-18) ──
+{
+    const parts = [
+        { id: 'R', legacyErpId: 'H1-75R', itemId: 'H1-75R', itemName: 'Rod', netSuiteInternalId: '201', manufacturingSpecs: { basePrice: 9, partHandling: 'Custom' } },
+        { id: 'ILE', legacyErpId: 'H1-75ILE/P', itemId: 'H1-75ILE/P', itemName: 'In Line Bracket', netSuiteInternalId: '202', manufacturingSpecs: { basePrice: 35, partHandling: 'Small Parts' } },
+        { id: 'RING', legacyErpId: 'H1-75BR/P', itemId: 'H1-75BR/P', itemName: 'Ring', netSuiteInternalId: '203', manufacturingSpecs: { basePrice: 0, partHandling: 'Small Parts' } },
+        { id: 'MR', legacyErpId: 'H1-MRPF', itemId: 'H1-MRPF', itemName: 'MITER RETURN', partClass: 'Fee', netSuiteInternalId: '204', manufacturingSpecs: { basePrice: 50, productType: 'FEE' } },
+        { id: 'PK', legacyErpId: 'H1-PCKF1', itemId: 'H1-PCKF1', itemName: 'Pole Pack', partClass: 'Fee', netSuiteInternalId: '205', manufacturingSpecs: { basePrice: 12, productType: 'FEE' } },
+    ];
+    const gdata = { libraryParts: parts, cpqFlows: [{ id: 'F1', name: 'FABRICUT H1', nsRollupItemId: '999' }], outsourceFinishes: [], globalFinishes: [] };
+    // SO60427's configuration, per assembly (2 ordered): rod 7 ft × $9, two miter-return fees, the bracket at Fabricut's $26.50, 26 rings at $3.50
+    const so427 = [
+        { partId: 'R', legacyErpId: 'H1-75R', name: 'Rod', qty: 1, price: 9, total: 63, perFoot: true, feet: 7 },
+        { partId: 'MR', legacyErpId: 'H1-MRPF', name: 'MITER RETURN', qty: 1, price: 50, total: 50 },
+        { partId: 'MR', legacyErpId: 'H1-MRPF', name: 'MITER RETURN', qty: 1, price: 50, total: 50 },
+        { partId: 'ILE', legacyErpId: 'H1-75ILE/P', name: 'In Line Bracket', qty: 1, price: 26.5, total: 26.5 },
+        { partId: 'RING', legacyErpId: 'H1-75BR/P', name: 'Ring', qty: 26, price: 3.5, total: 91 },
+    ];
+    const cart = (id, sidemark, breakdown, qty = 1) => ({ id, engine: 'TAGS', flowId: 'F1', qty, sidemark, assemblyName: 'H1-75', pricing: { finalPrice: breakdown.reduce((s, l) => s + l.total, 0) }, pricingBreakdown: breakdown });
+    const gj = job([cart('a', 'WRD', so427, 2)], 561);
+    const gb = await buildNsTransaction({ job: gj, asType: 'salesorder', brand: 'ce', data: gdata, ctx: null });
+    ok('builds', gb.ok);
+    const gi = gb.ok ? gb.payload.item.items : [];
+    eq('the roll-up prints first and carries ONLY the fees (4 miter returns, $200)', [gi[0].item.id, gi[0].rate], ['999', 200]);
+    ok('the roll-up names the CPQ line', /FABRICUT H1 — WRD · fees, fabrication & labor/.test(gi[0].description));
+    eq('items at the price CPQ quoted — the bracket at $26.50 (not its $35 base), the rings at $3.50 (not $0), the rod by the foot',
+        gi.slice(1).map(l => [l.item.id, l.quantity, l.rate]), [['201', 14, 9], ['202', 2, 26.5], ['203', 52, 3.5]]);
+    eq('lands at the quote, to the cent', Math.round(gi.reduce((s, l) => s + l.rate * l.quantity, 0) * 100) / 100, 561);
+    // two CPQ lines + checkout add-ons: [roll-up A, A's items, roll-up B, B's items, add-ons]
+    const two = job([cart('a', 'Living', [so427[0], so427[3]]), cart('b', 'Den', [so427[1], so427[3]])], 241.5);
+    two.cpqData.breakdown = [{ isAddOn: true, isFee: true, partId: 'PK', legacyErpId: 'H1-PCKF1', name: 'Pole Pack', qty: 1, price: 12, total: 12 }];
+    two.cpqData.totalPrice = 63 + 26.5 + 50 + 26.5 + 12;
+    const tb = await buildNsTransaction({ job: two, asType: 'salesorder', brand: 'ce', data: gdata, ctx: null });
+    eq('two CPQ lines and the add-ons, each group roll-up first', tb.payload.item.items.map(l => [l.item.id, l.rate]),
+        [['999', 0], ['201', 9], ['202', 26.5], ['999', 50], ['202', 26.5], ['999', 12]]);
+    ok('each roll-up names its own line', /— Living ·/.test(tb.payload.item.items[0].description) && /— Den ·/.test(tb.payload.item.items[3].description) && /^Add-ons & fees/.test(tb.payload.item.items[5].description));
+    eq('meta: the roll-ups sum to the fees', [tb.meta.silentFeeBalance, tb.meta.groups.map(g => g.group)], [62, [0, 1, 'ADDONS']]);
+    // an order-wide % (customer code) scales every line; a cent of rounding rides the first roll-up
+    const disc = job([cart('a', 'WRD', so427, 2)], 504.9, { orderDiscount: { mode: 'CODE', percent: 10, code: 'D10', by: '' } });
+    const db = await buildNsTransaction({ job: disc, asType: 'salesorder', brand: 'ce', data: gdata, ctx: null });
+    eq('a 10% code lands at the net to the cent', Math.round(db.payload.item.items.reduce((s, l) => s + l.rate * l.quantity, 0) * 100) / 100, 504.9);
+    // a line discounted in the cart: its group lands at its net, the other group untouched
+    const ld = job([cart('a', 'A', so427), cart('b', 'B', so427, 1)], 280.5 * 0.8 + 280.5);
+    ld.cpqData.cartItems[0].lineDiscount = { mode: 'PERCENT', percent: 20, by: 'Stuart', at: 1 };
+    const lb = await buildNsTransaction({ job: ld, asType: 'salesorder', brand: 'ce', data: gdata, ctx: null });
+    const groupA = lb.payload.item.items.slice(0, 4), groupB = lb.payload.item.items.slice(4);
+    eq('the discounted group at 80%, the other at full price', [Math.round(groupA.reduce((s, l) => s + l.rate * l.quantity, 0) * 100) / 100, Math.round(groupB.reduce((s, l) => s + l.rate * l.quantity, 0) * 100) / 100], [224.4, 280.5]);
+    // an older step-walk quote keeps the order-wide merge and the one roll-up
+    const legacy = resolveJobLines({ ...job([], 0), cpqData: { totalPrice: 0, cartItems: [], breakdown: [] } }, gdata);
+    eq('an older quote is not grouped', legacy.grouped, false);
 }
 
 console.log(`\nnsTransmit line discount: ${pass} passed, ${fail} failed`);
