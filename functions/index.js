@@ -3720,3 +3720,70 @@ const emailPaymentReceived = async (paymentId) => {
         console.warn('emailPaymentReceived:', (e && e.message) || e);
     }
 };
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// 💳  CARD MONEY NETSUITE HAS NOT HEARD ABOUT, FOR ONE SALES ORDER
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// The WMS holds a shipment until the customer's TERMS are satisfied, and it reads what NetSuite
+// says has been paid. But a card payment is CAPTURED the moment it is taken — the money is in the
+// merchant account, irreversibly — while the deposit may take a minute to post, or may wait for
+// ever behind a customer who has never reached NetSuite.
+//
+// So an order the customer has ACTUALLY PAID FOR could sit unshippable because the books had not
+// caught up, which is a worse failure than the one the terms check exists to prevent, and it would
+// have happened first at a trade show. Stuart 2026-10-17: "go on 1 and the card money".
+//
+// This answers one question for one order: how much card money has been taken that NetSuite does
+// not yet know about. The WMS adds it to NetSuite's own figure. It falls to zero by itself as each
+// posting lands, so nothing is double counted for longer than the moment between the two.
+//
+// GATED BY THE WMS'S OWN RULE, not a copy of it: the caller's role must carry STOCK or PACKING in
+// pick_config/permissions, the same document the pick/pack app reads to decide who may pack and
+// ship. A list of roles here would be a second copy that rots the first time someone adds one.
+const assertWmsPacker = async (request) => {
+    const role = String((request.auth && request.auth.token && request.auth.token.role) || '').toLowerCase();
+    if (['admin', 'superadmin'].includes(role)) return role;
+    const snap = await admin.firestore().doc('pick_config/permissions').get();
+    const tabs = ((snap.exists && snap.data()) || {})[role] || [];
+    if (!Array.isArray(tabs) || !(tabs.includes('STOCK') || tabs.includes('PACKING'))) {
+        throw new HttpsError('permission-denied', `Reading an order's payments is for the people who pack and ship it — this login is "${role || 'none'}".`);
+    }
+    return role;
+};
+
+exports.paymentsUnpostedForOrder = onCall({ enforceAppCheck: true }, async (request) => {
+    await assertWmsPacker(request);
+    const db = admin.firestore();
+    const { collection, docId, nsSoId } = request.data || {};
+    let col = String(collection || '');
+    let id = String(docId || '');
+
+    // Keyed by the NetSuite sales-order id instead? Find the app record that carries it.
+    if (!id && String(nsSoId || '')) {
+        const q = await db.collection('hq_sales_orders').where('nsInternalId', '==', String(nsSoId)).limit(1).get();
+        if (!q.empty) { col = 'hq_sales_orders'; id = q.docs[0].id; }
+    }
+    if (!id) return { unpostedTotal: 0, count: 0, found: false };
+
+    // ONE equality filter, on purpose: a docId is specific enough that the result is tiny, and this
+    // needs no composite index to be deployed alongside the function.
+    const snap = await db.collection('payments').where('docId', '==', id).limit(100).get();
+    const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).filter((p) =>
+        (!col || String(p.collection || '') === col)
+        && p.environment === 'PRODUCTION'          // a test payment can never clear a real shipment
+        && p.netsuitePosted !== true
+        && Number(p.amount || 0) > 0
+        && p.voided !== true && p.refunded !== true);
+
+    return {
+        found: true,
+        collection: col, docId: id,
+        unpostedTotal: Math.round(rows.reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100,
+        count: rows.length,
+        // So a held order can say WHY it was cleared, and a person can find the payment.
+        payments: rows.map((p) => ({
+            id: p.id, amount: Number(p.amount || 0), paidAt: Number(p.paidAt || 0),
+            reference: p.reference || '', waiting: p.netsuiteWaiting || '',
+        })),
+    };
+});
