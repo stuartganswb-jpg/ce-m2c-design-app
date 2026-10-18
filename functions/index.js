@@ -3173,10 +3173,15 @@ exports.portalPayDoc = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LI
 // deposit waits for ever unless a person matches the customer).
 exports.paymentsWaiting = onCall({ enforceAppCheck: true }, async (request) => {
     assertStaffAdmin(request);
+    // ⚠ NO orderBy HERE, deliberately. An equality filter PLUS an order on a different field needs
+    // a composite index, and asking for one Firestore does not have fails the whole call with
+    // INTERNAL — which this did in production, silently, because the note swallows errors and draws
+    // nothing (found by the App Improvement session, 2026-10-18). Unposted payments are rare by
+    // nature, so the equality filter alone is a small set and the ordering is done below, where it
+    // costs nothing and needs no index deployed alongside the function.
     const snap = await admin.firestore().collection('payments')
         .where('netsuitePosted', '==', false)
-        .orderBy('paidAt', 'desc')
-        .limit(100)
+        .limit(200)
         .get();
     const rows = snap.docs.map((d) => {
         const p = d.data() || {};
@@ -3187,7 +3192,8 @@ exports.paymentsWaiting = onCall({ enforceAppCheck: true }, async (request) => {
             netsuiteWaiting: p.netsuiteWaiting || '', brand: p.brand || '',
         };
     });
-    return { payments: rows, truncated: snap.size >= 100 };
+    rows.sort((a, b) => b.paidAt - a.paidAt);      // newest first, in code — see above
+    return { payments: rows, truncated: snap.size >= 200 };
 });
 
 exports.paymentsQueue = onCall({ enforceAppCheck: true }, async (request) => {
@@ -3804,9 +3810,13 @@ exports.paymentsUnpostedForOrder = onCall({ enforceAppCheck: true }, async (requ
         unpostedTotal: Math.round(rows.reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100,
         count: rows.length,
         // So a held order can say WHY it was cleared, and a person can find the payment.
+        // transactionId is what nsPayment writes into a deposit's CHECKNUM, so the WMS can tell
+        // "this card payment IS that NetSuite deposit" exactly, instead of matching on amount —
+        // which two $500 deposits on one order would defeat (App Improvement session, 2026-10-18).
         payments: rows.map((p) => ({
             id: p.id, amount: Number(p.amount || 0), paidAt: Number(p.paidAt || 0),
             reference: p.reference || '', waiting: p.netsuiteWaiting || '',
+            transactionId: String(p.transactionId || ''),
         })),
     };
 });
