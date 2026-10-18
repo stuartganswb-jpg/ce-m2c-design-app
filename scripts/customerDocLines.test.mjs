@@ -230,5 +230,20 @@ for (const type of MONEY_DOC_TYPES) {
     eq('the floors and the packing list never see the kit line, and read the brackets whole', customerDocLines(cfg, 'PACKING_SLIP').map(l => [l.legacyErpId, l.qty]).slice(0, 4), [['H1-138TRV', 42], ['H1-138EC/P', 84], ['H1-138TRVEBA/P', 42], ['H1-138TRVEBA/P', 126]]);
 }
 
+// ── An item kit the traverse kit pays for prints $0.00, not its price (Eric's App Imp card 2026-10-16, SO60838) ──────
+{
+    const rows = customerDocLines([
+        { name: '  - 2" MOTORIZED TRAVERSE SYSTEM - WOOD FASCIA', legacyErpId: 'H1-2TRV-4M/W-45W', clientSku: 'HMTS7506F', qty: 1, price: 987, total: 987, isKit: true },
+        { name: '  - 2" Traverse Wall Bracket (3-5/8" P)', legacyErpId: 'H1-2TRV-WB', clientSku: 'H3642F', qty: 1, price: 35, total: 0, isKit: true, itemKit: true, inKit: true, coveredQty: 1 },
+        { name: '  - Backplate for 2" Traverse Wall Bracket', legacyErpId: 'H1-2TRVBP/B', qty: 1, price: 0, total: 0, hidden: true, inKit: true },
+    ], 'INVOICE');
+    const wb = rows.find(r => r.legacyErpId === 'H3642F');
+    eq('SO60838: the covered wall bracket prints 1 × $0.00 = $0.00, under their number', [wb && wb.qty, wb && wb.price, wb && wb.total], [1, 0, 0]);
+    const kit = rows.find(r => r.legacyErpId === 'HMTS7506F');
+    eq('the traverse kit itself keeps its price', [kit.qty, kit.price, kit.total], [1, 987, 987]);
+    const sold = customerDocLines([{ name: 'Wall bracket kit', legacyErpId: 'H1-2TRV-WB/C', clientSku: 'H3642F', qty: 50, price: 14, total: 700, isKit: true, itemKit: true }], 'QUOTE')[0];
+    eq('an item kit the customer pays for keeps its price', [sold.price, sold.total], [14, 700]);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

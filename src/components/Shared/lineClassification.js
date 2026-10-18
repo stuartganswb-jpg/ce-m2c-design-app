@@ -275,8 +275,11 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
     // prints a $0.00 unit; a row partly above the kit's chart (coveredQty — Shared/kitSeed) prints as TWO rows,
     // the included ones at $0.00 and the rest at the price, so every row is qty × unit = amount.
     const zeroed = (l) => (l.inKit && !(Number(l.total) > 0) ? { price: 0 } : {});
+    // An ITEM KIT the traverse kit pays for is a covered row too (Eric's App Imp card 2026-10-16, SO60838: the 2" traverse
+    // wall bracket H1-2TRV-WB — itself a kit of backplate + arms — printed "1 × $35.00 = $0.00", "a rate but $0 total due
+    // to being included"). It keeps its own row (it is never split), at a $0.00 unit; the traverse kit itself is not inKit.
     const kitCovered = (l) => {
-        if (l.isKit) return [l];
+        if (l.isKit) return [{ ...l, ...zeroed(l) }];
         const qty = Number(l.qty) || 0, cov = Number(l.coveredQty) || 0;
         if (cov > 0 && cov < qty && Number(l.total) > 0) {
             return [{ ...l, qty: cov, price: 0, total: 0, inKit: true }, { ...l, qty: qty - cov, coveredQty: 0 }];
