@@ -1,6 +1,6 @@
 // 🧪 May this order ship? The customer's terms decide (Stuart 2026-10-17).   node scripts/shipClearance.test.mjs
 import { termRuleOf, TERM_RULE, PAY_FIRST_TERMS, CREDIT_TERMS, shipFactsSql, shipFactsOf, shipClearanceOf, fetchShipClearance,
-    shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, shipHoldText } from '../src/components/Shared/shipClearance.js';
+    shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, shipHoldText, unpostedCardOf } from '../src/components/Shared/shipClearance.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 const eq = (n, a, b) => ok(`${n}\n    got  ${JSON.stringify(a)}\n    want ${JSON.stringify(b)}`, JSON.stringify(a) === JSON.stringify(b));
@@ -50,9 +50,48 @@ const seq = (answers) => { const calls = []; const fn = async (r) => { calls.pus
     eq('fetch: no such order → not ok', r3.ok, false);
 }
 
+// ── card money taken in the app that NetSuite has not posted yet (Stuart 2026-10-18: "go on 1 and the card money") ──
+const ans = (payments) => ({ found: true, unpostedTotal: payments.reduce((t, p) => t + p.amount, 0), count: payments.length, payments });
+{
+    // QS counter sale, Pay Before Shipping, $568, paid by card at the counter — nothing in NetSuite yet
+    const so = { id: '970001', tranid: 'SOUNIQ-4100', termid: '22', termname: 'Pay Before Shipping', total: '568' };
+    const a = shipFactsOf({ soRow: so, paidRows: [], cardAnswer: ans([{ id: 'P1', amount: 568 }]) });
+    eq('card money not in NetSuite counts as paid', [a.nsPaid, a.card, a.paid, shipClearanceOf(a).clear], [0, 568, 568, true]);
+    eq('…and the sentence says so', shipClearanceOf(a).why, 'Pay Before Shipping — paid in full ($568.00, $568.00 of it by card in the app, not yet posted in NetSuite)');
+    // the moment between the deposit posting and its row being stamped: the same $568 on both sides — counted once
+    const b = shipFactsOf({ soRow: so, paidRows: [{ ttype: 'CustDep', voided: 'F', total: '568', tranid: 'CDUNIQ-3000' }], cardAnswer: ans([{ id: 'P1', amount: 568 }]) });
+    eq('a card payment matching a NetSuite deposit IS that deposit', [b.nsPaid, b.card, b.paid], [568, 0, 568]);
+    // 50% Deposit Balance to Ship, $1,000: $500 deposit posted; the $500 balance by card, posting — counted once, NOT cleared
+    const so26 = { ...so, termid: '26', termname: '50% Deposit Balance to Ship', total: '1000' };
+    const c2 = shipFactsOf({ soRow: so26, paidRows: [{ ttype: 'CustDep', voided: 'F', total: '500' }], cardAnswer: ans([{ id: 'P2', amount: 500 }]) });
+    eq('a part-paid order is never cleared by one payment counted twice', [c2.paid, shipClearanceOf(c2).clear, shipClearanceOf(c2).due], [500, false, 500]);
+    const c3 = shipFactsOf({ soRow: so26, paidRows: [{ ttype: 'CustDep', voided: 'F', total: '500' }], cardAnswer: ans([{ id: 'P2', amount: 500 }, { id: 'P3', amount: 500 }]) });
+    eq('…a second payment of the balance does count', [c3.card, c3.paid, shipClearanceOf(c3).clear], [500, 1000, true]);
+    const c4 = shipFactsOf({ soRow: so26, paidRows: [{ ttype: 'CustDep', voided: 'F', total: '300' }], cardAnswer: ans([{ id: 'P4', amount: 400 }]) });
+    eq('part paid with card money: held, the sentence names both', [c4.paid, shipClearanceOf(c4).why], [700, '50% Deposit Balance to Ship — $300.00 still to be paid before it ships ($700.00 of $1,000.00 paid, $400.00 of it by card in the app, not yet posted in NetSuite)']);
+    const c5 = shipFactsOf({ soRow: so, paidRows: [{ ttype: 'CustDep', voided: 'F', total: '100' }], cardAnswer: ans([{ id: 'P5', amount: 600 }]) });
+    eq('capped at the order total', [c5.paid, c5.card], [568, 468]);
+    eq('nothing found / refused = no card money, never a hold reason', [unpostedCardOf({ found: false }).amount, unpostedCardOf(null).amount, unpostedCardOf({ found: false, error: 'permission-denied' }).error], [0, 0, 'permission-denied']);
+    eq('an answer without its payment rows falls back to its total', unpostedCardOf({ found: true, unpostedTotal: 25.5, count: 1 }), { amount: 25.5, count: 1, error: '' });
+
+    // the read: asked only when the terms want payment and NetSuite falls short
+    const asked = [];
+    const card = (answer) => async (x) => { asked.push(x); if (answer instanceof Error) throw answer; return answer; };
+    const r1 = await fetchShipClearance({ nsProxyFetch: seq([res(200, { items: [so] }), res(200, { items: [] })]), nsSoId: '970001', unpostedOf: card(ans([{ id: 'P1', amount: 568 }])) });
+    eq('fetch: card money clears it', [r1.ok, r1.clearance.clear, r1.facts.card, asked.length, asked[0]], [true, true, 568, 1, { nsSoId: '970001' }]);
+    const r2 = await fetchShipClearance({ nsProxyFetch: seq([res(200, { items: [so] }), res(200, { items: [] })]), nsSoId: '970001', unpostedOf: card(new Error('permission-denied')) });
+    eq('fetch: a failed card read → decided on NetSuite alone, the error kept', [r2.ok, r2.clearance.clear, r2.facts.card, r2.facts.cardError], [true, false, 0, 'permission-denied']);
+    asked.length = 0;
+    await fetchShipClearance({ nsProxyFetch: seq([res(200, { items: [{ ...so, termid: '2', termname: 'Net 30' }] }), res(200, { items: [] })]), nsSoId: '970001', unpostedOf: card(ans([])) });
+    await fetchShipClearance({ nsProxyFetch: seq([res(200, { items: [so] }), res(200, { items: [{ ttype: 'CustDep', voided: 'F', total: '568' }] })]), nsSoId: '970001', unpostedOf: card(ans([])) });
+    eq('fetch: not asked for credit terms, nor when NetSuite already says paid', asked.length, 0);
+    const held = shipHoldStampOf({ facts: c4, clearance: shipClearanceOf(c4) }, { at: 1, by: 'x' }).shipHold;
+    eq('the hold keeps the card money it counted', [held.paid, held.card], [700, 400]);
+}
+
 // the stamps
 const hold = shipHoldStampOf({ facts: f, clearance: c }, { at: 7, by: 'Eric' });
-eq('the hold', hold, { shipHold: { why: c.why, due: 169, rule: 'PAY_FIRST', termId: '22', termName: 'Pay Before Shipping', total: 1859, paid: 1690, at: 7, by: 'Eric' } });
+eq('the hold', hold, { shipHold: { why: c.why, due: 169, rule: 'PAY_FIRST', termId: '22', termName: 'Pay Before Shipping', total: 1859, paid: 1690, card: 0, at: 7, by: 'Eric' } });
 ok('held reads held; cleared and released do not', isShipHeld(hold) && !isShipHeld(shipClearedStampOf({ clearance: { why: 'paid' } })) && !isShipHeld(shipReleaseStampOf({ hold: hold.shipHold, reason: 'x' })));
 eq('a release keeps what it lifted and why', shipReleaseStampOf({ hold: hold.shipHold, reason: 'credit approved by phone' }, { at: 9, by: 'Stuart' }).shipRelease, { by: 'Stuart', at: 9, reason: 'credit approved by phone', was: hold.shipHold });
 eq('the words', shipHoldText(hold.shipHold), `⏸ ${c.why}`);

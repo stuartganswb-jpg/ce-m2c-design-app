@@ -11,7 +11,11 @@
 // may override it there — never the CRM's imported copy, never a card on file. "Paid" is NetSuite's: the customer deposits
 // made from the order, or what its invoices have been paid, whichever is more (each is a floor under the truth, so the
 // larger never says paid when it is not). Card payments taken in the app reach NetSuite as deposits (the Payments session's
-// posting); one still waiting there reads as not paid, and the hold says where to look.
+// posting). CARD MONEY NOT YET POSTED counts too (Stuart 2026-10-18: "go on 1 and the card money"): a captured card payment is
+// money in the account, so an order paid at the counter ships although its deposit has not reached NetSuite. It is read from
+// the Payments session's callable (PRODUCTION, non-voided, not yet posted), is never counted twice — a card payment matching
+// a NetSuite deposit of the same amount is that deposit, posted a moment before the app heard — and the total is capped at the
+// order. A read that fails or finds nothing counts no card money; it is never a reason to hold.
 //
 // Packing never stops on this: the order is packed as always; only its NetSuite fulfilment (and so its UPS label) waits.
 // Pure but for fetchShipClearance, which is handed the proxy.
@@ -50,16 +54,41 @@ export const shipFactsSql = (nsSoId) => {
     };
 };
 
-/** The facts, from the two reads' rows. */
-export const shipFactsOf = ({ soRow = null, paidRows = [] } = {}) => {
+/**
+ * The card money NetSuite does not hold yet, from the Payments callable's answer (paymentsUnpostedForOrder). A card payment
+ * whose amount matches a NetSuite deposit of the order is taken to BE that deposit (posted, its row not yet stamped) — each
+ * deposit explains one payment at most. When the two are only alike, the payment waits for its posting: the order is held a
+ * moment longer, never shipped unpaid. → { amount, count, error }
+ */
+export const unpostedCardOf = (answer, depositTotals = []) => {
+    if (!answer || answer.found !== true) return { amount: 0, count: 0, error: str(answer && answer.error) };
+    const rows = Array.isArray(answer.payments) ? answer.payments : null;
+    if (!rows) return { amount: Math.max(0, money(answer.unpostedTotal)), count: num(answer.count), error: '' };
+    const left = (depositTotals || []).map(money);
+    const kept = rows.filter(p => {
+        const i = left.indexOf(money(p && p.amount));
+        if (i < 0) return true;
+        left.splice(i, 1);
+        return false;
+    }).filter(p => money(p && p.amount) > 0);
+    return { amount: money(kept.reduce((s, p) => s + money(p.amount), 0)), count: kept.length, error: '' };
+};
+
+/** The facts, from the two reads' rows — and, when it was read, the Payments callable's answer for the order. */
+export const shipFactsOf = ({ soRow = null, paidRows = [], cardAnswer = null } = {}) => {
     const live = (paidRows || []).filter(r => r && str(r.voided).toUpperCase() !== 'T');
-    const deposits = money(live.filter(r => str(r.ttype) === 'CustDep').reduce((s, r) => s + num(r.total), 0));
+    const dep = live.filter(r => str(r.ttype) === 'CustDep');
+    const deposits = money(dep.reduce((s, r) => s + num(r.total), 0));
     const invoicePaid = money(live.filter(r => str(r.ttype) === 'CustInvc').reduce((s, r) => s + Math.max(0, num(r.total) - num(r.unpaid)), 0));
+    const total = money(soRow && soRow.total), nsPaid = Math.max(deposits, invoicePaid);
+    const c = unpostedCardOf(cardAnswer, dep.map(r => num(r.total)));
+    // capped at the order: the excess of a payment counted on both sides for a moment is never "more than paid"
+    const paid = c.amount > 0 ? Math.max(nsPaid, Math.min(total, money(nsPaid + c.amount))) : nsPaid;
     return {
         nsSoId: str(soRow && soRow.id), tran: str(soRow && soRow.tranid),
         termId: str(soRow && soRow.termid), termName: str(soRow && soRow.termname),
-        total: money(soRow && soRow.total), deposits, invoicePaid, paid: Math.max(deposits, invoicePaid),
-        depositRefs: live.filter(r => str(r.ttype) === 'CustDep').map(r => str(r.tranid)).filter(Boolean),
+        total, deposits, invoicePaid, nsPaid, card: money(paid - nsPaid), cardCount: c.count, cardError: c.error, paid,
+        depositRefs: dep.map(r => str(r.tranid)).filter(Boolean),
     };
 };
 
@@ -73,12 +102,17 @@ export const shipClearanceOf = (facts) => {
     const term = facts.termName || (facts.termId ? `term ${facts.termId}` : 'No terms on the order');
     if (rule === TERM_RULE.CREDIT) return { clear: true, rule, due: 0, why: `${term} — ships before payment` };
     const due = money(facts.total - facts.paid);
-    if (due <= 0.005) return { clear: true, rule, due: 0, why: `${term} — paid in full (${usd(facts.paid)})` };
-    return { clear: false, rule, due, why: `${term} — ${usd(due)} still to be paid before it ships (${usd(facts.paid)} of ${usd(facts.total)} paid)` };
+    const card = money(facts.card) > 0 ? `, ${usd(facts.card)} of it by card in the app, not yet posted in NetSuite` : '';
+    if (due <= 0.005) return { clear: true, rule, due: 0, why: `${term} — paid in full (${usd(facts.paid)}${card})` };
+    return { clear: false, rule, due, why: `${term} — ${usd(due)} still to be paid before it ships (${usd(facts.paid)} of ${usd(facts.total)} paid${card})` };
 };
 
-/** Read NetSuite and decide. → { ok, facts, clearance }; ok false = NetSuite did not answer (the clearance says so). */
-export async function fetchShipClearance({ nsProxyFetch, nsSoId }) {
+/**
+ * Read NetSuite and decide. → { ok, facts, clearance }; ok false = NetSuite did not answer (the clearance says so).
+ * `unpostedOf({ nsSoId })` → the Payments callable's answer; asked only when the terms want payment and NetSuite's own figure
+ * falls short. Whatever it does — throws, refuses, finds nothing — the order is decided on NetSuite's figure alone.
+ */
+export async function fetchShipClearance({ nsProxyFetch, nsSoId, unpostedOf = null }) {
     const sql = shipFactsSql(nsSoId);
     if (!sql || !nsProxyFetch) return { ok: false, facts: null, clearance: shipClearanceOf(null) };
     const url = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
@@ -89,7 +123,14 @@ export async function fetchShipClearance({ nsProxyFetch, nsSoId }) {
         const b2 = await r2.json().catch(() => ({}));
         const soRow = (r1.ok && Array.isArray(b1.items) && b1.items[0]) || null;
         if (!soRow || !r2.ok) return { ok: false, facts: null, clearance: shipClearanceOf(null) };
-        const facts = shipFactsOf({ soRow, paidRows: b2.items || [] });
+        const paidRows = b2.items || [];
+        let facts = shipFactsOf({ soRow, paidRows });
+        if (unpostedOf && termRuleOf(facts.termId) === TERM_RULE.PAY_FIRST && facts.total - facts.paid > 0.005) {
+            let cardAnswer;
+            try { cardAnswer = await unpostedOf({ nsSoId: facts.nsSoId }); }
+            catch (e) { cardAnswer = { found: false, error: str((e && e.message) || e) || 'the card payments could not be read' }; }
+            facts = shipFactsOf({ soRow, paidRows, cardAnswer });
+        }
         return { ok: true, facts, clearance: shipClearanceOf(facts) };
     } catch (e) {
         return { ok: false, facts: null, clearance: shipClearanceOf(null) };
@@ -102,7 +143,7 @@ export const shipHoldStampOf = ({ facts = null, clearance }, { at = Date.now(), 
     shipHold: {
         why: str(clearance && clearance.why), due: money(clearance && clearance.due), rule: str(clearance && clearance.rule),
         termId: str(facts && facts.termId), termName: str(facts && facts.termName),
-        total: money(facts && facts.total), paid: money(facts && facts.paid), at, by: str(by),
+        total: money(facts && facts.total), paid: money(facts && facts.paid), card: money(facts && facts.card), at, by: str(by),
     },
 });
 /** Cleared — on a fresh read that says it may ship. */

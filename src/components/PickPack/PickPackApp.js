@@ -6058,8 +6058,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // it "Waiting for payment" with Check again, and a manager may release it with a reason.
     const shipHoldRefsOf = (job, soDoc) => (isQsOrder(job) ? [packDocOf(job)]
         : [packDocOf(job), ...(soDoc && soDoc.id ? [doc(db, 'hq_sales_orders', soDoc.id)] : []), ...orderPackDocsOf(job).filter(d => d.id !== job.id).map(d => doc(db, 'fin_workorders', d.id))]);
+    // Card money taken in the app that NetSuite has not posted yet counts as paid (Payments' callable — PRODUCTION only).
+    const unpostedCardFor = async ({ nsSoId }) => (await httpsCallable(functions, 'paymentsUnpostedForOrder')({ nsSoId })).data;
     const gateShipment = async ({ nsSoId, refs = [], ref = '' }) => {
-        const r = await fetchShipClearance({ nsProxyFetch, nsSoId });
+        const r = await fetchShipClearance({ nsProxyFetch, nsSoId, unpostedOf: unpostedCardFor });
         if (r.clearance.clear) return { clear: true, ...r };
         const stamp = shipHoldStampOf(r, { at: Date.now(), by: operator?.name || '' });
         for (const x of refs) { try { await updateDoc(x, stamp); } catch (e) { console.warn('ship hold stamp failed (the order is still held here):', e); } }
@@ -6105,12 +6107,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const recheckShipHold = async (rec, docs = []) => {
         const tg = shipTargetsOf(rec, docs);
         if (!tg.nsSoId) return alert('No NetSuite sales order is linked to this order.');
-        const r = await fetchShipClearance({ nsProxyFetch, nsSoId: tg.nsSoId });
+        const r = await fetchShipClearance({ nsProxyFetch, nsSoId: tg.nsSoId, unpostedOf: unpostedCardFor });
         const by = operator?.name || '';
         if (!r.clearance.clear) {
             const stamp = shipHoldStampOf(r, { at: Date.now(), by });
             for (const x of tg.refs) await updateDoc(x, stamp).catch(() => {});
-            return alert(`⏸ ${tg.ref} still waits — ${r.clearance.why}.${r.ok ? '\n\nA card payment taken in the app reaches NetSuite as a deposit — if one is missing, HQ 11 shows the payments still waiting.' : ''}`);
+            return alert(`⏸ ${tg.ref} still waits — ${r.clearance.why}.${r.facts && r.facts.cardError ? `\n\n⚠ The card payments taken in the app could not be read (${r.facts.cardError}) — any not yet in NetSuite are not counted here.` : ''}`);
         }
         for (const x of tg.refs) await updateDoc(x, shipClearedStampOf(r, { at: Date.now(), by })).catch(() => {});
         writeLog(`✓ ${tg.ref} cleared to ship — ${r.clearance.why}`, 'packing');
@@ -6135,7 +6137,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const id = String(nsSoId || '');
         if (!/^\d+$/.test(id)) return;
         setShipLook(p => ({ ...p, [id]: { loading: true } }));
-        const r = await fetchShipClearance({ nsProxyFetch, nsSoId: id });
+        const r = await fetchShipClearance({ nsProxyFetch, nsSoId: id, unpostedOf: unpostedCardFor });
         setShipLook(p => ({ ...p, [id]: { at: Date.now(), clearance: r.clearance } }));
     };
     const shipLookLine = (nsSoId) => {
