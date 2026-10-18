@@ -3758,16 +3758,28 @@ exports.paymentsUnpostedForOrder = onCall({ enforceAppCheck: true }, async (requ
     let col = String(collection || '');
     let id = String(docId || '');
 
-    // Keyed by the NetSuite sales-order id instead? Find the app record that carries it.
-    if (!id && String(nsSoId || '')) {
+    // ⚠ A SALES ORDER AND THE THING THAT WAS PAID ARE NOT ALWAYS THE SAME DOCUMENT. An Order Entry
+    // payment sits on the hq_sales_orders record; a CPQ one sits on the JOB the order was raised
+    // from, because that is the document staff take a deposit against. Resolving the NetSuite id to
+    // the sales-order record alone would find no card money for any CPQ order — exactly the trap
+    // this function exists to prevent, just at the other door. So we follow hqJobId too.
+    const ids = [];
+    if (id) ids.push(id);
+    if (String(nsSoId || '')) {
         const q = await db.collection('hq_sales_orders').where('nsInternalId', '==', String(nsSoId)).limit(1).get();
-        if (!q.empty) { col = 'hq_sales_orders'; id = q.docs[0].id; }
+        if (!q.empty) {
+            const so = { id: q.docs[0].id, ...(q.docs[0].data() || {}) };
+            col = '';                                        // either collection may answer now
+            if (!ids.includes(so.id)) ids.push(so.id);
+            const jobId = String(so.hqJobId || '');           // the CPQ job this order came from
+            if (jobId && !ids.includes(jobId)) ids.push(jobId);
+        }
     }
-    if (!id) return { unpostedTotal: 0, count: 0, found: false };
+    if (!ids.length) return { unpostedTotal: 0, count: 0, found: false };
 
-    // ONE equality filter, on purpose: a docId is specific enough that the result is tiny, and this
-    // needs no composite index to be deployed alongside the function.
-    const snap = await db.collection('payments').where('docId', '==', id).limit(100).get();
+    // ONE equality filter on a single field, on purpose: a docId is specific enough that the result
+    // is tiny, and `in` on one field needs no composite index deployed alongside the function.
+    const snap = await db.collection('payments').where('docId', 'in', ids.slice(0, 10)).limit(100).get();
     const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).filter((p) =>
         (!col || String(p.collection || '') === col)
         && p.environment === 'PRODUCTION'          // a test payment can never clear a real shipment
@@ -3777,7 +3789,7 @@ exports.paymentsUnpostedForOrder = onCall({ enforceAppCheck: true }, async (requ
 
     return {
         found: true,
-        collection: col, docId: id,
+        collection: col, docId: ids[0], docIds: ids,
         unpostedTotal: Math.round(rows.reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100,
         count: rows.length,
         // So a held order can say WHY it was cleared, and a person can find the payment.
