@@ -85,6 +85,12 @@ function handoffLine(l, part, finishName = '', clientFinishName = '', subFinishC
         ...(l.sku || l.aliasCode ? { clientSku: l.sku || l.aliasCode } : {}),
         ...(l.hidden ? { hidden: true } : {}),
         ...(l.isFee ? { isFee: true } : {}),
+        // WHAT IT IS AND WHERE IT SITS (Stuart 2026-10-18, "1-b": on Fabricut's paper a cover plate prints as an upgrade line
+        // under its own bracket or return). The engine pairs a plate with the arm at its position and tier (hardwareModel
+        // .armOf); the saved line now keeps those facts so a document can too. Words only — nothing reads them to build or bill.
+        ...(l.role ? { role: String(l.role).toUpperCase() } : {}),
+        ...(l.position ? { position: String(l.position).toUpperCase() } : {}),
+        ...(l.tier ? { tier: String(l.tier).toUpperCase() } : {}),
         // ⚠ THE FINISH, PER LINE (Stuart 2026-08-21: "of course in the bom to send along to
         // finishing … in case people do choose different finishes for different parts"). The item
         // has carried `finishes`/`finishLabel` for the whole configuration since the old engine and

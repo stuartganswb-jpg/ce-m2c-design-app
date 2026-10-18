@@ -423,6 +423,8 @@ export function priceConfiguration(model, ctx = {}) {
             hidden: !!entry.hidden,   // built and billed, never shown on a customer document
             role: entry.role || '',
             position: entry.position || '',
+            // …and which rod of a double it belongs to, so a plate can be printed under ITS arm (Stuart 2026-10-18, 1-b).
+            ...(tierOf(entry) ? { tier: tierOf(entry) } : {}),
         };
         if (!isItemKit(part)) return [line];
         const kit = kitComponentLines(line, part, ctx, kitCollar.get(String(entry.id || '')) || null);

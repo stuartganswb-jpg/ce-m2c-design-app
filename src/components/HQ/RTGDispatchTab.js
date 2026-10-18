@@ -3470,7 +3470,8 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
         // doc's just not customer docs"). A packing slip keeps them — the standoff is in the box.
         // The finish is stamped into each line's name by customerDocLines itself (per-line stamp
         // first, configuration-level fallback) — ONE place, so no form can disagree.
-        const lines = customerDocLines(job?.cpqData?.breakdown || [], formType, cartFinishLabelOf(job?.cpqData)).map(l => ({
+        // the customer, so Fabricut's paper reads as the CRM prints it (a cover plate under its arm — Stuart 2026-10-18, 1-b)
+        const lines = customerDocLines(job?.cpqData?.breakdown || [], formType, cartFinishLabelOf(job?.cpqData), { custKeys: customerKeys(job?.customer?.id || '', { name: job?.customer?.name || job?.clientName || '' }) }).map(l => ({
             item: l.legacyErpId || l.partId || '',
             custItem: l.clientSku || '',     // the customer's own number — a blind packing list prints it (printDoc)
             desc: String(l.name || '').replace(/^\s*[-▶]\s*/, '').trim(),

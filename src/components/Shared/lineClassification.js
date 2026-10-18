@@ -288,10 +288,51 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
     };
     // Automatic hardware — an F-clip hanger, an end plug, an end stopper (Shared/autoParts) — is not something the
     // customer chose and, at $0.00, only confused them (Stuart 2026-10-02, QUO188). It stays on every other reader.
-    return real.filter(l => !l.hidden && !l.shopOnly && !leftOffCustomerPaper(l))
+    // ── A COVER PLATE PRINTS UNDER ITS ARM, ON FABRICUT'S PAPER (Stuart 2026-10-18: "fold them into the bracket line, show
+    // coverplate upgrades as line below" · "1-b" · "fabricut paper for display, for netsuite just push both bracket arm and
+    // plates as they are both parts with inventory"). A plate is chosen FOR an arm — the bracket at its position, or the
+    // return that replaced the bracket there (hardwareModel.armOf / the slot rule) — at its tier on a double. On Fabricut's
+    // money documents the standard plate the arm's price includes ($0) folds into the arm's line, and a cover plate prints
+    // directly under its arm as "Cover plate upgrade", under H1-CPF, the cover-plate code on Fabricut's own purchase orders
+    // (their price list has no plate numbers — the plates are folded into the brackets). Lines saved before the saved line
+    // carried role / position (2026-10-18) print exactly as before; every other customer's paper too; the floors, the
+    // packing list and NetSuite never come through here.
+    const keysOf = (k) => (k instanceof Set ? [...k] : (Array.isArray(k) ? k : []));
+    const fabricutPaper = keysOf(custKeys).some(k => /FABRICUT/.test(String(k || '').toUpperCase()));
+    const ARM_ROLES = ['BRACKET', 'RETURN', 'INSIDE_MOUNT'];
+    const roleU = (l) => String((l && l.role) || '').toUpperCase();
+    const platesUnderArms = (rows) => {
+        if (!fabricutPaper) return rows;
+        const arrange = (group) => {
+            const plates = group.filter(l => roleU(l) === 'BACKPLATE' && l.position);
+            if (!plates.length) return group;
+            const seated = new Set();
+            const out = [];
+            const armFor = (plate) => group.find(a => ARM_ROLES.includes(roleU(a)) && String(a.position || '').toUpperCase() === String(plate.position).toUpperCase()
+                && (!plate.tier || !a.tier || String(a.tier).toUpperCase() === String(plate.tier).toUpperCase()));
+            const byArm = new Map();
+            plates.forEach(pl => { const a = armFor(pl); if (a) { seated.add(pl); byArm.set(a, [...(byArm.get(a) || []), pl]); } });
+            group.forEach(l => {
+                if (seated.has(l)) return;
+                out.push(l);
+                (byArm.get(l) || []).forEach(pl => {
+                    if (!(Number(pl.total) > 0)) return;   // the standard plate the arm's price includes — folded into the arm's line
+                    const nm = String(pl.name || '').replace(/^\s*-\s*/, '').trim();
+                    out.push({ ...pl, name: `  - Cover plate upgrade — ${nm}`, clientSku: pl.clientSku || 'H1-CPF', coverPlateUpgrade: true });
+                });
+            });
+            return out;
+        };
+        const out = [];
+        let group = [];
+        rows.forEach(l => { if (l && l.isHeader) { out.push(...arrange(group)); group = []; out.push(l); } else group.push(l); });
+        out.push(...arrange(group));
+        return out;
+    };
+    return platesUnderArms(real.filter(l => !l.hidden && !l.shopOnly && !leftOffCustomerPaper(l))
         .flatMap(l => (l.perFoot && Number(l.feet) > 0
             ? [kitFeet(l) || { ...l, qty: (Number(l.qty) || 1) * Number(l.feet), ...zeroed(l) }]
-            : kitCovered(l)))
+            : kitCovered(l))))
         // ── THE CUSTOMER'S PART# ON THE CUSTOMER'S PAPER (Stuart 2026-08-31, invoice S060147:
         // "it has a customer part# associated with it and Brimar is the chosen customer … it
         // should display their part#'s"). A line priced off the customer's own clientPricing row

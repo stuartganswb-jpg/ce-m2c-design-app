@@ -3156,6 +3156,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                   ...(line.itemKit ? { itemKit: true } : {}),
                   ...(line.inKit ? { inKit: true } : {}),
                   ...(line.kitOf ? { kitOf: line.kitOf } : {}),
+                  // What it is and where it sits — the money documents print a cover plate under ITS arm on Fabricut's
+                  // paper (Shared/lineClassification, Stuart 2026-10-18 "1-b"); words only.
+                  ...(line.role ? { role: line.role } : {}),
+                  ...(line.position ? { position: line.position } : {}),
+                  ...(line.tier ? { tier: line.tier } : {}),
                   cutLength: line.cutLength || null,
                   dimensions: line.dimensions || null
               });

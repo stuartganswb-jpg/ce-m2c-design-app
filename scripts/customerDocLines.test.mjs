@@ -245,5 +245,49 @@ for (const type of MONEY_DOC_TYPES) {
     eq('an item kit the customer pays for keeps its price', [sold.price, sold.total], [14, 700]);
 }
 
+// ── 1-b: on Fabricut's paper a cover plate prints under ITS arm, the $0 standard plate folds into it (Stuart 2026-10-18) ──
+{
+    const FAB = new Set(['CUST-4720', 'FABRICUT']);
+    const rows = [
+        { isHeader: true, name: '▶ H1-75 [WRD]', qty: 2, total: 621 },
+        { name: '  - In Line Bracket (4-5/8" P)', legacyErpId: 'H1-75ILE/P', clientSku: 'H3553F', qty: 2, price: 26.5, total: 53, role: 'BRACKET', position: 'CENTER' },
+        { name: '  - MITER RETURN', legacyErpId: 'H1-MRPF', clientSku: 'H1-MRPF', qty: 2, price: 50, total: 100, role: 'RETURN', position: 'LEFT' },
+        { name: '  - MITER RETURN', legacyErpId: 'H1-MRPF', clientSku: 'H1-MRPF', qty: 2, price: 50, total: 100, role: 'RETURN', position: 'RIGHT' },
+        { name: '  - Square Cover Plate for Returns', legacyErpId: 'H1-75RCP-S/P', qty: 2, price: 10, total: 20, role: 'BACKPLATE', position: 'LEFT' },
+        { name: '  - Square Cover Plate', legacyErpId: 'H1-75CP-S/P', qty: 2, price: 10, total: 20, role: 'BACKPLATE', position: 'CENTER' },
+        { name: '  - Square Cover Plate for Returns', legacyErpId: 'H1-75RCP-S/P', qty: 2, price: 10, total: 20, role: 'BACKPLATE', position: 'RIGHT' },
+        { name: '  - Chamfered Edge Ring', legacyErpId: 'H1-75BR/P', clientSku: 'H4527F', qty: 52, price: 3.5, total: 182, role: 'RING' },
+    ];
+    const fab = customerDocLines(rows, 'INVOICE', '', { custKeys: FAB }).filter(l => !l.isHeader && !l.isNetLine);
+    eq('each plate under its arm — the bracket\'s under the bracket, each return\'s under its return', fab.map(l => l.legacyErpId),
+        ['H3553F', 'H1-CPF', 'H1-MRPF', 'H1-CPF', 'H1-MRPF', 'H1-CPF', 'H4527F']);
+    const up = fab[1];
+    eq('the upgrade line: named, at its own price, under H1-CPF, our number kept for the match', [up.name, up.qty, up.price, up.total, up.houseItemNo, up.coverPlateUpgrade],
+        ['  - Cover plate upgrade — Square Cover Plate', 2, 10, 20, 'H1-75CP-S/P', true]);
+    eq('the money is unchanged', fab.reduce((n, l) => n + (Number(l.total) || 0), 0), 495);
+    const withStd = [...rows.slice(0, 2), { name: '  - Square Backplate', legacyErpId: 'H1-75BP-S/P', qty: 2, price: 0, total: 0, role: 'BACKPLATE', position: 'CENTER' }, rows[7]];
+    eq('the standard $0 plate folds into its bracket — no line of its own', customerDocLines(withStd, 'QUOTE', '', { custKeys: FAB }).filter(l => !l.isHeader && !l.isNetLine).map(l => l.legacyErpId), ['H3553F', 'H4527F']);
+    // a double: a plate of its tier under the arm of its tier
+    const dbl = [
+        { isHeader: true, name: '▶ H1-138D', qty: 1, total: 100 },
+        { name: 'Front bracket', legacyErpId: 'FB', qty: 1, price: 30, total: 30, role: 'BRACKET', position: 'CENTER', tier: 'FRONT' },
+        { name: 'Back bracket', legacyErpId: 'BB', qty: 1, price: 30, total: 30, role: 'BRACKET', position: 'CENTER', tier: 'BACK' },
+        { name: 'Back cover plate', legacyErpId: 'BCP', qty: 1, price: 10, total: 10, role: 'BACKPLATE', position: 'CENTER', tier: 'BACK' },
+        { name: 'Front cover plate', legacyErpId: 'FCP', qty: 1, price: 10, total: 10, role: 'BACKPLATE', position: 'CENTER', tier: 'FRONT' },
+    ];
+    eq('a double: each plate under the arm of its own rod', customerDocLines(dbl, 'QUOTE', '', { custKeys: FAB }).filter(l => !l.isHeader && !l.isNetLine).map(l => l.houseItemNo || l.legacyErpId), ['FB', 'FCP', 'BB', 'BCP']);
+    // a plate with no arm at its position stays where it was
+    const lone = [rows[0], rows[1], { name: '  - Square Cover Plate', legacyErpId: 'H1-75CP-S/P', qty: 1, price: 10, total: 10, role: 'BACKPLATE', position: 'LEFT' }];
+    eq('a plate with no arm at its position stays as it was', customerDocLines(lone, 'QUOTE', '', { custKeys: FAB }).filter(l => !l.isHeader && !l.isNetLine).map(l => l.legacyErpId), ['H3553F', 'H1-75CP-S/P']);
+    // everyone else's paper, and lines saved before role / position, read exactly as before
+    eq('another customer\'s paper is unchanged', customerDocLines(rows, 'INVOICE', '', { custKeys: new Set(['CUST-1', 'BRIMAR']) }).filter(l => !l.isHeader && !l.isNetLine).map(l => l.legacyErpId),
+        ['H1-75ILE/P', 'H1-MRPF', 'H1-MRPF', 'H1-75RCP-S/P', 'H1-75CP-S/P', 'H1-75RCP-S/P', 'H1-75BR/P'].map((c, i) => [rows[1], rows[2], rows[3], rows[4], rows[5], rows[6], rows[7]][i].clientSku || c));
+    const old = rows.map(({ role, position, ...l }) => l);
+    eq('a quote saved before the line carried role / position is unchanged', customerDocLines(old, 'INVOICE', '', { custKeys: FAB }).filter(l => !l.isHeader && !l.isNetLine).map(l => l.houseItemNo || l.legacyErpId),
+        ['H1-75ILE/P', 'H1-MRPF', 'H1-MRPF', 'H1-75RCP-S/P', 'H1-75CP-S/P', 'H1-75RCP-S/P', 'H1-75BR/P']);
+    eq('the packing list (not money) keeps every piece where it was', customerDocLines(rows, 'PACKING_SLIP', '', { custKeys: FAB }).filter(l => !l.isHeader).map(l => l.legacyErpId),
+        ['H1-75ILE/P', 'H1-MRPF', 'H1-MRPF', 'H1-75RCP-S/P', 'H1-75CP-S/P', 'H1-75RCP-S/P', 'H1-75BR/P']);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);
