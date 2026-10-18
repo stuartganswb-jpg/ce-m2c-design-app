@@ -69,3 +69,27 @@ export function collectPrintStyles(nodes) {
         .filter(Boolean)
         .join('\n');
 }
+
+// ── A DOCUMENT BREAKS ACROSS PAGES WHERE A READER WOULD (Eric's App Imp card 2026-10-16: "forms like Quotes and Invoices
+// don't have or adhere to page breaks for printing, and/or have correct page sizing" · Stuart 2026-10-17) ─────────────────
+// The CRM draws each document as a sheet (`.pdf-page`, 8.5in wide, its margins painted in as padding, 11in tall, 30px
+// apart) and kept its "a sheet starts a new page" rule inside its own screen — a <style> in the body, which the print
+// popup (it copies the HEAD) never received. So a quote longer than one sheet pushed every later sheet part-way down a
+// page, and nothing anywhere kept a row, a picture or the totals from being cut in half. These rules go into EVERY form
+// popup: a sheet starts a page and its painted margins move to the page box (so a sheet's second page has margins too);
+// a row, a picture, the totals, the pay block, the signature and the footer never split; a table's header repeats.
+export const SHEET_PAGE_CSS = '@page { size: Letter portrait; margin: 0.45in 0.35in; }';
+export const formPrintCss = () => `
+  @media print {
+    #printable-document { width: auto !important; gap: 0 !important; display: block !important; }
+    .pdf-page { width: auto !important; min-height: 0 !important; padding: 0 !important; margin: 0 !important; box-shadow: none !important;
+      break-after: page; page-break-after: always; }
+    .pdf-page:last-child { break-after: auto; page-break-after: auto; }
+    .no-print { display: none !important; }
+    .ce-form { border: none !important; box-shadow: none !important; max-width: none !important; padding: 0 !important; }
+    thead { display: table-header-group; }
+    tr, figure, img, .ce-form-keep { break-inside: avoid; page-break-inside: avoid; }
+    h1, h2, h3 { break-after: avoid; page-break-after: avoid; }
+  }`;
+/** The page box: a document drawn as sheets prints at the sheets' own margins; anything else as the caller says. */
+export const pageCssFor = (markup, callerPageCss) => (/\bpdf-page\b/.test(String(markup || '')) ? SHEET_PAGE_CSS : (callerPageCss || '@page { size: Letter portrait; margin: 0.5in; }'));

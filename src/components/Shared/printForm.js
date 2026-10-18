@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { collectPrintStyles } from './printStyles';
+import { collectPrintStyles, formPrintCss, pageCssFor } from './printStyles';
 
 // Print a React element (e.g. <FormPreview/>) as a standalone document in a new window. We copy the
 // app's stylesheets + :root CSS variables so the branded form — fonts, light-grey shading, and the
@@ -26,8 +26,11 @@ export function printForm(element, title = 'Document', opts = {}) {
     ${headStyles}
     <style>
       /* Declared LAST and with an explicit size so nothing copied above can decide the page for
-         us — a form is Letter portrait, whatever was printed in this tab before it. */
-      ${opts.pageCss || '@page { size: Letter portrait; margin: 0.5in; }'}
+         us — a form is Letter portrait, whatever was printed in this tab before it. A document drawn
+         as SHEETS (.pdf-page) prints at its sheets' own margins, which move from the artwork to the page
+         box so a sheet that runs onto a second page has them there too (Shared/printStyles.formPrintCss). */
+      ${pageCssFor(markup, opts.pageCss)}
+      ${formPrintCss()}
       html, body { margin: 0; padding: 0; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     </style>
   </head><body>${markup}</body></html>`);

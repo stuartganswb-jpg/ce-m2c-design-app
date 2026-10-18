@@ -2,6 +2,7 @@ import React from 'react';
 import { cutText } from './configQty';
 import Barcode from './Barcode';
 import { blindItemNoOf } from './blindShip';
+import { termNameOf } from './nsTerms';
 
 // Live, print-style preview of a branded document (Sales Order / Packing List / Invoice / Quote …).
 // Serif headings, mono labels, sans body, light-grey shaded header blocks, and the document number
@@ -73,7 +74,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
   const charges = allLines.filter(l => l.afterSubtotal);
   const date = d.date || (isSample ? '06/27/2026' : '—');
   const po = d.po || (isSample ? 'CUST-10239' : '—');
-  const termsLabel = d.termsLabel || (isSample ? 'Net 30' : '—');
+  const termsLabel = termNameOf(d.termsLabel) || (isSample ? 'Net 30' : '—');   // a NetSuite term id prints by its name (Shared/nsTerms)
 
   const lineAmount = (l) => (l.amount != null ? Number(l.amount) || 0 : (Number(l.qty) || 0) * (Number(l.price) || 0));
   // ⚠ A SUBTOTAL ROW IS NOT A LINE — IT IS THE ROWS ABOVE IT (2026-09-21). "Net Line Total" states
@@ -94,7 +95,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
   const shaded = { background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px', padding: '12px 14px' };
 
   return (
-    <div style={{ background: '#fff', border: '1px solid var(--line)', boxShadow: '0 8px 30px rgba(0,0,0,0.06)', width: '100%', maxWidth: '820px', margin: '0 auto', padding: '44px 48px', fontFamily: 'var(--sans)', color: 'var(--ink)' }}>
+    <div className="ce-form" style={{ background: '#fff', border: '1px solid var(--line)', boxShadow: '0 8px 30px rgba(0,0,0,0.06)', width: '100%', maxWidth: '820px', margin: '0 auto', padding: '44px 48px', fontFamily: 'var(--sans)', color: 'var(--ink)' }}>
 
       {/* Masthead */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', borderBottom: '2px solid var(--ink)', paddingBottom: '18px' }}>
@@ -228,7 +229,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
 
       {/* Totals */}
       {showMoney && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+        <div className="ce-form-keep" style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
           <div style={{ width: '260px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '12px', fontFamily: 'var(--mono)' }}><span style={{ color: 'var(--ink-soft)' }}>SUBTOTAL</span><span>{money(subtotal)}</span></div>
             {charges.map((c, i) => (
@@ -252,7 +253,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
           to add it"). `pay` = { url, qrSvg, amountDue, label } from Shared/PayLinkPanel; without it
           the document prints exactly as it always has. */}
       {pay && (pay.url || Number(pay.paidTotal) > 0) && (
-        <div style={{ marginTop: '24px', border: '1px solid var(--line)', padding: '14px 16px', display: 'flex', gap: '16px', alignItems: 'center' }}>
+        <div className="ce-form-keep" style={{ marginTop: '24px', border: '1px solid var(--line)', padding: '14px 16px', display: 'flex', gap: '16px', alignItems: 'center' }}>
           {pay.qrSvg ? <div style={{ width: '104px', height: '104px', flex: '0 0 104px' }} dangerouslySetInnerHTML={{ __html: pay.qrSvg }} /> : null}
           <div style={{ minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--brass)', marginBottom: '4px' }}>
@@ -291,7 +292,7 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
       )}
 
       {(footer || terms) && !blind && (
-        <div style={{ marginTop: '26px', borderTop: '1px solid var(--line)', paddingTop: '16px' }}>
+        <div className="ce-form-keep" style={{ marginTop: '26px', borderTop: '1px solid var(--line)', paddingTop: '16px' }}>
           {footer ? <div style={{ fontSize: '12px', color: 'var(--ink)', marginBottom: terms ? '10px' : 0 }}>{footer}</div> : null}
           {terms ? <div style={{ fontSize: '9px', lineHeight: 1.6, color: 'var(--ink-soft)', fontFamily: 'var(--sans)' }}>{terms}</div> : null}
         </div>
@@ -299,14 +300,14 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
 
       {/* Client approval signatures on quotes */}
       {type === 'QUOTE' && (
-        <div style={{ marginTop: '40px', display: 'flex', justifyContent: 'space-between', gap: '40px' }}>
+        <div className="ce-form-keep" style={{ marginTop: '40px', display: 'flex', justifyContent: 'space-between', gap: '40px' }}>
           <div style={{ flex: 1, borderTop: '1px solid var(--line)', paddingTop: '8px', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Client Approval Signature</div>
           <div style={{ width: '180px', borderTop: '1px solid var(--line)', paddingTop: '8px', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Date</div>
         </div>
       )}
 
       {/* Document number — print + barcode at the bottom of every form (the NetSuite spine) */}
-      <div style={{ marginTop: '34px', paddingTop: '16px', borderTop: '2px solid var(--ink)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+      <div className="ce-form-keep" style={{ marginTop: '34px', paddingTop: '16px', borderTop: '2px solid var(--ink)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
           <span style={label}>{title} Number</span>
           <div style={{ fontFamily: 'var(--mono)', fontSize: '18px', fontWeight: 600, letterSpacing: '.05em' }}>{docNumber}</div>

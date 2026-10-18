@@ -4,6 +4,7 @@ import { doc, updateDoc } from 'firebase/firestore';
 import { nsProxyFetch } from './nsProxy';
 import { printForm } from './printForm';
 import { usePayBlock } from './payBlock';
+import { termNameOf } from './nsTerms';   // a NetSuite term id prints by its name
 
 // ============================================================================
 // QUICK SHIP INVOICE (Stuart 2026-07-17) — the customer-facing document.
@@ -125,7 +126,7 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                                 <div><span style={{ color: '#8a857c' }}>DATE</span> {new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
                                 {order.customerPo ? <div><span style={{ color: '#8a857c' }}>P.O.</span> {order.customerPo}</div> : null}
                                 {sidemark ? <div><span style={{ color: '#8a857c' }}>SIDEMARK</span> {sidemark}</div> : null}
-                                {customer?.terms ? <div><span style={{ color: '#8a857c' }}>TERMS</span> {customer.terms}</div> : null}
+                                {customer?.terms ? <div><span style={{ color: '#8a857c' }}>TERMS</span> {termNameOf(customer.terms)}</div> : null}
                                 {(order.needBy || order.needByDate) ? <div style={{ fontWeight: 700 }}><span style={{ color: '#8a857c', fontWeight: 400 }}>NEED BY</span> {(order.needBy || order.needByDate)}</div> : null}
                             </div>
                         </div>
