@@ -26,7 +26,10 @@ export function invoiceDocOf({ priced = [], packingList = null, shippingAmount =
     if (!adjusted) {
         return { rows, total: round2(num(orderedTotal) + shipping), adjusted: false, factor: 1, note: '' };
     }
-    const phys = rows.filter(isPhysicalLine);
+    // Every goods row, by what was ORDERED — a line that shipped nothing (qty 0) is still goods: it counts as a line that
+    // differs, and its ordered dollars stay in the pro-rating (it used to drop out of both — SO60427 read "0 line(s)
+    // differ" with three lines billed at nothing).
+    const phys = rows.filter(r => r && isPhysicalLine({ ...r, qty: r.qtyOrdered ?? r.qty }));
     const physOrdered = phys.reduce((s, r) => s + num(r.price) * num(r.qtyOrdered ?? r.qty), 0);
     const physShipped = phys.reduce((s, r) => s + amountOf(r), 0);
     const factor = physOrdered > 0 ? physShipped / physOrdered : 0;

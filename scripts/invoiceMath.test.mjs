@@ -4,6 +4,7 @@
 
 import { invoiceDocOf } from '../src/components/Shared/invoiceMath.js';
 import { packingListOf } from '../src/components/Shared/packingList.js';
+import { customerDocLines } from '../src/components/Shared/lineClassification.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${name}\n    got  ${g}\n    want ${w}`); };
@@ -48,6 +49,41 @@ const short = { ...full, packedLines: { L0: { at: 1, by: 'S', qty: 7 }, L1: { at
 {
     const d = invoiceDocOf({ priced, packingList: null, shippingAmount: 0, orderedTotal });
     eq('no packing list: adjusted, everything at 0 but the fee', [d.adjusted, d.total], [true, 40]);
+}
+
+// ── SO60427 (Fabricut) end to end, as stored 2026-10-17 — Eric's App Imp card: the invoice read $260 of $621 ─────────
+{
+    const r = (o) => ({ finishCode: 'P16', finishLabel: 'P16', isFee: false, qtyEach: 1, configQty: 2, ...o });
+    const breakdown = [
+        { isHeader: true, total: 621, qty: 2, name: '▶ H1-75 [WRD]' },
+        r({ name: '  - 3/4" Round Hollow Rod Stock (14 GA)', partHandling: 'Custom', legacyErpId: 'H1-75R', perFoot: true, total: 126, clientSku: 'H2578F', qty: 2, cutLength: 76, feet: 7, price: 9 }),
+        r({ name: '  - MITER RETURN', partHandling: 'CUSTOM', legacyErpId: 'H1-MRPF', clientSku: 'H1-MRPF', qty: 2, price: 50, total: 100 }),
+        r({ name: '  - MITER RETURN', partHandling: 'CUSTOM', legacyErpId: 'H1-MRPF', clientSku: 'H1-MRPF', qty: 2, price: 50, total: 100 }),
+        r({ name: '  - In Line Bracket (4-5/8" P)', partHandling: 'Small Parts', legacyErpId: 'H1-75ILE/P', clientSku: 'H3553F', qty: 2, price: 26.5, total: 53 }),
+        r({ name: '  - Square Cover Plate for Returns', partHandling: 'Small Parts', legacyErpId: 'H1-75RCP-S/P', clientSku: null, qty: 2, price: 10, total: 20 }),
+        r({ name: '  - Square Cover Plate', partHandling: 'Small Parts', legacyErpId: 'H1-75CP-S/P', clientSku: null, qty: 2, price: 10, total: 20 }),
+        r({ name: '  - Square Cover Plate for Returns', partHandling: 'Small Parts', legacyErpId: 'H1-75RCP-S/P', clientSku: null, qty: 2, price: 10, total: 20 }),
+        r({ name: '  - Chamfered Edge Ring for .75" Rod', partHandling: 'Small Parts', legacyErpId: 'H1-75BR/P', clientSku: 'H4527F', qty: 52, qtyEach: 26, price: 3.5, total: 182 }),
+    ];
+    const pl = (o) => ({ finishCode: 'P16', configQty: 2, clientSku: '', qtyEach: 1, ...o });
+    const doc = { id: 'WO-SO60427', orderType: 'sales', packStatus: 'Packed', currentPhase: 'Complete', hasCustomSibling: true, customFabStatus: 'Complete',
+        partsList: [pl({ name: 'In Line Bracket', legacyErpId: 'H1-75ILE/P', qty: 2 }), pl({ name: 'Square Cover Plate for Returns', legacyErpId: 'H1-75RCP-S/P', qty: 2 }),
+            pl({ name: 'Square Cover Plate', legacyErpId: 'H1-75CP-S/P', qty: 2 }), pl({ name: 'Square Cover Plate for Returns', legacyErpId: 'H1-75RCP-S/P', qty: 2 }),
+            pl({ name: 'Chamfered Edge Ring', legacyErpId: 'H1-75BR/P', qty: 52, qtyEach: 26 })],
+        poleLines: [{ length: 76, qty: 2, unit: 'in', code: 'H1-75R', name: 'Rod', riders: [{ qty: 2, code: 'H1-MRPF', name: 'MITER RETURN' }, { qty: 2, code: 'H1-MRPF', name: 'MITER RETURN' }] }],
+        packedLines: { 'POLE-0': { qty: 2 }, L0: { qty: 2 }, L1: { qty: 2 }, L2: { qty: 2 }, L3: { qty: 2 }, L4: { qty: 52 }, 'POLE-0-R0': { qty: 2, withPole: 'POLE-0' }, 'POLE-0-R1': { qty: 2, withPole: 'POLE-0' } } };
+    const ordered = customerDocLines(breakdown, 'PACKING_SLIP', '', {}).filter(l => !l.isKit);
+    const packingList = packingListOf({ ordered, packDocs: [doc] });
+    const inv = invoiceDocOf({ priced: customerDocLines(breakdown, 'INVOICE', '', {}), packingList, shippingAmount: 0, orderedTotal: 621 });
+    eq('SO60427: everything shipped → the invoice IS the order, $621', [inv.total, inv.adjusted, inv.note], [621, false, '']);
+    eq('SO60427: Fabricut\'s numbers still print on the invoice', inv.rows.filter(x => x.clientSku).map(x => x.legacyErpId), ['H2578F', 'H1-MRPF', 'H1-MRPF', 'H3553F', 'H4527F']);
+    // the rings left behind: a line that shipped nothing is a line that differs, and its dollars stay in the pro-rating
+    const noRings = { ...doc, packedLines: { ...doc.packedLines, L4: { qty: 0 } } };
+    const inv2 = invoiceDocOf({ priced: customerDocLines([...breakdown, { isDiscount: true, name: 'Trade discount', total: -62.1, amount: -62.1 }], 'INVOICE', '', {}),
+        packingList: packingListOf({ ordered, packDocs: [noRings] }), shippingAmount: 0, orderedTotal: 558.9 });
+    eq('no rings: one line differs, said', /^Billed at shipped quantities: 1 line\(s\) differ/.test(inv2.note), true);
+    eq('no rings: the rings bill nothing', inv2.rows.find(x => x.legacyErpId === 'H4527F').amount, 0);
+    eq('no rings: the discount follows the goods that went', Math.round(inv2.rows.find(x => x.isDiscount).amount * 100) / 100, Math.round(-62.1 * ((621 - 182) / 621) * 100) / 100);
 }
 
 console.log(`\ninvoiceMath: ${pass} passed, ${fail} failed`);

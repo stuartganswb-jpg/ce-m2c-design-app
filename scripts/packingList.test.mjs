@@ -63,5 +63,25 @@ ok('sales may not', !canReopenInProduction('sales'));
 eq('packed state: every pack doc packed', packedStateOf({ status: 'Dispatched' }, [fin, { packStatus: 'Packed', packedAt: 2000, nsIfTran: 'IF1' }]), { packed: true, packedAt: 2000, shipped: true, tracking: [] });
 eq('packed state: one doc still open → not packed', packedStateOf({ status: 'Dispatched' }, [fin, { packStatus: null }]).packed, false);
 eq('packed state: quick ship reads the SO doc', packedStateOf({ orderClass: 'QUICKSHIP', packStatus: 'Packed', packedAt: 9, status: 'Shipped', trackingNumbers: ['1Z'] }), { packed: true, packedAt: 9, shipped: true, tracking: ['1Z'] });
+// ── Eric's App Imp card 2026-10-16 (SO60427, Fabricut): the invoice billed $260 of $621 ─────────────────────────────
+{
+    const list = { lines: [{ code: 'H1-75R', qtyShipped: 2 }, { code: 'H1-75ILE/P', qtyShipped: 2 }, { code: 'H1-75BR/P', qtyShipped: 52 }] };
+    // a money row priced off the customer's own row prints THEIR number and keeps ours on houseItemNo
+    const theirs = (code, house, o) => ({ legacyErpId: code, houseItemNo: house, clientSku: code, ...o });
+    const rows = invoiceLinesOf({ priced: [
+        theirs('H2578F', 'H1-75R', { qty: 14, price: 9, total: 126, perFoot: true, feet: 7 }),
+        theirs('H3553F', 'H1-75ILE/P', { qty: 2, price: 26.5, total: 53 }),
+        theirs('H4527F', 'H1-75BR/P', { qty: 52, price: 3.5, total: 182 }),
+    ], packingList: list });
+    eq('matched by OUR number, their number still printed', rows.map(r => [r.legacyErpId, r.qty, r.amount, r.invoiceAdjusted]), [['H2578F', 14, 126, false], ['H3553F', 2, 53, false], ['H4527F', 52, 182, false]]);
+    const short = invoiceLinesOf({ priced: [{ legacyErpId: 'H1-75R', qty: 14, price: 9, perFoot: true, feet: 7 }], packingList: { lines: [{ code: 'H1-75R', qtyShipped: 1 }] } })[0];
+    eq('a pole: one of two shipped → 7 of the 14 feet billed', [short.qty, short.amount, short.invoiceAdjusted], [7, 63, true]);
+    const kit = invoiceLinesOf({ priced: [{ legacyErpId: 'H1-138R', qty: 16, price: 15, perFoot: true, feet: 12, billedFeet: 8 }], packingList: { lines: [{ code: 'H1-138R', qtyShipped: 2 }] } })[0];
+    eq('a pole under a kit bills the feet above the kit, per pole shipped', [kit.qty, kit.amount, kit.invoiceAdjusted], [16, 240, false]);
+    const none = invoiceLinesOf({ priced: [{ legacyErpId: 'H1-75R', qty: 14, price: 9, perFoot: true, feet: 7 }], packingList: { lines: [] } })[0];
+    eq('nothing shipped → nothing billed, said', [none.qty, none.amount, none.invoiceAdjusted], [0, 0, true]);
+    const ours = invoiceLinesOf({ priced: [{ legacyErpId: 'H1-75ILE/P', qty: 2, price: 26.5 }], packingList: list })[0];
+    eq('a line on our own number reads as before', [ours.qty, ours.amount], [2, 53]);
+}
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

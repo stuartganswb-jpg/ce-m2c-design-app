@@ -113,17 +113,30 @@ export function packingListOf({ ordered = [], packDocs = [], shipDate = null, tr
  * "sales order items and prices × packing slip qty"). Paper rows (fees, discount, net) pass
  * through untouched — their arithmetic is the money reader's (S1), not this module's.
  */
+//
+// TWO THINGS A PRICED LINE SAYS DIFFERENTLY FROM THE PACKING LIST (Eric's App Imp card 2026-10-16, SO60427 · Stuart
+// 2026-10-17 "go on 1" — the invoice billed $260 of a $621 order):
+//   · ITS NUMBER. On a money document a line priced off the customer's own row prints THEIR number (Fabricut's
+//     H2578F) and keeps ours on `houseItemNo` (Shared/lineClassification.customerDocLines). The packing list counts by
+//     OUR number, so the match is by ours — the customer's number still prints.
+//   · ITS QUANTITY, FOR A POLE. A pole is sold by the foot and packed as a piece: the priced line's qty is the FEET
+//     billed (pieces × feet, or pieces × billedFeet under a kit) while the packing list counts poles. What shipped is
+//     counted in pieces and billed back in feet.
 export function invoiceLinesOf({ priced = [], packingList }) {
     const pool = new Map();
     ((packingList && packingList.lines) || []).forEach(x => { if (x.code) pool.set(x.code, (pool.get(x.code) || 0) + x.qtyShipped); });
+    const r3 = (n) => Math.round(n * 1000) / 1000;
     return (priced || []).map(l => {
         if (!isPhysicalLine(l)) return l;
-        const code = codeOf(l);
+        const code = up(l.houseItemNo) || codeOf(l);
         const qtyOrdered = num(l.qty ?? l.quantity);
         const unit = l.price != null ? num(l.price) : (qtyOrdered ? num(l.amount) / qtyOrdered : 0);
+        const perPiece = l.perFoot ? (num(l.billedFeet) > 0 ? num(l.billedFeet) : num(l.feet)) : 0;   // feet billed per pole
+        const piecesOrdered = perPiece > 0 ? r3(qtyOrdered / perPiece) : qtyOrdered;
         const avail = code ? (pool.get(code) || 0) : 0;
-        const qty = Math.min(avail, qtyOrdered);
-        if (code) pool.set(code, Math.max(0, avail - qty));
+        const pieces = Math.min(avail, piecesOrdered);
+        if (code) pool.set(code, Math.max(0, avail - pieces));
+        const qty = perPiece > 0 ? r3(pieces * perPiece) : pieces;
         return { ...l, qtyOrdered, qty, price: unit, amount: Math.round(unit * qty * 100) / 100, invoiceAdjusted: qty !== qtyOrdered };
     });
 }
