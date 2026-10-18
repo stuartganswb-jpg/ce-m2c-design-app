@@ -2740,6 +2740,7 @@ const resolvePaymentTargets = async (pay) => {
     let salesOrderNsId = '';
     let invoiceNsId = '';
     let reference = pay.reference || '';
+    let heldReason = '';
 
     if (Array.isArray(pay.invoices) && pay.invoices.length) {
         return { brand, locationId, customerId, salesOrderNsId: '', invoiceNsId: String(pay.invoices[0].id || ''), reference };
@@ -2749,6 +2750,15 @@ const resolvePaymentTargets = async (pay) => {
     if (d) {
         customerId = customerId || String((d.customer && d.customer.id) || d.customerId || '');
         reference = reference || (pay.collection === 'jobs' ? String(d.quoteNo || d.jobId || d.id) : `SO ${d.soId || d.id}`);
+        // WHY the order has not reached NetSuite, when the order itself says so. These are the
+        // app's own holds, not faults — each has a person and a screen that clears it.
+        if (!d.nsInternalId) {
+            if (String(d.status || '') === 'HELD_PLACEHOLDER' || d.nsHold) {
+                heldReason = 'a quick-add item on this order still has to be identified before NetSuite will take it — RTG\u2019s order card, or the order row on the customer\u2019s CRM card';
+            } else if (String(d.status || '') === 'NS_QUEUED') {
+                heldReason = 'the sales order is queued for NetSuite and has not been accepted yet';
+            }
+        }
         if (pay.collection === 'hq_sales_orders') {
             salesOrderNsId = String(d.nsInternalId || '');
             if (d.nsInvoiceNo) {
@@ -2761,7 +2771,7 @@ const resolvePaymentTargets = async (pay) => {
             if (!so.empty) salesOrderNsId = String((so.docs[0].data() || {}).nsInternalId || '');
         }
     }
-    return { brand, locationId, customerId, salesOrderNsId, invoiceNsId, reference };
+    return { brand, locationId, customerId, salesOrderNsId, invoiceNsId, reference, heldReason };
 };
 
 // Post one recorded payment. Safe to call twice: a posted or queued payment is left alone, and a
@@ -2784,7 +2794,13 @@ const postPaymentToNetSuite = async (paymentId) => {
         locationId: t.locationId, amount: pay.amount, environment: pay.environment,
     });
     if (!state.ready) {
-        await ref.set({ netsuiteWaiting: state.reason, netsuiteCheckedAt: Date.now() }, { merge: true });
+        // SAY WHAT A PERSON CAN DO ABOUT IT. "Waiting for the sales order to reach NetSuite" is true
+        // and useless: it describes the symptom. The ORDER knows the cause — and on 2026-10-18 two
+        // real deposits, $11,936 and $568, sat behind quick-add lines nobody had identified, with
+        // nothing anywhere saying that was the hold-up (found by the App Improvement session).
+        let reason = state.reason;
+        if (state.waiting && !t.salesOrderNsId && t.heldReason) reason = t.heldReason;
+        await ref.set({ netsuiteWaiting: reason, netsuiteCheckedAt: Date.now() }, { merge: true });
         return { ok: false, waiting: state.waiting, reason: state.reason };
     }
 
