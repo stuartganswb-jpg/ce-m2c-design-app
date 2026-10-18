@@ -69,6 +69,23 @@ const noName = paymentReceivedEmail({ brand: 'uniquity', reference: 'X', amount:
 ok(noName.text.startsWith('Thank you.'), 'no name, no awkward gap');
 ok(deposit.text.startsWith('Thank you, Uniquity Marketing.'), 'a name is used when we have one');
 
+// ── THE ORDER ITSELF, AS A LINK (2026-10-18) ─────────────────────────────────
+// There is no PDF and a browser-made one cannot run unattended, so the letter carries a page the
+// customer can open, read and print — always current, rather than a snapshot of this moment.
+{
+    const withDoc = paymentReceivedEmail({
+        brand: 'uniquity', reference: 'SOUNIQ-3996', amount: 516.8, paidTotal: 516.8, orderTotal: 6460,
+        docUrl: 'https://pay.uniquitystyle.com/#/doc/abc123',
+    });
+    ok(withDoc.text.includes('https://pay.uniquitystyle.com/#/doc/abc123'), 'the text carries the address in full');
+    ok(withDoc.html.includes('View your order'), 'the html offers a button');
+    ok(withDoc.html.includes('href="https://pay.uniquitystyle.com/#/doc/abc123"'), 'pointing at the order');
+    ok(withDoc.text.includes('showing what has been paid'), 'and says what it is');
+    const noDoc = paymentReceivedEmail({ brand: 'uniquity', reference: 'X', amount: 5 });
+    ok(!noDoc.html.includes('View your order'), 'no link, no button — never a dead one');
+    ok(!noDoc.text.includes('Your order, showing'), 'and nothing promised that is not there');
+}
+
 // ── NOTHING UNESCAPED REACHES AN INBOX ───────────────────────────────────────
 const nasty = paymentReceivedEmail({ brand: 'uniquity', customerName: '<script>alert(1)</script>', reference: 'A&B "quoted"', amount: 1 });
 ok(!nasty.html.includes('<script>'), 'a customer name cannot inject html into our own letter');

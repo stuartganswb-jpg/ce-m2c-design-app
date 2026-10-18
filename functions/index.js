@@ -2678,6 +2678,7 @@ exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_
 // in HQ 11.1, and refused twice by a dedupe key. A SANDBOX payment never posts.
 const nsPay = require('./nsPayment');
 const mail = require('./emailOutbox');
+const orderDoc = require('./orderDocument');
 
 // The brand's location, the same map the rest of the app pushes against.
 const NS_BRAND_LOCATION = { m2c: '19', ce: '17', uniquity: '20', leyla: '18' };
@@ -3705,9 +3706,19 @@ const emailPaymentReceived = async (paymentId) => {
             await skip(`No email address to send to — the payer typed none, the order carries none, and the customer record has none${to ? ` (found "${to}", which is not an address)` : ''}. Add one to the customer in the CRM and press Resend.`);
             return;
         }
+        // The order itself, as a page they can open — made once per document and reused, so an
+        // older email keeps working and three letters about one order share one address.
+        let docUrl = '';
+        try {
+            if (p.collection && p.docId) {
+                const cfg = await nmiConfig();
+                const t = await docLinkFor({ collection: p.collection, docId: p.docId, brand: p.brand, reference: p.reference });
+                docUrl = `${payBaseUrlOf(p.brand, cfg)}/#/doc/${t}`;
+            }
+        } catch (e) { docUrl = ''; }      // a receipt without a link still beats no receipt
         const letter = mail.paymentReceivedEmail({
             brand: p.brand, customerName, reference: p.reference,
-            amount: Number(p.amount || 0), paidTotal, orderTotal, transactionId: p.transactionId,
+            amount: Number(p.amount || 0), paidTotal, orderTotal, transactionId: p.transactionId, docUrl,
         });
         const { id, already } = await enqueueEmail({
             brand: p.brand, kind: 'PAYMENT_RECEIVED',
@@ -3798,4 +3809,55 @@ exports.paymentsUnpostedForOrder = onCall({ enforceAppCheck: true }, async (requ
             reference: p.reference || '', waiting: p.netsuiteWaiting || '',
         })),
     };
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// 📄  THE SALES ORDER BEHIND THE LINK IN THE EMAIL  (Stuart 2026-09-23 → built 2026-10-18)
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// "Once the payment is processed how can we make the app email a copy of the sales order showing
+// the deposit amount." There is no PDF renderer, and a browser-made one cannot run unattended —
+// nobody's screen is open at nine in the evening — so the letter carries a LINK to a page.
+//
+// The token IS the credential, exactly as the pay link's is: long, random, and standing for one
+// document. It carries no login, so a customer need not have one, and it expires.
+const DOC_LINK_DAYS = 120;      // long enough to be useful when an order ships months later
+
+const docLinkFor = async ({ collection, docId, brand, reference }) => {
+    const db = admin.firestore();
+    // ONE LINK PER DOCUMENT, reused: a customer who gets three emails about one order should see
+    // the same address each time, and an old email must keep working.
+    const found = await db.collection('doc_links')
+        .where('collection', '==', String(collection)).where('docId', '==', String(docId)).limit(1).get();
+    if (!found.empty) {
+        const d = found.docs[0];
+        await d.ref.set({ expiresAt: Date.now() + DOC_LINK_DAYS * 86400000 }, { merge: true });
+        return d.id;
+    }
+    const token = crypto.randomBytes(32).toString('base64url');
+    await db.collection('doc_links').doc(token).set({
+        token, collection: String(collection), docId: String(docId),
+        brand: String(brand || '').toLowerCase(), reference: String(reference || ''),
+        createdAt: Date.now(), expiresAt: Date.now() + DOC_LINK_DAYS * 86400000,
+    });
+    return token;
+};
+
+// What the page shows. Public by design — the token is the credential — and it returns ONLY what a
+// customer may see: their own order, its lines, and what they have paid. No costs, no internal
+// notes, no other customer.
+exports.docIntent = onCall({ cors: true }, async (request) => {
+    const token = String((request.data || {}).token || '');
+    const db = admin.firestore();
+    const snap = token ? await db.collection('doc_links').doc(token).get() : null;
+    if (!snap || !snap.exists) throw new HttpsError('not-found', 'This link is not valid.');
+    const link = snap.data() || {};
+    if (Number(link.expiresAt || 0) < Date.now()) throw new HttpsError('failed-precondition', 'This link has expired. Ask us for a new one.');
+
+    const d = await db.collection(String(link.collection)).doc(String(link.docId)).get();
+    if (!d.exists) throw new HttpsError('not-found', 'That order could not be found.');
+    const order = { id: d.id, ...(d.data() || {}) };
+    return orderDoc.orderDocumentOf(order, {
+        merchantName: PAY_MERCHANT_NAME[String(link.brand || '').toLowerCase()] || '',
+        reference: link.reference || order.soId || order.id,
+    });
 });

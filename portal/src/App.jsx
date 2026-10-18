@@ -12,6 +12,7 @@ const Policies = lazy(() => import('./Policies.jsx'));
 // The pay page is opened from a link on a quote / sales order / invoice — no login, the token is
 // the credential (single use, 30 days, revocable). Card fields are the gateway's own.
 const Pay = lazy(() => import('./Pay.jsx'));
+const Doc = lazy(() => import('./Doc.jsx'));   // 📄 a customer's own order, from the link in their receipt
 // Signed-in customers: what is owed, pay it, and keep cards for next time (the gateway's vault).
 const Payments = lazy(() => import('./Payments.jsx'));
 // The configurator, on HQ's own engine and drawn with HQ's own drawing code (the rebuild, step 4 — 2026-10-14). Its tab
@@ -360,6 +361,16 @@ export default function App() {
     return (
       <Suspense fallback={<div className="loading">One moment…</div>}>
         <Pay />
+      </Suspense>
+    );
+  }
+
+  // A customer's own sales order, opened from the link in their receipt. Public by the same rule
+  // as the pay page: the token IS the credential, and the customer may have no portal login.
+  if (route.startsWith('#/doc/')) {
+    return (
+      <Suspense fallback={<div className="loading">One moment…</div>}>
+        <Doc token={route.slice('#/doc/'.length).split(/[?#]/)[0]} />
       </Suspense>
     );
   }

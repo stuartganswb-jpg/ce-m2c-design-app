@@ -43,7 +43,7 @@ const dedupeKeyOf = (kind, ...parts) =>
 // ── THE LETTERS ──────────────────────────────────────────────────────────────────────────────
 // Plain, short, and factual. Everything in them is read from the order, never retyped.
 
-function paymentReceivedEmail({ brand, customerName, reference, amount, paidTotal, orderTotal, transactionId }) {
+function paymentReceivedEmail({ brand, customerName, reference, amount, paidTotal, orderTotal, transactionId, docUrl }) {
     const s = senderFor(brand);
     const paid = Number(paidTotal || amount || 0);
     const total = Number(orderTotal || 0);
@@ -61,6 +61,9 @@ function paymentReceivedEmail({ brand, customerName, reference, amount, paidTota
         lines.push(`Paid to date: ${money(paid)}`);
         lines.push(balance !== null && balance > 0.005 ? `Balance: ${money(balance)}` : 'Paid in full — nothing further is due.');
     }
+    // THE ORDER ITSELF, as a link. There is no PDF: a page they can open, read and print is what a
+    // customer actually wants, and it is always current rather than a snapshot of this moment.
+    if (str(docUrl)) { lines.push(''); lines.push('Your order, showing what has been paid:'); lines.push(str(docUrl)); }
     if (transactionId) { lines.push(''); lines.push(`Reference: ${str(transactionId)}`); }
     lines.push('');
     lines.push(`Reply to this email and it reaches us at ${s.replyTo}.`);
@@ -78,6 +81,8 @@ function paymentReceivedEmail({ brand, customerName, reference, amount, paidTota
 <p style="margin:0 0 14px">Thank you${customerName ? `, ${esc(customerName)}` : ''}.</p>
 <p style="margin:0 0 18px">We have received <strong>${money(amount)}</strong> for ${esc(reference) || 'your order'}.</p>
 ${rows.length ? `<table style="border-collapse:collapse;margin:0 0 18px">${rows.map(([k, v]) => `<tr><td style="padding:4px 18px 4px 0;color:#524e46">${esc(k)}</td><td style="padding:4px 0;text-align:right"><strong>${esc(v)}</strong></td></tr>`).join('')}</table>` : ''}
+${str(docUrl) ? `<p style="margin:0 0 18px"><a href="${esc(docUrl)}" style="display:inline-block;padding:10px 18px;background:#1c1a16;color:#fff;text-decoration:none;font-size:14px">View your order</a></p>
+<p style="margin:0 0 18px;font-size:12px;color:#524e46">Or open ${esc(docUrl)}</p>` : ''}
 ${transactionId ? `<p style="margin:0 0 18px;font-size:12px;color:#524e46">Reference ${esc(transactionId)}</p>` : ''}
 <p style="margin:0 0 6px;font-size:13px;color:#524e46">Reply to this email and it reaches us at ${esc(s.replyTo)}.</p>
 <p style="margin:18px 0 0;font-size:13px">${esc(s.merchant)}</p>
