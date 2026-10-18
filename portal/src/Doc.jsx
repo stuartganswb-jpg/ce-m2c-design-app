@@ -59,6 +59,15 @@ export default function Doc({ token }) {
           {doc.sidemark ? <><br />{doc.sidemark}</> : null}
         </p>
 
+        {/* An order whose itemised copy has not been captured yet still shows the customer what
+            matters — what it comes to and what they have paid — and SAYS it is a summary rather
+            than leaving an empty table for them to puzzle over. */}
+        {doc.linesPending && doc.lines.length === 0 && (
+          <p style={{ fontSize: 13, color: 'var(--ink-soft)', marginBottom: 18 }}>
+            A summary of your order is below. For the itemised copy, reply to your confirmation email and we will send it.
+          </p>
+        )}
+
         {doc.lines.length > 0 && (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 18 }}>
             <thead>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { lineImageStripOf } from '../Shared/lineImage';   // 🖼 line pictures on the documents (S7 step 7)
 import { poEmailDraft, markPoSent, acknowledgePurchaseOrder, hasNsNumber, poRef } from '../Shared/purchaseOrders';
 import { db, storage, functions } from '../../firebase';
@@ -807,6 +807,45 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   // exists for that document (Shared/payBlock). Documents without one print exactly as before.
   // MUST stay below activeDocJob/activeDocType: reading them above their declaration threw on every
   // render and whited out the whole CRM tab (2026-09-23).
+  // 📄 A SNAPSHOT OF THE CUSTOMER'S DOCUMENT, so the page behind the link in their receipt can
+  // show a CPQ order's lines (Stuart 2026-10-18: "go ahead on cpq").
+  //
+  // Why a snapshot and not a server-side build: a CPQ quote's customer lines are
+  // Shared/lineClassification.customerDocLines — two hundred lines of kits, net rows, billed feet
+  // and discounts, with four modules behind it, all ESM the Cloud Functions cannot import.
+  // Rebuilding it there would be a SECOND copy of the hardest arithmetic in the app, and the two
+  // would disagree the first time one changed. So the document is captured HERE, where the real
+  // logic has just run, and the page reads what the office itself would print.
+  //
+  // The MONEY on that page stays live from the order — only the lines are the snapshot — so a
+  // later payment still shows. Writing it costs nothing: the same lines, already computed.
+  const docSnapKey = activeDocJob ? `jobs__${String(activeDocJob.jobId || activeDocJob.id || '')}` : '';
+  const lastDocSnap = useRef('');
+  const saveDocSnapshot = useCallback(async (formData) => {
+      if (!docSnapKey || !formData || formData.unpriced) return;
+      const lines = (formData.lines || [])
+          .filter(l => l && !l.note)                       // a note is not a line the customer bought
+          .map(l => ({
+              item: String(l.item || ''), description: String(l.description || ''),
+              qty: l.qty === '' || l.qty == null ? null : Number(l.qty) || 0,
+              amount: l.amount != null ? Number(l.amount) || 0 : (Number(l.qty) || 0) * (Number(l.price) || 0),
+          }))
+          .slice(0, 300);
+      if (!lines.length) return;
+      const stamp = JSON.stringify({ lines, total: formData.total });
+      if (lastDocSnap.current === stamp) return;            // nothing new to write
+      lastDocSnap.current = stamp;
+      try {
+          await setDoc(doc(db, 'doc_snapshots', docSnapKey), {
+              collection: 'jobs', docId: String(activeDocJob.jobId || activeDocJob.id || ''),
+              brand: activeBrand, lines, total: Number(formData.total || 0),
+              po: String(formData.po || ''), sidemark: String(formData.sidemark || ''),
+              date: String(formData.date || ''), at: Date.now(),
+          }, { merge: true });
+      } catch (e) { /* the document still prints; only the customer's copy misses its lines */ }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docSnapKey, activeBrand]);
+
   const docPay = usePayBlock({
       collection: (activeDocJob && (activeDocJob.orderClass === 'QUICKSHIP' || activeDocJob.soId)) ? 'hq_sales_orders' : 'jobs',
       docId: activeDocJob ? String(activeDocJob.jobId || activeDocJob.id || '') : '',
@@ -1710,6 +1749,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       // copied @page stripped, and Letter declared last. margin 0 because these pages already ARE
       // full 8.5in sheets with their own inner margins. (RTG, Admin and the invoice modal have
       // printed this way since 2026-08-03 — this was the one door still calling window.print.)
+      // Capture it the moment it exists — the office opening a customer's document is what makes
+      // the customer's own copy complete.
+      if (quoteFormData && !quoteFormData.unpriced) { saveDocSnapshot(quoteFormData); }
+
       const printableDoc = (
                   <div id="printable-document" style={{ width: '8.5in', display: 'flex', flexDirection: 'column', gap: '30px' }}>
                       

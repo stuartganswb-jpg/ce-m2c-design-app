@@ -3856,8 +3856,41 @@ exports.docIntent = onCall({ cors: true }, async (request) => {
     const d = await db.collection(String(link.collection)).doc(String(link.docId)).get();
     if (!d.exists) throw new HttpsError('not-found', 'That order could not be found.');
     const order = { id: d.id, ...(d.data() || {}) };
-    return orderDoc.orderDocumentOf(order, {
-        merchantName: PAY_MERCHANT_NAME[String(link.brand || '').toLowerCase()] || '',
-        reference: link.reference || order.soId || order.id,
-    });
+    const merchantName = PAY_MERCHANT_NAME[String(link.brand || '').toLowerCase()] || '';
+    const reference = link.reference || order.soId || order.id;
+
+    // A CPQ ORDER'S LINES COME FROM THE SNAPSHOT the CRM wrote when it built that customer's
+    // document (doc_snapshots). Its line rule is Shared/lineClassification — kits, net rows,
+    // billed feet, discounts — ESM that this file cannot import, and rebuilding it here would be a
+    // second copy of the hardest arithmetic in the app. The MONEY is always live from the order,
+    // so a payment made after the snapshot still shows.
+    if (String(link.collection) === 'jobs') {
+        const snapDoc = await db.collection('doc_snapshots').doc(`jobs__${String(link.docId)}`).get().catch(() => null);
+        const snap0 = snapDoc && snapDoc.exists ? (snapDoc.data() || {}) : null;
+        const total = Number((order.cpqData && order.cpqData.totalPrice) || 0) + Number(order.shippingAmount || 0);
+        const paid = Math.round(Number(order.paymentsTotal || 0) * 100) / 100;
+        const balance = Math.round((total - paid) * 100) / 100;
+        return {
+            kind: 'SALES_ORDER', merchantName, reference,
+            nsInvoiceNo: '', orderDate: 0,
+            customerName: String((order.customer && order.customer.name) || ''),
+            poNumber: String((snap0 && snap0.po) || order.poNumber || ''),
+            sidemark: String((snap0 && snap0.sidemark) || order.orderSidemark || order.sidemark || ''),
+            dateText: String((snap0 && snap0.date) || ''),
+            lines: ((snap0 && snap0.lines) || []).map((l) => ({
+                code: String(l.item || ''), name: String(l.description || ''), note: '',
+                qty: l.qty === null || l.qty === undefined ? null : Number(l.qty),
+                rate: null, amount: l.amount === null || l.amount === undefined ? null : Number(l.amount),
+            })),
+            total: Math.round(total * 100) / 100,
+            paid, balance: balance > 0 ? balance : 0,
+            paidInFull: total > 0 && balance <= 0.005,
+            shipping: Number(order.shippingAmount || 0),
+            paidNote: paid > 0 ? (balance <= 0.005 ? 'Paid in full — thank you.' : 'Deposit received. The balance is shown above.') : '',
+            // Said plainly rather than shown as an empty table: the customer is told their copy is
+            // a summary, not left wondering where their items went.
+            linesPending: !snap0,
+        };
+    }
+    return orderDoc.orderDocumentOf(order, { merchantName, reference });
 });
