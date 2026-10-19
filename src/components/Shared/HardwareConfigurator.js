@@ -19,7 +19,7 @@ import { renderScaleOf } from './sizeMatrix';
 import { modelNodesOf } from './hardwareAdapter';
 import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle,
     lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf,
-    spanAnswersOf, rodOptionsAdviceOf, supportShortfallOf, DROP_FT_RANGE,
+    spanAnswersOf, rodOptionsAdviceOf, supportShortfallOf, DROP_FT_RANGE, spliceInfoOf, trvJoinersOf, spliceCentreMissingOf, spanRiskKeyOf,
     spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice,
     globalFinishOf, finishIndexOf, withGlobalFinish, wearsAsTwinFinish, wearsFinishOf, globalFinishForChoice, chosenListOf, partFinishByPartOf, armFinishOfChoice,
     finishForChoice, matchFinishOverrideOf, rodFinishForChoice, followsRodChoice, subFinishForChoice, lineFinishForChoice, textureOverridesOf, chosenFinishObjectsOf,
@@ -37,6 +37,7 @@ import { customerLines } from './hardwareHandoff';
 import { finishLabelOf } from './finishLabel';
 import { unansweredOf } from './finishQuestions';
 import { ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
+import { spanRiskOf, SpanRiskArt, SPAN_RISK_ASK } from './spanRisk';   // the risk window: its words and drawings, shared with the portal
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 import { captureTransparentPng, saveGuideCapture } from './guideCapture';
 import { BoardFrame, captureBoardFrame, readDisplayMode, writeDisplayMode } from './displayFrame';   // DISPLAY MODE (S5, Stuart 2026-09-13) — one guarded block, see below
@@ -172,10 +173,15 @@ function HardwareConfiguratorInner({
     const [poleIn, setPoleIn] = useState('');            // finished length, whole inches
     const [poleFrac, setPoleFrac] = useState('');        // …and the fraction
     const [fabricId, setFabricId] = useState('PRINT');   // drives the span, so it is asked here
-    // …with the curtain length (rod to floor; empty = 8 ft) and whether the brackets go into studs — the other two things
-    // 6.5's span is worked from (Stuart 2026-10-19: "yes use the 6.5 not in stud column").
+    // …with the curtain length (rod to floor; empty = 8 ft) and the WALL FIXING — the other two things 6.5's span is worked from
+    // (Stuart 2026-10-19: "yes use the 6.5 not in stud column" · "make the default for all screens drywall with medium weight
+    // fabric 8ft fabric length, so only need to change if different"). A new configuration starts on drywall with toggles.
     const [dropFt, setDropFt] = useState('');
-    const [onStud, setOnStud] = useState(true);
+    const [onStud, setOnStud] = useState(false);
+    // THE RISK WINDOW (Stuart 2026-10-19): the short count it is asking about (null = closed), and what was confirmed this session.
+    const [riskAsk, setRiskAsk] = useState(null);       // { sh, then: 'add' | null }
+    const [riskCheck, setRiskCheck] = useState(null);   // a centre step's key, set as its count field is left
+    const riskOkRef = useRef(new Set());
     const [thumbs, setThumbs] = useState({});            // choice id → data URL
     const [partFinish, setPartFinish] = useState({});   // choice id -> finish code (per-part mode)
     // ⚠ DECLARED HERE, WITH THE REST OF THE STATE, AND NOT WHERE THEY ARE USED. Both of these are
@@ -477,6 +483,10 @@ function HardwareConfiguratorInner({
     // The bracket recommendation from 6.5's engineering, how many of each the length asks for, and the
     // counts the operator typed over them — hardwareSession (bracketAdviceOf / recommendedFor / quantitiesOf).
     const span = useMemo(() => spanAnswersOf({ fabricId, dropFt, onStud }), [fabricId, dropFt, onStud]);
+    // The splices on this configuration — a bracket goes at every one (hardwareSession.centreCountForSplices): the joiners added at
+    // the length step and the traverse's own (a tick on its components step), with where Vision drew them.
+    const trvJoiners = useMemo(() => trvJoinersOf({ trvRules, model, livePicks, answers, lengthFeet, trvSel }), [trvRules, model, livePicks, answers, lengthFeet, trvSel]);
+    const splice = useMemo(() => spliceInfoOf({ extras, spliceCodes, sameItemCode, trvJoiners, drawnSplices, lengthInches, spliceOverIn }), [extras, spliceCodes, sameItemCode, trvJoiners, drawnSplices, lengthInches, spliceOverIn]);
     const advice = useMemo(() => bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId }),
         [model, livePicks, lengthInches, spanMap, spanCaps, span, ourId]);
     // Where a rod step offers more than one rod: what the pole would need with each (hardwareSession.rodOptionsAdviceOf).
@@ -484,12 +494,20 @@ function HardwareConfiguratorInner({
         [model, livePicks, lengthInches, spanMap, spanCaps, span, ourId]);
     // Read by both the seeding below and the field's placeholder, so what is billed and what is shown
     // can never drift apart.
-    const recommendFor = useCallback((slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet }),
-        [advice, model, livePicks, lengthFeet]);
-    const quantities = useMemo(() => quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId }),
-        [model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId]);
+    const recommendFor = useCallback((slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet, splice }),
+        [advice, model, livePicks, lengthFeet, splice]);
+    const quantities = useMemo(() => quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId, splice }),
+        [model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId, splice]);
     // Fewer centre brackets than 6.5 recommends — said beside the price, never refused (hardwareSession.supportShortfallOf).
     const supportShort = useMemo(() => supportShortfallOf({ model, livePicks, quantities, recommendFor }), [model, livePicks, quantities, recommendFor]);
+    // The risk window opens when a centre count field is left short of the recommendation (and at Add, below) — once per short count.
+    const riskKeyOf = useCallback((sh) => spanRiskKeyOf({ chosen: sh.chosen, recommended: sh.recommended, onStud: span.onStud, lengthInches }), [span, lengthInches]);
+    useEffect(() => {
+        if (!riskCheck) return;
+        setRiskCheck(null);
+        const sh = supportShort.find(x => x.slotKey === riskCheck);
+        if (sh && !riskOkRef.current.has(riskKeyOf(sh))) setRiskAsk({ sh, then: null });
+    }, [riskCheck, supportShort, riskKeyOf]);
 
     // ── THE KIT'S BRACKETS, PICKED AS THEY BECOME ANSWERABLE (Stuart 2026-10-01: "it should prepopulate
     // ideally the steps … with the bracket selections in the kit … i had to manually select vertical
@@ -765,7 +783,8 @@ function HardwareConfiguratorInner({
         if (s.fabricId) setFabricId(String(s.fabricId));
         // the curtain length and the stud answer — on a saved line's engineConfig when they differ from the default
         if (s.dropFt) setDropFt(String(s.dropFt));
-        if (s.onStud === false) setOnStud(false);
+        // every line from 2026-10-19 records its wall fixing; one saved before has none and was worked IN A STUD
+        setOnStud(s.onStud !== false);
         if (s.sizePick && typeof s.sizePick === 'object') setSizePick({ ...s.sizePick });
         if (Array.isArray(s.drawnSplices)) setDrawnSplices(s.drawnSplices.map(sp => ({ distInches: sp.distInches, ref: sp.ref || '' })));
         if (s.visionSeededId) seededRef.current = String(s.visionSeededId);
@@ -836,7 +855,7 @@ function HardwareConfiguratorInner({
             lengthInches, memo: configMemo, qty: cfgQty,
             // The kit exactly as the handoff saves it: named only while it bills.
             kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
-            trvSel, fabricId, ...(dropFt ? { dropFt } : {}), ...(onStud ? {} : { onStud: false }), sizePick, stepIx, drawnSplices, visionSeededId: seededRef.current || '',
+            trvSel, fabricId, ...(dropFt ? { dropFt } : {}), onStud, sizePick, stepIx, drawnSplices, visionSeededId: seededRef.current || '',
             ...(spliceWaived ? { spliceWaived: true } : {}),
             ...(Object.keys(stepNoteClient).length ? { stepNoteClient } : {}),
             ...(Object.keys(finishAnswers).length ? { finishAnswers } : {}),
@@ -851,8 +870,11 @@ function HardwareConfiguratorInner({
         // ⚠ NEVER ADD SHORT · WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE · A FINISH THAT ASKS IS ANSWERED FIRST — the rules,
         // their order and his words are hardwareSession.addRefusalOf. Nothing priced and a removal nobody has acknowledged
         // wait in silence (the button and the strip already say why); the other two say what to do.
-        const refusal = addRefusalOf({ priced, pendingDrops, chosenList, finishFor, askingFinishes, finishAnswers });
+        const refusal = addRefusalOf({ priced, pendingDrops, chosenList, finishFor, askingFinishes, finishAnswers, spliceCentreMissing: spliceCentreMissingOf({ model, livePicks, splice }) });
         if (refusal) { if (refusal.alert) alert(refusal.alert); return; }
+        // FEWER CENTRE BRACKETS THAN 6.5 RECOMMENDS, NOT YET CONFIRMED: the risk window first; its Confirm adds (Stuart 2026-10-19).
+        const unconfirmed = supportShort.find(sh => !riskOkRef.current.has(riskKeyOf(sh)));
+        if (unconfirmed) { setRiskAsk({ sh: unconfirmed, then: 'add' }); return; }
         // A picture of what was configured, taken as it is added — front view, white ground, ≤900px
         // JPEG (the same capturer the old engine used) — so the quotation and the sales order can
         // show the customer what they are ordering. Never blocks the add: no canvas, no picture.
@@ -1054,8 +1076,36 @@ function HardwareConfiguratorInner({
     // fifteen steps, or one long pricing line, pushes its column and with it the entire page, and
     // no amount of overflow on the inner element helps, because the column itself has already
     // grown. The steps went from eleven to fifteen on a double and the page went wide with them.
+    // THE RISK WINDOW (Stuart 2026-10-19: "a pop up window … risk of deflection … risk of drywall anchor failure … a simple black and
+    // white illustration … then a confirm button"). Shared/spanRisk holds the words and the drawings the portal shows too.
+    const riskWords = riskAsk ? spanRiskOf({ onStud: span.onStud, chosen: riskAsk.sh.chosen, recommended: riskAsk.sh.recommended, lengthInches, everyInches: advice ? advice.everyInches : null }) : null;
+    const closeRisk = (confirmed) => {
+        const ask = riskAsk;
+        setRiskAsk(null);
+        if (!confirmed || !ask) return;
+        riskOkRef.current.add(riskKeyOf(ask.sh));
+        if (ask.then === 'add') addConfiguration();
+    };
+    const riskWindow = riskWords && (
+        <div role="dialog" aria-modal="true" aria-label={riskWords.title}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.38)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000, padding: '16px' }}>
+            <div style={{ background: '#fff', color: '#000', maxWidth: '440px', width: '100%', padding: '20px 22px', border: '1px solid #000', boxShadow: '0 12px 32px rgba(0,0,0,0.25)' }}>
+                <div style={{ ...mono, fontSize: '11px', color: '#000', marginBottom: '10px' }}>{riskWords.title}</div>
+                <SpanRiskArt kind={riskWords.kind} width={396} />
+                <p style={{ margin: '12px 0 4px', fontSize: '13.5px', lineHeight: 1.45 }}><b>{riskWords.lead}</b></p>
+                <p style={{ margin: '0 0 8px', fontSize: '13px', lineHeight: 1.45 }}>{riskWords.body}</p>
+                <p style={{ margin: '0 0 14px', fontSize: '12px', color: '#444' }}>{SPAN_RISK_ASK}</p>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                    <button onClick={() => closeRisk(false)} style={{ padding: '8px 14px', border: '1px solid #000', background: '#fff', color: '#000', cursor: 'pointer', ...mono }}>Go back</button>
+                    <button onClick={() => closeRisk(true)} style={{ padding: '8px 16px', border: '1px solid #000', background: '#000', color: '#fff', cursor: 'pointer', ...mono }}>Confirm</button>
+                </div>
+            </div>
+        </div>
+    );
+
     return (
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 300px) minmax(0, 1fr)', gap: '14px', alignItems: 'start', maxWidth: '100%' }}>
+          {riskWindow}
           {finishPanel}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', minWidth: 0 }}>
 
@@ -1387,12 +1437,18 @@ function HardwareConfiguratorInner({
                                         <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>How many</span>
                                         <input value={stepQty[step.slot.key] ?? ''} inputMode="numeric"
                                             onChange={e => setStepQty(q => ({ ...q, [step.slot.key]: e.target.value.replace(/[^0-9]/g, '') }))}
+                                            onBlur={() => {
+                                                // a centre count on a spliced pole is rounded up so one sits at the splice — the field shows what is billed
+                                                const typed = Number(stepQty[step.slot.key]); const billed = Number(quantities[picked && picked.id]);
+                                                if (isCentre && typed > 0 && billed > 0 && billed !== typed) setStepQty(q => ({ ...q, [step.slot.key]: String(billed) }));
+                                                if (isCentre) setRiskCheck(step.slot.key);
+                                            }}
                                             placeholder={rec ? String(rec) : '1'}
                                             style={{ width: '62px', padding: '5px 7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', background: '#fff' }} />
                                         {rec != null && (
                                             <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
                                                 {isCentre
-                                                    ? `recommended ${rec} — ${advice ? advice.supports : '?'} support${advice && advice.supports === 1 ? '' : 's'} for this pole${advice && !advice.onStud ? ' off-stud' : ''}, less ${ends} carried by the ends`
+                                                    ? `recommended ${rec} — ${advice ? `${advice.supports} support${advice.supports === 1 ? '' : 's'} for this pole ${advice.onStud ? 'in a stud' : 'on drywall toggles'}, less ${ends} carried by the ends` : 'no span listed in 6.5'}${splice.count ? (splice.drawn ? ` · at least one at each of the ${splice.count} drawn splice${splice.count === 1 ? '' : 's'}` : (splice.count === 1 ? ' · odd, so one sits at the splice' : ` · one at each of the ${splice.count} splices`)) : ''}`
                                                     : `recommended ${rec} — four a foot over ${lengthFeet} ft, plus the pair at the ends`}
                                             </span>
                                         )}
@@ -1545,11 +1601,11 @@ function HardwareConfiguratorInner({
                                     </span>
                                 </label>
                                 <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                    <span style={{ ...mono, color: 'var(--ink-soft)' }}>Into studs?</span>
-                                    <select value={onStud ? 'YES' : 'NO'} onChange={e => setOnStud(e.target.value === 'YES')}
+                                    <span style={{ ...mono, color: 'var(--ink-soft)' }}>Wall fixing</span>
+                                    <select value={onStud ? 'STUD' : 'DRYWALL'} onChange={e => setOnStud(e.target.value === 'STUD')}
                                         style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '13px', background: '#fff', color: 'var(--ink)' }}>
-                                        <option value="YES">Yes — into studs</option>
-                                        <option value="NO">No — drywall anchors</option>
+                                        <option value="DRYWALL">Drywall with toggles</option>
+                                        <option value="STUD">In a stud</option>
                                     </select>
                                 </label>
                             </div>
@@ -1865,7 +1921,7 @@ function HardwareConfiguratorInner({
                                     error — it must be visible without reading as a fault. */}
                                 {priceWarnings.map((w, i) => <div key={i} style={{ color: w.sev === 'amber' ? '#8a6508' : '#b00020', fontSize: '9px' }}>{w.sev === 'amber' ? '○' : '●'} {w.msg}</div>)}
                                 {/* Fewer centre brackets than 6.5 recommends — allowed, never silent (step 4, Stuart 2026-10-19). */}
-                                {supportShort.map(sh => <div key={sh.slotKey} style={{ color: '#8a6508', fontSize: '9px' }}>○ {sh.picked ? `${sh.chosen} centre bracket${sh.chosen === 1 ? '' : 's'}` : 'No centre bracket'} — 6.5 recommends {sh.recommended} for this {lengthInches}&Prime; pole{advice && !advice.onStud ? ' off-stud' : ''}.</div>)}
+                                {supportShort.map(sh => <div key={sh.slotKey} style={{ color: '#8a6508', fontSize: '9px' }}>○ {sh.picked ? `${sh.chosen} centre bracket${sh.chosen === 1 ? '' : 's'}` : 'No centre bracket'} — 6.5 recommends {sh.recommended} for this {lengthInches}&Prime; pole {span.onStud ? 'in a stud' : 'on drywall with toggles'}{riskOkRef.current.has(riskKeyOf(sh)) ? ' · confirmed' : ''}.</div>)}
                                 {/* Over the one-piece limit with no joiner — allowed, never silent (Stuart 2026-10-01). */}
                                 {noSplice && <div style={{ color: '#8a6508', fontSize: '9px' }}>○ No splice — this {lengthInches}&Prime; pole is over the {spliceOverIn}&Prime; one-piece limit and ships in ONE PIECE. {isTraverse ? 'Tick the joiner on the Traverse components step' : 'Add the joiner on the Pole length step'} if it should be spliced.</div>}
                                 {!!priced.lines.length && <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>Hover a line for the rule that set it{customerId ? '' : ' · no customer, so no client pricing'}</div>}
@@ -1880,10 +1936,10 @@ function HardwareConfiguratorInner({
                                         <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Recommendation</span>
                                         <p style={{ margin: '2px 0 0', fontSize: '12.5px', lineHeight: 1.45 }}>
                                             A support every <b>{ftIn(advice.everyInches)}</b> — {advice.whyApplies}. Your {lengthInches}" pole wants <b>{advice.supports}</b>
-                                            {advice.otherSupports && advice.otherSupports !== advice.supports ? <> ({advice.otherSupports} {advice.onStud ? 'off-stud' : 'into studs'})</> : ''}.
+                                            {advice.otherSupports && advice.otherSupports !== advice.supports ? <> ({advice.otherSupports} {advice.onStud ? 'on drywall toggles' : 'in a stud'})</> : ''}.
                                         </p>
                                         <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', marginTop: '3px' }}>
-                                            {advice.onStud ? 'Into studs' : 'Not into studs'} · {(FABRIC_CLASSES.find(f => f.id === advice.fabricId) || {}).label} · {advice.dropFt} ft curtain · {rodWords(advice.rod)}
+                                            {advice.onStud ? 'In a stud' : 'Drywall with toggles'} · {(FABRIC_CLASSES.find(f => f.id === advice.fabricId) || {}).label} · {advice.dropFt} ft curtain · {rodWords(advice.rod)}
                                         </div>
                                         {!!(advice.unlisted || []).length && (
                                             <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: '#8a6508', marginTop: '3px' }}>

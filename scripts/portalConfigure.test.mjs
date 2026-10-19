@@ -21,7 +21,8 @@ eq('nothing to open: a fresh configuration', answersOf(null), blankAnswers());
 // what the span is worked from (2026-10-19): the curtain length as typed and the stud answer travel, and come back
 const spanned = { ...a, fabricId: 'BLACKOUT', dropFt: '12.5', onStud: false };
 eq('the curtain length and the stud answer are sent, and a line opened again comes back with them', [wireOf(spanned).dropFt, wireOf(spanned).onStud, answersOf(wireOf(spanned))], ['12.5', false, { ...spanned }]);
-eq('…a fresh configuration: no curtain length typed (8 ft is assumed), into studs; a line saved before them opens the same way', [blankAnswers().dropFt, blankAnswers().onStud, wireOf(blankAnswers()).onStud, answersOf({ answers: {}, fabricId: 'SHEER' }).dropFt, answersOf({ answers: {}, fabricId: 'SHEER' }).onStud], ['', true, true, '', true]);
+eq('…a fresh configuration: no curtain length typed (8 ft is assumed), drywall with toggles (Stuart 2026-10-19: "make the default for all screens drywall"), nothing confirmed', [blankAnswers().dropFt, blankAnswers().onStud, wireOf(blankAnswers()).onStud, blankAnswers().riskConfirmed, wireOf(blankAnswers()).riskConfirmed], ['', false, false, '', '']);
+eq('…a line saved in this browser in a stud opens in a stud; what the customer confirmed in the risk window travels with the line', [answersOf(wireOf({ ...blankAnswers(), onStud: true })).onStud, wireOf({ ...blankAnswers(), riskConfirmed: '2|5|DRYWALL|144' }).riskConfirmed], [true, '2|5|DRYWALL|144']);
 eq('every fraction the screen offers is a length the engine reads (sixteenths)', FRACTIONS.filter(Boolean).every((f) => { const [n, d] = f.split('/').map(Number); return lengthInchesOf('10', f) === 10 + n / d && 16 % d === 0; }), true);
 // the request in this browser, per login
 eq('nothing kept yet: an empty request', readBasket('u1'), { lines: [], sidemark: '', note: '' });

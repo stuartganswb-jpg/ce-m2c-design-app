@@ -53,6 +53,8 @@ export function workIsPristine(w) {
     if (Number(w.stepIx) > 0) return false;
     if (txt(w.qty) && txt(w.qty) !== '1') return false;
     if (txt(w.fabricId) && txt(w.fabricId) !== 'PRINT') return false;
+    // the span's other two answers (2026-10-19): a curtain length typed, or a stud chosen over the drywall a new walk starts on
+    if (txt(w.dropFt) || w.onStud === true) return false;
     if (anySet(w.sizePick) || anySet(w.stepQty)) return false;
     return true;
 }

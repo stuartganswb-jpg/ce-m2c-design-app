@@ -191,10 +191,13 @@ export function spanAnswersOf({ fabricId, dropFt, onStud } = {}) {
     const drop = Number.isFinite(n) && n >= DROP_FT_RANGE[0] && n <= DROP_FT_RANGE[1] ? Math.round(n * 100) / 100 : DEFAULT_DROP_FT;
     return { fabricId: fab, dropFt: drop, onStud: onStud !== false };
 }
-// What a saved line keeps of them: only what differs from the default ("defaults stay defaults", as typed counts do).
+// What a saved line keeps of them: the fabric and the curtain length where they differ from the default ("defaults stay
+// defaults", as typed counts do) — and the WALL FIXING ALWAYS (2026-10-19, Stuart: "make the default for all screens drywall").
+// A new configuration starts at drywall with toggles; a line saved before today has no fixing on it and was worked IN A STUD,
+// so an absent fixing reads as a stud (spanAnswersOf) and every line from now on says which it was.
 export function spanAnswersSavedOf(span) {
     const s = spanAnswersOf(span || {});
-    return { ...(s.fabricId !== 'PRINT' ? { fabricId: s.fabricId } : {}), ...(s.dropFt !== DEFAULT_DROP_FT ? { dropFt: s.dropFt } : {}), ...(s.onStud ? {} : { onStud: false }) };
+    return { ...(s.fabricId !== 'PRINT' ? { fabricId: s.fabricId } : {}), ...(s.dropFt !== DEFAULT_DROP_FT ? { dropFt: s.dropFt } : {}), onStud: s.onStud };
 }
 // The count, span and reason that APPLY to one rod's advice — the stud column or the not-in-a-stud column.
 const appliedOf = (a, onStud) => (!a ? null : onStud
@@ -254,6 +257,11 @@ export function rodOptionsAdviceOf({ model, livePicks, lengthInches, spanMap, sp
         .filter(r => r.options.filter(o => o.supports != null).length > 1);
 }
 
+// THE ONE SHORT COUNT A "CONFIRM" ANSWERS (the risk window, Stuart 2026-10-19 — Shared/spanRisk): the same numbers on CPQ, the portal
+// and the request's note, so a change of count, length or wall fixing after a Confirm asks again.
+export const spanRiskKeyOf = ({ chosen, recommended, onStud, lengthInches }) =>
+    `${Number(chosen) || 0}|${Number(recommended) || 0}|${onStud ? 'STUD' : 'DRYWALL'}|${Number(lengthInches) || 0}`;
+
 // ── FEWER CENTRE BRACKETS THAN 6.5 RECOMMENDS (step 4, Stuart 2026-10-19) ─────────────────────
 // Said, never refused: a typed count below the recommendation, or no centre bracket chosen where the span wants one.
 // Reads the counts the bill reads (quantitiesOf), so what is said is what will be billed.
@@ -280,21 +288,70 @@ export function supportShortfallOf({ model, livePicks, quantities, recommendFor 
 // carriers come from the length; the centre bracket comes from the span less whatever the ends
 // are already carrying. Read by both the seeding below and the field's placeholder, so what is
 // billed and what is shown can never drift apart.
-export function recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet }) {
+// ── A BRACKET AT EVERY SPLICE (Stuart 2026-10-19) ─────────────────────────────────────────────
+// "if a splice is selected center brackets must be odd amount either 1,3,5 since one is always required at the splice" ·
+// "automatically, i can not think if a situation where with a splice we would want 2 or 4 brackets".
+// The splices sit evenly along the pole (one at the centre — spliceMarksOf) and so do the centre brackets, so a bracket lands
+// on every splice when (centre count + 1) is a multiple of (splices + 1): one splice → 1, 3, 5; two → 2, 5, 8. Any count is
+// rounded UP to the next such number. A splice drawn at its own place (Vision) is not met by a pattern: at least one centre
+// bracket per splice, which the shop places at the drawn splices.
+const isCentreSlot = (sl) => !!sl && sl.kind === 'BRACKET' && String(sl.position || '').toUpperCase() === 'CENTER';
+export function centreCountForSplices(n, splice) {
+    const want = Math.max(0, Math.round(Number(n) || 0));
+    const c = Math.max(0, Math.round(Number(splice && splice.count) || 0));
+    if (!c) return want;
+    if (splice.drawn) return Math.max(want, c);
+    return Math.ceil((want + 1) / (c + 1)) * (c + 1) - 1;
+}
+// The splices ALONG THE POLE — where a bracket must sit. Whether the pole is spliced at all is the joiner on the line (the length
+// step's, or the traverse's tick — trvJoinersOf); HOW MANY splices it has is NOT the joiner's quantity: a double rod carries one
+// joiner per rod, and lines are quoted with 2 joiners on a pole one splice makes (Brimar, 142–148" on the 10-13 snapshot). A pole
+// over the one-piece limit is made in equal pieces — ceil(length / limit) — with a splice between each; a joiner on a pole under
+// the limit is one splice, at the centre (spliceMarksOf's default). Splices Vision DREW are counted where drawn.
+export function spliceInfoOf({ extras = [], spliceCodes = [], sameItemCode, trvJoiners = 0, drawnSplices = [], lengthInches, spliceOverIn }) {
+    const same = typeof sameItemCode === 'function' ? sameItemCode : (a, b) => String(a || '').toUpperCase() === String(b || '').toUpperCase();
+    const fromExtras = extras.filter(x => spliceCodes.some(c => same(x.code, c))).reduce((n, x) => n + (Number(x.qty) > 0 ? Number(x.qty) : 0), 0);
+    const joiners = fromExtras + (Number(trvJoiners) || 0);
+    if (!joiners) return { count: 0, drawn: false };
+    const L = Number(lengthInches) || 0;
+    const drawnAt = fromExtras > 0 && L > 0 ? (drawnSplices || []).filter(sp => sp && sp.distInches != null && Number.isFinite(Number(sp.distInches))).length : 0;
+    if (drawnAt) return { count: drawnAt, drawn: true };
+    const limit = Number(spliceOverIn) || 0;
+    const pieces = limit > 0 && L > limit ? Math.ceil(L / limit) : 2;
+    return { count: pieces - 1, drawn: false };
+}
+// The traverse's joiners at this length, as its components step holds them (the same functions billOf runs — counted, not priced).
+export function trvJoinersOf({ trvRules, model, livePicks, answers = {}, lengthFeet, trvSel }) {
+    const isTraverse = isTraverseOf(model, livePicks);
+    if (!trvRules || !isTraverse) return 0;
+    const trvDrive = driveOf(answers.drive);
+    const trvFeet = trvFeetOf(lengthFeet);
+    const trvLive = trvSel || trvSeedOf({ trvRules, isTraverse, trvDrive, trvFeet, trvTracks: trvTracksOf(answers.setup) });
+    return trvComponentsOf({ trvRules, isTraverse, trvLive, trvDrive, trvFeet, lengthFeet, trvPriceOf: () => 0 })
+        .filter(c => /SPLICE|JOINER|JNR|SPLC/i.test(String(c.code || ''))).reduce((n, c) => n + (Number(c.qty) > 0 ? Number(c.qty) : 0), 0);
+}
+// A spliced pole needs its centre bracket CHOSEN — a count cannot be rounded up on a step left empty (addRefusalOf).
+export const spliceCentreMissingOf = ({ model, livePicks, splice }) => !!(splice && splice.count > 0)
+    && model.slots.some(sl => isCentreSlot(sl) && !sl.suppressedBy && (sl.options || []).length && !livePicks[sl.key]);
+
+export function recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet, splice = null }) {
     if (!slot) return null;
-    if (slot.kind === 'BRACKET' && String(slot.position || '').toUpperCase() === 'CENTER') {
-        // `supports` is the column that applies — into studs, or not (bracketAdviceOf).
-        return advice ? centreBracketsFor(advice.supports ?? advice.brackets, bearingEnds(model.choices, Object.values(livePicks), model.slots)) : null;
+    if (isCentreSlot(slot)) {
+        // `supports` is the column that applies — in a stud, or drywall with toggles (bracketAdviceOf).
+        const base = advice ? centreBracketsFor(advice.supports ?? advice.brackets, bearingEnds(model.choices, Object.values(livePicks), model.slots)) : null;
+        // a spliced pole wants a bracket at the splice whatever the span says (or when 6.5 cannot say)
+        return splice && splice.count > 0 ? centreCountForSplices(base || 0, splice) : base;
     }
     return recommendedQty(choice, lengthFeet);
 }
-export function quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId }) {
+export function quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId, splice = null }) {
     const q = {};
     model.slots.forEach(sl => {
         const id = livePicks[sl.key];
         if (!id) return;
         const typed = Number(stepQty[sl.key]);
-        if (typed > 0) { q[id] = typed; return; }
+        // a typed centre count on a spliced pole is rounded up so a bracket sits at the splice ("automatically", Stuart 2026-10-19)
+        if (typed > 0) { q[id] = isCentreSlot(sl) && splice && splice.count > 0 ? centreCountForSplices(typed, splice) : typed; return; }
         const rec = recommendFor(sl, sl.options.find(o => o.id === id));
         if (rec != null && rec > 0) q[id] = rec;
     });
@@ -1295,13 +1352,16 @@ export const dropRefusalOf = (pendingDrops) => (pendingDrops.length
  *                     would leave here missing a part the operator chose. The strip names it; Add waits.
  *   BARE_WOOD         ⚠ WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE (Stuart 2026-09-16 — bareWoodOf). The add names
  *                     the parts and waits; the WOOD row of the finish step (or the part's own swatch) is the answer.
+ *   SPLICE_CENTRE     A SPLICED POLE TAKES A CENTRE BRACKET AT THE SPLICE (Stuart 2026-10-19) — the step offers one, none chosen.
  *   FINISH_QUESTIONS  A FINISH THAT ASKS IS ANSWERED BEFORE THE LINE LEAVES (Stuart 2026-10-06: "yes required"). Solid
  *                     brass with no word on brushed / polished, lacquered or not, is an order the floor cannot make.
  * `alert` is what the CPQ screen says out loud (the first two say nothing: the button and the strip already do).
  */
-export function addRefusalOf({ priced, pendingDrops, chosenList, finishFor, askingFinishes, finishAnswers }) {
+export function addRefusalOf({ priced, pendingDrops, chosenList, finishFor, askingFinishes, finishAnswers, spliceCentreMissing = false }) {
     if (!priced.lines.length) return { kind: 'NOTHING_PRICED' };
     if (pendingDrops.length) return { kind: 'REMOVALS', message: dropRefusalOf(pendingDrops) };
+    // A SPLICED POLE TAKES A CENTRE BRACKET AT THE SPLICE (Stuart 2026-10-19: "a center bracket is always required there").
+    if (spliceCentreMissing) return { kind: 'SPLICE_CENTRE', alert: 'This pole is spliced — choose a centre bracket first. One sits at the splice, so the centre count is always odd (1, 3, 5).' };
     const bareWood = bareWoodOf(chosenList, finishFor);
     if (bareWood.length) {
         return { kind: 'BARE_WOOD', bareWood,
@@ -1445,14 +1505,6 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const lengthInches = lengthInchesOf(fields.poleIn, fields.poleFrac);
     const lengthFeetExact = lengthFeetExactOf(lengthInches);
     const lengthFeet = lengthFeetOf(lengthInches);
-    // What the span depends on — the fabric weight, the curtain length, into studs or not — as the operator answered it.
-    const span = spanAnswersOf({ fabricId, dropFt, onStud });
-    const advice = bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId });
-    const rodOptions = rodOptionsAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId });
-    const recommendFor = (slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet });
-    const quantities = quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId });
-    const supportShort = supportShortfallOf({ model, livePicks, quantities, recommendFor });
-    const resolved = resolvedOf({ choices, answers: effAnswers, livePicks, modelNodes, quantities });
     // The add-by-hand rows: restored as Edit restores them, offered for the rod chosen, and — over the flow's
     // limit, with ONE joiner to choose from, unless the operator declined it — the joiner the length step adds itself.
     const sameItemCode = (a, b) => sameItem(a, b, findPart);
@@ -1466,6 +1518,17 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     if (spliceNeeded && spliceCode && !spliceWaived) typedExtras = withRequiredSplice(typedExtras, spliceCode, sameItemCode);
     const extras = liveExtrasOf(typedExtras, extraItems, rodMats);
     const spliceSatisfied = spliceIsSatisfied(spliceCodes, extras, sameItemCode);
+    const drawnSplices = Array.isArray(savedDrawnSplices) ? savedDrawnSplices.map(sp => ({ distInches: sp.distInches, ref: sp.ref || '' })) : [];
+    // The splices on it — a bracket goes at every one (centreCountForSplices); the traverse's joiner is a tick on its components step.
+    const splice = spliceInfoOf({ extras, spliceCodes, sameItemCode, trvJoiners: trvJoinersOf({ trvRules, model, livePicks, answers, lengthFeet, trvSel: savedTrvSel && typeof savedTrvSel === 'object' ? savedTrvSel : null }), drawnSplices, lengthInches, spliceOverIn });
+    // What the span depends on — the fabric weight, the curtain length, into studs or not — as the operator answered it.
+    const span = spanAnswersOf({ fabricId, dropFt, onStud });
+    const advice = bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId });
+    const rodOptions = rodOptionsAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId });
+    const recommendFor = (slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet, splice });
+    const quantities = quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId, splice });
+    const supportShort = supportShortfallOf({ model, livePicks, quantities, recommendFor });
+    const resolved = resolvedOf({ choices, answers: effAnswers, livePicks, modelNodes, quantities });
     // The finishes: the saved defaults as Edit restores them — one per material, or (a line saved before there
     // was one per material) ONE code, which lands in its material's slot — and the rules bound to this configuration.
     const globalFinishes = (savedGlobalFinishes && typeof savedGlobalFinishes === 'object') ? { ...savedGlobalFinishes }
@@ -1483,7 +1546,6 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     // multiplier and a drawing's splices read back as Edit (or a restored workspace) restores them.
     const stepNotes = { ...(savedStepNotes || {}) };
     const stepNoteClient = (savedStepNoteClient && typeof savedStepNoteClient === 'object') ? { ...savedStepNoteClient } : {};
-    const drawnSplices = Array.isArray(savedDrawnSplices) ? savedDrawnSplices.map(sp => ({ distInches: sp.distInches, ref: sp.ref || '' })) : [];
     const memo = savedMemo || sidemark || '';
     const qty = configQtyOf(savedQty);
     const steps = stepsOf({ model, isTraverse: bill.isTraverse, trvRules, sizeSteps, sizeProjInches, settledKeys });
@@ -1505,14 +1567,15 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const drops = mergeDrops(Array.isArray(savedDrops) ? savedDrops : [], droppedPicks(model, picks, livePicks, { labelOf: slotLabel, everyChoice, savedParts: pickPartsSaved }));
     const pendingDrops = unacknowledged(drops);
     const dropRefusal = dropRefusalOf(pendingDrops);
-    const refusal = addRefusalOf({ priced: bill.priced, pendingDrops, chosenList: fin.chosenList, finishFor: fin.finishFor, askingFinishes: bill.askingFinishes, finishAnswers });
+    const refusal = addRefusalOf({ priced: bill.priced, pendingDrops, chosenList: fin.chosenList, finishFor: fin.finishFor, askingFinishes: bill.askingFinishes, finishAnswers,
+        spliceCentreMissing: spliceCentreMissingOf({ model, livePicks, splice }) });
     const item = refusal ? null : cartLineOf({ resolved, pricingCtx: bill.pricingCtx, assembly, flow, findPart, qty, renderSnapshot, pins, memo,
         chosenFinishObjects: fin.chosenFinishObjects, effectiveLevel: bill.effectiveLevel, lengthInches, lengthFeet, extras, extraLines: bill.extraLines, stepNotes, stepNoteClient,
         answers, livePicks, partFinish, globalFinish: fin.globalFinish, globalFinishes, stepQty, liveFinishAnswers: bill.liveFinishAnswers,
         kitBill: bill.kitBill, kitSource: bill.kitSource, kitPick: bill.kitPick, kitMotor: bill.kitMotor, isTraverse: bill.isTraverse, trvSel, trvComponents: bill.trvComponents, trvLive: bill.trvLive,
         renderState, steps, noSplice: bill.noSplice, spliceOverIn, span });
     return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks,
-        lengthInches, lengthFeetExact, lengthFeet, span, advice, rodOptions, recommendFor, quantities, supportShort, resolved,
+        lengthInches, lengthFeetExact, lengthFeet, span, advice, rodOptions, splice, recommendFor, quantities, supportShort, resolved,
         sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied,
         ...fin, finishAnswers, trvSel, ...bill,
         stepNotes, stepNoteClient, drawnSplices, memo, qty, steps, answerOf, extrasOnStep, visibleOverrides, clearList, railNames, stretchSpec, spliceMarks, cloneSpecs,

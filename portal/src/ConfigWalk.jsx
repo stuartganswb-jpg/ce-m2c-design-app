@@ -14,6 +14,7 @@ import { loadView, troubleOf } from './configApi';
 import { shownOf } from './configBasket';
 import { FRACTIONS, blankAnswers, wireOf, toggled } from './configAnswers';
 import { renderThumbnails, cachedThumb } from '@engine/hardwareThumbs.js';
+import { spanRiskOf, SpanRiskArt, SPAN_RISK_ASK } from '@engine/spanRisk.js';   // the risk window's words and drawings — CPQ shows the same
 
 const ConfigStage = lazy(() => import('./ConfigStage.jsx'));
 
@@ -31,6 +32,10 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
   const [trouble, setTrouble] = useState(null);
   const [thumbs, setThumbs] = useState({});
   const [added, setAdded] = useState(null);
+  // THE RISK WINDOW (Stuart 2026-10-19): fewer centre brackets than recommended, said and drawn, with a Confirm — when a count field is
+  // left short (once the screen has the count back) and at Add.
+  const [riskAsk, setRiskAsk] = useState(null);          // { r: view.risk entry, then: 'add' | null }
+  const [riskCheck, setRiskCheck] = useState(false);
   const seq = useRef(0);
   const typing = useRef(false);
 
@@ -65,6 +70,13 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
     }, wait);
     return () => clearTimeout(timer);
   }, [flow.id, a, scopeStep, scopeNow]);
+
+  useEffect(() => {
+    if (!riskCheck || pending || !view) return;
+    setRiskCheck(false);
+    const r = (view.risk || [])[0];
+    if (r && r.key !== a.riskConfirmed) setRiskAsk({ r, then: null });
+  }, [riskCheck, pending, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The step on screen stays the one the customer was on, as the walk grows or shrinks around it.
   useEffect(() => {
@@ -111,12 +123,25 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
 
   const go = (d) => { const next = steps[Math.max(0, Math.min(steps.length - 1, ix + d))]; if (next) setStepKey(next.key); };
   const canAdd = !!view && !view.refusal && !pending && !trouble;
-  const add = () => {
+  const add = (confirmedKey) => {
     if (!canAdd) return;
-    onAdd({ flowId: flow.id, flowName: flow.name, state: wireOf(a), memo: a.memo, qty: Math.max(1, parseInt(a.qty, 10) || 1), shown: shownOf(view) });
+    const r = (view.risk || [])[0];
+    const confirmed = typeof confirmedKey === 'string' ? confirmedKey : a.riskConfirmed;
+    if (r && r.key !== confirmed) { setRiskAsk({ r, then: 'add' }); return; }
+    const sent = { ...a, riskConfirmed: confirmed || '' };
+    onAdd({ flowId: flow.id, flowName: flow.name, state: wireOf(sent), memo: a.memo, qty: Math.max(1, parseInt(a.qty, 10) || 1), shown: shownOf(view) });
     setAdded({ memo: a.memo || flow.name, editing: !!editing });
     if (!editing) { setA(blankAnswers()); setStepKey(''); setScopePick(null); }
   };
+
+  const closeRisk = (confirmed) => {
+    const ask = riskAsk;
+    setRiskAsk(null);
+    if (!confirmed || !ask) return;
+    set(() => ({ riskConfirmed: ask.r.key }));
+    if (ask.then === 'add') add(ask.r.key);
+  };
+  const riskWords = riskAsk ? spanRiskOf(riskAsk.r) : null;
 
   // ── DRAWING ──
   const optionCard = (o, onClick) => {
@@ -158,8 +183,11 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
             <label className="cf-count">
               <span>How many</span>
               <input value={a.stepQty[step.key] !== undefined ? a.stepQty[step.key] : ''} inputMode="numeric"
-                placeholder={step.qty.recommended ? String(step.qty.recommended) : '1'} onChange={(e) => count(step.key, e.target.value)} />
+                placeholder={step.qty.recommended ? String(step.qty.recommended) : '1'} onChange={(e) => count(step.key, e.target.value)}
+                onBlur={() => { if (step.qty.rounded) count(step.key, String(step.qty.rounded)); setRiskCheck(true); }} />
               {step.qty.recommended ? <span className="cf-fine">recommended {step.qty.recommended} — leave it empty to use it</span> : null}
+              {step.qty.splices ? <span className="cf-fine">{step.qty.splices === 1 ? 'this pole is spliced: one centre bracket sits at the splice, so the count is odd (1, 3, 5)' : `one centre bracket at each of the ${step.qty.splices} splices`}</span> : null}
+              {step.qty.rounded ? <span className="cf-fine">rounded up to {step.qty.rounded}</span> : null}
             </label>
           )}
           {step.short && <div className="cf-note warn">{step.short.chosen ? `${step.short.chosen} centre bracket${step.short.chosen === 1 ? '' : 's'} chosen` : 'No centre bracket chosen'} — {step.short.recommended} recommended for this pole. You can still add this to your request; our team will look at it.</div>}
@@ -199,10 +227,10 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
             <label><span>Curtain length (ft)</span>
               <input data-span="drop" value={a.dropFt || ''} inputMode="decimal" placeholder={String(step.dropFt || 8)} onChange={(e) => set(() => ({ dropFt: e.target.value.replace(/[^0-9.]/g, '') }), true)} />
             </label>
-            <label><span>Into studs?</span>
-              <select data-span="stud" value={a.onStud === false ? 'NO' : 'YES'} onChange={(e) => set(() => ({ onStud: e.target.value === 'YES' }))}>
-                <option value="YES">Yes — into studs</option>
-                <option value="NO">No — drywall anchors</option>
+            <label><span>Wall fixing</span>
+              <select data-span="stud" value={a.onStud === true ? 'STUD' : 'DRYWALL'} onChange={(e) => set(() => ({ onStud: e.target.value === 'STUD' }))}>
+                <option value="DRYWALL">Drywall with toggles</option>
+                <option value="STUD">In a stud</option>
               </select>
             </label>
           </div>
@@ -210,7 +238,7 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
           {step.support && (
             <div className="cf-note">
               A support every {step.support.everyInches}&Prime; — {step.support.why}. This pole wants <b>{step.support.supports}</b> support{step.support.supports === 1 ? '' : 's'}
-              {step.support.other && step.support.other !== step.support.supports ? ` (${step.support.other} ${step.support.onStud ? 'if not into studs' : 'into studs'})` : ''}.
+              {step.support.other && step.support.other !== step.support.supports ? ` (${step.support.other} ${step.support.onStud ? 'on drywall toggles' : 'in a stud'})` : ''}.
               {step.support.unlisted ? ' One of the rods chosen has no span on file — our team will confirm the supports for it.' : ''}
             </div>
           )}
@@ -324,6 +352,21 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
 
   return (
     <div className="cf">
+      {riskWords && (
+        <div className="cf-risk" role="dialog" aria-modal="true" aria-label={riskWords.title}>
+          <div className="cf-risk-card">
+            <div className="cf-risk-title">{riskWords.title}</div>
+            <SpanRiskArt kind={riskWords.kind} width={396} />
+            <p className="cf-risk-lead">{riskWords.lead}</p>
+            <p>{riskWords.body}</p>
+            <p className="cf-fine">{SPAN_RISK_ASK}</p>
+            <div className="cf-risk-go">
+              <button className="btn-ghost" onClick={() => closeRisk(false)}>Go back</button>
+              <button className="btn" onClick={() => closeRisk(true)}>Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="cf-top">
         <button className="btn-ghost" onClick={onLeave}>← All products</button>
         <div className="cf-title">{flow.name}{flow.preview ? <span className="cf-preview">Preview · only you can see this product</span> : null}</div>

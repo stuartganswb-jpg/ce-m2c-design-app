@@ -367,8 +367,8 @@ ok(`the set-ups take each road — lines ${t.lines}, refused ${JSON.stringify(t.
                 const bare = (it) => { const c = JSON.parse(JSON.stringify(it)); delete c.id; return c; };
                 if (JSON.stringify(bare(req.item)) !== JSON.stringify(bare(own.item))) bad2.push(`request ${fi}.${v}`);
                 if (JSON.stringify(req.notes) !== JSON.stringify(view.supportShort)) bad2.push(`notes ${fi}.${v}`);
-                if (req.notes.length) { tr.notes++; if (!/^Fewer centre brackets than recommended: (\d+|none) chosen, \d+ recommended for this [\d.]+″ pole(, not into studs)?\.$/.test(req.notes[0])
-                    || /, not into studs\.$/.test(req.notes[0]) !== (state.onStud === false) || !req.notes[0].includes(`${hq.lengthInches}″`)) bad2.push(`note words ${fi}.${v}: ${req.notes[0]}`); }
+                if (req.notes.length) { tr.notes++; if (!/^Fewer centre brackets than recommended: (\d+|none) chosen, \d+ recommended for this [\d.]+″ pole (in a stud|on drywall with toggles)\.( The customer confirmed the risk\.)?$/.test(req.notes[0])
+                    || / in a stud\./.test(req.notes[0]) !== (state.onStud !== false) || !req.notes[0].includes(`${hq.lengthInches}″`) || / confirmed /.test(req.notes[0])) bad2.push(`note words ${fi}.${v}: ${req.notes[0]}`); }
                 // the answers that differ from the default ride the saved line, so a reopen recommends what was recommended
                 const ec = req.item.engineConfig;
                 if ((state.onStud === false) !== (ec.onStud === false) || (hq.span.dropFt !== 8) !== (ec.dropFt === hq.span.dropFt)) bad2.push(`saved span ${fi}.${v}`);
@@ -381,6 +381,54 @@ ok(`the set-ups take each road — lines ${t.lines}, refused ${JSON.stringify(t.
     eq(`the recommendations the portal draws are HQ's: the span answers, the advice in the column that applies, the rods compared, the short count and its words — on the view and the request (${tr.views} views)${bad2.length ? ` — first: ${bad2.slice(0, 6).join(', ')}` : ''}`, bad2.length, 0);
     ok(`…and each road was taken — advice ${tr.support} (off-stud ${tr.offStud}), rods compared ${tr.rods} (a fewer-supports rod ${tr.better}), a short count ${tr.short}, said on the request ${tr.notes}`,
         tr.support > 20 && tr.offStud > 5 && tr.rods > 5 && tr.better > 2 && tr.short > 3 && tr.notes > 3);
+}
+
+// ── THE SPLICE AND THE RISK WINDOW ON THE PORTAL (2026-10-19): the count rounded up at a splice, the gate's words, the risk numbers
+//    with the key a Confirm answers, and "the customer confirmed the risk" only for the count confirmed ──
+{
+    const S2 = (raw) => P.stateFromClient(raw, { finishCodes: allowed });
+    const W3 = world(fabricut, { spanDoc: { map: { 'H1-ALU2': 'H1-2RCTAR, H1-2RCTWR, H1-2RCTACR' }, caps: {} } });
+    const t3 = { rounded: 0, gate: 0, risk: 0, confirmed: 0, unconfirmed: 0 };
+    const bad3 = [];
+    framings.forEach((answers, fi) => {
+        const picks = picksFor(answers, `splice|${fi}`);
+        const base = { answers, picks, lengthInches: 150, globalFinishes: { METAL: 'P14', WOOD: 'S04' }, onStud: false };
+        const hq0 = direct('STANDARD', S2(base), W3);
+        const centre = hq0.model.slots.find(sl => sl.kind === 'BRACKET' && String(sl.position || '').toUpperCase() === 'CENTER' && hq0.livePicks[sl.key]);
+        if (hq0.splice.count && centre) {
+            const state = S2({ ...base, stepQty: { [centre.key]: '2' } });
+            const view = P.viewOf(engine, W3, state, { level: 'FAB_RETAIL', money: true });
+            const st = view.steps.find(x => x.key === centre.key);
+            const want = direct('FAB_RETAIL', state, W3).quantities[hq0.livePicks[centre.key]];
+            if (!st || !st.qty || st.qty.rounded !== want || want % 2 !== 1 || st.qty.splices !== hq0.splice.count) bad3.push(`rounded #${fi}: ${JSON.stringify(st && st.qty)} vs ${want}`); else t3.rounded++;
+            // the risk numbers and their key, as the engine keys them; the note says "confirmed" only for that key
+            const hq = direct('FAB_RETAIL', S2({ ...base, stepQty: { [centre.key]: '1' } }), W3);
+            const v1 = P.viewOf(engine, W3, S2({ ...base, stepQty: { [centre.key]: '1' } }), { level: 'FAB_RETAIL', money: true });
+            const wantRisk = hq.supportShort.map(x => ({ chosen: x.chosen, recommended: x.recommended, onStud: false, lengthInches: hq.lengthInches, everyInches: hq.advice ? hq.advice.everyInches : null,
+                key: engine.spanRiskKeyOf({ chosen: x.chosen, recommended: x.recommended, onStud: false, lengthInches: hq.lengthInches }) }));
+            if (JSON.stringify(v1.risk) !== JSON.stringify(wantRisk)) bad3.push(`risk #${fi}`);
+            if (wantRisk.length) {
+                t3.risk++;
+                const yes = P.requestLineOf(engine, W3, S2({ ...base, stepQty: { [centre.key]: '1' }, riskConfirmed: wantRisk[0].key }), { level: 'STANDARD' });
+                const no = P.requestLineOf(engine, W3, S2({ ...base, stepQty: { [centre.key]: '1' }, riskConfirmed: '9|9|STUD|1' }), { level: 'STANDARD' });
+                if (yes.item && /The customer confirmed the risk\.$/.test(yes.notes[0])) t3.confirmed++; else if (yes.item) bad3.push(`confirmed #${fi}: ${yes.notes[0]}`);
+                if (no.item && !/confirmed/.test(no.notes[0])) t3.unconfirmed++; else if (no.item) bad3.push(`unconfirmed #${fi}: ${no.notes[0]}`);
+            }
+        }
+        // the gate: a spliced pole with its centre bracket left unchosen — refused for HQ's reason, in the portal's words
+        if (hq0.splice.count && centre) {
+            const noCentre = { ...picks }; delete noCentre[centre.key];
+            const st = S2({ ...base, picks: noCentre });
+            const hqN = direct('STANDARD', st, W3);
+            if (hqN.refusal && hqN.refusal.kind === 'SPLICE_CENTRE') {
+                const v = P.viewOf(engine, W3, st, { level: 'FAB_RETAIL', money: true });
+                if (!v.refusal || v.refusal.kind !== 'SPLICE_CENTRE' || v.refusal.message !== P.REFUSAL_WORDS.SPLICE_CENTRE || !/two pieces/.test(v.refusal.message)) bad3.push(`gate words #${fi}`); else t3.gate++;
+            }
+        }
+    });
+    if (process.env.PS_VERBOSE) console.log(JSON.stringify(t3));
+    eq(`the portal at a splice: the typed count rounded up as the bill holds it, the risk numbers and their key as the engine keys them, "confirmed" only for the count confirmed, the gate in the portal's words${bad3.length ? ` — first: ${bad3.slice(0, 4).join('; ')}` : ''}`, bad3.length, 0);
+    ok(`…reached: rounded ${t3.rounded}, a short count with its key ${t3.risk} (confirmed ${t3.confirmed}, not ${t3.unconfirmed}), the gate ${t3.gate}`, t3.rounded > 5 && t3.risk > 3 && t3.confirmed === t3.risk && t3.unconfirmed === t3.risk && t3.gate > 3);
 }
 
 eq('in line: the server\'s copy and the site\'s bundle carry the same engine and the same files — anything else is behind', [P.inLine(engine.stamp, { ...engine.stamp }), P.inLine(engine.stamp, { ...engine.stamp, closureHash: 'x' }), P.inLine(engine.stamp, { ...engine.stamp, engineVersion: 'y' }), P.inLine(engine.stamp, null), P.inLine(null, engine.stamp), P.inLine({ engineVersion: '', closureHash: '' }, { engineVersion: '', closureHash: '' })], [true, false, false, false, false, false]);

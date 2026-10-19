@@ -934,6 +934,37 @@ const picksFor = (answers, seed) => {
     eq('a centre bracket with no span to go on is not guessed', recommendedFor({ slot: { kind: 'BRACKET', position: 'center' }, choice: {}, advice: null, model, livePicks: {}, lengthFeet: 8 }), null);
 }
 
+// ── A BRACKET AT THE SPLICE, ON A TRAVERSE TOO (2026-10-19): the traverse's joiner is a tick on its components step, counted from
+//    its chart — the centre count follows it as it follows a length-step joiner ──
+{
+    const { trvJoinersOf, spliceInfoOf } = S;
+    const SPAN = { 'H1-ALU2': 'H1-2RCTAR, H1-2RCTWR, H1-2RCTACR' };
+    const CHART = { usage: [{ label: 'Pinch Pleat Carriers', itemId: 'HTSLNTCAR', byFeet: { 2: 8, 4: 16, 8: 32, 12: 48, 16: 64 } }, { label: 'Splice', itemId: 'H1-2TRVSPLC', byFeet: { 11: 1, 16: 1 } }],
+        configurator: [{ itemId: 'H1-2TRVSPLC', drive: 'BOTH', billable: false }, { itemId: 'HTTENDSTOP', drive: 'BOTH', billable: false }] };
+    const parts = [...new Map(PINS.map(p => [p.partId, { id: p.partId, itemId: p.partId, legacyErpId: p.legacyErpId || p.partName, itemName: p.partName }])).values()];
+    let traverse = 0, joined = 0, odd = 0, short = 0, solid = 0, roundedUp = 0, wrong = [];
+    framings.forEach((answers, fi) => {
+        const picks = picksFor(answers, `trv-splice|${fi}`);
+        const at = (lengthInches) => sessionOf({ assembly: ASSEMBLY, pins: PINS, parts, spanMap: SPAN, trvRules: CHART }, { answers, picks, lengthInches, onStud: false });
+        const long = at(144), short8 = at(96);
+        if (!long.isTraverse) { solid++; if (trvJoinersOf({ trvRules: CHART, model: long.model, livePicks: long.livePicks, answers, lengthFeet: long.lengthFeet, trvSel: null })) wrong.push(`solid #${fi} counted a traverse joiner`); return; }
+        traverse++;
+        const j12 = trvJoinersOf({ trvRules: CHART, model: long.model, livePicks: long.livePicks, answers, lengthFeet: long.lengthFeet, trvSel: null });
+        const j8 = trvJoinersOf({ trvRules: CHART, model: short8.model, livePicks: short8.livePicks, answers, lengthFeet: short8.lengthFeet, trvSel: null });
+        if (j12 !== 1 || j8 !== 0) wrong.push(`#${fi}: joiners at 12 ft ${j12}, at 8 ft ${j8}`);
+        if (long.splice.count === 1 && short8.splice.count === 0) joined++; else wrong.push(`#${fi}: splice ${long.splice.count} / ${short8.splice.count}`);
+        const centre = long.model.slots.find(sl => sl.kind === 'BRACKET' && String(sl.position || '').toUpperCase() === 'CENTER' && long.livePicks[sl.key]);
+        if (centre) { const q = long.quantities[long.livePicks[centre.key]]; if (q % 2 === 1) odd++; else wrong.push(`#${fi}: a spliced traverse with ${q} centre brackets`); }
+        // 126" on drywall toggles: the span alone wants 2 in the centre (4 supports at 42") — the splice makes it 3
+        const mid = at(126);
+        const centreMid = mid.model.slots.find(sl => sl.kind === 'BRACKET' && String(sl.position || '').toUpperCase() === 'CENTER' && mid.livePicks[sl.key]);
+        if (centreMid && mid.advice && mid.splice.count === 1) { const q = mid.quantities[mid.livePicks[centreMid.key]]; if (q === 3 && mid.advice.supports === 4) roundedUp++; else wrong.push(`#${fi}: at 126" ${q} centre brackets from ${mid.advice.supports} supports`); }
+        if (long.supportShort.length) short++;
+    });
+    eq(`the traverse's chart joiner is a splice: counted at 12 ft and not at 8, never on a solid pole; and the centre count at it is odd (traverse set-ups ${traverse}, solid ${solid})${wrong.length ? ` — ${wrong.slice(0, 3).join('; ')}` : ''}`, wrong.length, 0);
+    ok(`…reached: ${traverse} traverse set-ups, ${joined} spliced at 12 ft, ${odd} odd centre counts, ${roundedUp} rounded up from an even 2 at 126"`, traverse > 5 && joined === traverse && odd > 5 && solid > 0 && roundedUp > 5);
+}
+
 // ── THE STUD ANSWER AND THE CURTAIN LENGTH, THROUGH THE WHOLE CALL, on the live H1-2TRV pins (2026-10-19) ──
 {
     const SPAN = { 'H1-ALU2': 'H1-2RCTAR, H1-2RCTWR, H1-2RCTACR' };
@@ -1422,12 +1453,25 @@ const FIN = [
                     const drawSaid = (w) => canon([w.visibleOverrides, w.clearList, w.railNames, w.stretchSpec, w.spliceMarks, w.cloneSpecs, w.chosen]);
                     // …and a second one, the same day: the line keeps, beside its picks, WHICH PART each one was (engineConfig.pickParts).
                     // The line is compared with the screen's without that record; the record itself is checked on its own, below.
-                    const bare = (it) => { if (!it) return null; const c = JSON.parse(JSON.stringify(it)); delete c.id; if (c.engineConfig) delete c.engineConfig.pickParts; return c; };
+                    // ⚠ DELIBERATE RULE CHANGES, 2026-10-19 (Stuart: "make the default for all screens drywall" · "a center bracket is
+                    // always required there"): every line now records its wall fixing (engineConfig.onStud — checked on its own below),
+                    // and a SPLICED pole whose centre step offers a bracket nobody chose is refused (SPLICE_CENTRE) where the screen's
+                    // code built the line. Everything else is still the screen's code as it was.
+                    const bare = (it) => { if (!it) return null; const c = JSON.parse(JSON.stringify(it)); delete c.id; if (c.engineConfig) { delete c.engineConfig.pickParts; delete c.engineConfig.onStud; } return c; };
                     walk6.compared++;
+                    if (n6.item && n6.item.engineConfig.onStud !== n6.span.onStud) { walk6.add++; if (first6.length < 3) first6.push(`fixing not kept #${fi}.${v}`); }
+                    const spliceGate = !!n6.refusal && n6.refusal.kind === 'SPLICE_CENTRE';
+                    if (spliceGate) {
+                        // (checked after "nothing priced" and the removals, before the finish refusals — where the screen's code refused
+                        // for bare wood or an open finish question, this names the missing centre bracket first)
+                        if (n6.splice.count > 0 && n6.model.slots.some(sl => sl.kind === 'BRACKET' && String(sl.position || '').toUpperCase() === 'CENTER' && !sl.suppressedBy && sl.options.length && !n6.livePicks[sl.key])) {
+                            walk6.spliceCentre = (walk6.spliceCentre || 0) + 1; if (!oa.item) walk6.spliceFirst = (walk6.spliceFirst || 0) + 1;
+                        } else { walk6.add++; if (first6.length < 3) first6.push(`splice gate #${fi}.${v}`); }
+                    }
                     if (walkSaid(ow) !== walkSaid({ steps: n6.steps, hintFor: stepHintOf, extrasOnStep: n6.extrasOnStep, answerOf: n6.answerOf })) { walk6.walk++; if (first6.length < 3) first6.push(`walk #${fi}.${v}`); }
                     if (drawSaid(ow) !== drawSaid(n6)) { walk6.draw++; if (first6.length < 3) first6.push(`draw #${fi}.${v}`); }
-                    if (canon([oa.said, bare(oa.item), oa.dropRefusal, oa.cfgQtyN, drops]) !== canon([n6.refusal && n6.refusal.alert ? [n6.refusal.alert] : [], bare(n6.item), n6.dropRefusal, n6.qty, n6.drops])
-                        || !!n6.refusal !== (oa.item === null)) { walk6.add++; if (first6.length < 3) first6.push(`add #${fi}.${v}`); }
+                    if (!spliceGate && (canon([oa.said, bare(oa.item), oa.dropRefusal, oa.cfgQtyN, drops]) !== canon([n6.refusal && n6.refusal.alert ? [n6.refusal.alert] : [], bare(n6.item), n6.dropRefusal, n6.qty, n6.drops])
+                        || !!n6.refusal !== (oa.item === null))) { walk6.add++; if (first6.length < 3) first6.push(`add #${fi}.${v}`); }
                     // A ROW TYPED TO NOTHING — 0 into an empty quantity box. Only the screen can hold one (a saved line never does: the
                     // restore reads its count as at least one), so it is handed to the Add itself, old and new, on the same typed rows:
                     // alone on the line, beside rows that were taken, and on one step while the same item is taken on another.
@@ -1480,7 +1524,7 @@ const FIN = [
     eq(`…and with a row typed to nothing on it — alone, beside rows that were taken (${walk6.typedBeside}), on one step while the same item is taken on another — the Add hands on what the screen's did (${walk6.typed} lines)`, [walk6.typedDiffer, walk6.typed > 50, walk6.typedBeside > 20], [0, true, true]);
     ok(`the set-ups take each road of the walk — steps ${JSON.stringify(walk6.kinds)}, the track hint ${walk6.hints}, items offered off the length step ${walk6.itemsOffStep}, "not asked" ${walk6.notAsked}, refused ${JSON.stringify(walk6.refused)}, removals named then acknowledged ${walk6.removals}, lines ${walk6.lines} (shop notes ${walk6.shopNotes}, customer notes ${walk6.clientNotes}, ticks with nothing to print ${walk6.ticksOnly}, one piece ${walk6.onePiece}, more than one build ${walk6.multiples}, no model ${walk6.noModel}), splice lines drawn where placed ${walk6.drawnMarks} / spread ${walk6.spreadMarks}, stretched ${walk6.stretch}, clear parts ${walk6.clear}, no rings pinned ${walk6.noRings}, no rod pinned ${walk6.noRod}`,
         walk6.kinds.AXES > 50 && walk6.kinds.AXIS > 20 && walk6.kinds.SLOT > 500 && walk6.kinds.LENGTH === walk6.compared && walk6.kinds.CARRIERS > 3 && walk6.kinds.TRV > 30 && walk6.hints > 20 && walk6.itemsOffStep > 50 && walk6.notAsked > 20
-        && walk6.refused.NOTHING_PRICED > 0 && walk6.refused.REMOVALS > 3 && walk6.refused.BARE_WOOD > 3 && walk6.refused.FINISH_QUESTIONS > 3 && walk6.removals > 3 && walk6.lines > 100 && walk6.shopNotes > 30 && walk6.clientNotes > 10 && walk6.ticksOnly > 3
+        && walk6.refused.NOTHING_PRICED > 0 && walk6.refused.REMOVALS > 3 && walk6.refused.BARE_WOOD > 3 && walk6.refused.FINISH_QUESTIONS > 3 && walk6.removals > 3 && walk6.lines + (walk6.spliceCentre || 0) > 100 && (walk6.spliceCentre || 0) > 10 && walk6.shopNotes > 30 && walk6.clientNotes > 10 && walk6.ticksOnly > 3
         && walk6.onePiece > 0 && walk6.multiples > 10 && walk6.noModel > 3 && walk6.drawnMarks > 3 && walk6.spreadMarks > 3 && walk6.stretch > 50 && walk6.clear > 50 && walk6.noRings > 5 && walk6.noRod > 3);
     // the kit a reopened line names: found the way the screen's restore effect found it
     const cases5 = [{}, { kitPick: 'KIT-H1-2TRV-4/P' }, { kitPick: 'KIT-H1-2TRV-4M/P', kitMotor: 'H1-2TRV-4M/P-35W' }, { kitCode: 'h1-2trv-4c/p' }, { kitPick: 'GONE', kitCode: 'H1-2TRV-4D/P' }, { kitPick: 'GONE' }, { kitCode: 'NOPE', kitMotor: 'x' }];
@@ -1660,7 +1704,8 @@ const FIN = [
     const spanned = lineOf({ fabricId: 'BLACKOUT', dropFt: 12, onStud: false });
     eq('the fabric, the curtain length and the stud answer are on the session and on the saved line — the ones that differ from the default',
         [spanned.span, spanned.item.engineConfig.fabricId, spanned.item.engineConfig.dropFt, spanned.item.engineConfig.onStud], [{ fabricId: 'BLACKOUT', dropFt: 12, onStud: false }, 'BLACKOUT', 12, false]);
-    eq('…a line at the defaults saves none of them (it reopens to the defaults it was given)', ['fabricId', 'dropFt', 'onStud'].map(k => Object.prototype.hasOwnProperty.call(lineOf({}).item.engineConfig, k)), [false, false, false]);
+    eq('…a line at the defaults saves no fabric and no curtain length (it reopens to them) — and ALWAYS its wall fixing, so a line saved before 2026-10-19 (none on it) reopens in a stud, as it was worked',
+        [['fabricId', 'dropFt'].map(k => Object.prototype.hasOwnProperty.call(lineOf({}).item.engineConfig, k)), lineOf({}).item.engineConfig.onStud, lineOf({ onStud: false }).item.engineConfig.onStud], [[false, false], true, false]);
     const reopened = sessionOf({ assembly: SIZE_ASM, pins: SIZE_PINS, parts: sizeParts, flow: SIZE_FLOW, spanMap: { 'H2-1.375': 'H2-138R' } },
         { ...spanned.item.engineConfig, sizePick: { 'SIZE-DIA': 'SIZE-DIA-138', 'SIZE-PROJ': 'SIZE-PROJ-6' } });
     eq('…and a reopen of that line works the span from them again: not into studs, 12 ft of blackout', [reopened.span, reopened.advice && reopened.advice.supports, reopened.advice && reopened.advice.bracketsNoStud],

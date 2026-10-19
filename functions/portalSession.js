@@ -58,7 +58,7 @@ async function loadEngine(dir = path.join(__dirname, 'engine')) {
         import(at('finishPbr.js')), import(at('finishScope.js')), import(at('bracketSpan.js')), import(at('sizeMatrix.js'))]);
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'MANIFEST.json'), 'utf8'));
     const engine = {
-        sessionOf: session.sessionOf, offeredFinishesOf: session.offeredFinishesOf, stepHintOf: session.stepHintOf, valueLabel: session.valueLabel, AXIS_LABEL: session.AXIS_LABEL,
+        sessionOf: session.sessionOf, spanRiskKeyOf: session.spanRiskKeyOf, offeredFinishesOf: session.offeredFinishesOf, stepHintOf: session.stepHintOf, valueLabel: session.valueLabel, AXIS_LABEL: session.AXIS_LABEL,
         finishGroupLabel: session.finishGroupLabel, lengthInchesOf: session.lengthInchesOf,
         aliasFor: pricing.aliasFor, PRICE_SOURCES: pricing.PRICE_SOURCES, customerPriceLevel: levels.customerPriceLevel,
         wearsAsTwin: twin.wearsAsTwin, customerLines: handoff.customerLines, isItemKit: itemKit.isItemKit,
@@ -152,6 +152,9 @@ function stateFromClient(raw, { finishCodes = new Set(), lengthOf = null } = {})
         lengthInches: Number.isFinite(length) && length > 0 && length <= 600 ? length : null,
         stepQty, fabricId: FABRICS.includes(U(r.fabricId)) ? U(r.fabricId) : 'PRINT',
         dropFt: Number.isFinite(drop) && drop > 0 ? drop : null, onStud: r.onStud !== false,
+        // what the customer pressed Confirm on in the risk window (fewer centre brackets than recommended): the short count's own key
+        // (hardwareSession.spanRiskKeyOf) — words on the request, and only while it is still the count on the line
+        riskConfirmed: typeof r.riskConfirmed === 'string' ? r.riskConfirmed.slice(0, 80) : '',
         globalFinishes: flat(r.globalFinishes, 6, fin), partFinish: flat(r.partFinish, 80, fin), finishAnswers,
         memo: txt(r.memo, 120), qty: qty > 0 && qty <= 999 ? qty : 1,
         // what was named as removed and acknowledged — the keys only; the entries themselves are worked out here
@@ -187,6 +190,7 @@ const REFUSAL_WORDS = {
     REMOVALS: 'A later choice removed something you had picked — look at what was removed and confirm before sending.',
     BARE_WOOD: 'Choose a wood finish — the wood parts on this order have none yet.',
     FINISH_QUESTIONS: 'One of your finishes has a question still to answer.',
+    SPLICE_CENTRE: 'This pole is made in two pieces — choose a centre bracket: one sits at the splice.',
 };
 // The words for a finish group that a CUSTOMER reads: CPQ's own for what it knows (Painted · Plated · Wood · Solid
 // brass — hardwareSession.finishGroupLabel), and an unfamiliar material by its own name, never "In house" /
@@ -226,7 +230,10 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
             return { ...base, ...slotView(st.slot), sub: st.sub ? { label: 'Matching backplate', ...slotView(st.sub) } : null,
                 // A CHOSEN RETURN COLLAPSES THE REST (CPQ, Stuart 2026-08-20): the plate picker it brings sits under the other ends.
                 collapse: !!(picked && picked.role === 'RETURN' && st.sub),
-                qty: asksQty ? { typed: state.stepQty[st.slot.key] || '', recommended: s.recommendFor(st.slot, picked) || null } : null,
+                qty: asksQty ? { typed: state.stepQty[st.slot.key] || '', recommended: s.recommendFor(st.slot, picked) || null,
+                    // a typed centre count on a spliced pole, rounded up so one sits at the splice (hardwareSession.centreCountForSplices)
+                    ...(Number(state.stepQty[st.slot.key]) > 0 && Number(s.quantities[picked.id]) !== Number(state.stepQty[st.slot.key]) ? { rounded: Number(s.quantities[picked.id]) } : {}),
+                    ...(s.splice && s.splice.count > 0 && st.slot.kind === 'BRACKET' && String(st.slot.position || '').toUpperCase() === 'CENTER' ? { splices: s.splice.count } : {}) } : null,
                 // fewer centre brackets than recommended — said, never refused
                 short: shortOf(st.slot.key) ? { chosen: shortOf(st.slot.key).chosen, recommended: shortOf(st.slot.key).recommended } : null };
         }
@@ -322,15 +329,20 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
         // what a later choice took off: our number and our description, and why in the customer's words — Understood clears it
         removals: s.drops.map((d) => ({ key: d.key, step: txt(d.step), code: d.partCode ? txt(s.ourId(d.partCode)) : '', part: txt((part(d.partCode) || {}).itemName || d.partName), why: removalWords(d.reason), acked: !!d.acked })),
         // fewer centre brackets than recommended — the same words the request carries to HQ
-        supportShort: shortNotesOf(s),
+        supportShort: shortNotesOf(engine, s, state),
+        // …and the same counts as numbers, for the risk window (Shared/spanRisk draws it; the key is what a Confirm answers)
+        risk: (s.supportShort || []).map((x) => ({ chosen: x.chosen, recommended: x.recommended, onStud: !!(s.span && s.span.onStud), lengthInches: s.lengthInches,
+            everyInches: s.advice ? s.advice.everyInches : null, key: engine.spanRiskKeyOf({ chosen: x.chosen, recommended: x.recommended, onStud: !!(s.span && s.span.onStud), lengthInches: s.lengthInches }) })),
         refusal: s.refusal ? { kind: s.refusal.kind, message: REFUSAL_WORDS[s.refusal.kind] || 'This configuration cannot be requested yet.' } : null,
     };
 }
 
 // FEWER CENTRE BRACKETS THAN RECOMMENDED, in words the customer and HQ both read (Shared/portalRequestLines prints them under
 // the configuration). The engine decides it (hardwareSession.supportShortfallOf); this only says it.
-function shortNotesOf(s) {
-    return (s.supportShort || []).map((x) => `Fewer centre brackets than recommended: ${x.picked ? x.chosen : 'none'} chosen, ${x.recommended} recommended for this ${s.lengthInches}″ pole${s.span && !s.span.onStud ? ', not into studs' : ''}.`);
+function shortNotesOf(engine, s, state = {}) {
+    const onStud = !!(s.span && s.span.onStud);
+    const confirmed = (x) => !!state.riskConfirmed && state.riskConfirmed === engine.spanRiskKeyOf({ chosen: x.chosen, recommended: x.recommended, onStud, lengthInches: s.lengthInches });
+    return (s.supportShort || []).map((x) => `Fewer centre brackets than recommended: ${x.picked ? x.chosen : 'none'} chosen, ${x.recommended} recommended for this ${s.lengthInches}″ pole ${onStud ? 'in a stud' : 'on drywall with toggles'}.${confirmed(x) ? ' The customer confirmed the risk.' : ''}`);
 }
 
 // ── THE REQUEST'S CART LINE ──────────────────────────────────────────────────────────────────
@@ -339,7 +351,7 @@ function shortNotesOf(s) {
 function requestLineOf(engine, data, state, { level = 'STANDARD' } = {}) {
     const s = engine.sessionOf({ ...data, priceLevel: level }, state);
     if (s.refusal) return { refusal: { kind: s.refusal.kind, message: REFUSAL_WORDS[s.refusal.kind] || 'This configuration cannot be requested yet.' }, item: null };
-    return { refusal: null, item: s.item, effectiveLevel: s.effectiveLevel, total: money(s.grandTotal * s.qty), notes: shortNotesOf(s) };
+    return { refusal: null, item: s.item, effectiveLevel: s.effectiveLevel, total: money(s.grandTotal * s.qty), notes: shortNotesOf(engine, s, state) };
 }
 
 // ── IN LINE, OR BEHIND ───────────────────────────────────────────────────────────────────────

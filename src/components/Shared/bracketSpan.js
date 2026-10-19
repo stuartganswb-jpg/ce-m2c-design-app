@@ -316,7 +316,7 @@ export function rodForItemCode(code, map) {
 }
 
 // Why the NOT-IN-A-STUD span is what it is, in the same words as `why` (spanTable's noStudLimitedBy).
-const NO_STUD_WHY = { LOAD: 'limited by fabric weight', ANCHOR: 'the limit for a drywall anchor', MAX: 'our maximum span' };
+const NO_STUD_WHY = { LOAD: 'limited by fabric weight', ANCHOR: 'the limit for drywall toggles', MAX: 'our maximum span' };
 
 /**
  * The bracket recommendation for one configuration, or null when it cannot be made honestly.

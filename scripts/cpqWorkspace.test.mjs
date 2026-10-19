@@ -39,6 +39,9 @@ ok('a finish alone is worth keeping', !workIsPristine({ ...fresh, globalFinishes
 ok('being on step 5 is worth keeping', !workIsPristine({ ...fresh, stepIx: 4 }));
 ok('two of this configuration is worth keeping', !workIsPristine({ ...fresh, qty: '2' }));
 ok('a heavier fabric is worth keeping', !workIsPristine({ ...fresh, fabricId: 'HEAVY' }));
+// the span's other two answers (2026-10-19): a new walk starts on drywall with toggles and the 8 ft curtain
+ok('drywall with toggles (the default) and no curtain length typed is still a fresh walk', workIsPristine({ ...fresh, onStud: false, dropFt: '' }));
+ok('a stud chosen, or a curtain length typed, is worth keeping', !workIsPristine({ ...fresh, onStud: true }) && !workIsPristine({ ...fresh, dropFt: '12' }));
 
 // ── empty workspaces are removed, not stored ────────────────────────────────────────────────
 const blankHeader = { ...header, jobData: { ...header.jobData, customerId: '' } };
