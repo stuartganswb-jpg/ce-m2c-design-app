@@ -12,6 +12,9 @@ import OneOfAKindImport from './OneOfAKindImport';   // 🎁 Uniquity: one-of-a-
 import CurtainPricingAdmin from './CurtainPricingAdmin';   // 🪟 M2C: the workroom's curtain chart + the swatches (2026-10-12, manager level and above)
 import { canLineDiscount } from '../Shared/lineDiscount';   // the app's ONE manager-or-higher rule (admin · superadmin · manager · executive)
 import { canTakePayment } from '../Shared/payRoles';   // the counter crew: CSR and up (Stuart 2026-10-19: Ashley files one-of-a-kind pieces)
+// The counter crew = the payment roles TODAY, by coincidence not by intent (Payments session 2026-10-19): a separate name,
+// so if who may charge a card ever changes, who may use the counter's tools changes only by a decision here.
+const canUseCounterTools = (role) => canTakePayment(role);
 
 // TOOLS, SPECS & FAQs (HQ 6.5) — the staff-side twin of the portal's Tools page. Same engineering
 // (Shared/bracketSpan.js, a verbatim-copy pair with portal/src/shared/), but staff also see the
@@ -291,7 +294,7 @@ const toolFitsBrand = (t, brand) => {
 // cart discounts use, plus the super-admin flag. The tab itself is granted per role on 11's matrix.
 // A tool marked counterUp is for the counter crew — CSR and up, the same list that may take a payment at the counter
 // (Shared/payRoles) — so a rep can file the show's one-of-a-kind pieces; prices stay managerUp.
-const toolFitsRole = (t, role, isSuperAdmin) => (t.managerUp ? canLineDiscount(role, isSuperAdmin) : (t.counterUp ? (canTakePayment(role) || isSuperAdmin) : true));
+const toolFitsRole = (t, role, isSuperAdmin) => (t.managerUp ? canLineDiscount(role, isSuperAdmin) : (t.counterUp ? (canUseCounterTools(role) || isSuperAdmin) : true));
 
 const ToolsSpecsTab = ({ activeBrand, currentUser = 'HQ', userRole = '', isSuperAdmin = false }) => {
     const [activeTool, setActiveTool] = useState(TOOLS[0].id);
