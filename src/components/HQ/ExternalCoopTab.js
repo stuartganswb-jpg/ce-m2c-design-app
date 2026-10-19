@@ -2576,7 +2576,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                                   collection="hq_sales_orders" docId={o.id}
                                                                   reference={`SO ${o.soId || o.id}`}
                                                                   customerName={o.customer || ''}
-                                                                  totalAmount={Number(o.invoiceTotal || 0)}
+                                                                  totalAmount={Number(o.invoiceTotal || 0) + Number(o.shippingAmount || (o.shipping && o.shipping.amount) || 0)}
                                                                   brand={activeBrand} compact
                                                               />
                                                           </div>

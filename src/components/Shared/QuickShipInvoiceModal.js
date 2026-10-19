@@ -46,9 +46,15 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
         ? order.invoiceLines
         // Customer document → the alias code they ordered under, when the line carries one.
         : (order.lines || []).map(l => ({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.qty, rate: null, total: null, note: l.note || '', finishCode: l.finishCode || '' }));
-    const total = typeof order.invoiceTotal === 'number'
+    // ⚠ FREIGHT IS PART OF THE BILL (Stuart 2026-10-19: "the amount it is wanting to collect is
+    // ignoring the shipping charge"). invoiceTotal is the GOODS only — freight rides in its own
+    // field because that is where NetSuite wants it — so this document said $700 on an order
+    // NetSuite itself totalled at $770, and the deposit was taken on the smaller figure.
+    const shipAmt = Number(order.shippingAmount || (order.shipping && order.shipping.amount) || 0);
+    const goods = typeof order.invoiceTotal === 'number'
         ? order.invoiceTotal
         : lines.reduce((s, l) => s + (l.type === 'KIT' ? (l.price || 0) : (l.total || 0)), 0);
+    const total = Math.round((goods + shipAmt) * 100) / 100;
 
     const matchInvoice = async () => {
         if (!order.nsInternalId) return alert('This order has no NetSuite sales-order id.');
@@ -192,12 +198,15 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                 const paid = Number(order.paymentsTotal || (pay && pay.paidTotal) || 0);
                 const balance = Math.round((total - paid) * 100) / 100;
                 const lbl = { fontFamily: 'var(--mono, monospace)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.14em', color: '#8a857c', marginRight: '16px' };
+                const shipRow = shipAmt > 0 ? (
+                    <div><span style={lbl}>Shipping</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px' }}>${shipAmt.toFixed(2)}</span></div>
+                ) : null;
                 if (!(paid > 0)) {
                     return (
                         <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #1c1a16', marginTop: '8px', paddingTop: '10px' }}>
-                            <div style={{ textAlign: 'right' }}>
-                                <span style={lbl}>Total Due</span>
-                                <span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px' }}>${total.toFixed(2)}</span>
+                            <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {shipRow}
+                                <div><span style={lbl}>Total Due</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px' }}>${total.toFixed(2)}</span></div>
                             </div>
                         </div>
                     );
@@ -205,6 +214,8 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                 return (
                     <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #1c1a16', marginTop: '8px', paddingTop: '10px' }}>
                         <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <div><span style={lbl}>Goods</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px' }}>${goods.toFixed(2)}</span></div>
+                            {shipRow}
                             <div><span style={lbl}>Order total</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px' }}>${total.toFixed(2)}</span></div>
                             <div><span style={lbl}>Paid</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px', color: '#3a7d44' }}>−${paid.toFixed(2)}</span></div>
                             <div style={{ borderTop: '1px solid #ddd', paddingTop: '5px' }}>

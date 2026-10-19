@@ -1937,7 +1937,12 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                 });
                 addLog(`✅ Quote saved (${qJobId}) and queued to NetSuite (outbox ${obId}).`, 'success');
                 alert(`✅ Quote saved on ${selectedCustomer?.name || customerId}'s pipeline (Tab 10) and queued to NetSuite — the estimate # lands on it in ~1 minute.`);
-                setLastCreated({ kind: 'QUOTE', id: qJobId, total: cartTotal, customerName: selectedCustomer?.name || customerId });
+                // ⚠ THE PAY CARD CHARGES THIS FIGURE, so it is the WHOLE bill — goods AND freight.
+                // cartTotal is the goods only, and the freight rides in its own field because that
+                // is where NetSuite wants it, so a deposit was being taken on the smaller number
+                // (Stuart 2026-10-19: "the amount it is wanting to collect is ignoring the shipping
+                // charge, we need it to reflect in the total to be collected").
+                setLastCreated({ kind: 'QUOTE', id: qJobId, total: cartTotal + (parseFloat(ship.amount) || 0), customerName: selectedCustomer?.name || customerId });
                 resetOrderEntry();
                 setPushing(false); return;
             }
@@ -2119,7 +2124,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                     addLog(`✅ Quote ${reopenedQuote}${chain.length > 1 ? ` and its ${chain.length - 1} earlier revision(s)` : ''} marked CONVERTED → ${hqId}; the order records the quote it came from.`, 'success');
                 } catch (e) { addLog(`⚠ The quote chain could not be marked converted (${e.message || e}) — mark ${reopenedQuote} from the CRM.`, 'warn'); }
             }
-            setLastCreated({ kind: 'SALES ORDER', id: hqId, total: cartTotal, customerName: selectedCustomer?.name || customerId, toIdentify: phLines.length });
+            // The whole bill, goods AND freight — see the quote above.
+            setLastCreated({ kind: 'SALES ORDER', id: hqId, total: cartTotal + (parseFloat(ship.amount) || 0), customerName: selectedCustomer?.name || customerId, toIdentify: phLines.length });
             resetOrderEntry();
         } catch (e) {
             console.error('Quick Ship push error', e);

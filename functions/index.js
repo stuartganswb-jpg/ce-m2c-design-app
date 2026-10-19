@@ -3032,7 +3032,9 @@ exports.portalPayables = onCall({ cors: true }, async (request) => {
         // It is an INVOICE when NetSuite has actually billed it — and nothing else makes it one. A
         // packed-but-unbilled order is still a sales order, and is named as one rather than shown
         // to a customer as an invoice that does not exist.
-        push(o, 'hq_sales_orders', o.nsInvoiceNo ? 'INVOICE' : 'SALES_ORDER', `SO ${o.soId || o.id}`, Number(o.invoiceTotal || 0));
+        // Freight is part of what is owed: invoiceTotal is the GOODS only (Stuart 2026-10-19).
+        push(o, 'hq_sales_orders', o.nsInvoiceNo ? 'INVOICE' : 'SALES_ORDER', `SO ${o.soId || o.id}`,
+            Number(o.invoiceTotal || 0) + orderDoc.shippingOf(o));
     });
 
     const crmSnap = await db.collection('crm_records').doc(customerId).get();
@@ -3893,7 +3895,7 @@ exports.docIntent = onCall({ cors: true }, async (request) => {
     if (String(link.collection) === 'jobs') {
         const snapDoc = await db.collection('doc_snapshots').doc(`jobs__${String(link.docId)}`).get().catch(() => null);
         const snap0 = snapDoc && snapDoc.exists ? (snapDoc.data() || {}) : null;
-        const total = Number((order.cpqData && order.cpqData.totalPrice) || 0) + Number(order.shippingAmount || 0);
+        const total = Number((order.cpqData && order.cpqData.totalPrice) || 0) + orderDoc.shippingOf(order);
         const paid = Math.round(Number(order.paymentsTotal || 0) * 100) / 100;
         const balance = Math.round((total - paid) * 100) / 100;
         return {

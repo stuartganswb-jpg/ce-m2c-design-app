@@ -41,20 +41,31 @@ function linesOf(order) {
     }));
 }
 
+// ⚠ FREIGHT IS PART OF WHAT THE CUSTOMER OWES (Stuart 2026-10-19: "the amount it is wanting to
+// collect is ignoring the shipping charge"). `invoiceTotal` is the GOODS only — freight rides
+// separately, because NetSuite wants it in its own shippingcost field — so a total built from it
+// alone understates the bill, asks for a deposit on the wrong figure, and disagrees with NetSuite's
+// own total for the same order. The order carries it as `shippingAmount` or `shipping.amount`
+// depending on which door wrote it; both are the same number.
+const shippingOf = (order) => money((order && order.shippingAmount) || (order && order.shipping && order.shipping.amount) || 0);
+
 // THE MONEY, worked out once. The order's total is its own figure when it has one, else the lines
 // add up to it — never a second reckoning that could disagree with the printed page.
 function totalsOf(order, lines) {
-    const total = order && order.invoiceTotal !== undefined && order.invoiceTotal !== null
+    const goods = order && order.invoiceTotal !== undefined && order.invoiceTotal !== null
         ? money(order.invoiceTotal)
         : money(lines.reduce((s, l) => s + num(l.amount), 0));
+    const shipping = shippingOf(order);
+    const total = money(goods + shipping);
     const paid = money(order && order.paymentsTotal);
     const balance = money(total - paid);
     return {
+        goods,
+        shipping,
         total,
         paid,
         balance: balance > 0 ? balance : 0,
         paidInFull: total > 0 && balance <= 0.005,
-        shipping: money(order && order.shippingAmount),
     };
 }
 
@@ -83,4 +94,4 @@ function orderDocumentOf(order, { merchantName = '', reference = '' } = {}) {
     };
 }
 
-module.exports = { orderDocumentOf, linesOf, totalsOf };
+module.exports = { orderDocumentOf, linesOf, totalsOf, shippingOf };

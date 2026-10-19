@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { orderDocumentOf, linesOf, totalsOf } = require('../functions/orderDocument.js');
+const { orderDocumentOf, linesOf, totalsOf, shippingOf } = require('../functions/orderDocument.js');
 
 let n = 0;
 const ok = (c, what) => { assert.ok(c, what); n += 1; };
@@ -56,6 +56,26 @@ eq(orderDocumentOf(order({ paymentsTotal: 7000 })).balance, 0, 'an overpayment o
 // With no total of its own, the lines add up to one — but only ONE reckoning either way.
 eq(totalsOf({ paymentsTotal: 0 }, [{ amount: 100 }, { amount: 50 }]).total, 150, 'lines make the total when there is none');
 eq(totalsOf({ invoiceTotal: 999, paymentsTotal: 0 }, [{ amount: 100 }]).total, 999, "the order's own total wins");
+
+// ── FREIGHT IS PART OF THE BILL (Stuart 2026-10-19) ──────────────────────────
+// invoiceTotal is the GOODS only; freight rides separately because NetSuite wants it in its own
+// field. Totalling the goods alone understated every bill, asked a deposit on the wrong figure,
+// and disagreed with NetSuite's own total for the same order — SOUNIQ-3991 was 700 + 70 = 770
+// there and 700 here.
+{
+    const ship = orderDocumentOf(order({ invoiceTotal: 700, shipping: { amount: 70 }, paymentsTotal: 0 }));
+    eq(ship.goods, 700, 'the goods');
+    eq(ship.shipping, 70, 'the freight');
+    eq(ship.total, 770, 'and the bill is both — the figure NetSuite already had');
+    eq(ship.balance, 770, 'so the balance owes the freight too');
+    // Either spelling: the two doors write it differently and mean the same thing.
+    eq(orderDocumentOf(order({ invoiceTotal: 700, shippingAmount: 70, shipping: undefined })).total, 770, 'shippingAmount is the same freight');
+    eq(shippingOf({ shippingAmount: 12 }), 12, 'read either way');
+    eq(shippingOf({ shipping: { amount: 12 } }), 12, 'or the other');
+    eq(shippingOf({}), 0, 'no freight, no charge');
+    // A deposit still leaves the freight owing.
+    eq(orderDocumentOf(order({ invoiceTotal: 700, shipping: { amount: 70 }, paymentsTotal: 385 })).balance, 385, 'half the goods paid still owes the freight');
+}
 
 // ── what it calls itself ─────────────────────────────────────────────────────
 eq(d.kind, 'SALES_ORDER', 'an unbilled order is a sales order');
