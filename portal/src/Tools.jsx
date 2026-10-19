@@ -1,8 +1,9 @@
 // TOOLS, SPECS & FAQs — the customer-facing reference page. Twin of HQ tab 6.5.
 //
-// The engineering lives in shared/bracketSpan.js, a VERBATIM COPY of
-// src/components/Shared/bracketSpan.js (same convention as sizeMatrix / priceLevels / bayMath /
-// quickShipUom). Change one, copy to the other in the same commit, and diff them.
+// THE ENGINEERING IS HQ'S OWN FILE (2026-10-19): src/components/Shared/bracketSpan.js, reached through '@engine' as the
+// configurator reaches the engine — no copy to fall behind. The copy this page used until today had fallen behind 6.5:
+// no acrylic 36" limit, no not-in-a-stud figures, and none of the house caps edited on 6.5. Those caps come with the
+// customer's profile (portalProfile → spanCaps, read from system/bracket_span_map), so this page and 6.5 give one answer.
 //
 // Difference from the HQ twin: customers see the ANSWER, never the engineering. No moduli, no
 // yield strengths, no safety factors, no gauges — those are on the staff page only.
@@ -14,11 +15,11 @@ import { functions } from './firebase';
 import {
   FABRIC_CLASSES, fabricClass, spanTable, bracketsFor, ftIn,
   ROD_COLLECTIONS, rodCollectionsFor, DEFAULT_DROP_FT, STUD_NOTE,
-} from './shared/bracketSpan';
+} from '@engine/bracketSpan.js';
 
 // myCollections = the rod families this customer is entitled to (from crm_records.portalCollections
 // via portalProfile). Empty/absent = everything, matching the catalog gate.
-const BracketSpanGuide = ({ myCollections, myBrand }) => {
+const BracketSpanGuide = ({ myCollections, myBrand, caps }) => {
   const [fabricId, setFabricId] = useState('PRINT');
   const [dropFt, setDropFt] = useState(String(DEFAULT_DROP_FT));
   const [rodLen, setRodLen] = useState('');
@@ -29,8 +30,8 @@ const BracketSpanGuide = ({ myCollections, myBrand }) => {
   const mine = useMemo(() => rodCollectionsFor(myCollections, myBrand), [myCollections, myBrand]);
   const mineIds = useMemo(() => new Set(mine.map((c) => c.id)), [mine]);
   const rows = useMemo(
-    () => (drop > 0 ? spanTable(fabricId, drop, collectionId).filter((r) => mineIds.has(r.collection)) : []),
-    [fabricId, drop, collectionId, mineIds]
+    () => (drop > 0 ? spanTable(fabricId, drop, collectionId, caps).filter((r) => mineIds.has(r.collection)) : []),
+    [fabricId, drop, collectionId, mineIds, caps]
   );
   const rodInches = parseFloat(rodLen) > 0 ? parseFloat(rodLen) : null;
 
@@ -170,7 +171,7 @@ export default function Tools() {
           ))}
         </div>
       )}
-      {active.render({ myCollections: profile.collections || [], myBrand: profile.brandId || '' })}
+      {active.render({ myCollections: profile.collections || [], myBrand: profile.brandId || '', caps: profile.spanCaps || {} })}
     </>
   );
 }

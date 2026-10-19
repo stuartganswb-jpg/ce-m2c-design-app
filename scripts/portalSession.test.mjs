@@ -314,6 +314,75 @@ ok(`the set-ups take each road — lines ${t.lines}, refused ${JSON.stringify(t.
     ok(`…and each road was taken — nodes ${tt.nodes}, collapse ${tt.collapse} (a return collapsing ${tt.collapsed}), length ${tt.length}, light ${tt.pbr}, scale ${tt.scale}, removals ${tt.removals} in words ${tt.words}, stock colours ${tt.stock}, scope ${tt.scope} (a collar among the targets ${tt.collarScope}), clicks ${tt.clicks}`,
         tt.nodes > 50 && tt.collapsed > 5 && tt.length > 10 && tt.pbr > 10 && tt.scale > 10 && tt.removals > 5 && tt.words > 10 && tt.stock > 0 && tt.scope > 200 && tt.collarScope > 10 && tt.clicks > 200);
 }
+// ── THE RECOMMENDATIONS (2026-10-19): what the span is worked from, the advice in the column that applies, the rods compared,
+// a count short of the recommendation — each held against HQ's own module, and said on the request in the same words ──
+{
+    const S = (raw) => P.stateFromClient(raw, { finishCodes: allowed });
+    eq('the curtain length is a number or nothing; the stud answer is no only when the screen says no', [S({ dropFt: '12' }).dropFt, S({ dropFt: 12.5 }).dropFt, S({ dropFt: 'tall' }).dropFt, S({ dropFt: '' }).dropFt, S({ dropFt: -3 }).dropFt, S({}).dropFt,
+        S({ onStud: false }).onStud, S({}).onStud, S({ onStud: 'false' }).onStud, S({ onStud: 0 }).onStud], [12, 12.5, null, null, null, null, false, true, true, true]);
+    // two rods of different engineering, so one would need fewer supports than the other (the acrylic and — for this test's
+    // sake — the wood rod under the acrylic family's 36", the aluminium under its 72"); every framing offers one or the other
+    const WEAK = ['H1-2RCTACR', 'H1-2RCTWR'];
+    const W2 = world(fabricut, { spanDoc: { map: { 'H1-ALU2': 'H1-2RCTAR', 'H1-ACR-1.375': WEAK.join(', ') }, caps: {} } });
+    const tr = { views: 0, support: 0, offStud: 0, rods: 0, better: 0, short: 0, notes: 0 };
+    const bad2 = [];
+    framings.forEach((answers, fi) => {
+        for (let v = 0; v < 6; v++) {
+            const picks = picksFor(answers, `rec|${fi}|${v % 4}`);
+            // (the last two walks choose the weaker rod — the one the aluminium would beat — on the first rod step that offers it, then
+            // on every rod step that does, where changing one cannot help while the other is weak too)
+            if (v >= 4) { const m = direct('STANDARD', S({ answers, picks }), W2); m.model.slots.filter(sl => ['ROD', 'FASCIA', 'TRACK'].includes(sl.kind) && sl.options.some(o => WEAK.includes(m.ourId(o.partId)))).slice(0, v === 4 ? 1 : 9).forEach(sl => { picks[sl.key] = sl.options.find(o => WEAK.includes(m.ourId(o.partId))).id; }); }
+            const span = [{}, { onStud: false }, { dropFt: '14', fabricId: 'BLACKOUT' }, { onStud: false, dropFt: 20 }, {}, { onStud: false }][v];
+            const base = { answers, picks, lengthInches: [144, 180, 120.5, 216][(fi + v) % 4], globalFinishes: { METAL: 'P14', WOOD: 'S04' }, ...span };
+            const hq0 = direct('STANDARD', S(base), W2);
+            // a typed centre count below the recommendation, on every other walk
+            const centre = hq0.model.slots.find(sl => sl.kind === 'BRACKET' && String(sl.position || '').toUpperCase() === 'CENTER' && hq0.livePicks[sl.key]);
+            const raw = (centre && fi % 2 === 0 && (hq0.quantities[hq0.livePicks[centre.key]] || 0) > 1) ? { ...base, stepQty: { [centre.key]: '1' } } : base;
+            const state = S(raw);
+            const view = P.viewOf(engine, W2, state, { level: 'FAB_RETAIL', money: true });
+            const hq = direct('FAB_RETAIL', state, W2);
+            tr.views++;
+            const len = view.steps.find(st => st.kind === 'LENGTH');
+            if (len) {
+                if (len.dropFt !== hq.span.dropFt || len.onStud !== hq.span.onStud || len.fabricId !== hq.span.fabricId) bad2.push(`span echo ${fi}.${v}`);
+                const wantSupport = hq.advice ? { everyInches: hq.advice.everyInches, supports: hq.advice.supports, why: hq.advice.whyApplies, onStud: hq.advice.onStud, other: hq.advice.otherSupports || null,
+                    ...(hq.advice.unlisted.length ? { unlisted: true } : {}) } : null;
+                if (len.support && len.support.unlisted) tr.unlisted = (tr.unlisted || 0) + 1;
+                if (JSON.stringify(len.support) !== JSON.stringify(wantSupport)) bad2.push(`support ${fi}.${v}`);
+                if (len.support) { tr.support++; if (!len.support.onStud && len.support.supports === hq.advice.bracketsNoStud) tr.offStud++; }
+                const wantRods = hq.rodOptions.map(r => [r.slotKey, r.options.map(o => [o.id, hq.ourId(o.partId), o.supports, o.picked]), r.better ? r.better.id : null]);
+                const gotRods = (len.rods || []).map(r => [r.key, r.options.map(o => [o.id, o.code, o.supports, o.picked]), r.better ? r.better.id : null]);
+                if (JSON.stringify(wantRods) !== JSON.stringify(gotRods)) bad2.push(`rods ${fi}.${v}`);
+                if (gotRods.length) tr.rods++;
+                if (gotRods.some(r => r[2])) tr.better++;
+            }
+            // the short count: on the centre's step, in the bar before Add, and on the request — the same words
+            const wantShort = hq.supportShort.map(x => [x.slotKey, x.chosen, x.recommended]);
+            const gotShort = view.steps.filter(st => st.short).map(st => [st.key.replace(/^.*?(BRACKET)/, '$1'), st.short.chosen, st.short.recommended]);
+            if (JSON.stringify(wantShort.map(x => [x[1], x[2]])) !== JSON.stringify(gotShort.map(x => [x[1], x[2]])) || view.supportShort.length !== wantShort.length) bad2.push(`short ${fi}.${v}`);
+            if (wantShort.length) tr.short++;
+            const req = P.requestLineOf(engine, W2, state, { level: 'STANDARD' });
+            if (req.item) {
+                const own = direct('STANDARD', state, W2);
+                const bare = (it) => { const c = JSON.parse(JSON.stringify(it)); delete c.id; return c; };
+                if (JSON.stringify(bare(req.item)) !== JSON.stringify(bare(own.item))) bad2.push(`request ${fi}.${v}`);
+                if (JSON.stringify(req.notes) !== JSON.stringify(view.supportShort)) bad2.push(`notes ${fi}.${v}`);
+                if (req.notes.length) { tr.notes++; if (!/^Fewer centre brackets than recommended: (\d+|none) chosen, \d+ recommended for this [\d.]+″ pole(, not into studs)?\.$/.test(req.notes[0])
+                    || /, not into studs\.$/.test(req.notes[0]) !== (state.onStud === false) || !req.notes[0].includes(`${hq.lengthInches}″`)) bad2.push(`note words ${fi}.${v}: ${req.notes[0]}`); }
+                // the answers that differ from the default ride the saved line, so a reopen recommends what was recommended
+                const ec = req.item.engineConfig;
+                if ((state.onStud === false) !== (ec.onStud === false) || (hq.span.dropFt !== 8) !== (ec.dropFt === hq.span.dropFt)) bad2.push(`saved span ${fi}.${v}`);
+            }
+            const text = JSON.stringify(view);
+            if ([...keysOf(view)].some(k => FORBIDDEN.test(k)) || /ACME FOUNDRY|INTERNAL-ROUTE|never show a customer|OTHER-\d|Their black|PLATER CO|3\.33/.test(text)) bad2.push(`leak ${fi}.${v}`);
+        }
+    });
+    if (process.env.PS_VERBOSE) console.log(JSON.stringify(tr));
+    eq(`the recommendations the portal draws are HQ's: the span answers, the advice in the column that applies, the rods compared, the short count and its words — on the view and the request (${tr.views} views)${bad2.length ? ` — first: ${bad2.slice(0, 6).join(', ')}` : ''}`, bad2.length, 0);
+    ok(`…and each road was taken — advice ${tr.support} (off-stud ${tr.offStud}), rods compared ${tr.rods} (a fewer-supports rod ${tr.better}), a short count ${tr.short}, said on the request ${tr.notes}`,
+        tr.support > 20 && tr.offStud > 5 && tr.rods > 5 && tr.better > 2 && tr.short > 3 && tr.notes > 3);
+}
+
 eq('in line: the server\'s copy and the site\'s bundle carry the same engine and the same files — anything else is behind', [P.inLine(engine.stamp, { ...engine.stamp }), P.inLine(engine.stamp, { ...engine.stamp, closureHash: 'x' }), P.inLine(engine.stamp, { ...engine.stamp, engineVersion: 'y' }), P.inLine(engine.stamp, null), P.inLine(null, engine.stamp), P.inLine({ engineVersion: '', closureHash: '' }, { engineVersion: '', closureHash: '' })], [true, false, false, false, false, false]);
 
 rmSync(tmp, { recursive: true, force: true });

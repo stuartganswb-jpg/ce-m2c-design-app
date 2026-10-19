@@ -162,6 +162,7 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
               {step.qty.recommended ? <span className="cf-fine">recommended {step.qty.recommended} — leave it empty to use it</span> : null}
             </label>
           )}
+          {step.short && <div className="cf-note warn">{step.short.chosen ? `${step.short.chosen} centre bracket${step.short.chosen === 1 ? '' : 's'} chosen` : 'No centre bracket chosen'} — {step.short.recommended} recommended for this pole. You can still add this to your request; our team will look at it.</div>}
           {step.sub && (
             <div className="cf-sub">
               <div className="cf-q-label">{step.sub.label}{step.sub.notAsked ? <span className="cf-fine"> · {step.sub.notAsked}</span> : null}</div>
@@ -189,10 +190,40 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
                 : <>Over the {step.splice.overInches}&Prime; one-piece limit — our team will confirm how this pole is joined.</>}
             </div>
           )}
-          {step.support && <div className="cf-fine">A support every {step.support.everyInches}&Prime; — this pole wants {step.support.supports}.</div>}
-          <label className="cf-fabric"><span>Fabric weight</span>
-            <select value={a.fabricId} onChange={(e) => set(() => ({ fabricId: e.target.value }))}>{(step.fabrics || []).map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}</select>
-          </label>
+          {/* WHAT THE SPAN IS WORKED FROM (2026-10-19): the fabric weight, the curtain length (rod to floor) and whether the
+              brackets go into studs — CPQ asks the same three on the same step. */}
+          <div className="cf-length cf-span">
+            <label className="cf-fabric"><span>Fabric weight</span>
+              <select value={a.fabricId} onChange={(e) => set(() => ({ fabricId: e.target.value }))}>{(step.fabrics || []).map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}</select>
+            </label>
+            <label><span>Curtain length (ft)</span>
+              <input data-span="drop" value={a.dropFt || ''} inputMode="decimal" placeholder={String(step.dropFt || 8)} onChange={(e) => set(() => ({ dropFt: e.target.value.replace(/[^0-9.]/g, '') }), true)} />
+            </label>
+            <label><span>Into studs?</span>
+              <select data-span="stud" value={a.onStud === false ? 'NO' : 'YES'} onChange={(e) => set(() => ({ onStud: e.target.value === 'YES' }))}>
+                <option value="YES">Yes — into studs</option>
+                <option value="NO">No — drywall anchors</option>
+              </select>
+            </label>
+          </div>
+          <div className="cf-fine">Curtain length is rod to floor — a longer curtain is heavier.{a.dropFt && Number(a.dropFt) !== step.dropFt ? ` Worked at ${step.dropFt} ft.` : ''}</div>
+          {step.support && (
+            <div className="cf-note">
+              A support every {step.support.everyInches}&Prime; — {step.support.why}. This pole wants <b>{step.support.supports}</b> support{step.support.supports === 1 ? '' : 's'}
+              {step.support.other && step.support.other !== step.support.supports ? ` (${step.support.other} ${step.support.onStud ? 'if not into studs' : 'into studs'})` : ''}.
+              {step.support.unlisted ? ' One of the rods chosen has no span on file — our team will confirm the supports for it.' : ''}
+            </div>
+          )}
+          {(step.rods || []).map((r) => {
+            const picked = r.options.find((o) => o.picked);
+            const nameOf = (o) => o.name || o.sku || o.code;
+            return (
+              <div key={r.key} className={`cf-note${r.better ? ' warn' : ''}`}>
+                {r.better && picked && <div>{nameOf(r.better)} would need {r.better.supports} — fewer than the {nameOf(picked)}'s {picked.supports}.</div>}
+                <div className="cf-fine">{r.label} at this length: {r.options.map((o) => `${o.sku || o.code} ${o.supports == null ? '—' : o.supports}${o.picked ? ' (chosen)' : ''}`).join(' · ')}</div>
+              </div>
+            );
+          })}
         </>
       );
     }
@@ -369,6 +400,7 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
             <label><span>Room / tag</span><input value={a.memo} maxLength={120} placeholder="Living room" onChange={(e) => set(() => ({ memo: e.target.value }), true)} /></label>
             <label title="How many of THIS exact set — 2 is two complete sets, never a length"><span>How many of this set</span><input value={a.qty} inputMode="numeric" onChange={(e) => set(() => ({ qty: e.target.value.replace(/[^0-9]/g, '') }), true)} /></label>
             <div className="cf-addbar-go">
+              {(view.supportShort || []).map((t, i) => <span key={i} className="cf-short">{t}</span>)}
               {view.refusal && <span className="cf-refusal">{view.refusal.message}</span>}
               <button className="btn" onClick={add} disabled={!canAdd}>{editing ? 'Save to request' : 'Add to request'}</button>
             </div>

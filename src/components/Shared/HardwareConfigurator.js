@@ -19,6 +19,7 @@ import { renderScaleOf } from './sizeMatrix';
 import { modelNodesOf } from './hardwareAdapter';
 import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle,
     lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf,
+    spanAnswersOf, rodOptionsAdviceOf, supportShortfallOf, DROP_FT_RANGE,
     spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice,
     globalFinishOf, finishIndexOf, withGlobalFinish, wearsAsTwinFinish, wearsFinishOf, globalFinishForChoice, chosenListOf, partFinishByPartOf, armFinishOfChoice,
     finishForChoice, matchFinishOverrideOf, rodFinishForChoice, followsRodChoice, subFinishForChoice, lineFinishForChoice, textureOverridesOf, chosenFinishObjectsOf,
@@ -35,10 +36,14 @@ import { indexForAssembly } from './partLookup.js';
 import { customerLines } from './hardwareHandoff';
 import { finishLabelOf } from './finishLabel';
 import { unansweredOf } from './finishQuestions';
-import { ftIn, FABRIC_CLASSES } from './bracketSpan';
+import { ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 import { captureTransparentPng, saveGuideCapture } from './guideCapture';
 import { BoardFrame, captureBoardFrame, readDisplayMode, writeDisplayMode } from './displayFrame';   // DISPLAY MODE (S5, Stuart 2026-09-13) — one guarded block, see below
+// The curtain lengths the span is worked at — anything else is worked at the 8 ft 6.5 assumes, and the field says so.
+const DROP_RANGE_WORDS_OF = (r) => `${r[0]}–${r[1]} ft`;
+// A 6.5 rod family in words: its label, and its material where the label does not already say it ("1-3/8" round steel", "1-3/8" acrylic").
+const rodWords = (rod) => { const label = String((rod && rod.label) || ''); const mat = String((rod && rod.material) || '').toLowerCase(); return mat && !label.toLowerCase().includes(mat) ? `${label} ${mat}` : label; };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // THE MASTER TEMPLATE (Stuart 2026-08-17)
@@ -167,6 +172,10 @@ function HardwareConfiguratorInner({
     const [poleIn, setPoleIn] = useState('');            // finished length, whole inches
     const [poleFrac, setPoleFrac] = useState('');        // …and the fraction
     const [fabricId, setFabricId] = useState('PRINT');   // drives the span, so it is asked here
+    // …with the curtain length (rod to floor; empty = 8 ft) and whether the brackets go into studs — the other two things
+    // 6.5's span is worked from (Stuart 2026-10-19: "yes use the 6.5 not in stud column").
+    const [dropFt, setDropFt] = useState('');
+    const [onStud, setOnStud] = useState(true);
     const [thumbs, setThumbs] = useState({});            // choice id → data URL
     const [partFinish, setPartFinish] = useState({});   // choice id -> finish code (per-part mode)
     // ⚠ DECLARED HERE, WITH THE REST OF THE STATE, AND NOT WHERE THEY ARE USED. Both of these are
@@ -467,14 +476,20 @@ function HardwareConfiguratorInner({
 
     // The bracket recommendation from 6.5's engineering, how many of each the length asks for, and the
     // counts the operator typed over them — hardwareSession (bracketAdviceOf / recommendedFor / quantitiesOf).
-    const advice = useMemo(() => bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, fabricId, ourId }),
-        [model, livePicks, lengthInches, spanMap, spanCaps, fabricId, ourId]);
+    const span = useMemo(() => spanAnswersOf({ fabricId, dropFt, onStud }), [fabricId, dropFt, onStud]);
+    const advice = useMemo(() => bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId }),
+        [model, livePicks, lengthInches, spanMap, spanCaps, span, ourId]);
+    // Where a rod step offers more than one rod: what the pole would need with each (hardwareSession.rodOptionsAdviceOf).
+    const rodOptions = useMemo(() => rodOptionsAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId }),
+        [model, livePicks, lengthInches, spanMap, spanCaps, span, ourId]);
     // Read by both the seeding below and the field's placeholder, so what is billed and what is shown
     // can never drift apart.
     const recommendFor = useCallback((slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet }),
         [advice, model, livePicks, lengthFeet]);
     const quantities = useMemo(() => quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId }),
         [model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId]);
+    // Fewer centre brackets than 6.5 recommends — said beside the price, never refused (hardwareSession.supportShortfallOf).
+    const supportShort = useMemo(() => supportShortfallOf({ model, livePicks, quantities, recommendFor }), [model, livePicks, quantities, recommendFor]);
 
     // ── THE KIT'S BRACKETS, PICKED AS THEY BECOME ANSWERABLE (Stuart 2026-10-01: "it should prepopulate
     // ideally the steps … with the bracket selections in the kit … i had to manually select vertical
@@ -748,6 +763,9 @@ function HardwareConfiguratorInner({
         // of these and opens exactly as it always has.
         setStepIx(Number.isInteger(s.stepIx) && s.stepIx > 0 ? s.stepIx : 0);
         if (s.fabricId) setFabricId(String(s.fabricId));
+        // the curtain length and the stud answer — on a saved line's engineConfig when they differ from the default
+        if (s.dropFt) setDropFt(String(s.dropFt));
+        if (s.onStud === false) setOnStud(false);
         if (s.sizePick && typeof s.sizePick === 'object') setSizePick({ ...s.sizePick });
         if (Array.isArray(s.drawnSplices)) setDrawnSplices(s.drawnSplices.map(sp => ({ distInches: sp.distInches, ref: sp.ref || '' })));
         if (s.visionSeededId) seededRef.current = String(s.visionSeededId);
@@ -818,7 +836,7 @@ function HardwareConfiguratorInner({
             lengthInches, memo: configMemo, qty: cfgQty,
             // The kit exactly as the handoff saves it: named only while it bills.
             kitPick: kitSource ? kitPick : '', kitMotor: kitSource ? kitMotor : '',
-            trvSel, fabricId, sizePick, stepIx, drawnSplices, visionSeededId: seededRef.current || '',
+            trvSel, fabricId, ...(dropFt ? { dropFt } : {}), ...(onStud ? {} : { onStud: false }), sizePick, stepIx, drawnSplices, visionSeededId: seededRef.current || '',
             ...(spliceWaived ? { spliceWaived: true } : {}),
             ...(Object.keys(stepNoteClient).length ? { stepNoteClient } : {}),
             ...(Object.keys(finishAnswers).length ? { finishAnswers } : {}),
@@ -828,7 +846,7 @@ function HardwareConfiguratorInner({
         workPublishedRef.current = true;
         onWorkState(work);
     }, [onWorkState, assembly, answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, typedExtras,
-        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, sizePick, stepIx, drawnSplices, spliceWaived, stepNoteClient, finishAnswers, savedPickParts]);
+        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, dropFt, onStud, sizePick, stepIx, drawnSplices, spliceWaived, stepNoteClient, finishAnswers, savedPickParts]);
     const addConfiguration = () => {
         // ⚠ NEVER ADD SHORT · WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE · A FINISH THAT ASKS IS ANSWERED FIRST — the rules,
         // their order and his words are hardwareSession.addRefusalOf. Nothing priced and a removal nobody has acknowledged
@@ -850,7 +868,7 @@ function HardwareConfiguratorInner({
             answers, livePicks, partFinish, globalFinish, globalFinishes, stepQty, liveFinishAnswers,
             kitBill, kitSource, kitPick, kitMotor, isTraverse, trvSel, trvComponents, trvLive,
             renderState: renderStateOf({ cadUrl, textureOverrides, visibleOverrides, cloneSpecs, stretchSpec, spliceMarks, clearList }),
-            steps, noSplice, spliceOverIn });
+            steps, noSplice, spliceOverIn, span });
         // onAdd is what puts it in the cart; without one the strip still works, so the configurator is usable before the
         // cart is wired.
         if (typeof onAdd === 'function') onAdd(displaySnapshot ? { ...item, displaySnapshot, displayBoard } : item);
@@ -1374,7 +1392,7 @@ function HardwareConfiguratorInner({
                                         {rec != null && (
                                             <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
                                                 {isCentre
-                                                    ? `recommended ${rec} — ${advice ? advice.brackets : '?'} support${advice && advice.brackets === 1 ? '' : 's'} for this pole, less ${ends} carried by the ends`
+                                                    ? `recommended ${rec} — ${advice ? advice.supports : '?'} support${advice && advice.supports === 1 ? '' : 's'} for this pole${advice && !advice.onStud ? ' off-stud' : ''}, less ${ends} carried by the ends`
                                                     : `recommended ${rec} — four a foot over ${lengthFeet} ft, plus the pair at the ends`}
                                             </span>
                                         )}
@@ -1515,6 +1533,26 @@ function HardwareConfiguratorInner({
                                     {FABRIC_CLASSES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
                                 </select>
                             </label>
+                            {/* THE OTHER TWO THINGS THE SPAN IS WORKED FROM (Stuart 2026-10-19: "yes use the 6.5 not in stud column"):
+                                6.5's "Curtain length", rod to floor (empty = the 8 ft 6.5 assumes), and which of 6.5's two columns applies. */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: '7px' }}>
+                                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                    <span style={{ ...mono, color: 'var(--ink-soft)' }}>Curtain length (ft)</span>
+                                    <input value={dropFt} onChange={e => setDropFt(e.target.value.replace(/[^0-9.]/g, ''))} placeholder={String(DEFAULT_DROP_FT)} inputMode="decimal"
+                                        style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '13px', background: '#fff', color: 'var(--ink)' }} />
+                                    <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: dropFt && span.dropFt !== Number(dropFt) ? '#8a6508' : 'var(--ink-faint)' }}>
+                                        {dropFt && span.dropFt !== Number(dropFt) ? `not ${DROP_RANGE_WORDS_OF(DROP_FT_RANGE)} — worked at ${span.dropFt} ft` : 'rod to floor — longer is heavier'}
+                                    </span>
+                                </label>
+                                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                    <span style={{ ...mono, color: 'var(--ink-soft)' }}>Into studs?</span>
+                                    <select value={onStud ? 'YES' : 'NO'} onChange={e => setOnStud(e.target.value === 'YES')}
+                                        style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '13px', background: '#fff', color: 'var(--ink)' }}>
+                                        <option value="YES">Yes — into studs</option>
+                                        <option value="NO">No — drywall anchors</option>
+                                    </select>
+                                </label>
+                            </div>
                         </>)}
 
                         {/* ADDED BY HAND — a splice, an extra ring, anything the flow does not
@@ -1826,6 +1864,8 @@ function HardwareConfiguratorInner({
                                 {/* An amber warning is a placeholder that reached a customer, not an
                                     error — it must be visible without reading as a fault. */}
                                 {priceWarnings.map((w, i) => <div key={i} style={{ color: w.sev === 'amber' ? '#8a6508' : '#b00020', fontSize: '9px' }}>{w.sev === 'amber' ? '○' : '●'} {w.msg}</div>)}
+                                {/* Fewer centre brackets than 6.5 recommends — allowed, never silent (step 4, Stuart 2026-10-19). */}
+                                {supportShort.map(sh => <div key={sh.slotKey} style={{ color: '#8a6508', fontSize: '9px' }}>○ {sh.picked ? `${sh.chosen} centre bracket${sh.chosen === 1 ? '' : 's'}` : 'No centre bracket'} — 6.5 recommends {sh.recommended} for this {lengthInches}&Prime; pole{advice && !advice.onStud ? ' off-stud' : ''}.</div>)}
                                 {/* Over the one-piece limit with no joiner — allowed, never silent (Stuart 2026-10-01). */}
                                 {noSplice && <div style={{ color: '#8a6508', fontSize: '9px' }}>○ No splice — this {lengthInches}&Prime; pole is over the {spliceOverIn}&Prime; one-piece limit and ships in ONE PIECE. {isTraverse ? 'Tick the joiner on the Traverse components step' : 'Add the joiner on the Pole length step'} if it should be spliced.</div>}
                                 {!!priced.lines.length && <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>Hover a line for the rule that set it{customerId ? '' : ' · no customer, so no client pricing'}</div>}
@@ -1839,9 +1879,30 @@ function HardwareConfiguratorInner({
                                     <div style={{ borderLeft: '2px solid var(--brass)', paddingLeft: '9px' }}>
                                         <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Recommendation</span>
                                         <p style={{ margin: '2px 0 0', fontSize: '12.5px', lineHeight: 1.45 }}>
-                                            A support every <b>{ftIn(advice.spanInches)}</b> — {advice.why}. Your {lengthInches}" pole wants <b>{advice.brackets}</b>
-                                            {advice.bracketsNoStud && advice.bracketsNoStud !== advice.brackets ? <>, or <b>{advice.bracketsNoStud}</b> off-stud</> : ''}.
+                                            A support every <b>{ftIn(advice.everyInches)}</b> — {advice.whyApplies}. Your {lengthInches}" pole wants <b>{advice.supports}</b>
+                                            {advice.otherSupports && advice.otherSupports !== advice.supports ? <> ({advice.otherSupports} {advice.onStud ? 'off-stud' : 'into studs'})</> : ''}.
                                         </p>
+                                        <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', marginTop: '3px' }}>
+                                            {advice.onStud ? 'Into studs' : 'Not into studs'} · {(FABRIC_CLASSES.find(f => f.id === advice.fabricId) || {}).label} · {advice.dropFt} ft curtain · {rodWords(advice.rod)}
+                                        </div>
+                                        {!!(advice.unlisted || []).length && (
+                                            <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: '#8a6508', marginTop: '3px' }}>
+                                                {advice.unlisted.join(', ')} {advice.unlisted.length === 1 ? 'is' : 'are'} not listed in 6.5 — the count follows the rods that are.
+                                            </div>
+                                        )}
+                                        {/* WHICH ROD, BY WHAT THE LENGTH NEEDS (step 3, 2026-10-19): each rod a step offers, worked at this length. */}
+                                        {rodOptions.map(r => {
+                                            const picked = r.options.find(o => o.picked);
+                                            const stepLabel = (steps.find(st => st.kind === 'SLOT' && st.slot.key === r.slotKey) || {}).label || 'Rod';
+                                            return (
+                                                <div key={r.slotKey} style={{ marginTop: '6px', fontSize: '11.5px', lineHeight: 1.4 }}>
+                                                    {r.better && picked && <div style={{ color: '#8a6508' }}>{ourId(r.better.partId)} would need <b>{r.better.supports}</b> — fewer than the {ourId(picked.partId)}'s <b>{picked.supports}</b>.</div>}
+                                                    <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
+                                                        {stepLabel} at this length: {r.options.map(o => `${ourId(o.partId)} ${o.supports == null ? 'not in 6.5' : o.supports}${o.picked ? ' (chosen)' : ''}`).join(' · ')}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 )}
                                 {!advice && lengthInches && (

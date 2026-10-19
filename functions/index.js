@@ -1426,6 +1426,10 @@ exports.portalProfile = onCall({ cors: true }, async (request) => {
         // Empty array = no restriction WITHIN the brand, matching the catalog gate.
         collections: (Array.isArray(crm.portalCollections) ? crm.portalCollections : [])
             .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean),
+        // The house span caps edited on 6.5 (system/bracket_span_map.caps — the numbers only, never the item-code map), so the
+        // Tools page works its spans exactly as 6.5 and the configurator do (2026-10-19). None readable → the published defaults.
+        spanCaps: await db.collection('system').doc('bracket_span_map').get()
+            .then((d) => ((d.exists && d.data() && d.data().caps && typeof d.data().caps === 'object') ? d.data().caps : {})).catch(() => ({})),
     };
 });
 
@@ -1599,7 +1603,7 @@ exports.portalConfigRequest = onCall({ cors: true, memory: '512MiB' }, async (re
         if (req.refusal) throw new HttpsError('failed-precondition', `Line ${i + 1}: ${req.refusal.message}`, { reason: req.refusal.kind, line: i + 1 });
         const levels = portalSession.levelsFor(engine, world.customer);
         const shown = portalSession.viewOf(engine, world.data, state, { level: levels.chosenForShown, money: levels.money }).price;
-        built.push({ item: req.item, flow: world.data.flow, shown });
+        built.push({ item: req.item, flow: world.data.flow, shown, notes: Array.isArray(req.notes) ? req.notes : [] });
     }
 
     const quoteNo = await nextQuoteNo(db, `${initialsOf(submitterName, email)}${mmddyy()}`);
@@ -1631,7 +1635,9 @@ exports.portalConfigRequest = onCall({ cors: true, memory: '512MiB' }, async (re
             flowId: String(first.flow.id || ''),
             flowName: String(first.flow.name || ''),
             lineTag: String(first.item.sidemark || ''),
-            lines: built.map((b) => ({ flowId: String(b.flow.id || ''), flowName: String(b.flow.name || ''), lineTag: String(b.item.sidemark || '') })),
+            // …and what was said about each line as it was configured (fewer centre brackets than recommended, 2026-10-19) —
+            // Shared/portalRequestLines prints it under the configuration, for HQ and on the customer's own card.
+            lines: built.map((b) => ({ flowId: String(b.flow.id || ''), flowName: String(b.flow.name || ''), lineTag: String(b.item.sidemark || ''), ...(b.notes.length ? { notes: b.notes } : {}) })),
             shown: built.map((b) => b.shown),
             note: String(note || '').slice(0, 2000),
             sidemark: cleanSidemark,

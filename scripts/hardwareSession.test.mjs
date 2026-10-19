@@ -911,8 +911,13 @@ const picksFor = (answers, seed) => {
                         const quantities = quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules: world.trvRules, ourId });
                         const resolved = resolvedOf({ choices, answers, livePicks, modelNodes, quantities });
                         compared++;
-                        if (canon(o.advice) !== canon(advice) || canon(o.quantities) !== canon(quantities) || canon(o.resolved) !== canon(resolved)
+                        // The advice carries what the old one did, field for field, plus the span answers it was worked from
+                        // and the column that applies (2026-10-19) — at the defaults, the stud column: the same numbers.
+                        const asOld = (a) => (a && o.advice ? Object.fromEntries(Object.keys(o.advice).map(k => [k, a[k]])) : a);
+                        if (canon(o.advice) !== canon(asOld(advice)) || canon(o.quantities) !== canon(quantities) || canon(o.resolved) !== canon(resolved)
                             || model.slots.some(sl => o.recommendFor(sl, sl.options[0]) !== recommendFor(sl, sl.options[0])) || o.recommendFor(null) !== recommendFor(null)) differ++;
+                        if (advice && (advice.supports !== advice.brackets || advice.everyInches !== advice.spanInches || advice.whyApplies !== advice.why
+                            || advice.fabricId !== fabricId || advice.dropFt !== DEFAULT_DROP_FT || advice.onStud !== true)) differ++;
                         if (advice) withAdvice++;
                         if (world.trvRules && (model.riders || []).some(r => r.role === 'CARRIER' && quantities[r.id] === usageAt(RULES.usage[0], Math.max(lengthFeet, 2)) && lengthFeet > 0)) charted++;
                         if (stepQty[countable[0]?.key] && quantities[livePicks[countable[0].key]] === 7) typedWins++;
@@ -927,6 +932,35 @@ const picksFor = (answers, seed) => {
     const model = settle({ choices, answers: framings[0], picks: {}, modelNodes });
     eq('no rod chosen, or no length → no recommendation, honestly', [bracketAdviceOf({ model, livePicks: {}, lengthInches: 96, spanMap: SPAN, spanCaps: {}, fabricId: 'PRINT', ourId }), recommendedFor({ slot: null })], [null, null]);
     eq('a centre bracket with no span to go on is not guessed', recommendedFor({ slot: { kind: 'BRACKET', position: 'center' }, choice: {}, advice: null, model, livePicks: {}, lengthFeet: 8 }), null);
+}
+
+// ── THE STUD ANSWER AND THE CURTAIN LENGTH, THROUGH THE WHOLE CALL, on the live H1-2TRV pins (2026-10-19) ──
+{
+    const SPAN = { 'H1-ALU2': 'H1-2RCTAR, H1-2RCTWR, H1-2RCTACR' };
+    const parts = [...new Map(PINS.map(p => [p.partId, { id: p.partId, itemId: p.partId, legacyErpId: p.legacyErpId || p.partName, itemName: p.partName }])).values()];
+    let tried = 0, centred = 0, moreOffStud = 0, shortSaid = 0, differ = 0;
+    framings.forEach((answers, fi) => {
+        const picks = picksFor(answers, `stud|${fi}`);
+        const at = (state) => sessionOf({ assembly: ASSEMBLY, pins: PINS, parts, spanMap: SPAN }, { answers, picks, lengthInches: 180, ...state });
+        const inStud = at({}), offStud = at({ onStud: false });
+        if (!inStud.advice) return;
+        tried++;
+        const centre = inStud.model.slots.find(sl => sl.kind === 'BRACKET' && String(sl.position || '').toUpperCase() === 'CENTER' && inStud.livePicks[sl.key]);
+        if (!centre) return;
+        centred++;
+        const ends = bearingEnds(inStud.model.choices, Object.values(inStud.livePicks), inStud.model.slots);
+        const id = inStud.livePicks[centre.key];
+        if (inStud.quantities[id] !== centreBracketsFor(inStud.advice.supports, ends) && centreBracketsFor(inStud.advice.supports, ends) > 0) differ++;
+        if (offStud.quantities[id] !== centreBracketsFor(offStud.advice.bracketsNoStud, ends) && centreBracketsFor(offStud.advice.bracketsNoStud, ends) > 0) differ++;
+        if (offStud.advice.supports > inStud.advice.supports && (offStud.quantities[id] || 0) > (inStud.quantities[id] || 0)) moreOffStud++;
+        const typedLow = at({ onStud: false, stepQty: { [centre.key]: '1' } });
+        if (typedLow.supportShort.length === 1 && typedLow.supportShort[0].chosen === 1 && typedLow.supportShort[0].recommended === offStud.quantities[id]) shortSaid++;
+        else if ((offStud.quantities[id] || 0) > 1) differ++;
+        if (inStud.supportShort.length || offStud.supportShort.length) differ++;          // the recommended count is never short of itself
+    });
+    eq('through sessionOf: the centre count is the column that applies — into studs, or not', differ, 0);
+    eq(`…reached: advice in ${tried}, a centre bracket in ${centred}, more of them off-stud in ${moreOffStud}, a short count said in ${shortSaid}`,
+        [tried > 5, centred > 3, moreOffStud > 3, shortSaid > 3], [true, true, true, true]);
 }
 
 // ── THE RULES + THE MOVE, the splice: one joiner, several, none; under and over the limit; typed, doubled, declined ──
@@ -1622,6 +1656,15 @@ const FIN = [
     eq('…and which part each pick was, beside the picks (so a reopen can name a part whose pin has since been re-made)', made.item.engineConfig.pickParts,
         { [sRod.key]: { partId: 'ID-H2-138R', code: 'H2-138R', name: 'H2-138R' }, [sEnd.key]: { partId: 'ID-H2-138F', code: 'H2-138F', name: 'H2-138F' } });
     eq('pickPartsOf: nothing picked, nothing recorded; a pick that is no choice is left out', [pickPartsOf({}, sized.model.choices, sizeFind), pickPartsOf({ [sRod.key]: 'NOPE', [sEnd.key]: '' }, sized.model.choices, sizeFind)], [{}, {}]);
+    // WHAT THE SPAN DEPENDS ON (2026-10-19) — asked, worked into the recommendation, kept on the line, read back by a reopen
+    const spanned = lineOf({ fabricId: 'BLACKOUT', dropFt: 12, onStud: false });
+    eq('the fabric, the curtain length and the stud answer are on the session and on the saved line — the ones that differ from the default',
+        [spanned.span, spanned.item.engineConfig.fabricId, spanned.item.engineConfig.dropFt, spanned.item.engineConfig.onStud], [{ fabricId: 'BLACKOUT', dropFt: 12, onStud: false }, 'BLACKOUT', 12, false]);
+    eq('…a line at the defaults saves none of them (it reopens to the defaults it was given)', ['fabricId', 'dropFt', 'onStud'].map(k => Object.prototype.hasOwnProperty.call(lineOf({}).item.engineConfig, k)), [false, false, false]);
+    const reopened = sessionOf({ assembly: SIZE_ASM, pins: SIZE_PINS, parts: sizeParts, flow: SIZE_FLOW, spanMap: { 'H2-1.375': 'H2-138R' } },
+        { ...spanned.item.engineConfig, sizePick: { 'SIZE-DIA': 'SIZE-DIA-138', 'SIZE-PROJ': 'SIZE-PROJ-6' } });
+    eq('…and a reopen of that line works the span from them again: not into studs, 12 ft of blackout', [reopened.span, reopened.advice && reopened.advice.supports, reopened.advice && reopened.advice.bracketsNoStud],
+        [{ fabricId: 'BLACKOUT', dropFt: 12, onStud: false }, 4, 4]);
     // a saved pick that is not among the choices any more is NAMED, and the add waits
     const acrylic = sized.model.slots.find(x => x.kind === 'END').options.find(o => /138AF/.test(o.id));
     const sizeData = { assembly: SIZE_ASM, pins: SIZE_PINS, parts: sizeParts, flow: SIZE_FLOW };

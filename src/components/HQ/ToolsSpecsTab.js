@@ -1,10 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import {
     FABRIC_CLASSES, fabricClass, loadPerFoot, spanTable, bracketsFor, ftIn,
-    ROD_COLLECTIONS, rodCollectionsFor, DEFAULT_DROP_FT, ASSUMPTIONS, STUD_NOTE,
+    ROD_COLLECTIONS, rodCollectionsFor, DEFAULT_DROP_FT, ASSUMPTIONS, STUD_NOTE, RODS,
 } from '../Shared/bracketSpan';
+import { spanCoverageOf } from '../Shared/spanCoverage';            // which rods the CPQ flows sell, and which 6.5 does not list
+import { enginePartsOf, partFinderOf } from '../Shared/flowItems';   // the parts CPQ's engine is given, found its way
 import RodPieceInventory from '../Shared/RodPieceInventory';
 import FabricCutStock from '../Shared/FabricCutStock';   // 🧵 Uniquity: replaces Rod Piece Stock (S7 2026-09-24)
 import PillowPricingAdmin from './PillowPricingAdmin';   // 🧵 Uniquity: the pillow price table + the fabric sheet (moved here from 11 — Stuart 2026-09-24: manager level and above)
@@ -17,7 +19,7 @@ import { canTakePayment } from '../Shared/payRoles';   // the counter crew: CSR 
 const canUseCounterTools = (role) => canTakePayment(role);
 
 // TOOLS, SPECS & FAQs (HQ 6.5) — the staff-side twin of the portal's Tools page. Same engineering
-// (Shared/bracketSpan.js, a verbatim-copy pair with portal/src/shared/), but staff also see the
+// (Shared/bracketSpan.js — the portal's Tools page reads this same file since 2026-10-19), but staff also see the
 // assumptions behind the numbers; customers see only the answer.
 //
 // Built as a REGISTRY on purpose: the bracket-span guide is the first of several tools, so adding
@@ -66,6 +68,37 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
     const [dropFt, setDropFt] = useState(String(DEFAULT_DROP_FT));
     const [rodLen, setRodLen] = useState('');          // optional, inches → bracket count
     const [collectionId, setCollectionId] = useState('');
+    // ── EVERY ROD THE CPQ FLOWS SELL, AGAINST THE JOIN ABOVE (Stuart 2026-10-19 — the configurator now recommends from these
+    // spans). A rod no family claims gets no guidance in CPQ or the portal; this says which, from the flows themselves. Read on
+    // demand (the brand's library + each flow's pins, as 4.7 Flow Stock reads them); worked against the join as it is edited.
+    const [flowRods, setFlowRods] = useState(null);   // null · 'loading' · { flows, assemblyFor, pinsFor, findPart } · { error }
+    useEffect(() => { setFlowRods(null); }, [activeBrand]);
+    const checkFlows = async () => {
+        setFlowRods('loading');
+        try {
+            const [lib, fl] = await Promise.all([
+                getDocs(collection(db, 'Approved_Designs')),
+                getDocs(query(collection(db, 'cpq_flows'), where('brandId', '==', activeBrand))),
+            ]);
+            const brandDocs = lib.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => d.brandId === activeBrand || (d.sharedBrands || []).includes(activeBrand));
+            const findPart = partFinderOf(enginePartsOf(brandDocs));
+            const assemblies = brandDocs.filter(d => d.partClass === 'Assembly' || d.partClass === 'Master Assembly');
+            // A flow's linkedAssemblyId may hold the doc id OR the itemId — the CPQ lookup's tolerance (4.7 does the same).
+            const assemblyFor = (flow) => { const key = flow?.linkedAssemblyId; return key ? (assemblies.find(a => a.id === key || a.itemId === key) || null) : null; };
+            const flows = fl.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => assemblyFor(f));
+            const pinsByAsm = {};
+            // the engine's read: assembly_pins where assemblyId == the assembly's DOC id
+            await Promise.all([...new Set(flows.map(f => assemblyFor(f).id))].map(async id => {
+                const snap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', id)));
+                pinsByAsm[id] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            }));
+            setFlowRods({ flows, assemblyFor, pinsFor: (a) => pinsByAsm[a.id] || [], findPart });
+        } catch (e) {
+            setFlowRods({ error: e.message || String(e) });
+        }
+    };
+    const coverage = useMemo(() => (flowRods && flowRods.flows ? spanCoverageOf({ ...flowRods, spanMap }) : null), [flowRods, spanMap]);
+    const familyLabel = (id) => { const r = RODS.find(x => x.id === id); return r ? `${r.label} ${String(r.material || '').toLowerCase()} · ${(ROD_COLLECTIONS.find(c => c.id === r.collection) || {}).label || r.collection}` : id; };
 
     const fab = fabricClass(fabricId);
     const drop = parseFloat(dropFt);
@@ -244,6 +277,51 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                     weight and curtain length only shorten the span further, and mostly bite on the smaller rods.
                     The 2" rectangular rod is Fabricut H1 only and is always mounted with the 2" dimension
                     vertical — we don't offer it the other way.
+                </div>
+
+                {/* EVERY ROD THE CPQ FLOWS SELL — listed above, or not (2026-10-19). */}
+                <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: `1px dashed ${theme.line}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                        <span style={{ ...lbl, marginBottom: 0 }}>Rods the CPQ flows sell</span>
+                        <button onClick={checkFlows} disabled={flowRods === 'loading'}
+                            title="Reads this brand's CPQ flows and lists every rod they offer against the Rod item codes above — a rod no family claims gets no span guidance in CPQ or the portal."
+                            style={{ padding: '6px 12px', cursor: flowRods === 'loading' ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', border: `1px solid ${theme.line}`, background: 'transparent', color: theme.inkSoft }}>
+                            {flowRods === 'loading' ? 'Checking…' : (coverage ? '↻ Check again' : 'Check the CPQ flows')}
+                        </button>
+                    </div>
+                    {flowRods && flowRods.error && <div style={{ marginTop: '8px', color: '#b00020', fontSize: '0.8rem' }}>Could not read the flows: {flowRods.error}</div>}
+                    {coverage && (coverage.missing.length ? (
+                        <div style={{ marginTop: '8px', fontSize: '0.82rem', color: theme.ink }}>
+                            <div style={{ color: theme.brass, marginBottom: '6px' }}>
+                                {coverage.missing.length} rod{coverage.missing.length === 1 ? '' : 's'} the flows sell {coverage.missing.length === 1 ? 'is' : 'are'} not in any family's item codes — the configurator gives {coverage.missing.length === 1 ? 'it' : 'them'} no span guidance:
+                            </div>
+                            {coverage.missing.map(r => (
+                                <div key={r.code} style={{ padding: '3px 0', borderBottom: `1px solid ${theme.paper2}` }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem' }}>{r.code}</span>
+                                    <span style={{ color: theme.inkSoft, marginLeft: '8px' }}>{r.name}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.7rem', color: theme.inkSoft, marginLeft: '8px' }}>{r.flows.join(' · ')}</span>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div style={{ marginTop: '8px', fontSize: '0.82rem', color: theme.ink }}>
+                            {coverage.listed.length
+                                ? `✓ All ${coverage.listed.length} rods the CPQ flows sell are in a family's item codes — every one gets span guidance.`
+                                : 'No rods found on this brand\'s CPQ flows.'}
+                        </div>
+                    ))}
+                    {coverage && coverage.listed.length > 0 && (
+                        <details style={{ marginTop: '8px' }}>
+                            <summary style={{ cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft }}>Listed ({coverage.listed.length})</summary>
+                            {coverage.listed.map(r => (
+                                <div key={r.code} style={{ padding: '3px 0', fontSize: '0.8rem', borderBottom: `1px solid ${theme.paper2}` }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem' }}>{r.code}</span>
+                                    <span style={{ color: theme.inkSoft, marginLeft: '8px' }}>→ {familyLabel(r.family)}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.7rem', color: theme.inkSoft, marginLeft: '8px' }}>{r.flows.join(' · ')}</span>
+                                </div>
+                            ))}
+                        </details>
+                    )}
                 </div>
 
                 {/* Staff see what the numbers assume; the portal deliberately does not. */}

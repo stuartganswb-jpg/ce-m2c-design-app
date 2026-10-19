@@ -144,10 +144,14 @@ function stateFromClient(raw, { finishCodes = new Set(), lengthOf = null } = {})
     const finishAnswers = {};
     if (isObj(r.finishAnswers)) Object.entries(r.finishAnswers).slice(0, 12).forEach(([code, a]) => { const c = U(code); if (finishCodes.has(c) && isObj(a)) finishAnswers[c] = flat(a, 8, str); });
     const qty = parseInt(r.qty, 10);
+    // The curtain length (rod to floor) and whether the brackets go into studs — what 6.5's span is worked from with the
+    // fabric weight (2026-10-19). A number or nothing: the engine works anything outside its range at the 8 ft 6.5 assumes.
+    const drop = typeof r.dropFt === 'number' ? r.dropFt : (typeof r.dropFt === 'string' && r.dropFt.trim() ? Number(r.dropFt.slice(0, 8)) : NaN);
     return {
         answers: flat(r.answers, 20, scalar), picks: flat(r.picks, 80, str), sizePick: flat(r.sizePick, 8, str),
         lengthInches: Number.isFinite(length) && length > 0 && length <= 600 ? length : null,
         stepQty, fabricId: FABRICS.includes(U(r.fabricId)) ? U(r.fabricId) : 'PRINT',
+        dropFt: Number.isFinite(drop) && drop > 0 ? drop : null, onStud: r.onStud !== false,
         globalFinishes: flat(r.globalFinishes, 6, fin), partFinish: flat(r.partFinish, 80, fin), finishAnswers,
         memo: txt(r.memo, 120), qty: qty > 0 && qty <= 999 ? qty : 1,
         // what was named as removed and acknowledged — the keys only; the entries themselves are worked out here
@@ -204,6 +208,11 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
     const option = (o, key) => ({ id: o.id, code: s.ourId(o.partId), sku: their(o.partId), name: txt((part(o.partId) || {}).itemName || o.name), noFinish: !!o.noFinish, on: s.livePicks[key] === o.id,
         nodes: (Array.isArray(o.nodes) ? o.nodes : []).slice(0, 60).map((n) => txt(n, 160)) });
     const slotView = (slot) => (slot ? { key: slot.key, notAsked: slot.suppressedBy ? txt(slot.suppressedReason, 240) : '', options: (slot.options || []).map((o) => option(o, slot.key)) } : null);
+    // WHICH ROD, BY WHAT THE LENGTH NEEDS (2026-10-19): each rod a step offers, with how many supports the pole would need with it.
+    const rodRow = (x) => ({ id: x.id, code: s.ourId(x.partId), sku: their(x.partId), name: txt((part(x.partId) || {}).itemName || ''), supports: x.supports, picked: !!x.picked });
+    const stepLabelOf = (key) => { const st = s.steps.find((x) => x.kind === 'SLOT' && x.slot.key === key); return st ? st.label : ''; };
+    const rods = (s.rodOptions || []).map((r) => ({ key: r.slotKey, label: stepLabelOf(r.slotKey) || 'Rod', options: r.options.map(rodRow), better: r.better ? rodRow(r.better) : null }));
+    const shortOf = (key) => (s.supportShort || []).find((x) => x.slotKey === key) || null;
     const steps = s.steps.map((st) => {
         const base = { key: st.key, kind: st.kind, label: st.label, answer: s.answerOf(st) || '', hint: engine.stepHintOf(st) };
         if (st.kind === 'AXIS' || st.kind === 'AXES') {
@@ -217,12 +226,19 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
             return { ...base, ...slotView(st.slot), sub: st.sub ? { label: 'Matching backplate', ...slotView(st.sub) } : null,
                 // A CHOSEN RETURN COLLAPSES THE REST (CPQ, Stuart 2026-08-20): the plate picker it brings sits under the other ends.
                 collapse: !!(picked && picked.role === 'RETURN' && st.sub),
-                qty: asksQty ? { typed: state.stepQty[st.slot.key] || '', recommended: s.recommendFor(st.slot, picked) || null } : null };
+                qty: asksQty ? { typed: state.stepQty[st.slot.key] || '', recommended: s.recommendFor(st.slot, picked) || null } : null,
+                // fewer centre brackets than recommended — said, never refused
+                short: shortOf(st.slot.key) ? { chosen: shortOf(st.slot.key).chosen, recommended: shortOf(st.slot.key).recommended } : null };
         }
-        if (st.kind === 'LENGTH') return { ...base, lengthInches: s.lengthInches || null, exactFeet: s.lengthFeetExact || null, feetBilled: s.lengthFeet || null, fabricId: state.fabricId,
+        if (st.kind === 'LENGTH') return { ...base, lengthInches: s.lengthInches || null, exactFeet: s.lengthFeetExact || null, feetBilled: s.lengthFeet || null,
+            fabricId: s.span.fabricId, dropFt: s.span.dropFt, onStud: s.span.onStud,
             fabrics: engine.FABRIC_CLASSES.map((f) => ({ id: f.id, label: txt(f.label) })),
             splice: s.spliceNeeded ? { overInches: s.spliceOverIn, included: !!s.spliceSatisfied } : null,
-            support: s.advice ? { everyInches: s.advice.spanInches, supports: s.advice.brackets } : null };
+            // the span in the column that applies (into studs or not), why, and the other column's count beside it
+            support: s.advice ? { everyInches: s.advice.everyInches, supports: s.advice.supports, why: txt(s.advice.whyApplies), onStud: !!s.advice.onStud, other: s.advice.otherSupports || null,
+                // a rod on this configuration with no span listed: said, so the count is never taken as covering it
+                ...((s.advice.unlisted || []).length ? { unlisted: true } : {}) } : null,
+            rods };
         if (st.kind === 'CARRIERS') return { ...base, rows: st.carriers.map((c) => ({ code: s.ourId(c.partId), name: txt((part(c.partId) || {}).itemName || c.name) })) };
         return base;                               // TRV: the track's components — shown as the engine seeds them (the customer's own picks come with the traverse step)
     });
@@ -305,8 +321,16 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
         price: { level: showMoney ? s.effectiveLevel : '', lines, ...(showMoney ? { total: firmTotal, totalForAll: money(firmTotal * s.qty) } : {}), hasReview: hasReview || !showMoney, qty: s.qty },
         // what a later choice took off: our number and our description, and why in the customer's words — Understood clears it
         removals: s.drops.map((d) => ({ key: d.key, step: txt(d.step), code: d.partCode ? txt(s.ourId(d.partCode)) : '', part: txt((part(d.partCode) || {}).itemName || d.partName), why: removalWords(d.reason), acked: !!d.acked })),
+        // fewer centre brackets than recommended — the same words the request carries to HQ
+        supportShort: shortNotesOf(s),
         refusal: s.refusal ? { kind: s.refusal.kind, message: REFUSAL_WORDS[s.refusal.kind] || 'This configuration cannot be requested yet.' } : null,
     };
+}
+
+// FEWER CENTRE BRACKETS THAN RECOMMENDED, in words the customer and HQ both read (Shared/portalRequestLines prints them under
+// the configuration). The engine decides it (hardwareSession.supportShortfallOf); this only says it.
+function shortNotesOf(s) {
+    return (s.supportShort || []).map((x) => `Fewer centre brackets than recommended: ${x.picked ? x.chosen : 'none'} chosen, ${x.recommended} recommended for this ${s.lengthInches}″ pole${s.span && !s.span.onStud ? ', not into studs' : ''}.`);
 }
 
 // ── THE REQUEST'S CART LINE ──────────────────────────────────────────────────────────────────
@@ -315,7 +339,7 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
 function requestLineOf(engine, data, state, { level = 'STANDARD' } = {}) {
     const s = engine.sessionOf({ ...data, priceLevel: level }, state);
     if (s.refusal) return { refusal: { kind: s.refusal.kind, message: REFUSAL_WORDS[s.refusal.kind] || 'This configuration cannot be requested yet.' }, item: null };
-    return { refusal: null, item: s.item, effectiveLevel: s.effectiveLevel, total: money(s.grandTotal * s.qty) };
+    return { refusal: null, item: s.item, effectiveLevel: s.effectiveLevel, total: money(s.grandTotal * s.qty), notes: shortNotesOf(s) };
 }
 
 // ── IN LINE, OR BEHIND ───────────────────────────────────────────────────────────────────────

@@ -112,8 +112,8 @@ const solidRoundSection = (d) => {
 // SMALLER of the engineered span and this cap — matching the common trade rule of a support
 // roughly every 4 ft, opened up for the heavier rods that carry it.
 //
-// These are OUR house numbers, deliberately in one editable place. Change here, re-copy to
-// portal/src/shared/bracketSpan.js.
+// These are OUR house numbers, deliberately in one editable place. The portal's Tools page reads this same file
+// (through '@engine', since 2026-10-19 — its copy is gone), and the configurator reads it on CPQ and the portal's server.
 const ALUM_MAX_SPAN = 72;
 const ALUM_NO_STUD = 42;
 // ACRYLIC — Stuart 2026-08-17: "acrylic will sag very easy and the limit is 36\" whether brackets
@@ -249,6 +249,10 @@ export function spanTable(fabricId, curtainLengthFt, collectionId, caps) {
                 // 'MAX'  = our house limit is the binding constraint (a longer curtain won't shorten it)
                 // 'LOAD' = the fabric weight is (a heavier or longer curtain WILL shorten it)
                 limitedBy: capped === null ? null : (eng > (r.maxSpan || Infinity) ? 'MAX' : 'LOAD'),
+                // …and what binds the NOT-IN-A-STUD span (2026-10-19, for the configurator's "Into studs?" question):
+                // 'ANCHOR' = the drywall anchor's cap · 'MAX' = our house limit (a stud buys nothing) · 'LOAD' = the fabric.
+                noStudLimitedBy: noStud === null ? null
+                    : (eng > Math.min(r.maxSpan || Infinity, noStudCap) ? (noStudCap < (r.maxSpan || Infinity) ? 'ANCHOR' : 'MAX') : 'LOAD'),
             };
         });
 }
@@ -311,6 +315,9 @@ export function rodForItemCode(code, map) {
     return hit ? (RODS.find(r => r.id === hit[0]) || null) : null;
 }
 
+// Why the NOT-IN-A-STUD span is what it is, in the same words as `why` (spanTable's noStudLimitedBy).
+const NO_STUD_WHY = { LOAD: 'limited by fabric weight', ANCHOR: 'the limit for a drywall anchor', MAX: 'our maximum span' };
+
 /**
  * The bracket recommendation for one configuration, or null when it cannot be made honestly.
  *
@@ -330,5 +337,6 @@ export function bracketAdviceFor({ itemCode, map, rodInches, fabricId, dropFt, c
         // The installer's real question: what if there is no framing where the bracket lands.
         bracketsNoStud: row.noStudInches ? bracketsFor(rodInches, row.noStudInches) : null,
         why: row.limitedBy === 'LOAD' ? 'limited by fabric weight' : 'our maximum span',
+        whyNoStud: NO_STUD_WHY[row.noStudLimitedBy] || null,
     };
 }

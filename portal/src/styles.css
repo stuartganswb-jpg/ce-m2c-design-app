@@ -422,6 +422,10 @@ footer.portal a { color: var(--ink-soft); }
 .cf-addbar-go { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-left: auto; }
 .cf-addbar-go .btn { padding: 14px 22px; }
 .cf-refusal { font-size: 0.84rem; color: #a33; }
+.cf-short { font-size: 0.84rem; color: #8a6508; }
+/* what the span is worked from: the fabric across the row, the curtain length and the stud answer beneath it */
+.cf-length.cf-span { grid-template-columns: 1fr 1.6fr; }
+.cf-length.cf-span .cf-fabric { grid-column: 1 / -1; }
 
 .cf-basket .card-head { cursor: default; }
 .cf-basket .card-head .btn-ghost { flex: 0 0 auto; }

@@ -18,6 +18,10 @@ eq('what is sent: the answers, the length as typed, the number of sets as a numb
 eq('a line opened again comes back as it was sent', answersOf(w), { ...a });
 eq('a number of sets that is not a number is one set', [wireOf({ ...a, qty: '' }).qty, wireOf({ ...a, qty: '0' }).qty, wireOf({ ...a, qty: 'x' }).qty], [1, 1, 1]);
 eq('nothing to open: a fresh configuration', answersOf(null), blankAnswers());
+// what the span is worked from (2026-10-19): the curtain length as typed and the stud answer travel, and come back
+const spanned = { ...a, fabricId: 'BLACKOUT', dropFt: '12.5', onStud: false };
+eq('the curtain length and the stud answer are sent, and a line opened again comes back with them', [wireOf(spanned).dropFt, wireOf(spanned).onStud, answersOf(wireOf(spanned))], ['12.5', false, { ...spanned }]);
+eq('…a fresh configuration: no curtain length typed (8 ft is assumed), into studs; a line saved before them opens the same way', [blankAnswers().dropFt, blankAnswers().onStud, wireOf(blankAnswers()).onStud, answersOf({ answers: {}, fabricId: 'SHEER' }).dropFt, answersOf({ answers: {}, fabricId: 'SHEER' }).onStud], ['', true, true, '', true]);
 eq('every fraction the screen offers is a length the engine reads (sixteenths)', FRACTIONS.filter(Boolean).every((f) => { const [n, d] = f.split('/').map(Number); return lengthInchesOf('10', f) === 10 + n / d && 16 % d === 0; }), true);
 // the request in this browser, per login
 eq('nothing kept yet: an empty request', readBasket('u1'), { lines: [], sidemark: '', note: '' });

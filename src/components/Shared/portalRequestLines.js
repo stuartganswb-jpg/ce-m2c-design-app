@@ -114,6 +114,8 @@ export function portalRequestLines(job, flowDoc, finishes, { custNames, flowById
                 const finish = l.clientFinishName || l.finishLabel || '';
                 out.push({ name: `${l.name || l.legacyErpId || ''}${finish ? ` — ${finish}` : ''}`, qty: Number(l.qty) || 0 });
             });
+            // What was said as it was configured — fewer centre brackets than recommended (2026-10-19) — under its configuration.
+            (Array.isArray(ln.notes) ? ln.notes : []).forEach((n) => out.push({ name: `Note: ${String(n).slice(0, 300)}`, qty: 0 }));
         });
         if (req.note) out.push({ name: `Note: ${String(req.note).slice(0, 300)}`, qty: 0 });
         return out;

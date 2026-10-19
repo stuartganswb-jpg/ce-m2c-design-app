@@ -26,7 +26,7 @@ import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter.js';
 import { resolve, reseatPicks, recommendedQty, bearingEnds, centreBracketsFor, finishesFor, ROD_ROLES, TRAVERSE } from './hardwareModel.js';
 import { autoPicksOf } from './hardwareAutoPicks.js';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, projInchesOfSel } from './sizeMatrix.js';
-import { bracketAdviceFor, DEFAULT_DROP_FT } from './bracketSpan.js';
+import { bracketAdviceFor, DEFAULT_DROP_FT, FABRIC_CLASSES } from './bracketSpan.js';
 import { carrierRows, configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator.js';
 import { usageAt, explodeTraverse } from './traverseExplode.js';
 import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf, noSpliceNote } from './flowExtras.js';
@@ -178,15 +178,95 @@ export function lengthFieldsOf(lengthInches) {
 // up — `H1-1.375 → H1-138R` — but this asked for `CE-INV-61954`, which no family claims, so
 // every rod reported itself unlisted. ourId() is the same resolver the cards and the quote
 // lines use, so what we look up is what he typed in 6.5.
-export function bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, fabricId, ourId }) {
+//
+// ── …AND WHAT THE SPAN DEPENDS ON, ASKED (Stuart 2026-10-19: "go ahead and yes use the 6.5 not in stud column") ──
+// The span is worked from three answers: the fabric weight, the curtain length (rod to floor — longer is heavier;
+// 6.5's own "Curtain length") and whether the brackets go into studs (6.5's two columns). Until today the length was
+// always 8 ft and the stud column was only mentioned. The defaults are what was always assumed — PRINT, 8 ft, into
+// studs, as 6.5's own note says — so a line saved before reopens to the same recommendation it was given.
+export const DROP_FT_RANGE = [1, 30];
+export function spanAnswersOf({ fabricId, dropFt, onStud } = {}) {
+    const fab = FABRIC_CLASSES.some(f => f.id === String(fabricId || '').toUpperCase()) ? String(fabricId).toUpperCase() : 'PRINT';
+    const n = Number(dropFt);
+    const drop = Number.isFinite(n) && n >= DROP_FT_RANGE[0] && n <= DROP_FT_RANGE[1] ? Math.round(n * 100) / 100 : DEFAULT_DROP_FT;
+    return { fabricId: fab, dropFt: drop, onStud: onStud !== false };
+}
+// What a saved line keeps of them: only what differs from the default ("defaults stay defaults", as typed counts do).
+export function spanAnswersSavedOf(span) {
+    const s = spanAnswersOf(span || {});
+    return { ...(s.fabricId !== 'PRINT' ? { fabricId: s.fabricId } : {}), ...(s.dropFt !== DEFAULT_DROP_FT ? { dropFt: s.dropFt } : {}), ...(s.onStud ? {} : { onStud: false }) };
+}
+// The count, span and reason that APPLY to one rod's advice — the stud column or the not-in-a-stud column.
+const appliedOf = (a, onStud) => (!a ? null : onStud
+    ? { supports: a.brackets, everyInches: a.spanInches, whyApplies: a.why, otherSupports: a.bracketsNoStud }
+    : { supports: a.bracketsNoStud || a.brackets, everyInches: a.noStudInches || a.spanInches, whyApplies: a.whyNoStud || a.why, otherSupports: a.brackets });
+const rodAdvice = (choice, { lengthInches, spanMap, spanCaps, span, ourId }) => bracketAdviceFor({ itemCode: ourId(choice.partId) || choice.name || choice.partId,
+    map: spanMap, caps: spanCaps, rodInches: lengthInches, fabricId: span.fabricId, dropFt: span.dropFt });
+// ⚠ THE ROD THAT NEEDS THE MOST SUPPORTS GOVERNS (2026-10-19). A double rod hangs both rods on the same brackets, so the
+// brackets go where the weaker rod needs them. Until today the first rod found decided, whichever it was.
+export function bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, fabricId, dropFt, onStud, ourId }) {
     // ⚠ READS `model`, NOT `resolved` (2026-08-20). The centre-bracket recommendation feeds
     // the quantities, which feed resolve — so taking the rod from the RESOLVED model would
     // close the loop: advice → quantities → resolved → advice. The pre-quantity model already
     // knows which rod was chosen, and a count never changes that.
     const ids = new Set(Object.values(livePicks));
-    const rod = model.choices.find(c => ids.has(c.id) && ['ROD', 'FASCIA', 'TRACK'].includes(c.role));
-    if (!rod || !lengthInches) return null;
-    return bracketAdviceFor({ itemCode: ourId(rod.partId) || rod.name || rod.partId, map: spanMap, caps: spanCaps, rodInches: lengthInches, fabricId, dropFt: DEFAULT_DROP_FT });
+    const rods = model.choices.filter(c => ids.has(c.id) && ROD_ROLES.includes(c.role));
+    if (!rods.length || !lengthInches) return null;
+    const span = spanAnswersOf({ fabricId, dropFt, onStud });
+    let best = null;
+    const unlisted = [];
+    rods.forEach(rod => {
+        const a = rodAdvice(rod, { lengthInches, spanMap, spanCaps, span, ourId });
+        const applied = appliedOf(a, span.onStud);
+        if (!applied) unlisted.push(ourId(rod.partId) || rod.name || rod.partId);
+        if (applied && (!best || applied.supports > best.supports)) best = { ...a, ...applied };
+    });
+    // A picked rod 6.5 does not list is NAMED beside the advice, never silently left out — it may be the weaker rod (validator rule:
+    // what the list cannot vouch for is said). None listed at all: no advice, as before.
+    return best ? { ...best, ...span, unlisted } : null;
+}
+
+// ── WHICH ROD, BY WHAT THE LENGTH NEEDS (step 3, Stuart 2026-10-19) ───────────────────────────
+// Where a rod step offers more than one rod (H1-138: steel, acrylic, wood), each is worked at this length, fabric,
+// curtain length and stud answer: how many supports the pole would need WITH it — the rods on the other steps still
+// count, since the weakest rod on the brackets decides. A recommendation, never a block. Empty when nothing compares.
+export function rodOptionsAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, fabricId, dropFt, onStud, ourId }) {
+    if (!lengthInches) return [];
+    const span = spanAnswersOf({ fabricId, dropFt, onStud });
+    const ctx = { lengthInches, spanMap, spanCaps, span, ourId };
+    const own = (c) => appliedOf(rodAdvice(c, ctx), span.onStud);
+    return model.slots
+        .filter(sl => ROD_ROLES.includes(sl.kind) && livePicks[sl.key] && (sl.options || []).length > 1)
+        .map(sl => {
+            const others = model.choices.filter(c => Object.entries(livePicks).some(([k, id]) => k !== sl.key && id === c.id) && ROD_ROLES.includes(c.role));
+            const othersNeed = Math.max(0, ...others.map(c => (own(c) || {}).supports || 0));
+            const options = sl.options.map(o => {
+                const a = own(o);
+                return { id: o.id, partId: o.partId, picked: livePicks[sl.key] === o.id, ownSupports: a ? a.supports : null,
+                    supports: a ? Math.max(a.supports, othersNeed) : null, everyInches: a ? a.everyInches : null, why: a ? a.whyApplies : '' };
+            });
+            const picked = options.find(o => o.picked) || null;
+            const priced = options.filter(o => o.supports != null);
+            const fewest = priced.length ? Math.min(...priced.map(o => o.supports)) : null;
+            const better = (picked && picked.supports != null && fewest != null && fewest < picked.supports) ? priced.find(o => o.supports === fewest) : null;
+            return { slotKey: sl.key, options, better };
+        })
+        .filter(r => r.options.filter(o => o.supports != null).length > 1);
+}
+
+// ── FEWER CENTRE BRACKETS THAN 6.5 RECOMMENDS (step 4, Stuart 2026-10-19) ─────────────────────
+// Said, never refused: a typed count below the recommendation, or no centre bracket chosen where the span wants one.
+// Reads the counts the bill reads (quantitiesOf), so what is said is what will be billed.
+export function supportShortfallOf({ model, livePicks, quantities, recommendFor }) {
+    return model.slots
+        .filter(sl => sl.kind === 'BRACKET' && String(sl.position || '').toUpperCase() === 'CENTER' && !sl.suppressedBy && (sl.options || []).length)
+        .map(sl => {
+            const picked = sl.options.find(o => o.id === livePicks[sl.key]) || null;
+            const recommended = recommendFor(sl, picked);
+            const chosen = picked ? (Number(quantities[picked.id]) || 0) : 0;
+            return recommended > 0 && chosen < recommended ? { slotKey: sl.key, chosen, recommended, picked: !!picked } : null;
+        })
+        .filter(Boolean);
 }
 
 // ── HOW MANY OF EACH (Stuart 2026-08-20) ─────────────────────────────────────────────────────
@@ -203,7 +283,8 @@ export function bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanC
 export function recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet }) {
     if (!slot) return null;
     if (slot.kind === 'BRACKET' && String(slot.position || '').toUpperCase() === 'CENTER') {
-        return advice ? centreBracketsFor(advice.brackets, bearingEnds(model.choices, Object.values(livePicks), model.slots)) : null;
+        // `supports` is the column that applies — into studs, or not (bracketAdviceOf).
+        return advice ? centreBracketsFor(advice.supports ?? advice.brackets, bearingEnds(model.choices, Object.values(livePicks), model.slots)) : null;
     }
     return recommendedQty(choice, lengthFeet);
 }
@@ -1268,7 +1349,7 @@ export function cartLineOf({ resolved, pricingCtx, assembly, flow, findPart, qty
     chosenFinishObjects, effectiveLevel, lengthInches, lengthFeet, extras, extraLines, stepNotes, stepNoteClient,
     answers, livePicks, partFinish, globalFinish, globalFinishes, stepQty, liveFinishAnswers,
     kitBill, kitSource, kitPick, kitMotor, isTraverse, trvSel, trvComponents, trvLive, renderState,
-    steps, noSplice, spliceOverIn }) {
+    steps, noSplice, spliceOverIn, span = null }) {
     const built = handoffItem(resolved, {
         ...pricingCtx, assembly, flow, findPart, qty, renderSnapshot,
         // The pins this line was resolved from — fingerprinted on the line so Approve can tell
@@ -1311,9 +1392,13 @@ export function cartLineOf({ resolved, pricingCtx, assembly, flow, findPart, qty
     // Which part each pick was — kept with the picks, so a reopen can name a part whose pin has since been re-made.
     const pickParts = pickPartsOf(livePicks, resolved.choices, findPart);
     const parted = Object.keys(pickParts).length > 0;
-    return (noSplice || shopNotes.length || ticked || parted)
+    // What the span was worked from (fabric weight, curtain length, into studs) — so a reopen recommends what this line was
+    // recommended, and a count taken from that recommendation is not quietly re-worked at the defaults. Non-defaults only.
+    const spanSaved = spanAnswersSavedOf(span || {});
+    const spanned = Object.keys(spanSaved).length > 0;
+    return (noSplice || shopNotes.length || ticked || parted || spanned)
         ? { ...built,
-            ...((noSplice || ticked || parted) ? { engineConfig: { ...built.engineConfig, ...(noSplice ? { spliceWaived: true } : {}), ...(ticked ? { stepNoteClient: { ...stepNoteClient } } : {}), ...(parted ? { pickParts } : {}) } } : {}),
+            ...((noSplice || ticked || parted || spanned) ? { engineConfig: { ...built.engineConfig, ...(noSplice ? { spliceWaived: true } : {}), ...(ticked ? { stepNoteClient: { ...stepNoteClient } } : {}), ...(parted ? { pickParts } : {}), ...spanSaved } } : {}),
             ...(shopNotes.length ? { generalNotes: shopNotes } : {}),
             ...(clientNotes.length ? { clientNotes } : {}) }
         : built;
@@ -1326,7 +1411,7 @@ export function cartLineOf({ resolved, pricingCtx, assembly, flow, findPart, qty
  *
  * @param data   { assembly, pins, parts, flow, spanMap, spanCaps, trvRules, extraItems, finishes, flowFinishes,
  *                 customer, customerId, priceLevel, outsourceCodes, kits } — what the screen is handed
- * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId, extras, spliceWaived, globalFinishes,
+ * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId, dropFt, onStud, extras, spliceWaived, globalFinishes,
  *                 globalFinish, partFinish, finishAnswers, kitPick, kitCode, kitMotor, trvSel, stepNotes,
  *                 stepNoteClient, memo, qty, drawnSplices, drops, pickParts } — what the operator has answered, as a cart
  *               line saves it (engineConfig); a saved length, the saved add-by-hand rows, the saved finish
@@ -1338,7 +1423,7 @@ export function cartLineOf({ resolved, pricingCtx, assembly, flow, findPart, qty
  */
 export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMap = {}, spanCaps = {}, trvRules = null, extraItems = [],
     finishes = [], flowFinishes = [], customer = null, customerId = '', priceLevel = 'STANDARD', outsourceCodes = [], kits = [] } = {},
-    { answers = {}, picks = {}, sizePick = {}, lengthInches: savedLength = null, stepQty = {}, fabricId = 'PRINT', extras: savedExtras = [], spliceWaived = false,
+    { answers = {}, picks = {}, sizePick = {}, lengthInches: savedLength = null, stepQty = {}, fabricId = 'PRINT', dropFt = null, onStud = true, extras: savedExtras = [], spliceWaived = false,
         globalFinishes: savedGlobalFinishes = null, globalFinish: savedGlobalFinish = '', partFinish: savedPartFinish = null,
         finishAnswers: savedFinishAnswers = null, kitPick = '', kitCode = '', kitMotor = '', trvSel: savedTrvSel = null,
         stepNotes: savedStepNotes = null, stepNoteClient: savedStepNoteClient = null, memo: savedMemo = '', sidemark = '', qty: savedQty = 1,
@@ -1360,9 +1445,13 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const lengthInches = lengthInchesOf(fields.poleIn, fields.poleFrac);
     const lengthFeetExact = lengthFeetExactOf(lengthInches);
     const lengthFeet = lengthFeetOf(lengthInches);
-    const advice = bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, fabricId, ourId });
+    // What the span depends on — the fabric weight, the curtain length, into studs or not — as the operator answered it.
+    const span = spanAnswersOf({ fabricId, dropFt, onStud });
+    const advice = bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId });
+    const rodOptions = rodOptionsAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId });
     const recommendFor = (slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet });
     const quantities = quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId });
+    const supportShort = supportShortfallOf({ model, livePicks, quantities, recommendFor });
     const resolved = resolvedOf({ choices, answers: effAnswers, livePicks, modelNodes, quantities });
     // The add-by-hand rows: restored as Edit restores them, offered for the rod chosen, and — over the flow's
     // limit, with ONE joiner to choose from, unless the operator declined it — the joiner the length step adds itself.
@@ -1421,9 +1510,9 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
         chosenFinishObjects: fin.chosenFinishObjects, effectiveLevel: bill.effectiveLevel, lengthInches, lengthFeet, extras, extraLines: bill.extraLines, stepNotes, stepNoteClient,
         answers, livePicks, partFinish, globalFinish: fin.globalFinish, globalFinishes, stepQty, liveFinishAnswers: bill.liveFinishAnswers,
         kitBill: bill.kitBill, kitSource: bill.kitSource, kitPick: bill.kitPick, kitMotor: bill.kitMotor, isTraverse: bill.isTraverse, trvSel, trvComponents: bill.trvComponents, trvLive: bill.trvLive,
-        renderState, steps, noSplice: bill.noSplice, spliceOverIn });
+        renderState, steps, noSplice: bill.noSplice, spliceOverIn, span });
     return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks,
-        lengthInches, lengthFeetExact, lengthFeet, advice, recommendFor, quantities, resolved,
+        lengthInches, lengthFeetExact, lengthFeet, span, advice, rodOptions, recommendFor, quantities, supportShort, resolved,
         sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied,
         ...fin, finishAnswers, trvSel, ...bill,
         stepNotes, stepNoteClient, drawnSplices, memo, qty, steps, answerOf, extrasOnStep, visibleOverrides, clearList, railNames, stretchSpec, spliceMarks, cloneSpecs,
