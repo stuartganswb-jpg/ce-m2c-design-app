@@ -11,6 +11,7 @@ import PillowPricingAdmin from './PillowPricingAdmin';   // 🧵 Uniquity: the p
 import OneOfAKindImport from './OneOfAKindImport';   // 🎁 Uniquity: one-of-a-kind pillows + wall art made at the show (S7, 2026-10-14)
 import CurtainPricingAdmin from './CurtainPricingAdmin';   // 🪟 M2C: the workroom's curtain chart + the swatches (2026-10-12, manager level and above)
 import { canLineDiscount } from '../Shared/lineDiscount';   // the app's ONE manager-or-higher rule (admin · superadmin · manager · executive)
+import { canTakePayment } from '../Shared/payRoles';   // the counter crew: CSR and up (Stuart 2026-10-19: Ashley files one-of-a-kind pieces)
 
 // TOOLS, SPECS & FAQs (HQ 6.5) — the staff-side twin of the portal's Tools page. Same engineering
 // (Shared/bracketSpan.js, a verbatim-copy pair with portal/src/shared/), but staff also see the
@@ -274,7 +275,7 @@ const TOOLS = [
     { id: 'pillowpricing', label: 'Pillow Pricing', blurb: 'Size × fabric-group prices, minimum cuts, labour + details, the fabric sheet', brands: ['uniquity'], managerUp: true, render: (p) => <PillowPricingAdmin activeBrand={p.activeBrand} currentUser={p.currentUser || 'HQ'} /> },
     { id: 'fabriccuts', label: 'Fabric Cut Stock', blurb: 'Cuts on the shelf by fabric + the throw → yardage convert', brands: ['uniquity'], render: (p) => <FabricCutStock activeBrand={p.activeBrand} currentUser={p.currentUser || 'HQ'} /> },
     // ONE-OF-A-KIND (Stuart 2026-10-14): the pillows and wall art made at the show — photo cards → library items that sell on the counter.
-    { id: 'oneofakind', label: 'One-of-a-kind', blurb: 'Pillows + wall art made at the show: photo, code from the tag, price, making → sell on the counter', brands: ['uniquity'], managerUp: true, render: (p) => <OneOfAKindImport activeBrand={p.activeBrand} currentUser={p.currentUser || 'HQ'} /> },
+    { id: 'oneofakind', label: 'One-of-a-kind', blurb: 'Pillows + wall art made at the show: photo, code from the tag, price, making → sell on the counter', brands: ['uniquity'], counterUp: true, render: (p) => <OneOfAKindImport activeBrand={p.activeBrand} currentUser={p.currentUser || 'HQ'} /> },
     // CURTAIN PRICING (Stuart 2026-10-12, M2C Studio custom curtains): the workroom's chart — fabric · top style ·
     // lining · width group · length band, each line with its sheet and row — and the fabric swatches. Brand M2C; manager+.
     { id: 'curtainpricing', label: 'Curtain Pricing', blurb: 'The workroom chart by fabric, style, lining, width and length + the swatches', brands: ['m2c'], managerUp: true, render: (p) => <CurtainPricingAdmin activeBrand={p.activeBrand} currentUser={p.currentUser || 'HQ'} /> },
@@ -288,7 +289,9 @@ const toolFitsBrand = (t, brand) => {
 };
 // A tool marked managerUp is offered to manager level and above only — the same role list the
 // cart discounts use, plus the super-admin flag. The tab itself is granted per role on 11's matrix.
-const toolFitsRole = (t, role, isSuperAdmin) => !t.managerUp || canLineDiscount(role, isSuperAdmin);
+// A tool marked counterUp is for the counter crew — CSR and up, the same list that may take a payment at the counter
+// (Shared/payRoles) — so a rep can file the show's one-of-a-kind pieces; prices stay managerUp.
+const toolFitsRole = (t, role, isSuperAdmin) => (t.managerUp ? canLineDiscount(role, isSuperAdmin) : (t.counterUp ? (canTakePayment(role) || isSuperAdmin) : true));
 
 const ToolsSpecsTab = ({ activeBrand, currentUser = 'HQ', userRole = '', isSuperAdmin = false }) => {
     const [activeTool, setActiveTool] = useState(TOOLS[0].id);
