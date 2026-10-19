@@ -96,10 +96,12 @@ export function sledsFromFootprint(footprint, parts) {
 
 // Per-sled MACHINE minutes for a recipe (load + each sprayed step's spray+bake + hand off/on).
 // Excludes per-part hand labor, which the caller adds once per part.
-export function batchMachineMins(recipe, timers = {}) {
+// `opts.dryMins`: what follows each sprayed coat when it is NOT the oven — a wood coat's 20-minute air dry, worked out by
+// the caller (Shared/airDry.dryMinsOf, which reads this file, so the rule cannot live here). Omitted = the oven, as before.
+export function batchMachineMins(recipe, timers = {}, opts = {}) {
   const spinSetup = Number(timers.spinSetupMins) || 10;
   const spinPaint = Number(timers.spinPaintMins) || 3;
-  const oven = Number(timers.ovenMins) || 10;
+  const oven = Number(opts.dryMins) > 0 ? Number(opts.dryMins) : (Number(timers.ovenMins) || 10);
   const steps = (recipe && Array.isArray(recipe.steps)) ? recipe.steps : [];
   let mins = spinSetup; // load the sled once
   steps.forEach(s => {

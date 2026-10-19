@@ -13,11 +13,11 @@ import { holdGateOf } from '../Shared/OrderStatusChips';
 // words — what waits is listed with its reason and never summed.
 const fmtH = (mins) => `${(mins / 60).toFixed(1)} h`;
 
-const SchedulePlanner = ({ workOrders = [], recipes = {}, capacityMatrix = {}, sysConfig = {} }) => {
+const SchedulePlanner = ({ workOrders = [], recipes = {}, capacityMatrix = {}, sysConfig = {}, finishes = null }) => {
     const plan = useMemo(
         // A held document (backorder hold from the split, or a STOP) is not schedulable (S1 spec 2026-09-15).
-        () => buildFinishingPlan(workOrders.filter(w => !holdGateOf(w)), recipes, capacityMatrix, sysConfig, {}),
-        [workOrders, recipes, capacityMatrix, sysConfig]
+        () => buildFinishingPlan(workOrders.filter(w => !holdGateOf(w)), recipes, capacityMatrix, sysConfig, { finishes }),
+        [workOrders, recipes, capacityMatrix, sysConfig, finishes]
     );
 
     const { batches, customBatches, customPoleBatches, stockBatches, poleBatches, totalSleds, totalParts, boothLoads, boothParts, customOrderCount,

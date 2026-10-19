@@ -13,6 +13,11 @@
 //
 // Which steps a coat has, the hand-coat PIN (Shared/floorActivity), the open-pick gate (Shared/orderStatus) and the
 // punch notice on every other short step are untouched. Pure — no React, no Firestore. Harness: scripts/stepOrder.test.mjs.
+//
+// ON WOOD THE BAKE IS AN AIR DRY (Grace / Stuart 2026-10-19 · Shared/airDry): the same slot, twenty minutes on the rack. The
+// caller passes `airDry` and the air dry's minutes as `ovenMins`; the stop then says air dry, never oven.
+
+import { AIR_DRY_LABEL, AIR_DRY_LABEL_ES } from './airDry.js';
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const MIN = 60000;
@@ -30,6 +35,7 @@ export const BAKE_KEYS = ['spinBake', 'poleBake'];
 const STEP_EN = { spinSetup: 'Setup', spinSpray: 'Spray', spinBake: 'Bake', poleSpray: 'Pole Spray', poleBake: 'Pole Bake', hand: 'Hand Finish', poleHand: 'Pole Hand Finish' };
 const STEP_ES = { spinSetup: 'Preparación', spinSpray: 'Pintura', spinBake: 'Horno', poleSpray: 'Pintura de barras', poleBake: 'Horno de barras', hand: 'Acabado a mano', poleHand: 'Acabado a mano (barras)' };
 /** "Setup → Spray → Bake" — the coat this step belongs to, as the stop spells it. */
+const airNames = (names, es) => ({ ...names, ...(es ? AIR_DRY_LABEL_ES : AIR_DRY_LABEL) });
 const coatLine = (taskKey, names) => (String(taskKey || '').startsWith('pole') ? ['poleSpray', 'poleBake'] : ['spinSetup', 'spinSpray', 'spinBake']).map(k => names[k]).join(' → ');
 
 /**
@@ -38,23 +44,24 @@ const coatLine = (taskKey, names) => (String(taskKey || '').startsWith('pole') ?
  * spin load loops), so "complete" always means complete on THIS coat.
  * @returns null | { kind: 'OUT_OF_ORDER', taskKey, waitsOn, running }
  */
-export function startStopOf({ wo, taskKey } = {}) {
+export function startStopOf({ wo, taskKey, airDry = false } = {}) {
     const before = STEPS_BEFORE[String(taskKey || '')];
     if (!before || !before.length) return null;
     const tasks = (wo && wo.tasks) || {};
     const waitsOn = before.find(k => String((tasks[k] || {}).status || '') !== 'Complete');
     if (!waitsOn) return null;
-    return { kind: STEP_STOP.OUT_OF_ORDER, taskKey, waitsOn, running: String((tasks[waitsOn] || {}).status || '') === 'Running' };
+    return { kind: STEP_STOP.OUT_OF_ORDER, taskKey, waitsOn, running: String((tasks[waitsOn] || {}).status || '') === 'Running', ...(airDry ? { airDry: true } : {}) };
 }
 
 /**
  * May this bake be COMPLETED now? Not before the oven time has run from its start. A bake that is not running has
  * not baked at all — a start time left on the step by an earlier coat is never read as this coat's.
  * @param task      the bake's own task as it stands ({ status, startTime })
- * @param ovenMins  the oven time set in Production Times; 0 / unset = no stop (nothing to hold it to)
- * @returns null | { kind: 'BAKE_TOO_SOON', taskKey, started, ranMins, ovenMins, leftMins }
+ * @param ovenMins  the oven time set in Production Times; 0 / unset = no stop (nothing to hold it to) — on a wood coat, the
+ *                  air dry's minutes, with `airDry` true (Shared/airDry.dryMinsOf)
+ * @returns null | { kind: 'BAKE_TOO_SOON', taskKey, started, ranMins, ovenMins, leftMins, airDry? }
  */
-export function bakeStopOf({ taskKey, task, nowMs, ovenMins } = {}) {
+export function bakeStopOf({ taskKey, task, nowMs, ovenMins, airDry = false } = {}) {
     if (!BAKE_KEYS.includes(String(taskKey || ''))) return null;
     const oven = num(ovenMins);
     if (!(oven > 0)) return null;
@@ -62,7 +69,7 @@ export function bakeStopOf({ taskKey, task, nowMs, ovenMins } = {}) {
     const started = String(t.status || '') === 'Running' && num(t.startTime) > 0;
     const ranMins = started ? Math.max(0, (num(nowMs) - num(t.startTime)) / MIN) : 0;
     if (started && ranMins >= oven) return null;
-    return { kind: STEP_STOP.BAKE_TOO_SOON, taskKey, started, ranMins, ovenMins: oven, leftMins: Math.max(0, oven - ranMins) };
+    return { kind: STEP_STOP.BAKE_TOO_SOON, taskKey, started, ranMins, ovenMins: oven, leftMins: Math.max(0, oven - ranMins), ...(airDry ? { airDry: true } : {}) };
 }
 
 const whole = (m) => Math.max(1, Math.ceil(num(m)));
@@ -73,10 +80,22 @@ const ranEs = (m) => (num(m) < 1 ? 'menos de 1 min' : `${Math.floor(num(m))} min
 export function stepStopReason(stop) {
     const s = stop || {};
     if (s.kind === STEP_STOP.OUT_OF_ORDER) {
+        const EN = s.airDry ? airNames(STEP_EN, false) : STEP_EN, ES = s.airDry ? airNames(STEP_ES, true) : STEP_ES;
         return {
-            en: `${STEP_EN[s.waitsOn] || s.waitsOn} ${s.running ? 'is still running' : 'has not been completed'} on this coat — ${STEP_EN[s.taskKey] || s.taskKey} comes after it (${coatLine(s.taskKey, STEP_EN)}).`,
-            es: `${STEP_ES[s.waitsOn] || s.waitsOn} ${s.running ? 'todavía está en proceso' : 'no se ha completado'} en esta capa — ${STEP_ES[s.taskKey] || s.taskKey} va después (${coatLine(s.taskKey, STEP_ES)}).`,
+            en: `${EN[s.waitsOn] || s.waitsOn} ${s.running ? 'is still running' : 'has not been completed'} on this coat — ${EN[s.taskKey] || s.taskKey} comes after it (${coatLine(s.taskKey, EN)}).`,
+            es: `${ES[s.waitsOn] || s.waitsOn} ${s.running ? 'todavía está en proceso' : 'no se ha completado'} en esta capa — ${ES[s.taskKey] || s.taskKey} va después (${coatLine(s.taskKey, ES)}).`,
         };
+    }
+    if (s.kind === STEP_STOP.BAKE_TOO_SOON && s.airDry) {
+        return s.started
+            ? {
+                en: `This air dry has run ${ran(s.ranMins)} of ${whole(s.ovenMins)} — about ${whole(s.leftMins)} min left. It is too soon to PIN it complete.`,
+                es: `Este secado al aire lleva ${ranEs(s.ranMins)} de ${whole(s.ovenMins)} — faltan unos ${whole(s.leftMins)} min. Es demasiado pronto para marcarlo como completado.`,
+            }
+            : {
+                en: `This air dry was never started on this coat — wood dries ${whole(s.ovenMins)} min on the rack, it does not go in the oven. Press START when it goes on the rack.`,
+                es: `Este secado al aire nunca se inició en esta capa — la madera se seca ${whole(s.ovenMins)} min en el rack, no entra al horno. Presione EMPIEZA cuando quede en el rack.`,
+            };
     }
     if (s.kind === STEP_STOP.BAKE_TOO_SOON) {
         return s.started
@@ -96,8 +115,9 @@ export function stepStopReason(stop) {
 export function stepStopText({ stop = null, who = '', order = '', step = '', stepEs = '' } = {}) {
     const r = stepStopReason(stop);
     const bake = stop && stop.kind === STEP_STOP.BAKE_TOO_SOON;
+    const air = bake && stop.airDry;
     return [
-        `${bake ? '⏱ TOO SOON — THE BAKE HAS NOT RUN ITS TIME' : '⛔ NOT YET — THE STEPS RUN IN ORDER'}${who ? ` — ${who}` : ''}`,
+        `${bake ? (air ? '⏱ TOO SOON — THE AIR DRY HAS NOT RUN ITS TIME' : '⏱ TOO SOON — THE BAKE HAS NOT RUN ITS TIME') : '⛔ NOT YET — THE STEPS RUN IN ORDER'}${who ? ` — ${who}` : ''}`,
         `${step}${order ? ` · ${order}` : ''}`,
         '',
         r.en,
@@ -107,7 +127,7 @@ export function stepStopText({ stop = null, who = '', order = '', step = '', ste
         '',
         '────────────',
         '',
-        `${bake ? '⏱ DEMASIADO PRONTO — EL HORNO NO HA CUMPLIDO SU TIEMPO' : '⛔ TODAVÍA NO — LOS PASOS VAN EN ORDEN'}${who ? ` — ${who}` : ''}`,
+        `${bake ? (air ? '⏱ DEMASIADO PRONTO — EL SECADO AL AIRE NO HA CUMPLIDO SU TIEMPO' : '⏱ DEMASIADO PRONTO — EL HORNO NO HA CUMPLIDO SU TIEMPO') : '⛔ TODAVÍA NO — LOS PASOS VAN EN ORDEN'}${who ? ` — ${who}` : ''}`,
         `${stepEs || step}${order ? ` · ${order}` : ''}`,
         '',
         r.es,
@@ -135,6 +155,7 @@ export function stepOverrideText({ stop = null, who = '', order = '', step = '' 
 export function stepStopLogText(stop) {
     const s = stop || {};
     if (s.kind === STEP_STOP.OUT_OF_ORDER) return `${s.waitsOn} ${s.running ? 'still running' : 'not complete'} on this coat`;
+    if (s.kind === STEP_STOP.BAKE_TOO_SOON && s.airDry) return s.started ? `air dry ran ${num(s.ranMins).toFixed(1)}m of ${whole(s.ovenMins)}m` : `air dry never started (wood, ${whole(s.ovenMins)}m)`;
     if (s.kind === STEP_STOP.BAKE_TOO_SOON) return s.started ? `bake ran ${num(s.ranMins).toFixed(1)}m of ${whole(s.ovenMins)}m` : `bake never started (oven ${whole(s.ovenMins)}m)`;
     return '';
 }

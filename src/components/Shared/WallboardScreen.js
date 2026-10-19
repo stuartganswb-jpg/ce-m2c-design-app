@@ -59,13 +59,13 @@ function FloorLeft({ s }) {
                 ))}
             </div>
             <div style={panel}>
-                <div style={sectionHead}>In the oven — the operator is free <span style={es}>En el horno — el operador está libre</span></div>
-                {!s.oven.length ? <Empty>The oven is empty.</Empty> : (
+                <div style={sectionHead}>In the oven or air drying — the operator is free <span style={es}>En el horno o secándose — el operador está libre</span></div>
+                {!s.oven.length ? <Empty>Nothing in the oven or on the drying rack.</Empty> : (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6vw' }}>
                         {s.oven.slice(0, 6).map((o, i) => (
                             <div key={i} style={{ border: `1px solid ${o.done ? C.warn : C.oven}`, padding: '0.5vw 0.7vw' }}>
                                 <div style={{ fontFamily: mono, fontSize: T.body }}>{o.ref} <span style={{ color: C.soft, fontSize: T.small }}>{o.step}</span></div>
-                                <div style={{ fontSize: T.body, color: o.done ? C.warn : C.oven, fontWeight: 600 }}>{o.done ? 'Done — take it out' : `${sayMins(o.leftMins)} left`}</div>
+                                <div style={{ fontSize: T.body, color: o.done ? C.warn : C.oven, fontWeight: 600 }}>{o.done ? (o.airDry ? 'Dry — take it off the rack' : 'Done — take it out') : `${sayMins(o.leftMins)} left`}</div>
                                 <div style={{ fontSize: T.small, color: C.soft }}>{o.who ? `${o.who} · free` : ''}</div>
                             </div>
                         ))}
@@ -78,7 +78,7 @@ function FloorLeft({ s }) {
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5vw' }}>
                         {s.crew.map(p => (
                             <span key={p.name} style={{ fontSize: T.body, padding: '0.3vw 0.8vw', border: `1px solid ${p.state === 'working' ? C.good : p.state === 'free' ? C.oven : C.line}`, color: p.state === 'none' ? C.soft : C.ink }}>
-                                <strong>{p.name}</strong> · {p.state === 'working' ? `${p.doing.step} ${p.doing.ref}` : p.state === 'free' ? 'free — product in the oven' : 'no step running'}
+                                <strong>{p.name}</strong> · {p.state === 'working' ? `${p.doing.step} ${p.doing.ref}` : p.state === 'free' ? 'free — product in the oven or drying' : 'no step running'}
                             </span>
                         ))}
                     </div>
@@ -200,7 +200,7 @@ function WeekRight({ half }) {
  * @param sysConfig  (finishing) fin_config/settings — the floor's timers
  * @param wms        (wms) { openPicks, staging, packQueue, docs, refOf } — the WMS's own lists
  */
-export default function WallboardScreen({ side = 'finishing', db, workOrders = [], sysConfig = {}, wms = {} }) {
+export default function WallboardScreen({ side = 'finishing', db, workOrders = [], sysConfig = {}, wms = {}, finishes = null }) {
     const [now, setNow] = useState(Date.now());
     const [published, setPublished] = useState(null);
     const [full, setFull] = useState(false);
@@ -230,7 +230,7 @@ export default function WallboardScreen({ side = 'finishing', db, workOrders = [
 
     const status = useMemo(() => (side === 'wms'
         ? wmsNowOf({ ...wms, nowMs: now })
-        : floorNowOf({ workOrders, cfg: floorTimersOf(sysConfig), nowMs: now })), [side, wms, workOrders, sysConfig, now]);
+        : floorNowOf({ workOrders, cfg: floorTimersOf(sysConfig), nowMs: now, finishes })), [side, wms, workOrders, sysConfig, now, finishes]);
     const half = useMemo(() => boardHalfOf(published, side === 'wms' ? GROUP.WMS : GROUP.FINISHING), [published, side]);
 
     const clock = new Date(now);

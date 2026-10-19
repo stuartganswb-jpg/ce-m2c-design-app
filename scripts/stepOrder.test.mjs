@@ -70,5 +70,22 @@ eq('no oven time set → nothing to hold it to', [bake(T('Running', 0.1), 0), ba
     eq('nothing to say for no stop', stepStopReason(null), { en: '', es: '' });
 }
 
+// ── 🌲 on wood the bake is an AIR DRY — 20 min on the rack (Grace / Stuart 2026-10-19 · Shared/airDry) ──
+{
+    const MINS = 60000, T0 = 1_000_000_000_000;
+    const air = bakeStopOf({ taskKey: 'spinBake', task: { status: 'Running', startTime: T0 }, nowMs: T0 + 12 * MINS, ovenMins: 20, airDry: true });
+    eq('twelve minutes into a twenty-minute air dry is too soon — and the stop knows it is an air dry', [air.kind, air.airDry, Math.round(air.leftMins)], ['BAKE_TOO_SOON', true, 8]);
+    eq('…past twenty it may complete', bakeStopOf({ taskKey: 'spinBake', task: { status: 'Running', startTime: T0 }, nowMs: T0 + 21 * MINS, ovenMins: 20, airDry: true }), null);
+    const r = stepStopReason(air);
+    ok('the words say air dry, never oven — English and Spanish', /air dry has run 12 min of 20/.test(r.en) && /secado al aire/.test(r.es) && !/oven|bake/i.test(r.en));
+    ok('the stop\'s heading says the air dry', /THE AIR DRY HAS NOT RUN ITS TIME/.test(stepStopText({ stop: air, step: 'Air Dry' })) && /EL SECADO AL AIRE/.test(stepStopText({ stop: air, step: 'Air Dry' })));
+    const never = bakeStopOf({ taskKey: 'poleBake', task: { status: 'Pending' }, nowMs: T0, ovenMins: 20, airDry: true });
+    ok('never started: "on the rack, it does not go in the oven"', /does not go in the oven/.test(stepStopReason(never).en) && /no entra al horno/.test(stepStopReason(never).es));
+    eq('the log line', stepStopLogText(air), 'air dry ran 12.0m of 20m');
+    const order = startStopOf({ wo: { tasks: { spinSetup: { status: 'Complete' }, spinSpray: { status: 'Running' } } }, taskKey: 'spinBake', airDry: true });
+    ok('out of order on a wood coat names the air dry in the coat line', /Spray is still running on this coat — Air Dry comes after it \(Setup → Spray → Air Dry\)/.test(stepStopReason(order).en));
+    ok('…a metal coat still says Bake', /Bake comes after it \(Setup → Spray → Bake\)/.test(stepStopReason(startStopOf({ wo: { tasks: { spinSetup: { status: 'Complete' }, spinSpray: { status: 'Running' } } }, taskKey: 'spinBake' })).en));
+}
+
 console.log(`stepOrder: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

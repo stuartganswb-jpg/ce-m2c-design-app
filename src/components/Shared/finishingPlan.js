@@ -28,6 +28,7 @@ import { woHasPoles, woHasSmallParts, partsRecipeOfWo, poleRecipeOfWo, partsStre
 import { isSalesDoc, stageWaitsOnMatch, pickGateOf } from './orderStatus.js';
 import { spinLoadsOf, smallPartsTotalOf, runsInLoads } from './spinLoads.js';
 import { isPoleCategory } from './poleCut.js';
+import { woAirDries, airDryMinsOf } from './airDry.js';
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const PLANNABLE = ['Setup', 'setup', 'Painting'];
@@ -43,6 +44,8 @@ export function planTimersOf(t = {}) {
         spinSetup: num(t.spinSetupMins) || 10, spinPaint: num(t.spinPaintMins) || 3, oven: num(t.ovenMins) || 10,
         handSmall: num(t.handSmallMins) || 1.35, handPole: num(t.handPoleMins) || 10, pole: num(t.poleMins) || 5,
         boothCoat: boothCoatMinsOf(t), boothLoad: boothLoadPcsOf(t),
+        // A WOOD coat air-dries on the rack after it is sprayed — never the oven (Shared/airDry · Grace / Stuart 2026-10-19).
+        airDry: airDryMinsOf(t),
     };
 }
 
@@ -125,9 +128,12 @@ const sizeMixOf = (lines) => lines.reduce((m, l) => { const s = String(l.size ||
 const earliest = (wos) => wos.map(w => w.reqDate).filter(Boolean).sort()[0] || null;
 
 // One small-parts row: `items` = [{ wo, track }] sharing a recipe key, a station and the same coats left per chunk.
-function priceParts(items, kind, matrix, T) {
+function priceParts(items, kind, matrix, T, finishes = null) {
     const first = items[0].track;
     const booth = first.station === SPRAY_STATIONS.BOOTH;
+    // One recipe to a row, so one answer: a wood row's sprayed coats air-dry (T.airDry each) and put nothing in the oven.
+    const airDry = woAirDries(items[0].wo, finishes);
+    const dwell = airDry ? T.airDry : T.oven, ovenPer = airDry ? 0 : T.oven;
     let pieces = 0, sleds = 0, loads = 0, machineMins = 0, ovenMins = 0, handMins = 0, resolved = true;
     // Chunks with the same coats left pool together (two orders of a recipe fill one sled between them).
     const bySig = new Map();
@@ -151,14 +157,14 @@ function priceParts(items, kind, matrix, T) {
         if (booth) {
             const n = Math.ceil(g.pieces / T.boothLoad);
             loads += n;
-            machineMins += n * sprayed * (T.boothCoat + T.oven);
-            ovenMins += n * sprayed * T.oven;
+            machineMins += n * sprayed * (T.boothCoat + dwell);
+            ovenMins += n * sprayed * ovenPer;
         } else {
             const n = sledsFromFootprint(g.footprint, g.pieces);
             sleds += n;
             // Load the sled once, a spray and a bake for every sprayed coat, off the machine and back on for a hand coat.
-            machineMins += n * (T.spinSetup + sprayed * (T.spinPaint + T.oven) + hand * 2 * T.spinSetup);
-            ovenMins += n * sprayed * T.oven;
+            machineMins += n * (T.spinSetup + sprayed * (T.spinPaint + dwell) + hand * 2 * T.spinSetup);
+            ovenMins += n * sprayed * ovenPer;
         }
     });
     const wos = items.map(i => i.wo);
@@ -169,14 +175,15 @@ function priceParts(items, kind, matrix, T) {
         wos, woCount: wos.length, parts: Math.round(pieces), sleds, loads,
         sizeMix: mix, distinctSizes: ['S', 'M', 'L'].filter(s => mix[s] > 0).length,
         sprayedSteps: sprayedLeft, handCoats: handLeft, hasHand: handLeft > 0, reqDate: earliest(wos),
-        machineMins: machineMins + handMins, handMins, ovenMins, resolved,
+        machineMins: machineMins + handMins, handMins, ovenMins, resolved, ...(airDry ? { airDry: true } : {}),
         running: wos.some(onFloor),
     };
 }
 
 // One pole row: `items` = [{ wo, track }] sharing a pole recipe key and the same coats left. Racked eight at a time.
-function pricePoles(items, kind, T) {
+function pricePoles(items, kind, T, finishes = null) {
     const first = items[0].track;
+    const airDry = woAirDries(items[0].wo, finishes);   // wood poles dry on the rack: no oven time
     const poles = items.reduce((a, i) => a + i.track.poles, 0);
     const racks = poles > 0 ? Math.ceil(poles / POLE_RACK) : 0;
     const sprayed = first.steps.filter(isSprayed).length, hand = first.steps.filter(isHandStep).length;
@@ -185,7 +192,8 @@ function pricePoles(items, kind, T) {
         kind, track: 'poles', recipe: first.key, kept: items.some(i => i.track.kept),
         wos, woCount: wos.length, poles, racks,
         sprayedSteps: sprayed, handCoats: hand, hasHand: hand > 0, reqDate: earliest(wos),
-        sprayMins: poles * T.pole * sprayed, ovenMins: racks * sprayed * T.oven, handMins: poles * T.handPole * hand,
+        sprayMins: poles * T.pole * sprayed, ovenMins: airDry ? 0 : racks * sprayed * T.oven, handMins: poles * T.handPole * hand,
+        ...(airDry ? { airDry: true, airDryMins: racks * sprayed * T.airDry } : {}),
         resolved: items.every(i => i.track.resolved),
         running: wos.some(onFloor),
     };
@@ -197,6 +205,7 @@ function pricePoles(items, kind, T) {
  */
 export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, timers = {}, opts = {}) {
     const T = planTimersOf(timers);
+    const finishes = opts.finishes || null;   // the finish library: it says which rows are wood (they air-dry)
     const docs = (workOrders || []).filter(w => w && PLANNABLE.includes(w.currentPhase) && w.pickOnly !== true)
         .map(wo => ({ wo, tracks: tracksOf(wo, recipes), wait: scheduleWaitOf(wo), sales: isSalesDoc(wo) }));
     const stamp = (row, wait) => ({ ...row, wait, ready: !wait, status: wait ? 'WAITING' : (row.running ? 'ON THE FLOOR' : 'SCHEDULED') });
@@ -205,8 +214,8 @@ export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, t
     const customBatches = [], customPoleBatches = [];
     docs.filter(d => d.sales).forEach(d => {
         const { parts, poles } = d.tracks;
-        if (parts && parts.chunks.length) customBatches.push(stamp(priceParts([{ wo: d.wo, track: parts }], 'custom', matrix, T), d.wait));
-        if (poles && poles.poles > 0 && !poles.done) customPoleBatches.push(stamp({ ...pricePoles([{ wo: d.wo, track: poles }], 'custom', T), withOrder: true }, d.wait));
+        if (parts && parts.chunks.length) customBatches.push(stamp(priceParts([{ wo: d.wo, track: parts }], 'custom', matrix, T, finishes), d.wait));
+        if (poles && poles.poles > 0 && !poles.done) customPoleBatches.push(stamp({ ...pricePoles([{ wo: d.wo, track: poles }], 'custom', T, finishes), withOrder: true }, d.wait));
     });
     const byDue = (a, b) => {
         if (a.ready !== b.ready) return a.ready ? -1 : 1;
@@ -219,11 +228,11 @@ export function buildFinishingPlan(workOrders = [], recipes = {}, matrix = {}, t
     const pool = (list, keyOf) => { const m = new Map(); list.forEach(x => { const k = keyOf(x); (m.get(k) || m.set(k, []).get(k)).push(x); }); return [...m.values()]; };
     const stockParts = docs.filter(d => !d.sales && d.tracks.parts && d.tracks.parts.chunks.length);
     const stockBatches = pool(stockParts, d => [d.wait ? 'W' : 'R', d.wait, d.tracks.parts.key, d.tracks.parts.station, d.tracks.parts.chunks.map(c => signatureOf(c.steps)).join('+'), d.tracks.parts.kept ? d.wo.id : ''].join('|'))
-        .map(g => stamp(priceParts(g.map(d => ({ wo: d.wo, track: d.tracks.parts })), 'stock', matrix, T), g[0].wait))
+        .map(g => stamp(priceParts(g.map(d => ({ wo: d.wo, track: d.tracks.parts })), 'stock', matrix, T, finishes), g[0].wait))
         .sort((a, b) => (a.ready !== b.ready ? (a.ready ? -1 : 1) : b.parts - a.parts));
     const stockPoles = docs.filter(d => !d.sales && d.tracks.poles && d.tracks.poles.poles > 0 && !d.tracks.poles.done);
     const poleBatches = pool(stockPoles, d => [d.wait ? 'W' : 'R', d.wait, d.tracks.poles.key, signatureOf(d.tracks.poles.steps), d.tracks.poles.kept ? d.wo.id : ''].join('|'))
-        .map(g => stamp(pricePoles(g.map(d => ({ wo: d.wo, track: d.tracks.poles })), 'stock', T), g[0].wait))
+        .map(g => stamp(pricePoles(g.map(d => ({ wo: d.wo, track: d.tracks.poles })), 'stock', T, finishes), g[0].wait))
         .sort((a, b) => (a.ready !== b.ready ? (a.ready ? -1 : 1) : b.poles - a.poles));
 
     // The run order: ready customer orders by due date (an order's poles carry its number), then stock, then stock poles.

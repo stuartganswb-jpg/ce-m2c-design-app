@@ -67,5 +67,14 @@ eq('booth: setup and bake are unchanged', [normalMinutesOf('spinSetup', booth(70
 eq('booth: a coat punched in 3 minutes is now under a quarter of 15', punchCheckOf({ startedMs: 1e12, completedMs: 1e12 + 3 * 60000, normalMins: normalMinutesOf('spinSpray', booth(12), cfg) }).flag, PUNCH_FLAG.TOO_SHORT);
 eq('booth: a coat of 4 minutes passes', punchCheckOf({ startedMs: 1e12, completedMs: 1e12 + 4 * 60000, normalMins: normalMinutesOf('spinSpray', booth(12), cfg) }).flag, null);
 
+// ── 🌲 a wood coat's dry slot is the 20-minute air dry, not the oven (2026-10-19 · Shared/airDry) ──
+{
+    const FIN = [{ code: 'SM04', material: 'WOOD' }, { code: 'P16', material: 'METAL' }];
+    const cfg = { ovenMins: 30 };
+    eq('normal time of the dry slot: wood 20, paint the oven', [normalMinutesOf('spinBake', { recipe: 'SM04' }, cfg, FIN), normalMinutesOf('poleBake', { recipe: 'SM04' }, cfg, FIN), normalMinutesOf('spinBake', { recipe: 'P16' }, cfg, FIN)], [20, 20, 30]);
+    eq('a CE stain is wood even with no list (the S-code fallback)', normalMinutesOf('spinBake', { recipe: 'S04' }, cfg), 20);
+    eq('a 12-minute air dry is honest (a quarter of 20 is 5)', punchCheckOf({ startedMs: 1_000_000, completedMs: 1_000_000 + 12 * 60000, normalMins: 20 }).flag || '', '');
+}
+
 console.log(`punchCheck: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

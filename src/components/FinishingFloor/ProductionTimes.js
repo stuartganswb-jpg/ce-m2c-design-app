@@ -7,6 +7,7 @@ import {
     workOrderPartLines, packFootprint, sledsFromFootprint, batchMachineMins,
 } from '../Shared/finishingTime';
 import { BOOTH_COAT_MINS, BOOTH_LOAD_PCS } from '../Shared/finishingPlan';
+import { dryMinsOf } from '../Shared/airDry';
 
 // Finishing-side production-time configuration. Two non-overlapping inputs live here:
 //   1) AI Production Timers (fin_config/settings) = minutes PER STEP (spin setup, spray, oven,
@@ -17,7 +18,7 @@ import { BOOTH_COAT_MINS, BOOTH_LOAD_PCS } from '../Shared/finishingPlan';
 const SIZES = ['S', 'M', 'L'];
 const PLANNABLE = ['Setup', 'setup', 'Painting'];
 
-const ProductionTimes = ({ sysConfig = {}, capacityMatrix = {}, recipes = {}, workOrders = [], prodTypes = [], writeLog, user }) => {
+const ProductionTimes = ({ sysConfig = {}, capacityMatrix = {}, recipes = {}, workOrders = [], prodTypes = [], writeLog, user, finishes = null }) => {
     // Normalize the role (alpha-only) so SUPERADMIN / super_admin / Floor Manager all match,
     // and honor the superAdmin flag. Super admin always has edit access.
     const role = String(user?.role || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -93,11 +94,12 @@ const ProductionTimes = ({ sysConfig = {}, capacityMatrix = {}, recipes = {}, wo
             const hasHand = !!(recipe?.steps?.some(s => s.app === 'Hand Applied'));
             const handMins = hasHand ? parts * (Number(config.handSmallMins) || 1.35) : 0;
             sleds += batches;
-            mins += batches * batchMachineMins(recipe, config) + handMins;
+            // a WOOD recipe's sprayed coats air-dry instead of baking (Shared/airDry, 2026-10-19)
+            mins += batches * batchMachineMins(recipe, config, { dryMins: dryMinsOf('spinBake', wos[0], config, finishes) }) + handMins;
             if (!resolved || !recipe) unresolved += wos.length;
         });
         return { count: plannable.length, sleds, mins, unresolved };
-    }, [workOrders, rules, def, recipes, config]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [workOrders, rules, def, recipes, config, finishes]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const labelForKey = (k) => {
         const [s, t] = k.split('|');

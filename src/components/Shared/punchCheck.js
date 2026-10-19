@@ -14,6 +14,7 @@
 // Firestore. Harness: scripts/punchCheck.test.mjs.
 
 import { sprayStationOf, SPRAY_STATIONS, boothSprayMinsOf } from './floorActivity.js';
+import { dryMinsOf } from './airDry.js';
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const MIN = 60000;
@@ -39,12 +40,13 @@ const polesOf = (wo) => num(wo && (wo.totalPoles || (wo.poles && wo.poles.qty)))
  * @param cfg  { spinSetupMins, spinPaintMins, ovenMins, poleMins, handPoleMins, handSmallMins, boothCoatMins, boothLoadPcs }
  * A sprayed coat in the booth is the booth's own standard, per load (Shared/floorActivity.boothSprayMinsOf — Stuart 2026-10-14).
  */
-export function normalMinutesOf(taskKey, wo, cfg = {}) {
+// `finishes` (the finish library, when the caller holds it): on a WOOD coat the dry slot is the 20-minute air dry (Shared/airDry).
+export function normalMinutesOf(taskKey, wo, cfg = {}, finishes = null) {
     switch (String(taskKey || '')) {
         case 'spinSetup': return num(cfg.spinSetupMins);
         case 'spinSpray': return sprayStationOf(wo) === SPRAY_STATIONS.BOOTH ? boothSprayMinsOf(wo, cfg) : num(cfg.spinPaintMins);
         case 'spinBake':
-        case 'poleBake': return num(cfg.ovenMins);
+        case 'poleBake': return dryMinsOf(taskKey, wo, cfg, finishes);
         case 'poleSpray': return polesOf(wo) * num(cfg.poleMins);
         case 'poleHand': return polesOf(wo) * num(cfg.handPoleMins);
         case 'hand': return (wo && wo.type === 'Poles')

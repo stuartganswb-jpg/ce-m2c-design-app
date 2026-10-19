@@ -32,8 +32,20 @@ eq('a spin coat is timed as the spin machine', [f.working[1].estMins, f.working[
 eq('the oven: the PRODUCT, soonest out first; a bake past its time says so', f.oven.map(o => `${o.ref}:${o.leftMins}:${o.done}`), ['WO103:0:true', 'WO102:2:false']);
 eq('the crew: working, free while their product bakes, or no step running — a closed order\'s step is not the floor\'s', f.crew.map(c => `${c.name}:${c.state}`), ['Lee:working', 'Pat:working', 'Kim:free', 'Ann:none']);
 eq('Pat is working (spray) and has a bake in the oven too', [f.crew[1].doing.ref, f.crew[1].ovenRefs], ['WO100', ['WO103']]);
-eq('the counts', f.counts, { onFloor: 5, inOven: 2, setupQueue: 1, finishedToday: 1, dueToday: 1, late: 1 });
-eq('an empty floor', floorNowOf({ workOrders: [], cfg, nowMs: NOW }).counts, { onFloor: 0, inOven: 0, setupQueue: 0, finishedToday: 0, dueToday: 0, late: 0 });
+eq('the counts', f.counts, { onFloor: 5, inOven: 2, airDrying: 0, setupQueue: 1, finishedToday: 1, dueToday: 1, late: 1 });
+eq('an empty floor', floorNowOf({ workOrders: [], cfg, nowMs: NOW }).counts, { onFloor: 0, inOven: 0, airDrying: 0, setupQueue: 0, finishedToday: 0, dueToday: 0, late: 0 });
+// 🌲 a WOOD coat air-dries on the rack, 20 min — not in the oven (Grace / Stuart 2026-10-19 · Shared/airDry)
+{
+    const FIN = [{ code: 'SM04', material: 'WOOD' }, { code: 'P16', material: 'METAL' }];
+    const wood = [
+        { id: 'w1', nsWoTran: 'WO300', currentPhase: 'Painting', recipe: 'SM04', totalParts: 8, tasks: { spinBake: run('Kim', 5) } },
+        { id: 'w2', nsWoTran: 'WO301', currentPhase: 'Painting', recipe: 'P16', totalParts: 8, tasks: { spinBake: run('Lee', 2) } },
+    ];
+    const fw = floorNowOf({ workOrders: wood, cfg, nowMs: NOW, finishes: FIN });
+    eq('the wood coat drying, the paint baking — each its own words and time', fw.oven.map(o => `${o.ref}:${o.step}:${o.estMins}:${o.leftMins}:${o.airDry}`).sort(), ['WO300:Air Dry:20:15:true', 'WO301:Sled Bake:6:4:false']);
+    eq('the oven counter counts the oven only', [fw.counts.inOven, fw.counts.airDrying], [1, 1]);
+    eq('without the library an M2C stain is still read as the oven (the library is what says wood)', floorNowOf({ workOrders: wood, cfg, nowMs: NOW }).counts.airDrying, 0);
+}
 
 // ── the pick / pack bench ───────────────────────────────────────────────────────────────────────────────────
 const docs = [

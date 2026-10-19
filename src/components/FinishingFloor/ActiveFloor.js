@@ -6,6 +6,7 @@ import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, 
 import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
 import { normalMinutesOf, punchCheckOf, catchUpRunOf, punchWarning, punchFlagText, TASK_LABEL_ES } from '../Shared/punchCheck';
 import { startStopOf, bakeStopOf, stepStopText, stepOverrideText, stepStopLogText } from '../Shared/stepOrder';
+import { woAirDries, isAirDryStep, dryMinsOf, dryAwareLabel, dryAwareLabelEs } from '../Shared/airDry';
 import { typedWoNumber } from '../Shared/skippedBuild';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp, deleteField } from "firebase/firestore";
@@ -158,6 +159,13 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
     // the booth's coat time and load size (Production Times) — their fall-backs live in Shared/floorActivity (2026-10-14)
     boothCoatMins: sysConfig?.boothCoatMins, boothLoadPcs: sysConfig?.boothLoadPcs
   };
+  // 🌲 ON WOOD THE BAKE IS AN AIR DRY (Grace, App Imp 2026-10-19: "Wood orders do not need to be baked nor can be" · Stuart:
+  // "yes, 20min air dry" · Shared/airDry). The slot after a sprayed coat keeps its task key; on a finish the library tags WOOD
+  // it is twenty minutes on the rack — its own words, its own time, never the oven station, never "oven busy".
+  const airDries = (wo) => woAirDries(wo, masterFinishes);
+  const dryMins = (taskKey, wo) => dryMinsOf(taskKey, wo, cfg, masterFinishes);
+  const stepWord = (taskKey, wo, label) => dryAwareLabel(taskKey, wo, masterFinishes, label);
+  const stepWordEs = (taskKey, wo, label) => dryAwareLabelEs(taskKey, wo, masterFinishes, label);
 
   // --- SLED ASSIGNMENT ENGINE ---
   // A BOOTH JOB NEVER TAKES A SLED (Stuart 2026-09-23): small parts sent to the booth at Start Setup
@@ -399,8 +407,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const forceCompleteToPacking = async (wo) => {
       const len = recipeLen(wo);
       const t = wo.tasks || {};
-      const pend = [['Sled Setup', t.spinSetup], ['Sled Spray', t.spinSpray], ['Sled Bake', t.spinBake],
-          ...(woHasPoles(wo) ? [['Pole Spray', t.poleSpray], ['Pole Bake', t.poleBake]] : []), ['Hand Finish', t.hand]]
+      const pend = [['Sled Setup', t.spinSetup], ['Sled Spray', t.spinSpray], [stepWord('spinBake', wo, 'Sled Bake'), t.spinBake],
+          ...(woHasPoles(wo) ? [['Pole Spray', t.poleSpray], [stepWord('poleBake', wo, 'Pole Bake'), t.poleBake]] : []), ['Hand Finish', t.hand]]
           .filter(([, task]) => (task?.status || 'Pending') !== 'Complete').map(([label]) => label);
       // EVERY job the server builds in NetSuite — a stock build AND an Order Entry sales job carrying its anchor work
       // order (functions onStockBuildDone builds both). The question used to be asked for stock only, so a force-
@@ -578,14 +586,14 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const actorIsManager = (actor) => actor ? isFloorSupervisor({ name: actor, role: roleOfActor(actor) }, users) : isFloorSupervisor(user, users);
   const stepStopCleared = async (wo, taskKey, action, actor) => {
       const t = (wo.tasks || {})[taskKey] || {};
-      const stop = action === 'START' ? startStopOf({ wo, taskKey })
-          : action === 'COMPLETE' ? bakeStopOf({ taskKey, task: t, nowMs: Date.now(), ovenMins: cfg.ovenMins }) : null;
+      const stop = action === 'START' ? startStopOf({ wo, taskKey, airDry: airDries(wo) })
+          : action === 'COMPLETE' ? bakeStopOf({ taskKey, task: t, nowMs: Date.now(), ovenMins: dryMins(taskKey, wo), airDry: isAirDryStep(taskKey, wo, masterFinishes) }) : null;
       if (!stop) return true;
       const who = actor || user?.name || '';
       const base = { ...(actor ? { u: actor } : {}), station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey, recipe: wo.recipe || '', stepIndex: wo.currentStepIndex || 0, poleStepIndex: poleIdxOf(wo), stopKind: stop.kind };
       await logManual({ ...base, msg: `STEP STOP · ${action} · ${taskKey} · ${woRef(wo)} — ${stepStopLogText(stop)}`, action: 'BLOCKED' });
-      const step = TASK_LABEL[taskKey] || taskKey;
-      if (!actorIsManager(actor)) { alert(stepStopText({ stop, who, order: woRef(wo), step, stepEs: TASK_LABEL_ES[taskKey] || '' })); return false; }
+      const step = stepWord(taskKey, wo, TASK_LABEL[taskKey] || taskKey);
+      if (!actorIsManager(actor)) { alert(stepStopText({ stop, who, order: woRef(wo), step, stepEs: stepWordEs(taskKey, wo, TASK_LABEL_ES[taskKey] || '') })); return false; }
       if (!window.confirm(stepOverrideText({ stop, who, order: woRef(wo), step }))) return false;
       await logManual({ ...base, msg: `⚠ STEP STOP OVERRIDE · ${action} · ${taskKey} · ${woRef(wo)} — ${who || 'manager'} went ahead despite: ${stepStopLogText(stop)}`, action: 'OVERRIDE' });
       return true;
@@ -665,7 +673,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           // it is stamped, logged and said.
           const who = actor || user?.name || '';
           const nowMs = Date.now();
-          const check = punchCheckOf({ startedMs, completedMs: nowMs, normalMins: normalMinutesOf(taskKey, wo, cfg) });
+          const check = punchCheckOf({ startedMs, completedMs: nowMs, normalMins: normalMinutesOf(taskKey, wo, cfg, masterFinishes) });
           const catchUp = catchUpRunOf({ wo, actor: who, taskKey, nowMs });
           updates[`tasks.${taskKey}.punchFlag`] = check.flag || '';
           if (check.flag) {
@@ -701,7 +709,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                   action: 'PUNCH_WARNING', station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey, recipe: wo.recipe || '',
                   stepIndex: wo.currentStepIndex || 0, poleStepIndex: poleIdxOf(wo), elapsedMs, startedAtMs: startedMs,
               });
-              alert(punchWarning({ who: punch.who, order: woRef(wo), step: TASK_LABEL[taskKey] || taskKey, stepEs: TASK_LABEL_ES[taskKey] || '', check: punch.check, catchUp: punch.catchUp }));
+              alert(punchWarning({ who: punch.who, order: woRef(wo), step: stepWord(taskKey, wo, TASK_LABEL[taskKey] || taskKey), stepEs: stepWordEs(taskKey, wo, TASK_LABEL_ES[taskKey] || ''), check: punch.check, catchUp: punch.catchUp }));
           }
           loadManualRecent();
       } catch (e) { alert('Manual update failed: ' + (e.message || e)); }
@@ -759,7 +767,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           if (t.hand?.status !== 'Complete') return { key: 'hand', action: 'START', label: '▶ Start · Empieza — Hand Finish' };
           return { advance: true, label: idx + 1 >= len ? finalCoatLabel(wo) : `→ Coat Done — Advance to Coat ${idx + 2}` };
       }
-      const seq = [['spinSetup', 'Sled Setup'], ['spinSpray', 'Spray Coat'], ['spinBake', 'Bake (oven)']];
+      const seq = [['spinSetup', 'Sled Setup'], ['spinSpray', 'Spray Coat'], ['spinBake', airDries(wo) ? `Air Dry · ${dryMins('spinBake', wo)} min (rack)` : 'Bake (oven)']];
       for (const [key, label] of seq) {
           const st = t[key]?.status;
           if (st === 'Running') return { key, action: 'COMPLETE', label: `✓ Complete · Completado — ${label}`, running: t[key] };
@@ -793,8 +801,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           return { key: 'poleSpray', action: 'START', label: '▶ Start · Empieza — Pole Spray' };
       }
       if (t.poleBake?.status !== 'Complete') {
-          if (t.poleBake?.status === 'Running') return { key: 'poleBake', action: 'COMPLETE', label: '✓ Complete · Completado — Pole Bake', running: t.poleBake };
-          return { key: 'poleBake', action: 'START', label: '▶ Start · Empieza — Pole Bake' };
+          const poleDry = airDries(wo) ? `Pole Air Dry · ${dryMins('poleBake', wo)} min (rack)` : 'Pole Bake';
+          if (t.poleBake?.status === 'Running') return { key: 'poleBake', action: 'COMPLETE', label: `✓ Complete · Completado — ${poleDry}`, running: t.poleBake };
+          return { key: 'poleBake', action: 'START', label: `▶ Start · Empieza — ${poleDry}` };
       }
       return { advance: true, label: idx + 1 >= len ? '✓ Poles Finished' : `→ Poles — Next Coat ${idx + 2}` };
   };
@@ -893,11 +902,11 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const pushT = (wo, key, label) => { if (wo && wo.tasks && wo.tasks[key]) out.push({ wo, key, label }); };
       if (st === 'RED' || st === 'BLUE') {
           const wo = st === 'RED' ? redWO : blueWO;
-          if (woHasSmallParts(wo)) { pushT(wo, 'spinSetup', 'Sled Setup'); pushT(wo, 'spinSpray', 'Spray Coat'); pushT(wo, 'spinBake', 'Bake (oven)'); }
+          if (woHasSmallParts(wo)) { pushT(wo, 'spinSetup', 'Sled Setup'); pushT(wo, 'spinSpray', 'Spray Coat'); pushT(wo, 'spinBake', airDries(wo) ? 'Air Dry (rack)' : 'Bake (oven)'); }
       } else if (st === 'OVEN') {
-          activeWOs.forEach(wo => { if (woHasSmallParts(wo)) pushT(wo, 'spinBake', 'Sled Bake'); if (woHasPoles(wo)) pushT(wo, 'poleBake', 'Pole Bake'); });
+          activeWOs.filter(wo => !airDries(wo)).forEach(wo => { if (woHasSmallParts(wo)) pushT(wo, 'spinBake', 'Sled Bake'); if (woHasPoles(wo)) pushT(wo, 'poleBake', 'Pole Bake'); });
       } else if (st === 'POLES') {
-          activeWOs.filter(woHasPoles).forEach(wo => { pushT(wo, 'poleSpray', 'Pole Spray'); pushT(wo, 'poleBake', 'Pole Bake'); });
+          activeWOs.filter(woHasPoles).forEach(wo => { pushT(wo, 'poleSpray', 'Pole Spray'); pushT(wo, 'poleBake', stepWord('poleBake', wo, 'Pole Bake')); });
       } else if (st === 'HAND') {
           // Both streams hand-finish. Poles were absent entirely, so an order hand-finishing its
           // poles showed nothing at the hand station (Grace 2026-08-11).
@@ -1147,7 +1156,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                             {/* Every step of this coat, each with its own PIN'd Start / Stop — no
                                 waiting on the engine's single "next" guess. */}
                             {step && !isHandStep(step)
-                                ? [manualStepBtn(manualWo, 'spinSetup', 'Setup'), manualStepBtn(manualWo, 'spinSpray', 'Spray'), manualStepBtn(manualWo, 'spinBake', 'Bake')]
+                                ? [manualStepBtn(manualWo, 'spinSetup', 'Setup'), manualStepBtn(manualWo, 'spinSpray', 'Spray'), manualStepBtn(manualWo, 'spinBake', airDries(manualWo) ? 'Air Dry' : 'Bake')]
                                 : (step ? manualStepBtn(manualWo, 'hand', 'Hand Finish') : null)}
                             <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
                                 {pAct && pAct.advance
@@ -1171,7 +1180,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                     so a hand-applied pole coat offered nothing to press (Grace). */}
                                 {isHandStep(poleStep)
                                     ? manualStepBtn(manualWo, 'poleHand', 'Hand Finish')
-                                    : [manualStepBtn(manualWo, 'poleSpray', 'Spray'), manualStepBtn(manualWo, 'poleBake', 'Bake')]}
+                                    : [manualStepBtn(manualWo, 'poleSpray', 'Spray'), manualStepBtn(manualWo, 'poleBake', airDries(manualWo) ? 'Air Dry' : 'Bake')]}
                                 {/* …and the POLE recipe's length. This read the small-parts count,
                                     so CP poles showed "coat 3/2" — 4 pole coats against 2 parts. */}
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }} title={poleStep ? `${poleStep.color || ''}${poleStep.app ? ` (${poleStep.app})` : ''}` : 'poles complete'}>coat {Math.min(poleIdxOf(manualWo) + 1, poleLen || 1)}/{poleLen || 1}{poleStep && poleStep.color ? ` · ${poleStep.color}` : ''}</span>
@@ -1214,11 +1223,12 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
             appropriate window"). Replaces the single panel of running steps (2026-08-03), which never
             showed a coat nobody had started. Always drawn — an empty window says so. */}
         {(() => {
-            const ovenNow = runningStepsOf(activeWOs).filter(s => OVEN_TASK_KEYS.includes(s.key));
+            const ovenNow = runningStepsOf(activeWOs).filter(s => OVEN_TASK_KEYS.includes(s.key) && !airDries(s.wo));   // an air dry is on the rack
             const ovenLine = ovenNow.length
                 ? ovenNow.map(s => `${s.key === 'poleBake' ? 'pole' : 'parts'} bake · ${woRef(s.wo)}${s.startTime ? ` · ${Math.floor((now - s.startTime) / 60000)}m` : ''}`).join('  ·  ')
                 : 'free';
-            const KEY_LABEL = { spinSetup: 'Setup', spinSpray: 'Spray', spinBake: 'Bake', poleSpray: 'Spray', poleBake: 'Bake', hand: 'Hand Finish', poleHand: 'Hand Finish' };
+            const KEY_LABEL_BASE = { spinSetup: 'Setup', spinSpray: 'Spray', spinBake: 'Bake', poleSpray: 'Spray', poleBake: 'Bake', hand: 'Hand Finish', poleHand: 'Hand Finish' };
+            const keyLabelOf = (wo) => (airDries(wo) ? { ...KEY_LABEL_BASE, spinBake: 'Air Dry', poleBake: 'Air Dry' } : KEY_LABEL_BASE);
             const STATE_LABEL = { running: 'Running', ready: 'Ready', held: 'Held', coming: 'Coming' };
             const mono = { fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.04em' };
             const piecesOf = (wo, stream) => {
@@ -1230,7 +1240,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
             const renderRow = (row, win, i) => {
                 const { wo, stream, step, state } = row;
                 const tasks = wo.tasks || {};
-                const acts = row.running.map(k => ({ k, a: activityOf({ wo, key: k, task: tasks[k], operator: tasks[k].assignedTo || '', startTime: tasks[k].startTime || null }, { cfg, now }) }));
+                const KEY_LABEL = keyLabelOf(wo);
+                const acts = row.running.map(k => ({ k, a: activityOf({ wo, key: k, task: tasks[k], operator: tasks[k].assignedTo || '', startTime: tasks[k].startTime || null }, { cfg, now, finishes: masterFinishes }) }));
                 const tone = state === 'running' ? activityTone(acts[0] ? acts[0].a.state : 'running')
                     : state === 'held' ? '#d9534f' : state === 'ready' ? 'var(--ink)' : 'var(--line)';
                 const gate = state === 'ready' && row.act && !row.act.advance && row.act.key !== 'spinSetup' ? pickGateOf(wo) : null;
@@ -1291,7 +1302,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 )}
                                 <div style={{ ...mono, fontSize: '9px', textTransform: 'uppercase', color: activityTone(a.state), marginTop: '3px' }}>
                                     {a.state === 'overdue' && `over by ${a.overdueMins}m · est ${a.estMins}m`}
-                                    {a.state === 'baking' && `baking · dwell ${a.estMins}m reached`}
+                                    {a.state === 'baking' && `${a.isAirDry ? 'air dry' : 'baking'} · dwell ${a.estMins}m reached`}
                                     {a.state === 'running' && `${a.remainingMins}m left of ${a.estMins}m`}
                                     {a.state === 'untimed' && 'no time set for this step'}
                                 </div>
@@ -1451,7 +1462,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 if (!isSetupComplete) {
                                     return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSetup ? "Oven is blocking station" : null} />
                                 } else if (!isBakeComplete) {
-                                    return <TaskCard key={item.wo.id+"spinBake"} titleOverride="2. Bake Cycle" wo={item.wo} type="spinBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinBake')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockBake ? "Oven is at pole rack" : null} />
+                                    return <TaskCard key={item.wo.id+"spinBake"} titleOverride={airDries(item.wo) ? '2. Air Dry (rack)' : '2. Bake Cycle'} wo={item.wo} type="spinBake" step={item.step} user={user} estTime={dryMins('spinBake', item.wo)} finishes={masterFinishes} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinBake')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockBake ? "Oven is at pole rack" : null} />
                                 } else {
                                     return (
                                         <div key={item.wo.id} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center' }}>
@@ -1496,7 +1507,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 if (!isSprayComplete) {
                                     return <TaskCard key={item.wo.id+"poleSpray"} titleOverride={`Spray Poles (coat ${idx + 1}/${len})`} wo={item.wo} type="poleSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={poleQty * cfg.poleMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('poleSpray')} users={users} activeWOs={activeWOs} cfg={cfg} />
                                 } else if (!isBakeComplete) {
-                                    return <TaskCard key={item.wo.id+"poleBake"} titleOverride={`Bake Poles (coat ${idx + 1}/${len})`} wo={item.wo} type="poleBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('poleBake')} users={users} activeWOs={activeWOs} cfg={cfg} blockReason={blockBake ? "Oven busy curing a sled" : null} />
+                                    return <TaskCard key={item.wo.id+"poleBake"} titleOverride={`${airDries(item.wo) ? 'Air Dry Poles' : 'Bake Poles'} (coat ${idx + 1}/${len})`} wo={item.wo} type="poleBake" step={item.step} user={user} estTime={dryMins('poleBake', item.wo)} finishes={masterFinishes} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('poleBake')} users={users} activeWOs={activeWOs} cfg={cfg} blockReason={blockBake ? "Oven busy curing a sled" : null} />
                                 } else {
                                     return (
                                         <div key={item.wo.id + 'poleNext'} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center' }}>
@@ -1871,9 +1882,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '14px' }}>
                               {chip('Sled Setup', 'spinSetup')}
                               {chip('Sled Spray', 'spinSpray')}
-                              {chip('Sled Bake', 'spinBake')}
+                              {chip(stepWord('spinBake', wo, 'Sled Bake'), 'spinBake')}
                               {hasP && chip('Pole Spray', 'poleSpray')}
-                              {hasP && chip('Pole Bake', 'poleBake')}
+                              {hasP && chip(stepWord('poleBake', wo, 'Pole Bake'), 'poleBake')}
                               {chip(hasP ? 'Hand Finish · small parts' : 'Hand Finish', 'hand')}
                               {hasP && chip('Hand Finish · poles', 'poleHand')}
                           </div>
@@ -1977,7 +1988,7 @@ async function endChoreOnFloor(c, why) {
     } catch (e) { console.warn('chore end failed', e); }
 }
 
-const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, activePots, now, aiRec, users, activeWOs, cfg, sled, blockReason: blockReasonProp, onViewWo }) => {
+const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, activePots, now, aiRec, users, activeWOs, cfg, sled, blockReason: blockReasonProp, onViewWo, finishes = null }) => {
     // A held document's card shows the hold where the START button would be (S1 spec 2026-09-15).
     const hold = holdGateOf(wo);
     const blockReason = hold ? `${hold.label} — ${hold.reason || 'held'}` : blockReasonProp;
@@ -1995,18 +2006,18 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
         const base = { u: who, cat: 'manual', station: 'CARD', woId: wo.id, woRefNo: woRef(wo), task: type, recipe: wo.recipe || '', stopKind: stop.kind };
         const log = (entry) => addDoc(collection(db, 'fin_logs'), { ...base, t: serverTimestamp(), at: Date.now(), ...entry }).catch(() => {});
         log({ msg: `STEP STOP · ${action} · ${type} · ${woRef(wo)} — ${stepStopLogText(stop)}`, action: 'BLOCKED' });
-        const stepName = FLOOR_TASK_LABEL[type] || type;
-        if (!isFloorSupervisor(user, users)) { alert(stepStopText({ stop, who, order: woRef(wo), step: stepName, stepEs: TASK_LABEL_ES[type] || '' })); return false; }
+        const stepName = dryAwareLabel(type, wo, finishes, FLOOR_TASK_LABEL[type] || type);
+        if (!isFloorSupervisor(user, users)) { alert(stepStopText({ stop, who, order: woRef(wo), step: stepName, stepEs: dryAwareLabelEs(type, wo, finishes, TASK_LABEL_ES[type] || '') })); return false; }
         if (!window.confirm(stepOverrideText({ stop, who, order: woRef(wo), step: stepName }))) return false;
         log({ msg: `⚠ STEP STOP OVERRIDE · ${action} · ${type} · ${woRef(wo)} — ${who} went ahead despite: ${stepStopLogText(stop)}`, action: 'OVERRIDE' });
         return true;
     };
     const completeFromCard = () => {
-        if (!cardStopCleared(bakeStopOf({ taskKey: type, task, nowMs: Date.now(), ovenMins: (cfg || {}).ovenMins }), 'COMPLETE')) return;
+        if (!cardStopCleared(bakeStopOf({ taskKey: type, task, nowMs: Date.now(), ovenMins: dryMinsOf(type, wo, cfg || {}, finishes), airDry: isAirDryStep(type, wo, finishes) }), 'COMPLETE')) return;
         const who = (user && user.name) || task.assignedTo || 'Tablet';
         const nowMs = Date.now();
         const startedMs = task.startTime || null;
-        const check = punchCheckOf({ startedMs, completedMs: nowMs, normalMins: normalMinutesOf(type, wo, cfg || {}) });
+        const check = punchCheckOf({ startedMs, completedMs: nowMs, normalMins: normalMinutesOf(type, wo, cfg || {}, finishes) });
         const catchUp = catchUpRunOf({ wo, actor: who, taskKey: type, nowMs });
         updateDoc(doc(db, "fin_workorders", wo.id), {
             [`tasks.${type}.status`]: 'Complete', [`tasks.${type}.completedAt`]: nowMs,
@@ -2026,7 +2037,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
             woId: wo.id, woRefNo: woRef(wo), task: type, recipe: wo.recipe || '',
             elapsedMs: startedMs ? nowMs - startedMs : null, startedAtMs: startedMs,
         }).catch(() => {});
-        alert(punchWarning({ who, order: woRef(wo), step: FLOOR_TASK_LABEL[type] || type, stepEs: TASK_LABEL_ES[type] || '', check, catchUp }));
+        alert(punchWarning({ who, order: woRef(wo), step: dryAwareLabel(type, wo, finishes, FLOOR_TASK_LABEL[type] || type), stepEs: dryAwareLabelEs(type, wo, finishes, TASK_LABEL_ES[type] || ''), check, catchUp }));
     };
     
     const [manualOp, setManualOp] = useState("");
@@ -2084,7 +2095,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
         return (
             <div style={{ ...cardStyle, borderLeft: '2px solid var(--brass)', textAlign: 'center', background: '#fff' }}>
                 <div onClick={() => onViewWo && onViewWo(wo)} title={`${wo.id} — tap for order details`} style={{ color: 'var(--ink)', fontWeight: 500, fontSize: '0.95rem', cursor: onViewWo ? 'pointer' : 'default', textDecoration: onViewWo ? 'underline' : 'none', textDecorationColor: 'var(--line)' }}>{woRef(wo)}</div>
-                {sled && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{sled} Station (Oven)</div>}
+                {sled && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{sled} Station ({isAirDryStep(type, wo, finishes) ? 'Air Dry — rack, not the oven' : 'Oven'})</div>}
                 <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)', margin: '16px 0' }}>{rem} mins</div>
                 <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); completeFromCard(); }} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
             </div>

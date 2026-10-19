@@ -33,14 +33,16 @@ export const CLAIM_STALE_MS = 4 * 60 * MIN;
  * @param cfg         the floor's timers (Shared/floorMetrics.floorTimersOf — the Active Floor's figures)
  * @returns { working, oven, crew, counts }
  *   working  hands-on steps and chores running: [{ who, ref, item, step, window, elapsedMins, estMins, state, chore? }]
- *   oven     product in the oven:    [{ ref, item, step, who, elapsedMins, estMins, leftMins, done }]
+ *   oven     product in the oven, or air-drying on the rack (a wood coat — Shared/airDry, 2026-10-19):
+ *            [{ ref, item, step, who, elapsedMins, estMins, leftMins, done, airDry }]
  *   crew     everyone who touched a step today or is running one: [{ name, state: 'working' | 'free' | 'none', doing, ovenRefs }]
- *   counts   { onFloor, inOven, setupQueue, finishedToday, dueToday, late }
+ *   counts   { onFloor, inOven, airDrying, setupQueue, finishedToday, dueToday, late } — inOven counts the OVEN only
+ * @param finishes    the finish library (the floor's own subscription) — it says which coats are wood
  */
-export function floorNowOf({ workOrders = [], cfg = {}, nowMs = Date.now() } = {}) {
+export function floorNowOf({ workOrders = [], cfg = {}, nowMs = Date.now(), finishes = null } = {}) {
     const today = dateKeyOf(nowMs);
     const onFloor = workOrders.filter(w => w && w.currentPhase === 'Painting');
-    const running = runningStepsOf(onFloor).map(s => ({ s, a: activityOf(s, { cfg, now: nowMs }) }));
+    const running = runningStepsOf(onFloor).map(s => ({ s, a: activityOf(s, { cfg, now: nowMs, finishes }) }));
     const working = running.filter(({ s }) => !isOvenTask(s.key)).map(({ s, a }) => ({
         who: String(s.operator || '').trim(), ref: woRefOf(s.wo), item: itemOf(s.wo), step: TASK_LABEL[s.key] || s.key,
         window: WINDOW_LABEL[windowOfTask(s.key, s.wo)] || '', elapsedMins: a.elapsedMins, estMins: a.estMins, state: a.state,
@@ -52,7 +54,7 @@ export function floorNowOf({ workOrders = [], cfg = {}, nowMs = Date.now() } = {
     }));
     working.sort((x, y) => (y.elapsedMins || 0) - (x.elapsedMins || 0));
     const oven = running.filter(({ s }) => isOvenTask(s.key)).map(({ s, a }) => ({
-        ref: woRefOf(s.wo), item: itemOf(s.wo), step: TASK_LABEL[s.key] || s.key, who: String(s.operator || '').trim(),
+        ref: woRefOf(s.wo), item: itemOf(s.wo), step: a.label || TASK_LABEL[s.key] || s.key, who: String(s.operator || '').trim(), airDry: !!a.isAirDry,
         elapsedMins: a.elapsedMins, estMins: a.estMins,
         leftMins: a.estMins > 0 && a.elapsedMins != null ? Math.max(0, a.estMins - a.elapsedMins) : null,
         done: a.estMins > 0 && a.elapsedMins != null && a.elapsedMins >= a.estMins,
@@ -76,7 +78,8 @@ export function floorNowOf({ workOrders = [], cfg = {}, nowMs = Date.now() } = {
         working, oven, crew: crewList,
         counts: {
             onFloor: onFloor.length,
-            inOven: oven.length,
+            inOven: oven.filter(x => !x.airDry).length,
+            airDrying: oven.filter(x => x.airDry).length,
             setupQueue: workOrders.filter(w => w && (w.currentPhase === 'Setup' || w.currentPhase === 'setup')).length,
             finishedToday: workOrders.filter(w => w && w.currentPhase === 'Complete' && w.pickOnly !== true && msOf(w.completedAt) && dateKeyOf(msOf(w.completedAt)) === today).length,
             dueToday: onFloor.filter(w => dueOf(w) === today).length,

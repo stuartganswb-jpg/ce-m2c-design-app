@@ -130,5 +130,22 @@ eq('a timer never saved falls to the floor\'s own default', [planTimersOf(timers
     eq('hand work beyond the pole bakes adds to the clock; the rest hides inside them', [d.handOverlapMins, d.handBeyondMins, d.wallMins, Math.round(d.days * 10) / 10], [432, 1368, 1800, 3.8]);
 }
 
+// ── 🌲 a WOOD coat air-dries — 20 min on the rack, no oven (Grace / Stuart 2026-10-19 · Shared/airDry) ──
+{
+    const woodRecipes = { ...recipes, S04: R(H, S), 'S04-P': R(H, S), SM04: R(H, S, H, S) };
+    const FIN = [{ code: 'S04', material: 'WOOD' }, { code: 'SM04', material: 'WOOD' }, { code: 'SG', material: 'METAL' }];
+    const wplan = (wos, opts) => buildFinishingPlan(wos, woodRecipes, {}, timers, opts);
+    eq('the air dry is a timer of its own: 20, unless the floor sets one', [planTimersOf(timers).airDry, planTimersOf({ woodAirDryMins: 25 }).airDry], [20, 25]);
+    const p = wplan([stockPoles('W1', 'S04'), stockPoles('W2', 'SG')], { finishes: FIN });
+    const s04 = p.poleBatches.find(b => b.recipe === 'S04-P'), sg = p.poleBatches.find(b => b.recipe === 'SG-P');
+    eq('wood poles: no oven time, the dry said instead (2 racks × 1 sprayed coat × 20)', [s04.ovenMins, s04.airDry, s04.airDryMins], [0, true, 40]);
+    eq('…the metal poles beside them bake as before', [sg.ovenMins, !!sg.airDry], [36, false]);
+    eq('the plan\'s oven total is the metal\'s alone', p.poleOvenMins, 36);
+    const small = wplan([stockSmall('W3', 'SM04', 20)], { finishes: FIN }).stockBatches[0];
+    eq('an M2C stain on the sled: no oven, and the sled\'s time counts the dry (10 + 2×(3+20) + 2×2×10)', [small.ovenMins, small.airDry, small.machineMins - small.handMins], [0, true, 96]);
+    const noLib = wplan([stockSmall('W4', 'SM04', 20)], {}).stockBatches[0];
+    eq('without the library an M2C stain is read as the oven — the library is what says wood', [noLib.ovenMins > 0, !!noLib.airDry], [true, false]);
+}
+
 console.log(`finishingPlan: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
