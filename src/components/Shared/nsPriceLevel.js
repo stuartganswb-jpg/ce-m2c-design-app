@@ -42,6 +42,20 @@ export const priceLevelNoteOf = (lvl) => {
     return `NetSuite price level ${lvl.name} → ${lvl.percent}% order discount`;
 };
 
+// ── A CUSTOMER ON A 4.6 PRICE LEVEL IS ALREADY AT THEIR PRICE (Stuart 2026-10-19, Fabricut PO 682688: "when entered and
+// fabricut is selected it needs to refer back to pricing on 4.6 and not use the additional 20% discount associated with their
+// customer price level in netsuite"). A customer who prices at a 4.6 level (Shared/priceLevels.customerPriceLevel — Fabricut
+// Cost / Wholesale / Retail) is quoted off their own sheet, net already; CPQ never puts the NetSuite level on top of it, and
+// Order Entry must not either. Their NetSuite level is still read and cached (the tile shows it) — said, never applied.
+/** Does the customer's NetSuite level become the order discount? Only when they price at STANDARD. */
+export const nsLevelAppliesAt = (level46) => !str(level46) || str(level46).toUpperCase() === 'STANDARD';
+/** The words when it does not: what NetSuite says, and why it is not used. */
+export const nsLevelSkippedNoteOf = (lvl, level46Label) => {
+    const name = str(lvl && (lvl.name || lvl.id)) || 'none';
+    const pct = lvl && num(lvl.percent) > 0 ? ` (${num(lvl.percent)}%)` : '';
+    return `NetSuite price level ${name}${pct} not applied — this customer prices at its 4.6 level (${str(level46Label) || '4.6'})`;
+};
+
 /**
  * Whether the auto-read percent may be written over what the discount box holds: only a blank box, or a
  * box still holding the LAST auto-set value (a percent someone typed is theirs).

@@ -1,6 +1,6 @@
 // The customer's NetSuite price level → the order discount, pinned (Stuart 2026-10-12): the record's own
 // discount % first, else the percent in the name, Base Price = 0, a level with no percent is UNKNOWN and said.
-import { priceLevelCacheOf, tileLevelWordsOf, priceLevelsBulkQuery } from '../src/components/Shared/nsPriceLevel.js';
+import { priceLevelCacheOf, tileLevelWordsOf, priceLevelsBulkQuery, nsLevelAppliesAt, nsLevelSkippedNoteOf } from '../src/components/Shared/nsPriceLevel.js';
 import { discountPctOfPriceLevel, priceLevelNoteOf, mayAutoSetDiscount, priceLevelQuery, NS_PRICE_LEVELS_KNOWN } from '../src/components/Shared/nsPriceLevel.js';
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => { if (cond) { pass++; } else { fail++; console.error('  ✗', name, extra); } };
@@ -21,5 +21,9 @@ ok('the cache keeps id, name, percent, reason and when', cache.id === '41' && ca
 ok('tile words: a discount, base, none, unknown, not read', tileLevelWordsOf({ nsPriceLevel: cache }).words === 'U - 60% · 60% off' && tileLevelWordsOf({ nsPriceLevel: cache }).tone === 'discount' && tileLevelWordsOf({ nsPriceLevel: priceLevelCacheOf(D({ id: '1', name: 'Base Price' }), 1) }).words === 'Base Price · no discount' && tileLevelWordsOf({ nsPriceLevel: priceLevelCacheOf(D({}), 1) }).words === 'no price level' && tileLevelWordsOf({ nsPriceLevel: priceLevelCacheOf(D({ id: '36', name: 'R2 Wholesale' }), 1) }).tone === 'unknown' && tileLevelWordsOf({}).words === 'level not read yet');
 ok('the bulk query joins every active customer to its level', /FROM customer c LEFT JOIN pricelevel pl/.test(priceLevelsBulkQuery()) && /customerid/.test(priceLevelsBulkQuery()));
 
+// ── a customer on a 4.6 level is already at their price (2026-10-19, Fabricut PO 682688) ─────────────────
+ok('the NetSuite level is the order discount only at STANDARD', nsLevelAppliesAt('STANDARD') && nsLevelAppliesAt('') && nsLevelAppliesAt(undefined) && !nsLevelAppliesAt('FAB_COST') && !nsLevelAppliesAt('fab_wholesale') && !nsLevelAppliesAt('FAB_RETAIL'));
+ok('Fabricut: the 20% level is said and not applied', nsLevelSkippedNoteOf(D({ id: '33', name: '20% Discount - Jobber/165yd' }), 'FABRICUT COST') === 'NetSuite price level 20% Discount - Jobber/165yd (20%) not applied — this customer prices at its 4.6 level (FABRICUT COST)');
+ok('…a level with no percent is named without one', nsLevelSkippedNoteOf(D({ id: '36', name: 'R2 Wholesale' }), 'FABRICUT COST') === 'NetSuite price level R2 Wholesale not applied — this customer prices at its 4.6 level (FABRICUT COST)');
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

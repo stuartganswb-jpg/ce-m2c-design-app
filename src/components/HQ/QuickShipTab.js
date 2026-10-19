@@ -12,7 +12,7 @@ import PillowQuickSell from './PillowQuickSell';
 import CurtainQuickSell from './CurtainQuickSell';   // 🪟 M2C custom curtains — the chart's price + the workroom's line (the finder; Add waits for the workroom route)
 import CounterScreens from './CounterScreens';   // 🛋 the show counter's screens (counterMode)
 import PayLinkPanel from '../Shared/PayLinkPanel';   // the QR the customer scans at the counter
-import { fetchCustomerPriceLevel, priceLevelNoteOf, mayAutoSetDiscount, priceLevelCacheOf, fetchAllCustomerPriceLevels } from '../Shared/nsPriceLevel';
+import { fetchCustomerPriceLevel, priceLevelNoteOf, mayAutoSetDiscount, priceLevelCacheOf, fetchAllCustomerPriceLevels, nsLevelAppliesAt, nsLevelSkippedNoteOf } from '../Shared/nsPriceLevel';
 import { chainOf, revisionStampOf, lineageWordsOf, convertedPatchesOf, fromQuoteStampOf } from '../Shared/quoteChain';   // a reopened quote's revisions; conversion closes the chain (2026-10-16)   // the customer's NetSuite price level → the order discount (Stuart 2026-10-12)
 import { nsCustomerIdOf } from '../Shared/nsHeader';   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
 import { QUICK_SELL_REQUEST_ID } from '../Shared/pillowQuickSell';
@@ -34,8 +34,8 @@ import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary, isCheckoutForCu
 import { defaultShipping, defaultShippingNote } from '../Shared/baseShipping';   // 🚚 freight is never left at $0 by accident
 import { canOverrideShipping } from '../Shared/payRoles';   // who may change the freight: the roles who may charge
 import { isShippingItem, orderPackagingPlanOf, PACK_FEE_CODES } from '../Shared/flatRateShipping';
-import { priceChoice } from '../Shared/hardwarePricing';
-import { customerPriceLevel } from '../Shared/priceLevels';
+import { priceChoice, PRICE_SOURCES } from '../Shared/hardwarePricing';
+import { customerPriceLevel, priceLevelShort } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { sizeKeyOf, SIZE_FAMILIES, speciesVariantOf } from "../Shared/sizeMatrix";
 import { materialTwinOf } from "../Shared/materialTwin";
@@ -223,6 +223,19 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
             // the tile shows it next time (Stuart 2026-10-16): the read is cached on the CRM record
             if (lvl.read) { try { await updateDoc(doc(db, 'crm_records', customerId), { nsPriceLevel: priceLevelCacheOf(lvl) }); } catch (e) { /* a record the rules refuse keeps its tile words */ } }
             if (!lvl.read) { addLog(`⚠ NetSuite price level not read for ${customerId} (${lvl.error || 'no answer'}) — set the order discount by hand if one applies.`, 'warn'); return; }
+            // A CUSTOMER ON A 4.6 PRICE LEVEL IS ALREADY AT THEIR PRICE (Stuart 2026-10-19, Fabricut PO 682688): their sheet in
+            // 4.6 is net, and CPQ never adds the NetSuite level on top — so neither does this door. Said, not applied; a percent
+            // typed by hand still is. An auto-set one left by the previous customer is cleared.
+            const level46 = customerPriceLevel(customers.find(c => c.id === customerId), 'STANDARD').level;
+            if (!nsLevelAppliesAt(level46)) {
+                addLog(`💲 ${nsLevelSkippedNoteOf(lvl, priceLevelShort(level46))}`, 'info');
+                setSoExtras(prev => {
+                    if (!String(prev.orderDiscountPercent || '').trim() || !mayAutoSetDiscount(prev.orderDiscountPercent, lastAutoPct.current)) return prev;
+                    lastAutoPct.current = null;
+                    return { ...prev, orderDiscountPercent: '' };
+                });
+                return;
+            }
             addLog(`💲 ${priceLevelNoteOf(lvl)}`, lvl.reason === 'UNKNOWN' ? 'warn' : 'info');
             if (lvl.percent !== null && lvl.percent >= 0) {
                 setSoExtras(prev => {
@@ -843,7 +856,13 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     }, [customerId, selectedCustomer, finishList, allItems]);
     // Quick Ship sells FINISHED skus, so the item on the line is already the record that is sold —
     // finishVariantOf leaves it alone and the price comes off that doc, exactly as before.
-    const rateFor = (it) => (it ? (priceChoice({ partId: it.id }, it, priceCtx).price || 0) : 0);
+    // ⚠ A PART TO BE FINISHED IS PRICED IN ITS FINISH (Stuart 2026-10-19, Fabricut PO 682688: H1-2RCTAEC in EP3 came in at the
+    // painted $38 where 4.6 says plated $45 — "it needs to refer back to pricing on 4.6"). The resolver was asked about the raw
+    // item with no finish, so a plated finish read the painted tier; CPQ always passes the finish. `finishCode` is the line's.
+    const priceOf = (it, finishCode = '') => (it ? priceChoice({ partId: it.id }, it, finishCode ? { ...priceCtx, finishCode } : priceCtx) : null);
+    const rateFor = (it, finishCode = '') => (it ? (priceOf(it, finishCode).price || 0) : 0);
+    // What the screen says about the customer's NetSuite level — the same words as the log (a 4.6 customer's is not applied).
+    const levelNoteOf = (lvl) => (nsLevelAppliesAt(priceCtx.priceLevel) ? priceLevelNoteOf(lvl) : nsLevelSkippedNoteOf(lvl, priceLevelShort(priceCtx.priceLevel)));
 
     // qty is counted in PACKS; this is what the warehouse and NetSuite actually see.
     // Billing quantity: packs convert to eaches; a PER-FOOT line bills qty(pieces) × feet each
@@ -1041,6 +1060,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
             // What the floor paints it (a to-be-finished line), and the fee rule that prices it.
             ...(opts && opts.finishCode ? { finishCode: opts.finishCode } : {}),
             ...(opts && opts.toBeFinished ? { toBeFinished: true } : {}),
+            // An item kit's finish — PRICING only (the kit line is billed, never made; its parts carry the finish to the floor).
+            ...(opts && opts.priceFinish ? { priceFinish: String(opts.priceFinish).toUpperCase() } : {}),
             // …or that it wears nothing: an item tagged Unfinished, cut only (2026-09-28).
             ...(opts && opts.noFinish ? { noFinish: true } : {}),
             ...(opts && opts.feeRule ? { feeRule: opts.feeRule } : {}),
@@ -1077,7 +1098,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         const k = itemKitOrderLinesOf({ line: { erp: erpOf(it), qty: Math.max(1, parseInt(qty) || 1), finishCode }, findByCode: kitCodeLookup, findPart: (id) => itemById(id) || null });
         if (!k) return false;
         if (k.missing.length) { alert(`${erpOf(it)} is a kit, and ${k.missing.join(', ')} in it is not in the library — fix the kit's parts in the Master Library first. Nothing was added.`); return true; }
-        pushLine(it, qty, note || `KIT · ${k.parts.length} part${k.parts.length === 1 ? '' : 's'} below`, null, { noPack: true, noNs: true, isKit: true, kitCode: k.kitLine.kitCode, rateOverride, ...aliasOpts });
+        pushLine(it, qty, note || `KIT · ${k.parts.length} part${k.parts.length === 1 ? '' : 's'} below`, null, { noPack: true, noNs: true, isKit: true, kitCode: k.kitLine.kitCode, rateOverride, ...(finishCode ? { priceFinish: finishCode } : {}), ...aliasOpts });
         k.parts.forEach(pt => {
             const rec = kitCodeLookup(pt.erp) || itemById(pt.partId);
             if (!rec) return;
@@ -1166,8 +1187,17 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // What this customer pays for it — their 4.6 row, else our base price. Shown rather than
     // assumed, and editable: an order taken over the phone sometimes carries a number that was
     // agreed before the row existed.
-    const tbfResolved = tbfItem ? rateFor(tbfItem) : 0;
-    useEffect(() => { setTbfPrice(tbfItem ? String(tbfResolved) : ''); }, [tbfItemId]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Priced IN the finish picked (2026-10-19): EP3 reads the plated tier, a paint the painted one — as CPQ does.
+    const tbfQuote = tbfItem ? priceOf(tbfItem, tbfFinish) : null;
+    const tbfResolved = tbfQuote ? (tbfQuote.price || 0) : 0;
+    // The box follows the item and its finish; a price someone typed stays theirs when only the finish changes.
+    const tbfAuto = useRef({ itemId: '', value: '' });
+    useEffect(() => {
+        const v = tbfItem ? String(tbfResolved) : '';
+        const typed = tbfAuto.current.itemId === tbfItemId && String(tbfPrice) !== '' && String(tbfPrice) !== tbfAuto.current.value;
+        if (!typed) setTbfPrice(v);
+        tbfAuto.current = { itemId: tbfItemId, value: v };
+    }, [tbfItemId, tbfFinish]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const addToBeFinished = () => {
         const it = tbfItem;
@@ -1479,13 +1509,16 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // PACKS (2026-07-25): `rate` is always the price of ONE EACH, and every subtotal multiplies by
     // the each count (qty × packSize). A 7-pack of $4 rings at qty 2 is 14 × $4 — so kit
     // distribution, the cart total and the NetSuite rate all stay in the same unit as stock.
-    const rateForId = (id) => { const it = itemById(id); return it ? rateFor(it) : 0; };
+    const rateForId = (id, finishCode = '') => { const it = itemById(id); return it ? rateFor(it, finishCode) : 0; };
     // A line sold under an alias bills at the ALIAS's price — that's the price list the customer is
     // buying from. An unpriced alias doc falls back to the real item, so a missing price can never
     // silently zero a line.
+    // The finish a line is PRICED in: a to-be-finished line's own; an item kit's (its parts carry it, the kit line is billed).
+    const priceFinishOf = (l) => String(l.priceFinish || (l.toBeFinished ? l.finishCode : '') || '').trim().toUpperCase();
     const rateForLine = (l) => {
-        if (l.aliasItemId) { const a = itemById(l.aliasItemId); if (a) { const r = rateFor(a); if (r > 0) return r; } }
-        return rateForId(l.itemId);
+        const fin = priceFinishOf(l);
+        if (l.aliasItemId) { const a = itemById(l.aliasItemId); if (a) { const r = rateFor(a, fin); if (r > 0) return r; } }
+        return rateForId(l.itemId, fin);
     };
     // THE COUNTER HIDES THE $0 MAKINGS (Stuart 2026-10-15: "the items that are included at $0 should be hidden it is
     // confusing to the customer … those lines will need to carry on to rtg and stitch and sew"): on the show counter the
@@ -2334,7 +2367,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                     onPickCustomer={(c) => { setCustomerId(c.id); setCustSearch(`${c.name} (${c.id})`); setLastCreated(null); }} jobName={jobName} setJobName={setJobName}
                     items={allItems} findPart={(id) => allItems.find(x => x.id === id) || pillowByCode(id)} rateFor={rateFor}
                     onAddQuickSell={addQuickSell} onAddCustomPillow={addCounterCustom} addLog={addLog} cartCount={cart.filter(l => !isHiddenMaking(l)).length} cartTotal={cartTotal}
-                    priceNote={priceLevelInfo ? (priceLevelInfo.read ? priceLevelNoteOf(priceLevelInfo) : 'NetSuite price level not read') : ''}
+                    priceNote={priceLevelInfo ? (priceLevelInfo.read ? levelNoteOf(priceLevelInfo) : 'NetSuite price level not read') : ''}
                     onAddOneOfAKind={addOneOfAKind}
                     onAddPlaceholder={addPlaceholder} onReadPriceLevels={readAllPriceLevels}
                     onListReopenable={listReopenable} onReopen={(row) => { setLastCreated(null); return row.kind === 'QUOTE' ? reopenQuoteById(row.id) : reopenSoById(row.id); }}
@@ -2467,7 +2500,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                     )}
                 </div>
                 <div><span style={lbl}>Job / Sidemark (optional)</span><input value={jobName} onChange={e => setJobName(e.target.value)} placeholder="e.g. Smith Residence" style={inp} /></div>
-                {priceLevelInfo && <div style={{ gridColumn: '1 / -1', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.06em', color: priceLevelInfo.reason === 'UNKNOWN' || !priceLevelInfo.read ? '#a86b00' : 'var(--ink-soft)' }}>💲 {priceLevelInfo.read ? priceLevelNoteOf(priceLevelInfo) : 'NetSuite price level not read — set the order discount by hand if one applies'}</div>}
+                {priceLevelInfo && <div style={{ gridColumn: '1 / -1', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.06em', color: priceLevelInfo.reason === 'UNKNOWN' || !priceLevelInfo.read ? '#a86b00' : 'var(--ink-soft)' }}>💲 {priceLevelInfo.read ? levelNoteOf(priceLevelInfo) : 'NetSuite price level not read — set the order discount by hand if one applies'}</div>}
             </div>
 
             {/* CATALOG SCOPE — pick the collection and every picker below narrows to the parts that
@@ -2658,9 +2691,12 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                             {tbfItem && (
                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.06em', marginTop: '-6px' }}>
                                     {selectedCustomer
-                                        ? (findClientPriceRow(tbfItem.clientPricing, custKeys)
-                                            ? `${selectedCustomer.name.toUpperCase()}'S PRICE $${tbfResolved.toFixed(2)}${findClientPriceRow(tbfItem.clientPricing, custKeys)?.clientSku ? ` · THEIR # ${findClientPriceRow(tbfItem.clientPricing, custKeys).clientSku}` : ''}`
-                                            : `NO ${selectedCustomer.name.toUpperCase()} PRICE ON THIS ITEM — BASE PRICE $${tbfResolved.toFixed(2)}`)
+                                        ? (tbfQuote && tbfQuote.source === PRICE_SOURCES.CLIENT
+                                            ? `${selectedCustomer.name.toUpperCase()}'S PRICE $${tbfResolved.toFixed(2)}${tbfQuote.sku ? ` · THEIR # ${tbfQuote.sku}` : ''}`
+                                            : tbfQuote && tbfQuote.source === PRICE_SOURCES.LEVEL
+                                                // their 4.6 tier, in the finish picked (2026-10-19) — Fabricut's sheet, not our base price
+                                                ? `${selectedCustomer.name.toUpperCase()}'S PRICE $${tbfResolved.toFixed(2)} · 4.6 ${priceLevelShort(priceCtx.priceLevel)}${tbfFinish ? ` · ${tbfFinish}` : ''}`
+                                                : `NO ${selectedCustomer.name.toUpperCase()} PRICE ON THIS ITEM — BASE PRICE $${tbfResolved.toFixed(2)}`)
                                         : `BASE PRICE $${tbfResolved.toFixed(2)} — PICK A CUSTOMER TO PRICE IT FOR THEM`}
                                 </div>
                             )}
