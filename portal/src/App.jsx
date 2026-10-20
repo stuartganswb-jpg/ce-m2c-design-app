@@ -47,6 +47,9 @@ const QUOTE_LABELS = {
   COMPLETED: 'Completed',
   SHIPPED: 'Shipped',
   CANCELLED: 'Cancelled',
+  // history — left out of the list by the server (portalMyOrders), worded here should one ever reach it
+  SUPERSEDED: 'Replaced by a newer version',
+  CONVERTED: 'Became an order',
 };
 
 // Their own part # gets its own column — but only when the order actually carries them, so a

@@ -1232,7 +1232,14 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
         fi.forEach((d) => finDocs.push(d.data()));
     }
 
-    const orderedJobIds = new Set(soDocs.map((so) => String(so.hqJobId || '')).filter(Boolean));
+    // The quotes that became these orders: CPQ's (the order names its job, hqJobId) and Order Entry's (the order names the quote it
+    // came from and every earlier revision of it — Shared/quoteChain.fromQuoteStampOf, since 2026-10-16).
+    const orderedJobIds = new Set(soDocs.flatMap((so) => [so.hqJobId, so.fromQuote, ...(Array.isArray(so.quoteChain) ? so.quoteChain : [])])
+        .map((v) => String(v || '')).filter(Boolean));
+    // HISTORY IS NOT A QUOTE TO ACT ON (Stuart 2026-10-20: "go on … 4"): a revision another one replaced (supersededBy / SUPERSEDED)
+    // and a quote that became an order (convertedTo / CONVERTED — the order is under Orders) leave the customer's quote list, which
+    // read "In review" for both. The marks are Shared/quoteChain's; a quote converted before they existed (2026-10-16) has none.
+    const isHistory = (j) => /^(SUPERSEDED|CONVERTED)$/i.test(String(j.status || '')) || !!j.supersededBy || !!j.convertedTo;
 
     // A quote the CUSTOMER deleted is gone from their list but kept in HQ, flagged, so the team
     // can see what happened rather than having a record vanish. An HQ soft-delete tombstone
@@ -1284,7 +1291,7 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
 
     return {
         quotes: liveJobs
-            .filter((j) => !orderedJobIds.has(String(j.jobId || j.id)))
+            .filter((j) => !orderedJobIds.has(String(j.jobId || j.id)) && !isHistory(j))
             .map((j) => {
                 const priced = sanitizeBreakdown(j.cpqData, skuOf);
                 const isRequest = j.status === 'PORTAL_REQUEST';
