@@ -4,6 +4,9 @@ import { isPoleCategory } from '../Shared/poleCut';
 import { nsTransactionHeader, withLineLocations, itemClassOf } from '../Shared/nsHeader';
 import { resolveShipMethod } from '../Shared/nsTransmit';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
+import { entryStockAsksOf, entryStockLinesOf } from '../Shared/entryStock';   // 📦 stock said the moment a line is picked (2026-10-20)
+import { isOutsourcedFinishCode } from '../Shared/finishRouting';
+import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';   // the brand's NetSuite location — where stock is read
 import { quickShipPullLines, quickShipCoverCodes, quickShipBackorderLines } from '../Shared/quickShipBackorder';
 import { pillowCartPlanOf, PILLOW_REQUEST_STATUS } from '../Shared/pillowRequest';   // 🧵 Uniquity custom pillows from the Vision board (S7 step 3c) — ONE guarded mount
 import { lineImageForItem, lineImageOfAsset, lineImagesOf } from '../Shared/lineImage';   // 🖼 a picture on a line — samples from the Asset Gallery (S7 step 7)
@@ -1120,6 +1123,13 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         const it = itemById(quickItemId);
         if (!it) return alert('Pick a stocked item first.');
         if (!(parseInt(quickQty) > 0)) return alert('Enter a quantity.');
+        // A KIT IS MADE IN ITS FINISH (Stuart 2026-10-20): off the shelf it has no finish to take, so a kit whose parts wear
+        // one would go on with them unfinished. To Be Finished picks the finish — and a plated one pulls them from stock.
+        if (isItemKit(it)) {
+            const k = itemKitOrderLinesOf({ line: { erp: erpOf(it), qty: 1, finishCode: '' }, findByCode: kitCodeLookup, findPart: (id) => itemById(id) || null });
+            const bare = k ? k.parts.filter(p => p.noFinish && !takesNoFinish(itemById(p.partId) || {})) : [];
+            if (bare.length) return alert(`${erpOf(it)} is made in its finish — ${bare.map(p => p.erp).join(', ')} would go on unfinished from here.\n\nAdd it under To Be Finished and pick the finish (e.g. EP3): a plated finish pulls its parts from stock when they are on the shelf.`);
+        }
         if (pushItemKitLines(it, quickQty)) { setQuickItemId(''); setQuickQty(''); return; }
         pushLine(it, quickQty, '');
         setQuickItemId(''); setQuickQty('');
@@ -1480,6 +1490,50 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         if (l.perFoot && l.unitWord !== 'yd' && isPoleItem(it)) return { qty: l.qty, lengthIn: Number(l.cutLength) > 0 ? Number(l.cutLength) : (Number(l.feetPer) || 0) * 12, motorized: false };
         return null;
     };
+    // 📦 STOCK, SAID THE MOMENT A LINE IS PICKED (Stuart 2026-10-20: "show live stock would be amazing" · Shared/entryStock) — the
+    // stocked item as itself; a part (or an item kit's parts) to be finished in a PLATED finish as its finished item; a painted
+    // line keeps its route and is not asked. NetSuite's available stock, the read the save makes for its backorders.
+    const stockLocation = (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '';
+    const stockedAsks = useMemo(() => {
+        const it = itemById(quickItemId);
+        if (!it) return [];
+        if (isItemKit(it)) {
+            const k = itemKitOrderLinesOf({ line: { erp: erpOf(it), qty: Math.max(1, parseInt(quickQty) || 1), finishCode: '' }, findByCode: kitCodeLookup, findPart: (id) => itemById(id) || null });
+            return k ? k.parts.map(p => ({ code: String(p.erp || '').toUpperCase(), need: Math.max(1, Number(p.qty) || 1) })).filter(a => a.code) : [];
+        }
+        return entryStockAsksOf({ mode: 'STOCKED', code: erpOf(it), qty: Math.max(1, parseInt(quickQty) || 1) * (packForItem(it).size || 1) });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [quickItemId, quickQty, allItems]);
+    const tbfAsks = useMemo(() => {
+        if (!tbfReal || !tbfFinish) return [];
+        const fin = finishList.find(f => f.code === tbfFinish);
+        const plated = !!(fin && fin.outsourced) || isOutsourcedFinishCode(tbfFinish);
+        const kit = isItemKit(tbfReal) ? itemKitOrderLinesOf({ line: { erp: erpOf(tbfReal), qty: Math.max(1, parseInt(tbfQty) || 1), finishCode: tbfFinish }, findByCode: kitCodeLookup, findPart: (id) => itemById(id) || null }) : null;
+        return entryStockAsksOf({ mode: 'TO_BE_FINISHED', code: erpOf(tbfReal), qty: Math.max(1, parseInt(tbfQty) || 1), finish: tbfFinish, plated, pole: tbfPerFoot || isPoleItem(tbfReal), kitParts: kit ? kit.parts : null });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tbfItemId, tbfFinish, tbfQty, finishList, allItems]);
+    const [stockSaid, setStockSaid] = useState({ stocked: null, tbf: null });
+    const stockedAskKey = JSON.stringify(stockedAsks), tbfAskKey = JSON.stringify(tbfAsks);
+    const readEntryStock = (slot, asks) => {
+        let alive = true;
+        if (!asks.length) { setStockSaid(p => ({ ...p, [slot]: null })); return () => { alive = false; }; }
+        setStockSaid(p => ({ ...p, [slot]: { loading: true, lines: [] } }));
+        const t = setTimeout(async () => {
+            let lines;
+            try { const r = await fetchAvailabilityUnits(asks.map(a => a.code), stockLocation); lines = entryStockLinesOf(asks, r.map); }
+            catch (e) { lines = entryStockLinesOf(asks, null, { failed: true }); }
+            if (alive) setStockSaid(p => ({ ...p, [slot]: { loading: false, lines } }));
+        }, 350);
+        return () => { alive = false; clearTimeout(t); };
+    };
+    useEffect(() => readEntryStock('stocked', stockedAsks), [stockedAskKey, stockLocation]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => readEntryStock('tbf', tbfAsks), [tbfAskKey, stockLocation]); // eslint-disable-line react-hooks/exhaustive-deps
+    const stockSaidView = (said) => (said ? (
+        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.04em', marginTop: '-6px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            {said.loading ? <span style={{ color: 'var(--ink-soft)' }}>… reading stock in NetSuite</span>
+                : said.lines.map(l => <span key={l.code} style={{ color: !l.known ? 'var(--ink-soft)' : l.covered ? '#2e7d32' : '#a86b00' }}>{l.covered ? '✓' : l.known ? '⚠' : '·'} {l.words}</span>)}
+        </div>
+    ) : null);
     useEffect(() => {
         if (!customerId || editingSo || reopenedQuote || packOff) return;
         const fees = PACK_FEE_CODES.map(code => [code, custCheckoutItems.find(it => erpOf(it) === code && isFeeItemRecord(it)) || null]).filter(([, it]) => it);
@@ -2690,6 +2744,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                                 <div><span style={lbl}>Qty</span><input type="number" min="1" value={quickQty} onChange={e => setQuickQty(e.target.value)} style={qtyInp} /></div>
                                 <button onClick={addQuick} style={btn('var(--ink)', '#fff')}>Add</button>
                             </div>
+                            {stockSaidView(stockSaid.stocked)}
 
                             {/* 2 — TO BE FINISHED. The raw mill part plus the colour it is going to
                                 wear. Every other tab calls this a made-to-order line; here it is one
@@ -2739,6 +2794,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                                         : `BASE PRICE $${tbfResolved.toFixed(2)} — PICK A CUSTOMER TO PRICE IT FOR THEM`}
                                 </div>
                             )}
+                            {tbfItem && stockSaidView(stockSaid.tbf)}
 
                             {/* 3 — FEES. Every fee item in the brand, priced the one way fees are
                                 priced. A percentage fee has no quantity: it is a share of the order. */}
