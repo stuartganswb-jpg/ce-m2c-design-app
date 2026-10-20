@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ORDER_ENTRY_CLASS } from '../Shared/pickLines';
-import { isPoleCategory } from '../Shared/poleCut';
+import { catOf, erpOf, nsIdOf, collectionsOf, diaCellLabel, isInsideMount, finishCodeOf, isFinished, quickShipFinishOf } from '../Shared/quickShipItems';   // one reading for every Quick Ship door (2026-10-20)
+import { quickShipPriceCtxOf, quickShipPriceOf, quickShipRateOf } from '../Shared/quickShipPricing';   // one price for every Quick Ship door (2026-10-20)
+import { traverseKitsOf, traverseKitByCode, traverseKitFinishesOf, traverseKitIsSingle, traverseKitProjectionsOf, traverseKitFamilyOf, traverseKitLinesOf, traverseComponentLinesOf, traverseKitOrderOf } from '../Shared/traverseKitSale';   // the traverse kit sale, shared with the portal (2026-10-20)
 import { nsTransactionHeader, withLineLocations, itemClassOf } from '../Shared/nsHeader';
 import { resolveShipMethod } from '../Shared/nsTransmit';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
@@ -31,17 +33,17 @@ import { cartLineFactsOf } from '../Shared/cartLineFacts';   // a pillow line's 
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
-import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
-import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
+import { describeKitAlign } from '../Shared/kitCode';
+import { explodeTraverse, projLabel } from '../Shared/traverseExplode';
 import { traverseOrderLinesOf } from '../Shared/subFinish';
 import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary, isCheckoutForCustomer } from '../Shared/feeRules';
 import { defaultShipping, defaultShippingNote } from '../Shared/baseShipping';   // 🚚 freight is never left at $0 by accident
 import { canOverrideShipping } from '../Shared/payRoles';   // who may change the freight: the roles who may charge
 import { isShippingItem, orderPackagingPlanOf, PACK_FEE_CODES, orderShippingPlanOf, shippingChargeOf } from '../Shared/flatRateShipping';
-import { priceChoice, PRICE_SOURCES } from '../Shared/hardwarePricing';
+import { PRICE_SOURCES } from '../Shared/hardwarePricing';
 import { customerPriceLevel, priceLevelShort } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
-import { sizeKeyOf, SIZE_FAMILIES, speciesVariantOf } from "../Shared/sizeMatrix";
+import { sizeKeyOf, speciesVariantOf } from "../Shared/sizeMatrix";
 import { materialTwinOf } from "../Shared/materialTwin";
 import { takesNoFinish } from "../Shared/finishLabel";
 import { isItemKit, itemKitOrderLinesOf } from "../Shared/itemKit";
@@ -72,46 +74,8 @@ const isUniquityPillowCode = (code) => { const p = parseUniquityCode(code); retu
 
 const KITS_DOC = { col: "system", id: "quick_ship_kits" };
 
-// Map a part's productType/name to one of our slot categories.
-const classifyCat = (pt) => {
-    const t = String(pt || '').toUpperCase();
-    if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE';
-    if (t.includes('BRACKET')) return 'BRACKET';
-    if (t.includes('FINIAL')) return 'FINIAL';
-    if (t.includes('RING')) return 'RING';
-    if (isPoleCategory(t)) return 'POLE';
-    return '';
-};
-const erpOf = (it) => String(it.legacyErpId || it.itemId || '').toUpperCase();
-const nsIdOf = (it) => it.netSuiteInternalId || it.legacyErpId || it.itemId || '';
-
-// Collection tags on an item, uppercased — the SAME shape CPQ/Vision scope by
-// (manufacturingSpecs.collections, legacy single customData.collection).
-const collectionsOf = (it) => (it.manufacturingSpecs?.collections
-    || (it.manufacturingSpecs?.customData?.collection ? [it.manufacturingSpecs.customData.collection] : []))
-    .map(c => String(c || '').trim().toUpperCase()).filter(Boolean);
-
-// Size identity of a STOCKED item. Stocked SKUs are pre-finished ("H2-75FB/BL") and the size-key
-// grammar deliberately skips finish variants, so read the key off the BARE code — that's the same
-// code the 🧬 stamper parses, so a stocked ring lands on exactly the diameter its master does.
-// (Resolution happens in diaCandidatesFor, which also follows alias links.)
-const diaCellLabel = (cell) => {
-    const [fam, dia] = String(cell || '').split('|');
-    const opt = SIZE_FAMILIES[fam]?.dia?.options?.find(o => o.value === dia);
-    return opt ? `${SIZE_FAMILIES[fam].label} · ${opt.label}` : cell;
-};
-
-// An inside-mount bracket takes the customer's Inside Mount pack; every other bracket sells each.
-const isInsideMount = (it) => /INSIDE/.test(String(it?.manufacturingSpecs?.customData?.bracketType || it?.manufacturingSpecs?.customData?.bracketMount || '').toUpperCase());
-
-// The finish code, i.e. everything after the suffix separator. "H2-75FB/CC" → "CC".
-// (The bare code the other way — everything BEFORE it — comes from Shared/aliasIdentity's bareCode.)
-const finishCodeOf = (it) => erpOf(it).split('/')[1] || '';
-
-// SELLABLE vs MILL (Stuart 2026-07-25): a code with no "/FINISH" suffix is the raw base part we
-// buy and paint — it never goes to an end customer. Only finished variants (/CC, /WC, …) are
-// offered in the kit builder. Quick Add still reaches everything, for the rare mill-stock sale.
-const isFinished = (it) => erpOf(it).includes('/');
+// WHAT A STOCKED ITEM IS — classifyCat / catOf / erpOf / nsIdOf / collectionsOf / diaCellLabel / isInsideMount / finishCodeOf / isFinished
+// live in Shared/quickShipItems (moved word for word 2026-10-20), so the customer portal's Quick Ship and its server read the same rule.
 
 // Compact searchable picker — shows "ITEM# — Name", sorted by item# (numeric-aware).
 const ItemSelect = ({ value, onChange, items, placeholder }) => {
@@ -324,12 +288,12 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         const unsubFin = onSnapshot(doc(db, "system", "master_finishes"), (s) => {
             const arr = (s.exists() && s.data().finishes) || [];
             // bomSuffix = the species a stain consumes (OAK / WALNUT, tab 4.5) — read by the to-be-finished add.
-            setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false, subFinishCode: String(f.subFinishCode || '').toUpperCase(), bomSuffix: String(f.bomSuffix || '').trim(), material: String(f.material || '').toUpperCase() })), ...prev.filter(p => p.outsourced)]);
+            setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => quickShipFinishOf(f, false)), ...prev.filter(p => p.outsourced)]);
         }, e => console.warn('Quick Ship finishes listen failed', e));
         const unsubOut = onSnapshot(collection(db, "hq_outsource_finishes"), (s) => {
             // code falls back to NAME (the finishText convention) — EP3–EP6 are stored name-only
             const arr = s.docs.map(d => d.data()).filter(f => f && (f.code || f.name));
-            setFinishList(prev => [...prev.filter(p => !p.outsourced), ...arr.map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: true, subFinishCode: String(f.subFinishCode || '').toUpperCase(), material: String(f.material || '').toUpperCase() }))]);
+            setFinishList(prev => [...prev.filter(p => !p.outsourced), ...arr.map(f => quickShipFinishOf(f, true))]);
         }, e => console.warn('Quick Ship outsource finishes listen failed', e));
         // Rush fee menu (Mass Update 4.5 → RUSH FEE TYPES). The dollar amount rides in the entry.
         const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (s) => {
@@ -373,7 +337,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         [allStocked, scopeCollection, aliasIndex] // eslint-disable-line react-hooks/exhaustive-deps
     );
 
-    const catOf = (it) => classifyCat(it.manufacturingSpecs?.productType || it.productType || it.customData?.category);
+    // (catOf — the slot category of an item — is Shared/quickShipItems')
     // Kit-builder pools are FINISHED goods only — the raw mill parts we paint never reach a customer.
     const byCat = (cat) => stocked.filter(it => catOf(it) === cat && isFinished(it));
 
@@ -717,10 +681,39 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                 rateOverride: null, kitKey: null, kitName: null, kitBrand: null, kitFinish: ''
             };
         }));
+        // A TRAVERSE KIT ORDERED ON THE PORTAL (Stuart 2026-10-20: "add and align — a kit can be sold, kit + additional per foot price in __
+        // finish"): its answers rebuilt as the lines this counter writes for them — the kit line, the feet line and the components — through
+        // Shared/traverseKitSale.traverseKitOrderOf, the same rebuild the portal's server priced the request with. Priced for THIS request's
+        // customer (the screen's own customer state is only being set above), each kit read against its own family's chart.
+        const trvOrders = Array.isArray(pr.traverse) ? pr.traverse : [];
+        if (trvOrders.length) {
+            const reqCustomerId = job.customer?.id || '';
+            const reqCustomer = customers.find(c => c.id === reqCustomerId) || null;
+            const reqKeys = customerKeys(reqCustomerId, reqCustomer);
+            const rowOfReq = (it) => findClientPriceRow(it?.clientPricing, reqKeys) || null;
+            const ctxReq = quickShipPriceCtxOf({ customerId: reqCustomerId, customer: reqCustomer, outsourceCodes: finishList.filter(f => f.outsourced),
+                findByCode: (c) => allItems.find(x => erpOf(x) === String(c || '').trim().toUpperCase()) || null });
+            const byCode = (c) => allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase());
+            const kitsReq = traverseKitsOf(allItems, rowOfReq);
+            const charts = {};
+            for (const fam of [...new Set(trvOrders.map(e => traverseKitFamilyOf(kitsReq.find(k => k.id === e.kitId))))]) {
+                try { const snap = await getDoc(doc(db, 'system', `traverse_rules_${fam}`)); charts[fam] = snap.exists() ? snap.data() : null; } catch (e) { charts[fam] = null; }
+            }
+            const problems = [];
+            trvOrders.forEach((e, i) => {
+                const o = traverseKitOrderOf(e, { kits: kitsReq, rowOf: rowOfReq, finishList, rulesOf: (fam) => charts[fam] || null, findItem: byCode,
+                    priceOf: (id) => { const it = byCode(id); return it ? quickShipRateOf(ctxReq, it) : 0; } });
+                if (o.error) { problems.push(`traverse kit ${i + 1}: ${o.error}`); return; }
+                setCart(prev => [...prev, { key: `${o.kit.id}-${Date.now()}-${i}`, ...o.kitLine }, ...(o.feetLine ? [{ key: `${o.kit.id}-ft-${Date.now()}-${i}`, ...o.feetLine }] : [])]);
+                o.components.forEach(l => pushLine(l.item, l.qty, l.note, null, l.opts));
+                if (o.missing) problems.push(`traverse kit ${i + 1}: ${o.missing} component code(s) not in the library — not added`);
+            });
+            if (problems.length) { addLog(`Portal request ${job.quoteNo || job.id}: ${problems.join(' · ')}`, 'error'); alert(`Portal request ${job.quoteNo || job.id}:\n\n${problems.join('\n')}`); }
+        }
         try {
             await updateDoc(doc(db, 'jobs', job.id), { status: 'QUICKSHIP_REVIEW', 'portalRequest.loadedBy': currentUser?.name || currentUser?.uName || 'staff', 'portalRequest.loadedAt': new Date().toISOString() });
         } catch (e) { console.warn('portal request stamp failed', e); }
-        addLog(`Loaded portal request ${job.quoteNo || job.id} — ${lines.length} line(s) for ${job.customer?.name || '?'}`, 'success');
+        addLog(`Loaded portal request ${job.quoteNo || job.id} — ${lines.length} line(s)${trvOrders.length ? ` + ${trvOrders.length} traverse kit(s)` : ''} for ${job.customer?.name || '?'}`, 'success');
     };
 
     // Fee / billable items — matched by keyword across ALL brand parts (fees aren't usually
@@ -853,23 +846,20 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // order came through. It now asks the SAME resolver CPQ asks (Shared/hardwarePricing): authored
     // override → the customer's price level → their negotiated row → base price → the flow default.
     // For a customer with no level that is exactly the old behaviour, which is what makes this safe.
-    const priceCtx = useMemo(() => {
-        const lvl = customerPriceLevel(selectedCustomer, 'STANDARD');
-        return {
-            customerId, customer: selectedCustomer || null,
-            priceLevel: lvl.level, levelIsDefault: lvl.isDefault,
-            outsourceCodes: finishList.filter(f => f.outsourced),
-            // Tier inheritance needs the BASE doc for a /EP variant that carries no box of its own.
-            findByCode: (c) => allItems.find(x => erpOf(x) === String(c || '').trim().toUpperCase()) || null,
-        };
-    }, [customerId, selectedCustomer, finishList, allItems]);
+    const priceCtx = useMemo(() => quickShipPriceCtxOf({
+        customerId, customer: selectedCustomer || null,
+        outsourceCodes: finishList.filter(f => f.outsourced),
+        // Tier inheritance needs the BASE doc for a /EP variant that carries no box of its own.
+        findByCode: (c) => allItems.find(x => erpOf(x) === String(c || '').trim().toUpperCase()) || null,
+    }), [customerId, selectedCustomer, finishList, allItems]);
     // Quick Ship sells FINISHED skus, so the item on the line is already the record that is sold —
     // finishVariantOf leaves it alone and the price comes off that doc, exactly as before.
     // ⚠ A PART TO BE FINISHED IS PRICED IN ITS FINISH (Stuart 2026-10-19, Fabricut PO 682688: H1-2RCTAEC in EP3 came in at the
     // painted $38 where 4.6 says plated $45 — "it needs to refer back to pricing on 4.6"). The resolver was asked about the raw
     // item with no finish, so a plated finish read the painted tier; CPQ always passes the finish. `finishCode` is the line's.
-    const priceOf = (it, finishCode = '') => (it ? priceChoice({ partId: it.id }, it, finishCode ? { ...priceCtx, finishCode } : priceCtx) : null);
-    const rateFor = (it, finishCode = '') => (it ? (priceOf(it, finishCode).price || 0) : 0);
+    // (the resolver call itself — Shared/quickShipPricing, the one the portal's Quick Ship prices with)
+    const priceOf = (it, finishCode = '') => quickShipPriceOf(priceCtx, it, finishCode);
+    const rateFor = (it, finishCode = '') => quickShipRateOf(priceCtx, it, finishCode);
     // What the screen says about the customer's NetSuite level — the same words as the log (a 4.6 customer's is not applied).
     const levelNoteOf = (lvl) => (nsLevelAppliesAt(priceCtx.priceLevel) ? priceLevelNoteOf(lvl) : nsLevelSkippedNoteOf(lvl, priceLevelShort(priceCtx.priceLevel)));
 
@@ -885,26 +875,14 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // A kit the customer is entitled to = a Kit-class record carrying kitAlign AND a pricing row
     // for this customer — the same entitlement rule as every Quick Ship item.
     const kitRowOf = (it) => findClientPriceRow(it?.clientPricing, custKeys) || null;
-    const trvKits = useMemo(() => {
-        // Dropdown order (Stuart 2026-08-13): all MANUAL first — wall, double, ceiling — then the
-        // same shape again for MOTORIZED, so the CSR's eye lands where the PO does.
-        const rank = (k) => {
-            const a = k.manufacturingSpecs.kitAlign;
-            const drive = String(a.drive).toUpperCase() === 'MOTORIZED' ? 1 : 0;
-            const mount = String(a.mount).toUpperCase() === 'CEILING' ? 1 : 0;
-            const setup = String(a.setup).toUpperCase() !== 'DOUBLE' ? 0 : (String(a.frontRail).toUpperCase() === 'RING' ? 2 : 1);
-            const mat = { P: 0, EP: 1, W: 2 }[String(a.material).toUpperCase()] ?? 3;
-            return drive * 1000 + mount * 100 + setup * 10 + mat;
-        };
-        return allItems.filter(p => p.partClass === 'Kit' && p.manufacturingSpecs?.kitAlign && kitRowOf(p))
-            .sort((x, y) => rank(x) - rank(y));
-    }, [allItems, customerId]); // eslint-disable-line react-hooks/exhaustive-deps
+    // (the list, in the CSR's order — manual first, then motorised — is Shared/traverseKitSale's, the portal's Quick Ship sells from it too)
+    const trvKits = useMemo(() => traverseKitsOf(allItems, kitRowOf), [allItems, customerId]); // eslint-disable-line react-hooks/exhaustive-deps
     const trvKit = trvKits.find(k => k.id === trvKitId) || null;
     // ── THE RULES DOCUMENT FOLLOWS THE KIT'S FAMILY (S5 hand-off, 2026-09-10) ──────────────
     // system/traverse_rules_<family>: bracket and splice counts by length. This read was fixed to
     // H1-2TRV, so an H1-138TRV kit's chart showed H1-2TRV's rows — 2 brackets and no splice at every
     // length. The push already reads per kit; the offer now does too. One rule, one screen earlier.
-    const trvFamily = String(trvKit?.manufacturingSpecs?.kitFamily || '').trim().toUpperCase() || 'H1-2TRV';
+    const trvFamily = traverseKitFamilyOf(trvKit);
     useEffect(() => {
         const unsub = onSnapshot(doc(db, "system", `traverse_rules_${trvFamily}`), (s) => {
             setTrvRules(s.exists() ? s.data() : null);
@@ -913,40 +891,20 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     }, [trvFamily]);
     const trvResolve = (code) => {
         setTrvCode(code);
-        const c = String(code || '').trim().toUpperCase();
-        // their pattern # (clientSku) or our code, base or per-motor — all four spellings land
-        const bySku = trvKits.find(k => { const r = kitRowOf(k); return r && String(r.clientSku || '').trim().toUpperCase() === c; })
-            || trvKits.find(k => (k.manufacturingSpecs.kitMotorCodes || []).some(x => String(x.fabSku || '').trim().toUpperCase() === c));
-        if (bySku) {
-            const mc = (bySku.manufacturingSpecs.kitMotorCodes || []).find(x => String(x.fabSku || '').trim().toUpperCase() === c);
-            setTrvKitId(bySku.id); if (mc?.motorItem) setTrvMotor(mc.motorItem);
-            return;
-        }
-        const r = resolveKitCode(trvKits, c);
+        // their pattern # (clientSku) or our code, base or per-motor — all four spellings land (Shared/traverseKitSale.traverseKitByCode)
+        const r = traverseKitByCode(trvKits, code, kitRowOf);
         if (r) { setTrvKitId(r.kit.id); if (r.motorItem) setTrvMotor(r.motorItem); }
     };
     // The finishes a kit's material accepts: /EP kits take the outsourced plated codes, /P kits the
     // in-house paints, /W kits the S-stains (Stuart 2026-08-13: "in the case of the W items those
     // should be looking for our S01, S02.. for the stained finishes").
-    const trvFinishOptions = useMemo(() => {
-        // The kit's own finish MATRIX wins (4.6 Kit Builder checkboxes, Stuart 2026-08-13: "just
-        // check off which apply, this will work better than just rules and scale better") — the
-        // material rules below are only the fallback for kits nobody has curated yet.
-        const allowed = (trvKit?.manufacturingSpecs?.kitFinishOptions || []).map(c => String(c).toUpperCase());
-        if (allowed.length) return finishList.filter(f => allowed.includes(f.code));
-        const mat = String(trvKit?.manufacturingSpecs?.kitAlign?.material || '').toUpperCase();
-        if (!mat) return [];
-        if (mat === 'EP') return finishList.filter(f => f.outsourced);
-        if (mat === 'W') return finishList.filter(f => /^S/.test(f.code));
-        return finishList.filter(f => !f.outsourced && /^P/.test(f.code));
-    }, [trvKit, finishList]);
+    // The kit's own finish MATRIX wins (4.6 Kit Builder checkboxes) — the material rules are only the fallback (Shared/traverseKitSale).
+    const trvFinishOptions = useMemo(() => traverseKitFinishesOf(trvKit, finishList), [trvKit, finishList]);
 
     // A DOUBLE has no projection to ask about — one bracket carries both rods, and every double
     // part is tagged proj:any. So the question appears on singles and nowhere else.
-    const trvIsSingle = !!trvKit && String(trvKit.manufacturingSpecs?.kitAlign?.setup || '').toUpperCase() !== 'DOUBLE';
-    const trvProjOptions = useMemo(
-        () => (trvIsSingle ? singleProjections(trvKit?.manufacturingSpecs?.kitFamily || 'H1-2TRV', trvKit?.manufacturingSpecs?.kitAlign?.bracketStyle || '') : []),
-        [trvIsSingle, trvKit]);
+    const trvIsSingle = traverseKitIsSingle(trvKit);
+    const trvProjOptions = useMemo(() => traverseKitProjectionsOf(trvKit), [trvKit]);
 
     // ── THE TRACK'S OWN COLOUR (Stuart 2026-08-22) ───────────────────────────────────────────────
     // "for every master finish ie. P01, EP01, etc. there is a matching bronze or champagne default
@@ -964,55 +922,17 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     useEffect(() => { setTrvProj(prev => (prev && !trvProjOptions.some(p => p.inches === prev)) ? '' : prev); }, [trvProjOptions]);
 
     const addTraverse = () => {
-        if (!trvKit) return alert("Pick a kit (or paste one of the customer's kit codes).");
-        if (!trvFinish) return alert('Pick the finish — the shop cannot build "painted" without knowing WHICH paint.');
-        // A single at the wrong depth is the wrong bracket ITEM, not a note on the order — so the
-        // question is answered before the line exists rather than assumed at push time.
-        if (trvIsSingle && !trvProj) return alert('Pick the projection — a single sells at three depths and each one is a different bracket.');
-        const row = kitRowOf(trvKit);
-        const align = trvKit.manufacturingSpecs.kitAlign;
-        const feet = Math.max(parseInt(trvFeet) || 4, 1);
-        const billFeet = Math.max(feet, align.minFeet || 4);   // 4ft is the MINIMUM CHARGE — a shorter cut still bills the set
-        // THE LINE IS THEIR COMPLETE KIT (Stuart 2026-08-13: "the in app forms should resolve to
-        // the finished fabricut kits that include the motor upgrade to match their complete kit
-        // code"). A motor pick folds INTO the kit line — their per-motor code at their per-motor
-        // price — never a separate upgrade line, so our form line matches their PO line exactly.
-        const mc = String(align.drive).toUpperCase() === 'MOTORIZED' && trvMotor
-            ? (trvKit.manufacturingSpecs.kitMotorCodes || []).find(x => String(x.motorItem).toUpperCase() === trvMotor.toUpperCase())
-            : null;
-        const theirSku = mc?.fabSku || row?.clientSku || '';
-        const mcNet = mc && Number.isFinite(parseFloat(mc.net)) ? parseFloat(mc.net) : null;
-        // NO NetSuite identity by design (noNs) — the SO push consumes exploded components plus a
-        // generic traverse $-holder, never the kit itself.
-        setCart(prev => [...prev, {
-            key: `${trvKit.id}-${Date.now()}`,
-            itemId: trvKit.id, erp: mc?.code || trvKit.legacyErpId, nsId: '', name: trvKit.itemName || trvKit.legacyErpId,
-            aliasErp: theirSku, aliasItemId: null,
-            qty: 1, note: `${feet}ft system — 4ft set${feet < billFeet ? ' (min charge)' : ''} · ${trvFinish}${trvProj ? ` · ${projLabel(trvProj)}` : ''}${mc ? ` · ${trvMotor}` : ''}`,
-            bin: '', packUom: '', packSize: 1,
-            rateOverride: mcNet, // per-motor kits price at THEIR number; base kits price from the row (null → rateForLine)
-            kitKey: null, kitName: null, kitBrand: null, kitFinish: '',
-            // trvProj rides the LINE, not the kit record: the same kit sells at any of the three
-            // depths, so the bracket the push consumes is a property of this order.
-            trvFinish, trvProj, trvMotor: mc ? trvMotor : '', trvFeet: billFeet, trvKitCode: mc?.code || trvKit.legacyErpId,
-        }]);
-        const extra = billFeet - (align.minFeet || 4);
-        const perFoot = parseFloat(row?.perFootPrice);
-        if (extra > 0) setCart(prev => [...prev, {
-            key: `${trvKit.id}-ft-${Date.now()}`,
-            itemId: trvKit.id, erp: mc?.code || trvKit.legacyErpId, nsId: '', name: trvKit.itemName || trvKit.legacyErpId,
-            aliasErp: theirSku, aliasItemId: null,
-            qty: extra, note: `Additional foot · ${trvFinish}`,
-            bin: '', packUom: '', packSize: 1,
-            rateOverride: Number.isFinite(perFoot) ? perFoot : 0,
-            kitKey: null, kitName: null, kitBrand: null, kitFinish: '',
-            trvFinish, trvProj, trvKitCode: mc?.code || trvKit.legacyErpId, trvIsFeet: true,
-        }]);
+        // THE LINE IS THEIR COMPLETE KIT — the kit line (a motor folds in at their per-motor code and price), "Additional foot · <finish>"
+        // × the feet above the 4 ft minimum charge at their per-foot price, the projection on the line: Shared/traverseKitSale (moved word
+        // for word 2026-10-20 — the portal's Quick Ship sells a kit through the same lines). A refusal says what is missing.
+        const out = traverseKitLinesOf({ kit: trvKit, row: trvKit ? kitRowOf(trvKit) : null, finish: trvFinish, proj: trvProj, motorItem: trvMotor, feet: trvFeet });
+        if (out.error) return alert(out.error);
+        setCart(prev => [...prev, { key: `${trvKit.id}-${Date.now()}`, ...out.kitLine }]);
+        if (out.feetLine) setCart(prev => [...prev, { key: `${trvKit.id}-ft-${Date.now()}`, ...out.feetLine }]);
         // The components configurator opens NOW — required at checkout, and this IS checkout for
         // a kit order. Skip stays possible (the operator may be quoting blind), but the default
         // path walks through it.
-        setTrvCfg({ drive: String(align.drive).toUpperCase(), feet: billFeet, kitCode: mc?.code || trvKit.legacyErpId, finish: trvFinish,
-            trackCount: String(align.setup).toUpperCase() === 'DOUBLE' && String(align.frontRail).toUpperCase() !== 'RING' ? 2 : 1 });
+        setTrvCfg(out.cfg);
         setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
     };
 
@@ -1020,14 +940,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // included lines ride rate 0, billables at the customer's price — both push as real NetSuite
     // lines, so no special casing downstream.
     const applyTrvComponents = (cfgLines) => {
-        const byCode = (c) => allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase());
-        let missing = 0;
-        cfgLines.forEach(cl => {
-            const it = byCode(cl.code);
-            if (!it) { missing++; return; }
-            const row = findClientPriceRow(it.clientPricing, custKeys);
-            pushLine(it, cl.qty, `${cl.why}${trvCfg?.finish ? ` · ${trvCfg.finish}` : ''} [${trvCfg?.kitCode || 'traverse'}]`, null, { noPack: true, rateOverride: cl.billable ? cl.rate : 0, aliasErp: row?.clientSku || '', trvOfKit: trvCfg?.kitCode || 'traverse' });
-        });
+        const { lines, missing } = traverseComponentLinesOf({ cfgLines, findItem: (c) => allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase()), rowOf: kitRowOf, cfg: trvCfg });
+        lines.forEach(l => pushLine(l.item, l.qty, l.note, null, l.opts));
         if (missing) alert(`${missing} component code(s) not in the library — not added. Check the rules doc against the Master Library.`);
         setTrvCfg(null);
     };
@@ -2565,10 +2479,21 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{j.quoteNo || j.id}</span>
                                     <span style={{ fontSize: '0.9rem', color: 'var(--ink)', flex: 1 }}>{j.customer?.name || '?'}{j.jobName ? ` · ${j.jobName}` : ''}</span>
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>
-                                        {(j.portalRequest?.lines || []).length} line(s){Number.isFinite(j.portalRequest?.total) ? ` · $${j.portalRequest.total.toLocaleString()}` : ''}{j.portalRequest?.collection ? ` · ${j.portalRequest.collection}` : ''}
+                                        {(j.portalRequest?.lines || []).length} line(s){(j.portalRequest?.traverse || []).length ? ` + ${j.portalRequest.traverse.length} traverse kit(s)` : ''}{Number.isFinite(j.portalRequest?.total) ? ` · $${j.portalRequest.total.toLocaleString()}` : ''}{j.portalRequest?.collection ? ` · ${j.portalRequest.collection}` : ''}
                                     </span>
                                     <button onClick={() => loadPortalReq(j)} style={{ padding: '8px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Load into cart</button>
                                 </div>
+                                {/* A TRAVERSE KIT THE CUSTOMER ORDERED (2026-10-20): its answers as they gave them — Load rebuilds the kit, feet and components
+                                    from them; the draw and motor side are said here because the components' lines do not carry them */}
+                                {(j.portalRequest?.traverse || []).map((t, i) => (
+                                    <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', marginTop: '6px' }}>
+                                        TRAVERSE {t.kitCode || ''} · {t.finish}{t.proj ? ` · ${projLabel(t.proj)}` : ''}{t.motorItem ? ` · ${t.motorItem}` : ''} · {t.feet}ft
+                                        {t.sel?.draw ? ` · draw ${t.sel.draw}` : ''}{t.sel?.motorSide ? ` · motor ${t.sel.motorSide}` : ''}{t.sel?.carrierStyle ? ` · ${t.sel.carrierStyle}` : ''}
+                                        {Number.isFinite(t.total) ? ` · $${t.total.toLocaleString()}` : ''}
+                                        {(t.still || []).length > 0 && <span style={{ color: 'var(--brass)' }}> · still needed: {t.still.join(', ')}</span>}
+                                        {t.missing > 0 && <span style={{ color: '#d9534f' }}> · {t.missing} component code(s) not in the library</span>}
+                                    </div>
+                                ))}
                                 {j.portalRequest?.note && <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '6px' }}>“{j.portalRequest.note}”</div>}
                             </div>
                         ))}

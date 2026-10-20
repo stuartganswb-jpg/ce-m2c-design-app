@@ -10,8 +10,9 @@ import { mirrorPlan } from '../scripts/sync-engine.mjs';
 // The old portal kept its own copies of CPQ's modules in src/shared/ and they fell behind HQ within
 // weeks. '@engine' is src/components/Shared itself — the files HQ's CPQ runs — so a portal build can
 // only ever contain the engine main has. It is for the engine's pure modules (what
-// scripts/sync-engine.mjs --list prints): nothing there imports React, Firebase or a package, and
-// nothing with a screen in it belongs behind this name.
+// scripts/sync-engine.mjs --list prints, and tab 7's pure Quick Ship helpers the stock page reads beside
+// them — aliasIdentity, quickShipUom; its src/shared/ copies went 2026-10-20): nothing there imports
+// React, Firebase or a package, and nothing with a screen in it belongs behind this name.
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const ENGINE = fileURLToPath(new URL('../src/components/Shared', import.meta.url));
 const STAMP = resolve(REPO, STAMP_FILE);

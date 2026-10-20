@@ -57,6 +57,9 @@ export const ENGINE_DOORS = {
     'finishPbr.js': 'pbrMapOf',                    // how each finish catches the light — the numbers the portal's screen draws with
     'kitStart.js': 'kitsForFlowOf',                // "Start from a kit": which kits, what picking one fills in, its brackets (2026-10-20)
     'traverseDraw.js': 'traverseAnswersMissing',   // the traverse step's draw and motor side, and what is still needed (2026-10-20)
+    'quickShipItems.js': 'catOf',                  // what a stocked item is, on every Quick Ship door (2026-10-20)
+    'quickShipPricing.js': 'quickShipRateOf',      // one price for every Quick Ship door — tab 7's (2026-10-20)
+    'traverseKitSale.js': 'traverseKitOrderOf',    // selling a traverse kit on Quick Ship — tab 7's (2026-10-20)
 };
 export const ENGINE_ROOTS = Object.keys(ENGINE_DOORS);
 /** The server's copy, relative to the repo. */

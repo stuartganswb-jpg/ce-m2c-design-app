@@ -3,37 +3,20 @@
 // collection → rod diameter → finish → pole / outer / center brackets / rings / finials — under
 // the pack rules (qty means PACKS, rate is per EACH, the request carries the each count) and at
 // their own clientPricing rates, alias-faced (§4b: customers always see the alias code).
-// The cascade runs the VERBATIM shared modules tab 7 uses (aliasIdentity / quickShipUom /
-// sizeMatrix) over the slim, entitled item set the portalStock BFF serves; submit re-validates
-// and re-prices everything server-side and lands a PORTAL_REQUEST job staff load in Quick Ship.
+// The cascade runs tab 7's OWN modules through '@engine' — aliasIdentity / quickShipUom / sizeMatrix, and what an item IS (its slot
+// category, inside mount, finish, the diameter words) from Shared/quickShipItems, tab 7's helpers moved word for word on 2026-10-20 —
+// over the slim, entitled item set the portalStock BFF serves (the copies this page kept in src/shared/ and the mirrors it kept here
+// are gone: the mirrors had drifted — a pole was any type containing "POLE" or "ROD"). Submit re-validates and re-prices everything
+// server-side and lands a PORTAL_REQUEST job staff load in Quick Ship. Traverse kits sell here as on tab 7 (./QuickShipTraverse).
 // Test collection: SIMPLE ELEGANCE (entitle it via CRM → Portal Access → Available Collections).
 import React, { useEffect, useMemo, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
-import { sizeKeyOf, SIZE_FAMILIES } from './shared/sizeMatrix.js';
-import { packSizeOf, packLabelOf, packUnitFor, isRealPack } from './shared/quickShipUom.js';
-import { buildAliasIndex, aliasCodesOf, effectiveCollectionsOf, bareCode, collectionsOf } from './shared/aliasIdentity.js';
-
-// ——— mirrors of tab 7's local helpers (QuickShipTab.js) — keep in lockstep ———
-const erpOf = (it) => String(it.legacyErpId || it.itemId || '').toUpperCase();
-const classifyCat = (pt) => {
-  const t = String(pt || '').toUpperCase();
-  if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE';
-  if (t.includes('BRACKET')) return 'BRACKET';
-  if (t.includes('FINIAL')) return 'FINIAL';
-  if (t.includes('RING')) return 'RING';
-  if (t.includes('POLE') || t.includes('ROD')) return 'POLE';
-  return '';
-};
-const catOf = (it) => classifyCat(it.manufacturingSpecs?.productType || it.productType);
-const finishCodeOf = (it) => erpOf(it).split('/')[1] || '';
-const isFinished = (it) => erpOf(it).includes('/'); // sellable = finished "/CODE" variants only
-const isInsideMount = (it) => /INSIDE/.test(String(it?.manufacturingSpecs?.customData?.bracketType || '').toUpperCase());
-const diaCellLabel = (cell) => {
-  const [fam, dia] = String(cell || '').split('|');
-  const opt = SIZE_FAMILIES[fam]?.dia?.options?.find((o) => o.value === dia);
-  return opt ? `${SIZE_FAMILIES[fam].label} · ${opt.label}` : cell;
-};
+import { sizeKeyOf } from '@engine/sizeMatrix.js';
+import { packSizeOf, packLabelOf, packUnitFor, isRealPack } from '@engine/quickShipUom.js';
+import { buildAliasIndex, aliasCodesOf, effectiveCollectionsOf, collectionsOf } from '@engine/aliasIdentity.js';
+import { erpOf, catOf, finishCodeOf, isFinished, isInsideMount, diaCellLabel } from '@engine/quickShipItems.js';
+import QuickShipTraverse from './QuickShipTraverse.jsx';
 
 const fmt$ = (v) => Number.isFinite(v) ? v.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '';
 const lbl = { fontFamily: 'var(--mono, monospace)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', margin: '0 0 6px' };
@@ -83,6 +66,7 @@ export default function QuickShip() {
   }, []);
 
   const items = data?.items || [];
+  const hasKits = !!(data && data.traverse && (data.traverse.kits || []).length);
   const index = useMemo(() => buildAliasIndex(items), [items]);
   const packCustomer = data?.packPrefs || {};
 
@@ -226,20 +210,25 @@ export default function QuickShip() {
   };
 
   const eachQtyOf = (l) => (parseInt(l.qty) || 0) * (l.packSize || 1);
-  const cartTotal = cart.reduce((s, l) => s + l.rate * eachQtyOf(l), 0);
+  // a traverse kit on the quote is its answers + the lines they make (./QuickShipTraverse) — its total is theirs
+  const cartTotal = cart.reduce((s, l) => s + (l.trv ? l.total : l.rate * eachQtyOf(l)), 0);
+  const addKit = (k) => { setSubErr(null); setCart((prev) => [...prev, { key: `trv-${Date.now()}-${prev.length}`, ...k }]); };
 
   const submit = async () => {
     if (!cart.length || busy) return;
     setBusy(true); setSubErr(null);
     try {
       const res = await httpsCallable(functions, 'portalStockQuoteRequest')({
-        lines: cart.map((l) => (l.cut ? { id: l.id, qty: l.qty, cutLen: l.cutLen } : { id: l.id, qty: l.qty })),
+        lines: cart.filter((l) => !l.trv).map((l) => (l.cut ? { id: l.id, qty: l.qty, cutLen: l.cutLen } : { id: l.id, qty: l.qty })),
+        traverse: cart.filter((l) => l.trv).map((l) => l.trv),
         jobName: jobName.trim(), note, collection: scope,
       });
       setSubmitted({ quoteNo: res.data?.quoteNo || '', total: res.data?.total });
       setCart([]);
     } catch (e) {
-      setSubErr(/permission/i.test(e.message || '') ? 'This collection is not enabled on your account.' : 'Could not submit right now — please try again shortly.');
+      setSubErr(/permission/i.test(e.message || '') ? 'This collection is not enabled on your account.'
+        : /invalid-argument/.test(e.code || '') && /^Traverse kit/.test(e.message || '') ? e.message   // a kit the server could not take, in its words
+          : 'Could not submit right now — please try again shortly.');
     } finally { setBusy(false); }
   };
 
@@ -295,11 +284,13 @@ export default function QuickShip() {
 
       {loadErr && <div className="empty">{loadErr}</div>}
       {!loadErr && !data && <div className="empty">Loading your stock counter…</div>}
-      {data && data.collections.length === 0 && <div className="empty">No stocked collections are enabled on your account yet — contact your representative.</div>}
-      {data && data.collections.length > 0 && (
+      {data && data.collections.length === 0 && !hasKits && <div className="empty">No stocked collections are enabled on your account yet — contact your representative.</div>}
+      {data && (data.collections.length > 0 || hasKits) && (
         <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 480px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* ── the kit builder ── */}
-          <div className="card" style={{ flex: '1 1 480px', padding: 20 }}>
+          {data.collections.length > 0 && (
+          <div className="card" style={{ padding: 20 }}>
             <div style={{ ...row, marginBottom: 14 }}>
               <div style={cell}>
                 <label style={lbl}>Collection</label>
@@ -365,6 +356,10 @@ export default function QuickShip() {
             {subErr && <div className="empty" style={{ margin: '10px 0' }}>{subErr}</div>}
             <button className="btn" onClick={addToQuote} style={{ width: '100%' }}>Add to quote</button>
           </div>
+          )}
+          {/* ── traverse kits (tab 7's card, Stuart 2026-10-20) ── */}
+          {hasKits && <QuickShipTraverse traverse={data.traverse} onAdd={addKit} fmt$={fmt$} lbl={lbl} field={field} row={row} cell={cell} />}
+          </div>
 
           {/* ── the quote ── */}
           <div className="card" style={{ flex: '1 1 380px', padding: 20, position: 'sticky', top: 12 }}>
@@ -378,7 +373,24 @@ export default function QuickShip() {
                     <th style={{ padding: '4px 4px' }}>Item</th><th style={{ padding: '4px 4px' }}>Qty</th><th style={{ padding: '4px 4px', textAlign: 'right' }}>Each</th><th style={{ padding: '4px 4px', textAlign: 'right' }}>Total</th><th />
                   </tr></thead>
                   <tbody>
-                    {cart.map((l) => (
+                    {cart.map((l) => (l.trv ? (
+                      <React.Fragment key={l.key}>
+                        <tr style={{ borderTop: '1px solid var(--line)' }}>
+                          <td style={{ padding: '7px 4px', fontWeight: 600 }} colSpan={3}>Traverse kit — {l.title}{l.still && l.still.length ? <div style={{ fontWeight: 400, color: 'var(--ink-soft)', fontSize: '0.74rem' }}>Still needed: {l.still.join(' · ')}</div> : null}</td>
+                          <td style={{ padding: '7px 4px', textAlign: 'right', fontWeight: 600 }}>{fmt$(l.total)}</td>
+                          <td style={{ padding: '7px 0', textAlign: 'right' }}><button className="btn-ghost" onClick={() => setCart((p) => p.filter((x) => x.key !== l.key))}>✕</button></td>
+                        </tr>
+                        {l.lines.map((x, i) => (
+                          <tr key={i}>
+                            <td style={{ padding: '3px 4px 3px 14px' }}><div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '0.76rem' }}>{x.code}</div><div style={{ color: 'var(--ink-soft)', fontSize: '0.74rem' }}>{x.note || x.name}</div></td>
+                            <td style={{ padding: '3px 4px' }}>{x.qty}</td>
+                            <td style={{ padding: '3px 4px', textAlign: 'right' }}>{x.rate ? fmt$(x.rate) : 'included'}</td>
+                            <td style={{ padding: '3px 4px', textAlign: 'right' }}>{fmt$(x.rate * x.qty)}</td>
+                            <td />
+                          </tr>
+                        ))}
+                      </React.Fragment>
+                    ) : (
                       <tr key={l.key} style={{ borderTop: '1px solid var(--line)' }}>
                         <td style={{ padding: '7px 4px' }}>
                           {l.code && <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '0.8rem' }}>{l.code}</div>}
@@ -389,7 +401,7 @@ export default function QuickShip() {
                         <td style={{ padding: '7px 4px', textAlign: 'right' }}>{fmt$(l.rate * eachQtyOf(l))}</td>
                         <td style={{ padding: '7px 0', textAlign: 'right' }}><button className="btn-ghost" onClick={() => setCart((p) => p.filter((x) => x.key !== l.key))}>✕</button></td>
                       </tr>
-                    ))}
+                    )))}
                   </tbody>
                 </table>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, borderTop: '1px solid var(--line)', paddingTop: 10, marginBottom: 14 }}>

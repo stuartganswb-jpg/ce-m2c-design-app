@@ -52,11 +52,12 @@ const loadedFrom = new Map();
 async function loadEngine(dir = path.join(__dirname, 'engine')) {
     if (loadedFrom.has(dir)) return loadedFrom.get(dir);
     const at = (f) => pathToFileURL(path.join(dir, f)).href;
-    const [session, pricing, levels, twin, handoff, itemKit, model, pbr, scope, span, size, kitStart, trvCfg, trvDraw, clientPricing] = await Promise.all([
+    const [session, pricing, levels, twin, handoff, itemKit, model, pbr, scope, span, size, kitStart, trvCfg, trvDraw, clientPricing, qsItems, qsPricing, kitSale] = await Promise.all([
         import(at('hardwareSession.js')), import(at('hardwarePricing.js')), import(at('priceLevels.js')), import(at('materialTwin.js')),
         import(at('hardwareHandoff.js')), import(at('itemKit.js')), import(at('hardwareModel.js')),
         import(at('finishPbr.js')), import(at('finishScope.js')), import(at('bracketSpan.js')), import(at('sizeMatrix.js')),
-        import(at('kitStart.js')), import(at('traverseConfigurator.js')), import(at('traverseDraw.js')), import(at('clientPricing.js'))]);
+        import(at('kitStart.js')), import(at('traverseConfigurator.js')), import(at('traverseDraw.js')), import(at('clientPricing.js')),
+        import(at('quickShipItems.js')), import(at('quickShipPricing.js')), import(at('traverseKitSale.js'))]);
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'MANIFEST.json'), 'utf8'));
     const engine = {
         sessionOf: session.sessionOf, spanRiskKeyOf: session.spanRiskKeyOf, offeredFinishesOf: session.offeredFinishesOf, stepHintOf: session.stepHintOf, valueLabel: session.valueLabel, AXIS_LABEL: session.AXIS_LABEL,
@@ -70,6 +71,10 @@ async function loadEngine(dir = path.join(__dirname, 'engine')) {
         kitsForFlowOf: kitStart.kitsForFlowOf, kitIdOf: kitStart.kitIdOf, kitStartOf: kitStart.kitStartOf, kitFillsOf: kitStart.kitFillsOf,
         configuratorOffer: trvCfg.configuratorOffer, DRAWS: trvDraw.DRAWS, MOTOR_SIDES: trvDraw.MOTOR_SIDES, traverseAnswersMissing: trvDraw.traverseAnswersMissing,
         findClientPriceRow: clientPricing.findClientPriceRow, customerKeys: clientPricing.customerKeys,
+        // the Quick Ship door, as tab 7 reads, prices and sells (2026-10-20)
+        quickShip: { catOf: qsItems.catOf, isInsideMount: qsItems.isInsideMount, finishOf: qsItems.quickShipFinishOf, priceCtxOf: qsPricing.quickShipPriceCtxOf, rateOf: qsPricing.quickShipRateOf },
+        kitSale: { kitsOf: kitSale.traverseKitsOf, byCode: kitSale.traverseKitByCode, finishesOf: kitSale.traverseKitFinishesOf, isSingle: kitSale.traverseKitIsSingle,
+            projectionsOf: kitSale.traverseKitProjectionsOf, familyOf: kitSale.traverseKitFamilyOf, orderOf: kitSale.traverseKitOrderOf },
         stamp: { engineVersion: String(manifest.engineVersion || ''), closureHash: String(manifest.closureHash || ''), files: Object.keys(manifest.files || {}).length },
     };
     loadedFrom.set(dir, engine);
@@ -395,18 +400,21 @@ function offeredStateOf(engine, data, s, state) {
     else kitMotor = (((kit.manufacturingSpecs || {}).kitMotorCodes || []).find((x) => U(x.code) === U(kitMotor)) || {}).code || '';
     if (trvSel) {
         if (!s.isTraverse || !data.trvRules) trvSel = null;
-        else {
-            const offer = engine.configuratorOffer({ rules: data.trvRules, drive: s.trvDrive, feet: s.trvFeet, realFeet: s.lengthFeet || undefined });
-            const styles = new Set(offer.carrierStyles.map((x) => x.itemId));
-            const only = (o, list) => { const ids = new Set(list.map((x) => x.itemId)); return Object.fromEntries(Object.entries(o || {}).filter(([k]) => ids.has(k))); };
-            const style = styles.has(trvSel.carrierStyle) ? trvSel.carrierStyle : '';
-            trvSel = { carrierStyle: style, carrierQty: style ? trvSel.carrierQty : '',
-                draw: engine.DRAWS.some((d) => d.value === trvSel.draw) ? trvSel.draw : '',
-                motorSide: engine.MOTOR_SIDES.some((m) => m.value === trvSel.motorSide) ? trvSel.motorSide : '',
-                picks: only(trvSel.picks, offer.picks), accessories: only(trvSel.accessories, offer.accessories) };
-        }
+        else trvSel = trvSelForOffer(engine, engine.configuratorOffer({ rules: data.trvRules, drive: s.trvDrive, feet: s.trvFeet, realFeet: s.lengthFeet || undefined }), trvSel);
     }
     return { ...state, kitPick, kitMotor, trvSel };
+}
+// The track's answers against what the chart offers here (the Configure walk and the Quick Ship kit alike): a carrier, component, accessory,
+// draw or side nobody offers is dropped; the rest stands.
+function trvSelForOffer(engine, offer, sel) {
+    if (!sel) return null;
+    const styles = new Set(offer.carrierStyles.map((x) => x.itemId));
+    const only = (o, list) => { const ids = new Set(list.map((x) => x.itemId)); return Object.fromEntries(Object.entries(o || {}).filter(([k]) => ids.has(k))); };
+    const style = styles.has(sel.carrierStyle) ? sel.carrierStyle : '';
+    return { carrierStyle: style, carrierQty: style ? sel.carrierQty : '',
+        draw: engine.DRAWS.some((d) => d.value === sel.draw) ? sel.draw : '',
+        motorSide: engine.MOTOR_SIDES.some((m) => m.value === sel.motorSide) ? sel.motorSide : '',
+        picks: only(sel.picks, offer.picks), accessories: only(sel.accessories, offer.accessories) };
 }
 function sessionFor(engine, data, raw, level) {
     const state = raw || {};
@@ -535,4 +543,4 @@ function picturesThatFit(pictures, baseBytes, limit = REQUEST_DOC_LIMIT) {
 // the OLD engine until it is deployed. Two halves that disagree must not quote — said, never guessed.
 const inLine = (serverStamp, siteStamp) => !!serverStamp && !!siteStamp && !!serverStamp.closureHash && serverStamp.closureHash === siteStamp.closureHash && serverStamp.engineVersion === siteStamp.engineVersion;
 
-module.exports = { loadEngine, worldFor, trvFamilyOf, levelsFor, portalFinishesOf, stateFromClient, uiFromClient, flowIdsFor, viewOf, requestLineOf, pictureOf, picturesThatFit, PICTURE_MAX, REQUEST_DOC_LIMIT, inLine, Refused, REFUSAL_WORDS, SHOWABLE };
+module.exports = { loadEngine, worldFor, trvFamilyOf, levelsFor, portalFinishesOf, stateFromClient, uiFromClient, flowIdsFor, viewOf, requestLineOf, pictureOf, picturesThatFit, PICTURE_MAX, REQUEST_DOC_LIMIT, trvSelShapeOf, trvSelForOffer, inLine, Refused, REFUSAL_WORDS, SHOWABLE };

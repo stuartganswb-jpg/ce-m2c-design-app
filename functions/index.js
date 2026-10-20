@@ -1876,21 +1876,12 @@ const qsPackSizeOf = (uom) => {
 const qsPackLabelOf = (uom) => String(uom || '').trim().replace(/\s*-\s*\d+(?:\.\d+)?\s*$/, '').toUpperCase();
 const qsIsRealPack = (uom) => !!uom && qsPackSizeOf(uom) > 1;
 const QS_PACK_PREFS = { ring: 'qsRingPack', finial: 'qsFinialPack', insideMount: 'qsInsideMountPack' };
-// Mirror of QuickShipTab's classifyCat / isInsideMount / slotOfCat / packForItem chain.
-const qsClassifyCat = (pt) => {
-    const t = String(pt || '').toUpperCase();
-    if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE';
-    if (t.includes('BRACKET')) return 'BRACKET';
-    if (t.includes('FINIAL')) return 'FINIAL';
-    if (t.includes('RING')) return 'RING';
-    if (t.includes('POLE') || t.includes('ROD')) return 'POLE';
-    return '';
-};
-const qsCatOf = (it) => qsClassifyCat((it.manufacturingSpecs && it.manufacturingSpecs.productType) || it.productType || (it.customData && it.customData.category));
-const qsIsInsideMount = (it) => /INSIDE/.test(String((it.manufacturingSpecs && it.manufacturingSpecs.customData && (it.manufacturingSpecs.customData.bracketType || it.manufacturingSpecs.customData.bracketMount)) || '').toUpperCase());
-const qsPackForItem = (it, crm) => {
-    const c = qsCatOf(it);
-    const slot = c === 'RING' ? 'ring' : c === 'FINIAL' ? 'finial' : (c === 'BRACKET' && qsIsInsideMount(it)) ? 'insideMount' : '';
+// What a stocked item IS — its slot category, inside mount or not — is tab 7's own reading (Shared/quickShipItems catOf / isInsideMount, through
+// the engine copy, 2026-10-20). The mirrors that lived here had drifted: a pole was any type CONTAINING "POLE" or "ROD", and an item
+// categorised only by its customData.category was never seen. The pack chain below mirrors Shared/quickShipUom + tab 7's packForItem.
+const qsPackForItem = (it, crm, engine) => {
+    const c = engine.quickShip.catOf(it);
+    const slot = c === 'RING' ? 'ring' : c === 'FINIAL' ? 'finial' : (c === 'BRACKET' && engine.quickShip.isInsideMount(it)) ? 'insideMount' : '';
     if (!slot) return { uom: '', size: 1 };
     const fromCust = crm && crm[QS_PACK_PREFS[slot]];
     const uom = fromCust ? String(fromCust).toUpperCase()
@@ -1898,9 +1889,16 @@ const qsPackForItem = (it, crm) => {
     return qsIsRealPack(uom) ? { uom: qsPackLabelOf(uom), size: qsPackSizeOf(uom) } : { uom: '', size: 1 };
 };
 
+// A library item by its code — tab 7's own lookup (the first record carrying it).
+const qsByCodeOf = (allItems) => {
+    const m = new Map();
+    allItems.forEach((x) => { const c = String(x.legacyErpId || x.itemId || '').toUpperCase(); if (c && !m.has(c)) m.set(c, x); });
+    return (code) => m.get(String(code || '').trim().toUpperCase()) || null;
+};
 // Everything both stock endpoints agree on — built the same way per call, so browse and submit
 // can never diverge on what a customer may buy or at what price.
 const buildPortalStockCtx = async (db, customerId, crm) => {
+    const engine = await portalSession.loadEngine();
     const brand = crm.brandId || null;
     const adSnap = await db.collection('Approved_Designs').get();
     const allItems = adSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
@@ -1915,15 +1913,20 @@ const buildPortalStockCtx = async (db, customerId, crm) => {
     const sellable = allowed.length ? stocked.filter((it) => [...effCols(it)].some((c) => allowed.includes(c))) : stocked;
     const collections = [...new Set(sellable.flatMap((it) => [...effCols(it)]))]
         .filter((c) => !allowed.length || allowed.includes(c)).sort();
-    // Per-customer rate — Shared/clientPricing semantics (row price > 0 wins, else base price).
-    const custKeys = new Set([customerId, crm.name, crm.companyName].filter(Boolean).map((s) => String(s).trim().toUpperCase()));
-    const rateFor = (it) => {
-        const rows = Array.isArray(it.clientPricing) ? it.clientPricing : [];
-        const row = rows.find((r) => custKeys.has(String((r && r.customerId) || '').trim().toUpperCase()));
-        const v = row ? parseFloat(row.price) : NaN;
-        if (Number.isFinite(v) && v > 0) return v;
-        return parseFloat((it.manufacturingSpecs && it.manufacturingSpecs.basePrice) || 0) || 0;
-    };
+    // THE PRICE — TAB 7'S OWN (Stuart 2026-10-20: "add and align"; Shared/quickShipPricing through the engine copy): the SAME resolver CPQ and
+    // Order Entry ask — authored override → the customer's price level → their negotiated row → base price → the flow default — over tab 7's
+    // finish list. Until today this was "their row, else base price": 1,092 of 2,807 stocked items read differently for Fabricut (10-13
+    // snapshot), many $0 here where Order Entry bills from 4.6. (The customer's NetSuite level discount is tab 7's, read live at entry; the
+    // portal cannot read NetSuite and applies none — for a 4.6 customer that is tab 7's rule too.)
+    const [mfSnap, outSnap] = await Promise.all([db.collection('system').doc('master_finishes').get(), db.collection('hq_outsource_finishes').get()]);
+    const masterFinishes = ((mfSnap.exists && mfSnap.data().finishes) || []).filter((f) => f && (f.code || f.name));
+    const outsourcedDocs = outSnap.docs.map((d) => d.data()).filter((f) => f && (f.code || f.name));
+    const finishList = [...masterFinishes.map((f) => engine.quickShip.finishOf(f, false)), ...outsourcedDocs.map((f) => engine.quickShip.finishOf(f, true))];
+    const customer = { id: customerId, ...crm };
+    const erpOfDoc = (x) => String(x.legacyErpId || x.itemId || '').toUpperCase();
+    const priceCtx = engine.quickShip.priceCtxOf({ customerId, customer, outsourceCodes: finishList.filter((f) => f.outsourced),
+        findByCode: (c) => allItems.find((x) => erpOfDoc(x) === String(c || '').trim().toUpperCase()) || null });
+    const rateFor = (it) => engine.quickShip.rateOf(priceCtx, it);
     // Alias display+price rule (§4b): the collection's alias doc fronts the item; its rate wins when > 0.
     const faceOf = (it, scope) => qsAlias.customerFaceOf(index, it, scope);
     const priceOf = (it, scope) => {
@@ -1952,7 +1955,90 @@ const buildPortalStockCtx = async (db, customerId, crm) => {
         const hay = `${ms.productType || ''} ${it.productType || ''} ${it.itemName || ''} ${cd.feeType || ''}`.toUpperCase();
         return hay.includes('CUT');
     });
-    return { allItems, index, sellable, collections, rateFor, faceOf, priceOf, outer, center, brand, cutFees };
+    // THE TRAVERSE KITS THIS CUSTOMER MAY BUY — tab 7's rule (Shared/traverseKitSale.traverseKitsOf): an aligned kit carrying their pricing row.
+    const keys = engine.customerKeys(customerId, customer);
+    const rowOf = (it) => engine.findClientPriceRow(it && it.clientPricing, keys) || null;
+    const trvKits = engine.kitSale.kitsOf(allItems, rowOf);
+    return { engine, allItems, index, sellable, collections, rateFor, faceOf, priceOf, outer, center, brand, cutFees, finishList, masterFinishes, outsourcedDocs, rowOf, trvKits, byCode: qsByCodeOf(allItems) };
+};
+// A kit family's traverse chart (system/traverse_rules_<family>), read once per call; and the slice of it a customer's screen needs to lay the
+// components out — each row's item, its label, its counts by length, its drive and whether it bills. Nothing else (no other customer's codes).
+const readTrvCharts = async (db, families) => {
+    const out = {};
+    await Promise.all([...new Set(families)].map(async (fam) => { const snap = await db.collection('system').doc(`traverse_rules_${fam}`).get(); out[fam] = snap.exists ? snap.data() : null; }));
+    return out;
+};
+const trvChartForScreen = (rules) => (rules ? {
+    usage: (Array.isArray(rules.usage) ? rules.usage : []).map((u) => ({ itemId: String((u && u.itemId) || ''), label: String((u && u.label) || ''), byFeet: (u && u.byFeet) || {} })),
+    configurator: (Array.isArray(rules.configurator) ? rules.configurator : []).map((c) => ({ itemId: String((c && c.itemId) || ''), drive: String((c && c.drive) || 'BOTH'), billable: !!(c && c.billable) })),
+} : null);
+// What the screen needs to sell a kit — tab 7's "Traverse kits" choices: the kit (our code, THEIR pattern # as their row names it), its
+// set-up as Shared/traverseKitSale reads it, its finishes (each with the colour its track takes), the depths a single sells at (inches + words
+// only — never the bracket codes behind them), the motors a motorised kit takes (tab 7's list: each motor's description and their code for
+// it, the per-motor kit code and price tab 7 bills), the kit's price, their price per additional foot and the minimum charge.
+const trvKitForScreen = (ctx, k) => {
+    const U2 = (v) => String(v == null ? '' : v).trim().toUpperCase();
+    const ms = k.manufacturingSpecs || {};
+    const a = ms.kitAlign || {};
+    const drive = U2(a.drive) === 'MOTORIZED' ? 'MOTORIZED' : 'MANUAL';
+    const code = U2(k.legacyErpId || k.itemId);
+    const row = ctx.rowOf(k) || {};
+    const sku = String(row.clientSku || '').trim();
+    const perFoot = parseFloat(row.perFootPrice);
+    const net = (x) => { const n = parseFloat(x && x.net); return Number.isFinite(n) ? n : null; };
+    const colourOf = (c) => { const f = c && ctx.finishList.find((x) => x.code === U2(c)); return f && f.name && U2(f.name) !== U2(f.code) ? String(f.name) : ''; };
+    const motorCodes = ms.kitMotorCodes || [];
+    return {
+        id: k.id, code, sku, name: String(k.itemName || ''),
+        family: ctx.engine.kitSale.familyOf(k), drive, setup: U2(a.setup), frontRail: U2(a.frontRail), minFeet: Number(a.minFeet) || 4,
+        single: ctx.engine.kitSale.isSingle(k),
+        projections: ctx.engine.kitSale.projectionsOf(k).map((p) => ({ value: String(p.inches), label: String(p.label || ''), standard: !!p.standard })),
+        finishes: ctx.engine.kitSale.finishesOf(k, ctx.finishList).map((f) => ({ code: f.code, name: String(f.name || f.code), track: colourOf(f.subFinishCode) })),
+        motors: drive === 'MOTORIZED' ? [...new Set(motorCodes.map((x) => x && x.motorItem).filter(Boolean).map(U2))].map((mi) => {
+            const mc = motorCodes.find((x) => x && U2(x.motorItem) === mi) || {};
+            const m = ctx.byCode(mi);
+            return { motorItem: mi, code: String(mc.code || ''), kitSku: String(mc.fabSku || ''), name: String((m && m.itemName) || ''), sku: String(((m && ctx.rowOf(m)) || {}).clientSku || mc.fabSku || ''), rate: net(mc) };
+        }) : [],
+        rate: ctx.rateFor(k), perFoot: Number.isFinite(perFoot) ? perFoot : 0,
+    };
+};
+// One traverse kit the customer asked for — their ANSWERS (kit, finish, depth, motor, length, the components) checked against what this
+// account may buy and rebuilt as the lines tab 7 writes for them (Shared/traverseKitSale.traverseKitOrderOf — the same rebuild tab 7's
+// "Load into cart" fills the cart with). The components are kept only as the chart offers them at the billed length. Throws in words.
+const TRV_ENTRY_MAX = 12;
+const TRV_FEET_MAX = 99;   // the length box takes two digits on the page; a longer number is a mistake, said rather than cut
+const trvEntryOf = (ctx, charts, raw, i) => {
+    const r = raw && typeof raw === 'object' ? raw : {};
+    const entry = {
+        kitId: String(r.kitId || '').slice(0, 120),
+        finish: String(r.finish || '').trim().toUpperCase().slice(0, 24),
+        proj: String(r.proj == null ? '' : r.proj).replace(/[^0-9.]/g, '').slice(0, 12),
+        motorItem: String(r.motorItem || '').trim().toUpperCase().slice(0, 60),
+        feet: Math.max(1, parseInt(r.feet, 10) || 4),   // tab 7's reading of the box: empty = the 4 ft set
+    };
+    if (entry.feet > TRV_FEET_MAX) throw new HttpsError('invalid-argument', `Traverse kit ${i + 1}: one kit runs up to ${TRV_FEET_MAX} ft — put a longer run in the notes and our team will quote it.`);
+    const byCode = ctx.byCode;
+    const deps = { kits: ctx.trvKits, rowOf: ctx.rowOf, finishList: ctx.finishList, rulesOf: (fam) => charts[fam] || null, findItem: byCode,
+        priceOf: (id) => { const it = byCode(id); return it ? ctx.rateFor(it) : 0; } };
+    const bare = ctx.engine.kitSale.orderOf({ ...entry, sel: null }, deps);
+    if (bare.error) throw new HttpsError('invalid-argument', `Traverse kit ${i + 1}: ${bare.error}`);
+    const rules = charts[ctx.engine.kitSale.familyOf(bare.kit)] || null;
+    const shaped = portalSession.trvSelShapeOf(r.sel);
+    const sel = rules && shaped ? portalSession.trvSelForOffer(ctx.engine, ctx.engine.configuratorOffer({ rules, drive: bare.cfg.drive, feet: bare.cfg.feet }), shaped) : null;
+    const o = sel ? ctx.engine.kitSale.orderOf({ ...entry, sel }, deps) : bare;
+    if (o.error) throw new HttpsError('invalid-argument', `Traverse kit ${i + 1}: ${o.error}`);
+    // What the track still needs (CPQ's words, Stuart 2026-10-20 "a. yes" — said, never refused): the draw, the motor side on a motor, a carrier style.
+    const still = rules ? [...ctx.engine.traverseAnswersMissing({ drive: o.cfg.drive, sel }), ...(sel && sel.carrierStyle ? [] : ['carrier style'])] : [];
+    const recordOf = (it, l, rate) => ({ itemId: it.id, erp: String(l.erp || it.legacyErpId || it.itemId || '').toUpperCase(), name: String(l.name || it.itemName || ''),
+        aliasErp: String(l.aliasErp || ''), faceItemId: null, qty: l.qty, packUom: '', packSize: 1, eachQty: l.qty, rate: Math.round((Number(rate) || 0) * 100) / 100, note: String(l.note || '') });
+    const lines = [
+        recordOf(o.kit, o.kitLine, o.kitLine.rateOverride != null ? o.kitLine.rateOverride : ctx.rateFor(o.kit)),
+        ...(o.feetLine ? [recordOf(o.kit, o.feetLine, o.feetLine.rateOverride)] : []),
+        ...o.components.map((c) => recordOf(c.item, { erp: c.item.legacyErpId || c.item.itemId, name: c.item.itemName, aliasErp: c.opts.aliasErp, qty: c.qty, note: c.note }, c.opts.rateOverride)),
+    ];
+    // A chart part that is not in the library is left off, as tab 7 leaves it off (and says so) — counted here for HQ's card, never a refusal.
+    return { ...entry, proj: o.kitLine.trvProj || '', motorItem: o.kitLine.trvMotor || '', finish: o.kitLine.trvFinish, sel: sel || null, still,
+        kitCode: o.cfg.kitCode, lines, total: Math.round(lines.reduce((n, l) => n + l.rate * l.eachQty, 0) * 100) / 100, ...(o.missing ? { missing: o.missing } : {}) };
 };
 
 exports.portalStock = onCall({ cors: true }, async (request) => {
@@ -1976,6 +2062,8 @@ exports.portalStock = onCall({ cors: true }, async (request) => {
             itemName: it.itemName || '',
             aliasOf: qsAlias.aliasTargetIdOf(it) || null,
             sellable: !!sellable,
+            // the category an item with no product type is known by (tab 7's catOf reads it — Shared/quickShipItems)
+            customData: { category: String((it.customData && it.customData.category) || '') },
             manufacturingSpecs: {
                 isStocked: !!(it.manufacturingSpecs && it.manufacturingSpecs.isStocked),
                 productType: (it.manufacturingSpecs && it.manufacturingSpecs.productType) || it.productType || '',
@@ -1994,13 +2082,27 @@ exports.portalStock = onCall({ cors: true }, async (request) => {
         }
         return out;
     };
+    // TRAVERSE KITS (Stuart 2026-10-20: "add and align — a kit can be sold, kit + additional per foot price in __ finish"): tab 7's kit sale —
+    // the kits this account may buy, each family's chart as the components step lays it out (Shared/traverseConfigurator runs on the page,
+    // the same module tab 7's popup runs), and for every part a chart names: its name, THEIR number and their price. Nothing for an account
+    // with no kit.
+    const trvForScreen = async () => {
+        if (!ctx.trvKits.length) return null;
+        const charts = await readTrvCharts(db, ctx.trvKits.map((k) => ctx.engine.kitSale.familyOf(k)));
+        const byCode = ctx.byCode;
+        const items = {};
+        Object.values(charts).filter(Boolean).forEach((rules) => [...(rules.usage || []), ...(rules.configurator || [])].forEach((r) => {
+            const code = String((r && r.itemId) || '').trim().toUpperCase(); const it = code && byCode(code);
+            if (it && !items[code]) items[code] = { name: String(it.itemName || code), sku: String((ctx.rowOf(it) || {}).clientSku || ''), rate: ctx.rateFor(it) };
+        }));
+        return { kits: ctx.trvKits.map((k) => trvKitForScreen(ctx, k)), charts: Object.fromEntries(Object.entries(charts).map(([f, r]) => [f, trvChartForScreen(r)])), items };
+    };
     // Finish NAMES for the counter's finish selector ("WS — Warm Silver"): master + outsourced
     // finishes, code → display name. Names only — no vendor or multiplier data leaves.
+    // (the same two lists the price context read — read once per call)
     const finishNames = {};
-    const mfSnap = await db.collection('system').doc('master_finishes').get();
-    ((mfSnap.exists && mfSnap.data().finishes) || []).forEach((f) => { if (f && f.code) finishNames[String(f.code).toUpperCase()] = String(f.name || f.code); });
-    const outSnap = await db.collection('hq_outsource_finishes').get();
-    outSnap.forEach((d) => { const f = d.data(); if (f && f.code && !finishNames[String(f.code).toUpperCase()]) finishNames[String(f.code).toUpperCase()] = String(f.name || f.code); });
+    ctx.masterFinishes.forEach((f) => { if (f && f.code) finishNames[String(f.code).toUpperCase()] = String(f.name || f.code); });
+    ctx.outsourcedDocs.forEach((f) => { if (f && f.code && !finishNames[String(f.code).toUpperCase()]) finishNames[String(f.code).toUpperCase()] = String(f.name || f.code); });
 
     return {
         items: [...ctx.sellable.map((it) => slim(it, true)), ...[...neighborhood.values()].map((it) => slim(it, false))],
@@ -2012,6 +2114,7 @@ exports.portalStock = onCall({ cors: true }, async (request) => {
         // Pole-cut fee choices (Stuart 2026-07-27: "under the pole line add a field for Pole Cut
         // Required") — DESCRIPTION + rate only, never the fee item code (the Measure & Fit rule).
         cutFees: ctx.cutFees.slice(0, 12).map((it) => ({ id: it.id, name: it.itemName || String(it.legacyErpId || it.itemId || ''), rate: ctx.rateFor(it) })),
+        traverse: await trvForScreen(),
     };
 });
 
@@ -2021,7 +2124,7 @@ exports.portalStock = onCall({ cors: true }, async (request) => {
 // "portal requests" panel loads it straight into the cart for review + the real SO push.
 exports.portalStockQuoteRequest = onCall({ cors: true }, async (request) => {
     const customerId = assertPortalCustomer(request);
-    const { lines: rawLines, jobName, note, collection } = request.data || {};
+    const { lines: rawLines, traverse: rawTraverse, jobName, note, collection } = request.data || {};
     const db = admin.firestore();
     const crmSnap = await db.collection('crm_records').doc(customerId).get();
     const crm = crmSnap.exists ? crmSnap.data() : {};
@@ -2052,7 +2155,7 @@ exports.portalStockQuoteRequest = onCall({ cors: true }, async (request) => {
         }
         const it = byId.get(id);
         if (!it || !(qty > 0) || qty > 999) continue;
-        const pack = qsPackForItem(it, crm);
+        const pack = qsPackForItem(it, crm, ctx.engine);
         const face = ctx.faceOf(it, scope);
         const rate = ctx.priceOf(it, scope);
         const erp = String(it.legacyErpId || it.itemId || '').toUpperCase();
@@ -2063,8 +2166,12 @@ exports.portalStockQuoteRequest = onCall({ cors: true }, async (request) => {
             rate, note: '',
         });
     }
-    if (!lines.length) throw new HttpsError('invalid-argument', 'No valid lines to quote.');
-    const total = Math.round(lines.reduce((s, l) => s + l.rate * l.eachQty, 0) * 100) / 100;
+    // Traverse kits — each re-checked and re-priced from its answers (trvEntryOf), never from the browser's numbers.
+    const trvRaw = (Array.isArray(rawTraverse) ? rawTraverse : []).slice(0, TRV_ENTRY_MAX);
+    const charts = trvRaw.length ? await readTrvCharts(db, ctx.trvKits.map((k) => ctx.engine.kitSale.familyOf(k))) : {};
+    const traverse = trvRaw.map((r, i) => trvEntryOf(ctx, charts, r, i));
+    if (!lines.length && !traverse.length) throw new HttpsError('invalid-argument', 'No valid lines to quote.');
+    const total = Math.round((lines.reduce((s, l) => s + l.rate * l.eachQty, 0) + traverse.reduce((s, t) => s + t.total, 0)) * 100) / 100;
 
     const email = String((request.auth.token && request.auth.token.email) || '');
     const puSnap = await db.collection('portal_users').doc(request.auth.uid).get();
@@ -2081,6 +2188,8 @@ exports.portalStockQuoteRequest = onCall({ cors: true }, async (request) => {
         jobName: cleanJobName,
         portalRequest: {
             kind: 'QUICKSHIP', collection: scope, lines, total,
+            // the traverse kits as their answers + the lines they made (tab 7's Load rebuilds from the answers)
+            ...(traverse.length ? { traverse } : {}),
             note: String(note || '').slice(0, 2000), byEmail: email,
         },
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
