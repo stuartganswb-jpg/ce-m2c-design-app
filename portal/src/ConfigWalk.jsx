@@ -36,6 +36,10 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
   // left short (once the screen has the count back) and at Add.
   const [riskAsk, setRiskAsk] = useState(null);          // { r: view.risk entry, then: 'add' | null }
   const [riskCheck, setRiskCheck] = useState(false);
+  // "START FROM A KIT" (CPQ's picker, 2026-10-20): what the kit filled in and what it could not, until dismissed; and the "additional ft"
+  // box while it is being typed in
+  const [kitReport, setKitReport] = useState(null);
+  const [feetDraft, setFeetDraft] = useState(null);
   const seq = useRef(0);
   const typing = useRef(false);
   // THE PICTURE AT ADD (step 5, Stuart 2026-10-20): the stage hands over a function that takes the view as it stands (CPQ's picture
@@ -58,7 +62,7 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
     setPending(true);
     const timer = setTimeout(async () => {
       try {
-        const ui = { step: scopeStep, scope: scopeNow };
+        const ui = { step: scopeStep, scope: scopeNow, kitStart: a.kitStart || '', kitArmed: !!(a.kitArmed && a.kitPick), kitDone: a.kitDone || [] };
         const v = await loadView({ flowId: flow.id, state: wireOf(a), ui });
         if (my !== seq.current) return;
         setView(v); setViewUi(ui); setTrouble(null);
@@ -66,6 +70,23 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
         // a fresh removal asks again (CPQ's pickDrops.mergeDrops).
         const live = new Set((v.removals || []).map((r) => r.key));
         setA((cur) => (cur.acks.every((k) => live.has(k)) ? cur : { ...cur, acks: cur.acks.filter((k) => live.has(k)) }));
+        // A KIT JUST PICKED: what it fills in (the server worked it out on this model) is adopted ONCE, as CPQ's picker does — the answers,
+        // the picks, the kit's base length only where none is typed; a kit this product cannot build fills in nothing.
+        const ks = v.kitStart;
+        if (ks && ks.id === a.kitStart) {
+          setKitReport(ks.report);
+          setA((cur) => (cur.kitStart !== ks.id ? cur : ks.blocked
+            ? { ...cur, kitStart: '', kitPick: '', kitMotor: '', kitArmed: false, kitDone: [] }
+            : { ...cur, kitStart: '', kitPick: ks.id, kitMotor: '', kitArmed: true, kitDone: [], answers: { ...cur.answers, ...ks.answers }, picks: { ...cur.picks, ...ks.picks },
+              ...(ks.lengthInches && !String(cur.poleIn || '').trim() ? { poleIn: String(Math.floor(ks.lengthInches)), poleFrac: '' } : {}) }));
+        }
+        // …and the kit's brackets as their steps become answerable (CPQ's kit-bracket fill) — each filled once, never over a choice
+        const fills = v.kitFills || {};
+        const fillKeys = Object.keys(fills);
+        if (fillKeys.length && ui.kitArmed) {
+          setA((cur) => (!cur.kitArmed || cur.kitPick !== a.kitPick ? cur
+            : { ...cur, picks: { ...cur.picks, ...fills }, kitDone: [...cur.kitDone, ...fillKeys.map((k) => `${k}|${fills[k]}`)] }));
+        }
       } catch (e) {
         if (my === seq.current) setTrouble(await troubleOf(e));
       } finally {
@@ -125,6 +146,24 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
   const backToConfiguration = (id) => set((cur) => { const pf = { ...cur.partFinish }; delete pf[id]; return { partFinish: pf }; });
   const finishAnswer = (code, label, choice) => set((cur) => ({ finishAnswers: { ...cur.finishAnswers, [code]: { ...(cur.finishAnswers[code] || {}), [label]: choice } } }));
 
+  // "Start from a kit": the server works out what the kit fills in and the walk adopts it once (above). Back to "from scratch" keeps
+  // every answer and drops the kit — CPQ's picker.
+  const startKit = (id) => { setKitReport(null); set(() => (id ? { kitStart: id } : { kitStart: '', kitPick: '', kitMotor: '', kitArmed: false, kitDone: [] })); };
+  // The kit's base set + the feet above it (CPQ: "on rod qty it starts at the 4ft set then each additional foot") — it sets the length.
+  const extraFeet = (typed) => {
+    const clean = String(typed).replace(/[^0-9]/g, '');
+    setFeetDraft(clean);
+    const base = (view && view.kit && view.kit.baseFeet) || 4;
+    set(() => ({ poleIn: String((base + (parseInt(clean, 10) || 0)) * 12), poleFrac: '' }), true);
+  };
+  const chooseMotor = (code) => set(() => ({ kitMotor: code }));
+  // The Traverse components answers: what stands is the customer's own, or — until they answer — the chart's defaults the server sent.
+  const trvStep = steps.find((st) => st.kind === 'TRV') || null;
+  const setTrv = (patch, isTyping = false) => set((cur) => {
+    const base = cur.trvSel || (trvStep && trvStep.trv ? trvStep.trv.sel : { carrierStyle: '', carrierQty: '', draw: '', motorSide: '', picks: {}, accessories: {} });
+    return { trvSel: { ...base, ...patch(base) } };
+  }, isTyping);
+
   const go = (d) => { const next = steps[Math.max(0, Math.min(steps.length - 1, ix + d))]; if (next) setStepKey(next.key); };
   const canAdd = !!view && !view.refusal && !pending && !trouble;
   const add = (confirmedKey) => {
@@ -137,7 +176,7 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
     const picture = (() => { try { return captureRef.current ? captureRef.current() : null; } catch (_) { return null; } })();
     onAdd({ flowId: flow.id, flowName: flow.name, state: wireOf(sent), memo: a.memo, qty: Math.max(1, parseInt(a.qty, 10) || 1), shown: shownOf(view), picture: picture || null });
     setAdded({ memo: a.memo || flow.name, editing: !!editing });
-    if (!editing) { setA(blankAnswers()); setStepKey(''); setScopePick(null); }
+    if (!editing) { setA(blankAnswers()); setStepKey(''); setScopePick(null); setKitReport(null); setFeetDraft(null); }
   };
 
   const closeRisk = (confirmed) => {
@@ -269,8 +308,106 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
         </>
       );
     }
-    if (step.kind === 'TRV') return <div className="cf-note">The track's components are set from our chart for this length — they are on the price list. Our team confirms the draw, the carrier style and the motor side with you.</div>;
+    if (step.kind === 'TRV') return trvBody(step.trv);
     return null;
+  };
+
+  // ── THE TRAVERSE COMPONENTS STEP — CPQ's panel (Shared/TraverseConfiguratorModal), its questions in its order: how the curtain opens,
+  //    the motor side on a motor, the carriers, the components, the accessories — and what is still needed, said, never refused ──
+  const trvBody = (t) => {
+    if (!t) return <div className="cf-note">The track's components are set from our chart for this length.</div>;
+    const sel = a.trvSel || t.sel;
+    const countOf = (map, id) => Number(((sel[map] || {})[id]) || 0);
+    const style = t.carrierStyles.find((c) => c.id === sel.carrierStyle) || null;
+    const typedCarriers = parseInt(sel.carrierQty, 10) || 0;
+    return (
+      <div className="cf-trv">
+        <div className="cf-fine">{t.drive === 'MOTORIZED' ? 'Motorized' : 'Manual'} · {t.feet} ft · {t.tracks === 2 ? 'two tracks' : 'one track'} — the drive decides which components there are; what this length needs is included, and raising a count adds the difference.</div>
+        <div className="cf-q">
+          <div className="cf-q-label">Draw direction — how the curtain opens</div>
+          <div className="cf-rows">
+            {t.draws.map((d) => (
+              <label key={d.value} className={`cf-radio${sel.draw === d.value ? ' on' : ''}`} data-draw={d.value}>
+                <input type="radio" name="trv-draw" checked={sel.draw === d.value} onChange={() => setTrv(() => ({ draw: d.value }))} />
+                <span><span className="cf-radio-label">{d.label}</span><span className="cf-fine">{d.hint}</span></span>
+              </label>
+            ))}
+          </div>
+          {!sel.draw && <div className="cf-fine cf-need">Required — the track is assembled to it.</div>}
+        </div>
+        {t.motorSides.length > 0 && (
+          <div className="cf-q">
+            <div className="cf-q-label">Motor side</div>
+            <div className="cf-rows">
+              {t.motorSides.map((m) => (
+                <label key={m.value} className={`cf-radio${sel.motorSide === m.value ? ' on' : ''}`} data-motor-side={m.value}>
+                  <input type="radio" name="trv-motor-side" checked={sel.motorSide === m.value} onChange={() => setTrv(() => ({ motorSide: m.value }))} />
+                  <span className="cf-radio-label">{m.label}</span>
+                </label>
+              ))}
+            </div>
+            {!sel.motorSide && <div className="cf-fine cf-need">Required on a motorized track — the head end is built to it.</div>}
+          </div>
+        )}
+        <div className="cf-q">
+          <div className="cf-q-label">Carrier style — pick one; {t.feet} ft includes the chart's count</div>
+          <div className="cf-rows">
+            {t.carrierStyles.map((c) => (
+              <label key={c.id} className={`cf-radio${sel.carrierStyle === c.id ? ' on' : ''}`} data-carrier={c.id}>
+                <input type="radio" name="trv-carrier" checked={sel.carrierStyle === c.id} onChange={() => setTrv(() => ({ carrierStyle: c.id, carrierQty: '' }))} />
+                <span><span className="cf-radio-label">{c.label}</span><span className="cf-fine">{c.id}{c.sku ? ` · ${c.sku}` : ''} — {c.included} included</span></span>
+              </label>
+            ))}
+          </div>
+          {style && (
+            <label className="cf-count">
+              <span>{style.defaultQty < style.included ? `How many (empty = ${style.defaultQty} for this length · up to ${style.included} included)` : `How many (empty = the chart's ${style.included})`}</span>
+              <input value={sel.carrierQty || ''} inputMode="numeric" placeholder={String(style.defaultQty)} onChange={(e) => setTrv(() => ({ carrierQty: e.target.value.replace(/[^0-9]/g, '') }), true)} />
+              {typedCarriers > style.included && <span className="cf-fine">+{typedCarriers - style.included} over the chart{style.unit ? ` × ${fmtMoney(style.unit)}` : ''}</span>}
+            </label>
+          )}
+        </div>
+        <div className="cf-q">
+          <div className="cf-q-label">Components — end stops are 2 per track; the chart says what this length includes</div>
+          <div className="cf-rows">
+            {t.picks.map((pk) => {
+              const q = countOf('picks', pk.id);
+              const on = q > 0;
+              const note = pk.included === null || pk.included === undefined ? ''
+                : pk.included > 0 ? `included at ${t.feet} ft (chart ${pk.included}${q > pk.included ? `; +${q - pk.included}${pk.unit ? ` × ${fmtMoney(pk.unit)}` : ''}` : ''})`
+                  : `not included at ${t.feet} ft${pk.unit ? ` — ${fmtMoney(pk.unit)} each` : ''}`;
+              const seed = pk.included > 0 ? pk.included : 1;
+              return (
+                <label key={pk.id} className={`cf-check${on ? ' on' : ''}`} data-pick={pk.id}>
+                  <input type="checkbox" checked={on} onChange={(e) => setTrv((b) => ({ picks: { ...(b.picks || {}), [pk.id]: e.target.checked ? (pk.endStop ? 2 * Math.max(1, t.tracks || 1) : seed) : 0 } }))} />
+                  <span className="cf-check-text"><span className="cf-radio-label">{pk.name}</span><span className="cf-fine">{pk.id}{pk.sku ? ` · ${pk.sku}` : ''}</span>{note && <span className="cf-fine">{note}</span>}</span>
+                  {on && <input className="cf-qty" value={q} inputMode="numeric" onClick={(e) => e.preventDefault()} onChange={(e) => setTrv((b) => ({ picks: { ...(b.picks || {}), [pk.id]: Math.max(1, parseInt(e.target.value, 10) || 1) } }), true)} />}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+        {t.accessories.length > 0 && (
+          <div className="cf-q">
+            <div className="cf-q-label">Accessories</div>
+            <div className="cf-rows">
+              {t.accessories.map((ac) => {
+                const q = countOf('accessories', ac.id);
+                const on = q > 0;
+                return (
+                  <label key={ac.id} className={`cf-check${on ? ' on' : ''}`} data-accessory={ac.id}>
+                    <input type="checkbox" checked={on} onChange={(e) => setTrv((b) => ({ accessories: { ...(b.accessories || {}), [ac.id]: e.target.checked ? 1 : 0 } }))} />
+                    <span className="cf-check-text"><span className="cf-radio-label">{ac.name}</span><span className="cf-fine">{ac.id}{ac.sku ? ` · ${ac.sku}` : ''}{ac.unit ? ` — ${fmtMoney(ac.unit)}` : ''}</span></span>
+                    {on && <input className="cf-qty" value={q} inputMode="numeric" onClick={(e) => e.preventDefault()} onChange={(e) => setTrv((b) => ({ accessories: { ...(b.accessories || {}), [ac.id]: Math.max(1, parseInt(e.target.value, 10) || 1) } }), true)} />}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {t.missing.length > 0 && <div className="cf-note warn">Still needed: {t.missing.join(' · ')} — the rest is priced, but a track missing any of these is not a finished configuration. You can still add it to your request; our team will confirm it with you.</div>}
+      </div>
+    );
   };
 
   const finishPanel = () => {
@@ -405,6 +542,46 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
             })}
           </div>
 
+          {view.kit && (
+            <div className="cf-kit">
+              <label className="cf-kit-pick">
+                <span className="cf-q-label">Start from a kit</span>
+                <select value={a.kitStart || a.kitPick || ''} onChange={(e) => startKit(e.target.value)} disabled={!!a.kitStart} data-kit-pick="">
+                  <option value="">— configure from scratch —</option>
+                  {view.kit.offered.map((k) => <option key={k.id} value={k.id}>{k.code}{k.sku ? ` · ${k.sku}` : ''}{k.name ? ` · ${k.name}` : ''}</option>)}
+                </select>
+              </label>
+              {view.kit.chosen && (
+                <label className="cf-kit-feet">
+                  <span className="cf-fine">{view.kit.baseFeet} ft set +</span>
+                  <input value={feetDraft !== null ? feetDraft : (view.kit.extraFeet || '')} placeholder="0" inputMode="numeric" onChange={(e) => extraFeet(e.target.value)} onBlur={() => setFeetDraft(null)} />
+                  <span className="cf-fine">additional ft</span>
+                </label>
+              )}
+              {view.kit.motor && (
+                <select className={`cf-kit-motor${view.kit.motor.chosen ? '' : ' need'}`} value={a.kitMotor || ''} onChange={(e) => chooseMotor(e.target.value)} data-kit-motor="">
+                  <option value="">motor — choose the code</option>
+                  {view.kit.motor.codes.map((m) => <option key={m.code} value={m.code}>{m.code}{m.motor ? ` · ${m.motor}` : ''}</option>)}
+                </select>
+              )}
+              {view.kit.mountFollow && <span className={`cf-kit-mount${view.kit.mountFollow.noKit ? ' warn' : ''}`}>{view.kit.mountFollow.words}</span>}
+              <span className="cf-fine">{view.kit.chosen
+                ? `The ${view.kit.baseFeet} ft kit is the first line; the feet above it are priced under it. Anything else you add is its own line.`
+                : 'Fills in the opening answers. Everything stays editable.'}</span>
+            </div>
+          )}
+          {kitReport && (
+            <div className={`cf-kit-report${kitReport.blocked ? ' blocked' : (kitReport.missed.length ? ' missed' : '')}`}>
+              <div>
+                <div className="cf-q-label">{kitReport.blocked ? 'This product cannot be built as' : 'Started from kit'} · {kitReport.name}</div>
+                {kitReport.blocked && <div className="cf-fine cf-need">⚠ {kitReport.blocked.what} — {kitReport.blocked.why} Nothing was filled in.</div>}
+                {kitReport.carried.length > 0 && <div className="cf-fine">Filled in: {kitReport.carried.join(' · ')}</div>}
+                {kitReport.missed.map((m, i) => <div key={i} className="cf-fine">○ {m.what} — {m.why}</div>)}
+              </div>
+              <button className="btn-ghost" onClick={() => setKitReport(null)}>Dismiss</button>
+            </div>
+          )}
+
           {view.removals.length > 0 && (
             <div className={`cf-removals${view.removals.some((r) => !r.acked) ? ' open' : ''}`}>
               {view.removals.map((r) => (
@@ -450,6 +627,7 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
             <label title="How many of THIS exact set — 2 is two complete sets, never a length"><span>How many of this set</span><input value={a.qty} inputMode="numeric" onChange={(e) => set(() => ({ qty: e.target.value.replace(/[^0-9]/g, '') }), true)} /></label>
             <div className="cf-addbar-go">
               {(view.supportShort || []).map((t, i) => <span key={i} className="cf-short">{t}</span>)}
+              {(view.trvStill || []).length > 0 && <span className="cf-short">Still needed on the track: {view.trvStill.join(' · ')}</span>}
               {view.refusal && <span className="cf-refusal">{view.refusal.message}</span>}
               <button className="btn" onClick={add} disabled={!canAdd}>{editing ? 'Save to request' : 'Add to request'}</button>
             </div>

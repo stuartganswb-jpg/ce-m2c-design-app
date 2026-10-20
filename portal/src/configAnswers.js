@@ -7,16 +7,22 @@ export const FRACTIONS = ['', '1/16', '1/8', '3/16', '1/4', '5/16', '3/8', '7/16
 // The curtain length is kept as typed ('' = the 8 ft the span assumes) and the wall fixing as in a stud or not — with the fabric
 // weight, what the span is worked from (2026-10-19). A new configuration starts on drywall with toggles, medium fabric, 8 ft
 // (Stuart: "make the default for all screens drywall"). `riskConfirmed` is the short count the customer confirmed in the risk window.
-export const blankAnswers = () => ({ answers: {}, picks: {}, sizePick: {}, poleIn: '', poleFrac: '', stepQty: {}, fabricId: 'PRINT', dropFt: '', onStud: false, riskConfirmed: '', globalFinishes: {}, partFinish: {}, finishAnswers: {}, memo: '', qty: '1', acks: [] });
+// "Start from a kit" and the Traverse components step (2026-10-20 — CPQ's own): `kitPick` the kit picked, `kitMotor` its per-motor code,
+// `trvSel` the track's answers (null until the customer answers — the chart's defaults stand till then). While a kit is being started:
+// `kitStart` the kit just picked (the server works out what it fills in, once), `kitArmed` its brackets still being filled in as their
+// steps become answerable, `kitDone` the ones already filled (never twice) — these three are the walk's own, never sent as answers.
+export const blankAnswers = () => ({ answers: {}, picks: {}, sizePick: {}, poleIn: '', poleFrac: '', stepQty: {}, fabricId: 'PRINT', dropFt: '', onStud: false, riskConfirmed: '', globalFinishes: {}, partFinish: {}, finishAnswers: {}, memo: '', qty: '1', acks: [],
+  kitPick: '', kitMotor: '', trvSel: null, kitStart: '', kitArmed: false, kitDone: [] });
 
 // What the server is sent: the answers, and the removals said Understood to. The server works the length out of the typed
 // inches and fraction itself (hardwareSession.lengthInchesOf) and refuses anything the portal does not offer.
 export const wireOf = (a) => ({ answers: a.answers, picks: a.picks, sizePick: a.sizePick, poleIn: a.poleIn, poleFrac: a.poleFrac, stepQty: a.stepQty, fabricId: a.fabricId,
   dropFt: a.dropFt || '', onStud: a.onStud === true, riskConfirmed: a.riskConfirmed || '',
   globalFinishes: a.globalFinishes, partFinish: a.partFinish, finishAnswers: a.finishAnswers, memo: a.memo, qty: Math.max(1, parseInt(a.qty, 10) || 1),
-  drops: (a.acks || []).map((key) => ({ key, acked: true })) });
+  drops: (a.acks || []).map((key) => ({ key, acked: true })), kitPick: a.kitPick || '', kitMotor: a.kitMotor || '', trvSel: a.trvSel || null });
 
-// …and back, when a line of the request is opened again to change it.
+// …and back, when a line of the request is opened again to change it. A kit's brackets are not filled in again (CPQ: "a reopened line
+// keeps the brackets it was saved with").
 export const answersOf = (wire) => {
   const { drops = [], ...rest } = wire || {};
   return { ...blankAnswers(), ...rest, qty: String(rest.qty || 1), acks: (Array.isArray(drops) ? drops : []).filter((d) => d && d.acked).map((d) => d.key) };

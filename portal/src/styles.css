@@ -441,6 +441,31 @@ footer.portal a { color: var(--ink-soft); }
 .cf-send .btn { align-self: flex-start; padding: 14px 22px; }
 .cf-sent p { font-size: 0.95rem; line-height: 1.6; max-width: 640px; }
 
+/* "Start from a kit" (CPQ's picker, 2026-10-20) — the strip under the rail, and what the kit filled in */
+.cf-kit { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; border: 1px solid var(--line); background: var(--card); padding: 10px 14px; margin-bottom: 12px; }
+.cf-kit-pick { display: flex; flex-direction: column; gap: 2px; }
+.cf-kit-pick .cf-q-label { margin-bottom: 0; }
+.cf-kit select { padding: 8px 10px; border: 1px solid var(--line); background: #fff; font-size: 0.88rem; min-width: 260px; max-width: min(100%, 560px); }
+.cf-kit-feet { display: inline-flex; align-items: center; gap: 6px; }
+.cf-kit-feet input { width: 64px; padding: 8px; }
+.cf-kit-motor.need { border-color: #b00020; }
+.cf-kit-mount { font-family: var(--mono); font-size: 10px; color: var(--brass); }
+.cf-kit-mount.warn { color: #8a6508; }
+.cf-kit-report { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border: 1px solid var(--brass); background: var(--card); padding: 10px 14px; margin-bottom: 12px; }
+.cf-kit-report.missed { border-color: #8a6508; }
+.cf-kit-report.blocked { border-color: #b00020; background: #fff5f5; }
+.cf-need { color: #b00020; }
+/* the Traverse components step — CPQ's panel: one choice per row, a tick and a count where a count is asked */
+.cf-trv { display: flex; flex-direction: column; gap: 16px; }
+.cf-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
+.cf-radio, .cf-check { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); background: #fff; cursor: pointer; min-width: 0; }
+.cf-radio.on, .cf-check.on { border-color: var(--brass); background: var(--paper); }
+.cf-radio > span, .cf-check-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.cf-radio-label { font-size: 0.9rem; color: var(--ink); overflow-wrap: anywhere; }
+/* (the page's own `input` rule makes every input full width — a tick, a dot and a count keep their own size here) */
+.cf-radio input[type="radio"], .cf-check input[type="checkbox"] { width: auto; flex: 0 0 auto; padding: 0; margin: 0; }
+.cf-qty { width: 64px; flex: 0 0 64px; padding: 7px; text-align: center; }
+
 @media (max-width: 1080px) { .cf-panels { grid-template-columns: 1fr; } }
 @media (max-width: 860px) {
   .cf-body { grid-template-columns: 1fr; }
@@ -450,4 +475,6 @@ footer.portal a { color: var(--ink-soft); }
 @media (max-width: 520px) {
   .cf-opts { grid-template-columns: 1fr 1fr; }
   .cf-length { grid-template-columns: 1fr 1fr; }
+  .cf-kit select { min-width: 0; width: 100%; }
+  .cf-kit-pick { flex: 1 1 100%; }
 }

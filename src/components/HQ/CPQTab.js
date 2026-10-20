@@ -7,7 +7,7 @@ import { collarAudit } from '../Shared/collarAudit';
 import { clientNoteRow } from '../Shared/lineShopNotes';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 import HardwareConfigurator from '../Shared/HardwareConfigurator';
-import { kitsForSeeding } from '../Shared/kitSeed';
+import { kitsForFlowOf, kitMatcherOf, unalignedKitsForFlowOf } from '../Shared/kitStart';   // "Start from a kit" — one rule for CPQ and the portal (2026-10-20)
 import { finishVariantOf as sharedFinishVariantOf } from '../Shared/finishVariant';
 import { resolve as resolveHardware, diagnose as diagnoseHardware, normalizeChoice } from '../Shared/hardwareModel';
 import { normalizeLocation } from '../Shared/assemblyTags';
@@ -518,53 +518,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
   // code); a generated flow carries flow.kitFamily (stamped at generate). TAG MATCH FIRST —
   // immune to assembly renames and flow regeneration — with the old code-prefix match kept as
   // the fallback for anything not yet tagged.
-  const seedableKits = useMemo(() => {
-      const a = activeAssembly;
-      if (!a) return [];
-      const base = String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase();
-      // Resolve the flow HERE — the `activeFlow` const lives further down the component and
-      // referencing it from this memo was a temporal-dead-zone crash (white screen, 2026-08-26).
-      const flowDoc = cpqFlows.find(f => f.id === activeFlowId);
-      const famFlow = String(flowDoc?.kitFamily || '').trim().toUpperCase();
-      if (!base && !famFlow) return [];
-      // A generator-suffixed display name ("H1-2TRV — GENERATED") still finds its family: the
-      // segment before the em-dash is the code the kits are named for (live diagnosis 2026-08-26).
-      const baseFam = base.includes(' — ') ? base.split(' — ')[0].trim() : (base.includes(' - ') ? base.split(' - ')[0].trim() : '');
-      const matches = (k) => {
-          const kf = String(k.manufacturingSpecs?.kitFamily || '').trim().toUpperCase();
-          if (famFlow && kf === famFlow) return true;                       // the tag system
-          if (kf && base && kf === base) return true;                       // kit tagged with the assembly code
-          if (kf && baseFam && kf === baseFam) return true;
-          const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
-          if (base && (code === base || code.startsWith(base + '-'))) return true;   // legacy prefix
-          return !!baseFam && (code === baseFam || code.startsWith(baseFam + '-'));  // suffixed-name family
-      };
-      return kitsForSeeding(kitLibrary).filter(matches);
-  }, [activeAssembly, cpqFlows, activeFlowId, kitLibrary]);
+  // THE RULE ITSELF LIVES IN Shared/kitStart (kitsForFlowOf — moved word for word 2026-10-20, so the customer portal offers
+  // exactly these kits). Resolve the flow HERE — the `activeFlow` const lives further down the component and referencing it
+  // from this memo was a temporal-dead-zone crash (white screen, 2026-08-26).
+  const seedableKits = useMemo(() => kitsForFlowOf(kitLibrary, { assembly: activeAssembly, flow: cpqFlows.find(f => f.id === activeFlowId) }),
+      [activeAssembly, cpqFlows, activeFlowId, kitLibrary]);
   // Kits that MATCH this flow's family but are missing their alignment — the named reason the
   // picker would otherwise silently not render — plus the full diagnostic (super-admin): what
   // code the picker matched against and what kit codes actually exist, so a prefix or brand
   // mismatch reads off the screen instead of needing a code dive (Stuart 2026-08-26).
   const kitSeedDiag = useMemo(() => {
-      const a = activeAssembly;
-      const base = a ? String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase() : '';
       const flowDoc = cpqFlows.find(f => f.id === activeFlowId);
-      const famFlow = String(flowDoc?.kitFamily || '').trim().toUpperCase();
-      const baseFam = base.includes(' — ') ? base.split(' — ')[0].trim() : (base.includes(' - ') ? base.split(' - ')[0].trim() : '');
-      const match = (k) => {
-          const kf = String(k.manufacturingSpecs?.kitFamily || '').trim().toUpperCase();
-          if (famFlow && kf === famFlow) return true;
-          if (kf && base && kf === base) return true;
-          if (kf && baseFam && kf === baseFam) return true;
-          const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
-          if (base && (code === base || code.startsWith(base + '-'))) return true;
-          return !!baseFam && (code === baseFam || code.startsWith(baseFam + '-'));
-      };
+      const { base, famFlow } = kitMatcherOf({ assembly: activeAssembly, flow: flowDoc });
       return {
           base,
           famFlow,
           totalKitClass: kitLibrary.length,
-          unaligned: base ? kitLibrary.filter(k => !k.manufacturingSpecs?.kitAlign).filter(match).length : 0,
+          unaligned: unalignedKitsForFlowOf(kitLibrary, { assembly: activeAssembly, flow: flowDoc }),
           sampleCodes: kitLibrary.slice(0, 4).map(k => String(k.legacyErpId || k.itemName || k.id)),
       };
   }, [activeAssembly, cpqFlows, activeFlowId, kitLibrary]);

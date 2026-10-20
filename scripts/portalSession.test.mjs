@@ -17,6 +17,8 @@ import { companionsFor } from '../src/components/Shared/hardwareModel.js';
 import { pbrMapOf } from '../src/components/Shared/finishPbr.js';
 import { FABRIC_CLASSES } from '../src/components/Shared/bracketSpan.js';
 import { ASSEMBLY, PINS } from './hardwareAutoPicks.fixture.mjs';
+import { kitsForFlowOf as hqKitsForFlowOf, kitStartOf as hqKitStartOf, kitFillsOf as hqKitFillsOf } from '../src/components/Shared/kitStart.js';
+import { configuratorOffer as hqOffer } from '../src/components/Shared/traverseConfigurator.js';
 
 const require = createRequire(import.meta.url);
 const P = require(process.env.PORTAL_SESSION || '../functions/portalSession.js');
@@ -108,7 +110,15 @@ const allowed = new Set(['P14', 'P25', 'S04', 'EP4']);
         finishAnswers: { P14: { Sheen: 'Flat' }, NOPE: { a: 'b' } }, memo: '  Living   room ', qty: '3', drops: [{ key: 'A|B', acked: true, reason: 'x' }, { key: 'C|D', acked: false }, 'junk'],
         extras: [{ code: 'FEE-PAINT', qty: '4' }], spliceWaived: true, kitPick: 'KIT-SYS', trvSel: { carrierQty: 900 }, stepNotes: { length: 'cut it short' }, priceLevel: 'FAB_COST', customerId: 'CUST-OTHER' }, { finishCodes: allowed });
     eq('the customer\'s own answers are kept, typed as they must be', [st.answers, st.picks, st.lengthInches, st.stepQty, st.fabricId, st.globalFinishes, st.partFinish, st.finishAnswers, st.memo, st.qty, st.drops], [{ setup: 'SINGLE', n: 6 }, { 'ROD||': 'PIN-1' }, 96.5, { a: '12' }, 'BLACKOUT', { METAL: 'P14' }, { 'PIN-1': 'EP4' }, { P14: { Sheen: 'Flat' } }, 'Living room', 3, [{ key: 'A|B', acked: true }]]);
-    eq('NOT taken from a customer: items added by hand, a declined splice, a kit, the track\'s components, shop notes — and no level or customer at all', [st.extras, st.spliceWaived, st.kitPick, st.trvSel, st.stepNotes, 'priceLevel' in st, 'customerId' in st], [[], false, '', null, {}, false, false]);
+    eq('NOT taken from a customer: items added by hand, a declined splice, shop notes — and no level or customer at all', [st.extras, st.spliceWaived, st.stepNotes, 'priceLevel' in st, 'customerId' in st], [[], false, {}, false, false]);
+    // …the kit and the track's answers ARE taken since 2026-10-20 ("the traverse kits needs to behave the same cpq in the app") — in their
+    // SHAPE here (whatever the configuration does not offer is dropped before anything is priced: sessionFor, tested below)
+    eq('the kit and the track\'s answers are taken in their shape — codes upper-cased, counts as digits, nothing else', [st.kitPick, st.kitMotor, st.trvSel,
+        P.stateFromClient({ trvSel: { carrierStyle: ' htslntcar ', carrierQty: '1x2', draw: 'center', motorSide: 'left', picks: { 'endstop-2': '2', bad: 'x', huge: 500, neg: -1 }, accessories: { 'wand-36': 1 }, extra: 'dropped' } }, { finishCodes: allowed }).trvSel,
+        P.stateFromClient({ trvSel: 'not an object', kitPick: 7, kitMotor: { x: 1 } }, { finishCodes: allowed })].map((x) => (x && x.kitPick !== undefined ? [x.kitPick, x.kitMotor, x.trvSel] : x)),
+        ['KIT-SYS', '', { carrierStyle: '', carrierQty: '900', draw: '', motorSide: '', picks: {}, accessories: {} },
+            { carrierStyle: 'HTSLNTCAR', carrierQty: '12', draw: 'CENTER', motorSide: 'LEFT', picks: { 'ENDSTOP-2': 2 }, accessories: { 'WAND-36': 1 } },
+            ['', '', null]]);
     let refused = null; try { P.stateFromClient({ globalFinishes: { BRASS: 'LBR' } }, { finishCodes: allowed }); } catch (e) { refused = [e instanceof P.Refused, e.code]; }
     eq('a finish the portal does not offer is refused by name — as a default', refused, [true, 'FINISH_NOT_OFFERED']);
     refused = null; try { P.stateFromClient({ partFinish: { x: 'lbr' } }, { finishCodes: allowed }); } catch (e) { refused = e.code; }
@@ -200,7 +210,10 @@ ok(`the set-ups take each road — lines ${t.lines}, refused ${JSON.stringify(t.
     // the length as typed — whole inches and a fraction — worked out by the engine's own rule
     const L = (raw) => P.stateFromClient(raw, { finishCodes: allowed, lengthOf: engine.lengthInchesOf }).lengthInches;
     eq('a length typed as inches and a fraction is the engine\'s inches; a number still works; nonsense is no length', [L({ poleIn: '96', poleFrac: '1/2' }), L({ poleIn: '96', poleFrac: '' }), L({ poleIn: 120 }), L({ lengthInches: 84 }), L({ poleIn: 'x', poleFrac: 'y' }), L({ poleIn: '9000' }), L({ poleIn: '96', poleFrac: '3/16', lengthInches: 10 })], [96.5, 96, 120, 84, null, null, 96.1875]);
-    eq('where the customer is: the step and what a click applies to, nothing else', [P.uiFromClient({ step: 'ROD||', scope: 'part', x: 1 }), P.uiFromClient({ scope: 'EVERYTHING' }), P.uiFromClient(null)], [{ step: 'ROD||', scope: 'PART' }, { step: '', scope: '' }, { step: '', scope: '' }]);
+    const noKit = { kitStart: '', kitArmed: false, kitDone: [] };
+    eq('where the customer is: the step and what a click applies to, nothing else', [P.uiFromClient({ step: 'ROD||', scope: 'part', x: 1 }), P.uiFromClient({ scope: 'EVERYTHING' }), P.uiFromClient(null)], [{ step: 'ROD||', scope: 'PART', ...noKit }, { step: '', scope: '', ...noKit }, { step: '', scope: '', ...noKit }]);
+    eq('…and, starting from a kit: the kit just picked, whether its brackets are still being filled in, and the ones already filled', [P.uiFromClient({ kitStart: 'KIT-1', kitArmed: true, kitDone: ['a|b', 7, 'c|d'] }), P.uiFromClient({ kitArmed: 'yes', kitDone: 'a|b' })],
+        [{ step: '', scope: '', kitStart: 'KIT-1', kitArmed: true, kitDone: ['a|b', 'c|d'] }, { step: '', scope: '', ...noKit }]);
     // which products a login may open: live, and preview for the logins ticked for previews
     const crm = { portalFlowIds: ['A', 'B', 7], portalPreviewFlowIds: ['B', 'C', ''], portalPreviewUids: ['uid-stuart'] };
     eq('a login sees the LIVE products; one ticked for previews also sees the PREVIEW ones (once, live winning)', [P.flowIdsFor(crm, 'uid-other'), P.flowIdsFor(crm, 'uid-stuart'), P.flowIdsFor(crm, ''), P.flowIdsFor(null, 'uid-stuart')],
@@ -429,6 +442,123 @@ ok(`the set-ups take each road — lines ${t.lines}, refused ${JSON.stringify(t.
     if (process.env.PS_VERBOSE) console.log(JSON.stringify(t3));
     eq(`the portal at a splice: the typed count rounded up as the bill holds it, the risk numbers and their key as the engine keys them, "confirmed" only for the count confirmed, the gate in the portal's words${bad3.length ? ` — first: ${bad3.slice(0, 4).join('; ')}` : ''}`, bad3.length, 0);
     ok(`…reached: rounded ${t3.rounded}, a short count with its key ${t3.risk} (confirmed ${t3.confirmed}, not ${t3.unconfirmed}), the gate ${t3.gate}`, t3.rounded > 5 && t3.risk > 3 && t3.confirmed === t3.risk && t3.unconfirmed === t3.risk && t3.gate > 3);
+}
+
+// ── "START FROM A KIT" AND THE TRAVERSE COMPONENTS STEP, ON THE PORTAL AS IN CPQ (Stuart 2026-10-20: "the traverse kits needs to
+//    behave the same cpq in the app" · "a. yes" — what a track still needs is said, never refused). Every answer below is held against
+//    HQ's own modules on the same records: the kit list, what a kit start fills in, the brackets it fills, the step, the cart line. ──
+{
+    const COMPS = [extra('HTSLNTCAR', 1.5), extra('HTSRIPCAR', 1.25), extra('H1-2TRVSPL', 18), extra('H1-2TRVMC', 6), extra('ENDSTOP-2', 0),
+        extra('WAND-36', 14, { clientPricing: [{ customerId: 'FABRICUT', clientSku: 'HWAND', price: 11 }] }), extra('REMOTE-1', 60)];
+    const RULES = { usage: [{ label: 'Pinch Pleat Carriers', itemId: 'HTSLNTCAR', byFeet: { 2: 8, 4: 16, 6: 24, 8: 32, 12: 48 } }, { label: 'Ripplefold Carriers', itemId: 'HTSRIPCAR', byFeet: { 4: 12, 8: 24, 12: 36 } },
+        { label: 'Splice', itemId: 'H1-2TRVSPL', byFeet: { 12: 1 } }],
+        configurator: [{ itemId: 'H1-2TRVMC', drive: 'MANUAL', billable: false }, { itemId: 'ENDSTOP-2', drive: 'BOTH', billable: false }, { itemId: 'H1-2TRVSPL', drive: 'BOTH', billable: false },
+            { itemId: 'WAND-36', drive: 'MANUAL', billable: true }, { itemId: 'REMOTE-1', drive: 'MOTORIZED', billable: true }] };
+    const kitRec = (id, code, align, { specs = {}, family = 'H1-2TRV' } = {}) => ({ id, legacyErpId: code, itemName: `Kit ${code}`, partClass: 'Kit', brandId: 'ce',
+        manufacturingSpecs: { kitFamily: family, ...(align ? { kitAlign: { frontRail: 'TRACK', material: 'P', minFeet: 4, ...align } } : {}), ...specs },
+        clientPricing: [{ customerId: 'FABRICUT', clientSku: `HTS-${hh(code) % 900 + 100}`, price: 150 + hh(code) % 50, perFootPrice: 22 }] });
+    const KITS = [kitRec('KIT-4P', 'H1-2TRV-4/P', { setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL' }),
+        kitRec('KIT-4MP', 'H1-2TRV-4M/P', { setup: 'SINGLE', drive: 'MOTORIZED', mount: 'WALL' }, { specs: { kitMotorCodes: [{ code: 'H1-2TRV-4M/P-35W', fabSku: 'HM35W', motorItem: 'HSOM-21', net: '1050' }] } }),
+        kitRec('KIT-4D', 'H1-2TRV-4D/P', { setup: 'DOUBLE', drive: 'MANUAL', mount: 'WALL' }),
+        kitRec('KIT-4C', 'H1-2TRV-4C/P', { setup: 'SINGLE', drive: 'MANUAL', mount: 'CEILING' }),
+        kitRec('KIT-NOALIGN', 'H1-2TRV-4X/P', null),
+        kitRec('KIT-138', 'H1-138TRV-4H/P', { setup: 'SINGLE', drive: 'MANUAL', mount: 'WALL', rodKind: 'TRAVERSE' }, { family: 'H1-138TRV' })];
+    const WK = world(fabricut, { records: [...records, ...COMPS, ...KITS], trvRules: RULES });
+    const S = (raw) => P.stateFromClient(raw, { finishCodes: allowed, lengthOf: engine.lengthInchesOf });
+    const lv = { level: levels.chosenForShown, money: levels.money };
+    const bare = (it) => { if (!it) return null; const c = JSON.parse(JSON.stringify(it)); delete c.id; return JSON.stringify(c); };
+    const trvOf = (v) => (v.steps.find((st) => st.kind === 'TRV') || {}).trv || null;
+    // ── the kits: CPQ's own list ──
+    eq('the kits a flow offers are CPQ\'s own list (HQ\'s module, the same records) — aligned, of the flow\'s family', WK.kits.map((k) => k.id),
+        hqKitsForFlowOf([...records, ...KITS].filter((r) => r.partClass === 'Kit' && r.brandId === 'ce'), { assembly: WK.assembly, flow }).map((k) => k.id));
+    eq('…here the four H1-2TRV kits: never one without its alignment, never another family\'s', WK.kits.map((k) => k.id), ['KIT-4P', 'KIT-4MP', 'KIT-4D', 'KIT-4C']);
+    const v0 = P.viewOf(engine, WK, S({}), lv);
+    eq('the strip offers each kit by our number with THEIR number beside it, and its name; nothing chosen, nothing filled in', [v0.kit.offered.map((k) => [k.id, k.code, /^HTS-\d+$/.test(k.sku), k.name]), v0.kit.chosen, v0.kitStart, v0.kitFills],
+        [KITS.slice(0, 4).map((k) => [k.id, k.legacyErpId, true, k.itemName]), '', null, {}]);
+    eq('…another customer sees our numbers only — never Fabricut\'s', P.viewOf(engine, world({ ...fabricut, id: 'CUST-OTHER', name: 'OTHER CO', companyName: '' }, { records: [...records, ...COMPS, ...KITS], trvRules: RULES }), S({}), lv).kit.offered.map((k) => k.sku), ['', '', '', '']);
+    // ── starting from a kit: what it fills in is CPQ's picker's (HQ's module, on HQ's own model) ──
+    const hqModel = direct('STANDARD', S({}), WK).model;
+    KITS.forEach((k) => {
+        const v = P.viewOf(engine, WK, S({}), { ...lv, ui: P.uiFromClient({ kitStart: k.id }) });
+        if (!WK.kits.includes(k)) { eq(`start from ${k.legacyErpId}: a kit this flow does not offer starts nothing`, v.kitStart, null); return; }
+        const want = hqKitStartOf({ model: hqModel, kit: k, lengthTyped: false });
+        eq(`start from ${k.legacyErpId}: the answers, picks, length and words CPQ's picker fills in${want.blocked ? ' (a kit the assembly cannot build fills in nothing)' : ''}`,
+            [v.kitStart.id, v.kitStart.answers, v.kitStart.picks, v.kitStart.lengthInches, v.kitStart.report.carried, v.kitStart.report.missed, v.kitStart.blocked],
+            [k.id, want.answers, want.picks, want.lengthInches, want.report.carried, want.report.missed.map((m) => ({ what: m.what, why: m.why })), want.blocked ? { what: want.blocked.what, why: want.blocked.why } : null]);
+    });
+    // ── the browser's walk after a kit start: the seed applied, then the brackets as they become answerable (each pass HQ's own) ──
+    const walkKit = (kit, more = {}) => {
+        const start = P.viewOf(engine, WK, S({}), { ...lv, ui: P.uiFromClient({ kitStart: kit.id }) }).kitStart;
+        const { answers: moreAnswers = {}, ...moreRest } = more;
+        let raw = { answers: { ...start.answers, ...moreAnswers }, picks: { ...start.picks }, poleIn: '96', kitPick: kit.id, ...moreRest };
+        const done = [];
+        let passes = 0, differ = 0;
+        for (let i = 0; i < 6; i++) {
+            const v = P.viewOf(engine, WK, S(raw), { ...lv, ui: P.uiFromClient({ kitArmed: true, kitDone: done }) });
+            const hqS = direct('STANDARD', S(raw), WK);
+            const hqAdd = hqKitFillsOf({ model: hqS.model, kit, answers: hqS.effAnswers, livePicks: hqS.livePicks, ourId: hqS.ourId, recommendFor: hqS.recommendFor, done: new Set(done) });
+            if (JSON.stringify(v.kitFills) !== JSON.stringify(hqAdd)) differ++;
+            const keys = Object.keys(v.kitFills);
+            if (!keys.length) break;
+            passes++;
+            raw = { ...raw, picks: { ...raw.picks, ...v.kitFills } };
+            keys.forEach((key) => done.push(`${key}|${v.kitFills[key]}`));
+        }
+        return { raw, passes, differ, done };
+    };
+    const w4 = walkKit(KITS[0], { answers: { proj: '4.625' } });   // a single's arm waits for the projection
+    eq('the kit\'s brackets are filled as they become answerable — each pass what CPQ\'s effect fills, none filled twice', [w4.differ, w4.passes > 0, new Set(w4.done).size === w4.done.length], [0, true, true]);
+    const v4 = P.viewOf(engine, WK, S(w4.raw), { ...lv, ui: P.uiFromClient({ kitArmed: true, kitDone: w4.done }) });
+    eq('…the strip then says which kit, its base set and the feet above it; a manual track asks no motor', [v4.kit.chosen, v4.kit.baseFeet, v4.kit.extraFeet, v4.kit.motor, v4.kitFills], ['KIT-4P', 4, 4, null, {}]);
+    // ── the traverse components step: CPQ's panel ──
+    const tv = trvOf(v4);
+    const hq4 = direct(levels.chosenForShown, S(w4.raw), WK);
+    const offer = hqOffer({ rules: RULES, drive: hq4.trvDrive, feet: hq4.trvFeet, realFeet: hq4.lengthFeet || undefined });
+    eq('the traverse step asks the draw (three), no motor side on a manual track, and the carriers, components and accessories the chart offers here',
+        [tv.draws.map((d) => d.value), tv.motorSides, tv.carrierStyles.map((c) => [c.id, c.included, c.defaultQty]), tv.picks.map((pk) => [pk.id, pk.included]), tv.accessories.map((a) => a.id)],
+        [['CENTER', 'LEFT', 'RIGHT'], [], offer.carrierStyles.map((c) => [c.itemId, c.includedQty, c.defaultQty]), offer.picks.map((pk) => [pk.itemId, pk.includedQty]), offer.accessories.map((a) => a.itemId)]);
+    const wand = tv.accessories.find((a) => a.id === 'WAND-36');
+    const wandPrice = Math.round((Number(hq4.trvPriceOf('WAND-36')) || 0) * 100) / 100;
+    eq('…their own number for a part (the wand), its price at the level shown, the chart\'s defaults until answered, and what is still needed — beside Add too',
+        [wand.sku, wand.unit, tv.answered, tv.sel.draw, tv.sel.picks, tv.missing, v4.trvStill], ['HWAND', wandPrice > 0 ? wandPrice : null, false, '', hq4.trvLive.picks, ['draw direction', 'carrier style'], ['draw direction', 'carrier style']]);
+    const vOther = P.viewOf(engine, world({ ...fabricut, id: 'CUST-OTHER', name: 'OTHER CO', companyName: '' }, { records: [...records, ...COMPS, ...KITS], trvRules: RULES }), S(w4.raw), lv);
+    eq('…another customer is never shown Fabricut\'s number for it', trvOf(vOther).accessories.find((a) => a.id === 'WAND-36').sku !== 'HWAND', true);
+    const unanswered = P.requestLineOf(engine, WK, S(w4.raw), { level: 'STANDARD' });
+    eq('the request still goes with the track unanswered — said on the line\'s notes, never refused (CPQ\'s rule)', [!!unanswered.item, unanswered.notes.filter((n) => /^Traverse/.test(n))], [true, ['Traverse — still needed: draw direction · carrier style.']]);
+    const answered = { ...w4.raw, trvSel: { carrierStyle: 'htsripcar', carrierQty: '30', draw: 'center', motorSide: '', picks: { 'ENDSTOP-2': 2, 'H1-2TRVSPL': 1 }, accessories: { 'WAND-36': 1, 'REMOTE-1': 1, BOGUS: 3 } } };
+    const vA = P.viewOf(engine, WK, S(answered), lv);
+    const stands = { carrierStyle: 'HTSRIPCAR', carrierQty: '30', draw: 'CENTER', motorSide: '', picks: { 'ENDSTOP-2': 2, 'H1-2TRVSPL': 1 }, accessories: { 'WAND-36': 1 } };
+    eq('answered: what this track does not offer is dropped (a motor\'s remote on a manual track, a code nobody offers); the rest stands, nothing is still needed', [trvOf(vA).sel, trvOf(vA).answered, vA.trvStill], [stands, true, []]);
+    const reqA = P.requestLineOf(engine, WK, S(answered), { level: 'STANDARD' });
+    const ownA = direct('STANDARD', { ...S(answered), trvSel: stands }, WK);
+    eq('…and the request is HQ\'s own cart line for the answers that stand — the kit, its feet, the track\'s choices — with no traverse note',
+        [bare(reqA.item) === bare(ownA.item), reqA.item.engineConfig.kitPick, reqA.item.engineConfig.trvSel, reqA.notes.filter((n) => /^Traverse/.test(n))], [true, 'KIT-4P', stands, []]);
+    const odd = { ...w4.raw, trvSel: { carrierStyle: 'HTSRIPCAR', draw: 'SIDEWAYS', motorSide: 'UP', picks: {}, accessories: {} } };
+    eq('a draw or a motor side nobody offers is dropped — and the draw is still needed', [trvOf(P.viewOf(engine, WK, S(odd), lv)).sel.draw, trvOf(P.viewOf(engine, WK, S(odd), lv)).sel.motorSide, P.viewOf(engine, WK, S(odd), lv).trvStill,
+        P.requestLineOf(engine, WK, S(odd), { level: 'STANDARD' }).item.engineConfig.trvSel.draw], ['', '', ['draw direction'], '']);
+    // a bracket the kit filled and the customer then took off is never filled again (CPQ's done set)
+    const [takenKey] = w4.done.length ? w4.done[0].split('|').length > 3 ? [w4.done[0].slice(0, w4.done[0].lastIndexOf('|'))] : [w4.done[0].split('|').slice(0, -1).join('|')] : [''];
+    const takenOff = { ...w4.raw, picks: Object.fromEntries(Object.entries(w4.raw.picks).filter(([k2]) => k2 !== takenKey)) };
+    const refill = P.viewOf(engine, WK, S(takenOff), { ...lv, ui: P.uiFromClient({ kitArmed: true, kitDone: w4.done }) }).kitFills;
+    const fresh = P.viewOf(engine, WK, S(takenOff), { ...lv, ui: P.uiFromClient({ kitArmed: true, kitDone: [] }) }).kitFills;
+    eq('a bracket the kit filled and the customer took off stays off — it would be filled again only on a fresh start', [!!takenKey, takenKey in refill, takenKey in fresh], [true, false, true]);
+    // ── a motorised kit: its motor code, in our words and theirs, never a net price ──
+    const wm = walkKit(KITS[1], { answers: { proj: '6' } });
+    const vM = P.viewOf(engine, WK, S(wm.raw), lv);
+    eq('a motorised kit asks for its motor code — the code and the motor, never its net price; the track asks the motor side', [wm.differ, vM.kit.motor, trvOf(vM).motorSides.map((m) => m.value), vM.trvStill],
+        [0, { chosen: '', codes: [{ code: 'H1-2TRV-4M/P-35W', motor: 'HSOM-21' }] }, ['LEFT', 'RIGHT'], ['draw direction', 'motor side', 'carrier style']]);
+    const reqM = P.requestLineOf(engine, WK, S({ ...wm.raw, kitMotor: 'h1-2trv-4m/p-35w' }), { level: 'STANDARD' });
+    const reqBad = P.requestLineOf(engine, WK, S({ ...wm.raw, kitMotor: 'NOT-A-MOTOR' }), { level: 'STANDARD' });
+    eq('…the code chosen rides the line in the kit\'s own spelling and HQ bills it as CPQ does; one the kit does not carry is dropped',
+        [reqM.item.engineConfig.kitMotor, bare(reqM.item) === bare(direct('STANDARD', { ...S(wm.raw), kitMotor: 'H1-2TRV-4M/P-35W' }, WK).item), reqBad.item.engineConfig.kitMotor || ''], ['H1-2TRV-4M/P-35W', true, '']);
+    const vMc = P.viewOf(engine, WK, S({ ...wm.raw, kitMotor: 'H1-2TRV-4M/P-35W' }), lv);
+    const motorLine = vMc.price.lines.find((l) => l.code === 'H1-2TRV-4M/P-35W');
+    eq('…chosen, the strip shows it chosen; the kit line carries the motor code and reads "priced on review" — the motor\'s net price is nowhere in what the customer gets, nor in the total',
+        [vMc.kit.motor.chosen, !!motorLine && motorLine.onReview === true && !('unit' in motorLine), /\b1050\b/.test(JSON.stringify(vMc)), vMc.price.hasReview], ['H1-2TRV-4M/P-35W', true, false, true]);
+    const vMo = P.viewOf(engine, world({ ...fabricut, id: 'CUST-OTHER', name: 'OTHER CO', companyName: '' }, { records: [...records, ...COMPS, ...KITS], trvRules: RULES }), S({ ...wm.raw, kitMotor: 'H1-2TRV-4M/P-35W' }), lv);
+    eq('…its per-motor number only for a customer whose pricing row the kit carries: Fabricut sees it, another customer does not', [motorLine.sku, (vMo.price.lines.find((l) => l.code === 'H1-2TRV-4M/P-35W') || {}).sku], ['HM35W', '']);
+    // ── a kit the flow does not offer is dropped, never billed ──
+    eq('a kit this flow does not offer (another family\'s, or a made-up id) is dropped from the line', ['KIT-138', 'KIT-GONE'].map((id) => P.requestLineOf(engine, WK, S({ ...w4.raw, kitPick: id }), { level: 'STANDARD' }).item.engineConfig.kitPick || ''), ['', '']);
 }
 
 // THE CUSTOMER'S PICTURE OF A LINE (step 5, Stuart 2026-10-20): kept only as what it claims to be, a JPEG this size or smaller;

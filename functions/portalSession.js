@@ -52,10 +52,11 @@ const loadedFrom = new Map();
 async function loadEngine(dir = path.join(__dirname, 'engine')) {
     if (loadedFrom.has(dir)) return loadedFrom.get(dir);
     const at = (f) => pathToFileURL(path.join(dir, f)).href;
-    const [session, pricing, levels, twin, handoff, itemKit, model, pbr, scope, span, size] = await Promise.all([
+    const [session, pricing, levels, twin, handoff, itemKit, model, pbr, scope, span, size, kitStart, trvCfg, trvDraw, clientPricing] = await Promise.all([
         import(at('hardwareSession.js')), import(at('hardwarePricing.js')), import(at('priceLevels.js')), import(at('materialTwin.js')),
         import(at('hardwareHandoff.js')), import(at('itemKit.js')), import(at('hardwareModel.js')),
-        import(at('finishPbr.js')), import(at('finishScope.js')), import(at('bracketSpan.js')), import(at('sizeMatrix.js'))]);
+        import(at('finishPbr.js')), import(at('finishScope.js')), import(at('bracketSpan.js')), import(at('sizeMatrix.js')),
+        import(at('kitStart.js')), import(at('traverseConfigurator.js')), import(at('traverseDraw.js')), import(at('clientPricing.js'))]);
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'MANIFEST.json'), 'utf8'));
     const engine = {
         sessionOf: session.sessionOf, spanRiskKeyOf: session.spanRiskKeyOf, offeredFinishesOf: session.offeredFinishesOf, stepHintOf: session.stepHintOf, valueLabel: session.valueLabel, AXIS_LABEL: session.AXIS_LABEL,
@@ -65,6 +66,10 @@ async function loadEngine(dir = path.join(__dirname, 'engine')) {
         takesQty: model.takesQty, companionsFor: model.companionsFor,
         pbrMapOf: pbr.pbrMapOf, FABRIC_CLASSES: span.FABRIC_CLASSES, renderScaleOf: size.renderScaleOf,
         scope: { scopeTargetsOf: scope.scopeTargetsOf, scopeInForce: scope.scopeInForce, swatchActionOf: scope.swatchActionOf, highlightOf: scope.highlightOf },
+        // "Start from a kit" and the Traverse components step, as CPQ does them (2026-10-20)
+        kitsForFlowOf: kitStart.kitsForFlowOf, kitIdOf: kitStart.kitIdOf, kitStartOf: kitStart.kitStartOf, kitFillsOf: kitStart.kitFillsOf,
+        configuratorOffer: trvCfg.configuratorOffer, DRAWS: trvDraw.DRAWS, MOTOR_SIDES: trvDraw.MOTOR_SIDES, traverseAnswersMissing: trvDraw.traverseAnswersMissing,
+        findClientPriceRow: clientPricing.findClientPriceRow, customerKeys: clientPricing.customerKeys,
         stamp: { engineVersion: String(manifest.engineVersion || ''), closureHash: String(manifest.closureHash || ''), files: Object.keys(manifest.files || {}).length },
     };
     loadedFrom.set(dir, engine);
@@ -87,7 +92,8 @@ function worldFor(engine, { flow, records = [], pins = [], finishes = [], outsou
     return {
         assembly, pins: pins || [],
         parts: [...libraryParts, ...liveAssemblies, ...kitLibrary.filter(engine.isItemKit)],
-        kits: [],                                   // "Start from a kit" comes to the portal with the traverse step — not offered yet
+        // "Start from a kit": the kits CPQ's own picker offers on this flow (Shared/kitStart.kitsForFlowOf — 2026-10-20)
+        kits: engine.kitsForFlowOf(kitLibrary, { assembly, flow }),
         finishes: [...(finishes || []), ...(outsourceFinishes || [])], outsourceCodes: outsourceFinishes || [],
         flow, spanMap: (spanDoc && spanDoc.map) || {}, spanCaps: (spanDoc && spanDoc.caps) || {},
         extraItems: (Array.isArray(flow && flow.extraItems) ? flow.extraItems : []).filter((x) => String((x && x.code) || '').trim()),
@@ -124,8 +130,9 @@ const codeOfFinish = (f) => U(f && (f.code || f.name));
 
 // ── WHAT THE BROWSER MAY SAY ─────────────────────────────────────────────────────────────────
 // The customer's answers, field by field. Anything else it sends is dropped; anything the portal does not
-// offer is refused by name. NOT taken from a customer: items added by hand, a declined splice, a kit, the
-// traverse components (the engine seeds them from the chart), shop notes, a price level.
+// offer is refused by name. NOT taken from a customer: items added by hand, a declined splice, shop notes, a
+// price level. The kit, its motor code and the traverse components ARE (2026-10-20) — in their shape here, and
+// whatever this configuration does not offer is dropped before anything is priced (sessionFor below).
 const FABRICS = ['SHEER', 'PRINT', 'BLACKOUT'];
 class Refused extends Error { constructor(code, message) { super(message); this.code = code; } }
 function stateFromClient(raw, { finishCodes = new Set(), lengthOf = null } = {}) {
@@ -159,7 +166,21 @@ function stateFromClient(raw, { finishCodes = new Set(), lengthOf = null } = {})
         memo: txt(r.memo, 120), qty: qty > 0 && qty <= 999 ? qty : 1,
         // what was named as removed and acknowledged — the keys only; the entries themselves are worked out here
         drops: (Array.isArray(r.drops) ? r.drops : []).slice(0, 80).filter((d) => isObj(d) && typeof d.key === 'string' && d.acked === true).map((d) => ({ key: d.key.slice(0, 400), acked: true })),
-        extras: [], spliceWaived: false, kitPick: '', kitCode: '', kitMotor: '', trvSel: null, stepNotes: {}, stepNoteClient: {},
+        extras: [], spliceWaived: false, kitCode: '', stepNotes: {}, stepNoteClient: {},
+        // "Start from a kit" and the Traverse components step (Stuart 2026-10-20: "the traverse kits needs to behave the same cpq in
+        // the app"): the kit picked (by the id CPQ's picker holds), its per-motor code, and the track's answers.
+        kitPick: typeof r.kitPick === 'string' ? r.kitPick.slice(0, 120) : '', kitMotor: typeof r.kitMotor === 'string' ? r.kitMotor.slice(0, 80) : '',
+        trvSel: trvSelShapeOf(r.trvSel),
+    };
+}
+// The Traverse components answers, in CPQ's shape (TraverseConfiguratorPanel): a carrier style and how many, the draw, the motor
+// side, the components and accessories ticked with their counts. Codes as the chart spells them; counts 0–99.
+function trvSelShapeOf(raw) {
+    if (!isObj(raw)) return null;
+    const counts = (o) => { const out = {}; if (isObj(o)) Object.entries(o).slice(0, 40).forEach(([k, v]) => { const n = parseInt(v, 10); const c = U(k).slice(0, 60); if (c && n >= 0 && n <= 99) out[c] = n; }); return out; };
+    return {
+        carrierStyle: U(raw.carrierStyle).slice(0, 60), carrierQty: String(raw.carrierQty == null ? '' : raw.carrierQty).replace(/[^0-9]/g, '').slice(0, 4),
+        draw: U(raw.draw).slice(0, 12), motorSide: U(raw.motorSide).slice(0, 12), picks: counts(raw.picks), accessories: counts(raw.accessories),
     };
 }
 
@@ -168,7 +189,11 @@ function stateFromClient(raw, { finishCodes = new Set(), lengthOf = null } = {})
 const SCOPES = ['PART', 'COLLAR', 'WHOLE'];
 function uiFromClient(raw) {
     const r = isObj(raw) ? raw : {};
-    return { step: typeof r.step === 'string' ? r.step.slice(0, 160) : '', scope: SCOPES.includes(U(r.scope)) ? U(r.scope) : '' };
+    return { step: typeof r.step === 'string' ? r.step.slice(0, 160) : '', scope: SCOPES.includes(U(r.scope)) ? U(r.scope) : '',
+        // …and, for "Start from a kit" (2026-10-20): the kit just picked (what it fills in is worked out once, here), whether its
+        // brackets are still being filled in as their steps become answerable, and the ones already filled (never filled twice)
+        kitStart: typeof r.kitStart === 'string' ? r.kitStart.slice(0, 120) : '', kitArmed: r.kitArmed === true,
+        kitDone: (Array.isArray(r.kitDone) ? r.kitDone : []).filter((k) => typeof k === 'string').slice(0, 200).map((k) => k.slice(0, 400)) };
 }
 
 // WHICH PRODUCTS A LOGIN MAY OPEN (CRM → Portal Access): every flow set LIVE; and, for the logins ticked "sees
@@ -203,8 +228,9 @@ const removalWords = (reason) => (/not made in the size now chosen/i.test(String
     : /no longer on this assembly|re-made since this line was saved/i.test(String(reason || '')) ? 'it is no longer offered on this step'
         : 'it does not go with a choice made after it');
 
-function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = true, ui = {} } = {}) {
-    const s = engine.sessionOf({ ...data, priceLevel: level }, state);
+function viewOf(engine, data, raw, { level = 'STANDARD', money: showMoney = true, ui = {} } = {}) {
+    // (what this configuration does not offer — a kit, a motor code, a track answer — is dropped before anything is priced)
+    const { s, state } = sessionFor(engine, data, raw, level);
     const part = (id) => s.findPart(id);
     const their = (id) => engine.aliasFor(part(id), s.priceCtx) || '';
     // An option: our number, theirs, our description — and the nodes it owns in the model, which is what HQ's own picture
@@ -247,7 +273,9 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
                 ...((s.advice.unlisted || []).length ? { unlisted: true } : {}) } : null,
             rods };
         if (st.kind === 'CARRIERS') return { ...base, rows: st.carriers.map((c) => ({ code: s.ourId(c.partId), name: txt((part(c.partId) || {}).itemName || c.name) })) };
-        return base;                               // TRV: the track's components — shown as the engine seeds them (the customer's own picks come with the traverse step)
+        // TRV: the track's components, asked as CPQ asks them (2026-10-20) — the draw, the motor side, the carriers, the rest
+        if (st.kind === 'TRV') return { ...base, trv: trvViewOf(engine, data, s, showMoney) };
+        return base;
     });
     // ── THE FINISHES: what this configuration can wear among what the portal offers, grouped as the engine groups them ──
     const offered = portalFinishesOf(engine, data);
@@ -292,9 +320,17 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
         if (l.subFinishCode) { const sub = s.finishByCode.get(U(l.subFinishCode)); return { finish: sub ? finishName(sub) : txt(l.subFinishCode), stock: true }; }
         return { finish: '', ...(l.noFinish ? { clear: true } : {}) };
     };
-    const line = (l, extra = {}) => ({ code: txt(l.billedId || s.ourId(l.partId)), sku: txt(l.sku || l.aliasCode || ''), name: txt((part((l.twinOf && l.soldPartId) || l.partId) || {}).itemName || l.name), qty: l.qty,
+    // A KIT LINE CARRYING A MOTOR CODE (2026-10-20): the engine prices it at the motor's NET (hardwareSession.kitBillOf →
+    // kitSeed.applyKitPricing, "match tab 7") — a figure from the 4.6 kit sheet at every level, never a Retail price, and its
+    // number is the per-motor code of the kit sheet. The portal shows its own level, so that line reads "priced on review", out of
+    // the firm total; and its number is shown only to a customer whose own pricing row the kit carries. HQ's request keeps the line.
+    const keys = engine.customerKeys(data.customerId, data.customer);
+    const kitOfCode = (code) => (data.kits || []).find((k) => U(k.legacyErpId || k.itemName) === U(code)) || null;
+    const motorSku = (l) => { const k = kitOfCode(l.partId); return k && engine.findClientPriceRow(k.clientPricing, keys) ? txt(l.sku || l.aliasCode || '') : ''; };
+    const reviewOf = (l) => onReview(l) || !!l.motorCode;
+    const line = (l, extra = {}) => ({ code: txt(l.billedId || s.ourId(l.partId)), sku: l.motorCode ? motorSku(l) : txt(l.sku || l.aliasCode || ''), name: txt((part((l.twinOf && l.soldPartId) || l.partId) || {}).itemName || l.name), qty: l.qty,
         ...(l.perFoot ? { feet: l.billedFeet !== undefined ? l.billedFeet : l.feet } : {}), ...finishOf(l), ...extra,
-        ...(showMoney && !onReview(l) ? { unit: money(l.unit), total: money(l.total) } : { onReview: true }) });
+        ...(showMoney && !reviewOf(l) ? { unit: money(l.unit), total: money(l.total) } : { onReview: true }) });
     const takenExtras = s.extraLines.filter((l) => Number((s.extras.find((x) => x.code === l.partId && (x.slot || '') === (l.slot || '')) || {}).qty) > 0);
     const lines = [...engine.customerLines(s.priced.lines).map((l) => line(l)), ...takenExtras.map((l) => line(l, { added: true })), ...(s.trvLines || []).map((l) => line(l))];
     // The total is the ENGINE's (parts that are billed but not shown are in it, as on CPQ's own panel), less the money of
@@ -302,8 +338,8 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
     const everyLine = [...s.priced.lines, ...takenExtras, ...(s.trvLines || [])];
     // "Priced on review" is said of what the customer can SEE, or of a hidden part that carries money — a hidden part with no
     // price of its own (the standoffs a return brings: $0, as on CPQ's own panel) is part of the set, not a price to come.
-    const hasReview = everyLine.some((l) => onReview(l) && (!l.hidden || Number(l.total) !== 0));
-    const firmTotal = money(s.grandTotal - everyLine.filter(onReview).reduce((n, l) => n + (Number(l.total) || 0), 0));
+    const hasReview = everyLine.some((l) => reviewOf(l) && (!l.hidden || Number(l.total) !== 0));
+    const firmTotal = money(s.grandTotal - everyLine.filter(reviewOf).reduce((n, l) => n + (Number(l.total) || 0), 0));
     // ── THE DRAWING: what HQ's own drawing code (Shared/DynamicModel) is handed, and how each finish on screen catches the
     // light — the same numbers HQ's registry holds, worked out from the same two finish lists (Shared/finishPbr.pbrMapOf) ──
     let render = null;
@@ -334,7 +370,117 @@ function viewOf(engine, data, state, { level = 'STANDARD', money: showMoney = tr
         risk: (s.supportShort || []).map((x) => ({ chosen: x.chosen, recommended: x.recommended, onStud: !!(s.span && s.span.onStud), lengthInches: s.lengthInches,
             everyInches: s.advice ? s.advice.everyInches : null, key: engine.spanRiskKeyOf({ chosen: x.chosen, recommended: x.recommended, onStud: !!(s.span && s.span.onStud), lengthInches: s.lengthInches }) })),
         refusal: s.refusal ? { kind: s.refusal.kind, message: REFUSAL_WORDS[s.refusal.kind] || 'This configuration cannot be requested yet.' } : null,
+        // "Start from a kit" (2026-10-20): the kits, the one in hand, its motor code, how it follows the mount — what picking one fills
+        // in (once, when it is picked) — and the kit's brackets that have just become answerable
+        kit: kitViewOf(engine, data, s),
+        kitStart: kitStartViewOf(engine, data, s, ui),
+        kitFills: (ui && ui.kitArmed && s.kitSource && s.kitSource.record)
+            ? engine.kitFillsOf({ model: s.model, kit: s.kitSource.record, answers: s.effAnswers, livePicks: s.livePicks, ourId: s.ourId, recommendFor: s.recommendFor, done: new Set(ui.kitDone || []) })
+            : {},
+        // what the track still needs (said, never refused — CPQ's rule; Stuart 2026-10-20 "a. yes")
+        trvStill: trvMissingOf(engine, data, s),
     };
+}
+
+// ── WHAT THIS CONFIGURATION OFFERS, AND ONLY THAT ─────────────────────────────────────────────
+// A kit the flow does not offer, a motor code the kit does not carry, a carrier, component, draw or side the chart does not offer
+// for this drive and length — dropped, so a cart line never carries what was not on the screen. The engine is asked again only
+// when something was dropped.
+function offeredStateOf(engine, data, s, state) {
+    let kitPick = state.kitPick || '';
+    let kitMotor = state.kitMotor || '';
+    let trvSel = state.trvSel || null;
+    const kit = kitPick ? (data.kits || []).find((k) => engine.kitIdOf(k) === kitPick) : null;
+    if (!kit) { kitPick = ''; kitMotor = ''; }
+    else kitMotor = (((kit.manufacturingSpecs || {}).kitMotorCodes || []).find((x) => U(x.code) === U(kitMotor)) || {}).code || '';
+    if (trvSel) {
+        if (!s.isTraverse || !data.trvRules) trvSel = null;
+        else {
+            const offer = engine.configuratorOffer({ rules: data.trvRules, drive: s.trvDrive, feet: s.trvFeet, realFeet: s.lengthFeet || undefined });
+            const styles = new Set(offer.carrierStyles.map((x) => x.itemId));
+            const only = (o, list) => { const ids = new Set(list.map((x) => x.itemId)); return Object.fromEntries(Object.entries(o || {}).filter(([k]) => ids.has(k))); };
+            const style = styles.has(trvSel.carrierStyle) ? trvSel.carrierStyle : '';
+            trvSel = { carrierStyle: style, carrierQty: style ? trvSel.carrierQty : '',
+                draw: engine.DRAWS.some((d) => d.value === trvSel.draw) ? trvSel.draw : '',
+                motorSide: engine.MOTOR_SIDES.some((m) => m.value === trvSel.motorSide) ? trvSel.motorSide : '',
+                picks: only(trvSel.picks, offer.picks), accessories: only(trvSel.accessories, offer.accessories) };
+        }
+    }
+    return { ...state, kitPick, kitMotor, trvSel };
+}
+function sessionFor(engine, data, raw, level) {
+    const state = raw || {};
+    let s = engine.sessionOf({ ...data, priceLevel: level }, state);
+    const clean = offeredStateOf(engine, data, s, state);
+    if (JSON.stringify([clean.kitPick, clean.kitMotor, clean.trvSel]) !== JSON.stringify([state.kitPick || '', state.kitMotor || '', state.trvSel || null])) s = engine.sessionOf({ ...data, priceLevel: level }, clean);
+    return { s, state: clean };
+}
+
+// ── THE KIT STRIP — CPQ's "Start from a kit" (HardwareConfigurator), in the customer's words ──
+// The kit's own number, and THEIRS beside it where their pricing row names one; never a motor's net price (the portal shows its
+// own level). How the kit follows the mount is CPQ's sentence.
+const mountWord = (m) => (m === 'CEILING' ? 'Ceiling' : 'Wall');
+function mountFollowWords(f) {
+    if (!f) return '';
+    if (f.mode === 'switched') return `Mount is ${mountWord(f.mount)} — billing the ${mountWord(f.mount).toLowerCase()} kit ${f.to}${f.theirs ? ` (${f.theirs})` : ''}, not ${f.from}.`;
+    if (f.mode === 'followed') return `Mount is ${mountWord(f.mount)} — this kit is the same on either mount: its ${mountWord(f.mount).toLowerCase()} brackets are in the kit, at the kit price.`;
+    return `No kit is made for this set-up on a ${mountWord(f.mount).toLowerCase()} mount — ${f.from} bills as picked and the brackets bill on their own.`;
+}
+function kitViewOf(engine, data, s) {
+    const kits = data.kits || [];
+    if (!kits.length) return null;
+    const keys = engine.customerKeys(data.customerId, data.customer);
+    const theirs = (k) => String(((engine.findClientPriceRow(k.clientPricing, keys)) || {}).clientSku || '').trim();
+    const src = s.kitSource;
+    const motors = src && s.trvDrive === 'MOTORIZED' ? ((((src.record || {}).manufacturingSpecs) || {}).kitMotorCodes || []) : [];
+    return {
+        offered: kits.map((k) => { const code = txt(k.legacyErpId || k.itemName); const t = txt(theirs(k)); return { id: engine.kitIdOf(k), code, sku: t && t !== code ? t : '', name: k.itemName && k.legacyErpId ? txt(k.itemName) : '' }; }),
+        chosen: src ? engine.kitIdOf(src.record) : '',
+        baseFeet: src ? src.baseFeet : null,
+        extraFeet: src ? Math.max(0, Math.round((s.lengthFeet || src.baseFeet) - src.baseFeet)) : null,
+        motor: motors.length ? { chosen: s.kitMotor || '', codes: motors.map((x) => ({ code: txt(x.code), motor: txt(x.motorItem) })) } : null,
+        mountFollow: s.kitBill && s.kitBill.mountFollow ? { words: mountFollowWords(s.kitBill.mountFollow), noKit: s.kitBill.mountFollow.mode === 'nokit' } : null,
+    };
+}
+// What picking a kit fills in — worked out ONCE, when the browser says it was just picked (CPQ's applyKit; Shared/kitStart.kitStartOf).
+// The browser applies it: the answers and picks, and the kit's base length only where nothing is typed yet.
+function kitStartViewOf(engine, data, s, ui) {
+    if (!ui || !ui.kitStart) return null;
+    const kit = (data.kits || []).find((k) => engine.kitIdOf(k) === ui.kitStart);
+    if (!kit) return null;
+    const st = engine.kitStartOf({ model: s.model, kit, lengthTyped: false });
+    const said = (b) => (b ? { what: txt(b.what), why: txt(b.why, 400) } : null);
+    return { id: engine.kitIdOf(kit), blocked: said(st.blocked), answers: st.answers, picks: st.picks, lengthInches: st.lengthInches || null,
+        report: { name: txt(st.report.name), blocked: said(st.report.blocked), carried: (st.report.carried || []).map((c) => txt(c, 400)), missed: (st.report.missed || []).map(said) } };
+}
+
+// ── THE TRAVERSE COMPONENTS STEP — CPQ's panel (Shared/TraverseConfiguratorModal), laid out for the portal to draw ──
+// Every choice the chart offers for this drive and length, with what the length includes; the customer's own number for each part
+// (their pricing row), never another customer's; a price only at the level this portal shows. `sel` is what stands (the chart's
+// defaults until the customer answers).
+function trvViewOf(engine, data, s, showMoney) {
+    if (!data.trvRules || !s.isTraverse) return null;
+    const offer = engine.configuratorOffer({ rules: data.trvRules, drive: s.trvDrive, feet: s.trvFeet, realFeet: s.lengthFeet || undefined });
+    const sel = s.trvLive || { picks: {}, accessories: {} };
+    const info = (code) => s.trvItemInfo(code) || { name: code, sku: '' };
+    const unit = (code) => { if (!showMoney) return null; const p = Number(s.trvPriceOf(code)) || 0; return p > 0 ? money(p) : null; };
+    const row = (code) => ({ id: code, name: txt(info(code).name), sku: txt(info(code).sku), unit: unit(code) });
+    return {
+        drive: s.trvDrive, feet: s.trvFeet, tracks: s.trvTracks,
+        draws: engine.DRAWS.map((d) => ({ value: d.value, label: d.label, hint: d.hint })),
+        motorSides: s.trvDrive === 'MOTORIZED' ? engine.MOTOR_SIDES.map((m) => ({ value: m.value, label: m.label })) : [],
+        carrierStyles: offer.carrierStyles.map((c) => ({ ...row(c.itemId), label: txt(c.label), included: c.includedQty, defaultQty: c.defaultQty })),
+        picks: offer.picks.map((p) => ({ ...row(p.itemId), included: p.includedQty, endStop: /ENDSTOP/i.test(p.itemId) })),
+        accessories: offer.accessories.map((a) => row(a.itemId)),
+        sel: { carrierStyle: sel.carrierStyle || '', carrierQty: sel.carrierQty || '', draw: sel.draw || '', motorSide: sel.motorSide || '', picks: { ...(sel.picks || {}) }, accessories: { ...(sel.accessories || {}) } },
+        answered: !!s.trvSel,
+        missing: trvMissingOf(engine, data, s),
+    };
+}
+// What a track still needs before it can be built (CPQ's "Still needed" line): the draw always, the motor side on a motor, a carrier style.
+function trvMissingOf(engine, data, s) {
+    if (!data.trvRules || !s.isTraverse) return [];
+    return [...engine.traverseAnswersMissing({ drive: s.trvDrive, sel: s.trvLive }), ...(s.trvLive && s.trvLive.carrierStyle ? [] : ['carrier style'])];
 }
 
 // FEWER CENTRE BRACKETS THAN RECOMMENDED, in words the customer and HQ both read (Shared/portalRequestLines prints them under
@@ -348,10 +494,13 @@ function shortNotesOf(engine, s, state = {}) {
 // ── THE REQUEST'S CART LINE ──────────────────────────────────────────────────────────────────
 // The same answers, worked out again at the customer's OWN level: the cart line CPQ writes for them
 // (engine 'TAGS', engineConfig, the frozen render, the engine and pin stamps) — or why it cannot be sent.
-function requestLineOf(engine, data, state, { level = 'STANDARD' } = {}) {
-    const s = engine.sessionOf({ ...data, priceLevel: level }, state);
+function requestLineOf(engine, data, raw, { level = 'STANDARD' } = {}) {
+    const { s, state } = sessionFor(engine, data, raw, level);
     if (s.refusal) return { refusal: { kind: s.refusal.kind, message: REFUSAL_WORDS[s.refusal.kind] || 'This configuration cannot be requested yet.' }, item: null };
-    return { refusal: null, item: s.item, effectiveLevel: s.effectiveLevel, total: money(s.grandTotal * s.qty), notes: shortNotesOf(engine, s, state) };
+    // the notes: fewer centre brackets than recommended, and what the track still needs (said, never refused)
+    const still = trvMissingOf(engine, data, s);
+    return { refusal: null, item: s.item, effectiveLevel: s.effectiveLevel, total: money(s.grandTotal * s.qty),
+        notes: [...shortNotesOf(engine, s, state), ...(still.length ? [`Traverse — still needed: ${still.join(' · ')}.`] : [])] };
 }
 
 // ── THE CUSTOMER'S PICTURE OF A LINE (step 5 of the portal rebuild, Stuart 2026-10-20) ───────────────────

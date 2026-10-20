@@ -7,13 +7,12 @@ import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAud
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
 import { traverseAnswersMissing, drawLabel } from './traverseDraw';
 import { seedFromVision } from './visionBridge';
-import { seedFromKit } from './kitSeed';
+import { kitIdOf, kitStartOf, kitFillsOf } from './kitStart';   // "Start from a kit" — the order it is done in, shared with the portal (2026-10-20)
 import { droppedPicks, mergeDrops, unacknowledged } from './pickDrops';
 import { autoPicksOf } from './hardwareAutoPicks';
 import { normalizeExtras } from './extrasRestore';
 import { rodMaterialsOf, extrasForRod, liveExtrasOf } from './flowExtras';
 import { SCOPE, scopeTargetsOf, scopeInForce, swatchActionOf, highlightOf } from './finishScope';
-import { kitBracketPicksOf, kitBracketSummary } from './kitBracketPicks';
 import { workIsPristine } from './cpqWorkspace';
 import { renderScaleOf } from './sizeMatrix';
 import { modelNodesOf } from './hardwareAdapter';
@@ -453,31 +452,28 @@ function HardwareConfiguratorInner({
         kitPicksArmedRef.current = false;
         kitPicksDoneRef.current = new Set();
         if (!id) { setKitReport(null); setKitSource(null); return; }
-        const chosen = kits.find(k => String(k.id || k.legacyErpId || '') === id);
+        const chosen = kits.find(k => kitIdOf(k) === id);
         if (!chosen) return;
-        const name = String(chosen.legacyErpId || chosen.itemName || 'the kit');
-        const seed = seedFromKit({ model, kit: chosen });
+        // WHAT PICKING IT FILLS IN — Shared/kitStart.kitStartOf (the portal's server calls the same, 2026-10-20):
         // A REFUSAL WRITES NOTHING. A kit the assembly cannot build would otherwise seed every
         // answer it CAN honour and look more convincing the more of it landed.
-        if (seed.blocked) { setKitReport({ name, blocked: seed.blocked, carried: [], missed: [] }); setKitSource(null); return; }
-        if (Object.keys(seed.answers).length) setAnswers(a => ({ ...a, ...seed.answers }));
-        if (Object.keys(seed.picks).length) setPicks(p => ({ ...p, ...seed.picks }));
         // ⚠ THE KIT'S 4 FT IS A STARTING POINT, NEVER AN OVERWRITE (Stuart 2026-09-19, QUO155 row 6: an
         // 18" display re-picked its kit and came back 48" — the shop would have cut four feet). The kit
         // seeds its length only where none has been typed; a typed length stands, and the bill follows
         // the rule either way (the kit below 4 ft, the kit + extra feet above it).
-        if (seed.lengthInches && !String(poleIn || '').trim()) { setPoleIn(String(Math.floor(seed.lengthInches))); setPoleFrac(''); }
-        // The brackets are filled in now, not reported: the strip says what the kit will pick, and the old
-        // "pick the V backplate" instruction is dropped where the kit names its own (Shared/kitBracketPicks).
-        const fills = kitBracketSummary({ kit: chosen });
-        setKitReport({ name, blocked: null,
-            carried: fills ? [...seed.carried, fills] : seed.carried,
-            missed: fills ? seed.missed.filter(m => m.what !== 'bracket style') : seed.missed });
+        const start = kitStartOf({ model, kit: chosen, lengthTyped: !!String(poleIn || '').trim() });
+        if (start.blocked) { setKitReport(start.report); setKitSource(null); return; }
+        if (Object.keys(start.answers).length) setAnswers(a => ({ ...a, ...start.answers }));
+        if (Object.keys(start.picks).length) setPicks(p => ({ ...p, ...start.picks }));
+        if (start.lengthInches) { setPoleIn(String(Math.floor(start.lengthInches))); setPoleFrac(''); }
+        // The brackets are filled in as they become answerable (the effect below), not reported: the strip says what the kit
+        // will pick, and the old "pick the V backplate" instruction is dropped where the kit names its own.
+        setKitReport(start.report);
         kitPicksArmedRef.current = true;
         // The kit now OWNS the first line of the bill, and the feet above its base set bill under
         // it. Held as the record, not a number: the price is resolved at pricing time through the
         // same rules every other line uses (customer row, level, alias) rather than re-derived.
-        setKitSource({ code: name, name: chosen.itemName || name, baseFeet: Number(chosen.manufacturingSpecs.kitAlign.minFeet) || 4, record: chosen });
+        setKitSource(start.kitSource);
     };
 
     // The bracket recommendation from 6.5's engineering, how many of each the length asks for, and the
@@ -518,11 +514,10 @@ function HardwareConfiguratorInner({
     // bounded because each (slot, part) is filled once. The operator's own pick is never touched.
     useEffect(() => {
         if (!kitSource || !kitSource.record || !kitPicksArmedRef.current) return;
-        const add = kitBracketPicksOf({ model, kit: kitSource.record, answers: effAnswers, livePicks,
-            codeOf: (o) => ourId(o.partId) || o.name, done: kitPicksDoneRef.current,
-            // The centre is filled only where the span WANTS one (recommendFor: null = not known yet, 0 = a
-            // short pole held at both ends). Picked regardless it would count as one — above the kit's chart.
-            wants: (slot) => String(slot.position || '').toUpperCase() !== 'CENTER' || recommendFor(slot) > 0 });
+        // (Shared/kitStart.kitFillsOf — the portal's server calls the same.) The centre is filled only where the span WANTS one
+        // (recommendFor: null = not known yet, 0 = a short pole held at both ends). Picked regardless it would count as one —
+        // above the kit's chart.
+        const add = kitFillsOf({ model, kit: kitSource.record, answers: effAnswers, livePicks, ourId, recommendFor, done: kitPicksDoneRef.current });
         const keys = Object.keys(add);
         if (!keys.length) return;
         keys.forEach(key => kitPicksDoneRef.current.add(`${key}|${add[key]}`));

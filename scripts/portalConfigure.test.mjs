@@ -3,6 +3,7 @@
 // The screen's own clicks are proved on real data outside the repo (every recorded H1 walk replayed by clicks against the
 // real Cloud Functions); this holds the pieces a change could quietly break: the answers sent, the answers restored, CPQ's
 // second-click rule, the length as typed, and the request kept in the browser per login.
+/* global globalThis */
 import { FRACTIONS, blankAnswers, wireOf, answersOf, toggled } from '../portal/src/configAnswers.js';
 import { readBasket, writeBasket, shownOf, lineId } from '../portal/src/configBasket.js';
 import { lengthInchesOf } from '../src/components/Shared/hardwareSession.js';
@@ -23,6 +24,17 @@ const spanned = { ...a, fabricId: 'BLACKOUT', dropFt: '12.5', onStud: false };
 eq('the curtain length and the stud answer are sent, and a line opened again comes back with them', [wireOf(spanned).dropFt, wireOf(spanned).onStud, answersOf(wireOf(spanned))], ['12.5', false, { ...spanned }]);
 eq('…a fresh configuration: no curtain length typed (8 ft is assumed), drywall with toggles (Stuart 2026-10-19: "make the default for all screens drywall"), nothing confirmed', [blankAnswers().dropFt, blankAnswers().onStud, wireOf(blankAnswers()).onStud, blankAnswers().riskConfirmed, wireOf(blankAnswers()).riskConfirmed], ['', false, false, '', '']);
 eq('…a line saved in this browser in a stud opens in a stud; what the customer confirmed in the risk window travels with the line', [answersOf(wireOf({ ...blankAnswers(), onStud: true })).onStud, wireOf({ ...blankAnswers(), riskConfirmed: '2|5|DRYWALL|144' }).riskConfirmed], [true, '2|5|DRYWALL|144']);
+// "START FROM A KIT" AND THE TRAVERSE STEP (2026-10-20): the kit, its motor code and the track's answers travel with the line and come back
+// on Edit; the walk's own kit-start state never leaves the browser, and an edited line does not fill its kit's brackets again (CPQ's rule)
+{
+    const kitted = { ...blankAnswers(), kitPick: 'KIT-4MP', kitMotor: 'H1-2TRV-4M/P-35W', trvSel: { carrierStyle: 'HTSRIPCAR', carrierQty: '30', draw: 'CENTER', motorSide: 'LEFT', picks: { 'ENDSTOP-2': 2 }, accessories: {} },
+        kitStart: 'KIT-X', kitArmed: true, kitDone: ['BRACKET|LEFT|A1'] };
+    const kw = wireOf(kitted);
+    eq('the kit, its motor code and the track\'s answers are sent; the walk\'s own kit-start state is not', [kw.kitPick, kw.kitMotor, kw.trvSel, 'kitStart' in kw, 'kitArmed' in kw, 'kitDone' in kw],
+        ['KIT-4MP', 'H1-2TRV-4M/P-35W', kitted.trvSel, false, false, false]);
+    eq('…a line opened again comes back with them — and its brackets are not filled in again', answersOf(kw), { ...kitted, kitStart: '', kitArmed: false, kitDone: [] });
+    eq('…a fresh configuration: no kit, no motor, the track unanswered (the chart\'s defaults stand)', [blankAnswers().kitPick, blankAnswers().kitMotor, blankAnswers().trvSel, wireOf(blankAnswers()).trvSel], ['', '', null, null]);
+}
 eq('every fraction the screen offers is a length the engine reads (sixteenths)', FRACTIONS.filter(Boolean).every((f) => { const [n, d] = f.split('/').map(Number); return lengthInchesOf('10', f) === 10 + n / d && 16 % d === 0; }), true);
 // the request in this browser, per login
 eq('nothing kept yet: an empty request', readBasket('u1'), { lines: [], sidemark: '', note: '' });

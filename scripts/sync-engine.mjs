@@ -55,6 +55,8 @@ export const ENGINE_DOORS = {
     'hardwareSession.js': 'sessionOf',             // the configuration itself, without the screen — what the portal's server calls
     'finishScope.js': 'scopeTargetsOf',            // what a finish click applies to — this part, its collar, or the whole configuration
     'finishPbr.js': 'pbrMapOf',                    // how each finish catches the light — the numbers the portal's screen draws with
+    'kitStart.js': 'kitsForFlowOf',                // "Start from a kit": which kits, what picking one fills in, its brackets (2026-10-20)
+    'traverseDraw.js': 'traverseAnswersMissing',   // the traverse step's draw and motor side, and what is still needed (2026-10-20)
 };
 export const ENGINE_ROOTS = Object.keys(ENGINE_DOORS);
 /** The server's copy, relative to the repo. */
