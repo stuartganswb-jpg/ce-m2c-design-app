@@ -27,6 +27,7 @@ import { OrbitControls, Bounds, Html } from '@react-three/drei';
 // studioScene also registers HQ's read of the finish documents the drawing's finish table is filled from (Shared/finishPbr).
 import { StudioRig } from '../Shared/studioScene';
 import { DynamicModel } from '../Shared/DynamicModel';
+import { currentViewPictureOf } from '../Shared/viewCapture';   // the picture at Add — one set of steps with the portal's (2026-10-20)
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf, customerPriceLevel } from '../Shared/priceLevels';
 import { priceChoice, isItemKit } from '../Shared/hardwarePricing';
@@ -202,15 +203,10 @@ export const ViewCapturer = ({ onReady }) => {
                 // back the same white-ground JPEG (≤900px) the documents print. Add configuration on
                 // both engines asks for this; the 📷 Capture Views packet button keeps the framed
                 // front + back pair below.
+                // (the picture itself is Shared/viewCapture.currentViewPictureOf — the one the customer portal takes at Add, 2026-10-20)
                 if (opts && opts.current) {
-                    gl.render(scene, camera);
-                    const src = gl.domElement;
-                    if (!src.width || !src.height) return null;
-                    const scale = Math.min(1, 900 / src.width);
-                    const w = Math.max(1, Math.round(src.width * scale)), h = Math.max(1, Math.round(src.height * scale));
-                    const oc = document.createElement('canvas'); oc.width = w; oc.height = h;
-                    const ctx = oc.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h); ctx.drawImage(src, 0, 0, w, h);
-                    return { front: oc.toDataURL('image/jpeg', 0.85), back: null, asSet: true };
+                    const front = currentViewPictureOf(gl, scene, camera);
+                    return front ? { front, back: null, asSet: true } : null;
                 }
                 // Fit to the VISIBLE model only — hidden meshes (unselected options, the center
                 // source, fasteners) inflate the scene box and shrink the real model to nothing.

@@ -3,7 +3,7 @@
 // 2026-09-11: "however we set the image when we hit add to cart you should capture that view"); the customer portal takes it
 // with this (step 5 of the portal rebuild, Stuart 2026-10-20), so a request reopened in CPQ carries the customer's own picture in
 // the field CPQ's lines carry theirs — `renderSnapshot`, what the quote documents print.
-// ⚠ CPQTab's ViewCapturer still carries its own copy of these steps — the two must stay alike.
+// CPQTab's ViewCapturer takes its picture at Add with this too (2026-10-20) — one set of steps, so the two can never differ.
 // Browser-only (a canvas); not part of the server's engine copy. Needs the Canvas made with gl.preserveDrawingBuffer.
 export const VIEW_PICTURE_MAX_WIDTH = 900;
 export const VIEW_PICTURE_QUALITY = 0.85;
