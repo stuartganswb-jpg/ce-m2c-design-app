@@ -26,6 +26,12 @@ eq('…no note: the line notes alone', portalRequestMemoOf(request({ portalReque
 eq('…nothing said: nothing written', portalRequestMemoOf(request({ portalRequest: { kind: 'CONFIG', note: ' ', lines: [{ notes: [] }, { notes: [' '] }] } })), '');
 eq('a request staff have priced (a saved breakdown) is a quote: its own memo is the truth', portalRequestMemoOf(request({ cpqData: { cartItems: [], breakdown: [{ name: 'H1-138', partId: 'P' }] } })), '');
 eq('…and so is one CPQ has saved (status CONFIGURED) — a memo staff cleared is never filled again', portalRequestMemoOf(request({ status: 'CONFIGURED' })), '');
+// THE ORDER ENTRY DOOR (Stuart 2026-10-20 "d. yes"): tab 7's Load of a portal STOCK request reads the same function — its lines carry a
+// one-line `note` (a cut length tab 7 already puts on the cart line), never `notes`, so only what the customer said reaches the memo.
+eq('a portal stock request (Order Entry): the customer\'s note, and nothing of its lines', portalRequestMemoOf({ status: 'PORTAL_REQUEST', source: 'PORTAL',
+    portalRequest: { kind: 'QUICKSHIP', note: 'Ship with the drapery order', lines: [{ itemId: 'A', erp: 'H1-138R/P14', qty: 2, note: '' }, { itemId: 'B', erp: 'H1-CUT', qty: 1, note: 'cut @ 84in' }] } }),
+    "Portal request — Customer's note: Ship with the drapery order");
+eq('…once loaded (QUICKSHIP_REVIEW) it is Order Entry\'s order, and nothing is filled again', portalRequestMemoOf({ status: 'QUICKSHIP_REVIEW', portalRequest: { kind: 'QUICKSHIP', note: 'x' } }), '');
 eq('a quote that never was a portal request, and nothing at all', [portalRequestMemoOf({ status: 'CONFIGURED', cpqData: {} }), portalRequestMemoOf(null), portalRequestMemoOf({})], ['', '', '']);
 
 // ── THE REOPEN ITSELF (the CRM's and the ERP hub's Reopen CPQ) — what CPQ is handed ──

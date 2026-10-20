@@ -15,6 +15,7 @@ import PillowQuickSell from './PillowQuickSell';
 import CurtainQuickSell from './CurtainQuickSell';   // 🪟 M2C custom curtains — the chart's price + the workroom's line (the finder; Add waits for the workroom route)
 import CounterScreens from './CounterScreens';   // 🛋 the show counter's screens (counterMode)
 import PayLinkPanel from '../Shared/PayLinkPanel';   // the QR the customer scans at the counter
+import { portalRequestMemoOf } from '../Shared/reopenQuote';   // a portal request's customer note → the internal memo, as CPQ's Reopen does (2026-10-20)
 import { fetchCustomerPriceLevel, priceLevelNoteOf, mayAutoSetDiscount, priceLevelCacheOf, fetchAllCustomerPriceLevels, nsLevelAppliesAt, nsLevelSkippedNoteOf } from '../Shared/nsPriceLevel';
 import { chainOf, revisionStampOf, lineageWordsOf, convertedPatchesOf, fromQuoteStampOf } from '../Shared/quoteChain';   // a reopened quote's revisions; conversion closes the chain (2026-10-16)   // the customer's NetSuite price level → the order discount (Stuart 2026-10-12)
 import { nsCustomerIdOf } from '../Shared/nsHeader';   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
@@ -699,6 +700,10 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         setCustomerId(job.customer?.id || '');
         setCustSearch(job.customer ? `${job.customer.name || ''} (${job.customer.id})` : '');
         setJobName(job.jobName || '');
+        // WHAT THE CUSTOMER SAID rides into the internal memo, the way CPQ's Reopen carries it (Stuart 2026-10-20: "d. yes" — the two
+        // doors alike). One function for both: Shared/reopenQuote.portalRequestMemoOf. Nothing said → the memo is left as it is.
+        const memo = job.internalMemo || portalRequestMemoOf(job);
+        if (memo) setSoExtras(p2 => ({ ...p2, internalMemo: memo }));
         setCart(lines.map((l, i) => {
             const it = itemById(l.itemId);
             return {
