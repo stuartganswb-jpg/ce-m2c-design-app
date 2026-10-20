@@ -63,7 +63,9 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
             const r = await nsProxyFetch({
                 targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
                 method: 'POST',
-                payload: { q: `SELECT id, tranid FROM transaction WHERE type = 'CustInvc' AND createdfrom = ${parseInt(order.nsInternalId, 10)}` }
+                // "Created from" lives on the transaction's MAIN LINE, not on `transaction` — SuiteQL refused the plain column
+                // ("Unknown identifier 'createdfrom'", SO60551's INV71002, Stuart 2026-10-20). The same reading as Shared/shipClearance.
+                payload: { q: `SELECT t.id, t.tranid FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'CustInvc' AND tl.createdfrom = ${parseInt(order.nsInternalId, 10)}` }
             });
             const b = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(JSON.stringify(b).slice(0, 300));

@@ -3322,12 +3322,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
     // FULFILLED → BACK INTO THE APP: pull the SO's Item Fulfillment(s) from NetSuite and stamp
     // status + tracking #(s) onto the sales order (and the fin doc for custom orders).
+    // "Created from" is read on the fulfilment's MAIN LINE — `transaction` has no such column and SuiteQL refused it
+    // (Stuart 2026-10-20, the same refusal as the invoice match); the reading Shared/shipClearance already uses.
     const pullFulfillment = async (job) => {
         const soDoc = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || null);
         const nsSoId = String((isQsOrder(job) ? (job.shipmentOfNsId || job.nsInternalId || job.soId) : (soDoc && soDoc.nsInternalId)) || '');
         if (!nsSoId) return alert('No NetSuite sales order linked to this order.');
         try {
-            const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: `SELECT t.id, t.tranid, BUILTIN.DF(t.status) AS status FROM transaction t WHERE t.type = 'ItemShip' AND t.createdfrom = ${nsSoId} ORDER BY t.id DESC` } });
+            const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: `SELECT t.id, t.tranid, BUILTIN.DF(t.status) AS status FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'ItemShip' AND tl.createdfrom = ${nsSoId} ORDER BY t.id DESC` } });
             const jq = await rq.json();
             if (!rq.ok) throw new Error(JSON.stringify(jq).slice(0, 300));
             const ifs = jq.items || [];
