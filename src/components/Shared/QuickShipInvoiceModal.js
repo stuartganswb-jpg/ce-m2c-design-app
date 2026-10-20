@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { customerDocLines, cartFinishLabelOf, moneyDocRows } from './lineClassification';
+import { customerKeys } from './clientPricing';
 import { nsProxyFetch } from './nsProxy';
 import { printForm } from './printForm';
 import { usePayBlock } from './payBlock';
@@ -17,7 +19,7 @@ import { invoiceDatesOf } from './invoiceDates';   // shipped = the fulfilment; 
 
 const BRAND_NAMES = { ce: 'Classical Elements', m2c: 'M2C Studio', uniquity: 'Uniquity', leyla: 'Leyla Gans LLC' };
 
-const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
+const QuickShipInvoiceModal = ({ order, customer, brand, onClose, findPart = null }) => {
     // A pay link, if staff made one for this order — printed on the document, scannable in person.
     const pay = usePayBlock({
         collection: 'hq_sales_orders', docId: String(order.id || ''),
@@ -30,6 +32,34 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
     // record is a quote or a sales order, never an "invoice" that nothing has been billed for.
     const fulfilled = order.packStatus === 'Packed' || order.status === 'Shipped' || !!invNo;
     const docLabel = fulfilled ? 'INVOICE' : 'SALES ORDER';
+    // THE INVOICE'S OWN DATES (Stuart 2026-10-20): once its NetSuite invoice is matched, the invoice is dated and falls due as
+    // NetSuite says — an order billed ahead of its shipments (a display order, invoiced in full before its showrooms ship)
+    // has no ship date to count from.
+    const [nsDates, setNsDates] = useState({ date: order.nsInvoiceDate || '', due: order.nsInvoiceDueDate || '' });
+
+    // A CPQ-BORN ORDER ON THIS LIST (Stuart 2026-10-20: SO60551's invoice printed every line "—" and $0.00). Anchoring a
+    // display order in 10.5 puts it on the Order Entry route — it packs off its own lines — so it lists here; but its prices
+    // were never written as invoice lines. They are on its CPQ quote, exactly as NetSuite billed them, so its document prints
+    // the quote's money rows through the same reader as the CRM's CPQ papers (Shared/lineClassification.moneyDocRows).
+    const fromQuote = !(Array.isArray(order.invoiceLines) && order.invoiceLines.length) && !!order.hqJobId;
+    const [quoteJob, setQuoteJob] = useState(null);      // null = reading · false = no quote found (the unpriced list stands)
+    useEffect(() => {
+        if (!fromQuote) return undefined;
+        let live = true;
+        getDoc(doc(db, 'jobs', String(order.hqJobId)))
+            .then(s => { if (live) setQuoteJob(s.exists() ? { id: s.id, ...s.data() } : false); })
+            .catch(() => { if (live) setQuoteJob(false); });
+        return () => { live = false; };
+    }, [fromQuote, order.hqJobId]);
+    const quoteRows = useMemo(() => (quoteJob ? moneyDocRows(customerDocLines(quoteJob.cpqData?.breakdown || [], 'INVOICE', cartFinishLabelOf(quoteJob.cpqData), {
+        findPart, custKeys: customerKeys(order.customerId || customer?.id || '', customer || { name: order.customer || '' }),
+    })) : null), [quoteJob, findPart, customer, order.customerId, order.customer]);
+    const quoteLoading = fromQuote && quoteJob === null;
+    const rowAmount = (r) => (r.amount != null ? Number(r.amount) || 0 : (Number(r.qty) || 0) * (Number(r.price) || 0));
+    // As Shared/FormPreview adds them: the products (a net row restates rows above it), then the order's charges.
+    const qProducts = quoteRows ? quoteRows.filter(r => !r.afterSubtotal) : [];
+    const qCharges = quoteRows ? quoteRows.filter(r => r.afterSubtotal) : [];
+    const qSubtotal = qProducts.filter(r => !r.noSum).reduce((s, r) => s + rowAmount(r), 0);
 
     // Priced structure captured at TRANSACTION time; legacy orders (pushed before this
     // feature) fall back to an unpriced item list.
@@ -50,8 +80,11 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
     // ignoring the shipping charge"). invoiceTotal is the GOODS only — freight rides in its own
     // field because that is where NetSuite wants it — so this document said $700 on an order
     // NetSuite itself totalled at $770, and the deposit was taken on the smaller figure.
-    const shipAmt = Number(order.shippingAmount || (order.shipping && order.shipping.amount) || 0);
-    const goods = typeof order.invoiceTotal === 'number'
+    const shipAmt = Number(order.shippingAmount || (order.shipping && order.shipping.amount) || (quoteRows && quoteJob.shippingAmount) || 0);
+    const goods = quoteRows
+        // the quote's own total — what the CRM's CPQ papers print and NetSuite billed
+        ? Math.round((Number(quoteJob.cpqData?.totalPrice) || 0) * 100) / 100
+        : typeof order.invoiceTotal === 'number'
         ? order.invoiceTotal
         : lines.reduce((s, l) => s + (l.type === 'KIT' ? (l.price || 0) : (l.total || 0)), 0);
     const total = Math.round((goods + shipAmt) * 100) / 100;
@@ -65,7 +98,7 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                 method: 'POST',
                 // "Created from" lives on the transaction's MAIN LINE, not on `transaction` — SuiteQL refused the plain column
                 // ("Unknown identifier 'createdfrom'", SO60551's INV71002, Stuart 2026-10-20). The same reading as Shared/shipClearance.
-                payload: { q: `SELECT t.id, t.tranid FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'CustInvc' AND tl.createdfrom = ${parseInt(order.nsInternalId, 10)}` }
+                payload: { q: `SELECT t.id, t.tranid, t.trandate, t.duedate FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'CustInvc' AND tl.createdfrom = ${parseInt(order.nsInternalId, 10)}` }
             });
             const b = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(JSON.stringify(b).slice(0, 300));
@@ -74,8 +107,12 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                 alert(`No NetSuite invoice found yet for SO ${order.soId}.\n\nBill the sales order in NetSuite first, then hit Match again — the invoice # imports onto this document.`);
             } else {
                 const no = rows.map(x => x.tranid).join(', ');
-                await updateDoc(doc(db, 'hq_sales_orders', order.id), { nsInvoiceNo: no, nsInvoiceIds: rows.map(x => String(x.id)), invoiceMatchedAt: Date.now() });
+                // the latest invoice's own date and due date, as NetSuite holds them (the document prints them as they come)
+                const latest = rows.reduce((a, x) => (Number(x.id) > Number(a.id) ? x : a), rows[0]);
+                const dates = { date: String(latest.trandate || ''), due: String(latest.duedate || '') };
+                await updateDoc(doc(db, 'hq_sales_orders', order.id), { nsInvoiceNo: no, nsInvoiceIds: rows.map(x => String(x.id)), nsInvoiceDate: dates.date, nsInvoiceDueDate: dates.due, invoiceMatchedAt: Date.now() });
                 setInvNo(no);
+                setNsDates(dates);
             }
         } catch (e) { alert('Invoice match failed: ' + (e.message || e)); }
         setBusy(false);
@@ -93,7 +130,7 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                     <div style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px', letterSpacing: '.08em' }}>{docLabel}</div>
                     <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '11px', marginTop: '4px' }}>{invNo ? `# ${invNo}` : (fulfilled ? 'DRAFT — NetSuite # not matched' : 'Order confirmation — invoice issues at fulfillment')}</div>
                     {/* the invoice is dated the day it shipped (Stuart 2026-10-20) — an order confirmation keeps the order's date */}
-                    <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#8a857c', marginTop: '2px' }}>{invoiceDatesOf({ order, customer }).shipDate || new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
+                    <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#8a857c', marginTop: '2px' }}>{(fulfilled && nsDates.date) || invoiceDatesOf({ order, customer }).shipDate || new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
                 </div>
             </div>
             {/* THE DOCUMENT SAYS WHO, WHERE AND AGAINST WHAT (Stuart 2026-08-30) — the same
@@ -140,8 +177,11 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                                 {order.customerNumber ? <div><span style={{ color: '#8a857c' }}>CUSTOMER #</span> {order.customerNumber}</div> : null}
                                 {sidemark ? <div><span style={{ color: '#8a857c' }}>SIDEMARK</span> {sidemark}</div> : null}
                                 {inv.terms ? <div><span style={{ color: '#8a857c' }}>TERMS</span> {inv.terms}</div> : null}
-                                {inv.dueDate ? <div style={{ fontWeight: 700 }}><span style={{ color: '#8a857c', fontWeight: 400 }}>DUE DATE</span> {inv.dueDate}</div> : null}
-                                {(order.needBy || order.needByDate) ? <div style={{ fontWeight: 700 }}><span style={{ color: '#8a857c', fontWeight: 400 }}>NEED BY</span> {(order.needBy || order.needByDate)}</div> : null}
+                                {/* AN INVOICE STATES WHEN IT IS DUE, NOT WHEN THE GOODS WERE NEEDED (Stuart 2026-10-20: "change the Need By
+                                    to State Due By (all invoices)") — NetSuite's own due date once the invoice is matched, else by the terms.
+                                    The order confirmation still says when the customer needs it. */}
+                                {(fulfilled && (nsDates.due || inv.dueDate)) ? <div style={{ fontWeight: 700 }}><span style={{ color: '#8a857c', fontWeight: 400 }}>DUE BY</span> {nsDates.due || inv.dueDate}</div> : null}
+                                {(!fulfilled && (order.needBy || order.needByDate)) ? <div style={{ fontWeight: 700 }}><span style={{ color: '#8a857c', fontWeight: 400 }}>NEED BY</span> {(order.needBy || order.needByDate)}</div> : null}
                             </div>
                         </div>
                     </div>
@@ -161,7 +201,21 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                     </tr>
                 </thead>
                 <tbody>
-                    {lines.map((l, i) => l.type === 'KIT' ? (
+                    {/* A CPQ-born order: its quote's money rows (a net row in bold restates the rows above it). */}
+                    {quoteLoading ? (
+                        <tr><td colSpan={4} style={{ padding: '12px 6px', fontSize: '11px', color: '#8a857c', fontStyle: 'italic' }}>Reading this order's prices from its quote…</td></tr>
+                    ) : quoteRows ? qProducts.map((r, i) => (
+                        <tr key={`q${i}`} style={{ borderTop: r.note ? 'none' : '1px solid #ddd8cf' }}>
+                            <td style={{ padding: r.note ? '0 6px 6px 18px' : '8px 6px' }}>
+                                {r.item && r.item !== '▶' ? <span style={{ fontFamily: 'var(--mono, monospace)', fontSize: '12px', fontWeight: r.bold ? 700 : 400 }}>{r.item} — </span> : null}
+                                <span style={{ fontSize: r.note ? '10px' : '11px', color: r.note ? '#8a857c' : '#524e46', fontWeight: r.bold ? 700 : 400 }}>{r.desc}</span>
+                                {r.cut ? <div style={{ fontSize: '9px', color: '#8a857c' }}>cut {r.cut}"</div> : null}
+                            </td>
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>{r.qty === '' || r.qty == null ? '' : r.qty}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>{r.price != null ? `$${Number(r.price).toFixed(2)}` : ''}</td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '12px', fontWeight: r.bold ? 700 : 400 }}>{r.note || r.amount == null ? '' : `$${Number(r.amount).toFixed(2)}`}</td>
+                        </tr>
+                    )) : lines.map((l, i) => l.type === 'KIT' ? (
                         <React.Fragment key={i}>
                             <tr style={{ borderTop: '1px solid #ddd8cf' }}>
                                 <td style={{ padding: '10px 6px 4px' }}><span style={{ fontFamily: 'var(--mono, monospace)', fontWeight: 700, fontSize: '13px' }}>{l.code}</span></td>
@@ -209,10 +263,20 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                 const shipRow = shipAmt > 0 ? (
                     <div><span style={lbl}>Shipping</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px' }}>${shipAmt.toFixed(2)}</span></div>
                 ) : null;
+                // A CPQ-born order's products subtotal, then the order's own charges (packaging, a rush fee) — as the CRM's CPQ papers print them.
+                const quoteBlock = (quoteRows && (qCharges.length > 0)) ? (
+                    <>
+                        <div><span style={lbl}>Subtotal</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px' }}>${qSubtotal.toFixed(2)}</span></div>
+                        {qCharges.map((c, i) => (
+                            <div key={`c${i}`}><span style={lbl}>{String(c.desc || '').replace(/^\s*-\s*/, '')}{c.qty !== '' && c.qty != null && c.price != null ? ` · ${c.qty} × $${Number(c.price).toFixed(2)}` : ''}</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px' }}>${rowAmount(c).toFixed(2)}</span></div>
+                        ))}
+                    </>
+                ) : null;
                 if (!(paid > 0)) {
                     return (
                         <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #1c1a16', marginTop: '8px', paddingTop: '10px' }}>
                             <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {quoteBlock}
                                 {shipRow}
                                 <div><span style={lbl}>Total Due</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px' }}>${total.toFixed(2)}</span></div>
                             </div>
@@ -222,6 +286,7 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                 return (
                     <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '2px solid #1c1a16', marginTop: '8px', paddingTop: '10px' }}>
                         <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            {quoteBlock}
                             <div><span style={lbl}>Goods</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px' }}>${goods.toFixed(2)}</span></div>
                             {shipRow}
                             <div><span style={lbl}>Order total</span><span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '15px' }}>${total.toFixed(2)}</span></div>
@@ -262,7 +327,7 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                         <button onClick={matchInvoice} disabled={busy} title="Find the NetSuite invoice billed from this SO and import its number onto this document" style={{ padding: '9px 14px', background: invNo ? 'transparent' : 'var(--brass)', color: invNo ? 'var(--ink)' : '#fff', border: invNo ? '1px solid var(--line)' : 'none', cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
                             {busy ? 'Matching…' : (invNo ? '↻ Re-match NS Invoice #' : '⤓ Match NetSuite Invoice #')}
                         </button>
-                        <button onClick={() => printForm(<InvoiceDoc />, `Invoice ${invNo || order.soId}`)} style={{ padding: '9px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>🖨 Print / PDF</button>
+                        <button onClick={() => printForm(<InvoiceDoc />, `Invoice ${invNo || order.soId}`)} disabled={quoteLoading} style={{ padding: '9px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: quoteLoading ? 'wait' : 'pointer', opacity: quoteLoading ? .5 : 1, fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>🖨 Print / PDF</button>
                         <button onClick={() => { window.location.href = `mailto:${customer?.email || ''}?subject=${encodeURIComponent(`${fulfilled ? 'Invoice' : 'Sales Order'} ${invNo || order.soId} — ${BRAND_NAMES[brand] || ''}`)}&body=${encodeURIComponent(fulfilled ? 'Please find your invoice attached.\n\nThank you!' : 'Please find your sales order confirmation attached.\n\nThank you!')}`; }} style={{ padding: '9px 14px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>✉ Email</button>
                         <button onClick={onClose} style={{ padding: '9px 14px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Close</button>
                     </div>

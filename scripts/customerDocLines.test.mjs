@@ -12,7 +12,7 @@
 // Stuart 2026-09-11 (S1): the money documents KEEP the discount / net rows — the paper has to add
 // up — while the floors and every non-money document still never see them.
 
-import { customerDocLines, isDisplayOnlyLine, MONEY_DOC_TYPES } from '../src/components/Shared/lineClassification.js';
+import { customerDocLines, isDisplayOnlyLine, MONEY_DOC_TYPES, moneyDocRows } from '../src/components/Shared/lineClassification.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -287,6 +287,28 @@ for (const type of MONEY_DOC_TYPES) {
         ['H1-75ILE/P', 'H1-MRPF', 'H1-MRPF', 'H1-75RCP-S/P', 'H1-75CP-S/P', 'H1-75RCP-S/P', 'H1-75BR/P']);
     eq('the packing list (not money) keeps every piece where it was', customerDocLines(rows, 'PACKING_SLIP', '', { custKeys: FAB }).filter(l => !l.isHeader).map(l => l.legacyErpId),
         ['H1-75ILE/P', 'H1-MRPF', 'H1-MRPF', 'H1-75RCP-S/P', 'H1-75CP-S/P', 'H1-75RCP-S/P', 'H1-75BR/P']);
+}
+
+// ── THE ROWS A MONEY DOCUMENT PRINTS — one shape for the CRM's CPQ papers and the Order Entry list's invoice of a CPQ-born
+// order (Stuart 2026-10-20: SO60551's invoice printed every line "—" and $0.00). Moved unchanged out of the CRM.
+{
+    const rows = moneyDocRows([
+        { isHeader: true, name: 'Row 1 — H1-1', total: 5000 },
+        { legacyErpId: 'H1-1R', name: '1" Round Rod', qty: 2, price: 12.5, total: 25, cutLength: 16.75 },
+        { isDiscount: true, name: 'Line discount', qty: 1, price: -5, total: -5 },
+        { isNetLine: true, name: 'Net Line Total', qty: 1, total: 20 },
+        { isAddOn: true, legacyErpId: 'H1-PCKF2', name: 'Packaging', qty: 50, price: 25, total: 1250 },
+        { isAddOn: true, isFee: false, legacyErpId: 'H1-TTB1', name: 'Base', qty: 50, price: 90, total: 4500 },
+        { isNote: true, name: 'Hand sample', qty: 1, price: 3, total: 3 },
+    ]);
+    eq('a configuration header: ▶, no qty, no unit, bold, adds nothing', [rows[0].item, rows[0].qty, rows[0].price, rows[0].bold, rows[0].noSum], ['▶', '', null, true, true]);
+    eq('a product row: their number, qty × unit = amount, the cut kept', [rows[1].item, rows[1].qty, rows[1].price, rows[1].amount, rows[1].cut, rows[1].noSum], ['H1-1R', 2, 12.5, 25, 16.75, false]);
+    eq('a discount row: amount only, and it adds', [rows[2].qty, rows[2].price, rows[2].amount, rows[2].noSum], ['', null, -5, false]);
+    eq('a net row restates the rows above it: bold, adds nothing', [rows[3].bold, rows[3].noSum, rows[3].amount], [true, true, 20]);
+    eq('a checkout FEE is a charge on the order (under the subtotal)', rows[4].afterSubtotal, true);
+    eq('a real item added at checkout prints with the products', rows[5].afterSubtotal, undefined);
+    eq('a note: words only — no number, quantity or money', [rows[6].item, rows[6].qty, rows[6].price, rows[6].amount, rows[6].noSum, rows[6].note], ['', '', null, null, true, true]);
+    eq('nothing in, nothing out', [moneyDocRows(null), moneyDocRows([])], [[], []]);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

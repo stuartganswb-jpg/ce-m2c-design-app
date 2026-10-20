@@ -344,6 +344,34 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '', 
             : l));
 };
 
+// ── THE ROWS A MONEY DOCUMENT PRINTS from customerDocLines — one shape for the CRM's CPQ documents (Shared/FormPreview) and
+// the Order Entry list's invoice of a CPQ-born order (Shared/QuickShipInvoiceModal, Stuart 2026-10-20: SO60551's invoice printed
+// every line at "—" and a $0.00 total — its prices live on its quote). Moved here unchanged from the CRM, so the two papers
+// can never disagree about what a row is, prints or adds.
+//   { item, desc, qty, price, amount, cut, bold, noSum, afterSubtotal?, note? }
+export const moneyDocRows = (docLines = []) => (docLines || []).map(b => ({
+    // THEIR PART NUMBER, ON THEIR PAPER (Stuart 2026-09-03). customerDocLines already
+    // swaps the customer's clientSku into legacyErpId for money documents — and this
+    // column then threw it away, hardcoded blank, so no document has ever printed an
+    // item number at all. Ours prints where they have no code of their own.
+    item: b.isHeader ? '▶' : (b.legacyErpId || ''),
+    desc: b.name,
+    qty: (b.isDiscount || b.isNetLine || b.isHeader) ? '' : b.qty,
+    price: (b.isDiscount || b.isNetLine || b.isHeader || b.qty == null || !b.qty) ? null : b.price,
+    amount: b.total,
+    cut: b.cutLength || null,
+    bold: !!b.isNetLine || !!b.isHeader,
+    // A net row restates the rows above it — it prints, it does not add (Shared/FormPreview).
+    noSum: !!b.isNetLine || !!b.isHeader,
+    // A checkout add-on (packaging, a rush fee) is a charge on the ORDER, not a product line: it prints
+    // under the subtotal with shipping (Stuart 2026-10-01, Shared/FormPreview).
+    // Only a FEE is a charge on the order; a real item added at checkout (a wand, a stocked item from the
+    // search) is a product and prints with the products (Stuart 2026-10-02).
+    ...(b.isAddOn && b.isFee !== false ? { afterSubtotal: true } : {}),
+    // A note the customer may read: words under its configuration — no number, no quantity, no money.
+    ...(b.isNote ? { item: '', qty: '', price: null, amount: null, noSum: true, note: true } : {}),
+}));
+
 export const DIVISION_SMALL = 'small';
 export const DIVISION_CUSTOM = 'custom';
 // STITCH & SEW (Uniquity custom pillows — S7, 2026-10-11): a line tab 7 marked made-to-order SEW (the pillow

@@ -14,7 +14,7 @@ import { quoteDisplayNo, quoteAuthorLine, docDateOf, orderSidemarkOf } from '../
 import QuickShipInvoiceModal from '../Shared/QuickShipInvoiceModal';
 import { invoiceDatesOf } from '../Shared/invoiceDates';   // an invoice's ship + due dates (2026-10-20)
 import FormPreview from '../Shared/FormPreview';
-import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
+import { customerDocLines, cartFinishLabelOf, moneyDocRows } from '../Shared/lineClassification';
 import { customerKeys } from '../Shared/clientPricing';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
@@ -1613,30 +1613,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
           // quotation showed our part numbers and "1 × $0.00" for the pole). Built as FULL_PACKET it
           // missed the customer-SKU swap and the per-foot qty rule that only fire for QUOTE /
           // SALES_ORDER / INVOICE. These lines feed the quotation page only.
-          : customerDocLines(activeDocJob.cpqData?.breakdown || [], activeDocType === 'FULL_PACKET' ? 'QUOTE' : activeDocType, cartFinishLabelOf(activeDocJob.cpqData), {
+          // The rows themselves: Shared/lineClassification.moneyDocRows — the same reading the Order Entry list's invoice
+          // of a CPQ-born order prints (2026-10-20).
+          : moneyDocRows(customerDocLines(activeDocJob.cpqData?.breakdown || [], activeDocType === 'FULL_PACKET' ? 'QUOTE' : activeDocType, cartFinishLabelOf(activeDocJob.cpqData), {
               findPart: (id) => docPartIndex.get(String(id || '').trim().toUpperCase()) || null,
               custKeys: customerKeys(activeDocJob.customer?.id || '', jobCrm || { name: activeDocJob.customer?.name || activeDocJob.clientName || '' }),
-          }).map(b => ({
-              // THEIR PART NUMBER, ON THEIR PAPER (Stuart 2026-09-03). customerDocLines already
-              // swaps the customer's clientSku into legacyErpId for money documents — and this
-              // column then threw it away, hardcoded blank, so no document has ever printed an
-              // item number at all. Ours prints where they have no code of their own.
-              item: b.isHeader ? '▶' : (b.legacyErpId || ''),
-              desc: b.name,
-              qty: (b.isDiscount || b.isNetLine || b.isHeader) ? '' : b.qty,
-              price: (b.isDiscount || b.isNetLine || b.isHeader || b.qty == null || !b.qty) ? null : b.price,
-              amount: b.total,
-              cut: b.cutLength || null,
-              bold: !!b.isNetLine || !!b.isHeader,
-              // A net row restates the rows above it — it prints, it does not add (Shared/FormPreview).
-              noSum: !!b.isNetLine || !!b.isHeader,
-              // A checkout add-on (packaging, a rush fee) is a charge on the ORDER, not a product line: it prints
-              // under the subtotal with shipping (Stuart 2026-10-01, Shared/FormPreview).
-              // Only a FEE is a charge on the order; a real item added at checkout (a wand, a stocked item from the
-              // search) is a product and prints with the products (Stuart 2026-10-02).
-              ...(b.isAddOn && b.isFee !== false ? { afterSubtotal: true } : {}),
-              // A note the customer may read: words under its configuration — no number, no quantity, no money.
-              ...(b.isNote ? { item: '', qty: '', price: null, amount: null, noSum: true, note: true } : {}),
           }));
       if (!isUnpricedRequest && shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt, afterSubtotal: true });
       // dateSaved is an ISO stamp — the doc was printing it verbatim ("2026-08-05T20:00:58.578Z").
@@ -2606,7 +2587,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                               </div>
                                           );
                                       })()}
-                                      {qsInvoice && <QuickShipInvoiceModal order={qsInvoice} customer={activeCrmRecord} brand={activeBrand} onClose={() => setQsInvoice(null)} />}
+                                      {qsInvoice && <QuickShipInvoiceModal order={qsInvoice} customer={activeCrmRecord} brand={activeBrand} findPart={(id) => docPartIndex.get(String(id || '').trim().toUpperCase()) || null} onClose={() => setQsInvoice(null)} />}
 
                                       <div
                                           onClick={() => setExpandedSections(prev => ({ ...prev, archive: !prev.archive }))}
