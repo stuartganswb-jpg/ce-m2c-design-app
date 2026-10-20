@@ -562,6 +562,16 @@ exports.nsOutboxWorker = onSchedule({
                 let nsId = r.body && r.body.id ? String(r.body.id) : '';
                 let nsTran = (r.body && (r.body.tranId || r.body.tranid)) || null;
                 if (!nsId && r.location) { const m = String(r.location).match(/\/(\d+)\s*$/); if (m) nsId = m[1]; }
+                // THE NUMBER, READ OFF THE NEW RECORD ITSELF (Stuart 2026-10-20: "quo213 yes alway write quo back"). A create answers
+                // 204 with the record's address in Location and no number, and the marker search below can run before NetSuite's
+                // search sees the new record — QUO213 (estimate 964201) posted 10-19 with its number never written back, so every
+                // screen showed the internal id. The record's own address is exact and immediate; the marker search stays behind it.
+                if (nsId && !nsTran && r.location && /\/record\/v1\//.test(String(r.location))) {
+                    try {
+                        const g = await nsCall('GET', `${String(r.location).trim()}?fields=tranId`, null);
+                        if (g.ok) nsTran = (g.body && (g.body.tranId || g.body.tranid)) || null;
+                    } catch (err) { /* the marker search below still tries */ }
+                }
                 if ((!nsId || !nsTran) && hasMarker) {
                     const rec = await recoverByMarker(e.id);
                     if (rec) { nsId = nsId || rec.nsId; nsTran = nsTran || rec.nsTran; }
