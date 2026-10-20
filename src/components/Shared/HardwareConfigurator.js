@@ -19,7 +19,7 @@ import { modelNodesOf } from './hardwareAdapter';
 import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle,
     lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf,
     spanAnswersOf, rodOptionsAdviceOf, supportShortfallOf, DROP_FT_RANGE, spliceInfoOf, trvJoinersOf, spliceCentreMissingOf, spanRiskKeyOf,
-    spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice,
+    spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice, withoutAutoSplice, joinersNeededOf, rodRunsOf,
     globalFinishOf, finishIndexOf, withGlobalFinish, wearsAsTwinFinish, wearsFinishOf, globalFinishForChoice, chosenListOf, partFinishByPartOf, armFinishOfChoice,
     finishForChoice, matchFinishOverrideOf, rodFinishForChoice, followsRodChoice, subFinishForChoice, lineFinishForChoice, textureOverridesOf, chosenFinishObjectsOf,
     clientFinishNameOf, offeredFinishesOf, finishGroupsOf, finishGroupLabel,
@@ -302,10 +302,16 @@ function HardwareConfiguratorInner({
     const spliceNeeded = spliceIsNeeded(spliceCodes, lengthInches, spliceOverIn);
     const sameItemCode = useCallback((a, b) => sameItem(a, b, findPart), [findPart]);
     const spliceSatisfied = spliceIsSatisfied(spliceCodes, extras, sameItemCode);
+    // The joiners the pole needs — one per rod per splice (hardwareSession.joinersNeededOf, 2026-10-20) — and how many are on the line.
+    const joinersNeeded = joinersNeededOf({ lengthInches, spliceOverIn, runs: rodRunsOf(answers) });
+    const joinersOnLine = extras.filter(x => spliceCodes.some(c => sameItemCode(x.code, c))).reduce((n, x) => n + (Number(x.qty) > 0 ? Number(x.qty) : 0), 0);
     useEffect(() => {
-        if (!spliceNeeded || !spliceCode || spliceWaived) return;   // several candidates → the operator picks · declined → it stays off
-        setExtras(a => withRequiredSplice(a, spliceCode, sameItemCode));
-    }, [spliceNeeded, spliceCode, spliceWaived, extras, sameItemCode]);
+        if (!spliceCode) return;   // several candidates → the operator picks
+        // Over the limit: the joiner the length step adds, at the count the pole needs — it follows the length; a count the operator
+        // typed stands; declined → it stays off. Back under the limit, the joiner the step added goes with it.
+        if (spliceNeeded && !spliceWaived) setExtras(a => withRequiredSplice(a, spliceCode, sameItemCode, joinersNeeded));
+        else if (!spliceNeeded) setExtras(a => withoutAutoSplice(a, spliceCode, sameItemCode));
+    }, [spliceNeeded, spliceCode, spliceWaived, extras, sameItemCode, joinersNeeded]);
     // The one sentence every refusal says — the same words on the button and in the strip.
     const dropRefusal = dropRefusalOf(pendingDrops);
 
@@ -1626,10 +1632,19 @@ function HardwareConfiguratorInner({
                                     <div style={{ border: `1px solid ${spliceSatisfied ? 'var(--line)' : 'var(--brass)'}`, background: spliceSatisfied ? 'var(--paper)' : '#faf6ee', padding: '9px 11px', marginBottom: '8px', fontSize: '11.5px', color: 'var(--ink)', lineHeight: 1.45 }}>
                                         <b>{spliceSatisfied ? 'Splice included' : '⚠ No splice on this pole'}</b> — {lengthInches}&Prime; exceeds the {spliceOverIn}&Prime; one-piece limit.{' '}
                                         {spliceSatisfied
-                                            ? <>Default location is the <b>CENTER of the run</b>; note the exact location below only if
-                                                different. Vision draws the splice where the note says. Set the quantity to 0 to ship it in one piece.</>
+                                            ? (splice.count > 1
+                                                // (a pole of three pieces or more — 2026-10-20: the splices fall evenly, one joiner per rod at each)
+                                                ? <>Made in <b>{splice.count + 1} pieces</b> — {splice.count} splices, <b>evenly along the run</b> by default
+                                                    ({joinersNeeded} joiner{joinersNeeded === 1 ? '' : 's'}{rodRunsOf(answers) === 2 ? ', one per rod at each splice' : ''}); note the exact
+                                                    locations below only if different. Vision draws the splices where the note says. Set the quantity to 0 to ship it in one piece.</>
+                                                : <>Default location is the <b>CENTER of the run</b>; note the exact location below only if
+                                                    different. Vision draws the splice where the note says. Set the quantity to 0 to ship it in one piece.</>)
                                             : <>It will be quoted, built and shipped in <b>ONE PIECE</b>, and the line says so to the shop.
                                                 {spliceCodes.length > 1 ? ' Add the splice/joiner for this rod below' : ' Enter a quantity below'} if it should be spliced.</>}
+                                        {/* fewer joiners typed than the pole needs — allowed, never silent (2026-10-20) */}
+                                        {spliceSatisfied && joinersOnLine < joinersNeeded && (
+                                            <div style={{ marginTop: '6px', color: '#8a6508' }}>⚠ This pole needs <b>{joinersNeeded} joiner{joinersNeeded === 1 ? '' : 's'}</b>{rodRunsOf(answers) === 2 ? ' (one per rod at each splice)' : ''} — {joinersOnLine} on this line.</div>
+                                        )}
                                     </div>
                                 )}
                                 <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '7px' }}>Add an item</div>
@@ -1657,7 +1672,9 @@ function HardwareConfiguratorInner({
                                             // ×1 either way. An item that is already on the order still leaves when its quantity is
                                             // cleared or set to 0 — the line below, as before.
                                             if (i < 0) return ('qty' in patch && !(Number(patch.qty) > 0)) ? a : [...a, { code: it.code, qty: '1', note: '', ...(slotScope ? { slot: slotScope } : {}), ...patch }];
-                                            const next = [...a]; next[i] = { ...next[i], ...patch };
+                                            // (a count typed into the joiner is the operator's — it no longer follows the length)
+                                            const was = { ...a[i] }; if ('qty' in patch && spliceCodes.includes(it.code)) delete was.auto;
+                                            const next = [...a]; next[i] = { ...was, ...patch };
                                             return next[i].qty === '' || Number(next[i].qty) <= 0 ? next.filter((_, j) => j !== i) : next;
                                           });
                                         };

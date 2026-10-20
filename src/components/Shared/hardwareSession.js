@@ -408,10 +408,34 @@ export function sameItem(a, b, findPart) {
     return !!(pa && pb && pa.id && pa.id === pb.id);
 }
 export const spliceIsSatisfied = (spliceCodes, extras, sameItemCode) => spliceCodes.some(c => extras.some(x => sameItemCode(x.code, c) && Number(x.qty) > 0));
-// The row the length step adds on its own, once: the list as it stands when the joiner is already on it
-// (the SAME list — nothing to re-render), else the list with the one joiner at 1.
-export const withRequiredSplice = (typedExtras, spliceCode, sameItemCode) =>
-    (typedExtras.some(x => sameItemCode(x.code, spliceCode) && Number(x.qty) > 0) ? typedExtras : [...typedExtras.filter(x => !sameItemCode(x.code, spliceCode)), { code: spliceCode, qty: '1', note: '' }]);
+// ── HOW MANY JOINERS THE POLE NEEDS (Stuart 2026-10-20: "go ahead on long pole fix") ─────────────────────────────────────────
+// A pole over the one-piece limit is made in equal pieces — ceil(length / limit) — with a splice between each (spliceInfoOf, the
+// count the bracket at every splice is placed by), and each ROD is joined at every splice: one joiner per rod per splice — the
+// count shipping already reads (Shared/flatRateShipping shares the joiners out across a double's two runs). The length step put
+// its joiner on at 1 whatever the length: a 300" pole (three pieces, two splices) carried one, a double (two rods) one.
+export const rodRunsOf = (answers) => (String((answers && answers.setup) || '').toUpperCase() === 'DOUBLE' ? 2 : 1);
+export function joinersNeededOf({ lengthInches, spliceOverIn, runs = 1 } = {}) {
+    const L = Number(lengthInches) || 0;
+    const lim = Number(spliceOverIn) > 0 ? Number(spliceOverIn) : 120;
+    if (!(L > lim)) return 0;
+    return (Math.ceil(L / lim) - 1) * Math.max(1, Math.round(Number(runs) || 1));
+}
+// The row the length step adds on its own: the list as it stands when the joiner is already on it (the SAME list — nothing to
+// re-render), else the list with the joiner at the count the pole needs. The row the step put there is marked `auto` and FOLLOWS
+// the length (a longer pole, more joiners); a count the operator typed is theirs and stands (allowed, said on the step).
+export const withRequiredSplice = (typedExtras, spliceCode, sameItemCode, need = 1) => {
+    const want = String(Math.max(1, Math.round(Number(need) || 1)));
+    const i = typedExtras.findIndex(x => sameItemCode(x.code, spliceCode) && Number(x.qty) > 0);
+    if (i >= 0) {
+        if (!typedExtras[i].auto || String(typedExtras[i].qty) === want) return typedExtras;
+        const next = [...typedExtras]; next[i] = { ...typedExtras[i], qty: want };
+        return next;
+    }
+    return [...typedExtras.filter(x => !sameItemCode(x.code, spliceCode)), { code: spliceCode, qty: want, note: '', auto: true }];
+};
+// …and back under the limit, the joiner the step added goes with it (a joiner the operator typed stays). The SAME list when there is none.
+export const withoutAutoSplice = (typedExtras, spliceCode, sameItemCode) =>
+    (typedExtras.some(x => x.auto && sameItemCode(x.code, spliceCode)) ? typedExtras.filter(x => !(x.auto && sameItemCode(x.code, spliceCode))) : typedExtras);
 
 // ── WHICH FINISH EACH PART WEARS ─────────────────────────────────────────────────────────────
 // ── ONE DEFAULT PER MATERIAL (Stuart 2026-09-09: "when i just selected finish for the metal
@@ -1519,8 +1543,10 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const spliceCode = singleSpliceOf(spliceCodes);
     const spliceOverIn = spliceLimitOf(flow);
     const spliceNeeded = spliceIsNeeded(spliceCodes, lengthInches, spliceOverIn);
+    // (the joiners the pole needs — one per rod per splice, 2026-10-20)
+    const joinersNeeded = joinersNeededOf({ lengthInches, spliceOverIn, runs: rodRunsOf(answers) });
     let typedExtras = normalizeExtras(Array.isArray(savedExtras) ? savedExtras : [], extraItems, findPart);
-    if (spliceNeeded && spliceCode && !spliceWaived) typedExtras = withRequiredSplice(typedExtras, spliceCode, sameItemCode);
+    if (spliceNeeded && spliceCode && !spliceWaived) typedExtras = withRequiredSplice(typedExtras, spliceCode, sameItemCode, joinersNeeded);
     const extras = liveExtrasOf(typedExtras, extraItems, rodMats);
     const spliceSatisfied = spliceIsSatisfied(spliceCodes, extras, sameItemCode);
     const drawnSplices = Array.isArray(savedDrawnSplices) ? savedDrawnSplices.map(sp => ({ distInches: sp.distInches, ref: sp.ref || '' })) : [];
@@ -1581,7 +1607,7 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
         renderState, steps, noSplice: bill.noSplice, spliceOverIn, span });
     return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks,
         lengthInches, lengthFeetExact, lengthFeet, span, advice, rodOptions, splice, recommendFor, quantities, supportShort, resolved,
-        sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied,
+        sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied, joinersNeeded,
         ...fin, finishAnswers, trvSel, ...bill,
         stepNotes, stepNoteClient, drawnSplices, memo, qty, steps, answerOf, extrasOnStep, visibleOverrides, clearList, railNames, stretchSpec, spliceMarks, cloneSpecs,
         chosen, cadUrl, renderState, everyChoice, pickPartsSaved, drops, pendingDrops, dropRefusal, refusal, item };

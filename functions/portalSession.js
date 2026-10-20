@@ -271,7 +271,8 @@ function viewOf(engine, data, raw, { level = 'STANDARD', money: showMoney = true
         if (st.kind === 'LENGTH') return { ...base, lengthInches: s.lengthInches || null, exactFeet: s.lengthFeetExact || null, feetBilled: s.lengthFeet || null,
             fabricId: s.span.fabricId, dropFt: s.span.dropFt, onStud: s.span.onStud,
             fabrics: engine.FABRIC_CLASSES.map((f) => ({ id: f.id, label: txt(f.label) })),
-            splice: s.spliceNeeded ? { overInches: s.spliceOverIn, included: !!s.spliceSatisfied } : null,
+            // (how many pieces and splices the pole is made in — the splice count its brackets and joiners follow, 2026-10-20)
+            splice: s.spliceNeeded ? { overInches: s.spliceOverIn, included: !!s.spliceSatisfied, splices: (s.splice && s.splice.count) || 0, pieces: ((s.splice && s.splice.count) || 0) + 1 } : null,
             // the span in the column that applies (into studs or not), why, and the other column's count beside it
             support: s.advice ? { everyInches: s.advice.everyInches, supports: s.advice.supports, why: txt(s.advice.whyApplies), onStud: !!s.advice.onStud, other: s.advice.otherSupports || null,
                 // a rod on this configuration with no span listed: said, so the count is never taken as covering it

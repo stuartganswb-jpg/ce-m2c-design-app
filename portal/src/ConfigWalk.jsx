@@ -260,7 +260,10 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
           {step.splice && (
             <div className={`cf-note${step.splice.included ? '' : ' warn'}`}>
               {step.splice.included
-                ? <>Over the {step.splice.overInches}&Prime; one-piece limit, this pole is made in two pieces joined by a splice at the center — it is on the order.</>
+                ? (step.splice.splices > 1
+                  // (a pole of three pieces or more — 2026-10-20: it said "two pieces … at the center" whatever the length)
+                  ? <>Over the {step.splice.overInches}&Prime; one-piece limit, this pole is made in {step.splice.pieces} pieces joined by {step.splice.splices} splices, evenly along it — the joiners are on the order.</>
+                  : <>Over the {step.splice.overInches}&Prime; one-piece limit, this pole is made in two pieces joined by a splice at the center — it is on the order.</>)
                 : <>Over the {step.splice.overInches}&Prime; one-piece limit — our team will confirm how this pole is joined.</>}
             </div>
           )}

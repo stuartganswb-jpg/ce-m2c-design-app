@@ -36,7 +36,7 @@ import { ASSEMBLY, PINS } from './hardwareAutoPicks.fixture.mjs';
 const S = await import(process.env.SESSION_MODULE || new URL('../src/components/Shared/hardwareSession.js', import.meta.url).href);
 const { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle, sessionOf,
     lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf,
-    spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice,
+    spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice, withoutAutoSplice, joinersNeededOf, rodRunsOf,
     globalFinishOf, finishIndexOf, materialOfFinish, withGlobalFinish, wearsAsTwinFinish, wearsFinishOf, globalFinishForChoice, chosenListOf, partFinishByPartOf,
     armFinishOfChoice, finishForChoice, matchFinishOverrideOf, isFeeRecord, rodFinishForChoice, followsRodChoice, subFinishForChoice, lineFinishForChoice,
     textureOverridesOf, chosenFinishObjectsOf, bareWoodOf, clientFinishNameOf, offeredFinishesOf, finishGroupsOf, finishGroupLabel, finishRulesOf,
@@ -1024,8 +1024,23 @@ const picksFor = (answers, seed) => {
     const same = (a, b) => sameItem(a, b, find);
     const has = [{ code: 'CE-INV-900', qty: '1', note: 'left' }];
     ok('a joiner already on the list is left alone — the SAME list, nothing to re-render', withRequiredSplice(has, 'H1-138JNR', same) === has);
-    eq('none on the list → one, at 1, last', withRequiredSplice([{ code: 'H1-RNGX', qty: '4', note: '' }], 'H1-138JNR', same), [{ code: 'H1-RNGX', qty: '4', note: '' }, { code: 'H1-138JNR', qty: '1', note: '' }]);
-    eq('taken off at 0 → put back at 1, once (its old row goes)', withRequiredSplice([{ code: 'CE-INV-900', qty: '0', note: 'x' }], 'H1-138JNR', same), [{ code: 'H1-138JNR', qty: '1', note: '' }]);
+    eq('none on the list → one, at 1, last — marked as the step\'s own', withRequiredSplice([{ code: 'H1-RNGX', qty: '4', note: '' }], 'H1-138JNR', same), [{ code: 'H1-RNGX', qty: '4', note: '' }, { code: 'H1-138JNR', qty: '1', note: '', auto: true }]);
+    eq('taken off at 0 → put back at 1, once (its old row goes)', withRequiredSplice([{ code: 'CE-INV-900', qty: '0', note: 'x' }], 'H1-138JNR', same), [{ code: 'H1-138JNR', qty: '1', note: '', auto: true }]);
+    // ── THE JOINERS A LONG POLE NEEDS (Stuart 2026-10-20: "go ahead on long pole fix"): one per rod per splice ──
+    eq('the joiners a pole needs: none under the limit; past it, one per splice (pieces − 1) — per rod on a double',
+        [joinersNeededOf({ lengthInches: 100, spliceOverIn: 120 }), joinersNeededOf({ lengthInches: 120, spliceOverIn: 120 }), joinersNeededOf({ lengthInches: 150, spliceOverIn: 120 }), joinersNeededOf({ lengthInches: 240, spliceOverIn: 120 }),
+         joinersNeededOf({ lengthInches: 241, spliceOverIn: 120 }), joinersNeededOf({ lengthInches: 300, spliceOverIn: 120 }), joinersNeededOf({ lengthInches: 400, spliceOverIn: 120 }), joinersNeededOf({ lengthInches: 150, spliceOverIn: 120, runs: 2 }),
+         joinersNeededOf({ lengthInches: 300, spliceOverIn: 120, runs: 2 }), joinersNeededOf({ lengthInches: 200, spliceOverIn: 96 }), joinersNeededOf({ lengthInches: 200 }), joinersNeededOf({})],
+        [0, 0, 1, 1, 2, 2, 3, 2, 4, 2, 1, 0]);
+    eq('a double is two runs; anything else one', [rodRunsOf({ setup: 'DOUBLE' }), rodRunsOf({ setup: 'double' }), rodRunsOf({ setup: 'SINGLE' }), rodRunsOf({}), rodRunsOf(null)], [2, 2, 1, 1, 1]);
+    eq('a long pole\'s joiner goes on at the count it needs', withRequiredSplice([], 'H1-138JNR', same, 2), [{ code: 'H1-138JNR', qty: '2', note: '', auto: true }]);
+    const autoRow = [{ code: 'H1-138JNR', qty: '1', note: '18 in from left', auto: true }];
+    eq('the step\'s joiner follows the length (its note kept)', withRequiredSplice(autoRow, 'H1-138JNR', same, 3), [{ code: 'H1-138JNR', qty: '3', note: '18 in from left', auto: true }]);
+    ok('…and at the count it already has, the SAME list', withRequiredSplice(autoRow, 'H1-138JNR', same, 1) === autoRow);
+    const typedRow = [{ code: 'H1-138JNR', qty: '1', note: '' }];
+    ok('a count the operator typed stands — the SAME list, whatever the length', withRequiredSplice(typedRow, 'H1-138JNR', same, 3) === typedRow);
+    eq('back under the limit, the step\'s joiner goes — a typed one and every other row stay', [withoutAutoSplice([...autoRow, { code: 'H1-RNGX', qty: '4', note: '' }], 'H1-138JNR', same), withoutAutoSplice(typedRow, 'H1-138JNR', same)], [[{ code: 'H1-RNGX', qty: '4', note: '' }], typedRow]);
+    ok('…and with none of the step\'s, the SAME list', withoutAutoSplice(typedRow, 'H1-138JNR', same) === typedRow);
     ok('satisfied by any of the candidates, under any of its names, at a count above 0', spliceIsSatisfied(['H1-138JNR', 'H1-1JNR'], [{ code: 'CE-INV-901', qty: '2' }], same) && !spliceIsSatisfied(['H1-138JNR'], [{ code: 'CE-INV-900', qty: '0' }], same) && !spliceIsSatisfied([], has, same));
 
     let compared = 0, differ = 0, added = 0, rested = 0, waived = 0, several = 0;
@@ -1040,9 +1055,13 @@ const picksFor = (answers, seed) => {
         const spliceOverIn = spliceLimitOf(flow);
         const spliceNeeded = spliceIsNeeded(spliceCodes, L, spliceOverIn);
         let typed = typedExtras;
-        if (spliceNeeded && spliceCode && !spliceWaived) typed = withRequiredSplice(typed, spliceCode, same);
+        // ⚠ DELIBERATE RULE CHANGE, 2026-10-20 (Stuart: "go ahead on long pole fix"): the joiner goes on at the count the pole needs
+        // (joinersNeededOf — the same 1 the old code added at every length tested here) and is marked `auto` (it follows the length; a
+        // count typed stands). The mark is set aside for the comparison; the counts past one are checked on their own above.
+        if (spliceNeeded && spliceCode && !spliceWaived) typed = withRequiredSplice(typed, spliceCode, same, joinersNeededOf({ lengthInches: L, spliceOverIn }));
         const extras = liveExtrasOf(typed, extraItems, rodMats);
-        const n = { spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied: spliceIsSatisfied(spliceCodes, extras, same), typed, extras };
+        const unmark = (rows) => rows.map(({ auto, ...r }) => r);   // eslint-disable-line no-unused-vars
+        const n = { spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied: spliceIsSatisfied(spliceCodes, extras, same), typed: unmark(typed), extras: unmark(extras) };
         compared++;
         if (canon({ ...o, renders: 0 }) !== canon({ ...n, renders: 0 })) differ++;
         if (typed !== typedExtras) added++;
