@@ -103,8 +103,9 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
         } catch (e) { addLog(`⛔ Could not use ${m.name}: ${e.message || e}`, 'error'); }
         setBusy(false);
     };
-    // NetSuite unreachable at the show: the sale is still recorded — in the app only, said on the record, and the
-    // sales order's NetSuite push waits until the customer exists there (create + 11.1 sync, then Queue now on RTG).
+    // NetSuite unreachable at the show: the customer is filed in the app only, said on the record. A SALE for them is REFUSED
+    // by name (a1708dbe, 2026-10-17) until they are matched to their NetSuite record on their CRM card (Match to NetSuite), or
+    // created in NetSuite and synced on 11.1 — an app-only id must never reach a NetSuite order.
     const createCustomerAppOnly = async () => {
         const name = String((newCust && newCust.name) || '').trim();
         if (!name) return;
@@ -112,7 +113,7 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
         try {
             const rec = crmRecordAppOnlyOf({ name, email: newCust.email, phone: newCust.phone, brand: 'uniquity', by: currentUser || '', reason: nsFail });
             await setDoc(doc(db, 'crm_records', rec.id), rec);
-            addLog(`⚠ ${name} filed in the app only (${rec.id}) — NOT in NetSuite. The sales order will be recorded here and its NetSuite push will refuse until the customer is created in NetSuite and synced (11.1), then Queue now on RTG.`, 'warn');
+            addLog(`⚠ ${name} filed in the app only (${rec.id}) — NOT in NetSuite. A sale for them is refused until they are matched to their NetSuite record on their CRM card (Match to NetSuite), or created in NetSuite and synced on 11.1.`, 'warn');
             onPickCustomer(rec);
             setNewCust(null); setNsFail(''); setScreen('HOME');
         } catch (e) { addLog(`Could not file the customer: ${e.message || e}`, 'error'); }
@@ -241,7 +242,7 @@ const CounterScreens = ({ currentUser, customers = [], customerId = '', selected
                             {nsFail && !nsMade && (
                                 <div style={{ border: '1px solid #d9534f', background: '#fdf3f3', padding: '12px', fontSize: '0.9rem' }}>
                                     <div style={{ color: '#8a1f1f', marginBottom: '8px' }}>NetSuite did not create the customer: {nsFail}</div>
-                                    <div style={{ color: 'var(--ink-soft)', marginBottom: '8px' }}>Fix it and try again, or file the customer in the app only — the sale is recorded, and its NetSuite push waits until the customer exists in NetSuite and is synced on 11.1.</div>
+                                    <div style={{ color: 'var(--ink-soft)', marginBottom: '8px' }}>Fix it and try again, or file the customer in the app only — a sale for them is refused until the office matches them to their NetSuite record on their CRM card (Match to NetSuite), or creates them in NetSuite and syncs on 11.1 — a quote too.</div>
                                     <button onClick={createCustomerAppOnly} disabled={busy} style={btn(false)}>File in the app only for now</button>
                                 </div>
                             )}
