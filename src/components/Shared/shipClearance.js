@@ -132,12 +132,25 @@ export const partialShipClearanceOf = (facts, { shippingNow = 0 } = {}) => {
     return { clear: false, rule: whole.rule, due: short, partial: true, why: `${term} — ${usd(facts.paid)} paid of ${usd(facts.total)}; to ship this part (${usd(now)}) first, what is paid must cover it and leave more than half of the ${usd(rest)} balance (${usd(short)} more needed)` };
 };
 
+// ── NO NETSUITE SALES ORDER, NO SHIPMENT (Stuart 2026-10-20: "3. yes hold at shipping") ─────────────────────────────────────
+// An order NetSuite has not accepted (refused, or still in the queue) is picked, packed and made as usual — the floor keeps
+// moving — and is held HERE, at shipping: there is no NetSuite order to fulfil, read terms from or bill. Only NetSuite
+// accepting it lifts this hold ("Check again"); no manager may release it, because no fulfilment can post without the order.
+export const NO_SO_RULE = 'NO_SO';
+/** Is this a NetSuite internal id (digits) — not an app id (QS-…, SO-APP-…) or a transaction number? */
+export const hasNsSoId = (id) => /^\d+$/.test(str(id).trim());
+export const noSoClearanceOf = () => ({ clear: false, rule: NO_SO_RULE, due: 0, why: 'NetSuite has not accepted this order yet — it ships once NetSuite does (the NetSuite-to-fix list says why)' });
+/** May a manager release this hold? Every hold but the missing NetSuite order. */
+export const holdMayBeReleased = (hold) => !hold || str(hold.rule) !== NO_SO_RULE;
+
 /**
  * Read NetSuite and decide. → { ok, facts, clearance }; ok false = NetSuite did not answer (the clearance says so).
+ * An order with no NetSuite sales order is not asked about: it is held at shipping (NO_SO_RULE).
  * `unpostedOf({ nsSoId })` → the Payments callable's answer; asked only when the terms want payment and NetSuite's own figure
  * falls short. Whatever it does — throws, refuses, finds nothing — the order is decided on NetSuite's figure alone.
  */
 export async function fetchShipClearance({ nsProxyFetch, nsSoId, unpostedOf = null, shippingNow = 0 }) {
+    if (!hasNsSoId(nsSoId)) return { ok: true, facts: null, clearance: noSoClearanceOf() };
     const sql = shipFactsSql(nsSoId);
     if (!sql || !nsProxyFetch) return { ok: false, facts: null, clearance: shipClearanceOf(null) };
     const url = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';

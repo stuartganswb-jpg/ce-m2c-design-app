@@ -12,6 +12,8 @@ import { woItemCodeOf } from "../Shared/workOrderContract";
 import { SOURCING, sourcingOf } from "../Shared/sourcing";
 import { guardImportSpecs, diffRecordOf } from "../Shared/nsImportGuard";
 import { yieldsToNetSuiteBom } from "../Shared/sheetPins";
+import { healRetryOf } from "../Shared/nsFixList";
+import NsFixPanel from "../Shared/NsFixPanel";
 
 // ONE copy now — Shared/brandNetsuite.js (2026-08-25).
 
@@ -22,24 +24,8 @@ const nsErrDetail = (raw) => {
     const m = [...s.matchAll(/"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map(x => x[1].replace(/\\"/g, '"'));
     return m.length ? m.join(' · ') : s;
 };
-// Heal known payload-shape mistakes before a retry, so Retry isn't a guaranteed repeat failure:
-// workorder creation must use `assemblyItem`; workordercompletion receive bins must be ONE bin
-// (the library home-bin field is a comma-joined list from the item sync — invalid as a refName).
-// Non-WIP work orders can't take workordercompletion — retries flip the transform to the
-// WO-linked assemblyBuild (the UI's "Create Build"), which IS valid for them.
-const healOutboxUrl = (o) => String(o.targetUrl || '').replace('/!transform/workordercompletion', '/!transform/assemblyBuild');
-const healOutboxPayload = (o) => {
-    const p = o.payload ? JSON.parse(JSON.stringify(o.payload)) : {};
-    if (o.kind === 'workorder' && p.item && !p.assemblyItem) { p.assemblyItem = p.item; delete p.item; }
-    if (o.kind === 'workordercompletion' && p.inventoryDetail) {
-        const q0 = p.inventoryDetail.quantity;
-        const raw = String(p.inventoryDetail?.inventoryAssignment?.items?.[0]?.binNumber?.refName || '');
-        const first = raw.split(',')[0].trim().toUpperCase();
-        if (!first || first === 'UNASSIGNED') delete p.inventoryDetail;
-        else p.inventoryDetail = { quantity: q0, inventoryAssignment: { items: [{ binNumber: { refName: first }, quantity: q0 }] } };
-    }
-    return p;
-};
+// The repairs a retry carries live in ONE place now (Shared/nsFixList.healRetryOf, 2026-10-20) — this tab's Retry, RTG's
+// Transmit Log and the NetSuite-to-fix list's Re-send all send the same healed payload.
 
 // ---- FIELD-LEVEL SYNC CONTROL (Stuart 2026-07-28) ----------------------------------------------
 // "this brings to light a weakness in the sync — add visible check flags on these 2 windows so we
@@ -1698,6 +1684,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '4px 8px', borderRadius: '2px' }}>Role: {currentUser}</span>
             </div>
 
+            {/* 🧾 NETSUITE TO FIX TODAY (Stuart 2026-10-20 · Shared/nsFixList): every refused write still owed, in words, with
+                Re-send / Done in NetSuite / Not needed — Eric's list; the floor kept moving. */}
+            <NsFixPanel currentUser={currentUser} />
+
             {/* NETSUITE SYNC QUEUE (Layer 2, 2026-07-16): staged writes (ns_outbox) drained ~1/min
                 by the nsOutboxWorker function — serial, retried with backoff, idempotent. This is
                 the live monitor: retry FAILED entries after fixing data; ✕ cancels an un-posted one. */}
@@ -1718,7 +1708,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink)' }} title={o.lastError || ''}>{o.label || o.kind}{o.nsTran ? ` → ${o.nsTran}` : ''}{o.status === 'FAILED' && o.lastError ? ` — ${nsErrDetail(o.lastError).slice(0, 140)}` : ''}</span>
                                 <span title={String(o.targetUrl || '')} style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{o.createdBy || ''}{o.createdAt ? ` · ${new Date(o.createdAt).toLocaleTimeString()}` : ''}{o.attempts ? ` · try ${o.attempts}` : ''}</span>
                                 {(o.status === 'FAILED' || o.status === 'CANCELLED') && (
-                                    <button onClick={() => updateDoc(doc(db, 'ns_outbox', o.id), { payload: healOutboxPayload(o), targetUrl: healOutboxUrl(o), status: 'PENDING', lastError: null, nextAttemptAt: Date.now(), requeuedAt: Date.now(), requeuedBy: currentUser || '' })} title="Retries with known fixes applied. Attempts are KEPT so the worker first checks NetSuite for an already-posted copy (marker recovery) — hitting Retry can never double-post." style={{ padding: '4px 10px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>↻ Retry</button>
+                                    <button onClick={() => updateDoc(doc(db, 'ns_outbox', o.id), { ...healRetryOf(o), status: 'PENDING', lastError: null, nextAttemptAt: Date.now(), requeuedAt: Date.now(), requeuedBy: currentUser || '' })} title="Retries with known fixes applied. Attempts are KEPT so the worker first checks NetSuite for an already-posted copy (marker recovery) — hitting Retry can never double-post." style={{ padding: '4px 10px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>↻ Retry</button>
                                 )}
                                 {(o.status === 'PENDING' || o.status === 'FAILED') && (
                                     <button onClick={() => { if (window.confirm(`Cancel "${o.label || o.kind}"? It will NOT be posted to NetSuite.`)) updateDoc(doc(db, 'ns_outbox', o.id), { status: 'CANCELLED' }); }} style={{ padding: '4px 10px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>✕</button>

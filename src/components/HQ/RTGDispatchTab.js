@@ -42,6 +42,9 @@ import { isOpenPo, isDraftPo, approvePurchaseOrder, markPoSent, poRef, PO_STATUS
 import { poLinesLocked, poLockMessage } from '../Shared/poLock';
 import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone, liftPatchFor, wholeOrderWait, customFabLabel, canReopenInProduction } from '../Shared/orderStatus';
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
+import { NsFixChip } from '../Shared/NsFixPanel';
+import { soRefusalOf } from '../Shared/nsRefusal';
+import { healRetryOf } from '../Shared/nsFixList';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import ReviewWaitingBanner from '../Shared/ReviewWaitingBanner';
@@ -101,26 +104,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     const requeueOutbox = async (o) => {
         if (!window.confirm(`Re-queue "${o.label || o.id}" to NetSuite?\n\nThe worker will retry it within ~1 minute.`)) return;
         try {
-            // Heal known payload-shape mistakes before resending, so a retry isn't a guaranteed
-            // repeat failure: workorder creation must use `assemblyItem`, not `item` (2026-07-17);
-            // workordercompletion receive bins must be ONE bin — the library home-bin field is a
-            // comma-joined list from the item sync, invalid as a refName (2026-07-20).
-            const p = o.payload ? JSON.parse(JSON.stringify(o.payload)) : {};
-            if (o.kind === 'workorder' && p.item && !p.assemblyItem) { p.assemblyItem = p.item; delete p.item; }
-            if (o.kind === 'workordercompletion' && p.inventoryDetail) {
-                const q0 = p.inventoryDetail.quantity;
-                const rawBin = String(p.inventoryDetail?.inventoryAssignment?.items?.[0]?.binNumber?.refName || '');
-                const firstBin = rawBin.split(',')[0].trim().toUpperCase();
-                if (!firstBin || firstBin === 'UNASSIGNED') delete p.inventoryDetail;
-                else p.inventoryDetail = { quantity: q0, inventoryAssignment: { items: [{ binNumber: { refName: firstBin }, quantity: q0 }] } };
-            }
-            // Non-WIP WOs can't take workordercompletion — flip the transform to the WO-linked
-            // assemblyBuild (the UI's "Create Build"), which IS how these complete (2026-07-21).
-            const fixedUrl = String(o.targetUrl || '').replace('/!transform/workordercompletion', '/!transform/assemblyBuild');
-            // Attempts are KEPT (not reset): the worker only runs its already-posted (marker
-            // recovery) check on retried entries — resetting to 0 disabled it and allowed
-            // double-posts when Retry was hammered (Stuart 2026-07-21).
-            await updateDoc(doc(db, 'ns_outbox', o.id), { payload: p, targetUrl: fixedUrl, status: 'PENDING', nextAttemptAt: Date.now(), lastError: '', requeuedAt: Date.now(), requeuedBy: currentUser || '' });
+            // The known repairs (workorder → assemblyItem; a build's one receive bin; a non-WIP WO completes by assemblyBuild) —
+            // ONE copy since 2026-10-20, Shared/nsFixList.healRetryOf, shared with 11.1 and the NetSuite-to-fix list.
+            // Attempts are KEPT (not reset): the worker only runs its already-posted (marker recovery) check on retried
+            // entries — resetting to 0 disabled it and allowed double-posts when Retry was hammered (Stuart 2026-07-21).
+            await updateDoc(doc(db, 'ns_outbox', o.id), { ...healRetryOf(o), status: 'PENDING', nextAttemptAt: Date.now(), lastError: '', requeuedAt: Date.now(), requeuedBy: currentUser || '' });
             addLog(`↻ Re-queued ${o.label || o.id}.`, 'info');
         } catch (e) { alert(`Re-queue failed: ${e.message}`); }
     };
@@ -558,7 +546,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // AN ORDER ENTRY ORDER IS NEVER SPLIT WHOLE (Stuart 2026-09-23, SO60586): a Quick Ship quote
         // approved from the CRM arrives here CPQ-shaped, with a QSQUOTE job — its lines start one at
         // a time through the Order Entry route below. Shared/reopenQuote.isOrderEntryOrder is the test.
-        const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId) && !o.displayRelease && !isOrderEntryOrder(o));
+        // A CPQ order NetSuite REFUSED starts anyway (Stuart 2026-10-20 — "keep the floor moving", Shared/nsRefusal): the floor
+        // makes it, and it is held at shipping until NetSuite accepts it. Still only queued: it waits a minute for the answer.
+        const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId || soRefusalOf(o)) && !o.displayRelease && !isOrderEntryOrder(o));
         const isSalesFlow = (o) => o.orderType === 'sales' || o.orderClass === 'ORDER_ENTRY' || (o.finPayload && o.finPayload.orderType === 'sales');
         // FINISH COMPLETE by default (Stuart 2026-09-03): a sales-typed work order waits for every
         // sibling line of its sales order unless that order is flagged "Finish as available".
@@ -637,7 +627,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         for (const o of liveSO) {
             // A display order's rows are started from 10.5, one at a time (Shared/displayRelease) —
             // the automatic start would raise every to-be-finished line of the order in one go.
-            if (!isQuickShip(o) || !o.nsInternalId || o.deleted || o.stopped || o.rtgArchived || o.displayRelease) continue;
+            // …and an Order Entry order NetSuite REFUSED starts the same way (held at shipping until NetSuite accepts it).
+            if (!isQuickShip(o) || (!o.nsInternalId && !soRefusalOf(o)) || o.deleted || o.stopped || o.rtgArchived || o.displayRelease) continue;
             if ((o.createdAt || 0) < OE_AUTO_FROM || isClosedState(o) || isDoneState(o)) continue;
             const open = oeOpenOf(o);
             if (!open.length) continue;
@@ -1430,6 +1421,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             if (o.autoSplit) return { text: 'auto-split ✓', tone: 'ok' };
             if (o.displayRelease) return { text: 'display order — its rows are released from 10.5', tone: 'wait' };
             if (!o.hqJobId) return { text: 'no CPQ job linked — cannot split; release from View', tone: 'red' };
+            if (o.appCreated && !o.nsInternalId && soRefusalOf(o)) return { text: 'NetSuite REFUSED the SO — the floor starts it; it ships once NetSuite accepts (NetSuite-to-fix list)', tone: 'wait' };
             if (o.appCreated && !o.nsInternalId) return { text: 'awaiting NetSuite SO accept', tone: 'wait' };
         } else {
             const g = gateSummary(o);
@@ -3625,6 +3617,8 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                         stands, what went on backorder — and, for a manager, the card's own overrule buttons. */}
                     <button onClick={() => setDaySummaryOpen(true)} title="Every sales order entered today (or any day) from Order Entry and CPQ: NetSuite's answer, finish complete / as available, each work order's standing, what waits on a person, and the parts that went on backorder that day. Print it or copy it to send."
                         style={{ ...btnStyle, padding: '8px 14px', fontSize: '10px' }}>📋 Day summary</button>
+                    {/* 🧾 NETSUITE TO FIX TODAY (Stuart 2026-10-20 · Shared/nsFixList) — red while NetSuite owes anything; the list opens here. */}
+                    <NsFixChip currentUser={currentUser || ''} />
                     {/* WHERE IS IT — from RTG it sees EVERYTHING: every floor job, board record,
                         shop job, demand, rod cut AND inbound PO (with delivery status/ETA). */}
                     <WhereIsIt compact recipeLenOf={(o) => coatsOf(o).recipeLen} poleRecipeLenOf={(o) => coatsOf(o).poleRecipeLen}

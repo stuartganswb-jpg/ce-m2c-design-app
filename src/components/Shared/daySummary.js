@@ -13,6 +13,7 @@ import { gateSummary, isReleasable, wholeOrderWait, finishModeOf, FINISH_MODE, u
 import { stockToReallocateText, REALLOCATE_WORD, orderLine, holdersText } from './stockReallocate.js';
 import { openWorkText, NO_MOVEMENT_DAYS } from './openWork.js';
 import { reviewWaitingOf } from './reviewWaiting.js';
+import { soRefusalOf } from './nsRefusal.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -97,7 +98,7 @@ export function daySummaryOf({ orders = [], workOrders = [], finDocs = [], shopD
         return {
             id: o.id, ref: String(o.soId || o.id), customer: String(o.customer || o.customerName || ''), door,
             enteredAt: msOf(o.createdAt), enteredBy: String((o.createdBy && (o.createdBy.name || o.createdBy)) || o.savedBy || ''),
-            netsuite: accepted ? `accepted · ${String(o.soId || '')}` : (o.status === 'NS_QUEUED' ? 'queued for NetSuite' : 'not in NetSuite yet'),
+            netsuite: accepted ? `accepted · ${String(o.soId || '')}` : (soRefusalOf(o) ? `REFUSED by NetSuite — ${String(soRefusalOf(o).error || '').slice(0, 120)} (the NetSuite-to-fix list)` : (o.status === 'NS_QUEUED' ? 'queued for NetSuite' : 'not in NetSuite yet')),
             accepted, status: String(o.status || ''),
             finishMode: finishModeOf(o), finishAsked: !!o.finishMode, finishBy: String(o.finishAsAvailableBy || o.finishModeBy || ''),
             lineCount: (o.lines || []).length, work, review, unstarted, backorders, verdict,

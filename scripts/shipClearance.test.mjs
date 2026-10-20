@@ -1,6 +1,7 @@
 // 🧪 May this order ship? The customer's terms decide (Stuart 2026-10-17).   node scripts/shipClearance.test.mjs
 import { termRuleOf, TERM_RULE, PAY_FIRST_TERMS, CREDIT_TERMS, shipFactsSql, shipFactsOf, shipClearanceOf, fetchShipClearance,
-    shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, shipHoldText, unpostedCardOf, partialShipClearanceOf, termsStampOf } from '../src/components/Shared/shipClearance.js';
+    shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, shipHoldText, unpostedCardOf, partialShipClearanceOf, termsStampOf,
+    NO_SO_RULE, hasNsSoId, noSoClearanceOf, holdMayBeReleased } from '../src/components/Shared/shipClearance.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 const eq = (n, a, b) => ok(`${n}\n    got  ${JSON.stringify(a)}\n    want ${JSON.stringify(b)}`, JSON.stringify(a) === JSON.stringify(b));
@@ -115,6 +116,22 @@ ok('NetSuite unread → not clear, as the whole rule says', partialShipClearance
 // ── the order's own terms ride on it, read or held (2026-10-20 — the invoice's due date) ──
 eq('the terms stamp', termsStampOf({ termId: '22', termName: 'Pay Before Shipping' }, { at: 5 }), { nsTerms: { id: '22', name: 'Pay Before Shipping', at: 5 } });
 eq('nothing read → nothing stamped', [termsStampOf(null), termsStampOf({ termId: '', termName: '' })], [{}, {}]);
+
+// ── no NetSuite sales order → held at shipping, and no manager may release it (Stuart 2026-10-20: "hold at shipping") ──
+ok('a NetSuite internal id', hasNsSoId('960034') && hasNsSoId(' 961171 '));
+ok('an app id / a transaction number / nothing is not', !hasNsSoId('QS-1792251032425') && !hasNsSoId('SO-APP-ST091826-01') && !hasNsSoId('SO61091') && !hasNsSoId('') && !hasNsSoId(null));
+{
+    const fx = seq([]);
+    const r = await fetchShipClearance({ nsProxyFetch: fx, nsSoId: 'QS-1792251032425' });
+    eq('no NetSuite order: NetSuite is not asked, held as NO_SO', [r.ok, r.clearance.clear, r.clearance.rule, fx.calls.length, /NetSuite has not accepted this order yet/.test(r.clearance.why)], [true, false, NO_SO_RULE, 0, true]);
+    const r2 = await fetchShipClearance({ nsProxyFetch: fx, nsSoId: '' });
+    eq('no id at all: the same hold', r2.clearance.rule, NO_SO_RULE);
+    const stamp = shipHoldStampOf(r, { at: 7, by: 'Andrea' });
+    eq('the hold stamp keeps the rule', [stamp.shipHold.rule, stamp.shipHold.by], [NO_SO_RULE, 'Andrea']);
+    ok('…and no manager may release it', !holdMayBeReleased(stamp.shipHold));
+    ok('a payment hold may still be released', holdMayBeReleased({ rule: TERM_RULE.PAY_FIRST }) && holdMayBeReleased(null));
+    eq('the words', noSoClearanceOf().why, 'NetSuite has not accepted this order yet — it ships once NetSuite does (the NetSuite-to-fix list says why)');
+}
 
 console.log(`shipClearance: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -94,6 +94,7 @@ const ES = {
     'Packed — send the fulfilment': 'Empacado — enviar el despacho',
     'Packed waits for': 'Empacado espera',
     'Waiting for payment': 'Esperando el pago',
+    'Waiting for NetSuite': 'Esperando a NetSuite',
     'Check again': 'Revisar de nuevo',
     'reading the terms in NetSuite': 'leyendo las condiciones en NetSuite',
     'pack it; it ships when paid': 'empáquelo; se envía cuando esté pagado',

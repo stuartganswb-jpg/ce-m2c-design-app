@@ -457,13 +457,19 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       if (src.bins.length > 0 && !srcBin) return alert('Pick the bin the finished parts come out of.');
       const binQty = (src.bins.find(b => b.bin === srcBin) || {}).qty || 0;
       if (srcBin && binQty < qty) return alert(`Bin ${srcBin} holds only ${binQty} of ${src.itemid} — pick a different bin or lower the qty.`);
-      if (!window.confirm(`⇄ CONVERT ${qty} × ${src.itemid} → ${raw.itemid}?\n\nOut of: ${srcBin || 'no bin'}\nInto: ${dstBin || 'no bin'}\n\nPosts the 2-line NetSuite inventory adjustment now.`)) return;
+      if (!window.confirm(`⇄ CONVERT ${qty} × ${src.itemid} → ${raw.itemid}?\n\nOut of: ${srcBin || 'no bin'}\nInto: ${dstBin || 'no bin'}\n\nQueues the 2-line NetSuite inventory adjustment — it posts within about a minute.`)) return;
       setConvPosting(true);
       try {
           const cfg = BRAND_NETSUITE_MAP[convBrand];
-          const r = await nsProxyFetch({
+          // THE CONVERT STANDS; NETSUITE FOLLOWS (Stuart 2026-10-20: "keep the floor moving … when it is only a netsuite
+          // acceptance issue"). This was a direct call — a refusal stopped the convert, and the order with it. It goes through
+          // the queue now (posts within a minute, never twice); a refusal lands on the NetSuite-to-fix list with both lines,
+          // for Eric to put right before the day ends, and the parts are pulled and prepped meanwhile.
+          await enqueueNsWrite({
+              kind: 'inventoryadjustment',
+              label: `Setup Queue convert — ${qty} × ${src.itemid} → ${raw.itemid}`,
               targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
-              method: 'POST',
+              method: 'POST', sourceApp: 'FINISHING', createdBy: currentUser || '',
               payload: {
                   account: { id: "254" }, subsidiary: { id: cfg.subsidiary },
                   memo: `Convert ${qty} ${src.itemid} → ${raw.itemid} for finishing (Setup Queue)`,
@@ -473,16 +479,11 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                   ] }
               }
           });
-          if (!r.ok) {
-              const btxt = await r.text().catch(() => '');
-              const det = (btxt.match(/"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/) || [])[1];
-              throw new Error(det || btxt.slice(0, 250) || `HTTP ${r.status}`);
-          }
-          if (writeLog) writeLog(`⇄ Converted ${qty} × ${src.itemid} → ${raw.itemid} (${srcBin || 'no bin'} → ${dstBin || 'no bin'})`, 'inventory');
-          alert(`✅ Converted ${qty} × ${src.itemid} → ${raw.itemid}.\n\nNetSuite adjusted — pull the parts and prep them for finishing.`);
+          if (writeLog) writeLog(`⇄ Converted ${qty} × ${src.itemid} → ${raw.itemid} (${srcBin || 'no bin'} → ${dstBin || 'no bin'}) — NetSuite adjustment queued`, 'inventory');
+          alert(`✅ Converted ${qty} × ${src.itemid} → ${raw.itemid}.\n\nNetSuite's adjustment is queued (it posts within about a minute; if NetSuite refuses it, it goes on the NetSuite-to-fix list) — pull the parts and prep them for finishing.`);
           setConvSel(null); setConvQty('');
           convSearch();
-      } catch (e) { alert('Convert failed: ' + (e.message || e)); }
+      } catch (e) { alert('Convert could not be queued: ' + (e.message || e) + '\n\nNothing was sent to NetSuite — try again.'); }
       finally { setConvPosting(false); }
   };
 

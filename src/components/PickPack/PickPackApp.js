@@ -15,6 +15,8 @@ import { uomOf, uomLabel } from '../Shared/uom';
 import { orderStatusOf, customPartsReady, liftPatchFor, nothingToPick, stagingMatched, floorWaitsOf } from '../Shared/orderStatus';
 import { asksSprayStation, sprayStationOf, sprayStationLockOf, sprayStationPatch, SPRAY_STATIONS, WINDOW_LABEL, TASK_LABEL, coatCountsOf } from '../Shared/floorActivity';
 import WhereIsIt from '../Shared/WhereIsIt';
+import { NsFixChip } from '../Shared/NsFixPanel';
+import { soRefusalOf } from '../Shared/nsRefusal';
 import { woRefOf } from '../Shared/woRef';
 import { pairWaitsOf, waitedText } from '../Shared/stagingPairs';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
@@ -75,7 +77,7 @@ import { packingListOf, packedQtyOf } from '../Shared/packingList';
 import { isBlindShipment, withBlindPacking } from '../Shared/blindShip';
 import { soPackBoardOf, lineBoxOf, LINE_STATE, ORDER_VERDICT } from '../Shared/soPackBoard';
 import { PACK_STAGE, orderAwaitsPackOf, orderPackBlockerOf, orderPackedPatchOf, docOrderPackedPatchOf, awaitsOrderPack } from '../Shared/soPackStep';
-import { fetchShipClearance, shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, termsStampOf } from '../Shared/shipClearance';   // the customer's NetSuite terms decide whether it ships (2026-10-17)   // a CPQ order is boxed and packed on SO Pack (step 2, 2026-10-17)
+import { fetchShipClearance, shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, termsStampOf, holdMayBeReleased, NO_SO_RULE } from '../Shared/shipClearance';   // the customer's NetSuite terms decide whether it ships (2026-10-17)   // a CPQ order is boxed and packed on SO Pack (step 2, 2026-10-17)
 import { boxHomeFor, boxOpenRefusal, isBoxShipped, spreadTrackingOf, orderBoxesOf, withNewBox, newBoxRefusal, boxOf, boxName, tickBoxesOf, tickIntoBox, moveIntoBox, unboxedQtyOf, boxSpreadLabel, boxContentsOf, boxRemovalRefusal, unboxedLinesOf, boxCompleteBlocker, packBoxesOfTicks, docBoxLinesOf } from '../Shared/orderBoxes';
 import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
 import { customerKeys } from '../Shared/clientPricing';
@@ -452,8 +454,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
         // Quick Ship stock orders for this brand (own pick/pack tab).
         const unsubQS = onSnapshot(query(collection(db, "hq_sales_orders"), where("orderClass", "==", ORDER_ENTRY_CLASS)), (snap) => {
-            // NS_QUEUED = saved locally, NetSuite not yet accepted (staged sync) — not floor work yet.
-            const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand && o.status !== 'NS_QUEUED');
+            // NS_QUEUED = saved locally, NetSuite not yet accepted (staged sync) — not floor work yet. Unless NetSuite REFUSED it
+            // (Shared/nsRefusal, 2026-10-20 — "keep the floor moving"): then it is picked and packed as usual, and held at
+            // shipping (Shared/shipClearance NO_SO_RULE) until NetSuite accepts it.
+            const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand && (o.status !== 'NS_QUEUED' || !!soRefusalOf(o)));
             rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
             setQuickShipOrders(rows);
         }, e => console.warn('quick ship orders listen failed', e));
@@ -3688,12 +3692,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
 
-        const postNs = async (url, body) => {
-            const r = await nsProxyFetch({ targetUrl: url, method: 'POST', payload: body });
-            const rb = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(typeof rb === 'object' ? JSON.stringify(rb) : String(rb));
-            return rb;
-        };
+        // THE COUNT STANDS; NETSUITE FOLLOWS (Stuart 2026-10-20 — the rod cut's rule): the moves and the adjustment go through
+        // the queue instead of straight to NetSuite, so a refusal (Eric's three counts of 10-14: "reconfigure the inventory
+        // detail record") is no longer a count lost — it lands on the NetSuite-to-fix list with every bin and quantity in it.
+        const queueNs = (url, body, label) => enqueueNsWrite({ kind: /binTransfer/i.test(url) ? 'bintransfer' : 'inventoryadjustment', label, targetUrl: url, method: 'POST', payload: body, sourceApp: 'WMS', createdBy: operator?.name || '' });
 
         try {
             setIsSyncing(true);
@@ -3709,8 +3711,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
             // 1) Bin transfers for the crossing moves (qty positive; direction is from→to).
             if (transferItems.length) {
-                await postNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`, {
-                    subsidiary: { id: nsConfig.subsidiary }, location: { id: nsConfig.location }, memo: nsMemo(memoText),
+                await queueNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`, {
+                    subsidiary: { id: nsConfig.subsidiary }, location: { id: nsConfig.location }, memo: memoText,
                     inventory: { items: transferItems.map(t => {
                         const lineQty = t.moves.reduce((s, m) => s + m.qty, 0);
                         return ({
@@ -3719,25 +3721,25 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                             inventoryDetail: { quantity: lineQty, inventoryAssignment: { items: t.moves.map(m => ({ binNumber: { refName: m.from }, toBinNumber: { refName: m.to }, quantity: m.qty })) } }
                         });
                     }) }
-                });
+                }, `Cycle count by ${operator?.name || 'Unknown'} — ${transferItems.reduce((s, t) => s + t.moves.length, 0)} bin move(s)`);
                 posted.push(`${transferItems.reduce((s, t) => s + t.moves.length, 0)} bin transfer(s)`);
             }
 
             // 2) Inventory adjustment for the residual single-direction variance.
             if (adjustItems.length) {
-                await postNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`, {
-                    account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: nsMemo(memoText),
+                await queueNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`, {
+                    account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: memoText,
                     inventory: { items: adjustItems.map(adj => ({
                         item: { id: adj.internalId },
                         location: { id: nsConfig.location },
                         adjustQtyBy: adj.total,
                         inventoryDetail: { quantity: adj.total, inventoryAssignment: { items: adj.bins.map(b => ({ binNumber: { refName: b.binNumber }, quantity: b.qty })) } }
                     })) }
-                });
+                }, `Cycle count by ${operator?.name || 'Unknown'} — ${adjustItems.length} adjustment line(s)`);
                 posted.push(`${adjustItems.length} adjustment line(s)`);
             }
 
-            alert(`✅ NetSuite updated: ${posted.join(' + ')}.${skipped.length ? `\n\n⚠️ Skipped ${skipped.length} counted item(s) with no NetSuite Internal ID.` : ''}`);
+            alert(`✅ Count recorded — NetSuite's ${posted.join(' + ')} queued (they post within about a minute; if NetSuite refuses one, it goes on the NetSuite-to-fix list with its bins).${skipped.length ? `\n\n⚠️ Skipped ${skipped.length} counted item(s) with no NetSuite Internal ID.` : ''}`);
             writeLog(`Count push: ${posted.join(' + ')}.${countMemo.trim() ? ` Memo: ${countMemo.trim()}` : ''}`, 'wms');
             setPhysicalCounts({});
             setExtraCountRows([]);   // the added bin rows were for THIS count — they do not outlive the push (Eric 2026-09-24)
@@ -3746,8 +3748,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             setShowSynapsis(false);
             pullNetSuiteStock();
         } catch (e) {
-            console.error("Inventory adjustment push failed:", e);
-            alert("❌ NetSuite rejected the adjustment:\n\n" + (e.message || e) + "\n\nIf it mentions the bin / inventory number not being found, NetSuite couldn't match the bin by its name — tell me and I'll switch to the bin's internal id. If it mentions inventoryDetail on an item that isn't bin/lot-tracked, I'll drop the bin detail for those.");
+            console.error("Count queue failed:", e);
+            alert("❌ The count could not be queued to NetSuite:\n\n" + (e.message || e) + "\n\nYour counts are still on the screen — try again.");
         } finally {
             setIsSyncing(false);
         }
@@ -3956,6 +3958,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         }
         const yieldText = cutYieldText(cutLines);
         const memoText = `Rod cut by ${operator?.name || 'Unknown'}: ${o.qtySource} × ${o.sourceItemId} → ${yieldText}${o.scrapFt ? ` (+${o.scrapFt} ft scrap)` : ''}${cutMemo.trim() ? ` — ${cutMemo.trim()}` : ''}`;
+        let adjObId = null;
         try {
             setIsSyncing(true);
             const lock = await lockBin(cutDestScan);   // THE BIN LOCK — a real bin, NetSuite's spelling
@@ -3967,21 +3970,29 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 offBin = lockOff.bin;
             }
             const binFor = (l) => (l.offcut ? offBin : destBin);
-            const r = await nsProxyFetch({
+            // THE CUT STANDS; NETSUITE FOLLOWS (Stuart 2026-10-20: "we do not need to stop the floor immediately … when it is only a
+            // netsuite acceptance issue"). This was a direct call: a refusal left the cut undone, the order waiting on it and its
+            // label unprinted — on 10-12 a bin NetSuite would not take held Sandra's 10 × HTA1235 cut seven hours. The cut is
+            // recorded now and the adjustment goes through the queue (posts within a minute, never twice); if NetSuite refuses
+            // it, it lands on the NetSuite-to-fix list with its bins and item, for Eric to put right before the day ends.
+            adjObId = await enqueueNsWrite({
+                kind: 'inventoryadjustment',
+                label: `Rod cut — ${o.qtySource} × ${o.sourceItemId} → ${yieldText}`,
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
                 method: 'POST',
                 payload: {
-                    account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: nsMemo(memoText),
+                    account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: memoText,
                     inventory: { items: [
                         { item: { id: String(o.sourceInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: -o.qtySource, inventoryDetail: { quantity: -o.qtySource, inventoryAssignment: { items: [{ binNumber: { refName: srcBin }, quantity: -o.qtySource }] } } },
                         ...cutLines.map(l => ({ item: { id: String(l.internalId) }, location: { id: nsConfig.location }, adjustQtyBy: l.qty, inventoryDetail: { quantity: l.qty, inventoryAssignment: { items: [{ binNumber: { refName: binFor(l) }, quantity: l.qty }] } } }))
                     ] }
-                }
+                },
+                sourceApp: 'WMS', createdBy: operator?.name || '',
+                dedupeKey: `rodcut:${o.id}`,
+                writeBack: [{ collection: 'rod_cut_orders', docId: o.id, idField: 'nsAdjustmentId', tranField: 'nsAdjustmentTran', patch: { nsAdjPosted: true } }],
             });
-            const body = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(typeof body === 'object' ? JSON.stringify(body) : String(body));
             await updateDoc(doc(db, "rod_cut_orders", o.id), {
-                status: 'DONE', sourceBin: srcBin, destBin, nsAdjustmentId: body.id || null, completedAt: Date.now(), completedBy: operator?.name || '',
+                status: 'DONE', sourceBin: srcBin, destBin, nsAdjustmentId: null, nsAdjQueued: true, nsAdjOutboxId: adjObId, completedAt: Date.now(), completedBy: operator?.name || '',
                 // What it put on the shelf, and where — the offcut length in its own bin.
                 yielded: cutLines.map(l => ({ itemId: l.itemId, qty: l.qty, bin: binFor(l), ...(l.offcut ? { offcut: true } : {}) })),
                 ...(offcuts.length ? { offcutBin: offBin } : {}),
@@ -4018,12 +4029,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 writeLog(cutReleaseLog({ cutId: o.id, woRef: o.finWoId, autoRelease: cutAutoRelease }), 'wms');
             }
 
-            alert(`✅ Rod cut posted to NetSuite:\n\n−${o.qtySource} × ${o.sourceItemId} from ${srcBin}\n${cutLines.map(l => `+${l.qty} × ${l.itemId} into ${binFor(l)}${l.offcut ? ' (offcuts — stock)' : ''}`).join('\n')}${o.scrapFt ? `\n(${o.scrapFt} ft scrap — not tracked)` : ''}${isFinishingCut && o.finWoId ? `\n\n${cutReleaseText({ woRef: o.finWoId, autoRelease: cutAutoRelease })}${Number(o.overrun) > 0 ? `\n(${o.overrun} spare ${o.targetItemId} stay in ${destBin}.)` : ''}` : ''}`);
+            alert(`✅ Rod cut recorded — NetSuite's adjustment is queued (it posts within about a minute; if NetSuite refuses it, it goes on the NetSuite-to-fix list and the cut stands):\n\n−${o.qtySource} × ${o.sourceItemId} from ${srcBin}\n${cutLines.map(l => `+${l.qty} × ${l.itemId} into ${binFor(l)}${l.offcut ? ' (offcuts — stock)' : ''}`).join('\n')}${o.scrapFt ? `\n(${o.scrapFt} ft scrap — not tracked)` : ''}${isFinishingCut && o.finWoId ? `\n\n${cutReleaseText({ woRef: o.finWoId, autoRelease: cutAutoRelease })}${Number(o.overrun) > 0 ? `\n(${o.overrun} spare ${o.targetItemId} stay in ${destBin}.)` : ''}` : ''}`);
             closeCut();
             pullNetSuiteStock();
         } catch (e) {
-            console.error("Rod cut push failed:", e);
-            alert("❌ NetSuite rejected the rod cut adjustment:\n\n" + (e.message || e) + "\n\nMost common cause: a bin named here does not hold the item — \"Invalid binnumber reference key\" means exactly that. Close this, open the cut again (it re-reads NetSuite's bins) and check where the sticks are recorded.");
+            console.error("Rod cut failed:", e);
+            alert(adjObId
+                ? `⚠ NetSuite's adjustment for this cut IS queued (${adjObId}), but the app could not finish recording the cut:\n\n${e.message || e}\n\nDo NOT cut or confirm it again — tell Eric (NetSuite-to-fix list / 11.1).`
+                : "❌ The rod cut was not recorded:\n\n" + (e.message || e) + "\n\nNothing was queued to NetSuite. Close this, open the cut again and confirm it once more.");
         } finally {
             setIsSyncing(false);
         }
@@ -6139,7 +6152,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         writeLog(`⏸ ${ref} packed, NOT shipped — ${r.clearance.why}`, 'packing');
         return { clear: false, ...r };
     };
-    const shipHoldNoteOf = (gate) => `\n\n⏸ NOT SHIPPED YET — ${gate.clearance.why}.\n\nThe NetSuite fulfilment was not sent. The order waits on SO Pack under "Waiting for payment": press Check again once it is paid, or a manager releases it with a reason.`;
+    const shipHoldNoteOf = (gate) => (gate.clearance.rule === NO_SO_RULE
+        ? `\n\n⏸ NOT SHIPPED YET — ${gate.clearance.why}.\n\nIt is packed and waits on SO Pack under "Waiting for NetSuite". Once NetSuite accepts the order (Eric's NetSuite-to-fix list), press Check again and it ships.`
+        : `\n\n⏸ NOT SHIPPED YET — ${gate.clearance.why}.\n\nThe NetSuite fulfilment was not sent. The order waits on SO Pack under "Waiting for payment": press Check again once it is paid, or a manager releases it with a reason.`);
     // The ONE fulfilment of an order, sent from SO Pack (its ✓ Packed, Check again, Release). → the words for the alert.
     const sendFulfilmentFor = async ({ nsSoId, ref, label, writeBack, preferBin = '', stampRefs = [] }) => {
         const by = operator?.name || 'Packer';
@@ -6193,6 +6208,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const releaseShipHold = async (rec, docs = []) => {
         if (!mayReleaseShipHold(operator?.role, operator?.superAdmin)) return alert('Only a manager or an admin can release a held order — sign in to the WMS with their PIN.');
         const tg = shipTargetsOf(rec, docs), hold = holdOfOrder(rec, docs);
+        // NO NETSUITE ORDER, NO RELEASE (2026-10-20): nothing could be fulfilled, billed or tracked — NetSuite has to accept it.
+        if (!holdMayBeReleased(hold)) return alert(`${tg.ref} cannot be released — NetSuite has not accepted the order, so no fulfilment can post for it.\n\nPut it right on the NetSuite-to-fix list (Eric); once NetSuite accepts it, Check again ships it.`);
         const why = window.prompt(`Release ${tg.ref} to ship${hold ? ` although: ${hold.why}` : ''}?\n\nThe reason is recorded on the order and in the log (for example: credit approved by phone).`);
         if (why === null) return;
         const reason = String(why).trim();
@@ -6227,9 +6244,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const bs = { padding: '6px 10px', background: 'transparent', border: '1px solid #a86b00', color: '#a86b00', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' };
         return (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', fontFamily: theme.mono, fontSize: '10px', color: '#a86b00', fontWeight: 700 }}>
-                ⏸ {t('Waiting for payment')} — {hold.why}
+                ⏸ {hold.rule === NO_SO_RULE ? t('Waiting for NetSuite') : t('Waiting for payment')} — {hold.why}
                 <button onClick={() => recheckShipHold(rec, docs)} disabled={isSyncing} title="Read the terms and what has been paid in NetSuite again — if it may ship, its fulfilment is sent" style={bs}>{t('Check again')}</button>
-                {mayReleaseShipHold(operator?.role, operator?.superAdmin) && <button onClick={() => releaseShipHold(rec, docs)} title="Release it to ship although it is not paid — a reason is recorded" style={{ ...bs, borderColor: '#c0392b', color: '#c0392b' }}>{t('Release')}</button>}
+                {mayReleaseShipHold(operator?.role, operator?.superAdmin) && holdMayBeReleased(hold) && <button onClick={() => releaseShipHold(rec, docs)} title="Release it to ship although it is not paid — a reason is recorded" style={{ ...bs, borderColor: '#c0392b', color: '#c0392b' }}>{t('Release')}</button>}
             </span>
         );
     };
@@ -6758,6 +6775,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         ...platingDemands.map(d => ({ ...d, __kind: 'PLATING' })),
                         ...rodCutOrders.filter(o => o.status !== 'DONE' && o.status !== 'CANCELLED').map(o => ({ ...o, __kind: 'RODCUT' })),
                     ]} operator={operator} from="Where is it · WMS" writeLog={writeLog} />
+                    {/* 🧾 NETSUITE TO FIX TODAY (Stuart 2026-10-20 · Shared/nsFixList) — what NetSuite refused while the floor kept
+                        moving; anyone sees it, a manager puts it right (Eric owns it). */}
+                    <NsFixChip currentUser={operator?.name || ''} canAct={mayResetToFloor} style={{ marginLeft: '8px' }} />
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
                     {/* ES / EN — per device. The tooltip is honest about partial coverage rather
                         than claiming the whole app is translated. */}

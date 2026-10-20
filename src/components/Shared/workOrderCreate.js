@@ -29,6 +29,7 @@ import { isReleasable } from './orderStatus';
 import { poleCutPlan } from './poleCut.js';
 import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from './nsWorkOrder';
 import { materialRowsOf, materialStampOf } from './materialGrid.js';
+import { openRunsOf } from './openRuns.js';
 
 // REISSUE (RTG's balance close, writer 10 — B's file calls it): the route is decided by the code,
 // exactly as STOCK_FINISH / STOCK_MILL would decide it, plus the lineage stamp (`replaces`).
@@ -39,7 +40,20 @@ export const ANCHOR = { AT_CREATION: 'AT_CREATION', AT_RELEASE: 'AT_RELEASE', NO
 export class ParkRefusal extends Error {
     constructor(code, message) { super(message); this.name = 'ParkRefusal'; this.code = code; }
 }
-export const REFUSAL = { PHOSPHATE: REFUSE_PHOSPHATE, OUTSOURCED: REFUSE_OUTSOURCED, RAW_UNKNOWN: 'RAW_UNKNOWN', INTENT: 'INTENT', NO_PART: 'NO_PART' };
+export const REFUSAL = { PHOSPHATE: REFUSE_PHOSPHATE, OUTSOURCED: REFUSE_OUTSOURCED, RAW_UNKNOWN: 'RAW_UNKNOWN', INTENT: 'INTENT', NO_PART: 'NO_PART', DUPLICATE: 'DUPLICATE' };
+
+/**
+ * The open runs of this item (Shared/openRuns — HCUSR15/N25-EA, 2026-10-19: four runs of 120 in thirteen minutes). One read
+ * of the RTG records by item code; a failed read answers [] (the question is a courtesy, never a gate on a read).
+ */
+export async function findOpenRuns(erp, { now = Date.now() } = {}) {
+    const code = String(erp || '').trim().toUpperCase();
+    if (!code) return [];
+    try {
+        const snap = await getDocs(query(collection(db, 'hq_work_orders'), where('itemCode', '==', code)));
+        return openRunsOf(snap.docs.map(d => ({ id: d.id, ...d.data() })), { erp: code, now });
+    } catch (e) { console.warn('open-run read failed (no question asked):', e); return []; }
+}
 
 // What the NetSuite memo says about where the order came from — the same words on every screen.
 const SOURCE_LABEL = {
@@ -101,6 +115,9 @@ export const parkWorkOrder = async ({
     // short, no cut was chosen and nothing is on order, the honest outcome is an UN-GATED order
     // carrying the shortfall on its face — not a receipt gate nothing can open. This is that face.
     poleShortNote = '',
+    // A SECOND RUN OF THE SAME THING IS ASKED ABOUT FIRST (Stuart 2026-10-20 · Shared/openRuns): `confirmOpenRuns(runs)` →
+    // true to make it anyway. Passed by the screens a person makes runs from; omitted, nothing is asked (as before).
+    confirmOpenRuns = null,
 }) => {
     const erp = String(code || erpOf(part) || '').toUpperCase();
     if (!erp || erp === 'PENDING') throw new ParkRefusal(REFUSAL.NO_PART, 'No item code on the part — sync or save it with an ERP id first.');
@@ -118,6 +135,10 @@ export const parkWorkOrder = async ({
     if (!isReissue && !wantFinishing && route.routeTo !== ROUTE_SHOP) throw new ParkRefusal(REFUSAL.INTENT, `${erp} carries finish /${route.finish} — it is finishing work (STOCK_FINISH), not a milling order.`);
     if (precheck && precheck.rawUnknown) throw new ParkRefusal(REFUSAL.RAW_UNKNOWN, `${erp}: /P components are short but the RAW availability read failed — a convert against unverified raw silently skips milling. Retry when NetSuite answers.`);
 
+    if (typeof confirmOpenRuns === 'function' && !isReissue && !isSales) {
+        const runs = await findOpenRuns(erp);
+        if (runs.length && !(await confirmOpenRuns(runs))) throw new ParkRefusal(REFUSAL.DUPLICATE, `${erp}: not made — ${runs.length} open run${runs.length === 1 ? '' : 's'} of it already (${runs.slice(0, 3).map(r => r.id).join(', ')}).`);
+    }
     const id = woId || `WO-${safeCode(erp)}-${Date.now().toString().slice(-6)}-${++seq}`;
     const made = [];
 

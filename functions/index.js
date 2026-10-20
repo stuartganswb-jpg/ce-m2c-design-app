@@ -440,6 +440,9 @@ exports.netsuiteProxy = onRequest({
 //     NetSuite id/tran into named fields (e.g. hq_purchase_orders.nsPoId).
 const NS_OB_MAX_ATTEMPTS = 6;
 const nsObBackoffMs = (attempts) => Math.min(30000 * Math.pow(2, attempts), 15 * 60 * 1000);
+// NETSUITE TO FIX TODAY (Stuart 2026-10-20 — functions/nsFix.js): a refusal is told to the records it was for, a refusal
+// NetSuite later takes leaves the list by itself, and the 3 pm note (nsFixDigest below).
+const nsFix = require('./nsFix');
 
 exports.nsOutboxWorker = onSchedule({
     schedule: 'every 1 minutes',
@@ -494,11 +497,29 @@ exports.nsOutboxWorker = onSchedule({
             await fdb.doc(`${wb.collection}/${wb.docId}`).set(patch, { merge: true }).catch(() => {});
         }
         await e.ref.update({ status: 'POSTED', postedAt: Date.now(), nsId: nsId || null, nsTran: nsTran || null, ...(note ? { note } : {}) });
+        // The records it was for are no longer refused for this kind — and an earlier refusal of the same thing is settled.
+        for (const t of nsFix.writeBackTargetsOf(e)) {
+            await fdb.doc(`${t.collection}/${t.docId}`).update({ [`nsRefused.${nsFix.refusedKeyOf(e.kind)}`]: admin.firestore.FieldValue.delete() }).catch(() => {});
+        }
+        try {
+            const failed = await fdb.collection('ns_outbox').where('status', '==', 'FAILED').limit(300).get();
+            for (const d of failed.docs) {
+                if (!nsFix.settles({ ...e, id: e.id }, { id: d.id, ...d.data() })) continue;
+                await d.ref.update({ fix: { how: 'POSTED_LATER', by: 'NetSuite queue', why: `posted later as ${nsTran || nsId || e.id}`, at: Date.now(), postedId: e.id, nsRef: { id: nsId || null, tranid: nsTran || null } } }).catch(() => {});
+            }
+        } catch (err) { console.warn('nsOutboxWorker: settling earlier refusals failed', err && err.message); }
+    };
+    // A REFUSAL IS TOLD TO THE RECORDS IT WAS FOR (nsRefused.<kind>) — the floor reads it to keep moving, the list to say why.
+    const markRefused = async (e, errText) => {
+        for (const t of nsFix.writeBackTargetsOf(e)) {
+            await fdb.doc(`${t.collection}/${t.docId}`).update({ [`nsRefused.${nsFix.refusedKeyOf(e.kind)}`]: nsFix.refusalMarkOf(e, errText, Date.now()) }).catch(() => {});
+        }
     };
     const bumpRetry = async (e, errText) => {
         const attempts = (e.attempts || 0) + 1;
         if (attempts >= NS_OB_MAX_ATTEMPTS) {
             await e.ref.update({ status: 'FAILED', attempts, lastError: errText, failedAt: Date.now() });
+            await markRefused(e, errText);
         } else {
             await e.ref.update({ status: 'PENDING', attempts, lastError: errText, nextAttemptAt: Date.now() + nsObBackoffMs(attempts) });
         }
@@ -525,7 +546,9 @@ exports.nsOutboxWorker = onSchedule({
             const st = dep && dep.exists ? String(dep.data().status || '') : 'MISSING';
             if (st === 'POSTED') await d.ref.update({ status: 'PENDING', nextAttemptAt: Date.now(), releasedAt: Date.now() });
             else if (['FAILED', 'CANCELLED', 'MISSING'].includes(st)) {
-                await d.ref.update({ status: 'FAILED', failedAt: Date.now(), lastError: `Not sent: the entry it follows (${w.afterId || 'none'}) is ${st}${dep && dep.exists && dep.data().label ? ` — ${dep.data().label}` : ''}. Fix that first, then retry this one.` });
+                const why = `Not sent: the entry it follows (${w.afterId || 'none'}) is ${st}${dep && dep.exists && dep.data().label ? ` — ${dep.data().label}` : ''}. Fix that first, then retry this one.`;
+                await d.ref.update({ status: 'FAILED', failedAt: Date.now(), lastError: why });
+                await markRefused({ id: d.id, ...w }, why);
             }
         }
     } catch (e) { console.warn('nsOutboxWorker: WAITING sweep failed', e && e.message); }
@@ -580,13 +603,32 @@ exports.nsOutboxWorker = onSchedule({
             } else if (r.status === 429 || r.status >= 500) {
                 await bumpRetry(e, `HTTP ${r.status}: ${JSON.stringify(r.body).slice(0, 400)}`);
             } else {
-                await e.ref.update({ status: 'FAILED', lastError: `HTTP ${r.status}: ${JSON.stringify(r.body).slice(0, 900)}`, failedAt: Date.now() });
+                const errText = `HTTP ${r.status}: ${JSON.stringify(r.body).slice(0, 900)}`;
+                await e.ref.update({ status: 'FAILED', lastError: errText, failedAt: Date.now() });
+                await markRefused(e, errText);
             }
         } catch (err) {
             await bumpRetry(e, String(err && err.message ? err.message : err).slice(0, 400)).catch(() => {});
         }
         await new Promise(r => setTimeout(r, 350)); // pacing — stay a polite single-file consumer
     }
+});
+
+
+// ── THE 3 PM NOTE (Stuart 2026-10-20: "detail these so they can be fixed before days end" · "eric will own list") ──────────
+// Weekdays at 3 pm shop time (High Point NC): what is still owed to NetSuite — the app's own list, read by its twin rule
+// (functions/nsFix.openOf) — goes on OS Comms for the list's owner. Nothing owed, nothing sent.
+exports.nsFixDigest = onSchedule({ schedule: '0 15 * * 1-5', timeZone: 'America/New_York', timeoutSeconds: 120, maxInstances: 1 }, async () => {
+    const fdb = admin.firestore();
+    const now = Date.now();
+    const since = now - nsFix.WINDOW_DAYS * 86400000;
+    const [ob, logs] = await Promise.all([
+        fdb.collection('ns_outbox').where('createdAt', '>=', since).get(),
+        fdb.collection('hq_logs').where('audit.ok', '==', false).get(),
+    ]);
+    const msg = nsFix.digestOf({ entries: ob.docs.map(d => ({ id: d.id, ...d.data() })), logs: logs.docs.map(d => ({ id: d.id, ...d.data() })), now });
+    if (!msg) return;
+    await fdb.collection('global_messages').add({ sender: 'System', sourceApp: 'NETSUITE', target: 'ALL', isSystem: true, t: admin.firestore.FieldValue.serverTimestamp(), msg });
 });
 
 

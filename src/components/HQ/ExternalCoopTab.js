@@ -39,6 +39,7 @@ import { soHeaderOf, jobHeaderPatchOf, EMPTY_SHIP_ADDRESS } from '../Shared/sale
 import { staleLinesOf, staleApprovalText } from '../Shared/cartStaleness';
 import { ENGINE_VERSION } from '../Shared/engineVersion';
 import { printForm } from '../Shared/printForm';
+import { soRefusalOf } from '../Shared/nsRefusal';
 
 const printStyles = `
   @media print {
@@ -2546,7 +2547,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                       // there an invoice to show (Stuart 2026-08-27: "invoices are only
                                                       // generated at fulfillment").
                                                       const fulfilled = o.packStatus === 'Packed' || o.status === 'Shipped' || !!o.nsInvoiceNo;
-                                                      const state = o.status === 'NS_QUEUED' ? 'AWAITING NETSUITE' : (o.status || 'Pending');
+                                                      const state = o.status === 'NS_QUEUED' ? (soRefusalOf(o) ? 'NETSUITE REFUSED — SHIPS ONCE ACCEPTED' : 'AWAITING NETSUITE') : (o.status || 'Pending');
                                                       return (
                                                       <div key={o.id}>
                                                       <div id={`crm-order-${o.id}`} style={{ display: 'flex', alignItems: 'center', gap: '12px', border: '1px solid var(--line)', background: 'var(--paper)', padding: '10px 14px', marginBottom: payRowId === o.id ? 0 : '8px', ...focusStyle(o.id) }}>

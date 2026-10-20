@@ -4,6 +4,7 @@ import { isStationPickLine, traverseWaitOf } from './trackLoaded.js';
 import { oeIsTbf } from './oeLines.js';
 import { isKitLine, isOffOrderLine } from './itemKit.js';
 import { awaitsOrderPack, orderPackedOnSoPack } from './soPackStep.js';
+import { soRefusalOf } from './nsRefusal.js';
 // WHERE IS IT? — the one answer, derived (Stuart 2026-08-03: "of utmost importance is the clarity
 // on the status of an item, my team is confused and i want them to see clearly each stage exactly
 // where something is at… from the time an order hits the custom or finishing floor till the time
@@ -307,6 +308,9 @@ export const quickShipStatusOf = (so) => {
     // 'Staged_Ready_For_Finishing'); a stocked order never carries those.
     const st = String(so.status || so.pickStatus || '');
     if (so.currentPhase === 'Closed' || st === 'Closed' || so.closed === true || st === 'CANCELLED') return { ...S, stage: 'CLOSED', detail: 'closed', since: so.closedAt || null, by: so.closedBy || '' };
+    // NetSuite REFUSED it (Shared/nsRefusal, 2026-10-20 — "keep the floor moving"): it is warehouse work as usual and is held
+    // at shipping until NetSuite accepts it; the chip says so on every screen. Still only queued: not warehouse work yet.
+    if (st === 'NS_QUEUED' && soRefusalOf(so)) return { ...S, stage: 'PICKING', detail: '⚠ NetSuite has not accepted it — pick & pack; ships once it does', since: so.nsQueuedAt || so.createdAt || null };
     if (st === 'NS_QUEUED') return { ...S, stage: 'AWAITING_NS', detail: '', since: so.nsQueuedAt || so.createdAt || null };
     // a quick-add placeholder on the order (Shared/placeholderLine): the NetSuite write is held until every item is identified
     if (st === 'HELD_PLACEHOLDER') return { ...S, stage: 'AWAITING_NS', detail: 'held — an item to identify', since: so.createdAt || null };

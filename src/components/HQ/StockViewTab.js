@@ -29,6 +29,7 @@ import { askRunHandling, runHandlingLabel } from '../Shared/RunHandlingPrompt';
 import { runBatchPrecheck } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
+import { openRunsQuestionOf } from '../Shared/openRuns';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
 import { holdSplitGroups } from '../Shared/rowPairShape';
@@ -878,6 +879,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         note: `Stock View grid · ${erp} ×${qty}${pre && pre.plan && pre.plan.exploded ? ` · BOM pull: ${pre.plan.lines.map(l => `${l.quantity}×${l.legacyErpId}`).join(', ')}` : ''}`,
                         source: 'STOCKVIEW_GRID', precheck: pre, pins, inventory: hqParts,
                         locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17',
+                        // a second open run of the same item is asked about first (Shared/openRuns, 2026-10-20)
+                        confirmOpenRuns: (runs) => window.confirm(openRunsQuestionOf({ erp, qty, runs })),
                     });
                     res.made.forEach((m, i) => {
                         madeUp.push(`${erp}: ${m}`);
@@ -1511,6 +1514,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     // item id back out of this form, so it stays.
                     woId: `WO-STK-${r.internalId}-${Date.now()}`,
                     convertSuggestion: sug ? { from: sug.from, to: sugBase, qty: sug.qty } : null,
+                    // a second open run of the same item is asked about first — HCUSR15/N25-EA was made four times from here on
+                    // 2026-10-19 inside thirteen minutes (Shared/openRuns)
+                    confirmOpenRuns: (runs) => window.confirm(openRunsQuestionOf({ erp: r.itemid, qty, runs })),
                 });
                 res.made.forEach((m, i) => {
                     made.push(`${r.itemid}: ${m}`);
@@ -1876,6 +1882,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     note: `Raw core replenish · avail ${info.available} · threshold ${info.threshold ?? info.minOnHand ?? 0}`,
                     source: 'RAW_CORES', inventory: hqParts,
                     woId: `WO-CORE-${String(r.itemid).replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now().toString().slice(-6)}-${n}`,
+                    confirmOpenRuns: (runs) => window.confirm(openRunsQuestionOf({ erp: r.itemid, qty, runs })),
                 });
                 res.made.forEach((m, i) => addLog(`${i === 0 ? '' : '   '}${m}`, i === 0 ? 'success' : (/^[⚠✂⇄🏭]/.test(m) ? 'warn' : 'info')));
                 n++;
