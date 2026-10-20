@@ -7,6 +7,7 @@ import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions'; 
 import '../../App.css';
 import { clearAllWorkspaces, writeWorkspace, headerWorkspaceOf } from '../Shared/cpqWorkspace';
+import { portalRequestsOf, isUnopened } from '../Shared/portalRequests';
 
 const InceptionTab = lazy(() => import('./InceptionTab'));
 const ControlSheetsTab = lazy(() => import('./ControlSheetsTab'));   // 1.2 — the working / holding sheet that replaces the Excel control sheets (2026-10-07)
@@ -109,6 +110,7 @@ function HQ() {
   // (brand-wide, shown to anyone with Inception access). Seen-state for pins is per-user localStorage.
   const [unreadMsgs, setUnreadMsgs] = useState([]); // {id, readBy} addressed to me + still unread
   const [pinList, setPinList] = useState([]);        // {id, user, seenBy} across the brand's assemblies
+  const [portalReqJobs, setPortalReqJobs] = useState([]); // jobs in PORTAL_REQUEST — the CRM tab's * (Shared/portalRequests)
 
   // NEW: State to hold an item ID we want to immediately open in the Master Library
   const [libraryFocusItemId, setLibraryFocusItemId] = useState(null);
@@ -173,6 +175,17 @@ function HQ() {
     }, err => console.warn('Inception pin badge listen failed', err));
     return () => unsub();
   }, [activeBrand]);
+
+  // CRM badge (Stuart 2026-10-20: "add * everytime a new that has never been opened arrives"): a portal request nobody has opened yet —
+  // the same reading as the CRM's Portal Requests panel (Shared/portalRequests). Opening one there, in Quick Ship or in CPQ clears it.
+  useEffect(() => {
+    if (!user) { setPortalReqJobs([]); return; }
+    const unsub = onSnapshot(query(collection(db, "jobs"), where("status", "==", "PORTAL_REQUEST")),
+      snap => setPortalReqJobs(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      err => console.warn('Portal request badge listen failed', err));
+    return () => unsub();
+  }, [user]);
+  const newPortalRequests = useMemo(() => (activeBrand ? portalRequestsOf(portalReqJobs, activeBrand.id).filter(isUnopened).length : 0), [portalReqJobs, activeBrand]);
 
   const currentUserName = user?.name;
   const unseenPins = useMemo(() => {
@@ -440,6 +453,9 @@ function HQ() {
               {TAB_LABELS[tab] || tab}
               {tab === '10.7 OS Comms' && unreadMsgs.length > 0 && (
                 <span title={`${unreadMsgs.length} unread message${unreadMsgs.length === 1 ? '' : 's'}`} style={{ color: '#d9534f', fontSize: '17px', fontWeight: 700, marginLeft: '5px', lineHeight: 0, verticalAlign: 'super' }}>*</span>
+              )}
+              {tab === '10. External Co-Op' && newPortalRequests > 0 && (
+                <span title={`${newPortalRequests} new portal request${newPortalRequests === 1 ? '' : 's'} — not opened yet`} style={{ color: '#d9534f', fontSize: '17px', fontWeight: 700, marginLeft: '5px', lineHeight: 0, verticalAlign: 'super' }}>*</span>
               )}
               {tab === '1. Inception & Validation' && unseenPins && (
                 <span title="New pin on the Inception board" style={{ color: '#d9534f', fontSize: '17px', fontWeight: 700, marginLeft: '5px', lineHeight: 0, verticalAlign: 'super' }}>*</span>

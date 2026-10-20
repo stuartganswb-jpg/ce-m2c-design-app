@@ -5,6 +5,8 @@ import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, query, where, doc, getDoc, getDocs, updateDoc, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
 import { portalRequestLines } from '../Shared/portalRequestLines';
+import { portalRequestsOf, isPortalRequest, isUnopened, openedPatchOf } from '../Shared/portalRequests';
+import PortalRequestsPanel from './PortalRequestsPanel';
 import { FLOW_MODE, flowModeOf, groupModeOf, withFlowMode, withPreviewer } from '../Shared/portalAccess';
 import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
@@ -745,6 +747,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   const [activeSubTab, setActiveSubTab] = useState('CUSTOMERS'); 
   const [inceptionJobs, setInceptionJobs] = useState([]);
   const [configuredJobs, setConfiguredJobs] = useState([]);
+  const [portalRequests, setPortalRequests] = useState([]);   // the Portal Requests panel — this brand's and any with no brand (Shared/portalRequests)
   
   const [allBrandJobs, setAllBrandJobs] = useState([]); 
   
@@ -907,6 +910,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
   // opens the customer's real card and marks the one that was asked for, so every rule about
   // modifying, reopening and closing stays where it has always been: on the card.
   const [focusOrderId, setFocusOrderId] = useState('');
+  // A PORTAL REQUEST IS NEW UNTIL IT IS FIRST OPENED (Stuart 2026-10-20: "add * everytime a new that has never been opened arrives"):
+  // the Portal Requests panel's row, the card's Docs / View Item / Reopen CPQ, and Quick Ship's Load each stamp the first opening
+  // (Shared/portalRequests.openedPatchOf); the red * on the row and on the CRM tab go with it, for everyone.
+  const noteOpened = (job) => { if (isUnopened(job)) updateDoc(doc(db, 'jobs', job.id), openedPatchOf(currentUser)).catch(e => console.warn('portal request open stamp failed', e)); };
+  const openPortalRequest = (job) => { noteOpened(job); openOrderOnCard({ customerId: job.customer?.id, id: job.id, number: quoteDisplayNo(job) }); };
   const openOrderOnCard = (match) => {
       const rec = crmData[match.customerId];
       if (!rec) {
@@ -1116,6 +1124,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
         const brandJobs = allJobs.filter(j => j.brandId === activeBrand);
         
         setAllBrandJobs(brandJobs); 
+        setPortalRequests(portalRequestsOf(allJobs, activeBrand));
         
         const inception = brandJobs.filter(j => ['INCEPTION', 'DRAFT'].includes(j.status));
         const configured = brandJobs.filter(j => !['INCEPTION', 'DRAFT'].includes(j.status));
@@ -1559,7 +1568,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       let active = 0; let pending = 0; let complete = 0;
       configuredJobs.filter(j => filterByActiveTab(j)).forEach(j => {
           if (['APPROVED', 'IN_PRODUCTION'].includes(j.status)) active++;
-          else if (['CONFIGURED', 'SENT_TO_CLIENT', 'REVISION_REQUESTED'].includes(j.status)) pending++;
+          // a portal request is waiting for US to review it (2026-10-20) — it was counted Completed / Archived
+          else if (['CONFIGURED', 'SENT_TO_CLIENT', 'REVISION_REQUESTED'].includes(j.status) || isPortalRequest(j)) pending++;
           else complete++;
       });
       return { active, pending, complete };
@@ -1949,6 +1959,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
             <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>External Co-op</h2>
         </div>
       </div>
+
+      {/* PORTAL REQUESTS, RIGHT ON THE MAIN SCREEN (Stuart 2026-10-20) — on every sub-tab; a red * on each one nobody has opened yet */}
+      <PortalRequestsPanel requests={portalRequests} onOpen={openPortalRequest} />
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch' }}>
           
@@ -2440,14 +2453,14 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
 
                                                       {(() => { const lk = cardLock(job, isOrderCard); const lockStyle = lk.locked ? { opacity: 0.45, cursor: 'not-allowed' } : {}; return (
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
-                                                          <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>🔍 View Item</button>
+                                                          <button onClick={() => { noteOpened(job); setCfgQuote(job.jobId || job.id); }} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>🔍 View Item</button>
                                                           {job.status === 'CONFIGURED' && (
                                                               <button onClick={() => approveToSalesOrder(job)} disabled={!!approveDoorReason(job)} title={approveDoorReason(job) || 'Create the NetSuite Sales Order from this quote (transforms the estimate)'} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', ...(approveDoorReason(job) ? { opacity: 0.35, cursor: 'not-allowed' } : {}) }}>Approve</button>
                                                           )}
                                                           <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${quoteDisplayNo(job)} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Email</button>
-                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
+                                                          <button onClick={() => { noteOpened(job); setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
                                                           <button onClick={() => openEditJobModal(job)} disabled={lk.locked} title={lk.locked ? lk.why : 'Edit the checkout header — shipping, sidemark, memo, PO'} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', ...lockStyle }}>Modify</button>
-                                                          <button onClick={lk.openCfg(reopenQuoteInCpq)} disabled={lk.cfgLocked || !!wrongDoorReason(job, 'CPQ')} title={lk.cfgLocked ? lk.cfgWhy : wrongDoorReason(job, 'CPQ') ? wrongDoorReason(job, 'CPQ') : "Reopen this quote's configuration in the CPQ Configurator"} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', ...lockStyle, ...(wrongDoorReason(job, 'CPQ') ? { opacity: 0.35, cursor: 'not-allowed', borderStyle: 'dashed' } : {}) }}>Reopen CPQ</button>
+                                                          <button onClick={() => { noteOpened(job); lk.openCfg(reopenQuoteInCpq)(); }} disabled={lk.cfgLocked || !!wrongDoorReason(job, 'CPQ')} title={lk.cfgLocked ? lk.cfgWhy : wrongDoorReason(job, 'CPQ') ? wrongDoorReason(job, 'CPQ') : "Reopen this quote's configuration in the CPQ Configurator"} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', ...lockStyle, ...(wrongDoorReason(job, 'CPQ') ? { opacity: 0.35, cursor: 'not-allowed', borderStyle: 'dashed' } : {}) }}>Reopen CPQ</button>
                                                           <button onClick={lk.openCfg(reopenQuoteInVision)} disabled={lk.cfgLocked || !!wrongDoorReason(job, 'VISION')} title={lk.cfgLocked ? lk.cfgWhy : wrongDoorReason(job, 'VISION') ? wrongDoorReason(job, 'VISION') : "Reopen this quote's session on the Vision Hardware board — dimensions, bracket/splice placement, and shop notes live there (Engineering view → Load saved line)"} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--ink)', color: 'var(--ink)', cursor: 'pointer', ...lockStyle, ...(wrongDoorReason(job, 'VISION') ? { opacity: 0.35, cursor: 'not-allowed', borderStyle: 'dashed' } : {}) }}>Reopen Vision</button>
                                                           {/* THE THIRD DOOR, BESIDE THE OTHER TWO (Stuart 2026-08-31). A quote
                                                               written in Order Entry has no flow and no cartItems, so Reopen CPQ
@@ -2617,7 +2630,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                       <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '8px' }}>Saved: {new Date(job.createdAt?.seconds * 1000).toLocaleDateString()}</div>
                                                       
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
+                                                          <button onClick={() => { noteOpened(job); setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
                                                           <button onClick={() => openEditJobModal(job)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Modify</button>
                                                           <button onClick={() => handleDeleteJob(job)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
                                                       </div>
@@ -2717,8 +2730,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
                                                   {job.status === 'CONFIGURED' && (
                                                       <button onClick={() => approveToSalesOrder(job)} disabled={!!approveDoorReason(job)} title={approveDoorReason(job) || 'Create the NetSuite Sales Order from this quote (transforms the estimate)'} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px', ...(approveDoorReason(job) ? { opacity: 0.35, cursor: 'not-allowed' } : {}) }}>Approve</button>
                                                   )}
-                                                  <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ padding: '8px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>🔍 View Item</button>
-                                                  <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Docs</button>
+                                                  <button onClick={() => { noteOpened(job); setCfgQuote(job.jobId || job.id); }} style={{ padding: '8px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>🔍 View Item</button>
+                                                  <button onClick={() => { noteOpened(job); setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Docs</button>
                                                   <button onClick={() => openEditJobModal(job)} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Modify</button>
                                                   <button onClick={() => handleDeleteJob(job)} style={{ padding: '8px 16px', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Delete</button>
                                               </td>
