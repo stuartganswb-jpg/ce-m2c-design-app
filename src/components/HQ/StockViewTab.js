@@ -10,7 +10,7 @@ import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '
 import { SOURCING, sourcingOf, orderRouteFor, ORDER_ROUTE } from '../Shared/sourcing';
 import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
-import { closeOrderEverywhere, hardDeleteWithLedger, propagateFloorState } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere, hardDeleteWithLedger, propagateFloorState, floorResetPatchOf, floorResetSummaryOf, logFloorReset, pickHappened, DELETE } from '../Shared/orderLifecycle';
 import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { woRefOf } from '../Shared/woRef';
 import { openWorkOf, openGroupCounts, OPEN_GROUP_LABEL } from '../Shared/openWork';
@@ -1643,18 +1643,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const fin = row.fin;
         if (!fin) return alert('This WO is still parked in RTG (never released to the floor) — nothing to reset.');
         const ref = woRowRef(row);
-        if (!window.confirm(`↩ RESET ${ref} back to the Setup Queue (picked, ready to start)?\n\n• Floor phase → Setup · coat 1 · all tasks Pending\n• Completion / pack / scrap stamps cleared\n• NetSuite BUILD flags cleared, so the real completion posts again when it happens\n\nThe NetSuite WORK ORDER itself is untouched (use this after deleting a wrong Assembly Build in NetSuite).`)) return;
+        if (!window.confirm(`↩ RESET ${ref} back to the Setup Queue (${pickHappened(fin) ? 'picked, ready to start' : 'its parts pick reopens — Start Setup sends the pull to the WMS'})?\n\n• Floor phase → Setup · coat 1 · all tasks Pending\n• Completion / pack / scrap stamps cleared\n• NetSuite BUILD flags cleared, so the real completion posts again when it happens\n\nThe NetSuite WORK ORDER itself is untouched (use this after deleting a wrong Assembly Build in NetSuite).`)) return;
         try {
-            await updateDoc(doc(db, 'fin_workorders', fin.id), {
-                currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
-                poleStepIndex: deleteField(), machineAssigned: null,
-                tasks: makeFullTasks(),
-                completedAt: deleteField(), completedParts: deleteField(), scrapReported: deleteField(),
-                packStatus: deleteField(), packedLines: deleteField(), packPhotos: deleteField(), packBoxes: deleteField(), packedAt: deleteField(), packedBy: deleteField(),
-                nsCompletionQueued: deleteField(), nsWoCompletionPosted: deleteField(), nsWoCompletionId: deleteField(), nsWoCompletionTran: deleteField(),
-                nsFulfillQueued: deleteField(), nsIfId: deleteField(), nsIfTran: deleteField(),
-                redlineAlert: false, resetAt: Date.now(), resetBy: currentUser || ''
-            });
+            // THE ONE RESET (Shared/orderLifecycle.floorResetPatchOf, 2026-10-20 — the same as the WMS Packing Station and
+            // "Where is it?"): what this button always cleared, plus the coat clocks and spin loads; a pick that never
+            // happened reopens; what it was is kept on the document (floorResets) and in the floor log.
+            const now = Date.now();
+            const why = 'reset from HQ Stock View (↩ Reset → Setup)';
+            const patch = floorResetPatchOf(fin, { by: currentUser || '', why, from: 'HQ · Stock View', now, tasks: makeFullTasks() });
+            await updateDoc(doc(db, 'fin_workorders', fin.id), Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, v === DELETE ? deleteField() : v])));
+            await logFloorReset({ db, addDoc, collection, serverTimestamp }, { finWo: fin, by: currentUser || '', why, from: 'HQ · Stock View', ref, summary: floorResetSummaryOf(fin, patch), now });
             if (row.hq) await updateDoc(doc(db, 'hq_work_orders', row.hq.id), { status: 'Dispatched' }).catch(() => {});
             // THE RECORD IS TOLD (B's hand-off, landed 2026-09-12): a reset that left floorPhase
             // 'Complete' on the record made the board — and the audit — believe the floor was done.
@@ -1662,7 +1660,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
                     { finWo: { ...fin, id: fin.id }, phase: 'Setup', by: currentUser || '', extra: { floorCompletedAt: deleteField(), floorCompletedBy: deleteField(), resetAt: Date.now(), resetBy: currentUser || '' } });
             } catch (e) { console.warn('propagate after reset failed (the reset stands):', e); }
-            addLog(`↩ ${ref} reset to Setup (picked) — NetSuite build flags cleared; the RTG record reads Setup.`, 'success');
+            addLog(`↩ ${ref} reset to Setup (${patch.pickStatus === 'Pending' ? 'parts pick reopened' : 'picked'}) — NetSuite build flags cleared; the RTG record reads Setup.`, 'success');
             loadOpenWos();
         } catch (e) { alert('Reset failed: ' + (e.message || e)); }
     };

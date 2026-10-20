@@ -42,7 +42,10 @@ const ago = (ms) => {
 // Callers read both from Shared/floorActivity.coatCountsOf so no screen measures a pole against the parts' recipe.
 // `stamps` — a caller that shows ONE LINE of a document passes the stamps that are about that line
 // (Shared/soPackBoard.lineStampsOf); they render exactly as a document's own do. Omitted, nothing changes.
-const OrderStatusChips = ({ wo, recipeLen = 0, poleRecipeLen, size = 'sm', showWho = true, style = {}, stamps = null }) => {
+// `onStamp(stamp, keys)` — a caller that can show a stamp's history ("Where is it?", Stuart 2026-10-20: "each stamp should
+// be a link we can click for the details") makes every chip a button; `keys` = every stamp key shown, `activeKey` the one
+// open. Omitted, the chips are plain as before.
+const OrderStatusChips = ({ wo, recipeLen = 0, poleRecipeLen, size = 'sm', showWho = true, style = {}, stamps = null, onStamp = null, activeKey = '' }) => {
     const st = Array.isArray(stamps) ? null : orderStatusOf(wo, { recipeLen, poleRecipeLen });
     const all = st ? [...st.streams, ...(st.fulfilment ? [st.fulfilment] : [])] : stamps;
     if (!all.length) return null;
@@ -53,15 +56,23 @@ const OrderStatusChips = ({ wo, recipeLen = 0, poleRecipeLen, size = 'sm', showW
             {all.map((s, i) => {
                 const tone = stageTone(s.stage);
                 const when = ago(s.since);
+                const link = typeof onStamp === 'function';
+                const open = link && activeKey === s.key;
                 return (
                     <span key={s.key + i}
-                        title={`${s.label} — ${stageLabel(s.stage)}${s.detail ? ` · ${s.detail}` : ''}${s.by ? ` · ${s.by}` : ''}${when ? ` · ${when} ago` : ''}`}
-                        style={{ display: 'inline-flex', alignItems: 'baseline', gap: '6px', border: `1px solid ${tone}`, borderLeft: `3px solid ${tone}`, background: '#fff', padding: size === 'md' ? '4px 9px' : '3px 7px', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+                        title={`${s.label} — ${stageLabel(s.stage)}${s.detail ? ` · ${s.detail}` : ''}${s.by ? ` · ${s.by}` : ''}${when ? ` · ${when} ago` : ''}${link ? ' — click for who did what, when' : ''}`}
+                        {...(link ? {
+                            role: 'button', tabIndex: 0,
+                            onClick: (e) => { e.stopPropagation(); onStamp(s, all.map(x => x.key)); },
+                            onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onStamp(s, all.map(x => x.key)); } },
+                        } : {})}
+                        style={{ display: 'inline-flex', alignItems: 'baseline', gap: '6px', border: `1px solid ${tone}`, borderLeft: `3px solid ${tone}`, background: open ? 'var(--paper-2)' : '#fff', padding: size === 'md' ? '4px 9px' : '3px 7px', whiteSpace: 'nowrap', maxWidth: '100%', ...(link ? { cursor: 'pointer', boxShadow: open ? `inset 0 -2px 0 ${tone}` : 'none' } : {}) }}>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)' }}>{s.label}</span>
                         <b style={{ fontFamily: 'var(--mono)', fontSize: fs, textTransform: 'uppercase', letterSpacing: '.04em', color: tone }}>{stageLabel(s.stage)}</b>
                         {s.detail && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.detail}</span>}
                         {showWho && s.by && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: tone }}>· {s.by}</span>}
                         {showWho && when && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--line)' }}>{when}</span>}
+                        {link && <span aria-hidden="true" style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: tone }}>{open ? '▾' : '▸'}</span>}
                     </span>
                 );
             })}

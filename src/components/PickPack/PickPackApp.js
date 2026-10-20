@@ -46,8 +46,8 @@ import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import WallboardScreen from '../Shared/WallboardScreen';   // 📺 the bench's wallboard (Stuart 2026-10-13)
-import { resolveStagingScan, stagingKeyOf, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf, mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
-import { hardDeleteWithLedger, propagateFloorState, closeOrderEverywhere } from '../Shared/orderLifecycle';
+import { resolveStagingScan, stagingKeyOf, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf, mirrorCustomStatusToSibling, makeFullTasks } from '../Shared/workOrderContract';
+import { hardDeleteWithLedger, propagateFloorState, closeOrderEverywhere, sendBackToFloor, floorResetRefusalOf, floorResetPromptOf } from '../Shared/orderLifecycle';
 import { startReadyLinesOf, startReadyLinesText } from '../Shared/oeAsAvailable';
 import { oeInventoryOf } from '../Shared/oeGenerate';
 import { fulfilPlatingDemand } from '../Shared/platingDemand';
@@ -1856,6 +1856,28 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             });
             writeLog(`↩ ${packRef(job)} returned to the pick queue — "${reason}"`, 'wms');
         } catch (e) { alert('Could not return it: ' + (e.message || e)); }
+    };
+
+    // ↩ NOT FINISHED — BACK TO THE FLOOR (Stuart 2026-10-20, WO11579: in packing as painted, never painted). A manager sends a
+    // finished, unpacked document back to the finishing floor — Shared/orderLifecycle.sendBackToFloor, the one reset, the same
+    // as "Where is it?" and HQ Stock View: Setup, coat 1; a pick that never happened reopens; RTG reads Setup; NetSuite untouched.
+    const mayResetToFloor = isFloorSupervisor(operator) || normRole(operator?.role) === 'executive';
+    const sendPackJobBackToFloor = async (job) => {
+        if (!job) return;
+        const ref = packRef(job);
+        const refused = floorResetRefusalOf(job);
+        if (refused) return alert(`${ref} cannot go back to the floor — ${refused}.`);
+        const why = window.prompt(floorResetPromptOf(job, ref), '');
+        if (why === null) return;
+        if (!String(why).trim()) return alert('A reason is needed — it is what makes the rewind accountable. Nothing was changed.');
+        try {
+            const r = await sendBackToFloor({ db, doc, getDoc, getDocs, query, collection, where, updateDoc, deleteField, addDoc, serverTimestamp, makeFullTasks },
+                { finWo: job, by: operator?.name || 'WMS', why, from: 'WMS · Packing Station', ref });
+            if (!r.ok) return alert(`${ref} cannot go back to the floor — ${r.refused}.`);
+            writeLog(`↩ ${ref} sent back to the floor — "${String(why).trim()}" · ${r.summary}`, 'wms');
+            setPackOrderId(null);
+            alert(`↩ ${ref} is back in the finishing Setup Queue.\n\n${r.summary}.`);
+        } catch (e) { alert(`Could not send ${ref} back: ${e.message || e}`); }
     };
 
     // A CLOSED ORDER LEAVES THE PICK QUEUE (Sandra 2026-08-17: "esta orden fue reemplazada porque
@@ -6450,6 +6472,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <button onClick={() => printAllOrderLabels(packJob, packLinesOf(packJob))} title="Print item labels for every line on this order" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 {t('Labels')}</button>
                                         {!c && <button onClick={() => startPacking(packJob)} style={{ padding: '9px 16px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Start packing')}</button>}
                                         {held && isPlatingAdmin && <button onClick={() => adminReleaseClaim(packJob, 'pack')} style={{ padding: '9px 14px', background: 'transparent', border: '1px solid #d9534f', color: '#c0392b', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Release (admin)')}</button>}
+                                        {mayResetToFloor && !isQsOrder(packJob) && packJob.currentPhase === 'Complete' && (
+                                            <button onClick={() => sendPackJobBackToFloor(packJob)} title={floorResetRefusalOf(packJob) ? `Not available — ${floorResetRefusalOf(packJob)}` : 'Managers: it was never really finished — back to the finishing Setup Queue, coat 1; a pick that never happened reopens; NetSuite untouched'}
+                                                style={{ padding: '9px 14px', background: 'transparent', border: '1px solid #c77d1a', color: '#c77d1a', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', opacity: floorResetRefusalOf(packJob) ? 0.55 : 1 }}>↩ {t('Not finished — back to the floor')}</button>
+                                        )}
                                         <button onClick={() => closePackCard(packJob)} style={{ padding: '9px 16px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Close')}</button>
                                     </span>
                                 </div>
@@ -6731,7 +6757,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         ...convertDemands.map(d => ({ ...d, __kind: 'CONVERT' })),
                         ...platingDemands.map(d => ({ ...d, __kind: 'PLATING' })),
                         ...rodCutOrders.filter(o => o.status !== 'DONE' && o.status !== 'CANCELLED').map(o => ({ ...o, __kind: 'RODCUT' })),
-                    ]} />
+                    ]} operator={operator} from="Where is it · WMS" writeLog={writeLog} />
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
                     {/* ES / EN — per device. The tooltip is honest about partial coverage rather
                         than claiming the whole app is translated. */}

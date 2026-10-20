@@ -213,7 +213,8 @@ const FinishingFloor = () => {
       {/* 🧭 The lookup — same question, same answer, from any screen. Fed the orders this app
           already subscribes to, so it adds no listener and can never be staler than the page. */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 30px 0' }}>
-        <WhereIsIt orders={workOrders} recipeLenOf={(o) => coatCountsOf(recipes, o).recipeLen} poleRecipeLenOf={(o) => coatCountsOf(recipes, o).poleRecipeLen} />
+        <WhereIsIt orders={workOrders} recipeLenOf={(o) => coatCountsOf(recipes, o).recipeLen} poleRecipeLenOf={(o) => coatCountsOf(recipes, o).poleRecipeLen}
+          operator={user} users={users} from="Where is it · Finishing floor" writeLog={writeLog} />
       </div>
       <main style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column' }}>
         <div style={{ backgroundColor: '#fff', border: '1px solid var(--line)', flex: 1, boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', borderRadius: '2px' }}>

@@ -948,3 +948,142 @@ export async function applyBulkReopen(ctx, { plan, by, onProgress }) {
     }
     return done;
 }
+
+// ── NOT FINISHED — BACK TO THE FLOOR (Stuart 2026-10-20, WO11579: "on both ideally if pushed in either place is executed") ──
+// WO11579 (HCUMLB415/SG × 70) read Complete from 2026-09-28: its three coats were clicked through Manual Control in 47
+// minutes, the raw cores were never pulled, and the office found it in WMS packing as painted while nothing had been
+// painted. A put-away there would have built 70 painted pieces in NetSuite that do not exist. Nothing could send a Complete
+// document back except HQ Stock View's ↩ Reset → Setup — which left a cleared pick cleared, so the 70 raw would never have
+// reached the pick queue. ONE reset, here, pressed from the WMS Packing Station, from "Where is it?" (finishing floor and
+// WMS) and from Stock View:
+//   · the document goes back to Setup, coat 1, every step Pending — completion, QC count, coat clocks and spin loads cleared,
+//     with the pack and NetSuite-build stamps Stock View always cleared (the pack-bench callers refuse while any exist);
+//   · a pick that never really happened (nothing picked, nothing staged — never released, cleared, or returned to the shelf)
+//     comes back OPEN, so Start Setup releases the pull to the WMS as it does for every order; a real pick stays as it is;
+//   · what it was is kept on the document (floorResets), never lost.
+// It reads the DOCUMENT, never the door: a CPQ split, an Order Entry row, a stock build and a JFP run are reset alike.
+// NetSuite is never touched — the work order stays as it is and the build posts at the real put-away.
+
+/** Did the parts pull really happen? Picked, matched or staged — anything else (never released, cleared, returned) did not. */
+export const pickHappened = (d) => !!d && (!!d.pickedAt || !!d.stagedAt || d.stagingStatus === 'MATCHED'
+    || ['Picked_Awaiting_Staging', 'Staged_Ready_For_Finishing'].includes(String(d.pickStatus || '')));
+
+/**
+ * May a finished document be sent back to the floor from the pack bench or the search? → null when it may, else the reason
+ * it may not, in words for the person who pressed it. Read off the document's own stamps only (complete knowledge).
+ */
+export const floorResetRefusalOf = (d) => {
+    if (!d) return 'there is no finishing document';
+    if (isClosedState(d)) return 'it is closed';
+    if (d.pickOnly === true) return 'it is a pick-only order — it never goes to the finishing floor';
+    if (d.currentPhase !== 'Complete') return `it is not finished — it is still on the floor (${String(d.currentPhase || 'not started').toLowerCase()})`;
+    if (d.packStatus) return `it is already ${String(d.packStatus).toLowerCase()}${d.putawayBin ? ` (bin ${d.putawayBin})` : ''} — HQ Stock View's ↩ Reset → Setup is the tool once a packed order has to go back`;
+    if (d.putawayBin) return `it is put away in ${d.putawayBin}`;
+    const packedLines = Object.values(d.packedLines || {}).filter(Boolean).length;
+    if (packedLines) return `${packedLines} line${packedLines === 1 ? ' is' : 's are'} already packed — move ${packedLines === 1 ? 'it' : 'them'} back to TO PACK (↩ on the packing card) first`;
+    const packer = d.packInProgress && d.packInProgress.by;
+    if (packer) return `${packer} has it open to pack — they close it first`;
+    const picker = d.pickInProgress && d.pickInProgress.by;
+    if (picker) return `${picker} has its pick open on a tablet — they close it first`;
+    if (d.nsWoCompletionPosted || d.nsWoCompletionTran || d.nsWoCompletionId) return `NetSuite already has its build${d.nsWoCompletionTran ? ` (${d.nsWoCompletionTran})` : ''} — sending it back would leave that build standing`;
+    if (d.nsCompletionQueued) return 'its NetSuite build is already waiting in the queue — see 11.1 → NetSuite Sync Queue first';
+    if (d.forceCompleteNsBuildSkipped === true) return 'it was force-completed as ALREADY BUILT in NetSuite — a build made there by hand would be built a second time';
+    if (d.nsFulfillQueued || d.nsIfTran) return `its NetSuite fulfilment is ${d.nsIfTran ? `posted (${d.nsIfTran})` : 'queued'} — it has shipped`;
+    return null;
+};
+
+const orNull = (v) => (v === undefined ? null : v);
+
+/**
+ * The reset itself — the patch for the finishing document, with DELETE for every field it removes. Pure.
+ * `tasks` is the canonical fresh task object (Shared/workOrderContract.makeFullTasks — passed in, so this module stays free
+ * of the Firebase import). `from` names the screen (it is kept with the history).
+ */
+export function floorResetPatchOf(d, { by = '', why = '', from = '', now = Date.now(), tasks } = {}) {
+    if (!tasks || typeof tasks !== 'object') throw new Error('floorResetPatchOf needs the fresh task object (makeFullTasks())');
+    const reopenPick = !pickHappened(d);
+    const entry = {
+        at: now, by: by || '', why: why || '', from: from || '', pickReopened: reopenPick,
+        was: {
+            currentPhase: orNull(d.currentPhase), stepStatus: orNull(d.stepStatus), currentStepIndex: orNull(d.currentStepIndex),
+            poleStepIndex: orNull(d.poleStepIndex), completedAt: orNull(d.completedAt), completedParts: orNull(d.completedParts),
+            scrapReported: orNull(d.scrapReported), spinLoadsRun: Array.isArray(d.spinLoads) ? d.spinLoads.length : 0,
+            pickStatus: orNull(d.pickStatus), sentToPickPack: orNull(d.sentToPickPack), pickedAt: orNull(d.pickedAt),
+            pickClearedBy: orNull(d.pickClearedBy), pickClearedAt: orNull(d.pickClearedAt),
+            packStatus: orNull(d.packStatus), packedAt: orNull(d.packedAt), packedBy: orNull(d.packedBy),
+            nsWoCompletionTran: orNull(d.nsWoCompletionTran),
+        },
+    };
+    return {
+        currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
+        poleStepIndex: DELETE, machineAssigned: null,
+        tasks,
+        completedAt: DELETE, completedParts: DELETE, scrapReported: DELETE,
+        lastCoatTime: DELETE, lastPoleCoatTime: DELETE,
+        spinLoads: DELETE, spinLoadQty: DELETE, spinLoadQtyAt: DELETE, spinLoadQtyBy: DELETE,
+        packStatus: DELETE, packedLines: DELETE, packPhotos: DELETE, packBoxes: DELETE, packedAt: DELETE, packedBy: DELETE,
+        nsCompletionQueued: DELETE, nsWoCompletionPosted: DELETE, nsWoCompletionId: DELETE, nsWoCompletionTran: DELETE,
+        nsFulfillQueued: DELETE, nsIfId: DELETE, nsIfTran: DELETE,
+        redlineAlert: false,
+        ...(reopenPick ? { pickStatus: 'Pending', sentToPickPack: false, pickClearedAt: DELETE, pickClearedBy: DELETE } : {}),
+        resetAt: now, resetBy: by || '',
+        floorResets: [...(Array.isArray(d.floorResets) ? d.floorResets : []), entry],
+    };
+}
+
+/** The question every screen asks before the reset — one wording, wherever it is pressed. */
+export const floorResetPromptOf = (d, ref) => `↩ NOT FINISHED — send ${ref} back to the floor?\n\n`
+    + '• Back to the Setup Queue, coat 1, every step Pending — its finish and QC count are cleared\n'
+    + `• ${pickHappened(d) ? 'Its pick stays as it is (the parts were picked)' : 'Its parts pick reopens — Start Setup sends the pull to the WMS again'}\n`
+    + '• It leaves the WMS pack queue; RTG reads Setup\n'
+    + '• NetSuite is not touched — the build posts at the real put-away\n\n'
+    + 'Why? (kept on the order)';
+
+/** The words for the log and the screens. */
+export const floorResetSummaryOf = (d, patch) => [
+    'back to Setup, coat 1, every step Pending',
+    patch && patch.pickStatus === 'Pending' ? 'its parts pick reopened — Start Setup sends the pull to the WMS' : 'its pick kept as it was (the parts were picked)',
+    'NetSuite untouched',
+].join(' · ');
+
+/**
+ * Send one finished document back to the floor: the pack-bench guard, the document, the RTG record (floorPhase 'Setup',
+ * the floor's completion stamps off) and a floor-log line under the document's id (so "Where is it?" shows it).
+ * ctx: { db, doc, getDoc, getDocs, query, collection, where, updateDoc, deleteField, addDoc, serverTimestamp, makeFullTasks }.
+ * → { ok, refused?, ref, pickReopened, summary }
+ */
+export async function sendBackToFloor(ctx, { finWo: given, by, why, from, ref = '' }) {
+    const { db, doc, getDoc, updateDoc, deleteField, makeFullTasks } = ctx;
+    if (!given || !given.id) return { ok: false, refused: 'there is no finishing document' };
+    // Judged on the document AS IT IS NOW — a screen's copy can be a moment old (a packer may just have started on it).
+    let finWo = given;
+    try {
+        const snap = getDoc ? await getDoc(doc(db, 'fin_workorders', given.id)) : null;
+        if (snap && typeof snap.exists === 'function' && snap.exists()) finWo = { ...snap.data(), id: given.id };
+    } catch (e) { /* unread — judged on the screen's copy */ }
+    const refused = floorResetRefusalOf(finWo);
+    if (refused) return { ok: false, refused };
+    if (!String(why || '').trim()) return { ok: false, refused: 'a reason is needed — it is what makes the rewind accountable' };
+    const now = Date.now();
+    const patch = floorResetPatchOf(finWo, { by, why: String(why).trim(), from, now, tasks: makeFullTasks() });
+    const summary = floorResetSummaryOf(finWo, patch);
+    await updateDoc(doc(db, 'fin_workorders', finWo.id), Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, v === DELETE ? deleteField() : v])));
+    try {
+        await propagateFloorState(ctx, { finWo, phase: 'Setup', by, extra: { floorCompletedAt: deleteField(), floorCompletedBy: deleteField(), resetAt: now, resetBy: by || '' } });
+    } catch (e) { console.warn('propagate after the floor reset failed (the reset stands):', e); }
+    await logFloorReset(ctx, { finWo, by, why, from, ref, summary, now });
+    return { ok: true, ref: ref || finWo.nsWoTran || finWo.id, pickReopened: patch.pickStatus === 'Pending', summary };
+}
+
+/** The reset's line in the floor log, under the document's id — what "Where is it?" shows. Best-effort: the reset stands regardless. */
+export async function logFloorReset(ctx, { finWo, by, why, from, ref = '', summary = '', now = Date.now() }) {
+    const { db, addDoc, collection, serverTimestamp } = ctx;
+    const r = ref || finWo.nsWoTran || finWo.id;
+    try {
+        await addDoc(collection(db, 'fin_logs'), {
+            u: by || 'Unknown', cat: 'manual', t: serverTimestamp(), at: now, action: 'RESET', station: from || '',
+            woId: finWo.id, woRefNo: r, recipe: finWo.recipe || '',
+            msg: `↩ NOT FINISHED — BACK TO THE FLOOR · ${r} — ${String(why || '').trim() || 'no reason given'}${summary ? ` · ${summary}` : ''}`,
+        });
+    } catch (e) { console.warn('floor log of the reset failed (the reset stands):', e); }
+}
