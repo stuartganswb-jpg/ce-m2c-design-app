@@ -79,4 +79,15 @@ ok(defaultShippingNote(applied, 'uniquity').includes('516.80'), 'and the figure'
 ok(defaultShippingNote(applied, 'uniquity').includes('Change it'), 'and says it can be changed');
 eq(defaultShippingNote(defaultShipping({ ...base, typed: '75' }), 'uniquity'), '', 'and says nothing when it did nothing');
 
+// ── 📦 a customer's own flat-rate boxes fill it, counted by the caller (tab 7, 2026-10-20) ────────────────────
+{
+    const flat = { total: 22.5, rows: [{ qty: 1, code: 'H1-SHIP-S', total: 22.5 }] };
+    const d = defaultShipping({ ...base, customerFlatRate: true, flatRate: flat });
+    eq([d.apply, d.amount, d.reason], [true, 22.5, 'flat-rate'], 'the boxes fill an empty box');
+    ok(defaultShippingNote(d, 'ce').includes('1 × H1-SHIP-S') && defaultShippingNote(d, 'ce').includes('22.50'), 'and the note names the boxes');
+    eq(defaultShipping({ ...base, customerFlatRate: true, flatRate: flat, typed: '40' }).apply, false, 'a typed figure still wins');
+    eq(defaultShipping({ ...base, customerFlatRate: true, flatRate: { total: 0, rows: [] } }).reason, 'flat-rate', 'no boxes counted: still never the percent');
+    eq(defaultShipping({ ...base, customerFlatRate: true, flatRate: { total: 0, rows: [] } }).apply, false, '…and nothing is filled');
+}
+
 console.log(`baseShipping: ${n} assertions passed`);

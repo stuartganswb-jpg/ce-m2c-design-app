@@ -33,7 +33,7 @@ import { traverseOrderLinesOf } from '../Shared/subFinish';
 import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary, isCheckoutForCustomer } from '../Shared/feeRules';
 import { defaultShipping, defaultShippingNote } from '../Shared/baseShipping';   // 🚚 freight is never left at $0 by accident
 import { canOverrideShipping } from '../Shared/payRoles';   // who may change the freight: the roles who may charge
-import { isShippingItem, orderPackagingPlanOf, PACK_FEE_CODES } from '../Shared/flatRateShipping';
+import { isShippingItem, orderPackagingPlanOf, PACK_FEE_CODES, orderShippingPlanOf, shippingChargeOf } from '../Shared/flatRateShipping';
 import { priceChoice, PRICE_SOURCES } from '../Shared/hardwarePricing';
 import { customerPriceLevel, priceLevelShort } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
@@ -1469,24 +1469,35 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // this order), and a packaging line they add themselves is never joined by another. Only for a customer the two
     // fees are assigned to in 4.6 (their checkout items) — nobody else's order sees a thing. Never on an order
     // being edited or a reopened quote: those say what was sold.
+    // WHAT IS A POLE OR A SYSTEM ON THIS ORDER — one reading, for the packaging fee and the flat-rate boxes (2026-10-20):
+    // a traverse kit is one system at its billed feet (the extra-feet line is the same system); a rod sold by the foot is a
+    // pole at its cut length, else its full length. null = neither.
+    const isPoleItem = (it) => /POLE|\bRODS?\b|FASCIA/i.test(String(it?.manufacturingSpecs?.productType || it?.category || ''));
+    const lineSystemOf = (l) => {
+        const it = itemById(l.itemId);
+        if (l.trvKitCode) return l.trvIsFeet ? null : { qty: l.qty, lengthIn: (Number(l.trvFeet) || 4) * 12, motorized: !!l.trvMotor || String(it?.manufacturingSpecs?.kitAlign?.drive || '').toUpperCase() === 'MOTORIZED', traverse: true };
+        if (l.perFoot && l.unitWord !== 'yd' && isPoleItem(it)) return { qty: l.qty, lengthIn: Number(l.cutLength) > 0 ? Number(l.cutLength) : (Number(l.feetPer) || 0) * 12, motorized: false };
+        return null;
+    };
     useEffect(() => {
         if (!customerId || editingSo || reopenedQuote || packOff) return;
         const fees = PACK_FEE_CODES.map(code => [code, custCheckoutItems.find(it => erpOf(it) === code && isFeeItemRecord(it)) || null]).filter(([, it]) => it);
         if (!fees.length) return;
         const packIds = new Set(fees.map(([, it]) => it.id));
         if (cart.some(l => packIds.has(l.itemId) && !l.autoPack)) return;
-        const isPole = (it) => /POLE|\bRODS?\b|FASCIA/i.test(String(it?.manufacturingSpecs?.productType || it?.category || ''));
         const systems = [], feeNames = [];
         cart.forEach(l => {
             if (l.autoPack || l.inKit || l.trvOfKit) return;
             const it = itemById(l.itemId);
             if (l.trvKitCode) {
                 // a traverse system (its extra feet are a second line of the same kit, not a second system)
-                if (!l.trvIsFeet) systems.push({ qty: l.qty, lengthIn: (Number(l.trvFeet) || 4) * 12, motorized: !!l.trvMotor || String(it?.manufacturingSpecs?.kitAlign?.drive || '').toUpperCase() === 'MOTORIZED' });
+                const sy = lineSystemOf(l);
+                if (sy) systems.push(sy);
                 return;
             }
             if (it && isFeeItemRecord(it)) { feeNames.push({ name: l.name || it.itemName || '', qty: l.qty }); return; }
-            if (l.perFoot && l.unitWord !== 'yd' && isPole(it)) systems.push({ qty: l.qty, lengthIn: Number(l.cutLength) > 0 ? Number(l.cutLength) : (Number(l.feetPer) || 0) * 12, motorized: false });
+            const sy = lineSystemOf(l);
+            if (sy) systems.push(sy);
         });
         const want = orderPackagingPlanOf({ systems, feeNames }).counts;
         fees.forEach(([code, it]) => {
@@ -1608,11 +1619,36 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         () => !!customerId && allItems.some(it => isShippingItem(it) && isCheckoutForCustomer(it, customerId)),
         [allItems, customerId],
     );
+    // 📦 …AND WHAT THEY COME TO FOR THIS CART (Stuart 2026-10-20 — Eric: "Flat Rate Shipping Fees not present as Fee or
+    // Checkout item"). The box items are shipping, never a line (Shared/flatRateShipping); CPQ counts the boxes at checkout
+    // and this door did not count them at all, so a Fabricut order left with no freight. Counted by the same rule
+    // (orderShippingPlanOf — tab 7's poles and systems, its kits' rods too, its return fees; small parts alone = one small
+    // box) and priced off the customer's own box items, the one price chain. Fills the shipping box below by the usual
+    // contract: only while it is empty or still holds what the app put there.
+    const orderFlatRate = useMemo(() => {
+        if (!customerFlatRate) return null;
+        const boxItemOf = (code) => allItems.find(it => isShippingItem(it) && erpOf(it) === code && isCheckoutForCustomer(it, customerId)) || null;
+        const systems = [], feeNames = [];
+        let goods = 0;
+        cart.forEach(l => {
+            if (l.autoPack || l.trvOfKit) return;
+            const it = itemById(l.itemId);
+            if (l.trvKitCode) { const sy = lineSystemOf(l); if (sy) { systems.push(sy); goods += 1; } return; }
+            if (it && isFeeItemRecord(it)) { feeNames.push({ name: l.name || it.itemName || '', qty: l.qty }); return; }
+            if (l.isKit) return;                        // the kit line is billed; its parts are what ship
+            goods += 1;
+            const sy = lineSystemOf(l);
+            if (sy) systems.push(sy);
+        });
+        const plan = orderShippingPlanOf({ systems, feeNames, goods });
+        return { plan, ...shippingChargeOf(plan, (code) => { const it = boxItemOf(code); return it ? rateFor(it) : null; }) };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [customerFlatRate, cart, allItems, customerId, priceCtx]);
     useEffect(() => {
         if (!shipCfg) return;
         const d = defaultShipping({
             brand: activeBrand, cfg: shipCfg, typed: ship.amount,
-            goodsSubtotal: cartTotal, customerFlatRate, lastAuto: lastAutoShip.current,
+            goodsSubtotal: cartTotal, customerFlatRate, lastAuto: lastAutoShip.current, flatRate: orderFlatRate,
         });
         if (!d.apply) return;
         const next = d.amount.toFixed(2);
@@ -1621,7 +1657,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         setShip(prev => ({ ...prev, amount: next }));
         addLog(`🚚 ${defaultShippingNote(d, activeBrand)}`, 'info');
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [shipCfg, activeBrand, cartTotal, customerFlatRate, ship.amount]);
+    }, [shipCfg, activeBrand, cartTotal, customerFlatRate, ship.amount, orderFlatRate]);
     // WHO MAY CHANGE THE FREIGHT: the roles who may take money (Stuart 2026-10-16, Shared/payRoles).
     // A guard against a default being cleared by accident, NOT a security boundary — the figure is
     // written by the browser, so this stops a slip, not a determined person. Stuart knows.

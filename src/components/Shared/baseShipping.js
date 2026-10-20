@@ -56,13 +56,18 @@ export const mayAutoSetShipping = (current, lastAuto) => {
 //   typed              — what is in the box now ('' when untouched)
 //   goodsSubtotal      — goods after the order discount
 //   customerFlatRate   — true when 4.6 gives this customer their own shipping programme
-export function defaultShipping({ brand, cfg, typed, goodsSubtotal, customerFlatRate = false, lastAuto = null }) {
+//   flatRate           — that programme's figure for this cart, when the caller counted it ({ total, rows } —
+//                        Shared/flatRateShipping.shippingChargeOf); tab 7 counts it (2026-10-20), CPQ fills its own
+export function defaultShipping({ brand, cfg, typed, goodsSubtotal, customerFlatRate = false, lastAuto = null, flatRate = null }) {
     const none = { apply: false, amount: 0, pct: 0, reason: '' };
     if (!mayAutoSetShipping(typed, lastAuto)) {
         return { ...none, reason: 'typed' };          // a person has already said; never overrule them
     }
     if (customerFlatRate) {
-        return { ...none, reason: 'flat-rate' };      // 4.6 owns this customer's freight
+        // 4.6 owns this customer's freight: its boxes, when the cart has been counted into them — never the percent
+        const total = Math.round((Number(flatRate && flatRate.total) || 0) * 100) / 100;
+        if (total > 0) return { apply: true, amount: total, pct: 0, reason: 'flat-rate', rows: (flatRate && flatRate.rows) || [] };
+        return { ...none, reason: 'flat-rate' };
     }
     const pct = baseRateOf(brand, cfg);
     if (!pct) return { ...none, reason: 'no-rate' };
@@ -72,7 +77,11 @@ export function defaultShipping({ brand, cfg, typed, goodsSubtotal, customerFlat
 }
 
 // What the screen and the log say when it fills one in.
-export const defaultShippingNote = (d, brand) =>
-    (d && d.apply
-        ? `Shipping defaulted to ${d.pct}% of the goods for ${String(brand || '').toUpperCase()} — $${d.amount.toFixed(2)}. Change it if the freight differs.`
-        : '');
+export const defaultShippingNote = (d, brand) => {
+    if (!(d && d.apply)) return '';
+    if (d.reason === 'flat-rate') {
+        const boxes = (d.rows || []).map(r => `${r.qty} × ${r.code}`).join(' + ');
+        return `Shipping by the customer's flat-rate boxes (4.6) — $${d.amount.toFixed(2)}${boxes ? ` (${boxes})` : ''}. Change it if the freight differs.`;
+    }
+    return `Shipping defaulted to ${d.pct}% of the goods for ${String(brand || '').toUpperCase()} — $${d.amount.toFixed(2)}. Change it if the freight differs.`;
+};

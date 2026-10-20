@@ -164,6 +164,12 @@ export function shippingPlanOf(items, opts = {}) {
         if (isTraverseLine(it) && pieces.length) traverseConfigs += q;
         for (let k = 0; k < q; k++) pieces.forEach(p => all.push(p));
     });
+    return { windows, ...packedPolesOf(all, windows), traverseConfigs };
+}
+
+// The ONE packing both doors' plans use: poles longest first, each into the first box with room, short poles riding in the
+// small boxes. → { counts, boxes, shortPoles, tooLong }
+function packedPolesOf(all, windows) {
     const shortPoles = all.filter(p => p.lengthIn < POLE_BOX_FROM_IN).length;
     const poles = all.filter(p => p.lengthIn >= POLE_BOX_FROM_IN)
         .sort((a, b) => b.lengthIn - a.lengthIn || Number(b.withReturn) - Number(a.withReturn));
@@ -182,7 +188,36 @@ export function shippingPlanOf(items, opts = {}) {
     });
     const counts = { S: windows > 0 ? Math.ceil(windows / WINDOWS_PER_SMALL_BOX) : 0, M: 0, L: 0, XL: 0 };
     boxes.forEach(b => { counts[b.key] += 1; });
-    return { windows, counts, boxes, shortPoles, tooLong: poles.filter(p => p.lengthIn > LONGEST_SHIPPABLE_IN).length, traverseConfigs };
+    return { counts, boxes, shortPoles, tooLong: poles.filter(p => p.lengthIn > LONGEST_SHIPPABLE_IN).length };
+}
+
+/**
+ * THE SAME BOXES FOR AN ORDER ENTRY ORDER (Stuart 2026-10-20: "4. ok good" — Eric: "Flat Rate Shipping Fees not present as
+ * Fee or Checkout item"). Tab 7 has no configurations, so it is read in the units tab 7 has: every POLE PIECE it sells (a rod
+ * sold by the foot, at its cut length or its full length — a kit's rods too) and every traverse SYSTEM (at its length) is one
+ * pole and one window; the order's return fees go two to a pole, the plain ones first — as its packaging fee reads them
+ * (orderPackagingPlanOf). An order with goods but no poles (small parts only) ships in one small box. Same packing, same
+ * prices, same total → the shipping charge, never a line.
+ * @param systems   [{ qty, lengthIn, traverse? }] — the order's poles and systems (tab 7's own reading)
+ * @param feeNames  [{ name, qty }] — its fee lines (the return fees are found by name)
+ * @param goods     how many physical lines the order has (any > 0 means at least one small box)
+ * @returns the shippingPlanOf shape: { windows, counts, boxes, shortPoles, tooLong, traverseConfigs }
+ */
+export function orderShippingPlanOf({ systems = [], feeNames = [], goods = 0 } = {}) {
+    let returns = 0;
+    (Array.isArray(feeNames) ? feeNames : []).forEach(f => { if (isReturnName(U(f && f.name))) returns += N(f && f.qty) || 1; });
+    const all = [];
+    let traverseConfigs = 0;
+    (Array.isArray(systems) ? systems : []).forEach(sy => {
+        const q = Math.max(0, Math.floor(N(sy && sy.qty)));
+        const L = N(sy && sy.lengthIn);
+        if (!(L > 0)) return;
+        if (sy.traverse) traverseConfigs += q;
+        for (let k = 0; k < q; k++) all.push({ lengthIn: L, withReturn: false, traverse: !!sy.traverse });
+    });
+    all.forEach(p => { if (returns > 0) { p.withReturn = true; returns -= Math.min(2, returns); } });
+    const windows = all.length || (N(goods) > 0 ? 1 : 0);
+    return { windows, ...packedPolesOf(all, windows), traverseConfigs };
 }
 
 /**

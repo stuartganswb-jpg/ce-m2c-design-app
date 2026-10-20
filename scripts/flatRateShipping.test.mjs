@@ -1,8 +1,7 @@
 // 📦 Flat-rate shipping, counted in boxes (Eric 2026-09-29 · Stuart 2026-09-30).   node scripts/flatRateShipping.test.mjs
 import {
     boxKeyFor, cutPiecesOf, splicePositionsOf, polePiecesOf, shippingPlanOf, shippingChargeOf, isShippingItem, isTraverseLine, FLAT_RATE_BOXES,
-    packFeeFor, packagingFeeOf, packagingPlanOf, orderPackagingPlanOf, STANDARD_PACK_FEE_CODE, LARGE_PACK_FEE_CODE, TRAVERSE_PACK_FEE_CODE, PACK_FEE_CODES,
-} from '../src/components/Shared/flatRateShipping.js';
+    packFeeFor, packagingFeeOf, packagingPlanOf, orderPackagingPlanOf, STANDARD_PACK_FEE_CODE, LARGE_PACK_FEE_CODE, TRAVERSE_PACK_FEE_CODE, PACK_FEE_CODES, orderShippingPlanOf } from '../src/components/Shared/flatRateShipping.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 const eq = (n, a, b) => ok(`${n} — got ${JSON.stringify(a)}`, JSON.stringify(a) === JSON.stringify(b));
@@ -131,6 +130,19 @@ eq('tab 7: two return fees go to ONE pole — the plain one first, not the motor
 eq('tab 7: three return fees reach two poles; a bend reaches one more', [orderPackagingPlanOf({ systems: [{ qty: 3, lengthIn: 60 }], returnQty: 3 }).counts, orderPackagingPlanOf({ systems: [{ qty: 3, lengthIn: 60 }], returnQty: 2, shapedQty: 1 }).counts], [{ [S12]: 1, [L25]: 2 }, { [S12]: 1, [L25]: 2 }]);
 eq('tab 7: the fee lines can be given by name', orderPackagingPlanOf({ systems: [{ qty: 2, lengthIn: 60 }], feeNames: [{ name: 'MITER RETURN', qty: 2 }, { name: 'Rush Order Fee', qty: 1 }, { name: 'Pole Pack Standard', qty: 1 }] }).counts, { [S12]: 1, [L25]: 1 });
 eq('tab 7: no pole, no fee — whatever fee lines the order carries', orderPackagingPlanOf({ systems: [], returnQty: 2 }).counts, { [S12]: 0, [L25]: 0 });
+
+// ── 📦 the same boxes for an ORDER ENTRY order (Stuart 2026-10-20 · Eric's PO 682688) ─────────────────────
+{
+    eq('a small part alone ships in one small box', orderShippingPlanOf({ systems: [], feeNames: [], goods: 1 }).counts, { S: 1, M: 0, L: 0, XL: 0 });
+    eq('nothing physical, no box', orderShippingPlanOf({ goods: 0 }).counts, { S: 0, M: 0, L: 0, XL: 0 });
+    const four = orderShippingPlanOf({ systems: [{ qty: 4, lengthIn: 90 }], goods: 2 });
+    eq('four 90" rods: one M box, and a small box per two of them', [four.windows, four.counts], [4, { S: 2, M: 1, L: 0, XL: 0 }]);
+    const ret = orderShippingPlanOf({ systems: [{ qty: 3, lengthIn: 90 }], feeNames: [{ name: 'FRENCH RETURN', qty: 4 }], goods: 2 });
+    eq('returns go two to a pole: two poles with returns fill an M box, the plain one starts another', [ret.boxes.map(b => `${b.key}:${b.plain}/${b.returns}`)], [['M:0/2', 'M:1/0']]);
+    eq('a short rod rides in the small box; a long one goes XL; a traverse system is a pole of its length', [orderShippingPlanOf({ systems: [{ qty: 1, lengthIn: 36 }], goods: 1 }).counts, orderShippingPlanOf({ systems: [{ qty: 1, lengthIn: 110 }, { qty: 1, lengthIn: 72, traverse: true }], goods: 2 }).counts], [{ S: 1, M: 0, L: 0, XL: 0 }, { S: 1, M: 0, L: 0, XL: 1 }]);
+    const ch = shippingChargeOf(orderShippingPlanOf({ goods: 1 }), (code) => ({ 'H1-SHIP-S': 22.5, 'H1-SHIP-M': 45 })[code] ?? null);
+    eq('PO 682688 — one acrylic end cap kit — is one small box at Fabricut\'s $22.50', [ch.total, ch.rows.map(r => `${r.qty}×${r.code}`)], [22.5, ['1×H1-SHIP-S']]);
+}
 
 console.log(`flatRateShipping: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
