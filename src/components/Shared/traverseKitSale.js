@@ -115,6 +115,18 @@ export function traverseKitLinesOf({ kit, row = null, finish = '', proj = '', mo
 }
 
 /**
+ * THE TRACK'S ANSWERS ON THE KIT LINE, IN CPQ'S OWN SHAPE (Stuart 2026-10-20: "fix tab 7 on the draw direction"). CPQ's cart line keeps
+ * `traverseDraw` / `traverseMotorSide` (when answered) and the whole answers (`engineConfig.trvSel`); tab 7's kit line now keeps the same
+ * two names and `trvSel`. Tab 7's components popup asked the draw and the motor side and dropped them; a portal kit's Load dropped them too.
+ * ⚠ Neither door's draw reaches a floor screen, a document or NetSuite yet — the order KEEPS it (named to Stuart 2026-10-20).
+ */
+export function withTraverseAnswers(kitLine, sel) {
+    if (!kitLine || !sel || typeof sel !== 'object') return kitLine;
+    const draw = U(sel.draw), side = U(sel.motorSide);
+    return { ...kitLine, ...(draw ? { traverseDraw: draw } : {}), ...(side ? { traverseMotorSide: side } : {}), trvSel: JSON.parse(JSON.stringify(sel)) };
+}
+
+/**
  * The components as Quick Ship lines (tab 7's applyTrvComponents): every line a REAL library item (they consume inventory) — included lines
  * ride rate 0, billables at the customer's price; both push as real NetSuite lines, so no special casing downstream.
  * @returns { lines: [{ item, qty, note, opts }], missing }   (`opts` is what tab 7's pushLine takes)
@@ -154,5 +166,6 @@ export function traverseKitOrderOf(entry = {}, { kits = [], rowOf = () => null, 
     const rules = rulesOf(traverseKitFamilyOf(kit));
     const cfgLines = rules && entry.sel ? configuratorLines({ rules, drive: out.cfg.drive, feet: out.cfg.feet, sel: entry.sel, priceOf }) : [];
     const { lines: components, missing } = traverseComponentLinesOf({ cfgLines, findItem, rowOf, cfg: out.cfg });
-    return { kit, ...out, cfgLines, components, missing };
+    // (the customer's track answers ride on the kit line, as CPQ's line keeps its own — withTraverseAnswers)
+    return { kit, ...out, kitLine: withTraverseAnswers(out.kitLine, entry.sel || null), cfgLines, components, missing };
 }

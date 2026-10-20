@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { catOf, erpOf, nsIdOf, collectionsOf, diaCellLabel, isInsideMount, finishCodeOf, isFinished, quickShipFinishOf } from '../Shared/quickShipItems';   // one reading for every Quick Ship door (2026-10-20)
 import { quickShipPriceCtxOf, quickShipPriceOf, quickShipRateOf } from '../Shared/quickShipPricing';   // one price for every Quick Ship door (2026-10-20)
-import { traverseKitsOf, traverseKitByCode, traverseKitFinishesOf, traverseKitIsSingle, traverseKitProjectionsOf, traverseKitFamilyOf, traverseKitLinesOf, traverseComponentLinesOf, traverseKitOrderOf } from '../Shared/traverseKitSale';   // the traverse kit sale, shared with the portal (2026-10-20)
+import { traverseKitsOf, traverseKitByCode, traverseKitFinishesOf, traverseKitIsSingle, traverseKitProjectionsOf, traverseKitFamilyOf, traverseKitLinesOf, traverseComponentLinesOf, traverseKitOrderOf, withTraverseAnswers } from '../Shared/traverseKitSale';   // the traverse kit sale, shared with the portal (2026-10-20)
 import { nsTransactionHeader, withLineLocations, itemClassOf } from '../Shared/nsHeader';
 import { resolveShipMethod } from '../Shared/nsTransmit';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
@@ -927,21 +927,25 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         // for word 2026-10-20 — the portal's Quick Ship sells a kit through the same lines). A refusal says what is missing.
         const out = traverseKitLinesOf({ kit: trvKit, row: trvKit ? kitRowOf(trvKit) : null, finish: trvFinish, proj: trvProj, motorItem: trvMotor, feet: trvFeet });
         if (out.error) return alert(out.error);
-        setCart(prev => [...prev, { key: `${trvKit.id}-${Date.now()}`, ...out.kitLine }]);
+        const kitKey = `${trvKit.id}-${Date.now()}`;
+        setCart(prev => [...prev, { key: kitKey, ...out.kitLine }]);
         if (out.feetLine) setCart(prev => [...prev, { key: `${trvKit.id}-ft-${Date.now()}`, ...out.feetLine }]);
         // The components configurator opens NOW — required at checkout, and this IS checkout for
         // a kit order. Skip stays possible (the operator may be quoting blind), but the default
         // path walks through it.
-        setTrvCfg(out.cfg);
+        setTrvCfg({ ...out.cfg, kitKey });   // (the kit line the popup's answers go back onto — applyTrvComponents)
         setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
     };
 
     // Configurator lines → cart. Every line is a REAL library item (they consume inventory):
     // included lines ride rate 0, billables at the customer's price — both push as real NetSuite
     // lines, so no special casing downstream.
-    const applyTrvComponents = (cfgLines) => {
+    const applyTrvComponents = (cfgLines, sel) => {
         const { lines, missing } = traverseComponentLinesOf({ cfgLines, findItem: (c) => allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase()), rowOf: kitRowOf, cfg: trvCfg });
         lines.forEach(l => pushLine(l.item, l.qty, l.note, null, l.opts));
+        // THE DRAW AND THE MOTOR SIDE THE POPUP ASKED ARE KEPT (Stuart 2026-10-20: "fix tab 7 on the draw direction") — on the kit line, in
+        // CPQ's own shape (Shared/traverseKitSale.withTraverseAnswers); they were dropped here.
+        if (trvCfg?.kitKey && sel) setCart(prev => prev.map(l => (l.key === trvCfg.kitKey ? withTraverseAnswers(l, sel) : l)));
         if (missing) alert(`${missing} component code(s) not in the library — not added. Check the rules doc against the Master Library.`);
         setTrvCfg(null);
     };

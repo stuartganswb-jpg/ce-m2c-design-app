@@ -4,7 +4,7 @@
 // Tab 7's OWN code as it stood before the move (HQ/QuickShipTab.js) is kept below verbatim as the reference; every function is held to it.
 import { classifyCat, catOf, erpOf, nsIdOf, collectionsOf, isInsideMount, finishCodeOf, isFinished, diaCellLabel } from '../src/components/Shared/quickShipItems.js';
 import { quickShipPriceCtxOf, quickShipPriceOf, quickShipRateOf } from '../src/components/Shared/quickShipPricing.js';
-import { traverseKitsOf, traverseKitByCode, traverseKitFinishesOf, traverseKitIsSingle, traverseKitProjectionsOf, traverseKitLinesOf, traverseComponentLinesOf, traverseKitOrderOf, traverseKitFamilyOf } from '../src/components/Shared/traverseKitSale.js';
+import { traverseKitsOf, traverseKitByCode, traverseKitFinishesOf, traverseKitIsSingle, traverseKitProjectionsOf, traverseKitLinesOf, traverseComponentLinesOf, traverseKitOrderOf, traverseKitFamilyOf, withTraverseAnswers } from '../src/components/Shared/traverseKitSale.js';
 import { isPoleCategory } from '../src/components/Shared/poleCut.js';
 import { SIZE_FAMILIES } from '../src/components/Shared/sizeMatrix.js';
 import { priceChoice } from '../src/components/Shared/hardwarePricing.js';
@@ -158,7 +158,16 @@ const priceOf = (id) => ({ HTSLNTCAR: 0.5, 'WAND-36': 11, 'H1-2TRVSPL': 18, 'MIS
     const sel = { carrierStyle: 'HTSLNTCAR', carrierQty: '', draw: 'CENTER', motorSide: '', picks: defaultPicks({ rules: RULES, drive: 'MANUAL', feet: 8, trackCount: 1 }), accessories: { 'WAND-36': 1 } };
     const o = traverseKitOrderOf({ kitId: 'K3', finish: 'p14', proj: 4.625, motorItem: '', feet: '8', sel }, opts);
     const ref = refAdd({ trvKit: kits.find((k) => k.id === 'K3'), trvFinish: 'P14', trvProj: '4.625', trvMotor: '', trvFeet: '8' });
-    eq('a portal kit order rebuilds tab 7\'s kit line, feet line and set-up (the finish and depth as tab 7\'s own selects hold them)', [o.kitLine, o.feetLine, o.cfg], [ref.cart[0], ref.cart[1], ref.cfg]);
+    // ⚠ DELIBERATE CHANGE, 2026-10-20 (Stuart: "fix tab 7 on the draw direction"): the customer's track answers ride on the kit line in CPQ's
+    // shape (withTraverseAnswers) — set aside here, checked on their own below; everything else is tab 7's line as it was.
+    const { traverseDraw, traverseMotorSide, trvSel: kept, ...kitLineAsWas } = o.kitLine;
+    eq('a portal kit order rebuilds tab 7\'s kit line, feet line and set-up (the finish and depth as tab 7\'s own selects hold them)', [kitLineAsWas, o.feetLine, o.cfg], [ref.cart[0], ref.cart[1], ref.cfg]);
+    eq('…with the customer\'s draw on it in CPQ\'s own names, no motor side unanswered, and the whole answers', [traverseDraw, traverseMotorSide, kept], ['CENTER', undefined, sel]);
+    eq('…the answers a copy, never the request\'s own object', [kept !== sel, kept.picks !== sel.picks], [true, true]);
+    eq('a kit sold with no answers keeps none', Object.keys(traverseKitOrderOf({ kitId: 'K3', finish: 'p14', proj: 4.625, motorItem: '', feet: '8' }, opts).kitLine).filter((k) => /traverse|trvSel/.test(k)), []);
+    eq('the answers on a kit line: draw and motor side in capitals when answered, the whole answers copied — nothing when none',
+        [withTraverseAnswers({ key: 'k', erp: 'X' }, { draw: 'left', motorSide: 'right', carrierStyle: 'C', picks: {}, accessories: {} }), withTraverseAnswers({ key: 'k' }, { draw: '', motorSide: '', carrierStyle: 'C', picks: {}, accessories: {} }), withTraverseAnswers({ key: 'k' }, null), withTraverseAnswers(null, { draw: 'LEFT' })],
+        [{ key: 'k', erp: 'X', traverseDraw: 'LEFT', traverseMotorSide: 'RIGHT', trvSel: { draw: 'left', motorSide: 'right', carrierStyle: 'C', picks: {}, accessories: {} } }, { key: 'k', trvSel: { draw: '', motorSide: '', carrierStyle: 'C', picks: {}, accessories: {} } }, { key: 'k' }, null]);
     eq('…and its components through the kit\'s own chart', [o.cfgLines, o.components.length], [configuratorLines({ rules: RULES, drive: 'MANUAL', feet: 8, sel, priceOf }), o.cfgLines.length - o.missing]);
     const m = traverseKitOrderOf({ kitId: 'K1', finish: 'P14', proj: '6', motorItem: 'hsom-21', feet: '4' }, opts);
     eq('a motorised kit takes its motor in the kit\'s own spelling — the line is their per-motor code at its net', [m.kitLine.erp, m.kitLine.aliasErp, m.kitLine.rateOverride, m.kitLine.trvMotor, m.cfgLines], ['H1-2TRV-4M/P-35W', 'HM35W', 1050, 'HSOM-21', []]);
