@@ -17,6 +17,7 @@ import { asksSprayStation, sprayStationOf, sprayStationLockOf, sprayStationPatch
 import WhereIsIt from '../Shared/WhereIsIt';
 import { NsFixChip } from '../Shared/NsFixPanel';
 import { soRefusalOf } from '../Shared/nsRefusal';
+import { countPlanOf, adjustmentItemsOf, binTransferItemsOf } from '../Shared/countPlan';
 import { woRefOf } from '../Shared/woRef';
 import { pairWaitsOf, waitedText } from '../Shared/stagingPairs';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
@@ -3654,36 +3655,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         // Group bins of the same item, then split each item's bin moves. A single inventory-adjustment line
         // can only push ONE direction (NetSuite rejects a mix of +/- bins with "Invalid number (must be
         // positive)" — that's a transfer, not an adjustment). So for each item we pair its down-bins with its
-        // up-bins into BIN TRANSFERS, and only the leftover single-direction remainder becomes an ADJUSTMENT.
-        const byItem = {};
-        rowDeltas.forEach(d => {
-            if (!byItem[d.internalId]) byItem[d.internalId] = { internalId: d.internalId, docId: d.docId, bins: [] };
-            byItem[d.internalId].bins.push({ binNumber: d.binNumber, qty: d.adjustQtyBy });
-        });
+        // up-bins into BIN TRANSFERS, and only the leftover single-direction remainder becomes an ADJUSTMENT —
+        // ONE LINE PER ITEM AND BIN (Shared/countPlan, 2026-10-20: a line carrying several bins is what NetSuite refused
+        // on Eric's 10-14 counts; every adjustment that posts carries one), the same item+bin merged, quantities rounded.
+        const { transferItems, adjustLines } = countPlanOf(rowDeltas);
 
-        const transferItems = []; // { internalId, moves: [{from, to, qty}] }  → bin transfers (crossing moves)
-        const adjustItems = [];   // { internalId, bins: [{binNumber, qty}], total } → residual real variance
-        Object.values(byItem).forEach(it => {
-            const decs = it.bins.filter(b => b.qty < 0).map(b => ({ bin: b.binNumber, rem: -b.qty }));
-            const incs = it.bins.filter(b => b.qty > 0).map(b => ({ bin: b.binNumber, rem: b.qty }));
-            const moves = [];
-            let di = 0, ii = 0;
-            while (di < decs.length && ii < incs.length) {
-                const move = Math.min(decs[di].rem, incs[ii].rem);
-                if (move > 0) moves.push({ from: decs[di].bin, to: incs[ii].bin, qty: move });
-                decs[di].rem -= move; incs[ii].rem -= move;
-                if (decs[di].rem === 0) di++;
-                if (incs[ii].rem === 0) ii++;
-            }
-            if (moves.length) transferItems.push({ internalId: it.internalId, moves });
-            const adjBins = [
-                ...decs.filter(x => x.rem > 0).map(x => ({ binNumber: x.bin, qty: -x.rem })),
-                ...incs.filter(x => x.rem > 0).map(x => ({ binNumber: x.bin, qty: x.rem }))
-            ];
-            if (adjBins.length) adjustItems.push({ internalId: it.internalId, bins: adjBins, total: adjBins.reduce((s, b) => s + b.qty, 0) });
-        });
-
-        if (transferItems.length === 0 && adjustItems.length === 0) {
+        if (transferItems.length === 0 && adjustLines.length === 0) {
             return alert(skipped.length
                 ? `No pushable adjustments — ${skipped.length} counted item(s) have no NetSuite Internal ID. Map them first (HQ → ERP Mapping Audit / Mass Update):\n\n${skipped.slice(0, 12).join('\n')}${skipped.length > 12 ? `\n…+${skipped.length - 12} more` : ''}`
                 : "No variances found to adjust.");
@@ -3713,30 +3690,18 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (transferItems.length) {
                 await queueNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`, {
                     subsidiary: { id: nsConfig.subsidiary }, location: { id: nsConfig.location }, memo: memoText,
-                    inventory: { items: transferItems.map(t => {
-                        const lineQty = t.moves.reduce((s, m) => s + m.qty, 0);
-                        return ({
-                            item: { id: t.internalId },
-                            quantity: lineQty,   // line-level qty is required before NetSuite accepts the inventoryDetail
-                            inventoryDetail: { quantity: lineQty, inventoryAssignment: { items: t.moves.map(m => ({ binNumber: { refName: m.from }, toBinNumber: { refName: m.to }, quantity: m.qty })) } }
-                        });
-                    }) }
+                    inventory: { items: binTransferItemsOf(transferItems) }
                 }, `Cycle count by ${operator?.name || 'Unknown'} — ${transferItems.reduce((s, t) => s + t.moves.length, 0)} bin move(s)`);
                 posted.push(`${transferItems.reduce((s, t) => s + t.moves.length, 0)} bin transfer(s)`);
             }
 
             // 2) Inventory adjustment for the residual single-direction variance.
-            if (adjustItems.length) {
+            if (adjustLines.length) {
                 await queueNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`, {
                     account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: memoText,
-                    inventory: { items: adjustItems.map(adj => ({
-                        item: { id: adj.internalId },
-                        location: { id: nsConfig.location },
-                        adjustQtyBy: adj.total,
-                        inventoryDetail: { quantity: adj.total, inventoryAssignment: { items: adj.bins.map(b => ({ binNumber: { refName: b.binNumber }, quantity: b.qty })) } }
-                    })) }
-                }, `Cycle count by ${operator?.name || 'Unknown'} — ${adjustItems.length} adjustment line(s)`);
-                posted.push(`${adjustItems.length} adjustment line(s)`);
+                    inventory: { items: adjustmentItemsOf(adjustLines, nsConfig.location) }
+                }, `Cycle count by ${operator?.name || 'Unknown'} — ${adjustLines.length} adjustment line(s)`);
+                posted.push(`${adjustLines.length} adjustment line(s)`);
             }
 
             alert(`✅ Count recorded — NetSuite's ${posted.join(' + ')} queued (they post within about a minute; if NetSuite refuses one, it goes on the NetSuite-to-fix list with its bins).${skipped.length ? `\n\n⚠️ Skipped ${skipped.length} counted item(s) with no NetSuite Internal ID.` : ''}`);

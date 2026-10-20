@@ -4,7 +4,8 @@ import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeI
 import { splitFinish, siblingsQuery, oneItemQuery, activeItemOf, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
 import { releaseRunToFloor as sharedReleaseRunToFloor, raisePaintRun as sharedRaisePaintRun } from '../Shared/repaintRun';
 import { askRunHandling, runHandlingLabel } from '../Shared/RunHandlingPrompt';
-import { parkWorkOrder, INTENT } from '../Shared/workOrderCreate';
+import { parkWorkOrder, INTENT, REFUSAL } from '../Shared/workOrderCreate';
+import { openRunsQuestionOf } from '../Shared/openRuns';
 import { issuePlatedDemand } from '../Shared/platingDemand';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
 import { isOutsourcedFinishCode, millBaseOf, finishSuffixOf } from '../Shared/finishRouting';
@@ -1126,16 +1127,21 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   // NetSuite work order at creation, and stamps source / autoFlow so RTG releases it on its own.
   // This used to park route-open (no routeTo), which is why RTG offered "Push to Shop" on it and
   // auto-release never took it (audit §2 writer 6, P0 #1).
+  // A SECOND OPEN RUN OF THE SAME ITEM IS ASKED ABOUT FIRST (Shared/openRuns, Stuart 2026-10-20) — "no" refuses it
+  // (ParkRefusal DUPLICATE): the card's own button says so; the make-up loop lists it as not made and goes on.
   const createStockBuildWO = async (part, qty) => {
+      const erp = String(part.legacyErpId || part.itemId || '').toUpperCase();
       const res = await parkWorkOrder({
           intent: INTENT.STOCK_MILL, part, qty: Number(qty), brand: activeBrand,
           createdBy: (currentUser && (currentUser.name || currentUser.email)) || '',
           reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-          note: `Library make-up · ${String(part.legacyErpId || part.itemId || '').toUpperCase()} ×${qty}`,
+          note: `Library make-up · ${erp} ×${qty}`,
           source: 'LIBRARY_MAKEUP', inventory,
+          confirmOpenRuns: (runs) => window.confirm(openRunsQuestionOf({ erp, qty, runs })),
       });
       return res.woId;
   };
+  const isDuplicateRefusal = (e) => !!e && e.name === 'ParkRefusal' && e.code === REFUSAL.DUPLICATE;
 
   // ONE RELEASE PATH — RTG keeps the record, the floor gets the job (Stuart 2026-08-03: "it should
   // also go to rtg for file keeping and a record but we can skip having to have to go there for an
@@ -1207,16 +1213,26 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                       const shortRaw = qty - rawHave;
                       if (basePart) {
                           if (window.confirm(`Raw ${mill} holds ${rawHave} — the convert needs ${qty}.\n\nAlso park a shop-floor stock WO for ${shortRaw} × ${mill} in RTG?`)) {
-                              const woId = await createStockBuildWO(basePart, shortRaw);
-                              made.push(`🏭 SHOP WO ${woId} — ${shortRaw} × ${mill} (RTG → release to shop)`);
+                              try {
+                                  const woId = await createStockBuildWO(basePart, shortRaw);
+                                  made.push(`🏭 SHOP WO ${woId} — ${shortRaw} × ${mill} (RTG → release to shop)`);
+                              } catch (e) {
+                                  if (!isDuplicateRefusal(e)) throw e;
+                                  made.push(`⏭ ${mill} — not made: ${e.message}`);
+                              }
                           } else made.push(`⚠ raw ${mill} short ${shortRaw} — no WO raised (declined)`);
                       } else made.push(`⚠ raw ${mill} not in the library — shortfall ${shortRaw} needs a manual order`);
                   }
               } else {
                   const p = partOfCode(r.code);
                   if (!p) { made.push(`⚠ ${r.code} not in the library — order manually`); continue; }
-                  const woId = await createStockBuildWO(p, qty);
-                  made.push(`🏭 SHOP WO ${woId} — ${qty} × ${r.code} (RTG → release to shop)`);
+                  try {
+                      const woId = await createStockBuildWO(p, qty);
+                      made.push(`🏭 SHOP WO ${woId} — ${qty} × ${r.code} (RTG → release to shop)`);
+                  } catch (e) {
+                      if (!isDuplicateRefusal(e)) throw e;
+                      made.push(`⏭ ${r.code} — not made: ${e.message}`);
+                  }
               }
           }
           // The notification leg — production/management see the confirm-and-release ask.
