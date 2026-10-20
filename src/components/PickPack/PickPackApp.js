@@ -22,7 +22,8 @@ import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../S
 import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, soLineIsFee, unpackedSiblingsOf, soPackLineStateOf, gatherPlanOf, soCodeNeedOf, soCodeReleasedNeedOf, soCodeReleasedOf, heldLinesOf } from '../Shared/pickLines';
 // 12.7 LAUNCH PHASE 2 (S7, 2026-10-20 — applied here with the App Improvement session's clearance): a held line is not picked,
 // a decided order packs what is in its bin, and a pack that leaves something behind is a SHIPMENT of its own.
-import { shipmentPlanOf, launchShipmentOf, shipmentFulfilItemsOf, shipmentsOf, isShipmentRecord, shipmentWordsOf, lineIsLaunchHeld, nsSoIdOfRecord } from '../Shared/launchBoard';
+import { shipmentPlanOf, launchShipmentOf, shipmentsOf, isShipmentRecord, shipmentWordsOf, lineIsLaunchHeld } from '../Shared/launchBoard';
+import { writeShipment, queueShipmentFulfilment as queueShipmentFulfilmentShared } from '../Shared/launchShipment';
 import { isReleaseByCount } from '../Shared/rowRelease';
 import { isFeePart } from '../Shared/oeClassify';
 import { fetchAvailabilityUnits, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
@@ -3022,23 +3023,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const blk = boxCompleteBlocker(job, lines);
         if (blk) return alert(`${blk.charAt(0).toUpperCase()}${blk.slice(1)}.`);
         const by = operator?.name || 'Packer';
-        const now = Date.now();
-        const built = launchShipmentOf({ parent: job, plan, by, now, boxes: packBoxesOfTicks(job, lines, orderBoxesOf(boxHomeOf(job).data)), photos: job.packPhotos || [] });
-        if (!built.ok) return alert(`Not shipped — ${built.why}`);
         const names = (idxs) => idxs.map(i => ((job.lines || [])[i] || {}).erp || '?').join(', ');
-        if (!window.confirm(`📦 SHIPMENT ${built.n} of ${packRef(job)}?\n\nShips now: ${lines.length} line${lines.length === 1 ? '' : 's'} — ${names(plan.pack)}\n${plan.held.length ? `Held on 12.7 Launch (stays): ${names(plan.held)}\n` : ''}${plan.waiting.length ? `Still to come (stays): ${names(plan.waiting)}\n` : ''}\nThe shipment becomes its own packed order (${built.id}) and ships from the FULFILMENT tab; its NetSuite fulfilment takes only these lines. ${packRef(job)} stays open for the rest.`)) return;
+        const preview = launchShipmentOf({ parent: job, plan, by });
+        if (!preview.ok) return alert(`Not shipped — ${preview.why}`);
+        if (!window.confirm(`📦 SHIPMENT ${preview.n} of ${packRef(job)}?\n\nShips now: ${lines.length} line${lines.length === 1 ? '' : 's'} — ${names(plan.pack)}\n${plan.held.length ? `Held on 12.7 Launch (stays): ${names(plan.held)}\n` : ''}${plan.waiting.length ? `Still to come (stays): ${names(plan.waiting)}\n` : ''}\nThe shipment becomes its own packed order (${preview.id}) and ships from the FULFILMENT tab; its NetSuite fulfilment takes only these lines. ${packRef(job)} stays open for the rest.`)) return;
         packCompletingRef.current = true;
         try {
-            const exists = await getDoc(doc(db, 'hq_sales_orders', built.id));
-            if (exists.exists()) return alert(`${built.id} already exists — shipment ${built.n} was already made from another screen. Nothing was written.`);
-            await setDoc(doc(db, 'hq_sales_orders', built.id), built.doc);
-            const args = [];
-            Object.entries(built.give).forEach(([c, q]) => {
-                args.push(new FieldPath('committedQty', c), increment(-q), new FieldPath('shippedQty', c), increment(q));
-                if (job.nsBinQty && job.nsBinQty[c] != null) args.push(new FieldPath('nsBinQty', c), increment(-q));
-            });
-            args.push(new FieldPath('shipments', String(built.n)), built.record, 'packedLines', {}, 'packPhotos', [], 'packInProgress', null, 'status', 'Pending', 'pickStatus', 'Pending', 'lastShipmentAt', now);
-            await updateDoc(doc(db, 'hq_sales_orders', job.id), ...args);
+            // The writes and the fulfilment are Shared/launchShipment's — the same code the Uniquity Pick & Pack page runs.
+            const w = await writeShipment({ parent: job, plan, by, now: Date.now(), boxes: packBoxesOfTicks(job, lines, orderBoxesOf(boxHomeOf(job).data)), photos: job.packPhotos || [] });
+            if (!w.ok) return alert(`Not shipped — ${w.why}`);
+            const built = w.built;
             writeLog(`📦 Shipment ${built.n} of ${packRef(job)} packed by ${by} — ${shipmentWordsOf(built.record)}${plan.held.length ? ` · held on 12.7: ${names(plan.held)}` : ''}${plan.waiting.length ? ` · to come: ${names(plan.waiting)}` : ''}`, 'packing');
             setPackOrderId(null);
             const nsNote = await queueShipmentFulfilment(built.doc, { gate: true });
@@ -3046,47 +3040,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { alert('Could not complete the shipment: ' + (e.message || e)); }
         finally { packCompletingRef.current = false; }
     };
-    // THE SHIPMENT'S FULFILMENT: the parent's NetSuite order, ITS lines only (Shared/launchBoard.shipmentFulfilItemsOf), from the
-    // parent's bin — after the terms gate with the part-payment rule (Shared/shipClearance.partialShipClearanceOf, Stuart 2026-10-20:
-    // "as long as the remaining funds from deposit are over 50% the amount of the balance order it is fine to ship first part").
-    // Never Shared/fulfilmentQueue.queueSoFulfilment, which takes EVERY open line of the order. → the words for the alert.
-    const queueShipmentFulfilment = async (d, { gate = true } = {}) => {
-        const ref = `${packRef(d)} shipment ${d.shipmentNo || ''}`;
-        const refDoc = doc(db, 'hq_sales_orders', d.id);
-        // The PARENT's NetSuite order, carried as `shipmentOfNsId` (App Improvement 2026-10-20: a child under `nsInternalId` would be
-        // what the Payments callable's limit(1) finds, and the parent's card money would count as zero).
-        const nsSoId = nsSoIdOfRecord(d);
-        try {
-            if (gate) {
-                const g = await gateShipment({ nsSoId, refs: [refDoc], ref, shippingNow: Number(d.shipmentAmount) || 0 });
-                if (!g.clear) return shipHoldNoteOf(g);
-            }
-            const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: soLinesSql(nsSoId) } });
-            const jq = await rq.json();
-            if (!rq.ok) throw new Error(`could not read the sales order lines — ${JSON.stringify(jq).slice(0, 200)}`);
-            const open = fulfilmentItemsOf(jq.items || []);
-            if (!open.ok) { await updateDoc(refDoc, { nsFulfillRefused: open.reason }); writeLog(`⚠ Fulfilment NOT queued for ${ref} — ${open.reason}`, 'alert'); return `\n\n⚠ ${refusalText(open)}`; }
-            const scoped = shipmentFulfilItemsOf({ items: open.items, rows: jq.items || [], lines: d.lines || [], bin: d.fulfilFromBin || '' });
-            if (!scoped.ok) {
-                await updateDoc(refDoc, { nsFulfillRefused: scoped.reason });
-                const w = `NetSuite has no open line for ${scoped.missing.map(m => m.code).join(', ')} — the fulfilment was NOT queued; fulfil ${ref} by hand in NetSuite.`;
-                writeLog(`⚠ ${w}`, 'alert');
-                return `\n\n⚠ ${w}`;
-            }
-            await enqueueNsWrite({
-                kind: 'itemfulfillment', dedupeKey: `if:${nsSoId}:s${d.shipmentNo || 0}`,
-                label: `NS Fulfillment — ${ref} (${d.customer || ''}) from ${d.fulfilFromBin || '—'}`,
-                sourceApp: 'WMS', createdBy: operator?.name || '',
-                // ITS lines, from the order's bin — replacing the bin NetSuite fills in itself (Shared/fulfilmentBins).
-                targetUrl: fulfilmentTargetOf(nsSoId, scoped.items), method: 'POST',
-                payload: { shipStatus: { id: 'B' }, memo: nsMemo(`Shipment ${d.shipmentNo || ''} of ${d.shipmentOfSoId || ''} — packed in app by ${operator?.name || 'Packer'}`), item: { items: scoped.items } },
-                writeBack: [{ collection: 'hq_sales_orders', docId: d.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }],
-            });
-            await updateDoc(refDoc, { nsFulfillQueued: true, nsFulfillNeedsBins: false, nsFulfillRefused: null });
-            writeLog(`📤 Fulfilment queued for ${ref} — ${scoped.items.length} NetSuite line${scoped.items.length === 1 ? '' : 's'} from ${d.fulfilFromBin || '—'}${scoped.missing.length ? ` · ⚠ no open NetSuite line for ${scoped.missing.map(m => m.code).join(', ')}` : ''}`, 'packing');
-            return `\n\n📤 NetSuite Item Fulfillment queued for these lines only (status: Packed). It ships from the FULFILMENT tab.${scoped.missing.length ? `\n\n⚠ NetSuite has no open line for ${scoped.missing.map(m => m.code).join(', ')} — check the order in NetSuite.` : ''}`;
-        } catch (e) { return `\n\n⚠ Could not queue the NetSuite fulfilment for ${ref}: ${e.message || e}. The shipment stands — press Send on its line under the order, or fulfil it in NetSuite.`; }
-    };
+    // THE SHIPMENT'S FULFILMENT — Shared/launchShipment.queueShipmentFulfilment (ITS lines only, from the parent's bin, after the
+    // terms gate with the part-payment rule), with this screen's gate and log. Never queueSoFulfilment for a shipment.
+    const queueShipmentFulfilment = (d, { gate = true } = {}) => queueShipmentFulfilmentShared({
+        child: d, nsProxyFetch, by: operator?.name || '', sourceApp: 'WMS', log: writeLog,
+        gate: gate ? (args) => gateShipment(args) : null,
+    });
     const completePacking = async (job) => {
         if (packCompletingRef.current) return;
         if (job.packStatus === 'Packed') return alert('This order is already packed.');

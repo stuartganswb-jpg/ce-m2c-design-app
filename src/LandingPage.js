@@ -90,6 +90,14 @@ const LandingPage = () => {
 
           <HubButton 
             theme={theme}
+            number="06.5"
+            title="Uniquity Pick & Pack"
+            subtitle="The Uniquity team's own pick, pack & ship"
+            onClick={() => navigate('/uniquity-pickpack')}
+          />
+
+          <HubButton 
+            theme={theme}
             number="07"
             title="Time Clock"
             subtitle="Clock in · lunch · clock out"

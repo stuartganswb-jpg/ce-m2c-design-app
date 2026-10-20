@@ -67,11 +67,36 @@ amount of the balance order it is fine to ship first part."
    Named, not fixed: the WMS does not read a making line's `noPack` (a pillow's fabric line sits on the pick / pack
    bench of an undecided order today; a decided order's plan leaves it off).
 
-## Phase 3 — the Uniquity pick / pack / fulfilment walk-through
-After phase 2: one real mixed order (throw + pillow) run through Launch → ship ahead → pick → pack → fulfilment #1 →
-sewing → second pick → fulfilment #2, watched on 11.1 and in NetSuite.
+## Phase 3 — the Uniquity pick channel (2026-10-20): /uniquity-pickpack
+Stuart, before the first Ship ahead was pressed: "we need a separate pick/pack for uniquity, it is a totally different
+team that pulls and ships these from the classical team. it is simple as we just need a pick channel for these orders
+above that are clicked ok to ship, it appears in order for them, by order/customer and they click the block need to
+mark each one packed and eventually marked each one shipped." Decisions: **own page (/uniquity-pickpack, the counter's
+PIN, hub tile 06.5) · UPS exactly as Classical with a different UPS account per brand (Payments' per-brand accounts on
+the 9.5 UPS page — asked) · a pillow is in hand once Stitch & Sew says Complete · keep every step clean and simple.**
+
+- Rules: `Shared/uniquityPickPack` (pure, harness 12). One block per Uniquity stocked order, oldest first: **TO PACK**
+  when every OK-to-ship line is in hand (shelf lines not held on 12.7; pillows whose sewing document — fin_workorders
+  division SEW, `soLineIdxs` — is Complete); **WAITING** with the reason (at Stitch & Sew · held on 12.7 · waiting for
+  12.7 to decide a mixed order · a quick-add to identify · NetSuite not yet accepted); **SHIP** once packed (the panel's
+  side). No order bin, no bin scans, no photos: "in hand" is the block's word; the fulfilment takes from the item's bin.
+- The PACKED press: a whole order writes the WMS's own packed stamp (`channelPackedPatchOf` — status Picked, packStatus
+  Packed, every line ticked, `packedFrom: 'UNIQ_PICKPACK'`) then the terms gate and the ONE fulfilment queue
+  (Shared/fulfilmentQueue.queueSoFulfilment, bins asked when NetSuite holds an item in several). A partial (released
+  lines while pillows are still sewn, or a line held by hand) is the SAME shipment child the WMS makes —
+  `Shared/launchShipment` (writeShipment · queueShipmentFulfilment · gateShipmentWith), lifted out of PickPackApp so
+  both screens run one code path.
+- The SHIP side mounts the Payments session's FulfilmentPanel with brand uniquity (UPS rate, label, tracking, void,
+  NetSuite shipped) over the packed Uniquity orders and shipment children; a held one shows Check again / Release
+  (manager) above it, with the WMS's stamps.
+- Named: the per-brand UPS account is Payments' (asked 2026-10-20); until it lands the page ships on today's account.
+  The live walk-through (a real mixed order through 12.7 → this page → shipment 1 → sewing → the last pack) is still to
+  run; nothing has moved live yet.
 
 ## Open decisions (Stuart)
 - (decided 2026-10-20) S7 built phase 2 with the App Improvement clearance; the part-payment rule is the 50% rule above —
   confirm the reading: "remaining funds from deposit" = paid − the part shipping now; "the balance order" = total − that part.
+- A shipment child (QS-SHP-<SO>-nn) is a QUICKSHIP record on hq_sales_orders, so RTG lists it as a stocked order of its
+  own ("Shipment n of SO…"). App Improvement (2026-10-20): RTG is the spine — do not hide it; show it under its parent or
+  fold it into the parent's card. RTGDispatchTab is the RTG session's; Stuart decides, that session applies.
 - CPQ orders on Launch (partsList, not lines[]) — phase 4 if wanted; today Launch lists Order Entry / counter orders.
