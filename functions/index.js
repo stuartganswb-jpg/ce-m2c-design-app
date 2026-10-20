@@ -285,8 +285,9 @@ exports.netsuiteProxy = onRequest({
         // 🛡️ AuthN/AuthZ — this proxy OAuth-signs with server-held NetSuite secrets, so it must
         // never be an open relay. Require BOTH:
         //   1. A valid App Check token (proves the call originates from our registered app, not curl).
-        //   2. A valid Firebase ID token (proves a signed-in user — any PIN-minted token qualifies).
-        // Both are attached by the shared client helper (src/components/Shared/nsProxy.js).
+        //   2. A valid Firebase ID token (proves a signed-in user — any PIN-minted token qualifies)…
+        //   3. …that is not a portal customer's (below).
+        // Both tokens are attached by the shared client helper (src/components/Shared/nsProxy.js).
         const appCheckToken = req.header('X-Firebase-AppCheck');
         if (!appCheckToken) {
             return res.status(401).send({ error: 'Missing App Check token.' });
@@ -302,10 +303,19 @@ exports.netsuiteProxy = onRequest({
         if (!idToken) {
             return res.status(401).send({ error: 'Missing authentication token.' });
         }
+        let decoded;
         try {
-            await admin.auth().verifyIdToken(idToken);
+            decoded = await admin.auth().verifyIdToken(idToken);
         } catch (e) {
             return res.status(401).send({ error: 'Invalid authentication token.' });
+        }
+        //   3. NOT A PORTAL CUSTOMER'S LOGIN (Plan D — Stuart's go 2026-10-20). Customers sign in with the same Firebase Auth
+        //      as staff and carry a 'customer' claim (createPortalUser). The database rules refuse that claim on every
+        //      collection (firestore.rules isAuth) and the UPS functions refuse it (assertStaffUser) — this is the same test,
+        //      so a customer's login, valid as it is, can never sign a NetSuite call. No role is required here: every staff
+        //      and floor login, PIN-minted or not, goes through exactly as before.
+        if (decoded && Object.prototype.hasOwnProperty.call(decoded, 'customer')) {
+            return res.status(403).send({ error: 'Portal logins cannot reach NetSuite.' });
         }
 
         const { targetUrl, method, payload } = req.body;
