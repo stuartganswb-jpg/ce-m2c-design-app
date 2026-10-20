@@ -19,7 +19,7 @@
 // back to the floor (Shared/orderLifecycle.sendBackToFloor — the same reset as the WMS Packing Station and HQ Stock View),
 // on the screens that hand the search their signed-in `operator` (the finishing floor and the WMS). Everything else in the
 // popup stays read-only; the 🔨 build repair still lives on the RTG card.
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, updateDoc, deleteField, addDoc, serverTimestamp } from 'firebase/firestore';
 import { orderStatusOf, stageLabel, stageTone, gateSummary } from './orderStatus';
@@ -91,6 +91,26 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, poleRecipe
     const [showAll, setShowAll] = useState(false);
     const [busy, setBusy] = useState(false);
     const loadSeq = useRef(0);
+    // THE CARD STAYS ON SCREEN (Stuart 2026-10-20: "when opens the details go off far to right, can you have menu move over to
+    // left so we can still see all of it on screen"). It opens from the search box's left edge; a search sitting near the
+    // right of the page (the finishing floor, the WMS header) pushed the 560px card past the window. Measured when it opens
+    // and on resize: slid left by exactly the overflow, never past the left edge. Where it fits, it opens where it always did.
+    const wrapRef = useRef(null);
+    const [shiftX, setShiftX] = useState(0);
+    const measure = useCallback(() => {
+        const el = wrapRef.current;
+        if (!el || typeof window === 'undefined') return;
+        const r = el.getBoundingClientRect();
+        const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
+        const over = r.left + Math.min(560, vw * 0.92) - (vw - 8);
+        setShiftX(over > 0 ? -Math.min(over, Math.max(0, r.left - 8)) : 0);
+    }, []);
+    useEffect(() => {
+        if (!open) return undefined;
+        measure();
+        window.addEventListener('resize', measure);
+        return () => window.removeEventListener('resize', measure);
+    }, [open, measure]);
     const canReset = !!operator && (isFloorSupervisor(operator, users) || normRole(operator.role) === 'executive');
     const poleLenOf = (o) => (typeof poleRecipeLenOf === 'function' ? poleRecipeLenOf(o) : undefined);
 
@@ -230,7 +250,7 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, poleRecipe
     const hidden = hits.hidden + extraHits.hidden;
 
     return (
-        <div style={{ position: 'relative', minWidth: compact ? '220px' : '300px' }}>
+        <div ref={wrapRef} style={{ position: 'relative', minWidth: compact ? '220px' : '300px' }}>
             <input
                 value={q}
                 onChange={e => { setQ(e.target.value); setOpen(true); }}
@@ -239,7 +259,7 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, poleRecipe
                 style={{ width: '100%', boxSizing: 'border-box', padding: compact ? '8px 10px' : '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--mono)', fontSize: '11px', background: '#fff' }}
             />
             {open && q.trim().length >= 2 && (
-                <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 900, width: 'min(560px, 92vw)', background: '#fff', border: '1px solid var(--line)', boxShadow: '0 10px 40px rgba(0,0,0,.18)', maxHeight: '60vh', overflowY: 'auto' }}>
+                <div style={{ position: 'absolute', top: '100%', left: shiftX, zIndex: 900, width: 'min(560px, 92vw)', background: '#fff', border: '1px solid var(--line)', boxShadow: '0 10px 40px rgba(0,0,0,.18)', maxHeight: '60vh', overflowY: 'auto' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>
                         <span>{shown ? `${shown} open match${shown === 1 ? '' : 'es'}` : 'no open match on this screen'}</span>
                         <button onClick={() => { setQ(''); setOpen(false); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>close</button>
