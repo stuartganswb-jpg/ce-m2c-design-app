@@ -2999,6 +2999,12 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                                     No position-tagged bracket steps in this brand's flows — both lists show every bracket.
                                 </div>
                             )}
+                            {/* NO SPAN CHECKS HERE — said, so nobody expects them (Stuart 2026-10-20: "better with no checks and state that only
+                                cpq performs them, as this screen will be used to order individual pieces or multiples of poles and brackets on
+                                their own"). The checks are hardwareSession's (bracketAdviceOf / supportShortfallOf / the splice gate), run by CPQ. */}
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.06em', marginTop: '-6px', paddingLeft: '120px' }}>
+                                Bracket spacing, center brackets and splices are checked in CPQ only — Order Entry orders poles and brackets as pieces, exactly as entered.
+                            </div>
                             <KitSlot title="Ring" items={rings} idKey="ringId" qtyKey="ringQty" />
                             <KitSlot title="Finial" items={finials} idKey="finialId" qtyKey="finialQty" />
 
