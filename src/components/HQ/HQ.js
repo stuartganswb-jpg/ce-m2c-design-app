@@ -32,6 +32,7 @@ const ERPPushPullTab = lazy(() => import('./ERPPushPullTab'));
 const StockViewTab = lazy(() => import('./StockViewTab'));
 const ErpMappingAudit = lazy(() => import('./ErpMappingAudit'));
 const RTGDispatchTab = lazy(() => import('./RTGDispatchTab'));
+const LaunchTab = lazy(() => import('./LaunchTab'));   // 12.7 — the day's stocked orders, decided line by line (S7, 2026-10-20)
 const QuickShipTab = lazy(() => import('./QuickShipTab'));
 const AssemblyBuilderTab = lazy(() => import('./AssemblyBuilderTab'));
 
@@ -63,7 +64,7 @@ const TAB_LABELS = {
 const TABS = [
   '1. Inception & Validation', '1.2 Control Sheets', '1.5 Node Grouping', '1.6 Assembly Builder', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update', '4.6 Customer Collections', '4.7 Flow Stock',
   '5. Marketing', '6. Instructions', '6.5 Tools, Specs & FAQs', '7. Quick Ship', '8. CPQ Configurator',
-  '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '11.1 NetSuite Sync', '11.2 ERP Mapping Audit', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
+  '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '11.1 NetSuite Sync', '11.2 ERP Mapping Audit', '12. ERP Push / Pull', '12.5 Stock View', '12.7 Launch', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', '15. Packaging', 'App Imp.', 'User Guide', 'ERP_WRITE_BACK'
 ];
 
@@ -513,6 +514,7 @@ function HQ() {
                 />
             )}
             
+            {activeTab === '12.7 Launch' && <LaunchTab currentUser={user.name} activeBrand={activeBrand.id} userRole={safeUserRole} />}
             {activeTab === '13. RTG Dispatch' && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} userRole={safeUserRole} />}
             {activeTab === '14. Asset Gallery' && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '14.5 Batch Processor' && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
