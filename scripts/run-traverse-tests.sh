@@ -1,33 +1,19 @@
 #!/bin/sh
-# Run the traverse model + generator tests.
+# Run every node suite in scripts/ (*.test.mjs) — the traverse model + generator tests and every newer one.
 #
 # Firestore enforces App Check and the app is behind a PIN gate, so nothing can drive the real app
 # from a script — pure modules + node tests are the only verification available for this feature.
-# The modules are plain ESM but live in a CRA package (no "type": "module"), so node cannot import
-# the .js files directly. Stage them as .mjs in a temp dir, fix the extensionless internal imports,
-# and run there.
+# EVERY SUITE READS THE APP'S OWN FILES where they live ('../src/components/…js', through
+# scripts/_lib/extless-hook.mjs for the CRA files that leave ".js" off) and runs from the REPO ROOT.
+# (2026-10-20: the traverse family used to run from .mjs copies staged here, their imports rewritten by
+# sed — once two modules imported './traverseExplode.js' and './nodeList.js' the copies could not load,
+# and those six suites had stopped running. They read the source now, like every newer suite.)
 #
 #   sh scripts/run-traverse-tests.sh
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
-
-for f in traverseTags traverseFlow traverseKitImport nodeList priceLevels kitCode traverseExplode traverseConfigurator; do
-    sed -e "s#from '\./traverseTags'#from './traverseTags.mjs'#" \
-        -e "s#from '\./nodeList'#from './nodeList.mjs'#" \
-        -e "s#from '\./traverseExplode'#from './traverseExplode.mjs'#" \
-        -e "s#from '\./kitCode'#from './kitCode.mjs'#" \
-        "$ROOT/src/components/Shared/$f.js" > "$OUT/$f.mjs"
-done
-# TWO KINDS OF TEST FILE (Brief F, 2026-09-03). The traverse family imports the STAGED copies
-# ('./traverseFlow.mjs'); every newer suite imports the source directly ('../src/components/…js')
-# and must run from the REPO ROOT, where that path exists. Copying the second kind in here made
-# fifteen suites fail on path alone while every one of them passed from the root.
-ROOTTESTS=""
-for t in "$ROOT"/scripts/*.test.mjs; do
-    if grep -q "from '\.\./src/" "$t"; then ROOTTESTS="$ROOTTESTS $t"; else cp "$t" "$OUT/"; fi
-done
 
 # The kit-import tests run against the REAL Fabricut sheet when it is present — extracted to JSON
 # here because node has no xlsx reader. Absent sheet = those tests skip, the rest still run.
@@ -49,7 +35,6 @@ json.dump(sheets, open(sys.argv[2], 'w'), default=str)
 PYEOF
 fi
 
-status=0
-(cd "$OUT" && node --test ./*.test.mjs) || status=1
-if [ -n "$ROOTTESTS" ]; then (cd "$ROOT" && node --test $ROOTTESTS) || status=1; fi
-exit $status
+# (KIT_SHEET names the extracted sheet for the suites that read it)
+if [ -f "$OUT/kit_sheet.json" ]; then KIT_SHEET="$OUT/kit_sheet.json"; export KIT_SHEET; fi
+cd "$ROOT" && node --test scripts/*.test.mjs

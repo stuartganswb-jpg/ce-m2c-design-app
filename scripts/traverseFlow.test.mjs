@@ -3,11 +3,13 @@
 // gate, so a pure-module test on the real tag shapes is the only verification available.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTraverseFlow, isTraverseAssembly, projectionsOffered } from './traverseFlow.mjs';
+import { register } from 'node:module';
+register('./_lib/extless-hook.mjs', import.meta.url);   // the app's own files, where they live (2026-10-20 — this suite ran from staged .mjs copies the runner could no longer make)
+const { buildTraverseFlow, isTraverseAssembly, projectionsOffered } = await import('../src/components/Shared/traverseFlow.js');
 // Node lists are joined by Shared/nodeList (pipe-delimited since c9e3755, comma-safe) — tests
 // assert through its splitter rather than a hardcoded separator, so a delimiter change never
 // breaks them again.
-import { splitNodes } from './nodeList.mjs';
+const { splitNodes } = await import('../src/components/Shared/nodeList.js');
 
 // ── Fixture: his tag dump, in post-groupPlacements option shape ──────────────────────────────────
 const opt = (o) => ({ price: 0, position: '', targetNode: `N-${o.optId}`, ...o });
@@ -133,7 +135,7 @@ test('SINGLE is the default — the standard build, not the one that happens to 
 });
 
 test('the base track survives BOTH setups — it is never filtered out of its own picker', async () => {
-    const { setupAllows } = await import('./traverseTags.mjs');
+    const { setupAllows } = await import('../src/components/Shared/traverseTags.js');
     const base = other.find(o => o.optId === 'TRK-S');   // tagged setup: single
     assert.equal(setupAllows(base, 'SINGLE'), true);
     // a double HAS the base track too. Filtering it here emptied the one-option Track picker the

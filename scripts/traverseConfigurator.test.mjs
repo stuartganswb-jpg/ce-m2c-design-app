@@ -3,12 +3,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { configuratorOffer, configuratorLines, configuratorTotal } from './traverseConfigurator.mjs';
-import { parseTraverseKitSheets } from './traverseKitImport.mjs';
+import { register } from 'node:module';
+register('./_lib/extless-hook.mjs', import.meta.url);   // the app's own files, where they live (2026-10-20 — this suite ran from staged .mjs copies the runner could no longer make)
+const KIT_SHEET = process.env.KIT_SHEET || './kit_sheet.json';   // the Fabricut sheet as JSON (run-traverse-tests.sh extracts it when the .xlsx is present)
+const { configuratorOffer, configuratorLines, configuratorTotal } = await import('../src/components/Shared/traverseConfigurator.js');
+const { parseTraverseKitSheets } = await import('../src/components/Shared/traverseKitImport.js');
 
-const HAVE = existsSync('./kit_sheet.json');
+const HAVE = existsSync(KIT_SHEET);
 const skip = HAVE ? false : 'Fabricut/Aug12/Fabricut_Traverse.xlsx not present';
-const rules = HAVE ? parseTraverseKitSheets(JSON.parse(readFileSync('./kit_sheet.json', 'utf8'))).rules : null;
+const rules = HAVE ? parseTraverseKitSheets(JSON.parse(readFileSync(KIT_SHEET, 'utf8'))).rules : null;
 const PRICES = { 'HTRF80-500': 0.5, 'HTSLNTCAR': 0.5, 'HSOM-40': 220, 'HSOM-19': 78, 'HMTCL/01': 3.25 };
 const priceOf = (id) => PRICES[id] ?? 1;
 
@@ -69,7 +72,7 @@ test('the splice follows the chart: charged on a 9ft set, included on an 11ft on
 });
 
 test('defaults: end stops 2 per track, splice pre-set only where the chart includes it', { skip }, async () => {
-    const { defaultPicks } = await import('./traverseConfigurator.mjs');
+    const { defaultPicks } = await import('../src/components/Shared/traverseConfigurator.js');
     const single9 = defaultPicks({ rules, drive: 'MANUAL', feet: 9, trackCount: 1 });
     assert.equal(single9['HTTENDSTOP'], 2);
     assert.equal(single9['H1-2TRVSPLC'], undefined);   // 9ft: not included, operator adds AND pays

@@ -5,10 +5,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { parseTraverseKitSheets, diffTraverseKits, kitPricingRow, BILLABLE_ACCESSORY_SEED } from './traverseKitImport.mjs';
+import { register } from 'node:module';
+register('./_lib/extless-hook.mjs', import.meta.url);   // the app's own files, where they live (2026-10-20 — this suite ran from staged .mjs copies the runner could no longer make)
+const KIT_SHEET = process.env.KIT_SHEET || './kit_sheet.json';   // the Fabricut sheet as JSON (run-traverse-tests.sh extracts it when the .xlsx is present)
+const { parseTraverseKitSheets, diffTraverseKits, kitPricingRow, BILLABLE_ACCESSORY_SEED } = await import('../src/components/Shared/traverseKitImport.js');
 
-const HAVE = existsSync('./kit_sheet.json');
-const parsed = HAVE ? parseTraverseKitSheets(JSON.parse(readFileSync('./kit_sheet.json', 'utf8'))) : null;
+const HAVE = existsSync(KIT_SHEET);
+const parsed = HAVE ? parseTraverseKitSheets(JSON.parse(readFileSync(KIT_SHEET, 'utf8'))) : null;
 const skip = HAVE ? false : 'Fabricut/Aug12/Fabricut_Traverse.xlsx not present';
 
 test('every Base Set row becomes a kit; Base Plus Motor rows become codes, not kits', { skip }, () => {
@@ -221,7 +224,7 @@ test('diff and pricing rows carry the family, so the apply writes the right kitF
 });
 
 test('a workbook without the H1-138TRV tab parses exactly as before — one family', { skip }, () => {
-    const one = parseTraverseKitSheets(JSON.parse(readFileSync('./kit_sheet.json', 'utf8')).filter(s => s.name !== 'H1-138TRV'));
+    const one = parseTraverseKitSheets(JSON.parse(readFileSync(KIT_SHEET, 'utf8')).filter(s => s.name !== 'H1-138TRV'));
     assert.equal(one.families.length, 1);
     assert.equal(one.kits.length, 30);
     assert.ok(!one.warnings.some(w => /138TRV/.test(w)));

@@ -5,7 +5,9 @@
 // follows the pricing rules for the /P and /EP."
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fabricutPriceOf, customerPriceLevel } from './priceLevels.mjs';
+import { register } from 'node:module';
+register('./_lib/extless-hook.mjs', import.meta.url);   // the app's own files, where they live (2026-10-20 — this suite ran from staged .mjs copies the runner could no longer make)
+const { fabricutPriceOf, customerPriceLevel } = await import('../src/components/Shared/priceLevels.js');
 
 const BASE = {
     legacyErpId: 'H1-2TRV-EWB',

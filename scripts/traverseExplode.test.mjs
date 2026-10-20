@@ -4,14 +4,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { explodeTraverse, usageAt, singleProjections, projLabel } from './traverseExplode.mjs';
-import { parseTraverseKitSheets } from './traverseKitImport.mjs';
-import * as KI from './traverseKitImport.mjs';
-import { TRAVERSE_FAMILY_PARTS } from './traverseExplode.mjs';
+import { register } from 'node:module';
+register('./_lib/extless-hook.mjs', import.meta.url);   // the app's own files, where they live (2026-10-20 — this suite ran from staged .mjs copies the runner could no longer make)
+const KIT_SHEET = process.env.KIT_SHEET || './kit_sheet.json';   // the Fabricut sheet as JSON (run-traverse-tests.sh extracts it when the .xlsx is present)
+const { explodeTraverse, usageAt, singleProjections, projLabel } = await import('../src/components/Shared/traverseExplode.js');
+const { parseTraverseKitSheets } = await import('../src/components/Shared/traverseKitImport.js');
+const KI = await import('../src/components/Shared/traverseKitImport.js');
+const { TRAVERSE_FAMILY_PARTS } = await import('../src/components/Shared/traverseExplode.js');
 
-const HAVE = existsSync('./kit_sheet.json');
+const HAVE = existsSync(KIT_SHEET);
 const skip = HAVE ? false : 'Fabricut/Aug12/Fabricut_Traverse.xlsx not present';
-const rules = HAVE ? parseTraverseKitSheets(JSON.parse(readFileSync('./kit_sheet.json', 'utf8'))).rules : null;
+const rules = HAVE ? parseTraverseKitSheets(JSON.parse(readFileSync(KIT_SHEET, 'utf8'))).rules : null;
 const A = (over = {}) => ({ setup: 'SINGLE', frontRail: 'TRACK', drive: 'MANUAL', mount: 'WALL', material: 'P', minFeet: 4, ...over });
 const q = (r, code) => r.lines.find(l => l.code === code)?.qty;
 

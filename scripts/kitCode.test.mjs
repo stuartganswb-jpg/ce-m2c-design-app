@@ -6,8 +6,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { parseKitCode, matchKit, resolveKitCode, kitCodeFor, describeKitAlign, axesKeyOf, kitForMount, motorCodeFor } from './kitCode.mjs';
-import { parseTraverseKitSheets } from './traverseKitImport.mjs';
+import { register } from 'node:module';
+register('./_lib/extless-hook.mjs', import.meta.url);   // the app's own files, where they live (2026-10-20 — this suite ran from staged .mjs copies the runner could no longer make)
+const KIT_SHEET = process.env.KIT_SHEET || './kit_sheet.json';   // the Fabricut sheet as JSON (run-traverse-tests.sh extracts it when the .xlsx is present)
+const { parseKitCode, matchKit, resolveKitCode, kitCodeFor, describeKitAlign, axesKeyOf, kitForMount, motorCodeFor } = await import('../src/components/Shared/kitCode.js');
+const { parseTraverseKitSheets } = await import('../src/components/Shared/traverseKitImport.js');
 
 test('hand-picked codes parse to their known meanings', () => {
     assert.deepEqual(parseKitCode('H1-2TRV-4/P').align,
@@ -32,9 +35,9 @@ test('describe reads like the CSR needs it to', () => {
 });
 
 // ── round-trip against the real sheet ────────────────────────────────────────────────────────────
-const HAVE = existsSync('./kit_sheet.json');
+const HAVE = existsSync(KIT_SHEET);
 const skip = HAVE ? false : 'Fabricut/Aug12/Fabricut_Traverse.xlsx not present';
-const parsed = HAVE ? parseTraverseKitSheets(JSON.parse(readFileSync('./kit_sheet.json', 'utf8'))) : null;
+const parsed = HAVE ? parseTraverseKitSheets(JSON.parse(readFileSync(KIT_SHEET, 'utf8'))) : null;
 // the shape the library holds after import: kitAlign + kitMotorCodes on manufacturingSpecs
 const lib = HAVE ? parsed.kits.map(k => ({
     legacyErpId: k.code, itemId: k.code, partClass: 'Kit',
