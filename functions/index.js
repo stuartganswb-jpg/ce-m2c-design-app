@@ -1644,7 +1644,7 @@ exports.portalConfigRequest = onCall({ cors: true, memory: '512MiB' }, async (re
     const jobName = built.length === 1
         ? `${first.flow.name || 'Portal request'} — ${crm.name || ''}`.trim()
         : `Portal order (${built.length} configurations) — ${crm.name || ''}`.trim();
-    await db.collection('jobs').doc(quoteNo).set({
+    const record = {
         jobId: quoteNo,
         quoteNo,
         brandId: crm.brandId || null,
@@ -1673,9 +1673,16 @@ exports.portalConfigRequest = onCall({ cors: true, memory: '512MiB' }, async (re
         },
         // (through JSON: a cart line may carry an undefined field, which Firestore refuses)
         cpqData: { cartItems: JSON.parse(JSON.stringify(cartItems)) },
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
         dateSaved: new Date().toISOString(),
-    });
+    };
+    // THE CUSTOMER'S PICTURE OF EACH LINE (step 5, Stuart 2026-10-20): the view as they left it at Add, kept where CPQ keeps its
+    // own (renderSnapshot) — so the request's documents and a reopen in CPQ show what they built. Checked as a JPEG
+    // (portalSession.pictureOf) and kept in line order while the one document stays under Firestore's limit; never a refusal.
+    const pictures = portalSession.picturesThatFit(rawLines.map((ln) => portalSession.pictureOf(ln.picture)), Buffer.byteLength(JSON.stringify(record)));
+    pictures.forEach((pic, i) => { if (pic && record.cpqData.cartItems[i]) record.cpqData.cartItems[i].renderSnapshot = pic; });
+    const leftOff = rawLines.filter((ln, i) => ln.picture && !pictures[i]).length;
+    if (leftOff) console.info(`portalConfigRequest ${quoteNo}: ${leftOff} picture(s) left off — not a JPEG, or past the size the request can hold`);
+    await db.collection('jobs').doc(quoteNo).set({ ...record, createdAt: admin.firestore.FieldValue.serverTimestamp() });
     return { ok: true, id: quoteNo, quoteNo, lineCount: built.length };
 });
 

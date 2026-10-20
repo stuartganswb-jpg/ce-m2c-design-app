@@ -38,6 +38,10 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
   const [riskCheck, setRiskCheck] = useState(false);
   const seq = useRef(0);
   const typing = useRef(false);
+  // THE PICTURE AT ADD (step 5, Stuart 2026-10-20): the stage hands over a function that takes the view as it stands (CPQ's picture
+  // at Add); the line carries it, and a request reopened in CPQ shows it. Stable, so the stage's effect does not re-fire each render.
+  const captureRef = useRef(null);
+  const registerCapture = useRef((fn) => { captureRef.current = fn; }).current;
 
   const steps = view ? view.steps : [];
   const ix = Math.max(0, steps.findIndex((s) => s.key === stepKey));
@@ -129,7 +133,9 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
     const confirmed = typeof confirmedKey === 'string' ? confirmedKey : a.riskConfirmed;
     if (r && r.key !== confirmed) { setRiskAsk({ r, then: 'add' }); return; }
     const sent = { ...a, riskConfirmed: confirmed || '' };
-    onAdd({ flowId: flow.id, flowName: flow.name, state: wireOf(sent), memo: a.memo, qty: Math.max(1, parseInt(a.qty, 10) || 1), shown: shownOf(view) });
+    // No picture (no 3D view on this device, or it failed) is no reason to stop: the line is the answers, the picture a courtesy.
+    const picture = (() => { try { return captureRef.current ? captureRef.current() : null; } catch (_) { return null; } })();
+    onAdd({ flowId: flow.id, flowName: flow.name, state: wireOf(sent), memo: a.memo, qty: Math.max(1, parseInt(a.qty, 10) || 1), shown: shownOf(view), picture: picture || null });
     setAdded({ memo: a.memo || flow.name, editing: !!editing });
     if (!editing) { setA(blankAnswers()); setStepKey(''); setScopePick(null); }
   };
@@ -428,7 +434,7 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
             <div className="cf-side">
               <div className="cf-stage">
                 <Suspense fallback={<div className="cf-stage-msg">Loading the 3D view…</div>}>
-                  <ConfigStage cadUrl={cadUrl} render={view.render} />
+                  <ConfigStage cadUrl={cadUrl} render={view.render} onCapture={registerCapture} />
                 </Suspense>
                 <span className="cf-stage-hint">Drag to rotate · scroll to zoom</span>
               </div>

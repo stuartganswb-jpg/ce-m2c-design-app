@@ -1,6 +1,8 @@
 // THE REQUEST BEING BUILT — several configurations, one request (step 4, 2026-10-14). Kept in this browser, per login, so a
 // refresh mid-order loses nothing. A line holds the customer's ANSWERS and what they were shown when they added it; it is
 // never a price: the server works every line out again when the request is sent, and HQ quotes it at the account's level.
+// It also holds `picture`, the 3D view as they left it at Add (step 5, 2026-10-20) — sent with the request, kept by HQ as the
+// cart line's renderSnapshot.
 
 const KEY = (uid) => `portal_config_request_v1:${uid || 'anon'}`;
 

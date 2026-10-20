@@ -192,6 +192,25 @@ export const openQuoteCopyInCpq = (copy, { brand = '' } = {}) => {
     return true;
 };
 
+// ── WHAT THE CUSTOMER SAID, CARRIED INTO CPQ (step 5 of the portal rebuild, Stuart 2026-10-20) ────────────────────────
+// A portal request nobody has priced yet (PORTAL_REQUEST and no saved breakdown — the CRM's own "unpriced request" test)
+// reopens with the customer's note and each line's notes — fewer centre brackets than recommended, and whether the customer
+// confirmed the risk (the words Shared/portalRequestLines prints under the request) — in CPQ's internal memo, where the staff
+// pricing it work. Once the quote is saved its own memo is the truth (finalize writes the memo only when typed), so a memo
+// staff cleared is never filled again. One line: CPQ's memo is a one-line field. Pure — exported for the harness.
+export const portalRequestMemoOf = (job) => {
+    const pr = job && job.portalRequest;
+    if (!pr || job.status !== 'PORTAL_REQUEST' || ((job.cpqData && job.cpqData.breakdown) || []).length) return '';
+    const flat = (v) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+    const parts = [];
+    if (flat(pr.note)) parts.push(`Customer's note: ${flat(pr.note)}`);
+    (Array.isArray(pr.lines) ? pr.lines : []).forEach((l, i) => {
+        const notes = (Array.isArray(l && l.notes) ? l.notes : []).map(flat).filter(Boolean);
+        if (notes.length) parts.push(`Line ${i + 1}${flat(l.lineTag) ? ` (${flat(l.lineTag)})` : ''}: ${notes.join(' ')}`);
+    });
+    return parts.length ? `Portal request — ${parts.join(' · ')}` : '';
+};
+
 export const reopenQuoteInCpq = (job) => {
     const wrongDoor = wrongDoorReason(job, 'CPQ');
     if (wrongDoor) { alert(`⛔ Wrong door.\n\n${wrongDoor}`); return false; }
@@ -225,7 +244,8 @@ export const reopenQuoteInCpq = (job) => {
                 sidemark: job.orderSidemark || '',
                 poNumber: job.poNumber || '',
                 customerNumber: job.customerNumber || '',
-                internalMemo: job.internalMemo || '',
+                // …an unpriced portal request's: what its customer said (portalRequestMemoOf, step 5).
+                internalMemo: job.internalMemo || portalRequestMemoOf(job),
                 // The one header's two sales-side fields (Brief E): a quote saved before they
                 // existed reopens blank — never with an invented date.
                 needBy: job.needBy || '',

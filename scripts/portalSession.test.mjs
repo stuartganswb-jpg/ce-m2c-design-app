@@ -431,6 +431,27 @@ ok(`the set-ups take each road — lines ${t.lines}, refused ${JSON.stringify(t.
     ok(`…reached: rounded ${t3.rounded}, a short count with its key ${t3.risk} (confirmed ${t3.confirmed}, not ${t3.unconfirmed}), the gate ${t3.gate}`, t3.rounded > 5 && t3.risk > 3 && t3.confirmed === t3.risk && t3.unconfirmed === t3.risk && t3.gate > 3);
 }
 
+// THE CUSTOMER'S PICTURE OF A LINE (step 5, Stuart 2026-10-20): kept only as what it claims to be, a JPEG this size or smaller;
+// kept in line order while the one request document fits — never a refusal.
+{
+    const jpegOf = (n = 64) => `data:image/jpeg;base64,${Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), Buffer.alloc(n, 7), Buffer.from([0xFF, 0xD9])]).toString('base64')}`;
+    const J = jpegOf();
+    eq('a picture: a JPEG data URL is kept exactly as sent', P.pictureOf(J), J);
+    eq('…a PNG, a JPEG label on other bytes, a JPEG cut short, other bytes ending as a JPEG ends, text, a number and nothing are left off', [
+        P.pictureOf(`data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 0xFF, 0xD9]).toString('base64')}`),
+        P.pictureOf(`data:image/jpeg;base64,${Buffer.from('<svg onload=alert(1)>').toString('base64')}`),
+        P.pictureOf(J.slice(0, -8)),
+        P.pictureOf(`data:image/jpeg;base64,${Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(16, 7), Buffer.from([0xFF, 0xD9])]).toString('base64')}`),
+        P.pictureOf('hello'), P.pictureOf(42), P.pictureOf(null),
+    ], [null, null, null, null, null, null, null]);
+    eq('…anything after the picture (markup, a second URL) leaves it off', [P.pictureOf(`${J}"><script>alert(1)</script>`), P.pictureOf(`${J} data:image/jpeg;base64,AAAA`)], [null, null]);
+    eq('…and one past the size limit is left off', [P.pictureOf(jpegOf(Math.floor(P.PICTURE_MAX * 0.74))), P.pictureOf(jpegOf(Math.floor(P.PICTURE_MAX * 0.76)))].map((x) => !!x), [true, false]);
+    const a = 'a'.repeat(100), b = 'b'.repeat(300), c = 'c'.repeat(50);
+    eq('the request fits one document: pictures kept in line order while it fits — a later, smaller one still goes in', P.picturesThatFit([a, b, null, c], 0, 250), [a, null, null, c]);
+    eq('…a document already full keeps none, and nothing is never a picture', [P.picturesThatFit([a], 300, 250), P.picturesThatFit(null, 0)], [[null], []]);
+    eq('…the default limit sits under Firestore\'s 1 MiB', P.REQUEST_DOC_LIMIT < 1048576 && P.REQUEST_DOC_LIMIT > 500000, true);
+}
+
 eq('in line: the server\'s copy and the site\'s bundle carry the same engine and the same files — anything else is behind', [P.inLine(engine.stamp, { ...engine.stamp }), P.inLine(engine.stamp, { ...engine.stamp, closureHash: 'x' }), P.inLine(engine.stamp, { ...engine.stamp, engineVersion: 'y' }), P.inLine(engine.stamp, null), P.inLine(null, engine.stamp), P.inLine({ engineVersion: '', closureHash: '' }, { engineVersion: '', closureHash: '' })], [true, false, false, false, false, false]);
 
 rmSync(tmp, { recursive: true, force: true });

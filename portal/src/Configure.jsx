@@ -53,7 +53,7 @@ export default function Configure({ flows }) {
   const send = async () => {
     setSending(true); setTrouble(null);
     try {
-      const res = await sendRequest({ lines: basket.lines.map((l) => ({ flowId: l.flowId, state: l.state })), note: basket.note, sidemark: basket.sidemark });
+      const res = await sendRequest({ lines: basket.lines.map((l) => ({ flowId: l.flowId, state: l.state, picture: l.picture || null })), note: basket.note, sidemark: basket.sidemark });
       setSent({ quoteNo: res.quoteNo || res.id, count: basket.lines.length });
       save({ lines: [], sidemark: '', note: '' });
       setMode('sent');

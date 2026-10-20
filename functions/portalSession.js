@@ -354,9 +354,36 @@ function requestLineOf(engine, data, state, { level = 'STANDARD' } = {}) {
     return { refusal: null, item: s.item, effectiveLevel: s.effectiveLevel, total: money(s.grandTotal * s.qty), notes: shortNotesOf(engine, s, state) };
 }
 
+// ── THE CUSTOMER'S PICTURE OF A LINE (step 5 of the portal rebuild, Stuart 2026-10-20) ───────────────────
+// The portal takes the 3D view as it was left at Add (Shared/viewCapture — CPQ's own picture at Add) and sends it with the line;
+// the cart line keeps it as `renderSnapshot`, the field CPQ's lines carry theirs in and the quote documents print. A picture is
+// only ever kept as what it claims to be: a JPEG data URL, this size or smaller, whose bytes start and end as a JPEG's do.
+// Anything else is left off — never a refusal: the request is the answers; the picture is a courtesy.
+const PICTURE_MAX = 400000;   // characters of data URL (~290 KB of JPEG); a 900-px picture of the view runs far under it
+function pictureOf(raw) {
+    if (typeof raw !== 'string' || raw.length > PICTURE_MAX) return null;
+    const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/]+={0,2})$/.exec(raw);
+    if (!m) return null;
+    const b = Buffer.from(m[1], 'base64');
+    return (b.length > 4 && b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF && b[b.length - 2] === 0xFF && b[b.length - 1] === 0xD9) ? raw : null;
+}
+// …and the request is ONE Firestore document (1 MiB at most) holding every line. Pictures are kept in line order while the
+// document stays under `limit` bytes; one that would cross it is left off (a later, smaller one may still fit).
+const REQUEST_DOC_LIMIT = 900000;
+function picturesThatFit(pictures, baseBytes, limit = REQUEST_DOC_LIMIT) {
+    let used = Number(baseBytes) || 0;
+    return (Array.isArray(pictures) ? pictures : []).map((p) => {
+        if (!p) return null;
+        const n = Buffer.byteLength(p) + 32;
+        if (used + n > limit) return null;
+        used += n;
+        return p;
+    });
+}
+
 // ── IN LINE, OR BEHIND ───────────────────────────────────────────────────────────────────────
 // Functions are deployed by hand, the portal site on every push: after an engine change this server runs
 // the OLD engine until it is deployed. Two halves that disagree must not quote — said, never guessed.
 const inLine = (serverStamp, siteStamp) => !!serverStamp && !!siteStamp && !!serverStamp.closureHash && serverStamp.closureHash === siteStamp.closureHash && serverStamp.engineVersion === siteStamp.engineVersion;
 
-module.exports = { loadEngine, worldFor, trvFamilyOf, levelsFor, portalFinishesOf, stateFromClient, uiFromClient, flowIdsFor, viewOf, requestLineOf, inLine, Refused, REFUSAL_WORDS, SHOWABLE };
+module.exports = { loadEngine, worldFor, trvFamilyOf, levelsFor, portalFinishesOf, stateFromClient, uiFromClient, flowIdsFor, viewOf, requestLineOf, pictureOf, picturesThatFit, PICTURE_MAX, REQUEST_DOC_LIMIT, inLine, Refused, REFUSAL_WORDS, SHOWABLE };
