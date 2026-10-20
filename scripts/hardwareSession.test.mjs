@@ -521,6 +521,18 @@ const oldSlotLabel = (s) => {
     const parts = [(s.tier && !s.tierSolo) ? cap(s.tier) : '', s.position ? cap(s.position) : '', kind].filter(Boolean);
     return parts.join(' ');
 };
+// ⚠ DELIBERATE RULE CHANGE, 2026-10-20 (Stuart, found-not-fixed item 6): the pencil lines are as many as the pole has SPLICES — the count
+// its brackets are placed by (the session's `splice`, spliceInfoOf) — never one per joiner (a double rod's two joiners drew two lines on each
+// rod). The screen's code below (oldWalk / oldAdd) is handed these lines; everything else it draws and adds is still its own.
+const newMarksOf = (splice, drawnSplices, lengthInches) => {
+    const c = Number(splice && splice.count) || 0;
+    if (!c) return [];
+    const L = Number(lengthInches) || 0;
+    const at = splice.drawn ? drawnSplices.filter(sp => sp && sp.distInches != null && L > 0)
+        .map(sp => (String(sp.ref).toUpperCase() === 'END' ? 1 - Number(sp.distInches) / L : Number(sp.distInches) / L))
+        .filter(f => Number.isFinite(f)).map(f => Math.min(0.98, Math.max(0.02, f))) : [];
+    return at.length ? at.map(frac => ({ frac })) : Array.from({ length: c }, (_, i) => ({ frac: (i + 1) / (c + 1) }));
+};
 const oldWalk = ({ model, settledKeys, isTraverse, trvRules, sizeSteps, sizeProjInches, answers, livePicks, lengthFeet, lengthInches, ourId, trvLive, trvComponents, sizePick,
     offeredExtraItems, resolved, extras, spliceCodes, drawnSplices, quantities }) => {
     const visibleOverrides = (() => {
@@ -1353,7 +1365,7 @@ const FIN = [
     const WHO = [{ customer: null, customerId: '', priceLevel: 'STANDARD' }, { customer: { id: 'C-FAB', name: 'FABRICUT' }, customerId: 'C-FAB', priceLevel: 'STANDARD' }, { customer: { id: 'C-FAB', name: 'Fabricut', companyName: 'FABRICUT' }, customerId: 'C-FAB', priceLevel: 'FAB_RETAIL' },
         { customer: { id: 'CUST-BRIMAR', name: 'Brimar', defaultPriceLevel: 'fab_wholesale' }, customerId: 'CUST-BRIMAR', priceLevel: 'STANDARD' }, { customer: { id: 'CUST-BRIMAR', name: 'Brimar', defaultPriceLevel: 'STANDARD' }, customerId: 'CUST-BRIMAR', priceLevel: 'STANDARD' }];
     const tally = { compared: 0, differ: 0, kit: 0, switched: 0, followed: 0, nokit: 0, motor: 0, motorTwin: 0, missingKit: 0, byCode: 0, carriersStep: 0, billedComp: 0, itemKit: 0, unfinishedExtra: 0, matchedFee: 0, noPrice: 0, fallback: 0, defaulted: 0, chosen: 0, asking: 0, open: 0, onePiece: 0, perFoot: 0, stock: 0, covered: 0 };
-    const walk6 = { compared: 0, walk: 0, draw: 0, add: 0, kinds: {}, nested: 0, hints: 0, itemsOffStep: 0, notAsked: 0, refused: {}, lines: 0, shopNotes: 0, clientNotes: 0, ticksOnly: 0, onePiece: 0, multiples: 0, noModel: 0, drawnMarks: 0, spreadMarks: 0, clones: 0, stretch: 0, clear: 0, noRings: 0, noRod: 0, removals: 0, typed: 0, typedDiffer: 0, typedBeside: 0, goneNamed: 0, partsWrong: 0 };
+    const walk6 = { compared: 0, walk: 0, draw: 0, add: 0, kinds: {}, nested: 0, hints: 0, itemsOffStep: 0, notAsked: 0, refused: {}, lines: 0, shopNotes: 0, clientNotes: 0, ticksOnly: 0, onePiece: 0, multiples: 0, noModel: 0, drawnMarks: 0, spreadMarks: 0, marksMoved: 0, clones: 0, stretch: 0, clear: 0, noRings: 0, noRod: 0, removals: 0, typed: 0, typedDiffer: 0, typedBeside: 0, goneNamed: 0, partsWrong: 0 };
     const first6 = [];
     const firstDiff = [];
     framings.forEach((answers, fi) => {
@@ -1436,6 +1448,8 @@ const FIN = [
                     const stepNoteClient = (st6.stepNoteClient && typeof st6.stepNoteClient === 'object') ? { ...st6.stepNoteClient } : {};
                     const ow = oldWalk({ model: n6.model, settledKeys: n6.settledKeys, isTraverse: ob6.isTraverse, trvRules: data6.trvRules, sizeSteps: n6.sizeSteps, sizeProjInches: n6.sizeProjInches, answers, livePicks: n6.livePicks, lengthFeet: n6.lengthFeet, lengthInches: n6.lengthInches,
                         ourId: n6.ourId, trvLive: ob6.trvLive, trvComponents: ob6.trvComponents, sizePick: {}, offeredExtraItems: n6.offeredExtraItems, resolved: n6.resolved, extras: n6.extras, spliceCodes: n6.spliceCodes, drawnSplices, quantities: n6.quantities });
+                    const marks6 = newMarksOf(n6.splice, drawnSplices, n6.lengthInches);   // (2026-10-20 — newMarksOf above)
+                    if (canon(marks6) !== canon(ow.spliceMarks)) walk6.marksMoved++;
                     // ⚠ DELIBERATE RULE CHANGE, 2026-10-13 (Stuart: "fix both"): a saved pick that is not among the choices any more
                     // is NAMED (Shared/pickDrops, its own harness) — the screen's reader as it was passed it over. The reference
                     // reads the removals with that rule; everything else below is still the screen's code as it was.
@@ -1446,7 +1460,7 @@ const FIN = [
                         cfgQty: String(parseInt(st6.qty, 10) > 0 ? parseInt(st6.qty, 10) : 1), pins: data6.pins, configMemo: st6.memo || st6.sidemark || '', chosenFinishObjects: of6.chosenFinishObjects, effectiveLevel: ob6.effectiveLevel, lengthInches: n6.lengthInches, lengthFeet: n6.lengthFeet,
                         extras: n6.extras, extraLines: ob6.extraLines, stepNotes, stepNoteClient, answers, livePicks: n6.livePicks, partFinish: n6.partFinish, globalFinish: of6.globalFinish, globalFinishes: n6.globalFinishes, stepQty: st6.stepQty || {},
                         liveFinishAnswers: ob6.liveFinishAnswers, kitBill: ob6.kitBill, kitSource: rk6.kitSource, kitPick: rk6.kitPick, kitMotor: rk6.kitMotor, isTraverse: ob6.isTraverse, trvSel: trvSel ? { ...trvSel } : null, trvComponents: ob6.trvComponents, trvLive: ob6.trvLive,
-                        cadUrl: data6.assembly?.manufacturingSpecs?.cadUrl, textureOverrides: of6.textureOverrides, visibleOverrides: ow.visibleOverrides, cloneSpecs: ow.cloneSpecs, stretchSpec: ow.stretchSpec, spliceMarks: ow.spliceMarks, clearList: ow.clearList,
+                        cadUrl: data6.assembly?.manufacturingSpecs?.cadUrl, textureOverrides: of6.textureOverrides, visibleOverrides: ow.visibleOverrides, cloneSpecs: ow.cloneSpecs, stretchSpec: ow.stretchSpec, spliceMarks: marks6, clearList: ow.clearList,
                         steps: ow.steps, noSplice: ob6.noSplice, spliceOverIn: n6.spliceOverIn };
                     const oa = oldAdd(addArgs);
                     const walkSaid = (w) => canon([w.steps, w.steps.map(st => [w.hintFor(st), w.extrasOnStep(st).map(it => it.code), w.answerOf(st)])]);
@@ -1469,7 +1483,7 @@ const FIN = [
                         } else { walk6.add++; if (first6.length < 3) first6.push(`splice gate #${fi}.${v}`); }
                     }
                     if (walkSaid(ow) !== walkSaid({ steps: n6.steps, hintFor: stepHintOf, extrasOnStep: n6.extrasOnStep, answerOf: n6.answerOf })) { walk6.walk++; if (first6.length < 3) first6.push(`walk #${fi}.${v}`); }
-                    if (drawSaid(ow) !== drawSaid(n6)) { walk6.draw++; if (first6.length < 3) first6.push(`draw #${fi}.${v}`); }
+                    if (drawSaid({ ...ow, spliceMarks: marks6 }) !== drawSaid(n6)) { walk6.draw++; if (first6.length < 3) first6.push(`draw #${fi}.${v}`); }
                     if (!spliceGate && (canon([oa.said, bare(oa.item), oa.dropRefusal, oa.cfgQtyN, drops]) !== canon([n6.refusal && n6.refusal.alert ? [n6.refusal.alert] : [], bare(n6.item), n6.dropRefusal, n6.qty, n6.drops])
                         || !!n6.refusal !== (oa.item === null))) { walk6.add++; if (first6.length < 3) first6.push(`add #${fi}.${v}`); }
                     // A ROW TYPED TO NOTHING — 0 into an empty quantity box. Only the screen can hold one (a saved line never does: the
@@ -1522,7 +1536,7 @@ const FIN = [
     eq('the Add: refused for the same reason in the same words, or the same cart line — every field, the frozen render and the notes with it', walk6.add, 0);
     eq(`the line keeps which part each pick was — the record's id, our number and its name, one for every pick on the line and no other; and a pick whose pin is not on the assembly is named where the screen's reader passed it over (${walk6.goneNamed} set-ups)`, [walk6.partsWrong, walk6.goneNamed > 5], [0, true]);
     eq(`…and with a row typed to nothing on it — alone, beside rows that were taken (${walk6.typedBeside}), on one step while the same item is taken on another — the Add hands on what the screen's did (${walk6.typed} lines)`, [walk6.typedDiffer, walk6.typed > 50, walk6.typedBeside > 20], [0, true, true]);
-    ok(`the set-ups take each road of the walk — steps ${JSON.stringify(walk6.kinds)}, the track hint ${walk6.hints}, items offered off the length step ${walk6.itemsOffStep}, "not asked" ${walk6.notAsked}, refused ${JSON.stringify(walk6.refused)}, removals named then acknowledged ${walk6.removals}, lines ${walk6.lines} (shop notes ${walk6.shopNotes}, customer notes ${walk6.clientNotes}, ticks with nothing to print ${walk6.ticksOnly}, one piece ${walk6.onePiece}, more than one build ${walk6.multiples}, no model ${walk6.noModel}), splice lines drawn where placed ${walk6.drawnMarks} / spread ${walk6.spreadMarks}, stretched ${walk6.stretch}, clear parts ${walk6.clear}, no rings pinned ${walk6.noRings}, no rod pinned ${walk6.noRod}`,
+    ok(`the set-ups take each road of the walk — steps ${JSON.stringify(walk6.kinds)}, the track hint ${walk6.hints}, items offered off the length step ${walk6.itemsOffStep}, "not asked" ${walk6.notAsked}, refused ${JSON.stringify(walk6.refused)}, removals named then acknowledged ${walk6.removals}, lines ${walk6.lines} (shop notes ${walk6.shopNotes}, customer notes ${walk6.clientNotes}, ticks with nothing to print ${walk6.ticksOnly}, one piece ${walk6.onePiece}, more than one build ${walk6.multiples}, no model ${walk6.noModel}), splice lines drawn where placed ${walk6.drawnMarks} / spread ${walk6.spreadMarks} (${walk6.marksMoved} drawing fewer or more than one per joiner — the 10-20 rule), stretched ${walk6.stretch}, clear parts ${walk6.clear}, no rings pinned ${walk6.noRings}, no rod pinned ${walk6.noRod}`,
         walk6.kinds.AXES > 50 && walk6.kinds.AXIS > 20 && walk6.kinds.SLOT > 500 && walk6.kinds.LENGTH === walk6.compared && walk6.kinds.CARRIERS > 3 && walk6.kinds.TRV > 30 && walk6.hints > 20 && walk6.itemsOffStep > 50 && walk6.notAsked > 20
         && walk6.refused.NOTHING_PRICED > 0 && walk6.refused.REMOVALS > 3 && walk6.refused.BARE_WOOD > 3 && walk6.refused.FINISH_QUESTIONS > 3 && walk6.removals > 3 && walk6.lines + (walk6.spliceCentre || 0) > 100 && (walk6.spliceCentre || 0) > 10 && walk6.shopNotes > 30 && walk6.clientNotes > 10 && walk6.ticksOnly > 3
         && walk6.onePiece > 0 && walk6.multiples > 10 && walk6.noModel > 3 && walk6.drawnMarks > 3 && walk6.spreadMarks > 3 && walk6.stretch > 50 && walk6.clear > 50 && walk6.noRings > 5 && walk6.noRod > 3);
@@ -1616,12 +1630,18 @@ const FIN = [
     const rodModel = { choices: [{ id: 'R1', role: 'ROD', nodes: ['Rod_L', 'Rod_C', 'Rod_R'] }, { id: 'R2', role: 'FASCIA', nodes: ['Rod_C'] }, { id: 'F1', role: 'FCLIP', nodes: ['Clip_Strip'] }, { id: 'C1', role: 'CARRIER', nodes: ['Car_1'] }, { id: 'B1', role: 'BRACKET', nodes: ['BKT_C'] }], riders: [{ id: 'C1' }] };
     eq('the rail is every rod piece the render shows, once, and the F-clip strip that runs its length — never a piece a return took off, never a carrier', railNamesOf(res, rodModel), ['Rod_L', 'Rod_C', 'Clip_Strip']);
     eq('a long order renders long — only with a length, and a rail to stretch', [stretchSpecOf(['Rod_C'], 144.5), stretchSpecOf(['Rod_C'], 0), stretchSpecOf(['Rod_C'], null), stretchSpecOf([], 144)], [{ railNames: ['Rod_C'], lengthInches: 144.5 }, null, null, null]);
-    const marks = (extras, drawn, L) => spliceMarksOf({ extras, spliceCodes: ['JNR'], drawnSplices: drawn, lengthInches: L }).map(m => Math.round(m.frac * 1000) / 1000);
-    eq('a splice is a pencil line: one at the centre, N spread evenly; none on the line, none drawn; another item draws nothing',
-        [marks([{ code: 'JNR', qty: '1' }], [], 144), marks([{ code: 'JNR', qty: '2' }, { code: 'JNR', qty: 1, slot: 'x' }], [], 144), marks([{ code: 'JNR', qty: '0' }], [{ distInches: 30 }], 144), marks([{ code: 'RING', qty: '5' }], [], 144)], [[0.5], [0.25, 0.5, 0.75], [], []]);
-    eq('…where a drawing placed them: from the left edge, from the right ("end" in any case), never off the pole, one with no place left out — and with no length they are spread',
+    // (the lines are the pole's SPLICES — spliceInfoOf, the count its brackets are placed by — never one per joiner: 2026-10-20)
+    const { spliceInfoOf: spliceOf } = S;
+    const marks = (extras, drawn, L, over = 0, trv = 0) => spliceMarksOf({ splice: spliceOf({ extras, spliceCodes: ['JNR'], trvJoiners: trv, drawnSplices: drawn, lengthInches: L, spliceOverIn: over }), drawnSplices: drawn, lengthInches: L }).map(m => Math.round(m.frac * 1000) / 1000);
+    eq('a splice is a pencil line, one per SPLICE: one joiner, one at the centre; a double rod\'s two joiners (and a third typed on another row) on a pole one splice makes, still one; a pole made in three pieces, two; the traverse\'s ticked joiner, one; none on the line, none drawn; another item draws nothing',
+        [marks([{ code: 'JNR', qty: '1' }], [], 144), marks([{ code: 'JNR', qty: '2' }, { code: 'JNR', qty: 1, slot: 'x' }], [], 144), marks([{ code: 'JNR', qty: '2' }], [], 144, 120), marks([{ code: 'JNR', qty: '1' }], [], 300, 120),
+         marks([], [], 144, 120, 1), marks([{ code: 'JNR', qty: '0' }], [{ distInches: 30 }], 144), marks([{ code: 'RING', qty: '5' }], [], 144)],
+        [[0.5], [0.5], [0.5], [0.333, 0.667], [0.5], [], []]);
+    eq('…and a splice line is where the bracket rule puts a bracket: the same count (centreCountForSplices rounds the centre brackets to it)',
+        [spliceOf({ extras: [{ code: 'JNR', qty: '2' }], spliceCodes: ['JNR'], lengthInches: 144, spliceOverIn: 120 }).count, spliceOf({ extras: [{ code: 'JNR', qty: '1' }], spliceCodes: ['JNR'], lengthInches: 300, spliceOverIn: 120 }).count], [1, 2]);
+    eq('…where a drawing placed them: from the left edge, from the right ("end" in any case), never off the pole, one with no place left out — and with no length they are spread, one per splice',
         [marks([{ code: 'JNR', qty: '2' }], [{ distInches: 36, ref: '' }, { distInches: 36, ref: 'end' }], 144), marks([{ code: 'JNR', qty: '1' }], [{ distInches: 1, ref: '' }, { distInches: 9999, ref: 'START' }, { distInches: null }, null], 144), marks([{ code: 'JNR', qty: '2' }], [{ distInches: 36 }], 0)],
-        [[0.25, 0.75], [0.02, 0.98], [0.333, 0.667]]);
+        [[0.25, 0.75], [0.02, 0.98], [0.5]]);
     const armO = opt('ARM-C'), plateO = opt('PLT-C'), bare = opt('ARM-BARE', { nodes: [] });
     const cRes = (slots) => ({ slots });
     const clones = (slots, picks, q = {}) => cloneSpecsOf({ resolved: cRes(slots), railNames: ['Rod_C'], livePicks: picks, quantities: q });
@@ -1635,7 +1655,7 @@ const FIN = [
         const w = oldWalk({ model: { ...rodModel, axes: [], slots: [] }, settledKeys: new Set(), isTraverse: false, trvRules: null, sizeSteps: [], sizeProjInches: null, answers: {}, livePicks: picks, lengthFeet: 12, lengthInches: 144, ourId: (id) => id, trvLive: null, trvComponents: [], sizePick: {},
             offeredExtraItems: [], resolved: r2, extras: [{ code: 'JNR', qty: '2' }], spliceCodes: ['JNR'], drawnSplices: [{ distInches: 20, ref: 'END' }], quantities: q });
         const rails = railNamesOf(r2, rodModel);
-        return canon([w.visibleOverrides, w.clearList, w.railNames, w.stretchSpec, w.spliceMarks, w.cloneSpecs, w.chosen]) === canon([visibleOverridesOf(r2), clearListOf(r2), rails, stretchSpecOf(rails, 144), spliceMarksOf({ extras: [{ code: 'JNR', qty: '2' }], spliceCodes: ['JNR'], drawnSplices: [{ distInches: 20, ref: 'END' }], lengthInches: 144 }),
+        return canon([w.visibleOverrides, w.clearList, w.railNames, w.stretchSpec, w.spliceMarks, w.cloneSpecs, w.chosen]) === canon([visibleOverridesOf(r2), clearListOf(r2), rails, stretchSpecOf(rails, 144), spliceMarksOf({ splice: spliceOf({ extras: [{ code: 'JNR', qty: '2' }], spliceCodes: ['JNR'], drawnSplices: [{ distInches: 20, ref: 'END' }], lengthInches: 144 }), drawnSplices: [{ distInches: 20, ref: 'END' }], lengthInches: 144 }),
             cloneSpecsOf({ resolved: r2, railNames: rails, livePicks: picks, quantities: q }), chosenPartsOf({ ...rodModel, axes: [], slots: [] }, picks)]);
     }));
     eq('a saved order re-renders from the frozen render alone: additive (default hidden), its clear parts with it — and with no model there is none',

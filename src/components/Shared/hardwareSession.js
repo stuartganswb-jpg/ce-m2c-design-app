@@ -1102,15 +1102,20 @@ export const stretchSpecOf = (railNames, lengthInches) => (lengthInches > 0 && r
 // splice is added in vision at an exact spot then ideally the rendering could show that").
 // Fractions along the rail, left to right: the drawing's positions where Vision placed them
 // (from the left edge = d / L, from the right = 1 − d / L), else one at the centre, N spread
-// evenly. Keyed on the flow's own splice item — the same detection the length step uses — so
-// every flow with a joiner gets the line. A picture of a decision already on the line.
-export function spliceMarksOf({ extras, spliceCodes, drawnSplices, lengthInches }) {
-    const count = extras.filter(x => spliceCodes.includes(x.code)).reduce((n, x) => n + (Number(x.qty) > 0 ? Number(x.qty) : 0), 0);
+// evenly. A picture of a decision already on the line.
+// ⚠ HOW MANY LINES IS THE SPLICE COUNT, NOT THE JOINER COUNT (Stuart 2026-10-20, found-not-fixed item 6): a double rod carries one
+// joiner per rod, so 2 joiners on a pole one splice makes drew TWO lines on each rod (at a third and two thirds) where the shop
+// splices once, at the centre. The lines now read `splice` — spliceInfoOf, the same count the bracket at every splice is placed by
+// (centreCountForSplices): a joiner under the one-piece limit is one splice; a pole made in N pieces has N − 1; the traverse's ticked
+// joiner is a splice too; Vision's drawn splices are drawn where they were placed.
+export function spliceMarksOf({ splice, drawnSplices = [], lengthInches }) {
+    const count = Math.max(0, Math.round(Number(splice && splice.count) || 0));
     if (!count) return [];
     const L = Number(lengthInches) || 0;
-    const drawn = drawnSplices.filter(sp => sp && sp.distInches != null && L > 0)
+    // (drawn where Vision drew them only when the count IS the drawing's — spliceInfoOf's own rule, so the lines and the brackets agree)
+    const drawn = splice.drawn ? (drawnSplices || []).filter(sp => sp && sp.distInches != null && L > 0)
         .map(sp => (String(sp.ref).toUpperCase() === 'END' ? 1 - Number(sp.distInches) / L : Number(sp.distInches) / L))
-        .filter(f => Number.isFinite(f)).map(f => Math.min(0.98, Math.max(0.02, f)));
+        .filter(f => Number.isFinite(f)).map(f => Math.min(0.98, Math.max(0.02, f))) : [];
     if (drawn.length) return drawn.map(frac => ({ frac }));
     return Array.from({ length: count }, (_, i) => ({ frac: (i + 1) / (count + 1) }));
 }
@@ -1555,7 +1560,7 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const clearList = clearListOf(resolved);
     const railNames = railNamesOf(resolved, model);
     const stretchSpec = stretchSpecOf(railNames, lengthInches);
-    const spliceMarks = spliceMarksOf({ extras, spliceCodes, drawnSplices, lengthInches });
+    const spliceMarks = spliceMarksOf({ splice, drawnSplices, lengthInches });
     const cloneSpecs = cloneSpecsOf({ resolved, railNames, livePicks, quantities });
     const chosen = chosenPartsOf(model, livePicks);
     const cadUrl = assembly?.manufacturingSpecs?.cadUrl;

@@ -533,7 +533,7 @@ function HardwareConfiguratorInner({
     const clearList = useMemo(() => clearListOf(resolved), [resolved]);
     const railNames = useMemo(() => railNamesOf(resolved, model), [resolved, model]);
     const stretchSpec = useMemo(() => stretchSpecOf(railNames, lengthInches), [railNames, lengthInches]);
-    const spliceMarks = useMemo(() => spliceMarksOf({ extras, spliceCodes, drawnSplices, lengthInches }), [extras, spliceCodes, drawnSplices, lengthInches]);
+    const spliceMarks = useMemo(() => spliceMarksOf({ splice, drawnSplices, lengthInches }), [splice, drawnSplices, lengthInches]);
     const cloneSpecs = useMemo(() => cloneSpecsOf({ resolved, railNames, livePicks, quantities }), [resolved, railNames, livePicks, quantities]);
 
     // ── WHICH FINISH EACH PART WEARS — the rules and his words are hardwareSession's (the portal rebuild, 2026-10-12):
