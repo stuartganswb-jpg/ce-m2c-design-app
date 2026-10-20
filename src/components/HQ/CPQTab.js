@@ -1848,17 +1848,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       }
   };
 
-  const handleClearAllDrafts = async () => {
-      if (window.confirm("⚠️ WARNING: This will permanently delete ALL abandoned drafts in the system. Are you sure?")) {
-          try {
-              // A FINALIZED draft is a saved quote's drawing, not an abandoned draft — never wiped here.
-              const deletePromises = previousDrafts.filter(d => d.status !== 'FINALIZED').map(d => deleteDoc(doc(db, "cpq_drafts", d.id)));
-              await Promise.all(deletePromises);
-              alert("✅ All drafts have been wiped from the system.");
-          } catch(err) { console.error(err); }
-      }
-  };
-
   useEffect(() => {
       let newFlags = { disabledSteps: [], warnings: [] };
 
