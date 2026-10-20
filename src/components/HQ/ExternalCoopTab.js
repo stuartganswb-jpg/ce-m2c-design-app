@@ -4,7 +4,7 @@ import { poEmailDraft, markPoSent, acknowledgePurchaseOrder, hasNsNumber, poRef 
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, query, where, doc, getDoc, getDocs, updateDoc, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
-import { portalRequestLines } from '../Shared/portalRequestLines';
+import { portalRequestLines, printsFromRequest } from '../Shared/portalRequestLines';
 import { portalRequestsOf, isPortalRequest, isUnopened, openedPatchOf } from '../Shared/portalRequests';
 import PortalRequestsPanel from './PortalRequestsPanel';
 import { FLOW_MODE, flowModeOf, groupModeOf, withFlowMode, withPreviewer } from '../Shared/portalAccess';
@@ -1603,7 +1603,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       // card shows — flagged `unpriced` so FormPreview hides money instead of totalling to $0.00.
       // (Before 2026-08-07 the empty breakdown made FormPreview fall back to its SAMPLE demo lines:
       // a fabricated $1,195.50 quotation under a real quote number.)
-      const isUnpricedRequest = activeDocJob.status === 'PORTAL_REQUEST' && !(activeDocJob.cpqData?.breakdown || []).length;
+      const isUnpricedRequest = printsFromRequest(activeDocJob);   // (a Quick Ship request loaded into tab 7 and not priced, too — 2026-10-20)
       const quoteLines = isUnpricedRequest
           ? portalRequestLines(activeDocJob, docRequestCtx?.flow, docRequestCtx?.finishes || [], { flowById: docRequestCtx?.flowById })
               .map(l => ({ item: '', desc: l.name, qty: l.qty || '', price: null, amount: null }))

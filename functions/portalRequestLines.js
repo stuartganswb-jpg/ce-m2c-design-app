@@ -74,6 +74,25 @@ const selectionRows = (selections, flowDoc, finishes, custNames) => {
     return out;
 };
 
+// ONE QUICK SHIP LINE IN WORDS — the code the counter showed (the collection's face code, else ours), the name, the packs, the note (a cut
+// length, a component's "included at 13ft per chart"). A FEE prints by its description alone — the portal never shows a fee's item code
+// (the Measure & Fit rule); a cut line is known by its `fee` flag or, on a request sent before it carried one, by the note the server writes.
+const stockLineWords = (l) => {
+    const isFee = !!l.fee || /^cut( @ |$)/.test(String(l.note || ''));
+    const code = isFee ? '' : String(l.aliasErp || l.erp || '').trim();
+    const name = String(l.name || '').trim();
+    const named = code ? (name && name.toUpperCase() !== code.toUpperCase() ? `${code} — ${name}` : code) : name;
+    const packs = l.packUom && Number(l.packSize) > 1 ? ` · ${l.packUom} of ${l.packSize} (${Number(l.eachQty) || (Number(l.qty) || 0) * Number(l.packSize)} ea)` : '';
+    return `${named}${packs}${l.note ? ` · ${String(l.note).slice(0, 200)}` : ''}`;
+};
+
+// WHICH JOBS PRINT FROM THE REQUEST'S OWN RECORD: a portal request nobody has priced yet — PORTAL_REQUEST, or a Quick Ship request staff
+// have loaded into 7. Quick Ship (QUICKSHIP_REVIEW), which until 2026-10-20 printed nothing at all on the customer's card. The customer's
+// card (functions/portalMyOrders) and the CRM's Docs ask this one question.
+const printsFromRequest = (job) => !!(job && job.portalRequest)
+    && (job.status === 'PORTAL_REQUEST' || (job.status === 'QUICKSHIP_REVIEW' && job.portalRequest.kind === 'QUICKSHIP'))
+    && !((job.cpqData && job.cpqData.breakdown) || []).length;
+
 // THE ONE CALL. job = the jobs doc (needs portalRequest), flowDoc = its cpq_flows doc (null-safe),
 // finishes = master + outsourced finish list, custNames = Set of UPPER customer names for
 // client-facing finish naming. Returns [{ name, qty }]; qty 0 means "show no quantity".
@@ -86,6 +105,29 @@ const selectionRows = (selections, flowDoc, finishes, custNames) => {
 function portalRequestLines(job, flowDoc, finishes, { custNames, flowById } = {}) {
     const req = (job && job.portalRequest) || {};
     const out = [];
+
+    // A QUICK SHIP REQUEST (portalRequest.kind 'QUICKSHIP' — the portal's stock counter; its traverse kits since 2026-10-20). It has no
+    // flow: until 2026-10-20 it fell through to the configuration rows below and printed one bare "▶ Configuration" per line (Stuart:
+    // "quick ship print fix is very important"). It prints what the customer built: each stock line by the code the counter showed them
+    // (their collection's face code, else ours), its name, its packs and a cut length — a fee by its description alone; each traverse
+    // kit as a block of its own — its lines, the track's answers in words, what it still needs.
+    if (req.kind === 'QUICKSHIP') {
+        const stock = Array.isArray(req.lines) ? req.lines.filter(Boolean) : [];
+        if (stock.length) out.push({ name: `▶ Quick Ship${req.collection ? ` — ${req.collection}` : ''}`, qty: 0, isHeader: true });
+        stock.forEach((l) => out.push({ name: stockLineWords(l), qty: Number(l.qty) || 0 }));
+        (Array.isArray(req.traverse) ? req.traverse : []).forEach((t) => {
+            if (!t) return;
+            const tl = Array.isArray(t.lines) ? t.lines.filter(Boolean) : [];
+            const code = String((tl[0] && (tl[0].aliasErp || tl[0].erp)) || t.kitCode || '').trim();
+            out.push({ name: `▶ Traverse kit${code ? ` ${code}` : ''}`, qty: 0, isHeader: true });
+            tl.forEach((l) => out.push({ name: stockLineWords(l), qty: Number(l.qty) || 0 }));
+            const said = Array.isArray(t.answerWords) ? t.answerWords.filter(Boolean) : [];
+            if (said.length) out.push({ name: `Track: ${said.join(' · ')}`, qty: 0 });
+            if (Array.isArray(t.still) && t.still.length) out.push({ name: `Still needed: ${t.still.join(' · ')}`, qty: 0 });
+        });
+        if (req.note) out.push({ name: `Note: ${String(req.note).slice(0, 300)}`, qty: 0 });
+        return out;
+    }
 
     // BUILT ON HQ'S ENGINE (portalRequest.kind 'CONFIG' — the portal rebuild, 2026-10-13). The request's lines are real
     // cart lines (cpqData.cartItems, engine 'TAGS'): what was chosen is read off them — the parts the customer sees,
@@ -129,4 +171,4 @@ function portalRequestLines(job, flowDoc, finishes, { custNames, flowById } = {}
     return out;
 }
 
-module.exports = { portalRequestLines };
+module.exports = { portalRequestLines, printsFromRequest };

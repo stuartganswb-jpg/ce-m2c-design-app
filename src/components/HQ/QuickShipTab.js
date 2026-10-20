@@ -2488,7 +2488,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                                 {(j.portalRequest?.traverse || []).map((t, i) => (
                                     <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', marginTop: '6px' }}>
                                         TRAVERSE {t.kitCode || ''} · {t.finish}{t.proj ? ` · ${projLabel(t.proj)}` : ''}{t.motorItem ? ` · ${t.motorItem}` : ''} · {t.feet}ft
-                                        {t.sel?.draw ? ` · draw ${t.sel.draw}` : ''}{t.sel?.motorSide ? ` · motor ${t.sel.motorSide}` : ''}{t.sel?.carrierStyle ? ` · ${t.sel.carrierStyle}` : ''}
+                                        {(t.answerWords || []).length ? ` · ${t.answerWords.join(' · ')}`
+                                            : `${t.sel?.draw ? ` · draw ${t.sel.draw}` : ''}${t.sel?.motorSide ? ` · motor ${t.sel.motorSide}` : ''}${t.sel?.carrierStyle ? ` · ${t.sel.carrierStyle}` : ''}`}
                                         {Number.isFinite(t.total) ? ` · $${t.total.toLocaleString()}` : ''}
                                         {(t.still || []).length > 0 && <span style={{ color: 'var(--brass)' }}> · still needed: {t.still.join(', ')}</span>}
                                         {t.missing > 0 && <span style={{ color: '#d9534f' }}> · {t.missing} component code(s) not in the library</span>}

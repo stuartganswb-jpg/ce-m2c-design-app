@@ -1223,7 +1223,7 @@ const buildSkuLookup = async (db, customerId, crm, codes) => {
 // and compound `__finish` / backplate `__sub` picks were skipped entirely. The CRM DOCS view renders
 // through the src/ mirror of the same module, so the customer's card and the team's document say
 // the same words. price/total/sku stay null-shaped here for the card renderer.
-const { portalRequestLines } = require('./portalRequestLines');
+const { portalRequestLines, printsFromRequest } = require('./portalRequestLines');
 // flowById covers multi-line requests (portalRequest.lines[]); the single-doc second argument
 // keeps legacy single-flow requests resolving exactly as before.
 const requestLines = (job, flowById, finishes, custNames) =>
@@ -1346,7 +1346,8 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
             .filter((j) => !orderedJobIds.has(String(j.jobId || j.id)) && !isHistory(j))
             .map((j) => {
                 const priced = sanitizeBreakdown(j.cpqData, skuOf);
-                const isRequest = j.status === 'PORTAL_REQUEST';
+                // (a Quick Ship request staff have loaded into 7. Quick Ship but not priced prints its own record too — 2026-10-20)
+                const isRequest = j.status === 'PORTAL_REQUEST' || printsFromRequest(j);
                 return {
                     id: j.quoteNo || j.jobId || j.id,
                     docId: j.id,
@@ -2029,6 +2030,10 @@ const trvEntryOf = (ctx, charts, raw, i) => {
     if (o.error) throw new HttpsError('invalid-argument', `Traverse kit ${i + 1}: ${o.error}`);
     // What the track still needs (CPQ's words, Stuart 2026-10-20 "a. yes" — said, never refused): the draw, the motor side on a motor, a carrier style.
     const still = rules ? [...ctx.engine.traverseAnswersMissing({ drive: o.cfg.drive, sel }), ...(sel && sel.carrierStyle ? [] : ['carrier style'])] : [];
+    // …and what it was answered, in words (the engine's own labels, the chart's carrier name) — what the request card and the documents print
+    const wordOf = (list, v) => ((list || []).find((x) => x.value === v) || {}).label || '';
+    const carrier = sel && sel.carrierStyle ? ((rules && rules.usage) || []).find((u) => String((u && u.itemId) || '').trim().toUpperCase() === sel.carrierStyle) : null;
+    const answerWords = sel ? [wordOf(ctx.engine.DRAWS, sel.draw), wordOf(ctx.engine.MOTOR_SIDES, sel.motorSide), carrier ? String(carrier.label || carrier.itemId) : ''].filter(Boolean) : [];
     const recordOf = (it, l, rate) => ({ itemId: it.id, erp: String(l.erp || it.legacyErpId || it.itemId || '').toUpperCase(), name: String(l.name || it.itemName || ''),
         aliasErp: String(l.aliasErp || ''), faceItemId: null, qty: l.qty, packUom: '', packSize: 1, eachQty: l.qty, rate: Math.round((Number(rate) || 0) * 100) / 100, note: String(l.note || '') });
     const lines = [
@@ -2037,7 +2042,7 @@ const trvEntryOf = (ctx, charts, raw, i) => {
         ...o.components.map((c) => recordOf(c.item, { erp: c.item.legacyErpId || c.item.itemId, name: c.item.itemName, aliasErp: c.opts.aliasErp, qty: c.qty, note: c.note }, c.opts.rateOverride)),
     ];
     // A chart part that is not in the library is left off, as tab 7 leaves it off (and says so) — counted here for HQ's card, never a refusal.
-    return { ...entry, proj: o.kitLine.trvProj || '', motorItem: o.kitLine.trvMotor || '', finish: o.kitLine.trvFinish, sel: sel || null, still,
+    return { ...entry, proj: o.kitLine.trvProj || '', motorItem: o.kitLine.trvMotor || '', finish: o.kitLine.trvFinish, sel: sel || null, still, answerWords,
         kitCode: o.cfg.kitCode, lines, total: Math.round(lines.reduce((n, l) => n + l.rate * l.eachQty, 0) * 100) / 100, ...(o.missing ? { missing: o.missing } : {}) };
 };
 
@@ -2149,7 +2154,7 @@ exports.portalStockQuoteRequest = onCall({ cors: true }, async (request) => {
                 itemId: cutIt.id, erp: cutErp, name: cutIt.itemName || cutErp,
                 aliasErp: '', faceItemId: null,
                 qty, packUom: '', packSize: 1, eachQty: qty,
-                rate: ctx.rateFor(cutIt), note: cutLen ? `cut @ ${cutLen}` : 'cut',
+                rate: ctx.rateFor(cutIt), note: cutLen ? `cut @ ${cutLen}` : 'cut', fee: true,
             });
             continue;
         }
