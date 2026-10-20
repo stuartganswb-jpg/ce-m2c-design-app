@@ -161,6 +161,8 @@ export const shipmentsOf = (so) => Object.values((so && so.shipments) || {}).fil
 
 /** Is this record a shipment of a parent order (born packed; ships from the Fulfilment tab; never picked)? */
 export const isShipmentRecord = (d) => !!d && d.packMode === 'SHIPMENT' && !!d.shipmentOf;
+/** The NetSuite sales order a sales-order-route record fulfils against: a shipment's parent's, else its own. */
+export const nsSoIdOfRecord = (d) => str(d && (d.shipmentOfNsId || d.nsInternalId || ''));
 
 /**
  * THE NEXT SHIPMENT of a DECIDED order — null for an order with no Launch decision (it packs whole, as it always has).
@@ -219,7 +221,9 @@ export function launchShipmentOf({ parent = {}, plan = null, by = '', now = Date
     const doc = {
         ...head,
         id, orderClass: 'QUICKSHIP', source: 'LAUNCH_SHIP', status: 'Pending', pickStatus: 'Pending',
-        soId: soRef, nsInternalId: str(parent.nsInternalId),
+        // The parent's NetSuite order, under ITS OWN name — never `nsInternalId`: every reader that finds an order by that field
+        // (the Payments callable's limit(1), the Fulfilment tab's send, the stock holds) must keep finding the PARENT.
+        soId: soRef, shipmentOfNsId: str(parent.nsInternalId),
         shipmentOf: str(parent.id), shipmentOfSoId: soRef, shipmentNo: n,
         jobName: `Shipment ${n} of ${soRef}${str(parent.jobName) ? ` — ${str(parent.jobName)}` : ''}`,
         lines,

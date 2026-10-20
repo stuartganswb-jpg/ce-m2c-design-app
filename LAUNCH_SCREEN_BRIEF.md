@@ -43,8 +43,9 @@ amount of the balance order it is fine to ship first part."
    always has. `packLinesOf` follows the plan.
 3. **A pack that leaves something behind is a SHIPMENT of its own** — `launchShipmentOf`: a child record on the
    sales-order route (`QS-SHP-<SO>-01`, orderClass QUICKSHIP, `packMode: 'SHIPMENT'`, `shipmentOf`, `shipmentNo`), born
-   PACKED with the plan's lines, this pack's boxes and photos, pointing at the SAME NetSuite sales order
-   (`nsInternalId`), `fulfilFromBin` = the parent's bin — the display shipment's model (Shared/displayShipment) less the
+   PACKED with the plan's lines, this pack's boxes and photos, pointing at the SAME NetSuite sales order under ITS OWN
+   field (`shipmentOfNsId`, read by `nsSoIdOfRecord` — never `nsInternalId`: the Payments callable finds an order by that
+   field with limit(1), and a child there would hide the parent's card money — App Improvement 2026-10-20), `fulfilFromBin` = the parent's bin — the display shipment's model (Shared/displayShipment) less the
    $0 order. The parent gives up the pieces (committedQty −, shippedQty +, nsBinQty − when counted), records
    `shipments.<n>` (a map, so the outbox can stamp into one), clears its ticks and photos and goes back to Pending for
    the rest. The child ships from the Fulfilment tab like any packed order (packing list, label, invoice = its lines).
@@ -60,9 +61,9 @@ amount of the balance order it is fine to ship first part."
    before any order discount — the stricter side): a pay-first order ships a part when **paid ≥ shippingNow AND
    paid − shippingNow > ½ × (total − shippingNow)**. Credit terms ship as always; paid in full is clear; a part worth
    the whole order is the ordinary rule. Harness rows pin it (scripts/shipClearance.test.mjs).
-6. Not touched: Shared/fulfilmentQueue, fulfilment.js, fulfilmentPanel.js (Payments' — one line asked of them: the
-   panel's `needsNsFulfilment` must leave `packMode === 'SHIPMENT'` out, as it does DISPLAY, so it never sends a
-   whole-order fulfilment for a child); SO Pack's `orderPackBlockerOf` (CPQ documents — CPQ orders are not on Launch).
+6. Not touched: Shared/fulfilmentQueue, fulfilment.js, fulfilmentPanel.js (Payments' — the panel's send reads
+   `nsInternalId`, which a child does not carry, so it never sends a whole-order fulfilment for one; a `packMode !==
+   'SHIPMENT'` guard in `needsNsFulfilment` is still welcome as the belt); SO Pack's `orderPackBlockerOf` (CPQ documents — CPQ orders are not on Launch).
    Named, not fixed: the WMS does not read a making line's `noPack` (a pillow's fabric line sits on the pick / pack
    bench of an undecided order today; a decided order's plan leaves it off).
 

@@ -22,7 +22,7 @@ import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../S
 import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, soLineIsFee, unpackedSiblingsOf, soPackLineStateOf, gatherPlanOf, soCodeNeedOf, soCodeReleasedNeedOf, soCodeReleasedOf, heldLinesOf } from '../Shared/pickLines';
 // 12.7 LAUNCH PHASE 2 (S7, 2026-10-20 — applied here with the App Improvement session's clearance): a held line is not picked,
 // a decided order packs what is in its bin, and a pack that leaves something behind is a SHIPMENT of its own.
-import { shipmentPlanOf, launchShipmentOf, shipmentFulfilItemsOf, shipmentsOf, isShipmentRecord, shipmentWordsOf, lineIsLaunchHeld } from '../Shared/launchBoard';
+import { shipmentPlanOf, launchShipmentOf, shipmentFulfilItemsOf, shipmentsOf, isShipmentRecord, shipmentWordsOf, lineIsLaunchHeld, nsSoIdOfRecord } from '../Shared/launchBoard';
 import { isReleaseByCount } from '../Shared/rowRelease';
 import { isFeePart } from '../Shared/oeClassify';
 import { fetchAvailabilityUnits, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
@@ -3052,12 +3052,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const queueShipmentFulfilment = async (d, { gate = true } = {}) => {
         const ref = `${packRef(d)} shipment ${d.shipmentNo || ''}`;
         const refDoc = doc(db, 'hq_sales_orders', d.id);
+        // The PARENT's NetSuite order, carried as `shipmentOfNsId` (App Improvement 2026-10-20: a child under `nsInternalId` would be
+        // what the Payments callable's limit(1) finds, and the parent's card money would count as zero).
+        const nsSoId = nsSoIdOfRecord(d);
         try {
             if (gate) {
-                const g = await gateShipment({ nsSoId: d.nsInternalId, refs: [refDoc], ref, shippingNow: Number(d.shipmentAmount) || 0 });
+                const g = await gateShipment({ nsSoId, refs: [refDoc], ref, shippingNow: Number(d.shipmentAmount) || 0 });
                 if (!g.clear) return shipHoldNoteOf(g);
             }
-            const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: soLinesSql(d.nsInternalId) } });
+            const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: soLinesSql(nsSoId) } });
             const jq = await rq.json();
             if (!rq.ok) throw new Error(`could not read the sales order lines — ${JSON.stringify(jq).slice(0, 200)}`);
             const open = fulfilmentItemsOf(jq.items || []);
@@ -3070,11 +3073,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 return `\n\n⚠ ${w}`;
             }
             await enqueueNsWrite({
-                kind: 'itemfulfillment', dedupeKey: `if:${d.nsInternalId}:s${d.shipmentNo || 0}`,
+                kind: 'itemfulfillment', dedupeKey: `if:${nsSoId}:s${d.shipmentNo || 0}`,
                 label: `NS Fulfillment — ${ref} (${d.customer || ''}) from ${d.fulfilFromBin || '—'}`,
                 sourceApp: 'WMS', createdBy: operator?.name || '',
                 // ITS lines, from the order's bin — replacing the bin NetSuite fills in itself (Shared/fulfilmentBins).
-                targetUrl: fulfilmentTargetOf(d.nsInternalId, scoped.items), method: 'POST',
+                targetUrl: fulfilmentTargetOf(nsSoId, scoped.items), method: 'POST',
                 payload: { shipStatus: { id: 'B' }, memo: nsMemo(`Shipment ${d.shipmentNo || ''} of ${d.shipmentOfSoId || ''} — packed in app by ${operator?.name || 'Packer'}`), item: { items: scoped.items } },
                 writeBack: [{ collection: 'hq_sales_orders', docId: d.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }],
             });
@@ -3334,7 +3337,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // status + tracking #(s) onto the sales order (and the fin doc for custom orders).
     const pullFulfillment = async (job) => {
         const soDoc = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || null);
-        const nsSoId = String((isQsOrder(job) ? (job.nsInternalId || job.soId) : (soDoc && soDoc.nsInternalId)) || '');
+        const nsSoId = String((isQsOrder(job) ? (job.shipmentOfNsId || job.nsInternalId || job.soId) : (soDoc && soDoc.nsInternalId)) || '');
         if (!nsSoId) return alert('No NetSuite sales order linked to this order.');
         try {
             const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: `SELECT t.id, t.tranid, BUILTIN.DF(t.status) AS status FROM transaction t WHERE t.type = 'ItemShip' AND t.createdfrom = ${nsSoId} ORDER BY t.id DESC` } });
@@ -6174,7 +6177,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const shipTargetsOf = (rec, docs = []) => {
         if (isQsOrder(rec)) {
             const ref = packRef(rec);
-            return { nsSoId: String(rec.nsInternalId || rec.soId || ''), ref, label: `NS Fulfillment — ${ref} (${rec.customerName || rec.customer || ''})`,
+            return { nsSoId: String(rec.shipmentOfNsId || rec.nsInternalId || rec.soId || ''), ref, label: `NS Fulfillment — ${ref} (${rec.customerName || rec.customer || ''})`,
                 refs: [doc(db, 'hq_sales_orders', rec.id)], writeBack: [{ collection: 'hq_sales_orders', docId: rec.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }], preferBin: rec.committedBin || '' };
         }
         const live = (docs || []).filter(d => d && !d.deleted && d.currentPhase !== 'Closed'), ref = `SO ${rec.soId || rec.id}`;
