@@ -13,6 +13,7 @@
 import { soLineCodeOf, soLineIsFee, soLineIsShelfPick, soCodeNeedOf, soPackLineStateOf, soLineReleasedOf, soCodeReleasedOf, soCodeReleasedNeedOf, soShelfToPickOf } from './pickLines.js';
 import { isReleaseByCount } from './rowRelease.js';
 import { committedQtyOf } from './committedBins.js';
+import { heldLinesOf } from './pickLines.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -51,7 +52,11 @@ export const soGatherStageOf = ({ so, statOf = () => null, isFeeCode = null, sta
     const lines = pieceLinesOf(so, isFeeCode);
     if (!lines.length) return { stage: 'WAITING', waiting: [], toPick: [] };
     // EVERYTHING HAS SHIPPED (a display order's last display gone): nothing is needed in the bin any more.
-    if (lines.every(({ l }) => soCodeNeedOf(so, soLineCodeOf(l), isFeeCode) === 0) && Object.keys((so && so.shippedQty) || {}).length) return { stage: 'SHIPPED', waiting: [], toPick: [] };
+    // …unless a line is HELD on 12.7 Launch (its need reads 0 while held): the order waits on the office, not on a shelf.
+    const held = heldLinesOf(so).map(l => soLineCodeOf(l)).filter(Boolean);
+    if (lines.every(({ l }) => soCodeNeedOf(so, soLineCodeOf(l), isFeeCode) === 0) && Object.keys((so && so.shippedQty) || {}).length) {
+        return held.length ? { stage: 'WAITING', waiting: [], toPick: [], held: [...new Set(held)] } : { stage: 'SHIPPED', waiting: [], toPick: [] };
+    }
     const isStation = (code) => typeof stationCode === 'function' && !!stationCode(code);
     if (isReleaseByCount(so)) return releasedStageOf({ so, statOf, isFeeCode, lines, isStation });
     const waiting = new Set(), toPick = new Set(), station = new Set();
@@ -64,8 +69,9 @@ export const soGatherStageOf = ({ so, statOf = () => null, isFeeCode = null, sta
         else waiting.add(code);
     });
     const stage = waiting.size ? 'WAITING' : (toPick.size ? 'PICK' : (station.size ? 'STATION' : 'PACK'));
-    // `station` is present only when the station has something to pick — an order with no track part reads exactly as before.
-    return { stage, waiting: [...waiting], toPick: [...toPick], ...(station.size ? { station: [...station] } : {}) };
+    // `station` is present only when the station has something to pick — an order with no track part reads exactly as before;
+    // `held` only when a line is held on 12.7 Launch (a PACK with held lines packs what is in the bin as a SHIPMENT).
+    return { stage, waiting: [...waiting], toPick: [...toPick], ...(station.size ? { station: [...station] } : {}), ...(held.length ? { held: [...new Set(held)] } : {}) };
 };
 
 // ── THE SAME THREE STAGES, AGAINST WHAT IS RELEASED (Stuart 2026-10-05, Shared/rowRelease) ───────────────────────────

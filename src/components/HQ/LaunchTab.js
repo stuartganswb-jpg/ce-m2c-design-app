@@ -7,9 +7,10 @@
 // at to decide whether to ship the throws ahead or wait for the pillows." Decisions: tab 12.7 · HOLD as the default ·
 // a second shipment per order is fine.
 //
-// PHASE 1 (this file): the board and the decisions, on the record (`launch`, Shared/launchBoard). The warehouse honours
-// a HELD line in phase 2 (Shared/pickLines + the pack / fulfilment side, with the WMS and Payments sessions). Starting
-// a made line is the review Order Entry Needs already does — the row hands the order to 12.5 as RTG's card does.
+// PHASE 1 (this file): the board and the decisions, on the record (`launch`, Shared/launchBoard). PHASE 2 (2026-10-20, the
+// warehouse): a HELD line is not picked, not needed in the bin, not packed (Shared/pickLines reads lineIsLaunchHeld); a
+// decided order packs what is in its bin, and a pack that leaves something behind is a SHIPMENT of its own — listed here
+// under the order. Starting a made line is the review Order Entry Needs already does — the row hands the order to 12.5.
 import React, { useEffect, useMemo, useState } from 'react';
 import { db } from '../../firebase';
 import { collection, doc, getDocs, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
@@ -17,7 +18,7 @@ import { nsProxyFetch } from '../Shared/nsProxy';
 import { isQuickShip } from '../Shared/pickLines';
 import { oeCoverageOf } from '../Shared/oeLines';
 import { fetchShipClearance } from '../Shared/shipClearance';
-import { launchRowsOf, launchPatchOf, shipAheadPatchOf, holdAllPatchOf, SUGGESTION_WORDS, LAUNCH_MODES } from '../Shared/launchBoard';
+import { launchRowsOf, launchPatchOf, shipAheadPatchOf, holdAllPatchOf, SUGGESTION_WORDS, LAUNCH_MODES, shipmentsOf, shipmentWordsOf } from '../Shared/launchBoard';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
 const card = { background: '#fff', border: '1px solid var(--line)', borderRadius: '2px' };
@@ -162,9 +163,14 @@ const LaunchTab = ({ currentUser = '', activeBrand = '', userRole = '' }) => {
                                     {r.lines.some(x => (x.kind === 'SEW' || x.kind === 'FINISH') && !x.started) && <button onClick={() => startLines(so)} style={btn(false, false)} title="Opens this order's review on 12.5 → Order Entry Needs — the start writes the documents">▶ Start the made lines → review</button>}
                                     <input value={note} onChange={e => setNote(e.target.value)} placeholder="a note on the decision (optional)" style={{ flex: '1 1 220px', padding: '8px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
                                 </div>
+                                {shipmentsOf(so).length > 0 && (
+                                    <div style={{ marginTop: '10px', fontSize: '0.85rem' }}>
+                                        {shipmentsOf(so).map(s => <div key={s.n} style={{ padding: '3px 0', color: 'var(--ink)' }}>📦 {shipmentWordsOf(s)} · {when(s.at)} <span style={mono}>({s.id} — ships from the WMS Fulfilment tab)</span></div>)}
+                                    </div>
+                                )}
                                 {so.launch && so.launch.decidedAt && <div style={{ ...mono, marginTop: '8px' }}>decided {when(so.launch.decidedAt)}{so.launch.decidedBy ? ` by ${so.launch.decidedBy}` : ''}{Object.values(so.launch.lines || {}).find(l => l.note) ? ` · ${Object.values(so.launch.lines).find(l => l.note).note}` : ''}</div>}
                                 {msg && <div style={{ fontSize: '0.85rem', marginTop: '8px', color: msg.startsWith('⛔') ? '#b3362f' : '#2e7d32' }}>{msg}</div>}
-                                <div style={{ ...mono, marginTop: '10px', textTransform: 'none', letterSpacing: 0, fontSize: '11px' }}>Phase 1: the decision is on the order. The warehouse honours a held line in phase 2 (the pick, the pack and the second fulfilment), coming with the WMS and Payments sessions.</div>
+                                <div style={{ ...mono, marginTop: '10px', textTransform: 'none', letterSpacing: 0, fontSize: '11px' }}>The warehouse honours the decision: a held line is not picked until released; the released shelf lines picked into the order's bin pack as a shipment of their own (ships from the WMS Fulfilment tab, a second fulfilment of the same NetSuite order), and the order stays open for the rest. A pay-first order ships a part when what is paid covers it and leaves more than half of the balance.ond fulfilment), coming with the WMS and Payments sessions.</div>
                             </div>
                         )}
                     </div>

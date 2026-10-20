@@ -108,11 +108,36 @@ export const shipClearanceOf = (facts) => {
 };
 
 /**
+ * PART OF THE ORDER SHIPS FIRST (12.7 Launch phase 2 — Stuart 2026-10-20: "pay first order, as long as the remaining funds
+ * from deposit are over 50% the amount of the balance order it is fine to ship first part"). For a pay-first order sending
+ * a shipment worth `shippingNow` with the rest (total − shippingNow) still to come:
+ *   clear when  paid ≥ shippingNow   AND   paid − shippingNow > 0.5 × (total − shippingNow)
+ * — what is paid covers the part going out, and what is left of it is more than half of what stays behind. Credit terms
+ * ship as always; an order paid in full is clear; a shipment worth the whole order is the ordinary rule.
+ */
+export const partialShipClearanceOf = (facts, { shippingNow = 0 } = {}) => {
+    const now = money(shippingNow);
+    if (!facts || !facts.nsSoId || !(now > 0)) return shipClearanceOf(facts);
+    const whole = shipClearanceOf(facts);
+    if (whole.clear) return whole;
+    const rest = money(facts.total - now);
+    if (rest <= 0.005) return whole;
+    const left = money(facts.paid - now);
+    const need = money(rest / 2);
+    const term = facts.termName || (facts.termId ? `term ${facts.termId}` : 'No terms on the order');
+    if (facts.paid + 0.005 >= now && left > need) {
+        return { clear: true, rule: whole.rule, due: 0, partial: true, why: `${term} — this shipment (${usd(now)}) is covered: ${usd(facts.paid)} paid, ${usd(left)} left against ${usd(rest)} still to ship (more than half)` };
+    }
+    const short = facts.paid + 0.005 < now ? money(now - facts.paid) : money(need - left + 0.01);
+    return { clear: false, rule: whole.rule, due: short, partial: true, why: `${term} — ${usd(facts.paid)} paid of ${usd(facts.total)}; to ship this part (${usd(now)}) first, what is paid must cover it and leave more than half of the ${usd(rest)} balance (${usd(short)} more needed)` };
+};
+
+/**
  * Read NetSuite and decide. → { ok, facts, clearance }; ok false = NetSuite did not answer (the clearance says so).
  * `unpostedOf({ nsSoId })` → the Payments callable's answer; asked only when the terms want payment and NetSuite's own figure
  * falls short. Whatever it does — throws, refuses, finds nothing — the order is decided on NetSuite's figure alone.
  */
-export async function fetchShipClearance({ nsProxyFetch, nsSoId, unpostedOf = null }) {
+export async function fetchShipClearance({ nsProxyFetch, nsSoId, unpostedOf = null, shippingNow = 0 }) {
     const sql = shipFactsSql(nsSoId);
     if (!sql || !nsProxyFetch) return { ok: false, facts: null, clearance: shipClearanceOf(null) };
     const url = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
@@ -131,7 +156,7 @@ export async function fetchShipClearance({ nsProxyFetch, nsSoId, unpostedOf = nu
             catch (e) { cardAnswer = { found: false, error: str((e && e.message) || e) || 'the card payments could not be read' }; }
             facts = shipFactsOf({ soRow, paidRows, cardAnswer });
         }
-        return { ok: true, facts, clearance: shipClearanceOf(facts) };
+        return { ok: true, facts, clearance: money(shippingNow) > 0 ? partialShipClearanceOf(facts, { shippingNow }) : shipClearanceOf(facts) };
     } catch (e) {
         return { ok: false, facts: null, clearance: shipClearanceOf(null) };
     }

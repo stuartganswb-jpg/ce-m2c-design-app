@@ -19,7 +19,10 @@ import { woRefOf } from '../Shared/woRef';
 import { pairWaitsOf, waitedText } from '../Shared/stagingPairs';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
-import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, soLineIsFee, unpackedSiblingsOf, soPackLineStateOf, gatherPlanOf, soCodeNeedOf, soCodeReleasedNeedOf, soCodeReleasedOf } from '../Shared/pickLines';
+import { packLinesOf as packLinesShared, pickableLinesOf, poleDetailsOf, stockedPoleDetail, isQuickShip, ORDER_ENTRY_CLASS, soLineCodeOf, soLineIsShelfPick, soLineIsFee, unpackedSiblingsOf, soPackLineStateOf, gatherPlanOf, soCodeNeedOf, soCodeReleasedNeedOf, soCodeReleasedOf, heldLinesOf } from '../Shared/pickLines';
+// 12.7 LAUNCH PHASE 2 (S7, 2026-10-20 — applied here with the App Improvement session's clearance): a held line is not picked,
+// a decided order packs what is in its bin, and a pack that leaves something behind is a SHIPMENT of its own.
+import { shipmentPlanOf, launchShipmentOf, shipmentFulfilItemsOf, shipmentsOf, isShipmentRecord, shipmentWordsOf, lineIsLaunchHeld } from '../Shared/launchBoard';
 import { isReleaseByCount } from '../Shared/rowRelease';
 import { isFeePart } from '../Shared/oeClassify';
 import { fetchAvailabilityUnits, fetchOrderCommitted, orderHeldOf } from '../Shared/oeReviewPlan';
@@ -1867,7 +1870,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // NOTHING TO PICK AND NOTHING TO FINISH (Stuart 2026-09-27): a plated custom pole's document — the pole
     // goes shop → plater, and its pieces reach the order at plating put-away (an Order Entry order) or the
     // pack document (a CPQ order). It has no pick and no staging, so it never waits in the pick queue.
-    function noPickNeeded(j) { return !!j && j.pickOnly === true && j.finishingRequired === false && pickableLines(j).length === 0; }
+    // …and a line HELD on 12.7 Launch is never "nothing to pick" (App Improvement's trap 1, 2026-10-20): it waits on the office.
+    function noPickNeeded(j) { return !!j && j.pickOnly === true && j.finishingRequired === false && pickableLines(j).length === 0 && heldLinesOf(j).length === 0; }
     // …BUT ITS PIECES STILL HAVE TO REACH THE ORDER (Stuart 2026-09-28, SO60551). A plated pole's document leaves the
     // packing station because the plating put-away gathers the poles into the Order Entry order — and a piece that wears
     // nothing (UNFINISHED: the clear acrylic, cut and packed) has no put-away at all, nor does a put-away whose gather
@@ -3007,6 +3011,78 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { alert('Gather stopped: ' + (e.message || e)); }
         finally { packCompletingRef.current = false; }
     };
+    // ── A SHIPMENT OF PART OF AN ORDER (12.7 Launch phase 2, S7 2026-10-20) ───────────────────────────────────────────
+    // Stuart: "second shipment/fulfillment is fine and acceptable in netsuite and how we do it now." The lines in the bin leave
+    // as their own packed record on the sales-order route (Shared/launchBoard.launchShipmentOf — the display shipment's model,
+    // less the $0 order): the SAME NetSuite sales order, fulfilled for THESE lines only, from the order's bin, shipped from the
+    // Fulfilment tab like any packed order. The parent gives up the pieces (its bin count, NetSuite's record of the bin, the
+    // shipped count), keeps the held and the waiting lines, and goes back to Pending for the next pack.
+    const completeShipment = async (job, lines, plan) => {
+        const blk = boxCompleteBlocker(job, lines);
+        if (blk) return alert(`${blk.charAt(0).toUpperCase()}${blk.slice(1)}.`);
+        const by = operator?.name || 'Packer';
+        const now = Date.now();
+        const built = launchShipmentOf({ parent: job, plan, by, now, boxes: packBoxesOfTicks(job, lines, orderBoxesOf(boxHomeOf(job).data)), photos: job.packPhotos || [] });
+        if (!built.ok) return alert(`Not shipped — ${built.why}`);
+        const names = (idxs) => idxs.map(i => ((job.lines || [])[i] || {}).erp || '?').join(', ');
+        if (!window.confirm(`📦 SHIPMENT ${built.n} of ${packRef(job)}?\n\nShips now: ${lines.length} line${lines.length === 1 ? '' : 's'} — ${names(plan.pack)}\n${plan.held.length ? `Held on 12.7 Launch (stays): ${names(plan.held)}\n` : ''}${plan.waiting.length ? `Still to come (stays): ${names(plan.waiting)}\n` : ''}\nThe shipment becomes its own packed order (${built.id}) and ships from the FULFILMENT tab; its NetSuite fulfilment takes only these lines. ${packRef(job)} stays open for the rest.`)) return;
+        packCompletingRef.current = true;
+        try {
+            const exists = await getDoc(doc(db, 'hq_sales_orders', built.id));
+            if (exists.exists()) return alert(`${built.id} already exists — shipment ${built.n} was already made from another screen. Nothing was written.`);
+            await setDoc(doc(db, 'hq_sales_orders', built.id), built.doc);
+            const args = [];
+            Object.entries(built.give).forEach(([c, q]) => {
+                args.push(new FieldPath('committedQty', c), increment(-q), new FieldPath('shippedQty', c), increment(q));
+                if (job.nsBinQty && job.nsBinQty[c] != null) args.push(new FieldPath('nsBinQty', c), increment(-q));
+            });
+            args.push(new FieldPath('shipments', String(built.n)), built.record, 'packedLines', {}, 'packPhotos', [], 'packInProgress', null, 'status', 'Pending', 'pickStatus', 'Pending', 'lastShipmentAt', now);
+            await updateDoc(doc(db, 'hq_sales_orders', job.id), ...args);
+            writeLog(`📦 Shipment ${built.n} of ${packRef(job)} packed by ${by} — ${shipmentWordsOf(built.record)}${plan.held.length ? ` · held on 12.7: ${names(plan.held)}` : ''}${plan.waiting.length ? ` · to come: ${names(plan.waiting)}` : ''}`, 'packing');
+            setPackOrderId(null);
+            const nsNote = await queueShipmentFulfilment(built.doc, { gate: true });
+            alert(`📦 Shipment ${built.n} of ${packRef(job)} packed (${built.id}).${nsNote}\n\n${packRef(job)} stays open for the rest${plan.waiting.length ? ` — still to come: ${names(plan.waiting)}` : ''}${plan.held.length ? ` — held on 12.7 Launch: ${names(plan.held)}` : ''}.`);
+        } catch (e) { alert('Could not complete the shipment: ' + (e.message || e)); }
+        finally { packCompletingRef.current = false; }
+    };
+    // THE SHIPMENT'S FULFILMENT: the parent's NetSuite order, ITS lines only (Shared/launchBoard.shipmentFulfilItemsOf), from the
+    // parent's bin — after the terms gate with the part-payment rule (Shared/shipClearance.partialShipClearanceOf, Stuart 2026-10-20:
+    // "as long as the remaining funds from deposit are over 50% the amount of the balance order it is fine to ship first part").
+    // Never Shared/fulfilmentQueue.queueSoFulfilment, which takes EVERY open line of the order. → the words for the alert.
+    const queueShipmentFulfilment = async (d, { gate = true } = {}) => {
+        const ref = `${packRef(d)} shipment ${d.shipmentNo || ''}`;
+        const refDoc = doc(db, 'hq_sales_orders', d.id);
+        try {
+            if (gate) {
+                const g = await gateShipment({ nsSoId: d.nsInternalId, refs: [refDoc], ref, shippingNow: Number(d.shipmentAmount) || 0 });
+                if (!g.clear) return shipHoldNoteOf(g);
+            }
+            const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: soLinesSql(d.nsInternalId) } });
+            const jq = await rq.json();
+            if (!rq.ok) throw new Error(`could not read the sales order lines — ${JSON.stringify(jq).slice(0, 200)}`);
+            const open = fulfilmentItemsOf(jq.items || []);
+            if (!open.ok) { await updateDoc(refDoc, { nsFulfillRefused: open.reason }); writeLog(`⚠ Fulfilment NOT queued for ${ref} — ${open.reason}`, 'alert'); return `\n\n⚠ ${refusalText(open)}`; }
+            const scoped = shipmentFulfilItemsOf({ items: open.items, rows: jq.items || [], lines: d.lines || [], bin: d.fulfilFromBin || '' });
+            if (!scoped.ok) {
+                await updateDoc(refDoc, { nsFulfillRefused: scoped.reason });
+                const w = `NetSuite has no open line for ${scoped.missing.map(m => m.code).join(', ')} — the fulfilment was NOT queued; fulfil ${ref} by hand in NetSuite.`;
+                writeLog(`⚠ ${w}`, 'alert');
+                return `\n\n⚠ ${w}`;
+            }
+            await enqueueNsWrite({
+                kind: 'itemfulfillment', dedupeKey: `if:${d.nsInternalId}:s${d.shipmentNo || 0}`,
+                label: `NS Fulfillment — ${ref} (${d.customer || ''}) from ${d.fulfilFromBin || '—'}`,
+                sourceApp: 'WMS', createdBy: operator?.name || '',
+                // ITS lines, from the order's bin — replacing the bin NetSuite fills in itself (Shared/fulfilmentBins).
+                targetUrl: fulfilmentTargetOf(d.nsInternalId, scoped.items), method: 'POST',
+                payload: { shipStatus: { id: 'B' }, memo: nsMemo(`Shipment ${d.shipmentNo || ''} of ${d.shipmentOfSoId || ''} — packed in app by ${operator?.name || 'Packer'}`), item: { items: scoped.items } },
+                writeBack: [{ collection: 'hq_sales_orders', docId: d.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }],
+            });
+            await updateDoc(refDoc, { nsFulfillQueued: true, nsFulfillNeedsBins: false, nsFulfillRefused: null });
+            writeLog(`📤 Fulfilment queued for ${ref} — ${scoped.items.length} NetSuite line${scoped.items.length === 1 ? '' : 's'} from ${d.fulfilFromBin || '—'}${scoped.missing.length ? ` · ⚠ no open NetSuite line for ${scoped.missing.map(m => m.code).join(', ')}` : ''}`, 'packing');
+            return `\n\n📤 NetSuite Item Fulfillment queued for these lines only (status: Packed). It ships from the FULFILMENT tab.${scoped.missing.length ? `\n\n⚠ NetSuite has no open line for ${scoped.missing.map(m => m.code).join(', ')} — check the order in NetSuite.` : ''}`;
+        } catch (e) { return `\n\n⚠ Could not queue the NetSuite fulfilment for ${ref}: ${e.message || e}. The shipment stands — press Send on its line under the order, or fulfil it in NetSuite.`; }
+    };
     const completePacking = async (job) => {
         if (packCompletingRef.current) return;
         if (job.packStatus === 'Packed') return alert('This order is already packed.');
@@ -3037,6 +3113,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         { const oeOrder = oeOrderOfDoc(job); if (oeOrder) return gatherDocIntoOrder(job, oeOrder); }
         const isStockPutaway = job.orderType === 'stock';
         if (!(job.packPhotos || []).length && !isStockPutaway) return alert('A photo of the packaged parts is required — tap 📷 Add Photo first.');
+        // 12.7 LAUNCH PHASE 2 (S7 2026-10-20): a decided Order Entry order packs what is in its bin (Shared/launchBoard.shipmentPlanOf
+        // — the same plan its pack lines came from). When a line stays behind (held by the office, or still being sewn) this pack
+        // is a SHIPMENT of its own, not the order's ✓ Packed: the order stays open for the rest.
+        if (isQsOrder(job)) { const plan = shipmentPlanOf(job); if (plan && plan.partial) return completeShipment(job, lines, plan); }
         let bin = normalizeBin(putawayBin);
         let putawayScanned = '';
         if (isStockPutaway) {
@@ -6060,8 +6140,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         : [packDocOf(job), ...(soDoc && soDoc.id ? [doc(db, 'hq_sales_orders', soDoc.id)] : []), ...orderPackDocsOf(job).filter(d => d.id !== job.id).map(d => doc(db, 'fin_workorders', d.id))]);
     // Card money taken in the app that NetSuite has not posted yet counts as paid (Payments' callable — PRODUCTION only).
     const unpostedCardFor = async ({ nsSoId }) => (await httpsCallable(functions, 'paymentsUnpostedForOrder')({ nsSoId })).data;
-    const gateShipment = async ({ nsSoId, refs = [], ref = '' }) => {
-        const r = await fetchShipClearance({ nsProxyFetch, nsSoId, unpostedOf: unpostedCardFor });
+    // `shippingNow` (12.7 Launch phase 2): the worth of a PART shipping first — the part-payment rule decides (Shared/shipClearance).
+    const gateShipment = async ({ nsSoId, refs = [], ref = '', shippingNow = 0 }) => {
+        const r = await fetchShipClearance({ nsProxyFetch, nsSoId, unpostedOf: unpostedCardFor, shippingNow });
         if (r.clearance.clear) return { clear: true, ...r };
         const stamp = shipHoldStampOf(r, { at: Date.now(), by: operator?.name || '' });
         for (const x of refs) { try { await updateDoc(x, stamp); } catch (e) { console.warn('ship hold stamp failed (the order is still held here):', e); } }
@@ -6107,7 +6188,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const recheckShipHold = async (rec, docs = []) => {
         const tg = shipTargetsOf(rec, docs);
         if (!tg.nsSoId) return alert('No NetSuite sales order is linked to this order.');
-        const r = await fetchShipClearance({ nsProxyFetch, nsSoId: tg.nsSoId, unpostedOf: unpostedCardFor });
+        const r = await fetchShipClearance({ nsProxyFetch, nsSoId: tg.nsSoId, unpostedOf: unpostedCardFor, shippingNow: isShipmentRecord(rec) ? (Number(rec.shipmentAmount) || 0) : 0 });
         const by = operator?.name || '';
         if (!r.clearance.clear) {
             const stamp = shipHoldStampOf(r, { at: Date.now(), by });
@@ -6116,7 +6197,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         }
         for (const x of tg.refs) await updateDoc(x, shipClearedStampOf(r, { at: Date.now(), by })).catch(() => {});
         writeLog(`✓ ${tg.ref} cleared to ship — ${r.clearance.why}`, 'packing');
-        const note = fulfilmentAlreadyQueued(rec, docs) ? '' : await sendFulfilmentFor({ ...tg, stampRefs: tg.refs });
+        const note = fulfilmentAlreadyQueued(rec, docs) ? '' : (isShipmentRecord(rec) ? await queueShipmentFulfilment(rec, { gate: false }) : await sendFulfilmentFor({ ...tg, stampRefs: tg.refs }));
         alert(`✓ ${tg.ref} may ship — ${r.clearance.why}.${note}`);
     };
     const releaseShipHold = async (rec, docs = []) => {
@@ -6129,7 +6210,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const by = operator?.name || '';
         for (const x of tg.refs) await updateDoc(x, shipReleaseStampOf({ hold, reason }, { at: Date.now(), by })).catch(() => {});
         writeLog(`🔓 ${tg.ref} released to ship by ${by} — ${reason}${hold ? ` (was: ${hold.why})` : ''}`, 'packing');
-        const note = (!tg.nsSoId || fulfilmentAlreadyQueued(rec, docs)) ? '' : await sendFulfilmentFor({ ...tg, stampRefs: tg.refs });
+        const note = (!tg.nsSoId || fulfilmentAlreadyQueued(rec, docs)) ? '' : (isShipmentRecord(rec) ? await queueShipmentFulfilment(rec, { gate: false }) : await sendFulfilmentFor({ ...tg, stampRefs: tg.refs }));
         alert(`🔓 ${tg.ref} released to ship.${note}`);
     };
     // The terms, read when Pack & ship opens — the packer knows before packing whether it ships today.
@@ -7101,7 +7182,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         .sort((a, b) => String(a.so.needBy || a.so.needByDate || '￿').localeCompare(String(b.so.needBy || b.so.needByDate || '￿')));
                     // A closed order is not open work: the closer stamps `closed`, or the status says so.
                     const isClosedSo = (o) => o.closed === true || ['Closed', 'CANCELLED', 'Cancelled', 'Deleted'].includes(String(o.status || ''));
-                    const open = quickShipOrders.filter(o => o.packMode !== 'DISPLAY' && (o.status || 'Pending') !== 'Shipped' && !isClosedSo(o));   // a display's shipments ship from the Fulfilment tab
+                    const open = quickShipOrders.filter(o => o.packMode !== 'DISPLAY' && !isShipmentRecord(o) && (o.status || 'Pending') !== 'Shipped' && !isClosedSo(o));   // a display's shipments, and a Launch shipment, ship from the Fulfilment tab
                     const shipped = quickShipOrders.filter(o => o.status === 'Shipped');
                     const closed = quickShipOrders.filter(o => isClosedSo(o) && o.status !== 'Shipped')
                         .sort((a, b) => (b.closedAt || b.updatedAt || 0) - (a.closedAt || a.updatedAt || 0));
@@ -7176,6 +7257,21 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         : <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.08em', color: theme.brass, marginRight: '12px' }}>{t('waiting on parts')}</span>))}
                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: o.status === 'Shipped' ? '#3a7d44' : (o.status === 'Picked' ? theme.brass : theme.inkSoft) }}>{o.status || 'Pending'}</span>
                             </div>
+                            {shipmentsOf(o).length > 0 && (
+                                /* SHIPMENTS ALREADY SENT (12.7 Launch phase 2): each is its own packed record, shipping from the Fulfilment tab. */
+                                <div style={{ padding: '8px 18px', borderBottom: `1px solid ${theme.line}`, background: '#fbfaf7', fontFamily: theme.mono, fontSize: '10px', color: theme.ink }}>
+                                    {shipmentsOf(o).map(s => { const d = quickShipOrders.find(x => x.id === s.id); return (
+                                        <div key={s.n} style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', padding: '3px 0' }}>
+                                            <span>📦 {shipmentWordsOf(s)} · {s.at ? new Date(s.at).toLocaleDateString() : ''}</span>
+                                            {d && (d.shippedAt ? <span style={{ color: '#2e7d32' }}>🚚 {t('shipped')}{d.nsIfTran ? ` · IF ${d.nsIfTran}` : ''}</span>
+                                                : d.nsIfTran ? <span style={{ color: '#2e7d32' }}>📤 IF {d.nsIfTran} — {t('ships from the Fulfilment tab')}</span>
+                                                : d.nsFulfillQueued ? <span>📤 {t('fulfilment queued — ships from the Fulfilment tab')}</span>
+                                                : isShipHeld(d) ? shipHoldBar(d)
+                                                : <span style={{ color: '#a86b00' }}>⚠ {t('fulfilment not queued')}{d.nsFulfillRefused ? ` (${d.nsFulfillRefused})` : ''} <button onClick={async () => { const n = await queueShipmentFulfilment(d, { gate: true }); alert(`${packRef(d)} shipment ${d.shipmentNo || ''}${n}`); }} disabled={isSyncing} style={{ padding: '3px 8px', background: 'transparent', border: '1px solid #a86b00', color: '#a86b00', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>{t('Send')}</button></span>)}
+                                        </div>); })}
+                                </div>
+                            )}
+                            {gs.held && gs.held.length > 0 && <div style={{ padding: '6px 18px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', color: '#a86b00' }}>⏸ {gs.held.length} {t('line(s) held on 12.7 Launch — picked when the office releases them')}: {gs.held.join(', ')}</div>}
                             {showLines && ready && (
                                 /* READY TO PACK: only what is in the order's bin, line by line (Stuart 2026-09-30: "it should show the qty
                                    of each line in the bin ORDERS-COM1 line by line"). Fees, kit lines and lines off the order carry no pieces. */
@@ -7218,6 +7314,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {/* A made-to-order line: the pieces ARRIVE from the finishing floor (in-house)
                                                     or the plater (outsourced) — do NOT pull the raw off the shelf for it
                                                     (its WO / plating demand carries the pull lines). */}
+                                                {!feeLine(o, l, i) && lineIsLaunchHeld(o, l, i) && <div style={{ color: '#a86b00', fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>⏸ {t('HELD on 12.7 Launch — not picked until the office releases it')}</div>}
                                                 {!feeLine(o, l, i) && isTrackCode(lineCodeOf(l)) && <div style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🧵 {t('loaded onto the track — the Traverse station picks and loads it')}</div>}
                                                 {feeLine(o, l, i) ? <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>{isKitLine(l) ? '🧰 kit — sold as one; its parts, beneath it, are what is picked or made' : `🔧 ${(o.oeGen && o.oeGen[i] && o.oeGen[i].rider) ? 'rides the pole — fabrication on the shop cut list, not picked' : 'fee — billed on the order, not picked'}`}</div>
                                                 : (l.toBeFinished || (l.stockColour && o.oeGen && o.oeGen[i] && o.oeGen[i].kind === 'WO')) && (soLineIsShelfPick(o, l, i)

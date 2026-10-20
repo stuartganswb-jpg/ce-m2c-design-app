@@ -1,4 +1,4 @@
-import { isQuickShip, pickableLinesOf, isKitHolderLine } from './pickLines.js';
+import { isQuickShip, pickableLinesOf, isKitHolderLine, heldLinesOf } from './pickLines.js';
 import { poleCoatIndexOf, woHasSmallParts } from './floorActivity.js';
 import { isStationPickLine, traverseWaitOf } from './trackLoaded.js';
 import { oeIsTbf } from './oeLines.js';
@@ -99,7 +99,8 @@ export const setupWaitsOnShop = (wo) => {
 // sibling or not, matched or not, anything to pick or not — never the door.
 export const isSalesDoc = (wo) => !!wo && ((wo.orderType || '') === 'sales' || !!wo.salesOrderId);
 /** Nothing for the warehouse to pull for this document (a paired pole with no small parts of its own). */
-export const nothingToPick = (wo) => !!wo && pickableLinesOf(wo).length === 0;
+// A line HELD on 12.7 Launch is not "nothing to pick" — it is waiting on the office (App Improvement's trap 1, 2026-10-20).
+export const nothingToPick = (wo) => !!wo && pickableLinesOf(wo).length === 0 && heldLinesOf(wo).length === 0;
 /** The WMS has scan-matched the document at the staging bin — the scheduler's own readiness test. */
 export const stagingMatched = (wo) => !!wo && wo.stagingStatus === 'MATCHED';
 // STAGE TO FLOOR WAITS ON THE MATCH (Stuart 2026-09-23: Base Front 1 was staged with no pick and
@@ -318,6 +319,10 @@ export const quickShipStatusOf = (so) => {
     if (packing) return { ...S, stage: 'PICKED', detail: 'open on a packing tablet', since: packing.since, by: packing.by };
     if (st === 'Picked') return { ...S, stage: 'PICKED', detail: 'awaiting pack', since: so.pickedAt || null, by: so.pickedBy || '' };
     if (picking) return { ...S, stage: 'PICKING', detail: 'open on a pick tablet', since: picking.since, by: picking.by };
+    // 12.7 Launch phase 2: part of the order has gone as a shipment of its own; the rest is still to pick.
+    const sent = Object.values(so.shipments || {}).filter(Boolean).length;
+    const held = heldLinesOf(so).length;
+    if (sent || held) return { ...S, stage: 'PICKING', detail: [sent ? `${sent} shipment${sent === 1 ? '' : 's'} sent, the rest to pick` : '', held ? `${held} line${held === 1 ? '' : 's'} held on 12.7 Launch` : ''].filter(Boolean).join(' · '), since: so.soAcceptedAt || null };
     return { ...S, stage: 'PICKING', detail: 'in the WMS pick queue', since: so.soAcceptedAt || null };
 };
 

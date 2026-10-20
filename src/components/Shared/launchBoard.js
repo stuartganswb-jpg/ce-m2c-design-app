@@ -27,12 +27,26 @@
 // NOT held by default (Classical keeps picking stock while the floor works, exactly as today) — the office holds a
 // Classical line by hand on 12.7 when it wants a partial.
 
+// PHASE 2 (S7, 2026-10-20 — Stuart: "build it here with clearance … second shipment/fulfillment is fine and acceptable in
+// netsuite and how we do it now"). THE WAREHOUSE HONOURS THE DECISION, through the one reader every WMS screen already
+// asks (Shared/pickLines): a HELD line is not a pull line, not part of the order's need (soCodeNeedOf), not a pack line.
+// A decided order PACKS WHAT IS IN ITS BIN (shipmentPlanOf) — the released shelf lines picked into it, a made line
+// gathered into it — and when something stays behind (held, or still being sewn) the pack is a SHIPMENT: its own
+// record on the sales-order route, born packed, pointing at the SAME NetSuite sales order (launchShipmentOf — the
+// display shipment's model, Shared/displayShipment, less the $0 order), fulfilled for ITS lines only
+// (shipmentFulfilItemsOf) and shipped from the Fulfilment tab like any packed order. The parent order keeps the rest,
+// goes back to Pending, and packs again when the rest is in the bin; its LAST pack is the ordinary ✓ Packed, whose
+// whole-order fulfilment takes exactly what is still open in NetSuite.
 import { isPlaceholderLine } from './placeholderLine.js';
 import { oeIsTbf } from './oeLines.js';
-import { soLineIsFee, soLineIsShelfPick } from './pickLines.js';
+import { soLineIsFee, soLineIsShelfPick, soLineCodeOf } from './pickLines.js';
+import { committedQtyOf } from './committedBins.js';
 
 const str = (v) => String(v == null ? '' : v).trim();
 const up = (v) => str(v).toUpperCase();
+const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const r3 = (n) => Math.round(n * 1000) / 1000;
+const r2 = (n) => Math.round(n * 100) / 100;
 
 export const LAUNCH_KINDS = ['SHELF', 'SEW', 'FINISH', 'FLOOR', 'PLACEHOLDER', 'FEE'];
 export const LAUNCH_STATES = ['AUTO', 'HELD', 'RELEASED'];
@@ -139,3 +153,118 @@ export const SUGGESTION_WORDS = {
     WAIT_NS: 'waiting for NetSuite to accept the order',
     CLOSED: 'closed',
 };
+
+// ── PHASE 2: SHIPMENTS ────────────────────────────────────────────────────────────────────────────────
+
+/** The shipments an order has sent, in order (`shipments` is a map keyed by n, so the outbox can stamp into one). */
+export const shipmentsOf = (so) => Object.values((so && so.shipments) || {}).filter(Boolean).sort((a, b) => num(a.n) - num(b.n));
+
+/** Is this record a shipment of a parent order (born packed; ships from the Fulfilment tab; never picked)? */
+export const isShipmentRecord = (d) => !!d && d.packMode === 'SHIPMENT' && !!d.shipmentOf;
+
+/**
+ * THE NEXT SHIPMENT of a DECIDED order — null for an order with no Launch decision (it packs whole, as it always has).
+ *   pack     ships now: a line whose pieces are in the order's bin (committedOf(so, code) covers it, in line order)
+ *   held     a SHELF line HELD on 12.7 — not picked, not packed, not fulfilled until released
+ *   waiting  a line whose pieces are not in the bin yet (a pillow still at Stitch & Sew, a released line not picked yet)
+ *   shipped  a line already gone in an earlier shipment (its code's shippedQty covers it, in line order)
+ * partial = something stays behind, so this pack is a SHIPMENT and not the order's ✓ Packed.
+ */
+export function shipmentPlanOf(so, { committedOf = committedQtyOf } = {}) {
+    if (!so || !so.launch) return null;
+    const shippedLeft = {};
+    Object.entries((so && so.shippedQty) || {}).forEach(([c, q]) => { shippedLeft[up(c)] = num(q); });
+    const binLeft = {};
+    const pack = [], held = [], waiting = [], shipped = [];
+    ((so && so.lines) || []).forEach((l, idx) => {
+        const kind = launchLineKindOf(so, l, idx);
+        if (kind === 'FEE' || kind === 'PLACEHOLDER') return;
+        const code = up(soLineCodeOf(l)), qty = num(l && l.qty);
+        if (!code || !(qty > 0)) return;
+        if ((shippedLeft[code] || 0) >= qty) { shippedLeft[code] -= qty; shipped.push(idx); return; }
+        if (lineIsLaunchHeld(so, l, idx)) { held.push(idx); return; }
+        if (binLeft[code] == null) binLeft[code] = num(committedOf(so, code));
+        if (binLeft[code] >= qty) { binLeft[code] -= qty; pack.push(idx); return; }
+        waiting.push(idx);
+    });
+    return { pack, held, waiting, shipped, partial: held.length + waiting.length > 0, n: shipmentsOf(so).length + 1 };
+}
+
+/** What the lines shipping now are worth — the line's own total, else price × qty; before any order discount (the stricter side). */
+export const shipmentAmountOf = (lines = []) => r2((lines || []).reduce((s, l) => s + (l ? (l.total != null ? num(l.total) : num(l.price) * num(l.qty)) : 0), 0));
+
+// The header fields a shipment carries from its parent — what the Fulfilment tab reads (Shared/fulfilment.shipToOf),
+// the packing list and the label. Nothing of the parent's pick / pack / pay / launch state crosses over.
+const SHIPMENT_HEADER_FIELDS = ['brand', 'customer', 'customerId', 'customerName', 'customerEmail', 'shippingMethod', 'customShippingAddress', 'shippingAddressId', 'needBy', 'needByDate', 'poNumber', 'customerPo', 'salesRep', 'blindShip', 'shipNotes', 'productionNotes'];
+
+/**
+ * THE SHIPMENT RECORD: its own document on the sales-order route (hq_sales_orders, Quick Ship class), born PACKED with the
+ * lines of the plan's `pack`, the boxes and the photos of this pack, pointing at the parent's NetSuite sales order
+ * (the fulfilment is a second fulfilment of THAT order — Stuart 2026-10-20). `give` = what the parent's bin gives up,
+ * per code (its app count, and NetSuite's record of the bin, since the fulfilment takes them out of it).
+ */
+export function launchShipmentOf({ parent = {}, plan = null, by = '', now = Date.now(), boxes = null, photos = [] } = {}) {
+    if (!parent || !plan) return { ok: false, why: 'no shipment plan' };
+    if (!plan.partial) return { ok: false, why: 'nothing stays behind — this pack is the order\'s ✓ Packed, not a shipment' };
+    if (!plan.pack.length) return { ok: false, why: `nothing is in ${str(parent.committedBin) || 'the order\'s bin'} to ship — pick the released shelf lines into it first (⤓)` };
+    if (!str(parent.nsInternalId)) return { ok: false, why: 'NetSuite has not accepted the order yet — its fulfilment needs the NetSuite sales order' };
+    const n = Math.max(1, Math.floor(num(plan.n)) || 1);
+    const soRef = str(parent.soId || parent.id);
+    const id = `QS-SHP-${soRef}-${String(n).padStart(2, '0')}`;
+    const lines = plan.pack.map(idx => ({ ...(parent.lines[idx] || {}), parentLineIdx: idx }));
+    const give = {};
+    lines.forEach(l => { const c = up(soLineCodeOf(l)); give[c] = r3((give[c] || 0) + num(l.qty)); });
+    const head = {};
+    SHIPMENT_HEADER_FIELDS.forEach(k => { if (parent[k] !== undefined && parent[k] !== null) head[k] = parent[k]; });
+    const doc = {
+        ...head,
+        id, orderClass: 'QUICKSHIP', source: 'LAUNCH_SHIP', status: 'Pending', pickStatus: 'Pending',
+        soId: soRef, nsInternalId: str(parent.nsInternalId),
+        shipmentOf: str(parent.id), shipmentOfSoId: soRef, shipmentNo: n,
+        jobName: `Shipment ${n} of ${soRef}${str(parent.jobName) ? ` — ${str(parent.jobName)}` : ''}`,
+        lines,
+        totalParts: lines.reduce((a, l) => a + num(l.qty), 0),
+        shipmentAmount: shipmentAmountOf(lines),
+        packStatus: 'Packed', packMode: 'SHIPMENT', packedAt: now, packedBy: str(by), packBoxes: boxes || {}, packPhotos: photos || [],
+        packedLines: Object.fromEntries(lines.map((l, i) => [`L${i}`, { qty: num(l.qty), by: str(by), at: now, boxes: [] }])),
+        fulfilFromBin: str(parent.committedBin), createdAt: now, createdBy: str(by),
+    };
+    const record = { n, id, at: now, by: str(by), lineIdxs: plan.pack.slice(), codes: give, amount: doc.shipmentAmount, heldIdxs: plan.held.slice(), waitingIdxs: plan.waiting.slice() };
+    return { ok: true, why: '', id, n, doc, give, record };
+}
+
+/**
+ * THE SHIPMENT'S FULFILMENT LINES: of the NetSuite sales order's open lines (Shared/fulfilmentLines.fulfilmentItemsOf —
+ * `items` with their `rows`), only those the shipment carries, at the shipment's quantity (never more than is open),
+ * taken from `bin` (the parent order's bin, as the display shipment does). A shipment line NetSuite has no open line
+ * for is `missing`; a shipment with nothing to fulfil is not ok.
+ */
+export function shipmentFulfilItemsOf({ items = [], rows = [], lines = [], bin = '' } = {}) {
+    const openOf = (r) => r3(num(r && r.qty) - num(r && r.shipped));
+    const pool = (items || []).map(it => {
+        const r = (rows || []).find(x => Number(x.line) === Number(it.orderLine)) || {};
+        return { it, code: up(r.item), open: openOf(r) };
+    }).filter(x => x.code && x.open > 0);
+    const out = [], missing = [];
+    (lines || []).forEach(l => {
+        const code = up(soLineCodeOf(l));
+        let want = num(l && l.qty);
+        if (!code || !(want > 0)) return;
+        let took = 0;
+        for (const x of pool) {
+            if (x.code !== code || !(x.open > 0) || !(want > 0)) continue;
+            const q = r3(Math.min(x.open, want));
+            x.open = r3(x.open - q); want = r3(want - q); took = r3(took + q);
+            const prev = out.find(o => o.orderLine === x.it.orderLine);
+            if (prev) prev.quantity = r3(prev.quantity + q);
+            else out.push({ ...x.it, quantity: q, ...(str(bin) ? { inventoryDetail: { inventoryAssignment: { items: [{ binNumber: { refName: str(bin) }, quantity: q }] } } } : {}) });
+        }
+        if (str(bin)) out.filter(o => o.inventoryDetail).forEach(o => { o.inventoryDetail.inventoryAssignment.items[0].quantity = o.quantity; });
+        if (!(took > 0)) missing.push({ code, qty: num(l.qty), name: str(l && l.name) });
+    });
+    if (!out.length) return { ok: false, reason: missing.length ? 'LINES_NOT_OPEN' : 'NOTHING_TO_FULFIL', items: [], missing };
+    return { ok: true, reason: '', items: out, missing };
+}
+
+/** The words beside a shipment on a card. */
+export const shipmentWordsOf = (s) => (s ? `Shipment ${s.n} · ${Object.entries(s.codes || {}).map(([c, q]) => `${q} × ${c}`).join(', ')}${s.by ? ` · ${s.by}` : ''}` : '');

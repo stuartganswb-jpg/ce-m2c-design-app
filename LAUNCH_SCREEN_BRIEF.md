@@ -28,26 +28,49 @@ line with its kind, state and whether a made line is STARTED (RTG's oeCoverageOf
 per-line Release / Hold, **Ship the shelf lines ahead** / **Hold until the pillows are sewn**, **Start the made lines →
 review** (hands the order to 12.5 Order Entry Needs as RTG's card does). Nothing in the warehouse moves yet.
 
-## Phase 2 — NEXT (needs the clearances below): the warehouse honours a held line
-1. Shared/pickLines.pickableLinesOf: a SHELF line that is HELD is not picked until released; a `heldLinesOf(doc)` beside
-   it, and orderStatus.nothingToPick / setupWaitsOnShop and PickPackApp's noPickNeeded require held === 0 — a held
-   line must never read as "nothing to pick" (App Improvement session, 2026-10-20, trap 1). The launch map lives on
-   hq_sales_orders; a sewing document never carries shelf lines, so a fin doc never reads it.
-2. The fulfilment is whole-order today (Shared/fulfilmentQueue.queueSoFulfilment takes the SO's open lines): packing
-   the released throws would fulfil the held pillows too. Partial release needs the fulfilment scoped to the PACKED
-   lines, the order left open for the second one, and SO Pack's orderPackBlockerOf / packReadinessOf not waiting on
-   held lines (trap 2). Shared/fulfilment.js + fulfilmentPanel.js are the Payments session's; pack & ship, SO Pack and
-   the terms gate were built by the App Improvement session, which offers to take that contract.
-3. The ship-clearance gate is per ORDER: a pay-first order (Uniquity's Pay Before Shipping) holds at ✓ Packed until paid
-   IN FULL, whatever is released. Whether a partial shipment of a pay-first order may go on a part payment is Stuart's
-   call (trap 3). Invoices bill what shipped (packingList.invoiceLinesOf) — check the first-shipment invoice.
+## Phase 2 — LIVE (2026-10-20, built here with the App Improvement session's clearance): the warehouse honours a held line
+Stuart: "build it here with clearance, pay first order, as long as the remaining funds from deposit are over 50% the
+amount of the balance order it is fine to ship first part."
+1. **A HELD line is out of the warehouse's hands until released** — through the one reader every WMS screen already asks
+   (Shared/pickLines): `pickableLinesOf` leaves it out, `soCodeNeedOf` does not need it in the bin (so the gather stage
+   offers no ⤓ pick for it, the "to-be-finished not gathered" warning does not count it), `soLineReleasedOf` reads it as
+   not in motion, `packLinesOf` keeps it off the bench. `heldLinesOf(so)` names them; `orderStatus.nothingToPick` and
+   PickPackApp's `noPickNeeded` require held === 0 (trap 1 closed in the same change); the gather stage never reads
+   SHIPPED while a line is held (`held: [codes]` on the result). The WMS line shows "⏸ HELD on 12.7 Launch".
+2. **A decided order packs what is in its bin** — `Shared/launchBoard.shipmentPlanOf(so)`: pack (in the bin) · held ·
+   waiting (not in the bin yet — a pillow still at Stitch & Sew, a released line not picked yet) · shipped (gone in an
+   earlier shipment, by `shippedQty` in line order). No decision (`launch` absent) = no plan: the order packs whole as it
+   always has. `packLinesOf` follows the plan.
+3. **A pack that leaves something behind is a SHIPMENT of its own** — `launchShipmentOf`: a child record on the
+   sales-order route (`QS-SHP-<SO>-01`, orderClass QUICKSHIP, `packMode: 'SHIPMENT'`, `shipmentOf`, `shipmentNo`), born
+   PACKED with the plan's lines, this pack's boxes and photos, pointing at the SAME NetSuite sales order
+   (`nsInternalId`), `fulfilFromBin` = the parent's bin — the display shipment's model (Shared/displayShipment) less the
+   $0 order. The parent gives up the pieces (committedQty −, shippedQty +, nsBinQty − when counted), records
+   `shipments.<n>` (a map, so the outbox can stamp into one), clears its ticks and photos and goes back to Pending for
+   the rest. The child ships from the Fulfilment tab like any packed order (packing list, label, invoice = its lines).
+   The parent's LAST pack (nothing held, nothing waiting) is the ordinary ✓ Packed — its whole-order fulfilment takes
+   exactly what is still open in NetSuite.
+4. **The shipment's fulfilment is scoped to its lines** — PickPackApp `queueShipmentFulfilment`: the SO's open lines
+   (Shared/fulfilmentLines) narrowed by `shipmentFulfilItemsOf` to the child's codes at the child's quantity (never more
+   than open), from the parent's bin; dedupeKey `if:<nsSoId>:s<n>`; write-back `nsIfId` / `nsIfTran` on the child.
+   Never `queueSoFulfilment` (every open line). The parent card lists its shipments with their state (queued · IF # ·
+   shipped · ⏸ waiting for payment with Check again / Release · ⚠ not queued with Send).
+5. **The part-payment rule** — `Shared/shipClearance.partialShipClearanceOf(facts, { shippingNow })`, read by the same
+   gate (`gateShipment` / `fetchShipClearance` take `shippingNow` = the child's `shipmentAmount`, the lines' totals
+   before any order discount — the stricter side): a pay-first order ships a part when **paid ≥ shippingNow AND
+   paid − shippingNow > ½ × (total − shippingNow)**. Credit terms ship as always; paid in full is clear; a part worth
+   the whole order is the ordinary rule. Harness rows pin it (scripts/shipClearance.test.mjs).
+6. Not touched: Shared/fulfilmentQueue, fulfilment.js, fulfilmentPanel.js (Payments' — one line asked of them: the
+   panel's `needsNsFulfilment` must leave `packMode === 'SHIPMENT'` out, as it does DISPLAY, so it never sends a
+   whole-order fulfilment for a child); SO Pack's `orderPackBlockerOf` (CPQ documents — CPQ orders are not on Launch).
+   Named, not fixed: the WMS does not read a making line's `noPack` (a pillow's fabric line sits on the pick / pack
+   bench of an undecided order today; a decided order's plan leaves it off).
 
 ## Phase 3 — the Uniquity pick / pack / fulfilment walk-through
 After phase 2: one real mixed order (throw + pillow) run through Launch → ship ahead → pick → pack → fulfilment #1 →
 sewing → second pick → fulfilment #2, watched on 11.1 and in NetSuite.
 
 ## Open decisions (Stuart)
-- Who builds the pack / fulfilment side of phase 2: S7 with the Payments + App Improvement clearances, or the App
-  Improvement session (it built pack & ship, SO Pack, the terms gate).
-- A pay-first order shipped in two parts: ship the first part on a part payment, or hold both until paid in full.
+- (decided 2026-10-20) S7 built phase 2 with the App Improvement clearance; the part-payment rule is the 50% rule above —
+  confirm the reading: "remaining funds from deposit" = paid − the part shipping now; "the balance order" = total − that part.
 - CPQ orders on Launch (partsList, not lines[]) — phase 4 if wanted; today Launch lists Order Entry / counter orders.

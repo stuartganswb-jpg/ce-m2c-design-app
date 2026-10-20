@@ -4,6 +4,10 @@ import { isKitLine, isOffOrderLine } from './itemKit.js';
 import { parseKitCode } from './kitCode.js';
 import { finishedCodeOf } from './subFinish.js';
 import { isReleaseByCount, releasedByKindOf, lineTargetOf } from './rowRelease.js';
+// 12.7 LAUNCH (Shared/launchBoard, S7 2026-10-20): a SHELF line HELD by the office is not a pull line, not part of the
+// order's need and not a pack line until it is released; a decided order packs what is in its bin (shipmentPlanOf).
+// (launchBoard reads soLineIsFee / soLineIsShelfPick from here — the cycle is by design, every call is at run time.)
+import { lineIsLaunchHeld, shipmentPlanOf } from './launchBoard.js';
 // ══ ONE READER FOR AN ORDER'S LINES ═══════════════════════════════════════════════════════════
 //
 // Brief D · D7. The warehouse takes work from two doors and they speak different dialects:
@@ -77,6 +81,8 @@ export const lineIsFeeish = (l) => {
 export const ORDER_ENTRY_CLASS = 'QUICKSHIP';
 /** Which door did this order come through — does it pack off the order itself (lines[] are the truth)? */
 export const isQuickShip = (job) => !!job && String(job.orderClass || '').trim().toUpperCase() === ORDER_ENTRY_CLASS;
+/** The lines HELD on 12.7 Launch — never "nothing to pick": a held line is waiting on the office, not absent. */
+export const heldLinesOf = (job) => (job && isQuickShip(job) ? (job.lines || []).filter((l, i) => lineIsLaunchHeld(job, l, i)) : []);
 
 /**
  * The lines to PICK: real parts off a shelf, in either dialect, fees removed.
@@ -84,7 +90,7 @@ export const isQuickShip = (job) => !!job && String(job.orderClass || '').trim()
  */
 export function pickableLinesOf(job, { isFeeCode = null } = {}) {
     if (!job) return [];
-    if (isQuickShip(job)) return (job.lines || []).filter((l, i) => !soLineIsFee(job, l, i, isFeeCode));
+    if (isQuickShip(job)) return (job.lines || []).filter((l, i) => !soLineIsFee(job, l, i, isFeeCode) && !lineIsLaunchHeld(job, l, i));
     // A PART LOADED ONTO THE TRACK that comes off the shelf as it is — is the traverse station's pick, AFTER finishing,
     // never part of this one (Shared/traverseStation, Stuart 2026-10-07: "the traverse components should be kept in
     // their own bucket"). One that is painted here is still pulled now: it has to be on the floor to be painted.
@@ -192,7 +198,8 @@ export const unpackedSiblingsOf = (job, docs = []) => {
 export const soCodeNeedOf = (so, code, isFeeCode = null) => {
     const c = up(code);
     if (!c) return 0;
-    const ordered = ((so && so.lines) || []).reduce((a, l, i) => a + ((soLineCodeOf(l) === c && !soLineIsFee(so, l, i, isFeeCode)) ? (Number(l.qty) || 0) : 0), 0);
+    // A line HELD on 12.7 Launch is not needed in the bin until it is released (S7, 2026-10-20).
+    const ordered = ((so && so.lines) || []).reduce((a, l, i) => a + ((soLineCodeOf(l) === c && !soLineIsFee(so, l, i, isFeeCode) && !lineIsLaunchHeld(so, l, i)) ? (Number(l.qty) || 0) : 0), 0);
     const shipped = Number(((so && so.shippedQty) || {})[c]) || 0;
     return Math.max(0, ordered - shipped);
 };
@@ -205,7 +212,7 @@ export const soCodeNeedOf = (so, code, isFeeCode = null) => {
 // An order NOT released by count (every order before 2026-10-05) is released whole: every line, all of it.
 // @returns { shelf, floor, total }
 export const soLineReleasedOf = (so, l, idx, isFeeCode = null) => {
-    if (!l || !soLineCodeOf(l) || soLineIsFee(so, l, idx, isFeeCode)) return { shelf: 0, floor: 0, total: 0 };
+    if (!l || !soLineCodeOf(l) || soLineIsFee(so, l, idx, isFeeCode) || lineIsLaunchHeld(so, l, idx)) return { shelf: 0, floor: 0, total: 0 };
     const q = Number(l.qty) || 0;
     const g = so && so.oeGen && so.oeGen[idx];
     if (!isReleaseByCount(so)) return soLineIsShelfPick(so, l, idx) ? { shelf: q, floor: 0, total: q } : { shelf: 0, floor: q, total: q };
@@ -334,8 +341,12 @@ export function packLinesOf(job, { poleRows = null, isFeeCode = null } = {}) {
     if (!job) return [];
     const out = [];
     if (isQuickShip(job)) {
+        // A DECIDED ORDER PACKS WHAT IS IN ITS BIN (12.7 Launch phase 2, S7 2026-10-20): a held line, a line still coming
+        // and a line already shipped stay off the bench; an order with no decision packs every line, as it always has.
+        const plan = shipmentPlanOf(job);
         (job.lines || []).forEach((l, i) => {
             if (soLineIsFee(job, l, i, isFeeCode)) return;   // ← the defect this module closes
+            if (plan && !plan.pack.includes(i)) return;
             out.push({
                 // The piece in the box: the FINISHED code for a to-be-finished line (soLineCodeOf, 2026-09-27).
                 key: `L${i}`, erp: soLineCodeOf(l) || l.erp || '', aliasErp: l.aliasErp || '',

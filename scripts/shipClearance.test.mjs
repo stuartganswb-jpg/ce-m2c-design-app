@@ -1,6 +1,6 @@
 // 🧪 May this order ship? The customer's terms decide (Stuart 2026-10-17).   node scripts/shipClearance.test.mjs
 import { termRuleOf, TERM_RULE, PAY_FIRST_TERMS, CREDIT_TERMS, shipFactsSql, shipFactsOf, shipClearanceOf, fetchShipClearance,
-    shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, shipHoldText, unpostedCardOf } from '../src/components/Shared/shipClearance.js';
+    shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, shipHoldText, unpostedCardOf, partialShipClearanceOf } from '../src/components/Shared/shipClearance.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 const eq = (n, a, b) => ok(`${n}\n    got  ${JSON.stringify(a)}\n    want ${JSON.stringify(b)}`, JSON.stringify(a) === JSON.stringify(b));
@@ -97,6 +97,20 @@ eq('a release keeps what it lifted and why', shipReleaseStampOf({ hold: hold.shi
 eq('the words', shipHoldText(hold.shipHold), `⏸ ${c.why}`);
 eq('who may release', ['admin', 'superadmin', 'executive', 'manager', 'warehouse_manager', 'Paint_Manager', 'operator', 'painter', 'csr'].map(r => mayReleaseShipHold(r)), [true, true, true, true, true, true, false, false, false]);
 ok('a super admin flag releases whatever the role', mayReleaseShipHold('operator', true));
+
+
+// PART OF THE ORDER SHIPS FIRST (12.7 Launch phase 2, Stuart 2026-10-20): paid ≥ shippingNow AND paid − shippingNow > ½ × (total − shippingNow).
+const pf = { nsSoId: '1', termId: '22', termName: 'Pay Before Shipping', total: 1000, paid: 650, card: 0 };
+eq('throws worth $200 ship first on $650 paid of $1,000: $450 left > half of the $800 balance', [partialShipClearanceOf(pf, { shippingNow: 200 }).clear, partialShipClearanceOf(pf, { shippingNow: 200 }).partial], [true, true]);
+eq('throws worth $400: $250 left is not more than half of $600 → waits, and says what is short', [partialShipClearanceOf(pf, { shippingNow: 400 }).clear, partialShipClearanceOf(pf, { shippingNow: 400 }).due], [false, 50.01]);
+eq('a part worth more than is paid waits', partialShipClearanceOf(pf, { shippingNow: 700 }).clear, false);
+eq('exactly half is not over half ($600 paid, $200 out, $400 left against $800)', partialShipClearanceOf({ ...pf, paid: 600 }, { shippingNow: 200 }).clear, false);
+eq('paid in full → clear whatever the part', partialShipClearanceOf({ ...pf, paid: 1000 }, { shippingNow: 900 }).clear, true);
+eq('credit terms ship the part as always', partialShipClearanceOf({ ...pf, termId: '2', termName: 'Net 30', paid: 0 }, { shippingNow: 200 }).clear, true);
+eq('no part named = the ordinary rule', partialShipClearanceOf(pf, {}).clear, false);
+eq('a part worth the whole order = the ordinary rule (not paid in full → waits)', partialShipClearanceOf(pf, { shippingNow: 1000 }).why, 'Pay Before Shipping — $350.00 still to be paid before it ships ($650.00 of $1,000.00 paid)');
+ok('the sentence names the part, what is paid, what is left and the balance', /\$200\.00.*\$650\.00 paid, \$450\.00 left against \$800\.00/.test(partialShipClearanceOf(pf, { shippingNow: 200 }).why));
+ok('NetSuite unread → not clear, as the whole rule says', partialShipClearanceOf(null, { shippingNow: 200 }).clear === false);
 
 console.log(`shipClearance: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
