@@ -41,6 +41,7 @@ import { isPlaceholderLine } from './placeholderLine.js';
 import { oeIsTbf } from './oeLines.js';
 import { soLineIsFee, soLineIsShelfPick, soLineCodeOf } from './pickLines.js';
 import { committedQtyOf } from './committedBins.js';
+import { soRefusalOf } from './nsRefusal.js';
 
 const str = (v) => String(v == null ? '' : v).trim();
 const up = (v) => str(v).toUpperCase();
@@ -107,18 +108,23 @@ export function launchOrderOf(so, { docs = [], startedOf = null } = {}) {
     const st = up(so && (so.status || so.pickStatus));
     const closed = st === 'CLOSED' || st === 'CANCELLED' || !!(so && (so.closed || so.currentPhase === 'Closed'));
     const nsAccepted = !!(so && so.nsInternalId);
+    // NETSUITE REFUSED IT (Stuart 2026-10-20, App Improvement's NetSuite-to-fix list: "hold at shipping"): a refused order is
+    // launched, picked, packed and made as usual, and held at shipping (Shared/shipClearance NO_SO_RULE) until NetSuite
+    // accepts it. Only an order still in flight to NetSuite waits here.
+    const refusal = soRefusalOf(so);
+    const nsRefused = refusal ? str(refusal.error || refusal.label || 'NetSuite refused the order') : '';
     const placeholders = kinds.PLACEHOLDER;
     const makes = lines.filter(x => (x.kind === 'SEW' || x.kind === 'FINISH') && !x.started).length;
     let suggestion = 'AUTO';
     if (closed) suggestion = 'CLOSED';
     else if (placeholders) suggestion = 'IDENTIFY';
-    else if (!nsAccepted) suggestion = 'WAIT_NS';
+    else if (!nsAccepted && !nsRefused) suggestion = 'WAIT_NS';
     else if (mixed && shelf.held > 0 && !(so.launch && so.launch.decidedAt)) suggestion = 'DECIDE';
     else if (makes > 0) suggestion = 'START';
     else if (shelf.held > 0) suggestion = 'HELD';
     return {
         id: so.id, number: so.soId || so.id, customer: str(so.customer), brand: str(so.brand), createdAt: Number(so.createdAt) || Number(so.nsQueuedAt) || 0,
-        kinds, mixed, lines, shelf, suggestion, closed, nsAccepted,
+        kinds, mixed, lines, shelf, suggestion, closed, nsAccepted, nsRefused,
         backorders: Array.isArray(so.backorderLines) ? so.backorderLines : [], placeholders,
         decided: !!(so.launch && so.launch.decidedAt), mode: str(so.launch && so.launch.mode),
     };
@@ -161,8 +167,9 @@ export const shipmentsOf = (so) => Object.values((so && so.shipments) || {}).fil
 
 /** Is this record a shipment of a parent order (born packed; ships from the Fulfilment tab; never picked)? */
 export const isShipmentRecord = (d) => !!d && d.packMode === 'SHIPMENT' && !!d.shipmentOf;
-/** The NetSuite sales order a sales-order-route record fulfils against: a shipment's parent's, else its own. */
-export const nsSoIdOfRecord = (d) => str(d && (d.shipmentOfNsId || d.nsInternalId || ''));
+/** The NetSuite sales order a sales-order-route record fulfils against: a shipment's parent's (from the child, else from the
+ *  parent record when given — a shipment made before NetSuite accepted the order learns it at Check again), else its own. */
+export const nsSoIdOfRecord = (d, parent = null) => str(d && (d.shipmentOfNsId || (isShipmentRecord(d) ? (parent && parent.nsInternalId) : d.nsInternalId) || ''));
 
 /**
  * THE NEXT SHIPMENT of a DECIDED order — null for an order with no Launch decision (it packs whole, as it always has).
@@ -209,7 +216,8 @@ export function launchShipmentOf({ parent = {}, plan = null, by = '', now = Date
     if (!parent || !plan) return { ok: false, why: 'no shipment plan' };
     if (!plan.partial) return { ok: false, why: 'nothing stays behind — this pack is the order\'s ✓ Packed, not a shipment' };
     if (!plan.pack.length) return { ok: false, why: `nothing is in ${str(parent.committedBin) || 'the order\'s bin'} to ship — pick the released shelf lines into it first (⤓)` };
-    if (!str(parent.nsInternalId)) return { ok: false, why: 'NetSuite has not accepted the order yet — its fulfilment needs the NetSuite sales order' };
+    // NetSuite not yet accepted the order (refused — the NetSuite-to-fix list): the shipment is still made and held at shipping
+    // (NO_SO_RULE); its NetSuite id arrives from the parent at Check again (nsSoIdOfRecord).
     const n = Math.max(1, Math.floor(num(plan.n)) || 1);
     const soRef = str(parent.soId || parent.id);
     const id = `QS-SHP-${soRef}-${String(n).padStart(2, '0')}`;

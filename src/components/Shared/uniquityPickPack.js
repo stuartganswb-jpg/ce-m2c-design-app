@@ -18,6 +18,7 @@
 import { isQuickShip, soLineCodeOf } from './pickLines.js';
 import { committedQtyOf } from './committedBins.js';
 import { launchLineKindOf, launchLineStateOf, launchIsMixed, shipmentPlanOf, shipmentsOf, isShipmentRecord } from './launchBoard.js';
+import { soRefusalOf } from './nsRefusal.js';
 
 const str = (v) => String(v == null ? '' : v).trim();
 const up = (v) => str(v).toUpperCase();
@@ -62,8 +63,12 @@ export function channelOrderOf(so, { sewDocs = [] } = {}) {
     const closed = !so || so.closed === true || ['Closed', 'CANCELLED', 'Cancelled', 'Deleted', 'Shipped'].includes(st) || so.currentPhase === 'Closed';
     const base = { so, lines: [], pack: [], waiting: [], shipped: [], plan: null, partial: false, note: '', shipments: shipmentsOf(so) };
     if (closed || !isQuickShip(so) || isShipmentRecord(so)) return { ...base, stage: 'OFF' };
-    if (!str(so.nsInternalId)) return { ...base, stage: 'WAITING', note: st === 'HELD_PLACEHOLDER' ? 'held — a quick-add to identify first (RTG or the CRM)' : 'waiting for NetSuite to accept the order' };
-    if (so.packStatus === 'Packed') return { ...base, stage: 'SHIP', note: so.shipHold ? `waiting for payment — ${str(so.shipHold.why)}` : 'packed — the label and the tracking are on the Ship side' };
+    // NetSuite refused the order (the NetSuite-to-fix list): picked and packed as usual, held at shipping until NetSuite accepts
+    // it (Stuart 2026-10-20). An order still in flight to NetSuite, or held for a quick-add, waits.
+    const refusal = soRefusalOf(so);
+    if (!str(so.nsInternalId) && !refusal) return { ...base, stage: 'WAITING', note: st === 'HELD_PLACEHOLDER' ? 'held — a quick-add to identify first (RTG or the CRM)' : 'waiting for NetSuite to accept the order' };
+    const refusedNote = refusal ? ` · ⚠ NetSuite refused the order (${str(refusal.error || refusal.label) || 'see the NetSuite-to-fix list'}) — it is held at shipping until NetSuite accepts it` : '';
+    if (so.packStatus === 'Packed') return { ...base, stage: 'SHIP', note: so.shipHold ? `${str(so.shipHold.rule) === 'NO_SO' ? 'waiting for NetSuite' : 'waiting for payment'} — ${str(so.shipHold.why)}` : 'packed — the label and the tracking are on the Ship side' };
     // "in hand" per code: the ready lines (plus anything already gathered into a bin) — what the shipment plan reads as the bin
     const readyByCode = {};
     const lines = ((so.lines) || []).map((l, idx) => {
@@ -93,7 +98,7 @@ export function channelOrderOf(so, { sewDocs = [] } = {}) {
     const note = stage === 'TO PACK'
         ? (partial ? `ships ${pack.length} line${pack.length === 1 ? '' : 's'} now as shipment ${plan.n}; ${waiting.length} stay${waiting.length === 1 ? 's' : ''} behind` : `every line in hand — pack it`)
         : (waiting.length ? [...new Set(waiting.map(w => w.why))].join(' · ') : 'nothing to pack');
-    return { so, stage, lines, pack, waiting, shipped, plan, partial, note, shipments: shipmentsOf(so) };
+    return { so, stage, lines, pack, waiting, shipped, plan, partial, note: note + refusedNote, nsRefused: !!refusal, shipments: shipmentsOf(so) };
 }
 
 /** The channel's blocks: the brand's orders, oldest first, TO PACK before WAITING; the SHIP side is the panel's own list. */

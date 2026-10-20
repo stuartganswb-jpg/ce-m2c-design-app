@@ -3070,7 +3070,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // THE SHIPMENT'S FULFILMENT — Shared/launchShipment.queueShipmentFulfilment (ITS lines only, from the parent's bin, after the
     // terms gate with the part-payment rule), with this screen's gate and log. Never queueSoFulfilment for a shipment.
     const queueShipmentFulfilment = (d, { gate = true } = {}) => queueShipmentFulfilmentShared({
-        child: d, nsProxyFetch, by: operator?.name || '', sourceApp: 'WMS', log: writeLog,
+        child: d, parent: quickShipOrders.find(o => o.id === d.shipmentOf) || null, nsProxyFetch, by: operator?.name || '', sourceApp: 'WMS', log: writeLog,
         gate: gate ? (args) => gateShipment(args) : null,
     });
     const completePacking = async (job) => {
@@ -6144,7 +6144,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const shipTargetsOf = (rec, docs = []) => {
         if (isQsOrder(rec)) {
             const ref = packRef(rec);
-            return { nsSoId: String(rec.shipmentOfNsId || rec.nsInternalId || rec.soId || ''), ref, label: `NS Fulfillment — ${ref} (${rec.customerName || rec.customer || ''})`,
+            // a shipment child made before NetSuite accepted the order reads the id from its parent (Shared/launchBoard.nsSoIdOfRecord)
+            const parent = isShipmentRecord(rec) ? (quickShipOrders.find(o => o.id === rec.shipmentOf) || null) : null;
+            return { nsSoId: String(rec.shipmentOfNsId || (parent && parent.nsInternalId) || rec.nsInternalId || rec.soId || ''), ref, label: `NS Fulfillment — ${ref} (${rec.customerName || rec.customer || ''})`,
                 refs: [doc(db, 'hq_sales_orders', rec.id)], writeBack: [{ collection: 'hq_sales_orders', docId: rec.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }], preferBin: rec.committedBin || '' };
         }
         const live = (docs || []).filter(d => d && !d.deleted && d.currentPhase !== 'Closed'), ref = `SO ${rec.soId || rec.id}`;

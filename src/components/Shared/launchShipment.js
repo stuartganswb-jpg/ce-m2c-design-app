@@ -10,7 +10,7 @@ import { db } from '../../firebase';
 import { enqueueNsWrite } from './nsOutbox';
 import { soLinesSql, fulfilmentItemsOf, refusalText } from './fulfilmentLines';
 import { fulfilmentTargetOf } from './fulfilmentBins';
-import { fetchShipClearance, shipHoldStampOf } from './shipClearance';
+import { fetchShipClearance, shipHoldStampOf, NO_SO_RULE } from './shipClearance';
 import { launchShipmentOf, shipmentFulfilItemsOf, shipmentWordsOf, nsSoIdOfRecord } from './launchBoard';
 
 const SUITEQL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
@@ -31,7 +31,9 @@ export async function gateShipmentWith({ nsProxyFetch, unpostedOf = null, nsSoId
     log(`⏸ ${ref} packed, NOT shipped — ${r.clearance.why}`, 'packing');
     return { clear: false, ...r };
 }
-export const shipHoldNoteOf = (gate) => `\n\n⏸ NOT SHIPPED YET — ${gate.clearance.why}.\n\nThe NetSuite fulfilment was not sent. It waits under "Waiting for payment": press Check again once it is paid, or a manager releases it with a reason.`;
+export const shipHoldNoteOf = (gate) => (gate.clearance.rule === NO_SO_RULE
+    ? `\n\n⏸ NOT SHIPPED YET — ${gate.clearance.why}.\n\nIt is packed and waits under "Waiting for NetSuite". Once NetSuite accepts the order (Eric's NetSuite-to-fix list), press Check again and it ships.`
+    : `\n\n⏸ NOT SHIPPED YET — ${gate.clearance.why}.\n\nThe NetSuite fulfilment was not sent. It waits under "Waiting for payment": press Check again once it is paid, or a manager releases it with a reason.`);
 
 /**
  * WRITE THE SHIPMENT: the child record (born packed), then the parent gives up the pieces — its bin count, the shipped
@@ -61,11 +63,13 @@ export async function writeShipment({ parent, plan, by = '', now = Date.now(), b
  * over 50% the amount of the balance order it is fine to ship first part"). → the words for the alert.
  *   gate(args) → gateShipmentWith's answer (a screen passes its own, with its unposted-card read); false = no gate
  */
-export async function queueShipmentFulfilment({ child: d, nsProxyFetch, gate = null, by = '', sourceApp = 'WMS', log = () => {} }) {
+export async function queueShipmentFulfilment({ child: d, parent = null, nsProxyFetch, gate = null, by = '', sourceApp = 'WMS', log = () => {} }) {
     const ref = packRefOfRecord(d);
     const refDoc = doc(db, 'hq_sales_orders', d.id);
-    const nsSoId = nsSoIdOfRecord(d);
+    const nsSoId = nsSoIdOfRecord(d, parent);
     try {
+        // A shipment made before NetSuite accepted the order learns the order's id from its parent now, and keeps it.
+        if (nsSoId && !d.shipmentOfNsId) { try { await updateDoc(refDoc, { shipmentOfNsId: nsSoId }); } catch (e) { console.warn('shipmentOfNsId stamp failed', e); } }
         if (typeof gate === 'function') {
             const g = await gate({ nsSoId, refs: [refDoc], ref, shippingNow: Number(d.shipmentAmount) || 0 });
             if (!g.clear) return shipHoldNoteOf(g);

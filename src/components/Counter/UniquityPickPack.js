@@ -20,11 +20,12 @@ import { setAuditPage, auditPageOf } from '../Shared/auditContext';
 import { nsProxyFetch } from '../Shared/nsProxy';
 import { isQuickShip, ORDER_ENTRY_CLASS } from '../Shared/pickLines';
 import { channelRowsOf, channelPackedPatchOf, channelLineWords } from '../Shared/uniquityPickPack';
-import { isShipmentRecord, shipmentWordsOf } from '../Shared/launchBoard';
+import { isShipmentRecord, shipmentWordsOf, nsSoIdOfRecord } from '../Shared/launchBoard';
 import { gateShipmentWith, writeShipment, queueShipmentFulfilment, shipHoldNoteOf, packRefOfRecord, nsMemoOf } from '../Shared/launchShipment';
 import { queueSoFulfilment } from '../Shared/fulfilmentQueue';
 import { useBinAsk } from '../Shared/BinChoiceModal';
-import { isShipHeld, shipClearedStampOf, shipReleaseStampOf, mayReleaseShipHold } from '../Shared/shipClearance';
+import { isShipHeld, shipClearedStampOf, shipReleaseStampOf, mayReleaseShipHold, holdMayBeReleased, NO_SO_RULE } from '../Shared/shipClearance';
+import { NsFixChip } from '../Shared/NsFixPanel';
 import { fetchShipClearance } from '../Shared/shipClearance';
 import FulfilmentPanel from '../Shared/fulfilmentPanel';
 
@@ -143,8 +144,9 @@ const UniquityPickPack = () => {
     };
 
     // ⏸ waiting for payment: Check again / a manager's Release — the same stamps as the WMS (Shared/shipClearance)
+    const parentOf = (d) => (isShipmentRecord(d) ? (orders.find(o => o.id === d.shipmentOf) || null) : null);
     const recheck = async (d) => {
-        const nsSoId = isShipmentRecord(d) ? d.shipmentOfNsId : d.nsInternalId;
+        const nsSoId = nsSoIdOfRecord(d, parentOf(d));
         const r = await fetchShipClearance({ nsProxyFetch, nsSoId, unpostedOf: unpostedCardFor, shippingNow: isShipmentRecord(d) ? (Number(d.shipmentAmount) || 0) : 0 });
         const refDoc = doc(db, 'hq_sales_orders', d.id);
         if (!r.clearance.clear) { await gate({ nsSoId, refs: [refDoc], ref: packRefOfRecord(d) }); return alert(`⏸ ${packRefOfRecord(d)} still waits — ${r.clearance.why}`); }
@@ -154,6 +156,7 @@ const UniquityPickPack = () => {
         alert(`✓ ${packRefOfRecord(d)} may ship — ${r.clearance.why}.${note}`);
     };
     const release = async (d) => {
+        if (!holdMayBeReleased(d.shipHold)) return alert(`${packRefOfRecord(d)} cannot be released — NetSuite has not accepted the order, so no fulfilment can post for it.\n\nPut it right on the NetSuite-to-fix list; once NetSuite accepts it, press Check again.`);
         if (!mayReleaseShipHold(user && user.role, user && user.superAdmin)) return alert('Only a manager or an admin can release a held order — sign in with their PIN.');
         const why = window.prompt(`Release ${packRefOfRecord(d)} to ship although: ${(d.shipHold && d.shipHold.why) || ''}?\n\nThe reason is recorded.`);
         if (why === null) return;
@@ -165,7 +168,7 @@ const UniquityPickPack = () => {
         alert(`🔓 ${packRefOfRecord(d)} released to ship.${note}`);
     };
     const sendFor = async (d) => {
-        if (isShipmentRecord(d)) return queueShipmentFulfilment({ child: d, nsProxyFetch, gate: null, by: by(), sourceApp: 'UNIQ_PICKPACK', log: writeLog });
+        if (isShipmentRecord(d)) return queueShipmentFulfilment({ child: d, parent: parentOf(d), nsProxyFetch, gate: null, by: by(), sourceApp: 'UNIQ_PICKPACK', log: writeLog });
         try {
             const sent = await queueSoFulfilment({ nsSoId: String(d.nsInternalId || ''), ref: packRefOfRecord(d), label: `NS Fulfillment — ${packRefOfRecord(d)} (${d.customer || ''})`, memo: nsMemoOf(`Packed on Uniquity Pick & Pack by ${by()}`), writeBack: [{ collection: 'hq_sales_orders', docId: d.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }], createdBy: by(), sourceApp: 'UNIQ_PICKPACK', preferBin: d.committedBin || '', askBins });
             if (sent.ok) { await updateDoc(doc(db, 'hq_sales_orders', d.id), { nsFulfillQueued: true, nsFulfillNeedsBins: false }); return '\n\n📤 NetSuite Item Fulfillment queued (status: Packed).'; }
@@ -189,9 +192,9 @@ const UniquityPickPack = () => {
 
     const holdBar = (d) => (
         <span style={{ ...mono, color: '#a86b00', display: 'inline-flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-            ⏸ waiting for payment — {d.shipHold && d.shipHold.why}
+            ⏸ {d.shipHold && d.shipHold.rule === NO_SO_RULE ? 'waiting for NetSuite' : 'waiting for payment'} — {d.shipHold && d.shipHold.why}
             <button onClick={() => recheck(d)} style={{ ...btn(false), padding: '4px 8px' }}>Check again</button>
-            <button onClick={() => release(d)} style={{ ...btn(false), padding: '4px 8px' }}>Release</button>
+            {holdMayBeReleased(d.shipHold) && <button onClick={() => release(d)} style={{ ...btn(false), padding: '4px 8px' }}>Release</button>}
         </span>
     );
 
@@ -204,6 +207,7 @@ const UniquityPickPack = () => {
                     <button onClick={() => setSide('SHIP')} style={btn(side === 'SHIP')}>Ship · {shipDocs.length}</button>
                 </div>
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <NsFixChip currentUser={user.name} canAct={mayReleaseShipHold(user.role, user.superAdmin)} />
                     <span style={mono}>{user.name}</span>
                     <button onClick={() => setUser(null)} style={btn(false)}>Switch user</button>
                     <button onClick={() => navigate('/')} style={btn(false)}>Hub</button>
@@ -242,6 +246,7 @@ const UniquityPickPack = () => {
                                             {r.pack.length > 0 && <span style={chip('#fff', '#2e7d32')}>{r.pack.length} line{r.pack.length === 1 ? '' : 's'} to pack</span>}
                                             {r.waiting.length > 0 && <span style={chip('#fff', '#9a5a1e')}>{r.waiting.length} waiting</span>}
                                             {r.shipments.length > 0 && <span style={chip('#eef7ff', '#1e5fa8')}>{r.shipments.length} shipment{r.shipments.length === 1 ? '' : 's'} sent</span>}
+                                            {r.nsRefused && <span style={chip('#fdf3f3', '#b3362f')}>NetSuite refused — held at shipping</span>}
                                         </div>
                                     </div>
                                     <div style={{ fontSize: '0.9rem', color: TONE[r.stage][1] }}>{r.note}</div>

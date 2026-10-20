@@ -40,6 +40,8 @@ ok('a sewing document that names no lines still answers for the order; an open o
 ok('the lines read: a held shelf line, a pillow at the sewing floor, a quick-add', channelLineOf(held, throwL, 0).why === 'held on 12.7 Launch' && channelLineOf(mixed, pillowL, 1, { sewDocs: [sewOpen] }).why === 'at Stitch & Sew' && channelLineOf(mixed, { erp: 'TBD', name: 'x', qty: 1, placeholder: { description: 'x' } }, 5).kind === 'PLACEHOLDER');
 const rows = channelRowsOf([allShelf, mixed, { ...allShelf, id: 'QS-C', status: 'Shipped' }, { ...allShelf, id: 'QS-D', brand: 'ce' }], { sewDocs: [sewOpen] });
 ok('the rows: this brand only, shipped left out, TO PACK first then oldest first', rows.map(r => `${r.so.id}:${r.stage}`).join() === 'QS-A:TO PACK,QS-B:WAITING');
+const refused = { ...allShelf, nsInternalId: '', nsRefused: { salesorder: { error: 'Invalid customer' } } };
+ok('a refused order is TO PACK, says NetSuite refused it, and is held at shipping once packed', (() => { const r = channelOrderOf(refused); const p = channelOrderOf({ ...refused, packStatus: 'Packed', shipHold: { rule: 'NO_SO', why: 'no order yet' } }); return r.stage === 'TO PACK' && r.nsRefused && /NetSuite refused the order \(Invalid customer\)/.test(r.note) && p.stage === 'SHIP' && /waiting for NetSuite/.test(p.note); })());
 const patch = channelPackedPatchOf(allShelf, [0, 1], { by: 'ashley', now: 7 });
 ok('the packed stamp: what the WMS writes, every packed line ticked, from this channel', patch.packStatus === 'Packed' && patch.status === 'Picked' && patch.packedBy === 'ashley' && patch.packedLines.L0.qty === 1 && patch.packedLines.L1.by === 'ashley' && patch.packedFrom === 'UNIQ_PICKPACK' && JSON.stringify(patch.packBoxes) === '{}');
 

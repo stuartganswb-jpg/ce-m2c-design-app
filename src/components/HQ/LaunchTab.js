@@ -69,8 +69,8 @@ const LaunchTab = ({ currentUser = '', activeBrand = '', userRole = '' }) => {
     const counts = useMemo(() => rows.reduce((a, r) => { a[r.suggestion] = (a[r.suggestion] || 0) + 1; return a; }, {}), [rows]);
 
     const readClearance = async (so) => {
-        if (!so.nsInternalId) { setClearance(p => ({ ...p, [so.id]: { ok: false, clearance: { why: 'NetSuite has not accepted the order yet' }, at: Date.now() } })); return; }
-        const r = await fetchShipClearance({ nsProxyFetch, nsSoId: so.nsInternalId });
+        // no NetSuite id: Shared/shipClearance answers NO_SO without asking NetSuite (a refused order is held at shipping)
+        const r = await fetchShipClearance({ nsProxyFetch, nsSoId: so.nsInternalId || '' });
         setClearance(p => ({ ...p, [so.id]: { ...r, at: Date.now() } }));
     };
     const toggle = (so) => { const next = open === so.id ? '' : so.id; setOpen(next); setNote(''); setMsg(''); if (next && !clearance[so.id]) readClearance(so).catch(() => {}); };
@@ -113,7 +113,7 @@ const LaunchTab = ({ currentUser = '', activeBrand = '', userRole = '' }) => {
                         <div onClick={() => toggle(so)} style={{ display: 'grid', gridTemplateColumns: '170px 1fr 1fr auto', gap: '14px', alignItems: 'center', padding: '14px 18px', cursor: 'pointer' }}>
                             <div>
                                 <div style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: 'var(--ink)' }}>{r.number}</div>
-                                <div style={mono}>{when(r.createdAt)}{r.nsAccepted ? '' : ' · awaiting NetSuite'}</div>
+                                <div style={mono}>{when(r.createdAt)}{r.nsAccepted ? '' : (r.nsRefused ? ' · NetSuite refused' : ' · awaiting NetSuite')}</div>
                             </div>
                             <div>
                                 <div style={{ fontWeight: 600 }}>{r.customer || '—'}</div>
@@ -122,6 +122,7 @@ const LaunchTab = ({ currentUser = '', activeBrand = '', userRole = '' }) => {
                                     {r.shelf.held > 0 && <span style={chip(STATE_TONE.HELD[0], STATE_TONE.HELD[1])}>{r.shelf.held} held</span>}
                                     {r.shelf.released > 0 && <span style={chip(STATE_TONE.RELEASED[0], STATE_TONE.RELEASED[1])}>{r.shelf.released} released</span>}
                                     {r.backorders.length > 0 && <span style={chip('#fdf3f3', '#b3362f')}>{r.backorders.length} backordered</span>}
+                                    {r.nsRefused && <span style={chip('#fdf3f3', '#b3362f')} title={r.nsRefused}>NetSuite refused — picked and packed as usual, held at shipping</span>}
                                 </div>
                             </div>
                             <div style={{ fontSize: '0.9rem', color: SUG_TONE[r.suggestion] }}>{SUGGESTION_WORDS[r.suggestion]}{r.decided ? <span style={{ ...mono, marginLeft: '8px' }}>· decided{r.mode ? ` (${r.mode.toLowerCase().replace('_', ' ')})` : ''}</span> : null}</div>

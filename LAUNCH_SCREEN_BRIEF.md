@@ -93,6 +93,15 @@ the 9.5 UPS page — asked) · a pillow is in hand once Stitch & Sew says Comple
   The live walk-through (a real mixed order through 12.7 → this page → shipment 1 → sewing → the last pack) is still to
   run; nothing has moved live yet.
 
+## A refused order (2026-10-20, Stuart's rule via the App Improvement session: "hold at shipping")
+An order NetSuite refused (Shared/nsRefusal.soRefusalOf — the outbox marks `nsRefused.salesorder`, cleared when it posts)
+is launched, picked, packed and made as usual, and held at shipping by Shared/shipClearance's NO_SO rule until NetSuite
+accepts it: 12.7 lists it with "NetSuite refused" and the reason beside it and lets the office decide it; the Uniquity
+channel lists it TO PACK with the same note; PACKED stamps it and the fulfilment holds as "Waiting for NetSuite" (Check
+again only — no Release, nothing can post without the order); a shipment child made before acceptance learns the
+NetSuite id from its parent at Check again (nsSoIdOfRecord(child, parent)). An order merely in flight to NetSuite still
+waits. The "NetSuite: n to fix" chip (Shared/NsFixPanel) is on the Uniquity page header.
+
 ## Open decisions (Stuart)
 - (decided 2026-10-20) S7 built phase 2 with the App Improvement clearance; the part-payment rule is the 50% rule above —
   confirm the reading: "remaining funds from deposit" = paid − the part shipping now; "the balance order" = total − that part.
