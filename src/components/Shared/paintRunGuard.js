@@ -10,11 +10,21 @@
 // writer (Shared/repaintRun.raisePaintRun) asks this before it writes; the door shows what is
 // found and asks whether a second run is deliberate. Pure; scripts/paintRunGuard.test.mjs asserts.
 
+import { openForSearch } from './orderLifecycle.js';
+
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 
-/** Closed, deleted or otherwise off the ledger — not "on order" any more. */
+/**
+ * Closed, deleted, or FINISHED — off the ledger, not "on order" any more.
+ * FINISHED (Eric, 2026-10-20: "The app is seeing completed JFP orders as still on order" — HHRMBF75/M3: two runs put away
+ * in M E4R-N7-R3 on 9-25 and 10-13, their NetSuite adjustments posted, IA27483 / IA27842, still listed as ALREADY ON
+ * ORDER): a run is done once it is packed or put away (the RTG record reports Packed / Shelved), built or shipped — the
+ * app's one "is this finished" rule, Shared/orderLifecycle.openForSearch, the same Where-is-it and the open-run question
+ * read. A run that is Complete off the paint line but not yet put away is still on order: its pieces are not on the shelf.
+ */
 export const runIsClosed = (d) => !!d && (
     d.deleted === true || !!d.closedAt || d.status === 'Closed' || d.currentPhase === 'Closed' || d.floorPhase === 'Closed'
+    || !openForSearch(d)
 );
 
 /** Where the run is, in the floor's own words when it has reported, else the board's. */

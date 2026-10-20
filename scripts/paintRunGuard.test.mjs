@@ -29,5 +29,18 @@ eq('…and says what OK and Cancel do', [text.includes('second run of 5 pcs'), t
 eq('a confirmed 2nd run is stamped with what it duplicates, by whom, when', duplicateStamp(open, 'Stuart', T0 + 9), { duplicateOf: [jfpA.id, jfpB.id], duplicateConfirmedBy: 'Stuart', duplicateConfirmedAt: T0 + 9 });
 eq('no open runs → no stamp at all (nothing undefined reaches Firestore)', duplicateStamp([], 'Stuart'), {});
 
+// ── A FINISHED RUN IS NOT ON ORDER (Eric 2026-10-20, HHRMBF75/M3) ──
+const shelved1 = { id: 'WO-JFP-HHRMBF75-M3-964230', paintOnly: true, jfpItemCode: 'HHRMBF75/M3', totalParts: 20, status: 'Dispatched', floorPhase: 'Shelved', jfpPullFrom: 'HHRMBF75/M1', createdAt: T0 };
+const shelved2 = { id: 'WO-JFP-HHRMBF75-M3-683890', paintOnly: true, jfpItemCode: 'HHRMBF75/M3', totalParts: 20, status: 'Dispatched', floorPhase: 'Shelved', jfpPullFrom: 'HHRMBF75/M6', createdAt: T0 + 1, duplicateOf: ['x'] };
+const justMade = { id: 'WO-JFP-HHRMBF75-M3-624816', paintOnly: true, jfpItemCode: 'HHRMBF75/M3', totalParts: 20, status: 'Dispatched', jfpPullFrom: 'HHRMBF75/M4', createdAt: T0 + 2, duplicateOf: ['x'] };
+eq('HHRMBF75/M3: the two runs put away are off the list — only the one just made is on order', openPaintRunsOf([shelved1, shelved2, justMade], 'HHRMBF75/M3').map(r => r.woId), [justMade.id]);
+eq('finished, every way: Shelved · Packed (board) · packed (doc) · built · completed · shipped', [
+    runIsClosed({ floorPhase: 'Shelved' }), runIsClosed({ floorPhase: 'Packed' }), runIsClosed({ packStatus: 'Packed' }),
+    runIsClosed({ status: 'Built' }), runIsClosed({ status: 'Completed' }), runIsClosed({ shippedAt: T0 }),
+], [true, true, true, true, true, true]);
+eq('still on order: dispatched · on the floor · Complete off the paint line but not yet put away', [
+    runIsClosed({ status: 'Dispatched' }), runIsClosed({ floorPhase: 'Painting' }), runIsClosed({ floorPhase: 'Complete' }), runIsClosed({ currentPhase: 'Complete' }),
+], [false, false, false, false]);
+
 console.log(`paintRunGuard: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
