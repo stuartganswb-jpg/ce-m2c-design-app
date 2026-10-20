@@ -10,6 +10,7 @@ import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { quoteDisplayNo, quoteAuthorLine, docDateOf, orderSidemarkOf } from '../Shared/quoteDisplay';
 import QuickShipInvoiceModal from '../Shared/QuickShipInvoiceModal';
+import { invoiceDatesOf } from '../Shared/invoiceDates';   // an invoice's ship + due dates (2026-10-20)
 import FormPreview from '../Shared/FormPreview';
 import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
 import { customerKeys } from '../Shared/clientPricing';
@@ -1640,6 +1641,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
           // The P.O. slot carries the customer's PO; the sidemark has its own row (close-out item 6 —
           // the sidemark, or the doc id, used to print where the customer's PO belongs).
           po: String(activeDocJob.poNumber || '').trim() || '—',
+          customerNumber: String(activeDocJob.customerNumber || '').trim(),   // their reference # (2026-10-20)
           sidemark: orderSidemarkOf(activeDocJob),
           termsLabel: activeCrmRecord?.terms || 'Per agreement',
           tax: isUnpricedRequest ? undefined : 0,
@@ -1676,7 +1678,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       // customer's logo, name and address on the packing list in place of ours — the same list the pack station
       // prints — unless the order was set to one or the other (the choice beside Print, below).
       const packingFormData = packingList ? withBlindPacking({
-          billTo: quoteFormData.billTo, shipTo: quoteFormData.shipTo, date: quoteFormData.date, po: quoteFormData.po, termsLabel: quoteFormData.termsLabel, lines: [],
+          billTo: quoteFormData.billTo, shipTo: quoteFormData.shipTo, date: quoteFormData.date, po: quoteFormData.po, customerNumber: quoteFormData.customerNumber, termsLabel: quoteFormData.termsLabel, lines: [],
           packing: { shipDate: packingList.shipDate, tracking: packingList.tracking, lines: packingList.lines, flagged: packingList.flagged, packed: packingList.packed },
       }, { docs: [activeDocJob], customer: jobCrm || null, name: activeDocJob.customer?.name || activeDocJob.clientName || '' }) : null;
       const docRow = (b) => ({
@@ -1692,8 +1694,11 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '', isSuperAdmin
       const invoiceDoc = (activeDocType === 'INVOICE' && packingList && !isQsDoc)
           ? invoiceDocOf({ priced: customerDocLines(activeDocJob.cpqData?.breakdown || [], 'INVOICE', cartFinishLabelOf(activeDocJob.cpqData), docOpts), packingList, shippingAmount: shippingAmt, orderedTotal: activeDocJob.cpqData?.totalPrice || 0 })
           : null;
+      // THE INVOICE'S DATES (Stuart 2026-10-20): shipped = the fulfilment, never the entry date; due = by the ORDER's terms.
+      const invDates = invoiceDatesOf({ order: activeDocJob, packDocs, customer: activeCrmRecord });
       const invoiceFormData = invoiceDoc ? {
           ...quoteFormData, images: [],
+          shipDate: invDates.shipDate, dueDate: invDates.dueDate, termsLabel: invDates.terms || quoteFormData.termsLabel,
           lines: [...invoiceDoc.rows.map(docRow), ...(shippingAmt > 0 ? [{ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt, afterSubtotal: true }] : [])],
           tax: 0, total: invoiceDoc.total,
       } : null;

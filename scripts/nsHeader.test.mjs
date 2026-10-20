@@ -70,5 +70,13 @@ eq('CUST- prefix stripped; an app-only or non-numeric id is NO entity', [nsCusto
     eq('no shipping at all → nothing', Object.keys(nsTransactionHeader({ brand: 'ce', customerId: '1', memo: 'x' }).header).some(k => /ship/i.test(k)), false);
 }
 
+// ── the customer's own reference # → custbody_bit_customernum (Stuart 2026-10-20 — Fabricut / Trend) ──
+{
+    const r = nsTransactionHeader({ brand: 'ce', asType: 'salesorder', customerId: 'CUST-4720', customerNumber: ' 0008749 ' });
+    eq('their customer # rides the header', r.header.custbody_bit_customernum, '0008749');
+    eq('…on a quote too', nsTransactionHeader({ brand: 'ce', asType: 'estimate', customerId: 'CUST-4720', customerNumber: '1125439' }).header.custbody_bit_customernum, '1125439');
+    ok('none typed, none sent', !('custbody_bit_customernum' in nsTransactionHeader({ brand: 'ce', asType: 'estimate', customerId: 'CUST-4720' }).header));
+}
+
 console.log(`\nnsHeader: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

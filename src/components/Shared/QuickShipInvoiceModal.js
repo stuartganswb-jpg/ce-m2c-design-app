@@ -4,7 +4,7 @@ import { doc, updateDoc } from 'firebase/firestore';
 import { nsProxyFetch } from './nsProxy';
 import { printForm } from './printForm';
 import { usePayBlock } from './payBlock';
-import { termNameOf } from './nsTerms';   // a NetSuite term id prints by its name
+import { invoiceDatesOf } from './invoiceDates';   // shipped = the fulfilment; due = by the order's terms (2026-10-20)
 
 // ============================================================================
 // QUICK SHIP INVOICE (Stuart 2026-07-17) — the customer-facing document.
@@ -90,7 +90,8 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                 <div style={{ textAlign: 'right' }}>
                     <div style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px', letterSpacing: '.08em' }}>{docLabel}</div>
                     <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '11px', marginTop: '4px' }}>{invNo ? `# ${invNo}` : (fulfilled ? 'DRAFT — NetSuite # not matched' : 'Order confirmation — invoice issues at fulfillment')}</div>
-                    <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#8a857c', marginTop: '2px' }}>{new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
+                    {/* the invoice is dated the day it shipped (Stuart 2026-10-20) — an order confirmation keeps the order's date */}
+                    <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#8a857c', marginTop: '2px' }}>{invoiceDatesOf({ order, customer }).shipDate || new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
                 </div>
             </div>
             {/* THE DOCUMENT SAYS WHO, WHERE AND AGAINST WHAT (Stuart 2026-08-30) — the same
@@ -107,6 +108,8 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                 })();
                 const shipLines = (order.shipTo || []).length ? order.shipTo : fallbackShip;
                 const sidemark = order.sidemark || (order.memo && order.memo !== 'Quick Ship' && order.memo !== order.jobName ? order.memo : '');
+                // shipped = the fulfilment, never the entry date; TERMS = the order's own (kept by the ship check); due by them
+                const inv = invoiceDatesOf({ order, customer });
                 return (
                     <div style={{ display: 'flex', gap: '12px', padding: '14px 0', borderBottom: '1px solid #ddd8cf', flexWrap: 'wrap' }}>
                         <div style={shaded}>
@@ -129,10 +132,13 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                             <span style={boxLabel}>Order Details</span>
                             <div style={{ fontSize: '11px', fontFamily: 'var(--mono, monospace)', lineHeight: 1.7 }}>
                                 <div><span style={{ color: '#8a857c' }}>NO.</span> {order.soId}</div>
-                                <div><span style={{ color: '#8a857c' }}>DATE</span> {new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
+                                <div><span style={{ color: '#8a857c' }}>ORDER DATE</span> {new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
+                                {inv.shipDate ? <div><span style={{ color: '#8a857c' }}>SHIP DATE</span> {inv.shipDate}</div> : null}
                                 {order.customerPo ? <div><span style={{ color: '#8a857c' }}>P.O.</span> {order.customerPo}</div> : null}
+                                {order.customerNumber ? <div><span style={{ color: '#8a857c' }}>CUSTOMER #</span> {order.customerNumber}</div> : null}
                                 {sidemark ? <div><span style={{ color: '#8a857c' }}>SIDEMARK</span> {sidemark}</div> : null}
-                                {customer?.terms ? <div><span style={{ color: '#8a857c' }}>TERMS</span> {termNameOf(customer.terms)}</div> : null}
+                                {inv.terms ? <div><span style={{ color: '#8a857c' }}>TERMS</span> {inv.terms}</div> : null}
+                                {inv.dueDate ? <div style={{ fontWeight: 700 }}><span style={{ color: '#8a857c', fontWeight: 400 }}>DUE DATE</span> {inv.dueDate}</div> : null}
                                 {(order.needBy || order.needByDate) ? <div style={{ fontWeight: 700 }}><span style={{ color: '#8a857c', fontWeight: 400 }}>NEED BY</span> {(order.needBy || order.needByDate)}</div> : null}
                             </div>
                         </div>

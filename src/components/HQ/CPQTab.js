@@ -721,6 +721,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                       jobName: reopen.jobName || '',
                       sidemark: reopen.sidemark || '',
                       poNumber: reopen.poNumber || '',
+                      customerNumber: reopen.customerNumber || '',
                       internalMemo: reopen.internalMemo || '',
                       needBy: reopen.needBy || '',
                       productionNotes: reopen.productionNotes || '',
@@ -3237,6 +3238,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           // PO # / Internal Memo only write when typed — merge:true keeps an earlier value on a
           // reopen-refinalize where the fields came back blank.
           ...(String(jobData.poNumber || '').trim() ? { poNumber: String(jobData.poNumber).trim() } : {}),
+          ...(String(jobData.customerNumber || '').trim() ? { customerNumber: String(jobData.customerNumber).trim() } : {}),
           ...(String(jobData.internalMemo || '').trim() ? { internalMemo: String(jobData.internalMemo).trim() } : {}),
           shippingMethod: jobData.shippingMethod || 'SAVED',
           shippingAddressId: jobData.shippingAddressId || null,
@@ -5708,6 +5710,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Customer PO # (Optional)</label>
                             <input type="text" placeholder="e.g. PO-48213" value={jobData.poNumber || ''} onChange={e => setJobData({...jobData, poNumber: e.target.value})}
                                 title="Pushes to the NetSuite estimate's PO # field (otherrefnum)."
+                                style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
+                        </div>
+                        <div>
+                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Customer # (Optional — their reference)</label>
+                            <input type="text" placeholder="e.g. Fabricut's customer number" value={jobData.customerNumber || ''} onChange={e => setJobData({...jobData, customerNumber: e.target.value})}
+                                title="The customer's own reference number (Fabricut / Trend) — NetSuite custbody_bit_customernum; prints on the quote, order, invoice and packing slip (Stuart 2026-10-20)."
                                 style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
                         </div>
                         <div>

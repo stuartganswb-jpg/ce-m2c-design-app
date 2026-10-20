@@ -16,3 +16,20 @@ export const termNameOf = (term) => {
     if (/^\d+$/.test(t)) return NS_TERM_NAMES[t] || `Term ${t}`;
     return t;
 };
+
+// ── WHEN A TERM FALLS DUE (Stuart 2026-10-20: "we need to show due date based on the terms code" · "60+60 is due in
+// 120days") — days from the invoice (the ship date) to due, as NetSuite's own invoices carry them: read 2026-10-20 from
+// this year's invoices (duedate − trandate, every term that had one: 15/30/60/30/45/0/120/30/0/0/0/0/30); the terms with
+// no invoice yet follow their names. 0 = due on receipt.
+export const NS_TERM_DAYS = Object.freeze({
+    1: 15, 2: 30, 3: 60, 6: 30, 12: 45, 13: 0, 14: 120, 15: 30, 16: 90, 17: 0, 18: 0, 19: 0, 20: 0,
+    21: 120, 22: 0, 23: 30, 24: 0, 25: 10, 26: 0, 27: 30,
+});
+/** Days to due for a term id, or a name we know ("Net 30" → its id's days); null when the term is not known. */
+export const termDaysOf = (term) => {
+    const t = String(term == null ? '' : term).trim();
+    if (!t) return null;
+    if (/^\d+$/.test(t)) return Object.prototype.hasOwnProperty.call(NS_TERM_DAYS, t) ? NS_TERM_DAYS[t] : null;
+    const id = Object.keys(NS_TERM_NAMES).find(k => NS_TERM_NAMES[k].toUpperCase() === t.toUpperCase());
+    return id ? NS_TERM_DAYS[id] : null;
+};

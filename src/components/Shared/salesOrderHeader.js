@@ -279,7 +279,7 @@ export function soHeaderOf({ door, job = null, form = null, customer = null, by 
         const sew = lines.some(isSewLine);
         const rush = !!(form && form.rush);
         h = {
-            customerPo: str(ex.po), sidemark: str(ex.sidemark), jobName: str(form && form.jobName),
+            customerPo: str(ex.po), customerNumber: str(ex.customerNumber), sidemark: str(ex.sidemark), jobName: str(form && form.jobName),
             needBy: str(ex.needBy),
             shipTo: shipToLinesOf({ shippingMethod: ship.method, shippingAddressId: ship.addressId, customShippingAddress: ship.custom, customer }),
             shippingMethod: ship.method || 'SAVED', shippingAddressId: ship.addressId || null,
@@ -301,7 +301,7 @@ export function soHeaderOf({ door, job = null, form = null, customer = null, by 
         const rec = resolveJobRecipe(j, finishes);
         const codes = rec.recipes.length ? rec.recipes : (rec.recipe ? [rec.recipe] : []);
         h = {
-            customerPo: str(j.poNumber), sidemark: str(j.orderSidemark || ''), jobName: str(j.jobName),
+            customerPo: str(j.poNumber), customerNumber: str(j.customerNumber), sidemark: str(j.orderSidemark || ''), jobName: str(j.jobName),
             needBy: str(j.needBy),
             shipTo: shipToLinesOf({ shippingMethod: j.shippingMethod, shippingAddressId: j.shippingAddressId, customShippingAddress: j.customShippingAddress, customer }),
             shippingMethod: j.shippingMethod || 'SAVED', shippingAddressId: j.shippingAddressId || null,

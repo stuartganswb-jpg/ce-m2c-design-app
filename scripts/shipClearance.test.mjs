@@ -1,6 +1,6 @@
 // 🧪 May this order ship? The customer's terms decide (Stuart 2026-10-17).   node scripts/shipClearance.test.mjs
 import { termRuleOf, TERM_RULE, PAY_FIRST_TERMS, CREDIT_TERMS, shipFactsSql, shipFactsOf, shipClearanceOf, fetchShipClearance,
-    shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, shipHoldText, unpostedCardOf, partialShipClearanceOf } from '../src/components/Shared/shipClearance.js';
+    shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, shipHoldText, unpostedCardOf, partialShipClearanceOf, termsStampOf } from '../src/components/Shared/shipClearance.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 const eq = (n, a, b) => ok(`${n}\n    got  ${JSON.stringify(a)}\n    want ${JSON.stringify(b)}`, JSON.stringify(a) === JSON.stringify(b));
@@ -111,6 +111,10 @@ eq('no part named = the ordinary rule', partialShipClearanceOf(pf, {}).clear, fa
 eq('a part worth the whole order = the ordinary rule (not paid in full → waits)', partialShipClearanceOf(pf, { shippingNow: 1000 }).why, 'Pay Before Shipping — $350.00 still to be paid before it ships ($650.00 of $1,000.00 paid)');
 ok('the sentence names the part, what is paid, what is left and the balance', /\$200\.00.*\$650\.00 paid, \$450\.00 left against \$800\.00/.test(partialShipClearanceOf(pf, { shippingNow: 200 }).why));
 ok('NetSuite unread → not clear, as the whole rule says', partialShipClearanceOf(null, { shippingNow: 200 }).clear === false);
+
+// ── the order's own terms ride on it, read or held (2026-10-20 — the invoice's due date) ──
+eq('the terms stamp', termsStampOf({ termId: '22', termName: 'Pay Before Shipping' }, { at: 5 }), { nsTerms: { id: '22', name: 'Pay Before Shipping', at: 5 } });
+eq('nothing read → nothing stamped', [termsStampOf(null), termsStampOf({ termId: '', termName: '' })], [{}, {}]);
 
 console.log(`shipClearance: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

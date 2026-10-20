@@ -171,6 +171,10 @@ export const shipHoldStampOf = ({ facts = null, clearance }, { at = Date.now(), 
         total: money(facts && facts.total), paid: money(facts && facts.paid), card: money(facts && facts.card), at, by: str(by),
     },
 });
+/** THE ORDER'S OWN TERMS, kept on it whenever the check reads them (Stuart 2026-10-20: the invoice's due date "based on the
+ *  terms code") — the sales order's terms in NetSuite, which staff may set apart from the customer's default. {} when unread. */
+export const termsStampOf = (facts, { at = Date.now() } = {}) => (facts && (str(facts.termId) || str(facts.termName))
+    ? { nsTerms: { id: str(facts.termId), name: str(facts.termName), at } } : {});
 /** Cleared — on a fresh read that says it may ship. */
 export const shipClearedStampOf = ({ clearance }, { at = Date.now(), by = '' } = {}) => ({ shipHold: null, shipClearedAt: at, shipClearedBy: str(by), shipClearedWhy: str(clearance && clearance.why) });
 /** Released by a manager — the hold it lifted kept beside the reason. */

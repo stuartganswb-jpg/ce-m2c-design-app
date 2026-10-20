@@ -128,8 +128,13 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
             <div><span style={{ color: 'var(--ink-soft)' }}>NO.</span> {docNumber}</div>
             <div><span style={{ color: 'var(--ink-soft)' }}>DATE</span> {date}</div>
             <div><span style={{ color: 'var(--ink-soft)' }}>P.O.</span> {po}</div>
+            {/* the customer's own reference # (Fabricut / Trend — custbody_bit_customernum, Stuart 2026-10-20) */}
+            {d.customerNumber ? <div><span style={{ color: 'var(--ink-soft)' }}>CUSTOMER #</span> {d.customerNumber}</div> : null}
             {d.sidemark ? <div><span style={{ color: 'var(--ink-soft)' }}>SIDEMARK</span> {d.sidemark}</div> : null}
             {!blind && <div><span style={{ color: 'var(--ink-soft)' }}>TERMS</span> {termsLabel}</div>}
+            {/* an invoice: when it shipped (the fulfilment, never the entry date) and when it falls due by its terms (Shared/invoiceDates) */}
+            {!packing && d.shipDate ? <div><span style={{ color: 'var(--ink-soft)' }}>SHIP DATE</span> {d.shipDate}</div> : null}
+            {!packing && d.dueDate ? <div style={{ fontWeight: 700 }}><span style={{ color: 'var(--ink-soft)', fontWeight: 400 }}>DUE DATE</span> {d.dueDate}</div> : null}
             {packing && <div><span style={{ color: 'var(--ink-soft)' }}>SHIP DATE</span> {fmtDate(packing.shipDate)}</div>}
             {packing && <div><span style={{ color: 'var(--ink-soft)' }}>TRACKING</span> {(packing.tracking || []).length ? packing.tracking.join(', ') : '—'}</div>}
           </div>

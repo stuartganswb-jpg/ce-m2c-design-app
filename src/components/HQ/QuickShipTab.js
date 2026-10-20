@@ -207,7 +207,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // memo → custbody_bit_internalmemo. Form/class/status ride the payload, not fields here.
     // orderDiscountPercent (Stuart 2026-09-11): a set % at checkout on every item line's rate — rides
     // quickShipExtras like the rest, so an edit / reopen brings it back typed.
-    const [soExtras, setSoExtras] = useState({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '', orderDiscountPercent: '' });
+    // customerNumber (Stuart 2026-10-20): the customer's own reference # (Fabricut / Trend) → custbody_bit_customernum + the forms.
+    const [soExtras, setSoExtras] = useState({ po: '', customerNumber: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '', orderDiscountPercent: '' });
     // THE CUSTOMER'S NETSUITE PRICE LEVEL (Stuart 2026-10-12): read once when a customer is picked; its percent
     // becomes the order discount unless someone typed one; said on screen and in the log, never silent.
     const [priceLevelInfo, setPriceLevelInfo] = useState(null);
@@ -1448,7 +1449,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         // goes too, back to "Who is this for?"; the pay card of the order just made stays pinned up there until the next
         // customer is picked or Done. HQ's tab 7 keeps the customer (the office runs several orders for one account).
         if (counterMode) { setCustomerId(''); setCustSearch(''); setCheckoutOpen(false); }
-        setSoExtras({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '', orderDiscountPercent: '' });
+        setSoExtras({ po: '', customerNumber: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '', orderDiscountPercent: '' });
         setShip({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
         setTrvCfg(null); setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
         setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setQuickQty('');
@@ -1865,7 +1866,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
             const sm = shipAmt > 0 ? await resolveShipMethod() : null;
             const hdr = nsTransactionHeader({
                 brand: activeBrand, asType, customerId, memo: memoText,
-                poNumber: soExtras.po, internalMemo: soExtras.internalMemo,
+                poNumber: soExtras.po, internalMemo: soExtras.internalMemo, customerNumber: soExtras.customerNumber,
                 shipping: { method: ship.method, addressId: ship.addressId, custom: ship.custom, amount: shipAmt, shipMethod: sm },
                 // The class follows what is sold where a brand has two (M2C Hardware / Lighting) — each line's own item.
                 itemClasses: lines.map(l => itemClassOf(itemById(l.itemId))),
@@ -1928,6 +1929,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                     // quote builds the SO from one shape: orderSidemark = exactly as typed.
                     orderSidemark: String(soExtras.sidemark || '').trim() || null,
                     poNumber: String(soExtras.po || '').trim(), internalMemo: String(soExtras.internalMemo || '').trim(),
+                    customerNumber: String(soExtras.customerNumber || '').trim(),
                     needBy: String(soExtras.needBy || '').trim(), productionNotes: String(soExtras.prodNotes || '').trim(),
                     shippingMethod: ship.method || 'SAVED', shippingAddressId: ship.addressId || null,
                     customShippingAddress: ship.method === 'CUSTOM' ? (ship.custom || null) : null, shippingAmount: parseFloat(ship.amount) || 0,
@@ -2287,6 +2289,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                     <div style={{ borderTop: '1px solid var(--line)', padding: '14px 20px' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
                             <div><span style={lbl}>Customer PO #</span><input value={soExtras.po} onChange={e => setSoExtras(p2 => ({ ...p2, po: e.target.value }))} placeholder="their PO number" style={{ ...inp, width: '100%' }} /></div>
+                            <div><span style={lbl}>Customer # (their reference)</span><input value={soExtras.customerNumber || ''} onChange={e => setSoExtras(p2 => ({ ...p2, customerNumber: e.target.value }))} placeholder="e.g. Fabricut's customer number" title="The customer's own reference number (Fabricut / Trend) — NetSuite custbody_bit_customernum, printed on the quote, order, invoice and packing slip." style={{ ...inp, width: '100%' }} /></div>
                             <div><span style={lbl}>Sidemark / job (memo + line tag)</span><input value={soExtras.sidemark} onChange={e => setSoExtras(p2 => ({ ...p2, sidemark: e.target.value }))} placeholder="e.g. SMITH RESIDENCE" style={{ ...inp, width: '100%' }} /></div>
                             <div style={{ gridColumn: '1 / -1' }}><span style={lbl}>Internal memo (optional — never customer-facing)</span><input value={soExtras.internalMemo} onChange={e => setSoExtras(p2 => ({ ...p2, internalMemo: e.target.value }))} style={{ ...inp, width: '100%' }} /></div>
                             {/* Need-by + production notes (Stuart 2026-08-28): ride the SO record, the

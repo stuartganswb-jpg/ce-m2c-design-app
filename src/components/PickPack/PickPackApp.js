@@ -74,7 +74,7 @@ import { packingListOf, packedQtyOf } from '../Shared/packingList';
 import { isBlindShipment, withBlindPacking } from '../Shared/blindShip';
 import { soPackBoardOf, lineBoxOf, LINE_STATE, ORDER_VERDICT } from '../Shared/soPackBoard';
 import { PACK_STAGE, orderAwaitsPackOf, orderPackBlockerOf, orderPackedPatchOf, docOrderPackedPatchOf, awaitsOrderPack } from '../Shared/soPackStep';
-import { fetchShipClearance, shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold } from '../Shared/shipClearance';   // the customer's NetSuite terms decide whether it ships (2026-10-17)   // a CPQ order is boxed and packed on SO Pack (step 2, 2026-10-17)
+import { fetchShipClearance, shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, termsStampOf } from '../Shared/shipClearance';   // the customer's NetSuite terms decide whether it ships (2026-10-17)   // a CPQ order is boxed and packed on SO Pack (step 2, 2026-10-17)
 import { boxHomeFor, boxOpenRefusal, isBoxShipped, spreadTrackingOf, orderBoxesOf, withNewBox, newBoxRefusal, boxOf, boxName, tickBoxesOf, tickIntoBox, moveIntoBox, unboxedQtyOf, boxSpreadLabel, boxContentsOf, boxRemovalRefusal, unboxedLinesOf, boxCompleteBlocker, packBoxesOfTicks, docBoxLinesOf } from '../Shared/orderBoxes';
 import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
 import { customerKeys } from '../Shared/clientPricing';
@@ -1248,6 +1248,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             }
             const data = withBlindPacking({
                 billTo: [customerName || '—'], shipTo, date: new Date().toLocaleDateString(), po: poRef || '—', termsLabel: '', lines: [],
+                customerNumber: String((so && so.customerNumber) || (cpqJob && cpqJob.customerNumber) || job.customerNumber || '').trim(),   // their reference # (2026-10-20)
                 packing: { shipDate: pl.shipDate, tracking: pl.tracking, lines: pl.lines, flagged: pl.flagged, packed: pl.packed },
             }, { docs: headerDocs, customer: custRec, name: customerName });
             printForm(<FormPreview type="PACKING_SLIP" brand={activeBrand} logoUrl={logoUrl} header={tpl.header} footer={tpl.footer} terms={tpl.terms} docNumber={String(docNumber)} data={data} />, `Packing List — ${docNumber}`);
@@ -6146,8 +6147,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // `shippingNow` (12.7 Launch phase 2): the worth of a PART shipping first — the part-payment rule decides (Shared/shipClearance).
     const gateShipment = async ({ nsSoId, refs = [], ref = '', shippingNow = 0 }) => {
         const r = await fetchShipClearance({ nsProxyFetch, nsSoId, unpostedOf: unpostedCardFor, shippingNow });
-        if (r.clearance.clear) return { clear: true, ...r };
-        const stamp = shipHoldStampOf(r, { at: Date.now(), by: operator?.name || '' });
+        // the order's own NetSuite terms ride on it either way — the invoice prints them and its due date (2026-10-20)
+        const terms = termsStampOf(r.facts);
+        if (r.clearance.clear) {
+            if (terms.nsTerms) for (const x of refs) { try { await updateDoc(x, terms); } catch (e) { console.warn('terms stamp failed:', e); } }
+            return { clear: true, ...r };
+        }
+        const stamp = { ...shipHoldStampOf(r, { at: Date.now(), by: operator?.name || '' }), ...terms };
         for (const x of refs) { try { await updateDoc(x, stamp); } catch (e) { console.warn('ship hold stamp failed (the order is still held here):', e); } }
         writeLog(`⏸ ${ref} packed, NOT shipped — ${r.clearance.why}`, 'packing');
         return { clear: false, ...r };
@@ -6194,11 +6200,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const r = await fetchShipClearance({ nsProxyFetch, nsSoId: tg.nsSoId, unpostedOf: unpostedCardFor, shippingNow: isShipmentRecord(rec) ? (Number(rec.shipmentAmount) || 0) : 0 });
         const by = operator?.name || '';
         if (!r.clearance.clear) {
-            const stamp = shipHoldStampOf(r, { at: Date.now(), by });
+            const stamp = { ...shipHoldStampOf(r, { at: Date.now(), by }), ...termsStampOf(r.facts) };
             for (const x of tg.refs) await updateDoc(x, stamp).catch(() => {});
             return alert(`⏸ ${tg.ref} still waits — ${r.clearance.why}.${r.facts && r.facts.cardError ? `\n\n⚠ The card payments taken in the app could not be read (${r.facts.cardError}) — any not yet in NetSuite are not counted here.` : ''}`);
         }
-        for (const x of tg.refs) await updateDoc(x, shipClearedStampOf(r, { at: Date.now(), by })).catch(() => {});
+        for (const x of tg.refs) await updateDoc(x, { ...shipClearedStampOf(r, { at: Date.now(), by }), ...termsStampOf(r.facts) }).catch(() => {});
         writeLog(`✓ ${tg.ref} cleared to ship — ${r.clearance.why}`, 'packing');
         const note = fulfilmentAlreadyQueued(rec, docs) ? '' : (isShipmentRecord(rec) ? await queueShipmentFulfilment(rec, { gate: false }) : await sendFulfilmentFor({ ...tg, stampRefs: tg.refs }));
         alert(`✓ ${tg.ref} may ship — ${r.clearance.why}.${note}`);

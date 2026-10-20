@@ -41,12 +41,14 @@ export const nsCustomerIdOf = (id) => { const s = str(id); const raw = s.startsW
  *   customerId    the app customer id (CUST-123) or the NetSuite id
  *   memo          the mainline memo (each door keeps its own fallback chain and its own cut)
  *   poNumber / internalMemo / appJobId   optional
+ *   customerNumber  optional — the CUSTOMER'S OWN reference number (Fabricut / Trend: their customer #) →
+ *                   custbody_bit_customernum (Stuart 2026-10-20; NetSuite carries it on to the invoice)
  *   itemClasses   the NetSuite class name of each product line (itemClassOf) — decides the class where the brand has two
  *   shipping      { method: 'SAVED'|'CUSTOM', addressId, custom: {attention, addressee, addr1, addr2, city, state, zip, country},
  *                   amount, shipMethod: { id, name } | null }   — shipMethod resolved by the caller
  * Returns { ok: true, header, warnings[] } or { ok: false, error: { code, message } }.
  */
-export function nsTransactionHeader({ brand, asType = 'estimate', customerId, memo = '', poNumber = '', internalMemo = '', appJobId = '', shipping = null, itemClasses = [] } = {}) {
+export function nsTransactionHeader({ brand, asType = 'estimate', customerId, memo = '', poNumber = '', internalMemo = '', appJobId = '', shipping = null, itemClasses = [], customerNumber = '' } = {}) {
     const b = str(brand).toLowerCase();
     const type = asType === 'salesorder' ? 'salesorder' : 'estimate';
     const nsCustomerId = nsCustomerIdOf(customerId);
@@ -67,6 +69,7 @@ export function nsTransactionHeader({ brand, asType = 'estimate', customerId, me
         memo: str(memo),   // each door cuts its own memo (tab 7 to 40; CPQ sends the sidemark / job name whole, as it always has)
         ...(str(poNumber) ? { otherRefNum: str(poNumber).slice(0, 40) } : {}),
         ...(str(internalMemo) ? { custbody_bit_internalmemo: str(internalMemo).slice(0, 999) } : {}),
+        ...(str(customerNumber) ? { custbody_bit_customernum: str(customerNumber).slice(0, 60) } : {}),
         ...(str(appJobId) ? { custbody50: str(appJobId) } : {}),
     };
     const s = shipping || {};

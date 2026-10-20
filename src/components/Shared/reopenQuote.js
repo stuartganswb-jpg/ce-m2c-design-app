@@ -224,6 +224,7 @@ export const reopenQuoteInCpq = (job) => {
                 // jobName / 'Multi-Room Project' — that must not reappear as typed text on reopen).
                 sidemark: job.orderSidemark || '',
                 poNumber: job.poNumber || '',
+                customerNumber: job.customerNumber || '',
                 internalMemo: job.internalMemo || '',
                 // The one header's two sales-side fields (Brief E): a quote saved before they
                 // existed reopens blank — never with an invented date.

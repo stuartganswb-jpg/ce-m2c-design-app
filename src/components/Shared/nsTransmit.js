@@ -731,7 +731,7 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     if (shippingAmount > 0 && sm) log(`Shipping $${shippingAmount.toFixed(2)} → header via ship method "${sm.name}".`, 'info');
     const hdr = nsTransactionHeader({
         brand, asType, customerId: job.customer?.id || '', memo: memoText,
-        poNumber: job.poNumber, internalMemo: job.internalMemo, appJobId: job.jobId || job.id,
+        poNumber: job.poNumber, internalMemo: job.internalMemo, appJobId: job.jobId || job.id, customerNumber: job.customerNumber,
         shipping: { method: job.shippingMethod, addressId: job.shippingAddressId, custom: job.customShippingAddress, amount: shippingAmount, shipMethod: sm },
         // The class follows what is sold where a brand has two (M2C Hardware / Lighting) — each pushed line's own item.
         itemClasses: linesToPush.filter(l => l.nsId !== 'UNMAPPED' && l.nsId !== 'PENDING').map(l => itemClassOf(l.masterPart)),
