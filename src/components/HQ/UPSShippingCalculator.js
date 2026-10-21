@@ -7,6 +7,8 @@ import {
   CA_REGIONS, MX_REGIONS, FROM_CA_REGIONS, FROM_MX_REGIONS,
   lookupIntlRate,
 } from './upsIntlRates';
+import UpsAccountsPanel from './UpsAccountsPanel';     // 📦 each brand's UPS accounts (2026-10-21)
+import UpsLiveRatePanel from './UpsLiveRatePanel';     // 🌍 live negotiated rates, incl. international
 
 // ---------------------------------------------------------------------------
 // THEME
@@ -771,6 +773,11 @@ function UpsConnectionProbe() {
   return (
     <>
       <UpsWmsSettings />
+      {/* 📦 + 🌍 The accounts each brand ships on, and a LIVE rate check against UPS's own system —
+          beside the agreement table above rather than replacing it, because when the two disagree
+          the agreement has drifted and that is worth seeing (Stuart 2026-10-21). */}
+      <UpsAccountsPanel />
+      <UpsLiveRatePanel />
       <UpsProbeRunner busy={busy} setBusy={setBusy} result={result} setResult={setResult} />
     </>
   );

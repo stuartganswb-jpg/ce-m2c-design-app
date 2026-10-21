@@ -174,6 +174,10 @@ export function shipPatchOf({ result, packages, labelUrls = [], by = '', now = D
         shipService: result.serviceName || '',
         shipmentId: result.shipmentId || '',
         shipEnvironment: result.environment || '',
+        // Which UPS account carried it — a border crossing bills the INTERNATIONAL account, and a
+        // void must go to the same one rather than be guessed from a ship-to we may no longer hold
+        // (Stuart 2026-10-21: CE and MC America each have a domestic and an intl account).
+        shipInternational: result.international === true,
         shipCharge: { published: result.published ?? null, negotiated: result.negotiated ?? null },
         trackingNumbers,
         shipPackages: [...(already || []).map(earlierRow), ...(packages || []).map((p, i) => ({

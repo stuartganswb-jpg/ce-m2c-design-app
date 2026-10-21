@@ -262,7 +262,7 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
         if (!window.confirm(`Void UPS shipment ${d.shipmentId} for ${packRefOf(d)}?\n\nThe label(s) stop working and the order returns to the ship queue.${sibWords}${nsSent ? '\n\n⚠ NetSuite was already sent this tracking — the fulfillment in NetSuite must be corrected by hand (remove the package line, set status back to Packed).' : ''}`)) return;
         setBusy(`void:${d.id}`); setNote(null);
         try {
-            await httpsCallable(functions, 'upsVoid')({ brand: activeBrand, shipmentId: d.shipmentId, environment: d.shipEnvironment });
+            await httpsCallable(functions, 'upsVoid')({ brand: activeBrand, shipmentId: d.shipmentId, environment: d.shipEnvironment, international: d.shipInternational === true });
             await updateDoc(packDocRef(d), voidPatchOf({ by: operator?.name || '', prior: d }));
             if (fx.changed) await writeBoxes(d, (list) => boxesAfterVoid(list, d.shipmentId));
             for (const x of fx.siblings) {

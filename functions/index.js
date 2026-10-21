@@ -3497,17 +3497,35 @@ const upsEnvironment = async () => {
 //
 // A brand with no account REFUSES rather than shipping on another company's number, which is the
 // same rule as the gateway keys: the wrong account here is the wrong company's freight bill.
-const upsShipperFor = async (brand) => {
+const upsShipperFor = async (brand, { international = false } = {}) => {
     const b = String(brand || '').toLowerCase();
     let cfg = {};
     try {
         const snap = await admin.firestore().doc('system/ups_config').get();
         cfg = ((snap.exists && snap.data()) || {}).shippers || {};
     } catch (e) { cfg = {}; }
-    const row = cfg[b];
-    if (row && String(row.account || '').trim()) {
+
+    // ONE ROW MAY SERVE TWO BRANDS. Classical Elements and M2C Studio ship on the SAME UPS accounts
+    // (Stuart 2026-10-21), so M2C's row can simply say `sameAs: 'ce'` — one place to change a
+    // number, rather than two rows that drift apart the first time one is updated.
+    const seen = new Set();
+    let row = cfg[b];
+    while (row && row.sameAs && !seen.has(String(row.sameAs).toLowerCase())) {
+        seen.add(String(row.sameAs).toLowerCase());
+        row = cfg[String(row.sameAs).toLowerCase()];
+    }
+
+    // ⚠ TWO ACCOUNTS PER ENTITY: a DOMESTIC one and an INTERNATIONAL one (Stuart's own UPS set-up).
+    // The parcel's destination decides which, so a border crossing is rated and billed on the
+    // international account and never on the domestic one.
+    const account = String((international ? (row && row.accountIntl) : (row && row.accountDomestic)) || '').trim()
+        // A brand with only one account on file uses it for both rather than refusing.
+        || String((row && (row.accountDomestic || row.accountIntl)) || '').trim();
+
+    if (row && account) {
         return {
-            account: String(row.account).trim(),
+            account,
+            usedIntlAccount: international && !!String((row && row.accountIntl) || '').trim(),
             name: String(row.name || '').trim() || b.toUpperCase(),
             phone: String(row.phone || '').replace(/[^0-9]/g, ''),
             address: {
@@ -3520,9 +3538,9 @@ const upsShipperFor = async (brand) => {
         };
     }
     // Nothing configured yet: CE keeps the account it has always shipped on, from its secret.
-    const s = UPS_SHIPPERS[b];
-    if (!s) throw new HttpsError('failed-precondition', `NO_UPS_ACCOUNT_FOR_BRAND: no UPS account is on file for "${brand}". Add it on HQ 9.5 → UPS accounts.`);
-    return { ...s, account: s.secret.value().trim() };
+    const sec = UPS_SHIPPERS[b];
+    if (!sec) throw new HttpsError('failed-precondition', `NO_UPS_ACCOUNT_FOR_BRAND: no UPS account is on file for "${brand}". Add it on HQ 9.5 → UPS accounts.`);
+    return { ...sec, account: sec.secret.value().trim(), usedIntlAccount: false };
 };
 
 const upsToken = async (env, account) => {
@@ -3614,7 +3632,8 @@ exports.upsRate = onCall({
     assertStaffUser(request);
     const { brand, shipTo, packages, declaredValue, currency } = request.data || {};
     const env = await upsEnvironment();
-    const shipper = await upsShipperFor(brand);
+    // The destination picks the account, so it is settled before the shipper is chosen.
+    const shipper = await upsShipperFor(brand, { international: !upsAddr.isDomestic(shipTo, 'US') });
     const origin = { Name: shipper.name, Address: shipper.address };
     // UPS wants the shipment's value to rate many INTERNATIONAL lanes and refuses, or answers
     // wrongly, without it. Sent only when the parcel actually crosses a border, and only when
@@ -3667,7 +3686,9 @@ exports.upsShip = onCall({
     const code = cleanStr(serviceCode, 3);
     if (!UPS_SERVICE_NAMES[code]) throw new HttpsError('invalid-argument', 'Choose a UPS service first.');
     const env = await upsEnvironment();
-    const shipper = await upsShipperFor(brand);
+    // THE SAME RULE AS RATING: a border crossing is billed to the INTERNATIONAL account. Choosing
+    // it any other way would quote on one account and bill on the other (Stuart 2026-10-21).
+    const shipper = await upsShipperFor(brand, { international: !upsAddr.isDomestic(shipTo, 'US') });
     const shipperBlock = { Name: shipper.name, AttentionName: 'Shipping', Phone: { Number: shipper.phone }, Address: shipper.address };
     const body = await upsCall(env, shipper.account, 'POST', '/api/shipments/v2409/ship', {
         ShipmentRequest: {
@@ -3690,6 +3711,10 @@ exports.upsShip = onCall({
     const neg = res.NegotiatedRateCharges && res.NegotiatedRateCharges.TotalCharge;
     return {
         environment: env,
+        // WHICH ACCOUNT CARRIED IT, recorded so a void later goes to the same one rather than
+        // guessing from a ship-to we may no longer hold.
+        international: !upsAddr.isDomestic(shipTo, 'US'),
+        account: shipper.account,
         shipmentId: res.ShipmentIdentificationNumber || '',
         serviceCode: code,
         serviceName: UPS_SERVICE_NAMES[code],
@@ -3713,7 +3738,10 @@ exports.upsVoid = onCall({
     const env = await upsEnvironment();
     // A label is voided on the host that made it — a test label never crosses to production.
     if (environment && environment !== env) throw new HttpsError('failed-precondition', `This label was made in ${environment}; UPS is now set to ${env}. Switch back to void it.`);
-    const shipper = await upsShipperFor(brand);
+    // A LABEL IS VOIDED ON THE ACCOUNT THAT MADE IT. The shipment record says whether it went out
+    // international, because guessing from a ship-to we may no longer hold would void against the
+    // wrong account and fail for a reason nobody could read.
+    const shipper = await upsShipperFor(brand, { international: (request.data || {}).international === true });
     const body = await upsCall(env, shipper.account, 'DELETE', `/api/shipments/v2409/void/cancel/${encodeURIComponent(id)}`);
     const status = body.VoidShipmentResponse && body.VoidShipmentResponse.SummaryResult && body.VoidShipmentResponse.SummaryResult.Status;
     return { environment: env, voided: true, status: (status && status.Description) || 'Voided' };
