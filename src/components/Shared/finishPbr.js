@@ -81,6 +81,18 @@ const DEFAULT_PLATED_PBR = { metalness: 1.0, roughness: 0.25 };   // unknown out
 // lives on the wood material alone and nothing else in the scene changes.
 const WOOD_PBR = { metalness: 0.0, roughness: 0.82, envMapIntensity: 1.05, bumpScale: 0.6, albedo: 2.6, wood: true };
 
+// ── A COLOUR WE BUY IN A SOFT MATERIAL — LEATHER (Stuart 2026-10-21: the M2C leather rings, "we purchase them we do not finish them
+// in the different colors" · "go, its a sound plan") ──────────────────────────────────────────────────────────────────────────────
+// A finish tagged in 4.5 with any material other than metal, brass, wood or a clear one — leather today — is a colour bought in a
+// soft material. Without this it fell to DEFAULT_PLATED_PBR (an outsourced finish nobody recognised): a chrome ring. It takes the
+// renderer's soft-surface path — the one wood uses (DynamicModel: `wood` = UVs built from the part, the swatch photo as the map and
+// its relief, the albedo this metal-lit studio needs) — under leather's finer grain and slightly glossier dials.
+const SOFT_PBR = { metalness: 0.0, roughness: 0.7, envMapIntensity: 1.05, bumpScale: 0.3, albedo: 2.4, wood: true };
+const isSoftFinish = (f) => {
+    const mats = String((f && (f.material || f.materials)) || '').toUpperCase();
+    return !!mats && !/METAL|BRASS|WOOD|MIXED|CLEAR|ACRYLIC|GLASS/.test(mats);
+};
+
 // ── WOOD NEEDS UVs, AND THESE MODELS HAVE NONE (Stuart 2026-09-20 — the actual cause) ───────────────
 // Read off the live H1-138 rod: its geometry carries `position` and `normal` and NO `uv`. With no UVs a
 // texture samples a single texel, so the part paints one flat colour — which is exactly "it looks like
@@ -170,6 +182,7 @@ const resolvePbr = (f, fallback) => {
         return { metalness: f.pbr.metalness, roughness: f.pbr.roughness };
     }
     if (isWoodFinish(f)) return WOOD_PBR;
+    if (isSoftFinish(f)) return SOFT_PBR;
     const code = String(f?.code || '').trim().toUpperCase();
     if (CODE_PBR[code]) return CODE_PBR[code];
     const name = String(f?.name || '');
@@ -207,7 +220,7 @@ export const pbrMapOf = (master = [], outsourced = []) => {
 };
 // The pieces the map is made of, for the harness only (scripts/finishPbr.test.mjs runs the registry as it was against the
 // registry as it is, with these same pieces, so a dial tuned later moves both sides alike).
-export { resolvePbr, trimPainted, DEFAULT_PBR, DEFAULT_PLATED_PBR, DEFAULT_ENVMAP_INTENSITY };
+export { resolvePbr, trimPainted, DEFAULT_PBR, DEFAULT_PLATED_PBR, DEFAULT_ENVMAP_INTENSITY, SOFT_PBR };
 export const ensureFinishPbr = () => {
     if (!pbrLoadPromise) {
         pbrLoadPromise = (async () => {

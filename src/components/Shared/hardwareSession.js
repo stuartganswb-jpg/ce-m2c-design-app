@@ -723,6 +723,19 @@ export function chosenFinishObjectsOf(globalFinishes, partFinish, finishByCode) 
 export const bareWoodOf = (chosenList, finishFor) =>
     chosenList.filter(c => Array.isArray(c.materials) && c.materials.includes('WOOD') && !c.noFinish && !finishFor(c));
 
+// ── A PART MADE IN A MATERIAL WE BUY IN ITS COLOUR LEAVES ONLY IN ONE (Stuart 2026-10-21, M2C's leather rings: "we purchase them
+// we do not finish them in the different colors … i can see this happening in the future with other materials for this brand as
+// leather products we would purchase finished" · "go, its a sound plan") ─────────────────────────────────────────────────────────
+// Metal can go out mill, wood has its own rule (above), solid brass and a clear part are what they are. Any OTHER material a part
+// is made in — leather today — is sold as a colour: the part is a base item (FILR) whose colours are the stocked items (FILR/01 …,
+// Shared/finishVariant), so with no colour chosen the line would be the base — no price, no NetSuite item. Refused only where the
+// flow offers the part a colour to wear, so a flow that offers none cannot be stuck.
+const OWN_RULE_MATERIALS = ['METAL', 'WOOD', 'BRASS'];
+export const isColourMaterial = (m) => { const u = String(m || '').trim().toUpperCase(); return !!u && !u.startsWith('CLEAR') && !OWN_RULE_MATERIALS.some(x => u.includes(x)); };
+export const bareColourOf = (chosenList, finishFor, canWearColour = () => true) =>
+    chosenList.filter(c => Array.isArray(c.materials) && c.materials.some(isColourMaterial) && !c.noFinish && !finishFor(c) && canWearColour(c));
+const titledMaterial = (m) => String(m || '').toLowerCase().replace(/(^|[\s(])\S/g, (x) => x.toUpperCase());
+
 // ── WHICH FINISHES ARE OFFERED, AND WHAT THEY ARE CALLED ─────────────────────────────────────
 // A FINISH IS NAMED, NOT JUST COLOURED (Stuart 2026-08-17: "make the finish chips bigger and
 // place the name under each one, our code along with customer name"). The customer's own word
@@ -776,7 +789,9 @@ export function finishGroupLabel(mat, kind) {
     if (m.includes('WOOD')) return 'Wood';
     if (m.includes('METAL')) return kind === 'out' ? 'Plated' : 'Painted';
     if (m.includes('BRASS')) return 'Solid brass';      // the part is MADE in it — in house or sent out is ours to know
-    return kind === 'out' ? 'Outsourced' : 'In house';   // an unfamiliar material keeps the old words
+    // …and any other material by its own name — "Leather" (Stuart 2026-10-21, the M2C leather rings): what the finish IS, never who
+    // applies it. It read "Outsourced" over the leather colours; the portal already said it this way (portalSession.groupWord).
+    return m ? titledMaterial(m) : (kind === 'out' ? 'Outsourced' : 'In house');
 }
 
 /**
@@ -1445,7 +1460,7 @@ export const dropRefusalOf = (pendingDrops) => (pendingDrops.length
  *                     brass with no word on brushed / polished, lacquered or not, is an order the floor cannot make.
  * `alert` is what the CPQ screen says out loud (the first two say nothing: the button and the strip already do).
  */
-export function addRefusalOf({ priced, pendingDrops, chosenList, finishFor, askingFinishes, finishAnswers, spliceCentreMissing = false }) {
+export function addRefusalOf({ priced, pendingDrops, chosenList, finishFor, askingFinishes, finishAnswers, spliceCentreMissing = false, offeredFinishes = null, wearsFinish = null }) {
     if (!priced.lines.length) return { kind: 'NOTHING_PRICED' };
     if (pendingDrops.length) return { kind: 'REMOVALS', message: dropRefusalOf(pendingDrops) };
     // A SPLICED POLE TAKES A CENTRE BRACKET AT THE SPLICE (Stuart 2026-10-19: "a center bracket is always required there").
@@ -1454,6 +1469,15 @@ export function addRefusalOf({ priced, pendingDrops, chosenList, finishFor, aski
     if (bareWood.length) {
         return { kind: 'BARE_WOOD', bareWood,
             alert: `Pick the WOOD finish first — ${bareWood.map(c => c.name || c.partId).join(', ')} would leave here with no stain.\n\nChoose it on the WOOD row of the finish step, or on the part itself.` };
+    }
+    // …and a part bought in its colour (leather) leaves only in one — where the flow offers it one (isColourMaterial, above)
+    const canWearColour = (c) => !Array.isArray(offeredFinishes) || typeof wearsFinish !== 'function'
+        || offeredFinishes.some(f => isColourMaterial(f && (f.material || f.type)) && wearsFinish(c, f));
+    const bareColour = bareColourOf(chosenList, finishFor, canWearColour);
+    if (bareColour.length) {
+        const mats = [...new Set(bareColour.flatMap(c => c.materials.filter(isColourMaterial)))];
+        return { kind: 'BARE_COLOUR', bareColour,
+            alert: `Pick the ${mats.join(' / ')} colour first — ${bareColour.map(c => c.name || c.partId).join(', ')} would leave here with no colour.\n\nChoose it on the ${mats.map(titledMaterial).join(' / ')} row of the finish step, or on the part itself.` };
     }
     const openQuestions = openFinishQuestionsOf(askingFinishes, finishAnswers);
     if (openQuestions.length) {
@@ -1668,7 +1692,7 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const pendingDrops = unacknowledged(drops);
     const dropRefusal = dropRefusalOf(pendingDrops);
     const refusal = addRefusalOf({ priced: bill.priced, pendingDrops, chosenList: fin.chosenList, finishFor: fin.finishFor, askingFinishes: bill.askingFinishes, finishAnswers,
-        spliceCentreMissing: spliceCentreMissingOf({ model, livePicks, splice }) });
+        spliceCentreMissing: spliceCentreMissingOf({ model, livePicks, splice }), offeredFinishes: fin.offeredFinishes, wearsFinish: fin.wearsFinish });
     const item = refusal ? null : cartLineOf({ resolved, pricingCtx: bill.pricingCtx, assembly, flow, findPart, qty, renderSnapshot, pins, memo,
         chosenFinishObjects: fin.chosenFinishObjects, effectiveLevel: bill.effectiveLevel, lengthInches, lengthFeet, extras, extraLines: bill.extraLines, stepNotes, stepNoteClient,
         answers, livePicks, partFinish, globalFinish: fin.globalFinish, globalFinishes, stepQty, liveFinishAnswers: bill.liveFinishAnswers,

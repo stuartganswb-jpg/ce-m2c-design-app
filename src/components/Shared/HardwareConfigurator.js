@@ -918,7 +918,7 @@ function HardwareConfiguratorInner({
         // ⚠ NEVER ADD SHORT · WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE · A FINISH THAT ASKS IS ANSWERED FIRST — the rules,
         // their order and his words are hardwareSession.addRefusalOf. Nothing priced and a removal nobody has acknowledged
         // wait in silence (the button and the strip already say why); the other two say what to do.
-        const refusal = addRefusalOf({ priced, pendingDrops, chosenList, finishFor, askingFinishes, finishAnswers, spliceCentreMissing: spliceCentreMissingOf({ model, livePicks, splice }) });
+        const refusal = addRefusalOf({ priced, pendingDrops, chosenList, finishFor, askingFinishes, finishAnswers, spliceCentreMissing: spliceCentreMissingOf({ model, livePicks, splice }), offeredFinishes, wearsFinish });
         if (refusal) { if (refusal.alert) alert(refusal.alert); return; }
         // FEWER CENTRE BRACKETS THAN 6.5 RECOMMENDS, NOT YET CONFIRMED: the risk window first; its Confirm adds (Stuart 2026-10-19).
         const unconfirmed = supportShort.find(sh => !riskOkRef.current.has(riskKeyOf(sh)));

@@ -219,6 +219,7 @@ const REFUSAL_WORDS = {
     NOTHING_PRICED: 'Choose a rod to begin.',
     REMOVALS: 'A later choice removed something you had picked — look at what was removed and confirm before sending.',
     BARE_WOOD: 'Choose a wood finish — the wood parts on this order have none yet.',
+    BARE_COLOUR: 'Choose a colour — a part on this order is sold in colours and has none yet.',
     FINISH_QUESTIONS: 'One of your finishes has a question still to answer.',
     SPLICE_CENTRE: 'This pole is made in two pieces — choose a centre bracket: one sits at the splice.',
 };

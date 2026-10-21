@@ -1282,8 +1282,9 @@ const FIN = [
     eq('grouped by material; metal splits painted / plated, wood never splits; with nothing chosen everything is offered', groups(FIN, []),
         [['METAL', ['F-P14', 'F-PEW'], ['F-EP4']], ['WOOD', ['F-S04', 'F-S11'], []], ['BRASS', ['F-LBR'], []], ['STONE', [], ['F-X90']]]);
     eq('…and then the parts have their say: a finish no chosen part can wear is not offered', [groups(FIN, [be]), groups(FIN, [bs, wf]).map(g => g[0]), groups(FIN, [af])], [[['METAL', ['F-P14', 'F-PEW'], ['F-EP4']]], ['METAL', 'WOOD', 'BRASS'], []]);
-    eq('the groups are named for what the finish IS', [finishGroupLabel('WOOD', 'out'), finishGroupLabel('METAL', 'in'), finishGroupLabel('metal', 'out'), finishGroupLabel('BRASS', 'out'), finishGroupLabel('STONE', 'out'), finishGroupLabel('STONE', 'in'), finishGroupLabel('', 'in')],
-        ['Wood', 'Painted', 'Plated', 'Solid brass', 'Outsourced', 'In house', 'In house']);
+    // (2026-10-21, the M2C leather rings: any other material by its own name — it read "Outsourced" / "In house", ours to know)
+    eq('the groups are named for what the finish IS', [finishGroupLabel('WOOD', 'out'), finishGroupLabel('METAL', 'in'), finishGroupLabel('metal', 'out'), finishGroupLabel('BRASS', 'out'), finishGroupLabel('STONE', 'out'), finishGroupLabel('STONE', 'in'), finishGroupLabel('', 'in'), finishGroupLabel('LEATHER', 'out')],
+        ['Wood', 'Painted', 'Plated', 'Solid brass', 'Stone', 'Stone', 'In house', 'Leather']);
 }
 
 // ── THE MOVE, finishes: the module against the screen's old block, on every part of every set-up ───────────────
