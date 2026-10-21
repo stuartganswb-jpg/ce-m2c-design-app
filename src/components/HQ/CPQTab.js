@@ -34,6 +34,7 @@ import { priceChoice, isItemKit } from '../Shared/hardwarePricing';
 import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, checkoutAssignmentOf, isFeeItemRecord } from '../Shared/feeRules';
 import { searchStockedItems, pickedItemEntries, isSearchableStockedItem } from '../Shared/checkoutSearch';
 import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, keepLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
+import { applyRowPrices, typedCountOf } from '../Shared/rowPrices';
 import { extrasFromSavedItem } from '../Shared/extrasRestore';
 import { readWorkspace, writeWorkspace, restorableWorkspace, workspaceSeedOf, workHasProgress, cleanStartOf, CLEAN_FLOW, CLEAN_ALL } from '../Shared/cpqWorkspace';
 import { shippingPlanOf, shippingChargeOf, FLAT_RATE_BOXES, packagingPlanOf, PACK_FEE_CODES } from '../Shared/flatRateShipping';
@@ -1087,8 +1088,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
       if (!(percent > 0)) return null;
       // Pre-isFee cart items (older localStorage carts) lack the flag — the CE-FEE id guard and
       // the physical-item requirement still keep fees out of the base.
+      // A PRICE TYPED OVER THE ENGINE'S IS THE PRICE (Stuart 2026-10-21: "only a manual apply discount can still be used, the
+      // customer netsuite level is ignored" · Shared/rowPrices): the customer's own code leaves it out of the base; a % typed at
+      // checkout (a discount applied by hand) still takes it in.
       const base = (item.pricingBreakdown || [])
           .filter(l => l && !l.isFee && (l.partId || l.legacyErpId) && !String(l.legacyErpId || '').toUpperCase().startsWith('CE-FEE'))
+          .filter(l => !(discountMode === 'CODE' && l.priceSetByHand))
           .reduce((s, l) => s + (parseFloat(l.total) || 0), 0);
       if (!(base > 0)) return null;
       const amount = Math.round(base * percent) / 100; // base × percent%, rounded to cents
@@ -4321,6 +4326,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                         if (ld) return <span style={{ color: 'var(--brass)' }}> · {ld.mode === 'NET' ? `Price set to $${ld.netPrice.toFixed(2)}` : `Line Discount - (${ld.percent}%)`}: {ld.amount < 0 ? '+' : '-'}${Math.abs(ld.amount * (item.qty || 1)).toFixed(2)} · Net ${(ld.net * (item.qty || 1)).toFixed(2)}{ld.by ? ` · by ${ld.by}` : ''}</span>;
                         return null;
                     })()}
+                    {/* prices typed over the engine's in the Pricing box (Shared/rowPrices) — Edit shows them part by part */}
+                    {typedCountOf(item) > 0 && <span style={{ color: 'var(--brass)' }}> · {typedCountOf(item)} price{typedCountOf(item) === 1 ? '' : 's'} set by hand{item.rowPricesSet && item.rowPricesSet.by ? ` · by ${item.rowPricesSet.by}` : ''}</span>}
                   </div>
                 </div>
                 <button onClick={() => handleEditCartItem(item.id)} title={editingCartId === item.id ? 'Open in the configurator — Add configuration replaces this line; the cart still holds it as it was' : 'Open this line in the configurator'} style={{ padding: '8px 16px', background: editingCartId === item.id ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{editingCartId === item.id ? 'Editing…' : 'Edit'}</button>
@@ -5084,6 +5091,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                                   reopenSeed={engineSeed && (!engineSeed.forAssemblyId || engineSeed.forAssemblyId === asmId) ? engineSeed : null}
                                   pins={shadowPins}
                                   isSuperAdmin={isSuperAdmin}
+                                  /* A PRICE TYPED OVER THE ENGINE'S (Stuart 2026-10-21, "manager or higher" — the line discount's own rule),
+                                     and the prices typed on the cart line open in the configurator (Shared/rowPrices). */
+                                  canSetPrices={canDiscount}
+                                  editingKey={editingCartId}
+                                  editingRowPrices={editingCartId ? ((cart.find(c => c.id === editingCartId) || {}).rowPrices || null) : null}
                                   finishes={[...globalFinishes, ...outsourceFinishes]}
                                   // ITEM KITS are parts a pin can point at (Stuart 2026-09-18, H1-2RCTCB: a bracket sold as one
                                   // number, made of an arm and a cuff). Kits ride in their own list (08-22) so a TRAVERSE SYSTEM
@@ -5111,7 +5123,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                                      from, the quote it belongs to, and how many are ordered. */
                                   onAdd={(item) => {
                                       const draft = previousDrafts.find(d => d.id === activeDraftId) || null;
-                                      placeInCart({
+                                      // …the prices typed over the engine's baked into the line: its rows, its total, the components NetSuite
+                                      // reads — the engine's own figures kept beside them (Shared/rowPrices.applyRowPrices)
+                                      placeInCart(applyRowPrices({
                                           ...item,
                                           masterQuoteId: activeMasterQuoteId,
                                           // ⚠ THE ENGINE'S OWN QTY WINS (Stuart 2026-08-26): the
@@ -5124,7 +5138,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                                           // a declined splice says so to the floor (Stuart 2026-10-01, Shared/flowExtras.noSpliceNote).
                                           generalNotes: [...(Array.isArray(item.generalNotes) ? item.generalNotes : []), ...visionFieldsOf(draft, activeDraftSvg).generalNotes],
                                           capturedViews: capturedViews || null,
-                                      });
+                                      }, item.rowPrices, { by: currentUser || '', at: new Date().toISOString() }));
                                       if (activeDraftId) setDoc(doc(db, "cpq_drafts", activeDraftId), { status: 'CONFIGURED' }, { merge: true }).catch(() => {});
                                   }}
                                   /* The way OUT of the engine. The walk ends on its last step, and

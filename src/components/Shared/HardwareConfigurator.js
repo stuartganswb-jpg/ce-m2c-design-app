@@ -16,6 +16,7 @@ import { SCOPE, scopeTargetsOf, scopeInForce, swatchActionOf, highlightOf } from
 import { workIsPristine } from './cpqWorkspace';
 import { renderScaleOf } from './sizeMatrix';
 import { modelNodesOf } from './hardwareAdapter';
+import { boxRowKeys, priceSettable, typedRow, cleanRowPrices } from './rowPrices';
 import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle,
     lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf,
     spanAnswersOf, rodOptionsAdviceOf, supportShortfallOf, DROP_FT_RANGE, spliceInfoOf, trvJoinersOf, spliceCentreMissingOf, spanRiskKeyOf,
@@ -134,9 +135,17 @@ function HardwareConfiguratorInner({
     // (Shared/cpqWorkspace) — the operator's own picks, in the shape a cart line's engineConfig keeps,
     // so it comes back through reopenSeed like an Edit. Read-only too: nothing here listens back.
     onWorkState = null,
+    // A PRICE TYPED OVER THE ENGINE'S (Stuart 2026-10-20/21 · Shared/rowPrices): a manager or higher types a part's price in the
+    // Pricing box — CPQ says who may (canSetPrices) and hands back the prices of the cart line open here (editingKey = its id).
+    canSetPrices = false,
+    editingRowPrices = null,
+    editingKey = null,
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
+    // THE PRICES TYPED IN THE PRICING BOX, as typed (text, so "12." can be on its way to 12.50) — by row key (Shared/rowPrices).
+    // Declared HERE, at the top: the box's memo below reads it, and a dependency read above its const is a TDZ ReferenceError.
+    const [rowPrices, setRowPrices] = useState({});
     const [kitPick, setKitPick] = useState('');      // the kit chosen as a starting point
     const [kitSource, setKitSource] = useState(null);  // { code, name, baseFeet, record } — bills as line 1
     const [kitReport, setKitReport] = useState(null);  // what it carried, missed, or refused
@@ -648,6 +657,23 @@ function HardwareConfiguratorInner({
     const spliceOnLine = spliceOnLineOf({ extras, spliceCodes, sameItemCode, trvComponents });
     const noSplice = shipsInOnePieceOf({ lengthInches, spliceOverIn, spliceCodes, isTraverse, trvRules, spliceOnLine });
     const grandTotal = grandTotalOf(priced, extraLines, trvComponents);
+    // ── A PRICE TYPED OVER THE ENGINE'S (Stuart 2026-10-20/21 · Shared/rowPrices) ──────────────────────────────────────────────────
+    // Each row the Pricing box lists, its key (the same key finds its row on the cart line), whether a price can be typed on it, and —
+    // where one was — the row as typed. The configuration's total carries them: what the strip, the Add button and the line say.
+    const typedPrices = useMemo(() => cleanRowPrices(rowPrices), [rowPrices]);
+    const boxRows = useMemo(() => {
+        const k = boxRowKeys({ lines: priced.lines, extraLines, trvLines, findPart });
+        return [
+            ...priced.lines.map((l, i) => [l, k.lines[i]]).filter(([l]) => !l.hidden),
+            ...extraLines.map((l, i) => [l, k.extraLines[i]]),
+            ...trvLines.map((l, i) => [l, k.trvLines[i]]),
+        ].map(([l, key]) => {
+            const settable = priceSettable(l);
+            return { line: l, key, settable, shown: settable && typedPrices[key] !== undefined ? typedRow(l, typedPrices[key]) : l };
+        });
+    }, [priced.lines, extraLines, trvLines, findPart, typedPrices]);
+    const configTotal = Math.round((grandTotal + boxRows.reduce((s2, r) => s2 + (r.shown.typed ? r.shown.total - r.line.total : 0), 0)) * 100) / 100;
+    const setRowPrice = (key, raw) => setRowPrices(p => { const n = { ...p }; const t = String(raw == null ? '' : raw).replace(/[^0-9.]/g, ''); if (t === '') delete n[key]; else n[key] = t; return n; });
 
 
 
@@ -765,6 +791,9 @@ function HardwareConfiguratorInner({
     // per-part finishes, length, notes, memo and qty the walk produced. Applied ONCE per key (a
     // re-render or a model refresh must never stomp what the operator has since changed); picks
     // reseat against the live model exactly as the Vision and kit seeds rely on.
+    // A cart line opened here (Edit, or a Vision re-save that replaces it) brings the prices typed on it (rowPrices, declared at the
+    // top); this sits above the reopen below so a workspace handed back in the same render (newer — typed since) has the last word.
+    useEffect(() => { setRowPrices(cleanRowPrices(editingRowPrices)); }, [editingKey]);   // eslint-disable-line react-hooks/exhaustive-deps
     const reopenAppliedRef = useRef(null);
     useEffect(() => {
         const s = reopenSeed;
@@ -803,6 +832,8 @@ function HardwareConfiguratorInner({
         if (s.sizePick && typeof s.sizePick === 'object') setSizePick({ ...s.sizePick });
         if (Array.isArray(s.drawnSplices)) setDrawnSplices(s.drawnSplices.map(sp => ({ distInches: sp.distInches, ref: sp.ref || '' })));
         if (s.visionSeededId) seededRef.current = String(s.visionSeededId);
+        // …and the prices typed in the Pricing box (a workspace only — an Edit's come with its line, above)
+        if (s.fromWorkspace && s.rowPrices && typeof s.rowPrices === 'object') setRowPrices(cleanRowPrices(s.rowPrices));
     }, [reopenSeed]);
     // ── …AND THE KIT IT WAS BILLED FROM (Stuart 2026-09-19, QUO154 row 6) ────────────────────────
     // The kit was a dropdown pick that lived only in this component, so Edit → re-add brought back
@@ -875,12 +906,14 @@ function HardwareConfiguratorInner({
             ...(Object.keys(stepNoteClient).length ? { stepNoteClient } : {}),
             ...(Object.keys(finishAnswers).length ? { finishAnswers } : {}),
             ...(Object.keys(savedPickParts).length ? { pickParts: savedPickParts } : {}),
+            // the prices typed in the Pricing box — always while a cart line is open here, so a price taken away stays away after a reload
+            ...((Object.keys(rowPrices).length || editingKey) ? { rowPrices } : {}),
         };
         if (!workPublishedRef.current && workIsPristine(work)) return;
         workPublishedRef.current = true;
         onWorkState(work);
     }, [onWorkState, assembly, answers, picks, partFinish, globalFinishes, globalFinish, stepQty, stepNotes, typedExtras,
-        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, dropFt, onStud, sizePick, stepIx, drawnSplices, spliceWaived, stepNoteClient, finishAnswers, savedPickParts]);
+        lengthInches, configMemo, cfgQty, kitPick, kitMotor, kitSource, trvSel, fabricId, dropFt, onStud, sizePick, stepIx, drawnSplices, spliceWaived, stepNoteClient, finishAnswers, savedPickParts, rowPrices, editingKey]);
     const addConfiguration = () => {
         // ⚠ NEVER ADD SHORT · WOOD WEARS A STAIN OR IT DOES NOT LEAVE HERE · A FINISH THAT ASKS IS ANSWERED FIRST — the rules,
         // their order and his words are hardwareSession.addRefusalOf. Nothing priced and a removal nobody has acknowledged
@@ -908,11 +941,13 @@ function HardwareConfiguratorInner({
             steps, noSplice, spliceOverIn, span });
         // onAdd is what puts it in the cart; without one the strip still works, so the configurator is usable before the
         // cart is wired.
-        if (typeof onAdd === 'function') onAdd(displaySnapshot ? { ...item, displaySnapshot, displayBoard } : item);
-        setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
+        // …with the prices typed over the engine's, for CPQ to bake into the line it keeps (Shared/rowPrices.applyRowPrices)
+        const withPrices = Object.keys(typedPrices).length ? { ...item, rowPrices: typedPrices } : item;
+        if (typeof onAdd === 'function') onAdd(displaySnapshot ? { ...withPrices, displaySnapshot, displayBoard } : withPrices);
+        setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: configTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
         kitPicksDoneRef.current = new Set();   // the next configuration fills its own brackets
-        setStepNotes({}); setStepNoteClient({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setFinishAnswers({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]); setSavedPickParts({});
+        setStepNotes({}); setStepNoteClient({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setFinishAnswers({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]); setSavedPickParts({}); setRowPrices({});
     };
 
     const railCell = (st, i) => {
@@ -1275,7 +1310,7 @@ function HardwareConfiguratorInner({
                 ))}
                 <span style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: '1px solid var(--ink)', background: 'var(--ink)', color: '#fff' }}>
                     {configMemo || 'This configuration'} <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '5px' }}>
-                        {cfgQtyN > 1 ? `$${grandTotal.toFixed(2)} × ${cfgQtyN} = $${(grandTotal * cfgQtyN).toFixed(2)}` : `$${grandTotal.toFixed(2)}`}
+                        {cfgQtyN > 1 ? `$${configTotal.toFixed(2)} × ${cfgQtyN} = $${(configTotal * cfgQtyN).toFixed(2)}` : `$${configTotal.toFixed(2)}`}
                     </b>
                 </span>
                 {/* WHO IS BEING PRICED, stated plainly. Every alias and every negotiated price on
@@ -1743,8 +1778,8 @@ function HardwareConfiguratorInner({
                                     title={priced.lines.length ? `Adds this configuration to the quote${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''} and starts the next one` : 'Nothing priced yet — this configuration has no lines'}
                                     style={{ ...chip(true), background: 'var(--brass)', border: '1px solid var(--brass)', color: '#fff', opacity: priced.lines.length ? 1 : .35, cursor: priced.lines.length ? 'pointer' : 'not-allowed' }}>
                                     {cfgQtyN > 1
-                                        ? `Add to quote · $${grandTotal.toFixed(2)} × ${cfgQtyN} = $${(grandTotal * cfgQtyN).toFixed(2)}`
-                                        : `Add to quote · $${grandTotal.toFixed(2)}`}
+                                        ? `Add to quote · $${configTotal.toFixed(2)} × ${cfgQtyN} = $${(configTotal * cfgQtyN).toFixed(2)}`
+                                        : `Add to quote · $${configTotal.toFixed(2)}`}
                                 </button>
                             ) : (
                                 <button onClick={() => setStepIx(Math.min(steps.length - 1, ix + 1))}
@@ -1855,7 +1890,7 @@ function HardwareConfiguratorInner({
                                     <tbody>
                                         {/* Hidden parts are BILLED but not SHOWN: they are in the
                                             total and on the shop's BOM, off the customer's quote. */}
-                                        {[...priced.lines.filter(l => !l.hidden), ...extraLines, ...trvLines].map((l, i) => (
+                                        {boxRows.map(({ line: l, key: rowKey, settable, shown }, i) => (
                                             <tr key={i} title={`${l.source || 'added by hand'}${l.detail ? ` — ${l.detail}` : ''}`}>
                                                 <td style={{ padding: '3px 0', color: 'var(--ink)' }}>
                                                     {/* Our id, their alias beside it, our description under. */}
@@ -1874,7 +1909,7 @@ function HardwareConfiguratorInner({
                                                             // whole length against the item's own rate. A kit line (billedFeet) says what it bills.
                                                             ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>{l.billedFeet !== undefined
                                                                 ? `one pole · ${l.cutLength ? `${l.cutLength}" · ` : ''}${l.feet} ft — ${l.detail || ''}${l.billedFeet > 0 && l.total > 0 ? ` × $${(l.total / l.billedFeet).toFixed(2)}` : ''}`
-                                                                : `one pole · ${l.cutLength ? `${l.cutLength}"` : ''} ${l.feet} ft × $${l.unit.toFixed(2)}`}</span>
+                                                                : `one pole · ${l.cutLength ? `${l.cutLength}"` : ''} ${l.feet} ft × $${shown.unit.toFixed(2)}`}</span>
                                                             : (l.qty > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>×{l.qty}</span>)}
                                                         {l.extra && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-faint)' }}>added</span>}
                                                     </span>
@@ -1934,12 +1969,30 @@ function HardwareConfiguratorInner({
                                                         );
                                                     })()}
                                                 </td>
-                                                <td style={{ padding: '3px 0', textAlign: 'right', whiteSpace: 'nowrap', verticalAlign: 'top', color: l.unit ? 'var(--ink)' : 'var(--ink-faint)' }}>${l.total.toFixed(2)}</td>
+                                                <td style={{ padding: '3px 0', textAlign: 'right', whiteSpace: 'nowrap', verticalAlign: 'top', color: shown.unit ? 'var(--ink)' : 'var(--ink-faint)' }}>
+                                                    {/* A PRICE TYPED OVER THE ENGINE'S (Stuart 2026-10-21: a manager or higher): the unit — per foot on a pole sold
+                                                        by the foot — with the engine's own price as the hint; × puts the engine's back. A part a kit paid for has no box. */}
+                                                    {canSetPrices && settable && (
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-faint)' }}>{l.perFoot ? '$/ft' : '$'}</span>
+                                                            <input value={rowPrices[rowKey] ?? ''} placeholder={(Number(l.unit) || 0).toFixed(2)} inputMode="decimal" aria-label={`Price for ${l.billedId || ourId(l.partId)}`}
+                                                                onChange={e => setRowPrice(rowKey, e.target.value)} title="Type a price over the engine's — it rides the cart line, the documents and NetSuite"
+                                                                style={{ width: '58px', padding: '2px 4px', fontSize: '11px', textAlign: 'right', fontFamily: 'var(--mono)', border: '1px solid var(--line)', background: shown.typed ? 'var(--paper-2)' : '#fff' }} />
+                                                        </span>
+                                                    )}
+                                                    <span style={{ display: 'block' }}>${shown.total.toFixed(2)}</span>
+                                                    {shown.typed && (
+                                                        <span style={{ display: 'block', fontSize: '9px', color: 'var(--ink-faint)' }}>
+                                                            <s>${shown.engineTotal.toFixed(2)}</s>
+                                                            {canSetPrices && <button onClick={() => setRowPrice(rowKey, '')} title="Back to the engine's price" style={{ marginLeft: '4px', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--rust, #a4442c)', fontSize: '10px', padding: 0 }}>×</button>}
+                                                        </span>
+                                                    )}
+                                                </td>
                                             </tr>
                                         ))}
                                         {!!priced.lines.length && (
                                             <tr><td style={{ borderTop: '1px solid var(--line)', paddingTop: '6px', fontWeight: 600 }}>Estimated unit</td>
-                                                <td style={{ borderTop: '1px solid var(--line)', paddingTop: '6px', textAlign: 'right', fontWeight: 600 }}>${grandTotal.toFixed(2)}</td></tr>
+                                                <td style={{ borderTop: '1px solid var(--line)', paddingTop: '6px', textAlign: 'right', fontWeight: 600 }}>${configTotal.toFixed(2)}</td></tr>
                                         )}
                                     </tbody>
                                 </table>
