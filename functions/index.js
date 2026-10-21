@@ -3582,7 +3582,7 @@ const cleanStr = (v, max) => String(v === undefined || v === null ? '' : v)
     .trim().slice(0, max);
 
 // The browser's ship-to + packages, checked and shaped for UPS. Refuses with the field named.
-const upsShipToOf = (a) => {
+const upsShipToOf = (a, label = 'Ship-to') => {
     const s = a || {};
     const addr1 = cleanStr(s.addr1, 35), city = cleanStr(s.city, 30), state = cleanStr(s.state, 5).toUpperCase(), zip = cleanStr(s.zip, 10);
     const country = upsAddr.countryOf(s);
@@ -3591,7 +3591,7 @@ const upsShipToOf = (a) => {
     // — which is why international could not be rated at all (Stuart 2026-10-21).
     const missing = upsAddr.addressGaps(s);
     const name = cleanStr(s.addressee || s.attention, 35);
-    if (missing.length) throw new HttpsError('invalid-argument', `Ship-to is missing: ${missing.join(', ')}.`);
+    if (missing.length) throw new HttpsError('invalid-argument', `${label} is missing: ${missing.join(', ')}.`);
     const phone = cleanStr(s.phone, 20).replace(/[^0-9]/g, '');
     return {
         Name: name,
@@ -3630,16 +3630,20 @@ exports.upsRate = onCall({
     secrets: [UPS_CLIENT_ID, UPS_CLIENT_SECRET, UPS_ACCOUNT_CE],
 }, async (request) => {
     assertStaffUser(request);
-    const { brand, shipTo, packages, declaredValue, currency } = request.data || {};
+    const { brand, shipTo, shipFrom, packages, declaredValue, currency } = request.data || {};
     const env = await upsEnvironment();
-    // The destination picks the account, so it is settled before the shipper is chosen.
-    const shipper = await upsShipperFor(brand, { international: !upsAddr.isDomestic(shipTo, 'US') });
+    // EITHER END ABROAD makes it international, so an INBOUND move from a supplier is quoted on the
+    // international account and not the domestic one (Stuart 2026-10-21).
+    const shipper = await upsShipperFor(brand, { international: upsAddr.crossesBorder({ shipFrom, shipTo, shipperCountry: 'US' }) });
     const origin = { Name: shipper.name, Address: shipper.address };
+    // WHERE IT ACTUALLY LEAVES FROM. Our own address unless a supplier's is given — the Shipper
+    // stays us either way, because we are the account being quoted and billed.
+    const from = shipFrom ? upsShipToOf(shipFrom, 'Ship-from') : origin;
     // UPS wants the shipment's value to rate many INTERNATIONAL lanes and refuses, or answers
     // wrongly, without it. Sent only when the parcel actually crosses a border, and only when
     // somebody gave a figure — never invented (functions/upsAddress, Stuart 2026-10-21).
     const invoiceTotal = upsAddr.invoiceLineTotalOf({
-        shipTo, shipperCountry: (shipper.address && shipper.address.CountryCode) || 'US',
+        shipTo, shipFrom, shipperCountry: (shipper.address && shipper.address.CountryCode) || 'US',
         declaredValue, currency,
     });
     const body = await upsCall(env, shipper.account, 'POST', '/api/rating/v2409/Shop', {
@@ -3647,7 +3651,7 @@ exports.upsRate = onCall({
             Request: { TransactionReference: { CustomerContext: 'wms-rate' } },
             Shipment: {
                 Shipper: { ...origin, ShipperNumber: shipper.account },
-                ShipFrom: origin,
+                ShipFrom: from,
                 ShipTo: upsShipToOf(shipTo),
                 PaymentDetails: { ShipmentCharge: [{ Type: '01', BillShipper: { AccountNumber: shipper.account } }] },
                 ShipmentRatingOptions: { NegotiatedRatesIndicator: '' },
@@ -3672,7 +3676,8 @@ exports.upsRate = onCall({
         // So a screen can SAY which account was quoted and whether these are international rates,
         // rather than leaving a reader to assume.
         account: shipper.account, shipperName: shipper.name,
-        international: !upsAddr.isDomestic(shipTo, (shipper.address && shipper.address.CountryCode) || 'US'),
+        international: upsAddr.crossesBorder({ shipFrom, shipTo, shipperCountry: (shipper.address && shipper.address.CountryCode) || 'US' }),
+        inbound: !!shipFrom && upsAddr.isDomestic(shipTo, 'US'),
         declaredValueSent: invoiceTotal ? Number(invoiceTotal.MonetaryValue) : null,
     };
 });

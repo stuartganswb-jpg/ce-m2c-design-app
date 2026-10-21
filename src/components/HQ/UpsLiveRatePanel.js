@@ -7,9 +7,11 @@
 // The table stays, deliberately: the comparison is the useful part. When UPS's live answer and the
 // uploaded agreement disagree, the agreement has drifted, and that is worth seeing rather than
 // discovering on an invoice.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../../firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { functions, db } from '../../firebase';
+import { addressBookOf } from './UpsAddressBook';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
 const input = { padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', width: '100%', boxSizing: 'border-box' };
@@ -19,7 +21,14 @@ const BRANDS = [['ce', 'Classical Elements'], ['uniquity', "Uniq'uity (MC Americ
 
 export default function UpsLiveRatePanel() {
     const [brand, setBrand] = useState('ce');
+    // OUR OWN DOCK unless a supplier is chosen. An INBOUND quote is a supplier here and us in To —
+    // and because either end abroad makes it international, it is quoted on the right account
+    // (Stuart 2026-10-21: "an order ready in china … from our supplier address to us").
+    const [from, setFrom] = useState(null);
     const [to, setTo] = useState({ addressee: '', addr1: '', city: '', state: '', zip: '', country: 'GB' });
+    const [book, setBook] = useState([]);
+    useEffect(() => onSnapshot(doc(db, 'system', 'ups_config'),
+        (s2) => setBook(addressBookOf(s2.exists() ? s2.data() : {})), () => setBook([])), []);
     const [pkg, setPkg] = useState({ length: '12', width: '12', height: '12', weight: '5' });
     const [declaredValue, setDeclaredValue] = useState('');
     const [res, setRes] = useState(null);
@@ -30,7 +39,7 @@ export default function UpsLiveRatePanel() {
         setBusy(true); setErr(''); setRes(null);
         try {
             const r = await httpsCallable(functions, 'upsRate')({
-                brand, shipTo: to,
+                brand, shipTo: to, ...(from ? { shipFrom: from } : {}),
                 packages: [{ length: Number(pkg.length), width: Number(pkg.width), height: Number(pkg.height), weight: Number(pkg.weight) }],
                 ...(Number(declaredValue) > 0 ? { declaredValue: Number(declaredValue) } : {}),
             });
@@ -49,6 +58,49 @@ export default function UpsLiveRatePanel() {
                 A destination outside the US is quoted on that brand's <strong>international</strong> account. Nothing is
                 shipped and nothing is recorded — this only asks.
             </p>
+
+            {/* FROM — ours, or a saved supplier. Picking one is the whole point of the list. */}
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px', background: 'var(--paper-2)', padding: '10px 12px', border: '1px solid var(--line)' }}>
+                <span style={{ ...mono }}>From</span>
+                <select
+                    style={{ ...input, maxWidth: '280px' }}
+                    value={from ? String(from.__i) : ''}
+                    onChange={(e) => {
+                        const i = e.target.value;
+                        setFrom(i === '' ? null : { ...book[Number(i)], __i: Number(i) });
+                    }}
+                >
+                    <option value="">Our own dock (outbound)</option>
+                    {book.map((a, i) => <option key={i} value={i}>{a.label || a.city || `Address ${i + 1}`}{a.country ? ` · ${a.country}` : ''}</option>)}
+                </select>
+                <span style={{ fontSize: '12px', color: 'var(--ink-soft)' }}>
+                    {from ? 'Inbound — quoted on the international account, billed to us.' : 'Leaving our building.'}
+                </span>
+                {/* The From box can only hold a SAVED address, so swapping a typed To into it would
+                    read "our own dock" while a supplier was being quoted. Offered only when both
+                    ends can be shown truthfully. */}
+                <button
+                    type="button"
+                    disabled={to.__i === undefined}
+                    onClick={() => { const i = to.__i; setTo(from ? { ...from } : to); setFrom({ ...book[i], __i: i }); }}
+                    style={{ ...mono, padding: '6px 11px', background: 'transparent', border: '1px solid var(--line)', cursor: to.__i === undefined ? 'not-allowed' : 'pointer', color: 'var(--ink)', opacity: to.__i === undefined ? 0.4 : 1 }}
+                    title={to.__i === undefined ? 'Pick a saved address in To first — a typed one cannot be shown in the From list.' : 'Swap the two ends'}
+                >⇄ Swap</button>
+            </div>
+
+            {/* TO — typed, or filled from the list in one click. */}
+            {book.length > 0 && (
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+                    <span style={{ ...mono }}>To</span>
+                    <select
+                        style={{ ...input, maxWidth: '280px' }} value=""
+                        onChange={(e) => { const i = e.target.value; if (i !== '') setTo({ ...book[Number(i)], __i: Number(i) }); }}
+                    >
+                        <option value="">Fill from a saved address…</option>
+                        {book.map((a, i) => <option key={i} value={i}>{a.label || a.city || `Address ${i + 1}`}{a.country ? ` · ${a.country}` : ''}</option>)}
+                    </select>
+                </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px', marginBottom: '10px' }}>
                 <div><div style={{ ...mono, marginBottom: '4px' }}>Brand</div>
@@ -90,7 +142,7 @@ export default function UpsLiveRatePanel() {
                         gave it, and a reader should never have to assume which one that was. */}
                     <div style={{ ...mono, marginBottom: '8px' }}>
                         {res.environment} · {res.shipperName} · account {res.account}
-                        {res.international ? ' · INTERNATIONAL' : ' · domestic'}
+                        {res.international ? ' · INTERNATIONAL' : ' · domestic'}{res.inbound ? ' · INBOUND' : ''}
                         {res.declaredValueSent ? ` · value ${usd(res.declaredValueSent)}` : ''}
                     </div>
                     {res.environment !== 'PRODUCTION' && (

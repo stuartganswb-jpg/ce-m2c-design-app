@@ -48,11 +48,22 @@ function addressGaps(a) {
     return gaps;
 }
 
+// ⚠ A SHIPMENT IS INTERNATIONAL IF **EITHER END** IS ABROAD — not just the destination. An INBOUND
+// move (a supplier in China sending to us) has a US ship-TO, so deciding from the destination alone
+// quoted it on the DOMESTIC account: the wrong account, and therefore the wrong rates, with nothing
+// on screen to say so (Stuart 2026-10-21, asking to rate inbound from suppliers).
+function crossesBorder({ shipFrom, shipTo, shipperCountry = 'US' }) {
+    const home = up(shipperCountry || 'US');
+    const from = shipFrom ? countryOf(shipFrom) : home;    // no origin given means we are the origin
+    const to = countryOf(shipTo);
+    return from !== home || to !== home;
+}
+
 // UPS REQUIRES A SHIPMENT VALUE to rate many international lanes, and returns a refusal or a wrong
 // figure without one. It is meaningless on a domestic move, so it is sent only when the parcel
 // actually crosses a border — never invented, never defaulted to a number nobody chose.
-function invoiceLineTotalOf({ shipTo, shipperCountry = 'US', declaredValue, currency = 'USD' }) {
-    if (isDomestic(shipTo, shipperCountry)) return null;
+function invoiceLineTotalOf({ shipTo, shipFrom, shipperCountry = 'US', declaredValue, currency = 'USD' }) {
+    if (!crossesBorder({ shipFrom, shipTo, shipperCountry })) return null;
     const v = Number(declaredValue);
     if (!Number.isFinite(v) || v <= 0) return null;
     return { CurrencyCode: up(currency).slice(0, 3) || 'USD', MonetaryValue: v.toFixed(2) };
@@ -60,5 +71,5 @@ function invoiceLineTotalOf({ shipTo, shipperCountry = 'US', declaredValue, curr
 
 module.exports = {
     STATE_REQUIRED, NO_POSTAL,
-    countryOf, isDomestic, needsState, needsPostal, addressGaps, invoiceLineTotalOf,
+    countryOf, isDomestic, crossesBorder, needsState, needsPostal, addressGaps, invoiceLineTotalOf,
 };

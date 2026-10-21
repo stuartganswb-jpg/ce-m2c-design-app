@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { countryOf, isDomestic, needsState, needsPostal, addressGaps, invoiceLineTotalOf } = require('../functions/upsAddress.js');
+const { countryOf, isDomestic, crossesBorder, needsState, needsPostal, addressGaps, invoiceLineTotalOf } = require('../functions/upsAddress.js');
 
 let n = 0;
 const ok = (c, what) => { assert.ok(c, what); n += 1; };
@@ -40,6 +40,21 @@ ok(addressGaps({ ...gb, city: '' }).includes('city'), 'nor no city');
 ok(addressGaps({ ...gb, addressee: '' }).includes('name / company'), 'nor nobody to send it to');
 ok(addressGaps({ ...gb, country: 'GBR' }).some(g => /two letters/.test(g)), 'a three-letter country is not a UPS country code');
 ok(addressGaps({}).length >= 4, 'an empty address is all gaps, not a crash');
+
+// ── INBOUND COUNTS TOO (Stuart 2026-10-21) ───────────────────────────────────
+// A supplier in China sending to us has a US ship-TO. Deciding from the destination alone quoted
+// that on the DOMESTIC account — the wrong account, the wrong rates, and nothing saying so.
+{
+    const cn = { addressee: 'Supplier', addr1: '1 Fuhua Rd', city: 'Shenzhen', country: 'CN' };
+    ok(crossesBorder({ shipTo: gb }), 'outbound to Britain crosses');
+    ok(crossesBorder({ shipFrom: cn, shipTo: us }), 'INBOUND from China crosses too');
+    ok(!crossesBorder({ shipTo: us }), 'US to US does not');
+    ok(!crossesBorder({ shipFrom: us, shipTo: us }), 'nor with our own origin spelled out');
+    ok(crossesBorder({ shipFrom: cn, shipTo: gb }), 'and a third-country move crosses at both ends');
+    // The customs value follows the same rule, or an inbound quote would carry none.
+    eq(invoiceLineTotalOf({ shipFrom: cn, shipTo: us, declaredValue: 900 }),
+        { CurrencyCode: 'USD', MonetaryValue: '900.00' }, 'an inbound move still needs its value');
+}
 
 // ── the shipment value UPS wants to rate a border crossing ───────────────────
 eq(invoiceLineTotalOf({ shipTo: us, declaredValue: 500 }), null, 'a domestic move needs no declared value');

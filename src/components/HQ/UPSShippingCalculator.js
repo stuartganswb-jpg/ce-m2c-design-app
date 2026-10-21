@@ -9,6 +9,7 @@ import {
 } from './upsIntlRates';
 import UpsAccountsPanel from './UpsAccountsPanel';     // 📦 each brand's UPS accounts (2026-10-21)
 import UpsLiveRatePanel from './UpsLiveRatePanel';     // 🌍 live negotiated rates, incl. international
+import UpsAddressBook from './UpsAddressBook';         // 📒 suppliers and docks we rate against often
 
 // ---------------------------------------------------------------------------
 // THEME
@@ -777,6 +778,7 @@ function UpsConnectionProbe() {
           beside the agreement table above rather than replacing it, because when the two disagree
           the agreement has drifted and that is worth seeing (Stuart 2026-10-21). */}
       <UpsAccountsPanel />
+      <UpsAddressBook />
       <UpsLiveRatePanel />
       <UpsProbeRunner busy={busy} setBusy={setBusy} result={result} setResult={setResult} />
     </>
