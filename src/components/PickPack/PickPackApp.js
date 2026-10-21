@@ -8,6 +8,7 @@ import StockPutAwayPanel from './StockPutAwayPanel';
 import { packagingOf } from '../Shared/productPackaging';
 import { itemScanOf, runItemCodeOf, runItemCodesOf, expectedBinsOf, expectedBinsText, binQuestionOf, putAwayStepOf, putAwayBlockerOf, PUT_AWAY_STEP } from '../Shared/putAwayScan';
 import { isTrackLoadedPart, traverseWaitOf, oeStationOf, oeTraverseGateOf, loadRefusal, loadedPatchOf, finishingDoneOf, cpqStationOf, loadedDocStampOf } from '../Shared/traverseStation';
+import { traversesOf } from '../Shared/trackFacts';   // each traverse's draw, motor side and carriers (2026-10-21)
 import { materialLabelText, lineSpanText } from '../Shared/partFacts';
 import MaterialGridCard from '../Shared/MaterialGridCard';
 import { coverArrival } from '../Shared/backorderCover';
@@ -1132,7 +1133,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (st.loaded >= st.releasedUnits && st.toPick === 0) return;       // every unit in motion is loaded
             const fin = finishingDoneOf(finAll.filter(d => { const so = oeOrderOfDoc(d); return !!so && so.id === o.id; }));
             out.push({ kind: 'OE', id: o.id, so: o, ref: `SO ${o.soId || o.id}`, customer: o.customer || '', jobName: o.jobName || '', needBy: o.needBy || o.needByDate || '', bin: committedBinOf(o) || '',
-                ready: fin.done, waitingDocs: fin.open.map(d => woRefOf(d)), st, tracks: st.tracks });
+                ready: fin.done, waitingDocs: fin.open.map(d => woRefOf(d)), st, tracks: st.tracks, traverses: traversesOf(o.lines) });
         });
         const keyOf = (d) => String(d.orderKey || d.salesOrderId || d.id);
         [...new Set(finAll.filter(d => d && d.traverseGate === 'WAITING' && !oeOrderOfDoc(d)).map(keyOf))].forEach(k => {
@@ -1143,7 +1144,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const so = soIndex[k] || null;
             const tracks = docs.flatMap(d => (poleInfoOf(d).rows || []).map(r => ({ code: r.code || '', name: r.name || '', qty: r.qty, display: r.display || '' })));
             out.push({ kind: 'CPQ', id: k, so, ref: `SO ${k}`, customer: (docs[0] && (docs[0].customerName || docs[0].clientName)) || (so && so.customer) || '', needBy: (so && (so.needBy || so.needByDate)) || '', bin: '',
-                ready: fin.done, waitingDocs: fin.open.map(d => woRefOf(d)), lines: cs.lines, tracks, docs: cs.gated.map(d => ({ id: d.id, ref: woRefOf(d) })) });
+                ready: fin.done, waitingDocs: fin.open.map(d => woRefOf(d)), lines: cs.lines, tracks, docs: cs.gated.map(d => ({ id: d.id, ref: woRefOf(d) })),
+                traverses: traversesOf(docs.flatMap(d => d.partsList || [])) });
         });
         return out.sort((a, b) => Number(b.ready) - Number(a.ready) || String(a.needBy || '\uffff').localeCompare(String(b.needBy || '\uffff')));
     }, [quickShipOrders, finAll, trackCodes, soIndex, shopSibs]); // eslint-disable-line react-hooks/exhaustive-deps

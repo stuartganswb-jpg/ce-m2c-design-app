@@ -27,6 +27,7 @@ import { findClientPriceRow } from './clientPricing.js';
 import { finishedCodeOf, isUnfinishedFinish } from './subFinish.js';
 import { isPoleCategory } from './poleCut.js';
 import { materialOfPart, pairFactsOf } from './partFacts.js';
+import { trackFactsFrom } from './trackFacts.js';
 import { PAIR_TAG_LETTER } from './stagingKey.js';
 import { releaseLabelOf } from './rowRelease.js';
 
@@ -321,6 +322,8 @@ export const pairShapeOf = ({ group, so, brand, createdBy = '', now = Date.now()
             // A traverse track / F-clip is cut shorter than its fascia by CPQ's deduction (Shared/subFinish) and leaves
             // the floor in its stock colour — the cut list says both, so the bench reads what it is making.
             ...(!job.rider && job.line && job.line.trvRole ? { trvRole: job.line.trvRole, ...(N(job.line.trvCutFrom) > 0 ? { trvCutFrom: N(job.line.trvCutFrom), trvDrive: job.line.trvDrive || 'MANUAL' } : {}) } : {}),
+            // …and its traverse's draw, motor side and carriers, as tab 7 stamped the kit's lines (Shared/trackFacts) — the cut sheet header reads them
+            ...(!job.rider ? trackFactsFrom(job.line) : {}),
             ...(!job.rider ? { finishedCode: finishedCodeOf(erp, job.finish) } : {}),
             finishCode: job.finish, soLineIdx: job.lineIdx,
             material: materialOfPart(job.part), ...lineNoOf(job),

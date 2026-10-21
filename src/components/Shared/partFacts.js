@@ -15,6 +15,7 @@
 // LABELLING ONLY (his call): the documents, their ids and what is on each are exactly what they were.
 // Pure. Harness: scripts/partFacts.test.mjs.
 import { isPoleCategory } from './poleCut.js';
+import { trackFactsFrom } from './trackFacts.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const N = (v) => Number(v) || 0;
@@ -80,23 +81,25 @@ const headerTagOf = (h) => String((h && h.sidemark) || (String((h && h.name) || 
  * @returns {{ rows, lineCount, tags: Object<number,string> }} — `rows` are copies; the quote is not touched.
  */
 export function withCartLines(breakdown = []) {
-    let no = 0, cur = 0, tag = '';
+    let no = 0, cur = 0, tag = '', track = {};
     const tags = {};
     const rows = (breakdown || []).map(row => {
         if (!row) return row;
         if (row.isHeader) {
-            if (isCartLineHeader(row)) { no += 1; cur = no; tag = headerTagOf(row); if (tag) tags[no] = tag; } else { cur = 0; tag = ''; }
+            // …and a traverse's draw, motor side and carriers, stamped on its header at save (Shared/trackFacts, 2026-10-21)
+            if (isCartLineHeader(row)) { no += 1; cur = no; tag = headerTagOf(row); track = trackFactsFrom(row); if (tag) tags[no] = tag; } else { cur = 0; tag = ''; track = {}; }
             return row;
         }
-        return cur ? { ...row, lineNo: cur, ...(tag ? { lineTag: tag } : {}) } : row;
+        return cur ? { ...row, lineNo: cur, ...(tag ? { lineTag: tag } : {}), ...track } : row;
     });
     return { rows, lineCount: no, tags };
 }
 
-/** The line fields a parts-list or cut-list entry carries: { material, lineNo?, lineTag? }. */
+/** The line fields a parts-list or cut-list entry carries: { material, lineNo?, lineTag?, …a traverse's facts (Shared/trackFacts)? }. */
 export const lineFactsOf = (line, part) => ({
     material: materialOfPart(part),
     ...(N(line && line.lineNo) > 0 ? { lineNo: N(line.lineNo), ...(line.lineTag ? { lineTag: String(line.lineTag) } : {}) } : {}),
+    ...trackFactsFrom(line),
 });
 
 /** The lines a document's parts and cuts belong to, in order: [1, 2, 5]. */

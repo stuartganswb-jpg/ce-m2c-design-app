@@ -28,6 +28,7 @@ import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, query, where, serverTimestamp, writeBatch } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
 import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp, orderDiscountApplies, withPillowDiscountMarks, canLineDiscount } from '../Shared/lineDiscount';
+import { carriersOnTrackOf, kitTrackFactsOf } from '../Shared/trackFacts';
 import { placeholderLineOf, nsHoldOf, PLACEHOLDER_HELD_STATUS } from '../Shared/placeholderLine';
 import { cartLineFactsOf } from '../Shared/cartLineFacts';   // a pillow line's facts in full on the cart row (Stuart 2026-10-17)   // ✚ Quick add: an item not yet in the system (2026-10-16)
 import { enqueueNsWrite } from '../Shared/nsOutbox';
@@ -704,7 +705,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                 const o = traverseKitOrderOf(e, { kits: kitsReq, rowOf: rowOfReq, finishList, rulesOf: (fam) => charts[fam] || null, findItem: byCode,
                     priceOf: (id) => { const it = byCode(id); return it ? quickShipRateOf(ctxReq, it) : 0; } });
                 if (o.error) { problems.push(`traverse kit ${i + 1}: ${o.error}`); return; }
-                setCart(prev => [...prev, { key: `${o.kit.id}-${Date.now()}-${i}`, ...o.kitLine }, ...(o.feetLine ? [{ key: `${o.kit.id}-ft-${Date.now()}-${i}`, ...o.feetLine }] : [])]);
+                const carriers = carriersOnTrackOf({ sel: e.sel || null, lines: o.cfgLines });   // (as the popup counts them — Shared/trackFacts)
+                setCart(prev => [...prev, { key: `${o.kit.id}-${Date.now()}-${i}`, ...o.kitLine, ...(carriers != null ? { traverseCarriers: carriers } : {}) }, ...(o.feetLine ? [{ key: `${o.kit.id}-ft-${Date.now()}-${i}`, ...o.feetLine }] : [])]);
                 o.components.forEach(l => pushLine(l.item, l.qty, l.note, null, l.opts));
                 if (o.missing) problems.push(`traverse kit ${i + 1}: ${o.missing} component code(s) not in the library — not added`);
             });
@@ -945,7 +947,9 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         lines.forEach(l => pushLine(l.item, l.qty, l.note, null, l.opts));
         // THE DRAW AND THE MOTOR SIDE THE POPUP ASKED ARE KEPT (Stuart 2026-10-20: "fix tab 7 on the draw direction") — on the kit line, in
         // CPQ's own shape (Shared/traverseKitSale.withTraverseAnswers); they were dropped here.
-        if (trvCfg?.kitKey && sel) setCart(prev => prev.map(l => (l.key === trvCfg.kitKey ? withTraverseAnswers(l, sel) : l)));
+        // …and the carriers it put on the order for this kit — the station's "72 carriers needed" (Shared/trackFacts, 2026-10-21)
+        const carriers = carriersOnTrackOf({ sel, lines: cfgLines });
+        if (trvCfg?.kitKey && sel) setCart(prev => prev.map(l => (l.key === trvCfg.kitKey ? { ...withTraverseAnswers(l, sel), ...(carriers != null ? { traverseCarriers: carriers } : {}) } : l)));
         if (missing) alert(`${missing} component code(s) not in the library — not added. Check the rules doc against the Master Library.`);
         setTrvCfg(null);
     };
@@ -1754,6 +1758,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                         kind: 'KIT', key: l.key, kitCode: String(l.trvKitCode || l.erp || '').toUpperCase(),
                         code: l.aliasErp || l.erp, name: l.name, note: l.note,
                         qty: l.eachQty || 1, rate: l.rate || 0, memo: String(l.lineMemo || '').trim(),
+                        // the track's draw, motor side and carriers — every part line of the kit carries them to the floor (Shared/trackFacts)
+                        facts: kitTrackFactsOf(l),
                     });
                     const kitDoc = itemById(l.itemId);
                     const fam = kitDoc?.manufacturingSpecs?.kitFamily || 'H1-2TRV';
@@ -2064,7 +2070,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                 // NetSuite ($0 lines) and prints them on the documents, but they never reached lines[] — so the SO Pack
                 // never listed the track, fascia and brackets to pick. Each goes on as the item NetSuite consumes, in
                 // NetSuite's unit, a shelf pick of its kit (trvComponent) — exactly what leaves the shelf.
-                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}), ...(l.lineImage && l.lineImage.url ? { lineImage: l.lineImage } : {}), ...(l.nsQtyFactor ? { nsQtyFactor: l.nsQtyFactor, nsVia: l.nsVia || '' } : {}), ...(l.oneOfAKind ? { oneOfAKind: l.oneOfAKind } : {}), ...(l.ooakPart ? { ooakPart: true } : {}), ...(l.placeholder ? { placeholder: l.placeholder } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(d.floor || {}) }))],
+                lines: [...lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(Number(l.cutLength) > 0 ? { cutLength: Number(l.cutLength) } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}), ...(l.noFinish ? { noFinish: true } : {}), ...(l.isKit ? { isKit: true, itemKit: true, kitCode: l.kitCode || '' } : {}), ...(l.inKit ? { inKit: true, kitOf: l.kitOf || '', hidden: true } : {}), ...(l.subFinishCode ? { subFinishCode: l.subFinishCode } : {}), ...(l.stockColour ? { stockColour: true } : {}), ...(l.pillow ? { pillow: l.pillow, madeToOrder: l.madeToOrder || 'SEW' } : {}), ...(l.unitWord ? { unitWord: l.unitWord } : {}), ...(l.lineImage && l.lineImage.url ? { lineImage: l.lineImage } : {}), ...(l.nsQtyFactor ? { nsQtyFactor: l.nsQtyFactor, nsVia: l.nsVia || '' } : {}), ...(l.oneOfAKind ? { oneOfAKind: l.oneOfAKind } : {}), ...(l.ooakPart ? { ooakPart: true } : {}), ...(l.placeholder ? { placeholder: l.placeholder } : {}) })), ...trvDocLines.filter(d => d.kind === 'PART').map(d => ({ erp: d.code, aliasErp: '', name: d.name, qty: Number(d.qty) || 0, packs: null, packUom: '', bin: '', note: d.note || '', memo: '', kit: ((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).code) || '', trvComponent: true, trvOfKit: d.ofKey || '', ...(((trvDocLines.find(k => k.kind === 'KIT' && k.key === d.ofKey) || {}).facts) || {}), ...(d.floor || {}) }))],
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never

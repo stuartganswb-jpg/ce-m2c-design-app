@@ -8,6 +8,7 @@
 //   ORDER ENTRY order  pick the track parts (for the displays released) → confirm how many displays are LOADED.
 //   CPQ order          tick each track part as picked → confirm the tracks loaded (lifts the gate on its documents).
 import React, { useState } from 'react';
+import { trackFactsWords } from '../Shared/trackFacts';
 
 const num = (v) => Number(v) || 0;
 
@@ -75,9 +76,15 @@ export default function TraverseStationTab({ orders = [], theme, t = (x) => x, b
                     </div>
                 )}
 
-                {/* 2 — THE TRACKS / RODS BEING LOADED */}
-                {(o.tracks || []).length > 0 && (<>
+                {/* 2 — THE TRACKS / RODS BEING LOADED, and each traverse's draw and carriers (Stuart 2026-10-21: "it should present them with
+                    example 'Left Draw, 72 carriers needed'" — Shared/trackFacts; a draw nobody recorded says so, and never stops the confirm) */}
+                {((o.tracks || []).length > 0 || (o.traverses || []).length > 0) && (<>
                     <div style={{ padding: '12px 16px 4px', ...label }}>2 · {t('Load onto')}</div>
+                    {(o.traverses || []).map(v => (
+                        <div key={v.id} style={{ padding: '2px 16px', fontFamily: theme.mono, fontSize: '12px', fontWeight: 700, color: v.drawn ? theme.ink : '#c0392b' }}>
+                            🧵 {(o.traverses || []).length > 1 || v.facts.traverseName ? <span style={{ fontWeight: 400, color: theme.inkSoft }}>{v.label} — </span> : null}{trackFactsWords(v.facts)}
+                        </div>
+                    ))}
                     <div style={{ padding: '0 16px 8px' }}>
                         {o.tracks.map((k, i) => (
                             <div key={i} style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink, padding: '3px 0' }}>

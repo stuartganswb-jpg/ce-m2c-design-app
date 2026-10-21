@@ -35,6 +35,7 @@ import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, ch
 import { searchStockedItems, pickedItemEntries, isSearchableStockedItem } from '../Shared/checkoutSearch';
 import { canLineDiscount, lineDiscountOf, lineDiscountStamp, applyLineDiscount, clearLineDiscount, keepLineDiscount, discountModeOf, lineDiscountRows, orderDiscountStamp } from '../Shared/lineDiscount';
 import { applyRowPrices, typedCountOf } from '../Shared/rowPrices';
+import { cpqTrackFactsOf } from '../Shared/trackFacts';
 import { extrasFromSavedItem } from '../Shared/extrasRestore';
 import { readWorkspace, writeWorkspace, restorableWorkspace, workspaceSeedOf, workHasProgress, cleanStartOf, CLEAN_FLOW, CLEAN_ALL } from '../Shared/cpqWorkspace';
 import { shippingPlanOf, shippingChargeOf, FLAT_RATE_BOXES, packagingPlanOf, PACK_FEE_CODES } from '../Shared/flatRateShipping';
@@ -3054,7 +3055,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
               // header and carry the sidemark down onto the group's Net Line Total row
               // (Shared/lineClassification). Quotes saved before this read it out of the [brackets].
               sidemark: item.sidemark || '',
-              isHeader: true
+              isHeader: true,
+              // A TRAVERSE'S DRAW, MOTOR SIDE AND CARRIERS ride its header to the floor (Stuart 2026-10-21: "that data ultimately needs to
+              // flow to the traverse station") — Shared/partFacts.withCartLines carries them onto every row of the line, RTG's split onto
+              // the finishing parts lists and the shop cut list (Shared/trackFacts). {} on anything that is not a traverse.
+              ...cpqTrackFactsOf(item),
           });
 
           item.pricingBreakdown.forEach(line => {

@@ -36,6 +36,7 @@ import { shopDocNeedsPhos } from '../Shared/phosphateRule';
 import { shopConfigsOf, alreadyDoneOf, alreadyDoneClosePatch } from '../Shared/shopJobOnce';
 import PartFactsStrip from '../Shared/PartFactsStrip';
 import { rowsByLine, lineHeadText, materialLabelText, lineSpanText } from '../Shared/partFacts';
+import { traversesOf, trackFactsWords } from '../Shared/trackFacts';   // each traverse's draw, motor side and carriers (2026-10-21)
 import { isCustomSalesDoc, stockCloseShortOf, closeShortStamps, closeShortLine, shortBuildStamps } from '../Shared/scrapClose';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
@@ -1696,13 +1697,21 @@ const ShopFloor = () => {
                         the rows on fabNotes.traverseCuts. The floor reads the numbers as given —
                         never recomputes them. Null on every solid-pole job, where the Pole Cut
                         Sheet below stands. */}
-                    {Array.isArray(order.fabNotes?.traverseCuts) && order.fabNotes.traverseCuts.length > 0 && (
+                    {/* …and under its header each traverse's draw, motor side and carriers (Stuart 2026-10-21: "the traverse cut sheet header as
+                        well" — Shared/trackFacts, on the cut list from CPQ's split and from Order Entry's rows); a job with no Vision cuts shows
+                        the header for them alone. */}
+                    {((Array.isArray(order.fabNotes?.traverseCuts) && order.fabNotes.traverseCuts.length > 0) || traversesOf(order.cutList).length > 0) && (
                         <div style={{ marginBottom: '20px', border: '1px solid var(--line)' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', background: 'var(--ink-soft)', padding: '6px 12px', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
                                 <span>Traverse Cut Sheet</span>
-                                <span>{[order.fabNotes.drive, order.fabNotes.setup, order.fabNotes.frontLayer ? `${order.fabNotes.frontLayer} front` : ''].filter(Boolean).join(' · ')}</span>
+                                <span>{[order.fabNotes?.drive, order.fabNotes?.setup, order.fabNotes?.frontLayer ? `${order.fabNotes.frontLayer} front` : ''].filter(Boolean).join(' · ')}</span>
                             </div>
-                            {order.fabNotes.traverseCuts.map((c, i) => {
+                            {traversesOf(order.cutList).map(v => (
+                                <div key={v.id} style={{ padding: '7px 12px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 700, color: v.drawn ? 'var(--ink)' : '#c0392b' }}>
+                                    {traversesOf(order.cutList).length > 1 || v.facts.traverseName ? <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}>{v.label} — </span> : null}{trackFactsWords(v.facts)}
+                                </div>
+                            ))}
+                            {(order.fabNotes?.traverseCuts || []).map((c, i) => {
                                 const role = { FASCIA: 'Fascia', TRACK: 'Track', FCLIP: 'F-clip' }[String(c?.role || '').toUpperCase()] || String(c?.role || '—');
                                 const cut = Number(c?.cutInches);
                                 return (
