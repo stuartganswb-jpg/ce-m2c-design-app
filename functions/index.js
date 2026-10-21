@@ -2875,6 +2875,7 @@ exports.payCharge = onCall({ cors: true, secrets: [NMI_SANDBOX_KEY_CE, NMI_LIVE_
 const nsPay = require('./nsPayment');
 const mail = require('./emailOutbox');
 const orderDoc = require('./orderDocument');
+const upsAddr = require('./upsAddress');
 
 // The brand's location, the same map the rest of the app pushes against.
 const NS_BRAND_LOCATION = { m2c: '19', ce: '17', uniquity: '20', leyla: '18' };
@@ -3488,14 +3489,50 @@ const upsEnvironment = async () => {
     } catch (e) { return 'CIE'; }
 };
 
-const upsShipperFor = (brand) => {
-    const s = UPS_SHIPPERS[String(brand || '').toLowerCase()];
-    if (!s) throw new HttpsError('failed-precondition', `NO_UPS_ACCOUNT_FOR_BRAND: no UPS shipper account is on file for "${brand}".`);
+// EACH BRAND SHIPS ON ITS OWN UPS ACCOUNT (Stuart 2026-10-21: "same as classical, direct
+// integration with ups, just a different ups account# — ideally we add all the account #'s on the
+// main ups integrations page"). The numbers live in system/ups_config.shippers, edited on HQ 9.5,
+// because a UPS account number is printed on every label and is not a secret — the OAuth client id
+// and secret are, and they stay in Secret Manager.
+//
+// A brand with no account REFUSES rather than shipping on another company's number, which is the
+// same rule as the gateway keys: the wrong account here is the wrong company's freight bill.
+const upsShipperFor = async (brand) => {
+    const b = String(brand || '').toLowerCase();
+    let cfg = {};
+    try {
+        const snap = await admin.firestore().doc('system/ups_config').get();
+        cfg = ((snap.exists && snap.data()) || {}).shippers || {};
+    } catch (e) { cfg = {}; }
+    const row = cfg[b];
+    if (row && String(row.account || '').trim()) {
+        return {
+            account: String(row.account).trim(),
+            name: String(row.name || '').trim() || b.toUpperCase(),
+            phone: String(row.phone || '').replace(/[^0-9]/g, ''),
+            address: {
+                AddressLine: [String(row.addr1 || '').trim(), String(row.addr2 || '').trim()].filter(Boolean),
+                City: String(row.city || '').trim(),
+                ...(String(row.state || '').trim() ? { StateProvinceCode: String(row.state).trim().toUpperCase() } : {}),
+                ...(String(row.zip || '').trim() ? { PostalCode: String(row.zip).trim() } : {}),
+                CountryCode: (String(row.country || 'US').trim().toUpperCase()) || 'US',
+            },
+        };
+    }
+    // Nothing configured yet: CE keeps the account it has always shipped on, from its secret.
+    const s = UPS_SHIPPERS[b];
+    if (!s) throw new HttpsError('failed-precondition', `NO_UPS_ACCOUNT_FOR_BRAND: no UPS account is on file for "${brand}". Add it on HQ 9.5 → UPS accounts.`);
     return { ...s, account: s.secret.value().trim() };
 };
 
 const upsToken = async (env, account) => {
-    const hit = upsTokenCache[env];
+    // ⚠ KEYED BY ENVIRONMENT **AND ACCOUNT**. The token is minted for one merchant (x-merchant-id),
+    // so caching it by environment alone meant the second brand to ship would borrow the first
+    // brand's token — rating and billing the wrong UPS account, with nothing on screen to say so.
+    // Harmless while CE was the only account; a live defect the moment Uniq'uity has its own
+    // (Stuart 2026-10-21).
+    const key = `${env}::${account}`;
+    const hit = upsTokenCache[key];
     if (hit && hit.exp > Date.now() + 60000) return hit.token;
     const basic = Buffer.from(`${UPS_CLIENT_ID.value().trim()}:${UPS_CLIENT_SECRET.value().trim()}`).toString('base64');
     const r = await fetch(`${UPS_HOSTS[env]}/security/v1/oauth/token`, {
@@ -3505,7 +3542,7 @@ const upsToken = async (env, account) => {
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok || !body.access_token) throw new HttpsError('unavailable', `UPS login failed (HTTP ${r.status}): ${upsErrorText(body) || 'no token'}`);
-    upsTokenCache[env] = { token: body.access_token, exp: Date.now() + (Number(body.expires_in) || 3600) * 1000 };
+    upsTokenCache[key] = { token: body.access_token, exp: Date.now() + (Number(body.expires_in) || 3600) * 1000 };
     return body.access_token;
 };
 
@@ -3530,10 +3567,12 @@ const cleanStr = (v, max) => String(v === undefined || v === null ? '' : v)
 const upsShipToOf = (a) => {
     const s = a || {};
     const addr1 = cleanStr(s.addr1, 35), city = cleanStr(s.city, 30), state = cleanStr(s.state, 5).toUpperCase(), zip = cleanStr(s.zip, 10);
-    const country = (cleanStr(s.country, 2) || 'US').toUpperCase();
-    const missing = [['street', addr1], ['city', city], ['state', state], ['zip', zip]].filter(([, v]) => !v).map(([k]) => k);
+    const country = upsAddr.countryOf(s);
+    // WHAT A COUNTRY ACTUALLY NEEDS (functions/upsAddress). This used to demand a state and a zip
+    // of every address on earth, so a good London address was refused HERE, before UPS ever saw it
+    // — which is why international could not be rated at all (Stuart 2026-10-21).
+    const missing = upsAddr.addressGaps(s);
     const name = cleanStr(s.addressee || s.attention, 35);
-    if (!name) missing.unshift('name / company');
     if (missing.length) throw new HttpsError('invalid-argument', `Ship-to is missing: ${missing.join(', ')}.`);
     const phone = cleanStr(s.phone, 20).replace(/[^0-9]/g, '');
     return {
@@ -3542,7 +3581,9 @@ const upsShipToOf = (a) => {
         ...(phone ? { Phone: { Number: phone } } : {}),
         Address: {
             AddressLine: [addr1, cleanStr(s.addr2, 35)].filter(Boolean),
-            City: city, StateProvinceCode: state, PostalCode: zip, CountryCode: country,
+            City: city, CountryCode: country,
+            ...(state ? { StateProvinceCode: state } : {}),
+            ...(zip ? { PostalCode: zip } : {}),
             ...(s.residential === true ? { ResidentialAddressIndicator: '' } : {}),
         },
     };
@@ -3571,10 +3612,17 @@ exports.upsRate = onCall({
     secrets: [UPS_CLIENT_ID, UPS_CLIENT_SECRET, UPS_ACCOUNT_CE],
 }, async (request) => {
     assertStaffUser(request);
-    const { brand, shipTo, packages } = request.data || {};
+    const { brand, shipTo, packages, declaredValue, currency } = request.data || {};
     const env = await upsEnvironment();
-    const shipper = upsShipperFor(brand);
+    const shipper = await upsShipperFor(brand);
     const origin = { Name: shipper.name, Address: shipper.address };
+    // UPS wants the shipment's value to rate many INTERNATIONAL lanes and refuses, or answers
+    // wrongly, without it. Sent only when the parcel actually crosses a border, and only when
+    // somebody gave a figure — never invented (functions/upsAddress, Stuart 2026-10-21).
+    const invoiceTotal = upsAddr.invoiceLineTotalOf({
+        shipTo, shipperCountry: (shipper.address && shipper.address.CountryCode) || 'US',
+        declaredValue, currency,
+    });
     const body = await upsCall(env, shipper.account, 'POST', '/api/rating/v2409/Shop', {
         RateRequest: {
             Request: { TransactionReference: { CustomerContext: 'wms-rate' } },
@@ -3584,6 +3632,7 @@ exports.upsRate = onCall({
                 ShipTo: upsShipToOf(shipTo),
                 PaymentDetails: { ShipmentCharge: [{ Type: '01', BillShipper: { AccountNumber: shipper.account } }] },
                 ShipmentRatingOptions: { NegotiatedRatesIndicator: '' },
+                ...(invoiceTotal ? { InvoiceLineTotal: invoiceTotal } : {}),
                 Package: upsPackagesOf(packages, 'PackagingType'),
             },
         },
@@ -3599,7 +3648,14 @@ exports.upsRate = onCall({
         };
     });
     const alerts = [].concat((body.RateResponse && body.RateResponse.Response && body.RateResponse.Response.Alert) || []).map((a) => `${a.Code || ''} ${a.Description || ''}`.trim());
-    return { environment: env, services, alerts };
+    return {
+        environment: env, services, alerts,
+        // So a screen can SAY which account was quoted and whether these are international rates,
+        // rather than leaving a reader to assume.
+        account: shipper.account, shipperName: shipper.name,
+        international: !upsAddr.isDomestic(shipTo, (shipper.address && shipper.address.CountryCode) || 'US'),
+        declaredValueSent: invoiceTotal ? Number(invoiceTotal.MonetaryValue) : null,
+    };
 });
 
 exports.upsShip = onCall({
@@ -3611,7 +3667,7 @@ exports.upsShip = onCall({
     const code = cleanStr(serviceCode, 3);
     if (!UPS_SERVICE_NAMES[code]) throw new HttpsError('invalid-argument', 'Choose a UPS service first.');
     const env = await upsEnvironment();
-    const shipper = upsShipperFor(brand);
+    const shipper = await upsShipperFor(brand);
     const shipperBlock = { Name: shipper.name, AttentionName: 'Shipping', Phone: { Number: shipper.phone }, Address: shipper.address };
     const body = await upsCall(env, shipper.account, 'POST', '/api/shipments/v2409/ship', {
         ShipmentRequest: {
@@ -3657,7 +3713,7 @@ exports.upsVoid = onCall({
     const env = await upsEnvironment();
     // A label is voided on the host that made it — a test label never crosses to production.
     if (environment && environment !== env) throw new HttpsError('failed-precondition', `This label was made in ${environment}; UPS is now set to ${env}. Switch back to void it.`);
-    const shipper = upsShipperFor(brand);
+    const shipper = await upsShipperFor(brand);
     const body = await upsCall(env, shipper.account, 'DELETE', `/api/shipments/v2409/void/cancel/${encodeURIComponent(id)}`);
     const status = body.VoidShipmentResponse && body.VoidShipmentResponse.SummaryResult && body.VoidShipmentResponse.SummaryResult.Status;
     return { environment: env, voided: true, status: (status && status.Description) || 'Voided' };
