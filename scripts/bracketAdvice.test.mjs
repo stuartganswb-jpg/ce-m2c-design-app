@@ -28,6 +28,19 @@ const eq = (n, got, want) => {
     eq('the advice says both reasons', [a.brackets, a.bracketsNoStud, a.why, a.whyNoStud], [3, 5, 'our maximum span', 'the limit for drywall toggles']);
 }
 
+// ── THE WOOD ROW (Stuart 2026-10-20: "wood make it 46" for both" · the 2" × 3/4" wood fascia "yes same") ──────────────────────────────
+{
+    const wood = (fab, drop) => spanTable(fab, drop, 'H1').find(r => r.id === 'H1-WOOD');
+    eq('one wood row in H1, the 1-3/8" round and the 2" × 3/4" fascia both', [wood('PRINT', 8).material, /1-3\/8" round/.test(wood('PRINT', 8).label) && /2" × 3\/4"/.test(wood('PRINT', 8).label)], ['Wood', true]);
+    eq('46" in a stud and on drywall alike, for every fabric at the standard 8 ft — our maximum binds both',
+        ['SHEER', 'PRINT', 'LINED', 'BLACKOUT'].map(f => [wood(f, 8).spanInches, wood(f, 8).limitedBy, wood(f, 8).noStudInches, wood(f, 8).noStudLimitedBy]),
+        [[46, 'MAX', 46, 'MAX'], [46, 'MAX', 46, 'MAX'], [46, 'MAX', 46, 'MAX'], [46, 'MAX', 46, 'MAX']]);
+    eq('only a long, heavy curtain brings the beam under the cap — and the row says so', [wood('BLACKOUT', 12).spanInches, wood('BLACKOUT', 12).limitedBy, wood('BLACKOUT', 12).noStudInches], [41, 'LOAD', 41]);
+    const w = bracketAdviceFor({ itemCode: 'H1-138WR/W01', map: { 'H1-WOOD': 'H1-138WR' }, rodInches: 120, fabricId: 'PRINT', dropFt: 8 });
+    const asAcrylic = bracketAdviceFor({ itemCode: 'H1-138WR/W01', map: { 'H1-ACR-1.375': 'H1-138WR' }, rodInches: 120, fabricId: 'PRINT', dropFt: 8 });
+    eq('a 10 ft wood pole joined to it: 4 supports either way (joined under acrylic it was held to 5)', [w.brackets, w.bracketsNoStud, asAcrylic.brackets, asAcrylic.bracketsNoStud], [4, 4, 5, 5]);
+}
+
 // ── THE THREE ANSWERS ────────────────────────────────────────────────────────────────────────────────────
 eq('defaults: medium fabric, 8 ft, into studs — what was always assumed', spanAnswersOf({}), { fabricId: 'PRINT', dropFt: DEFAULT_DROP_FT, onStud: true });
 eq('an answer is read as given; a fabric is case-blind; a length is a number', spanAnswersOf({ fabricId: 'blackout', dropFt: '10.5', onStud: false }), { fabricId: 'BLACKOUT', dropFt: 10.5, onStud: false });

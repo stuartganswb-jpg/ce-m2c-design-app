@@ -19,7 +19,7 @@ import { modelNodesOf } from './hardwareAdapter';
 import { partIndexOf, partIn, ourNumberOf, sizeStepsOf, sizeSelOf, sizeIndexOf, choicesAtSize, sizeProjInchesOf, answersAtSize, settle,
     lengthInchesOf, lengthFeetExactOf, lengthFeetOf, lengthFieldsOf, bracketAdviceOf, recommendedFor, quantitiesOf, resolvedOf,
     spanAnswersOf, rodOptionsAdviceOf, supportShortfallOf, DROP_FT_RANGE, spliceInfoOf, trvJoinersOf, spliceCentreMissingOf, spanRiskKeyOf,
-    spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice, withoutAutoSplice, joinersNeededOf, rodRunsOf,
+    spliceCodesAmong, singleSpliceOf, spliceLimitOf, spliceIsNeeded, sameItem, spliceIsSatisfied, withRequiredSplice, withoutAutoSplice, joinersNeededOf, rodRunsOf, chartGovernsBracketsOf, chartBracketsFor, kitChartBracketsOf,
     globalFinishOf, finishIndexOf, withGlobalFinish, wearsAsTwinFinish, wearsFinishOf, globalFinishForChoice, chosenListOf, partFinishByPartOf, armFinishOfChoice,
     finishForChoice, matchFinishOverrideOf, rodFinishForChoice, followsRodChoice, subFinishForChoice, lineFinishForChoice, textureOverridesOf, chosenFinishObjectsOf,
     clientFinishNameOf, offeredFinishesOf, finishGroupsOf, finishGroupLabel,
@@ -489,15 +489,29 @@ function HardwareConfiguratorInner({
     // the length step and the traverse's own (a tick on its components step), with where Vision drew them.
     const trvJoiners = useMemo(() => trvJoinersOf({ trvRules, model, livePicks, answers, lengthFeet, trvSel }), [trvRules, model, livePicks, answers, lengthFeet, trvSel]);
     const splice = useMemo(() => spliceInfoOf({ extras, spliceCodes, sameItemCode, trvJoiners, drawnSplices, lengthInches, spliceOverIn }), [extras, spliceCodes, sameItemCode, trvJoiners, drawnSplices, lengthInches, spliceOverIn]);
-    const advice = useMemo(() => bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId }),
+    // A TRAVERSE WHOSE FAMILY SELLS AS A KIT TAKES THE KIT'S BRACKETS (H1-2TRV, Stuart 2026-10-20 — hardwareSession.chartBracketsFor):
+    // the 4.6 chart's count, the whole set — the ends keep theirs, the centre takes the rest; where it is the count, 6.5's span words step
+    // aside for it (one count, said once). Line for line what hardwareSession.sessionOf does.
+    const chartBrackets = useMemo(() => chartGovernsBracketsOf({ flow, trvRules }) && isTraverseOf(model, livePicks), [flow, trvRules, model, livePicks]);
+    const kitFamily = String((flow && flow.kitFamily) || '').trim().toUpperCase();
+    const kitProj = effAnswers.proj != null ? String(effAnswers.proj) : '';
+    const spanAdvice = useMemo(() => bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId }),
         [model, livePicks, lengthInches, spanMap, spanCaps, span, ourId]);
+    // …what the kit includes, for the guidance box to say
+    const kitChartBrackets = useMemo(() => kitChartBracketsOf({ chartBrackets, trvRules, family: kitFamily, model, livePicks, ourId, lengthFeet, proj: kitProj }),
+        [chartBrackets, trvRules, kitFamily, model, livePicks, ourId, lengthFeet, kitProj]);
+    const advice = kitChartBrackets ? null : spanAdvice;
     // Where a rod step offers more than one rod: what the pole would need with each (hardwareSession.rodOptionsAdviceOf).
-    const rodOptions = useMemo(() => rodOptionsAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId }),
-        [model, livePicks, lengthInches, spanMap, spanCaps, span, ourId]);
+    const rodOptions = useMemo(() => (kitChartBrackets ? [] : rodOptionsAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId })),
+        [kitChartBrackets, model, livePicks, lengthInches, spanMap, spanCaps, span, ourId]);
+    // (a bracket step not picked yet is held to what the kit includes, as a picked one is)
+    const chartCountFor = useCallback((slot, choice) => (!chartBrackets || !slot || slot.kind !== 'BRACKET' ? null
+        : choice ? chartBracketsFor({ trvRules, family: kitFamily, choice, ourId, lengthFeet, proj: kitProj }) : (kitChartBrackets ? kitChartBrackets.count : null)),
+        [chartBrackets, trvRules, kitFamily, ourId, lengthFeet, kitProj, kitChartBrackets]);
     // Read by both the seeding below and the field's placeholder, so what is billed and what is shown
     // can never drift apart.
-    const recommendFor = useCallback((slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet, splice }),
-        [advice, model, livePicks, lengthFeet, splice]);
+    const recommendFor = useCallback((slot, choice) => recommendedFor({ slot, choice, advice: spanAdvice, model, livePicks, lengthFeet, splice, chartCount: chartCountFor(slot, choice) }),
+        [spanAdvice, model, livePicks, lengthFeet, splice, chartCountFor]);
     const quantities = useMemo(() => quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId, splice }),
         [model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId, splice]);
     // Fewer centre brackets than 6.5 recommends — said beside the price, never refused (hardwareSession.supportShortfallOf).
@@ -1933,7 +1947,7 @@ function HardwareConfiguratorInner({
                                     error — it must be visible without reading as a fault. */}
                                 {priceWarnings.map((w, i) => <div key={i} style={{ color: w.sev === 'amber' ? '#8a6508' : '#b00020', fontSize: '9px' }}>{w.sev === 'amber' ? '○' : '●'} {w.msg}</div>)}
                                 {/* Fewer centre brackets than 6.5 recommends — allowed, never silent (step 4, Stuart 2026-10-19). */}
-                                {supportShort.map(sh => <div key={sh.slotKey} style={{ color: '#8a6508', fontSize: '9px' }}>○ {sh.picked ? `${sh.chosen} centre bracket${sh.chosen === 1 ? '' : 's'}` : 'No centre bracket'} — 6.5 recommends {sh.recommended} for this {lengthInches}&Prime; pole {span.onStud ? 'in a stud' : 'on drywall with toggles'}{riskOkRef.current.has(riskKeyOf(sh)) ? ' · confirmed' : ''}.</div>)}
+                                {supportShort.map(sh => <div key={sh.slotKey} style={{ color: '#8a6508', fontSize: '9px' }}>○ {sh.picked ? `${sh.chosen} centre bracket${sh.chosen === 1 ? '' : 's'}` : 'No centre bracket'} — {kitChartBrackets ? <>the kit includes {kitChartBrackets.count} at {kitChartBrackets.feet} ft, {sh.recommended} of them in the centre</> : <>6.5 recommends {sh.recommended} for this {lengthInches}&Prime; pole {span.onStud ? 'in a stud' : 'on drywall with toggles'}</>}{riskOkRef.current.has(riskKeyOf(sh)) ? ' · confirmed' : ''}.</div>)}
                                 {/* Over the one-piece limit with no joiner — allowed, never silent (Stuart 2026-10-01). */}
                                 {noSplice && <div style={{ color: '#8a6508', fontSize: '9px' }}>○ No splice — this {lengthInches}&Prime; pole is over the {spliceOverIn}&Prime; one-piece limit and ships in ONE PIECE. {isTraverse ? 'Tick the joiner on the Traverse components step' : 'Add the joiner on the Pole length step'} if it should be spliced.</div>}
                                 {!!priced.lines.length && <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>Hover a line for the rule that set it{customerId ? '' : ' · no customer, so no client pricing'}</div>}
@@ -1943,6 +1957,15 @@ function HardwareConfiguratorInner({
                         <div style={boxStyle}>
                             {boxHead('Notes & guidance', 'This step')}
                             <div style={{ padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', maxHeight: '300px' }}>
+                                {/* a kit-chart traverse (H1-2TRV): the count the kit includes, from 4.6 — in place of 6.5's span line (2026-10-20) */}
+                                {kitChartBrackets && (
+                                    <div style={{ borderLeft: '2px solid var(--brass)', paddingLeft: '9px' }}>
+                                        <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Recommendation</span>
+                                        <p style={{ margin: '2px 0 0', fontSize: '12.5px', lineHeight: 1.45 }}>
+                                            <b>{kitChartBrackets.count} bracket{kitChartBrackets.count === 1 ? '' : 's'}</b> — what the kit includes at {kitChartBrackets.feet} ft (the 4.6 kit chart), wherever they are fixed: {kitChartBrackets.where}.
+                                        </p>
+                                    </div>
+                                )}
                                 {advice && (
                                     <div style={{ borderLeft: '2px solid var(--brass)', paddingLeft: '9px' }}>
                                         <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Recommendation</span>
@@ -1973,7 +1996,7 @@ function HardwareConfiguratorInner({
                                         })}
                                     </div>
                                 )}
-                                {!advice && lengthInches && (
+                                {!advice && !kitChartBrackets && lengthInches && (
                                     <div style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', borderLeft: '2px solid var(--line)', paddingLeft: '9px' }}>
                                         No span guidance — this rod is not listed against a family in 6.5.
                                     </div>

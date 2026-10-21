@@ -291,6 +291,10 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
               {step.support.unlisted ? ' One of the rods chosen has no span on file — our team will confirm the supports for it.' : ''}
             </div>
           )}
+          {/* a traverse sold as a kit (H1-2TRV, 2026-10-20): the brackets its kit includes at this length — what the bracket steps ask for */}
+          {step.kitChart && (
+            <div className="cf-note">Our kit for {step.kitChart.feet} ft includes <b>{step.kitChart.count}</b> bracket{step.kitChart.count === 1 ? '' : 's'} — {step.kitChart.where}.</div>
+          )}
           {(step.rods || []).map((r) => {
             const picked = r.options.find((o) => o.picked);
             const nameOf = (o) => o.name || o.sku || o.code;

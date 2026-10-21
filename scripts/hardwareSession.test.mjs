@@ -1006,6 +1006,99 @@ const picksFor = (answers, seed) => {
         [tried > 5, centred > 3, moreOffStud > 3, shortSaid > 3], [true, true, true, true]);
 }
 
+// ── A TRAVERSE THAT SELLS AS A KIT TAKES THE KIT'S BRACKETS (Stuart 2026-10-20: "the H1-2TRV should follow the kit inclusion guide
+//    established in 4.6 whatever # included in the kits is the correct span needs to be aligned") — the rules, then the live pins ──
+{
+    const { chartGovernsBracketsOf, chartBracketsFor, kitChartBracketsOf, takesChartCount } = S;
+    // rows that differ, so which row was read shows (the live chart's five rows are identical)
+    const CHART = { usage: [{ label: 'Pinch Pleat Carriers', itemId: 'HTSLNTCAR', byFeet: { 2: 8, 4: 16, 8: 32, 12: 48 } },
+        { label: 'Brackets 3-5/8"', itemId: 'H1-2TRV-WB', byFeet: { 2: 2, 4: 2, 5: 3, 10: 4, 11: 5, 18: 7 } },
+        { label: 'Brackets 4-5/8"', itemId: 'H1-2TRV-EWB', byFeet: { 2: 2, 4: 2, 5: 3, 10: 5, 11: 6, 18: 8 } },
+        { label: 'Brackets 6"', itemId: 'H1-2TRV-6WB', byFeet: { 2: 2, 4: 2, 5: 4, 10: 6, 11: 7, 18: 9 } },
+        { label: 'Double track brackets', itemId: 'H1-2TRV-DWB', byFeet: { 2: 2, 4: 2, 5: 3, 10: 4, 11: 5, 18: 7 } },
+        { label: 'Double ring brackets', itemId: 'H1-2TRV-DRTWB', byFeet: { 2: 2, 4: 2, 5: 3, 10: 4, 11: 5, 18: 7 } }], configurator: [] };
+    eq('the families the kit chart counts: H1-2TRV (as written on the flow, any case) — and only with its chart on file',
+        [chartGovernsBracketsOf({ flow: { kitFamily: 'H1-2TRV' }, trvRules: CHART }), chartGovernsBracketsOf({ flow: { kitFamily: ' h1-2trv ' }, trvRules: CHART }),
+         chartGovernsBracketsOf({ flow: { kitFamily: 'H1-2TRV' }, trvRules: null }), chartGovernsBracketsOf({ flow: { kitFamily: 'H1-138TRV' }, trvRules: CHART }), chartGovernsBracketsOf({ flow: null, trvRules: CHART })],
+        [true, true, false, false, false]);
+    const at = (code, feet, proj = '') => chartBracketsFor({ trvRules: CHART, family: 'H1-2TRV', choice: { partId: code }, ourId: (x) => x, lengthFeet: feet, proj });
+    eq('a bracket\'s count is its own row at the length — by our number, the finish dropped; between entries it reads up (as the kit does)',
+        [at('H1-2TRV-WB', 10), at('H1-2TRV-EWB/P09', 10), at('h1-2trv-6wb', 10), at('H1-2TRV-WB', 7), at('H1-2TRV-WB', 11), at('H1-2TRV-WB', 1)], [4, 5, 6, 4, 5, 2]);
+    eq('the ceiling bracket has no row: the single\'s at the depth sold, the standard one when none was (traverseExplode\'s own fallback)',
+        [at('H1-2TRV-CB', 10), at('H1-2TRV-CB', 10, '4.625'), at('H1-2TRV-CB', 10, '6'), at('H1-2TRV-CB', 10, '3.625')], [4, 5, 6, 4]);
+    eq('a part that is not the family\'s and has no row, no chart, no bracket, no length — no count (6.5 counts it)',
+        [at('H1-2RCTSPA', 10), chartBracketsFor({ trvRules: null, family: 'H1-2TRV', choice: { partId: 'H1-2TRV-WB' }, ourId: (x) => x, lengthFeet: 10 }), at(null, 10), chartBracketsFor({ trvRules: CHART, family: 'H1-2TRV', choice: null, ourId: (x) => x, lengthFeet: 10 }), at('H1-2TRV-WB', 0)],
+        [null, null, null, null, null]);
+    eq('the steps the count is spread over: the centre and a bracket step with no end position — an end keeps its own one',
+        ['CENTER', '', 'LEFT', 'right'].map(position => takesChartCount({ kind: 'BRACKET', position })).concat([takesChartCount({ kind: 'RING', position: 'CENTER' }), takesChartCount(null)]),
+        [true, true, false, false, false, false]);
+    const flat = settle({ choices, answers: framings[0], picks: {}, modelNodes });
+    eq('recommendedFor: an unpositioned bracket step takes the whole count; an end step is never handed it',
+        [recommendedFor({ slot: { kind: 'BRACKET', position: '' }, choice: {}, advice: null, model: flat, livePicks: {}, lengthFeet: 10, chartCount: 4 }),
+         recommendedFor({ slot: { kind: 'BRACKET', position: 'LEFT' }, choice: { role: 'BRACKET' }, advice: null, model: flat, livePicks: {}, lengthFeet: 10, chartCount: 4 })],
+        [4, null]);
+
+    // through sessionOf, on the live H1-2TRV pins
+    const SPAN = { 'H1-ALU2': 'H1-2RCTAR, H1-2RCTWR, H1-2RCTACR' };
+    const parts = [...new Map(PINS.map(p => [p.partId, { id: p.partId, itemId: p.partId, legacyErpId: p.legacyErpId || p.partName, itemName: p.partName }])).values()];
+    const FLOW = { kitFamily: 'H1-2TRV' };
+    const billedBrackets = (n) => n.model.slots.filter(sl => sl.kind === 'BRACKET' && n.livePicks[sl.key])
+        .reduce((t, sl) => t + (Number(((n.resolved.bom || []).find(b => b.id === n.livePicks[sl.key]) || {}).qty) || 0), 0);
+    const want = (code, feet, proj) => at(code, feet, proj == null ? '' : String(proj));
+    let runs = 0, ceiling = 0, solid = 0, sixFive = 0, unpickedHeld = 0; const wrong = [];
+    framings.forEach((answers) => {
+        const probe = sessionOf({ assembly: ASSEMBLY, pins: PINS, parts, flow: FLOW, spanMap: SPAN, trvRules: CHART }, { answers, picks: picksFor(answers, 'kit-chart'), lengthInches: 120 });
+        if (!probe.isTraverse) {
+            // a solid rod on the same flow keeps 6.5
+            solid++;
+            if (probe.chartBrackets || probe.kitChartBrackets) wrong.push(`solid ${JSON.stringify(answers)}: the chart governed`);
+            if (probe.advice) sixFive++;
+            return;
+        }
+        const slots = probe.model.slots.filter(sl => sl.kind === 'BRACKET' && !sl.suppressedBy && sl.options.length);
+        const centre = slots.find(sl => String(sl.position || '').toUpperCase() === 'CENTER');
+        for (const opt of (centre ? centre.options : [])) {
+            const code = probe.ourId(opt.partId);
+            const picks0 = { ...picksFor(answers, 'kit-chart'), ...Object.fromEntries(slots.map(sl => [sl.key, (sl.options.find(o => probe.ourId(o.partId) === code) || sl.options[0]).id])) };
+            for (const inches of [48, 60, 120, 132, 216]) {
+                const kit = want(code, Math.ceil(inches / 12), answers.proj);
+                // (where the kit leaves the centre nothing, it is not picked — the kit start does not pick it either, kitStart.kitFillsOf)
+                const picks = kit - 2 > 0 ? picks0 : Object.fromEntries(Object.entries(picks0).filter(([k]) => k !== centre.key));
+                for (const state of [{}, { onStud: false }, { onStud: true, fabricId: 'BLACKOUT', dropFt: 14 }]) {
+                    const n = sessionOf({ assembly: ASSEMBLY, pins: PINS, parts, flow: FLOW, spanMap: SPAN, trvRules: CHART }, { answers, picks, lengthInches: inches, ...state });
+                    if (!n.isTraverse) continue;
+                    runs++; if (code === 'H1-2TRV-CB') ceiling++;
+                    const tag = `${code} ${inches}" ${JSON.stringify(answers)} ${JSON.stringify(state)}`;
+                    if (billedBrackets(n) !== kit) wrong.push(`${tag}: billed ${billedBrackets(n)}, the kit includes ${kit}`);
+                    if (!n.kitChartBrackets || n.kitChartBrackets.count !== kit || n.kitChartBrackets.feet !== Math.ceil(inches / 12)) wrong.push(`${tag}: said ${JSON.stringify(n.kitChartBrackets)}`);
+                    const centreWant = Math.max(kit - 2, 0);
+                    if (n.kitChartBrackets && (n.kitChartBrackets.centre !== centreWant || n.kitChartBrackets.where !== (centreWant > 0 ? `${centreWant} in the centre, the ends carry the rest` : 'the ends carry them, none in the centre'))) wrong.push(`${tag}: where ${JSON.stringify(n.kitChartBrackets)}`);
+                    if (n.advice || n.rodOptions.length) wrong.push(`${tag}: 6.5's words still said`);
+                    if (n.supportShort.length) wrong.push(`${tag}: short of its own count`);
+                }
+            }
+        }
+        // the centre not picked yet is held to the kit's count less the ends — the short-count note and the kit start read it
+        if (centre) {
+            const ends = Object.fromEntries(slots.filter(sl => sl !== centre).map(sl => [sl.key, sl.options[0].id]));
+            const u = sessionOf({ assembly: ASSEMBLY, pins: PINS, parts, flow: FLOW, spanMap: SPAN, trvRules: CHART }, { answers, picks: { ...picksFor(answers, 'kit-chart'), ...ends, [centre.key]: '' }, lengthInches: 144 });
+            const sh = u.isTraverse ? u.supportShort.find(x => x.slotKey === centre.key) : null;
+            if (u.isTraverse && !u.livePicks[centre.key]) { if (sh && !sh.picked && sh.recommended === (u.kitChartBrackets || {}).count - 2) unpickedHeld++; else wrong.push(`unpicked centre at 12 ft: ${JSON.stringify(sh)} / ${JSON.stringify(u.kitChartBrackets)}`); }
+        }
+    });
+    eq(`H1-2TRV traverse: the brackets billed are what the kit includes, in a stud, on drywall, under a heavy curtain; said once, never short of itself${wrong.length ? ` — ${wrong.slice(0, 3).join('; ')}` : ''}`, wrong.length, 0);
+    ok(`…reached: ${runs} traverse runs (${ceiling} on the ceiling bracket), ${unpickedHeld} unpicked centres held to the kit's count, ${solid} solid framings (${sixFive} with 6.5's advice)`, runs > 100 && ceiling > 10 && unpickedHeld > 3 && solid > 0 && sixFive > 0);
+    // the same pins without the family on the flow: as before — 6.5 counts the traverse too
+    const before = framings.map(answers => sessionOf({ assembly: ASSEMBLY, pins: PINS, parts, flow: null, spanMap: SPAN, trvRules: CHART }, { answers, picks: picksFor(answers, 'kit-chart'), lengthInches: 120 })).filter(n => n.isTraverse);
+    eq('a flow that names no kit family keeps 6.5 on its traverses', [before.length > 0, before.every(n => !n.chartBrackets && !n.kitChartBrackets), before.some(n => n.advice)], [true, true, true]);
+    eq('no length → nothing said', kitChartBracketsOf({ chartBrackets: true, trvRules: CHART, family: 'H1-2TRV', model: flat, livePicks: {}, ourId: (x) => x, lengthFeet: null }), null);
+    const oneStep = { slots: [{ kind: 'BRACKET', key: 'B', position: '', options: [{ id: 'c1', partId: 'H1-2TRV-EWB' }] }], choices: [] };
+    eq('one bracket step with no end position: it asks for all of them; before a pick, the single at the depth sold is read',
+        [kitChartBracketsOf({ chartBrackets: true, trvRules: CHART, family: 'H1-2TRV', model: oneStep, livePicks: { B: 'c1' }, ourId: (x) => x, lengthFeet: 10 }),
+         kitChartBracketsOf({ chartBrackets: true, trvRules: CHART, family: 'H1-2TRV', model: oneStep, livePicks: {}, ourId: (x) => x, lengthFeet: 10, proj: '6' })],
+        [{ feet: 10, count: 5, centre: null, where: 'the bracket step asks for all of them' }, { feet: 10, count: 6, centre: null, where: 'the bracket step asks for all of them' }]);
+}
+
 // ── THE RULES + THE MOVE, the splice: one joiner, several, none; under and over the limit; typed, doubled, declined ──
 {
     const lib = [

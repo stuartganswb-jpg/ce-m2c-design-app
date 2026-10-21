@@ -444,6 +444,43 @@ ok(`the set-ups take each road — lines ${t.lines}, refused ${JSON.stringify(t.
     ok(`…reached: rounded ${t3.rounded}, a short count with its key ${t3.risk} (confirmed ${t3.confirmed}, not ${t3.unconfirmed}), the gate ${t3.gate}`, t3.rounded > 5 && t3.risk > 3 && t3.confirmed === t3.risk && t3.unconfirmed === t3.risk && t3.gate > 3);
 }
 
+// ── A TRAVERSE SOLD AS A KIT TAKES THE KIT'S BRACKETS ON THE PORTAL TOO (Stuart 2026-10-20: "the H1-2TRV should follow the kit
+//    inclusion guide established in 4.6") — the length step says what the kit includes in place of 6.5's line, a solid rod on the same
+//    flow keeps 6.5's, and the request carries HQ's own line ──
+{
+    const S4 = (raw) => P.stateFromClient(raw, { finishCodes: allowed });
+    const CHART = { usage: [{ label: 'Pinch Pleat Carriers', itemId: 'HTSLNTCAR', byFeet: { 2: 8, 4: 16, 8: 32, 12: 48 } },
+        ...['H1-2TRV-WB', 'H1-2TRV-EWB', 'H1-2TRV-6WB', 'H1-2TRV-DWB', 'H1-2TRV-DRTWB'].map(itemId => ({ label: itemId, itemId, byFeet: { 2: 2, 4: 2, 5: 3, 10: 4, 11: 5, 18: 7 } }))], configurator: [] };
+    const W4 = world(fabricut, { spanDoc: { map: { 'H1-ALU2': 'H1-2RCTAR, H1-2RCTWR, H1-2RCTACR' }, caps: {} }, trvRules: CHART });
+    const t4 = { traverse: 0, said: 0, solid: 0, kept: 0, requests: 0 };
+    const bad4 = [];
+    const bare = (it) => { const c = JSON.parse(JSON.stringify(it)); delete c.id; return JSON.stringify(c); };
+    framings.forEach((answers, fi) => {
+        for (const lengthInches of [60, 132, 216]) {
+            const state = S4({ answers, picks: picksFor(answers, `kitchart|${fi}`), lengthInches, globalFinishes: { METAL: 'P14', WOOD: 'S04' }, onStud: fi % 2 === 0 });
+            const hq = direct('FAB_RETAIL', state, W4);
+            const len = P.viewOf(engine, W4, state, { level: 'FAB_RETAIL', money: true }).steps.find(st => st.kind === 'LENGTH');
+            if (!len) continue;
+            const want = hq.kitChartBrackets ? { feet: hq.kitChartBrackets.feet, count: hq.kitChartBrackets.count, where: hq.kitChartBrackets.where } : undefined;
+            if (JSON.stringify(len.kitChart) !== JSON.stringify(want)) bad4.push(`kit line ${fi}@${lengthInches}: ${JSON.stringify(len.kitChart)} vs ${JSON.stringify(want)}`);
+            if (hq.isTraverse) {
+                t4.traverse++;
+                if (len.kitChart) t4.said++;
+                if (len.support || (len.rods || []).length) bad4.push(`6.5's line on a kit traverse ${fi}@${lengthInches}`);
+            } else {
+                t4.solid++;
+                if (len.kitChart) bad4.push(`the kit's line on a solid rod ${fi}@${lengthInches}`);
+                if (len.support) t4.kept++;
+            }
+            const req = P.requestLineOf(engine, W4, state, { level: 'STANDARD' });
+            if (req.item) { t4.requests++; if (bare(req.item) !== bare(direct('STANDARD', state, W4).item)) bad4.push(`request ${fi}@${lengthInches}`); }
+        }
+    });
+    if (process.env.PS_VERBOSE) console.log(JSON.stringify(t4));
+    eq(`the portal on a kit traverse: the length step says what the kit includes (HQ's count and words), 6.5's line steps aside, a solid rod keeps it, the request is HQ's line${bad4.length ? ` — first: ${bad4.slice(0, 4).join('; ')}` : ''}`, bad4.length, 0);
+    ok(`…reached: ${t4.traverse} traverse views (${t4.said} saying the kit's count), ${t4.solid} solid (${t4.kept} with 6.5's line), ${t4.requests} requests`, t4.traverse > 10 && t4.said === t4.traverse && t4.solid > 0 && t4.kept > 0 && t4.requests > 10);
+}
+
 // ── "START FROM A KIT" AND THE TRAVERSE COMPONENTS STEP, ON THE PORTAL AS IN CPQ (Stuart 2026-10-20: "the traverse kits needs to
 //    behave the same cpq in the app" · "a. yes" — what a track still needs is said, never refused). Every answer below is held against
 //    HQ's own modules on the same records: the kit list, what a kit start fills in, the brackets it fills, the step, the cart line. ──

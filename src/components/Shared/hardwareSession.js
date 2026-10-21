@@ -28,7 +28,7 @@ import { autoPicksOf } from './hardwareAutoPicks.js';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, projInchesOfSel } from './sizeMatrix.js';
 import { bracketAdviceFor, DEFAULT_DROP_FT, FABRIC_CLASSES } from './bracketSpan.js';
 import { carrierRows, configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator.js';
-import { usageAt, explodeTraverse } from './traverseExplode.js';
+import { usageAt, explodeTraverse, TRAVERSE_FAMILY_PARTS, singleProjections } from './traverseExplode.js';
 import { rodMaterialsOf, extrasForRod, liveExtrasOf, noSpliceOf, noSpliceNote } from './flowExtras.js';
 import { normalizeExtras } from './extrasRestore.js';
 import { wearsAsTwin } from './materialTwin.js';
@@ -334,8 +334,64 @@ export function trvJoinersOf({ trvRules, model, livePicks, answers = {}, lengthF
 export const spliceCentreMissingOf = ({ model, livePicks, splice }) => !!(splice && splice.count > 0)
     && model.slots.some(sl => isCentreSlot(sl) && !sl.suppressedBy && (sl.options || []).length && !livePicks[sl.key]);
 
-export function recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet, splice = null }) {
+// ── A TRAVERSE THAT SELLS AS A KIT TAKES THE KIT'S BRACKETS (Stuart 2026-10-20: "the H1-2TRV should follow the kit inclusion guide
+// established in 4.6 whatever # included in the kits is the correct span needs to be aligned") ──────────────────────────────────────
+// H1-2TRV's rod step is the fascia; its brackets hold the 1.5" square track, which 6.5 has no row for. So for the families listed, the
+// collection's 4.6 chart (system/traverse_rules_<family>) is the count, read the way the kit itself reads it (traverseExplode): the
+// bracket's own row at the length — and for one of the family's own brackets with no row of its own (the ceiling bracket), the single's
+// row at the depth sold. That count is the WHOLE set: an end step keeps its one, the centre step takes the rest, a bracket step with no
+// end position takes all of it — whatever the wall fixing. 6.5's span words step aside for it (the support line, rods compared): one
+// count, said once. The chart already places its brackets at the splices (from 26 to 33 ft it includes fewer than an even pattern would
+// — the even-pattern rounding of 2026-10-19 does not apply to it).
+export const CHART_BRACKET_FAMILIES = ['H1-2TRV'];
+const kitFamilyOf = (flow) => String((flow && flow.kitFamily) || '').trim().toUpperCase();
+// (the family's; the session also asks that the configuration IS a traverse — the same flow sells a solid 2" rod on passing arms, which keeps 6.5)
+export const chartGovernsBracketsOf = ({ flow, trvRules }) => !!trvRules && CHART_BRACKET_FAMILIES.includes(kitFamilyOf(flow));
+// a bracket step the kit's count is spread over — the centre, or one with no end position (an end step keeps its own one)
+export const takesChartCount = (slot) => !!slot && slot.kind === 'BRACKET' && !['LEFT', 'RIGHT'].includes(String(slot.position || '').toUpperCase());
+const familyBracketCodes = (family) => {
+    const out = new Set();
+    const walk = (v) => { if (typeof v === 'string') out.add(v.trim().toUpperCase()); else if (v && typeof v === 'object') Object.values(v).forEach(walk); };
+    walk(TRAVERSE_FAMILY_PARTS[family] && TRAVERSE_FAMILY_PARTS[family].brackets);
+    return out;
+};
+// the single bracket at the depth sold (no depth = the standard one) — the kit's fallback row
+const singleCodeAt = (family, proj) => { const s = singleProjections(family); const hit = s.find(p => p.inches === String(proj == null ? '' : proj).trim()) || s[0]; return hit ? String(hit.code).toUpperCase() : ''; };
+function kitBracketCountOf({ trvRules, family, code, lengthFeet, proj }) {
+    const rowOf = (c) => (c ? (trvRules.usage || []).find(u => String((u && u.itemId) || '').trim().toUpperCase() === c) : null);
+    const row = rowOf(code) || (family && familyBracketCodes(family).has(code) ? rowOf(singleCodeAt(family, proj)) : null);
+    return row ? usageAt(row, Math.max(Number(lengthFeet), 2)) : null;
+}
+/** The kit's bracket count at this length for one bracket (its row by our number, the finish dropped — or, for one of the family's own
+ *  brackets with no row, the single's at the depth sold), or null where neither applies. */
+export function chartBracketsFor({ trvRules, family = '', choice, ourId, lengthFeet, proj = '' }) {
+    if (!trvRules || !choice || !(Number(lengthFeet) > 0)) return null;
+    const code = String((typeof ourId === 'function' ? ourId(choice.partId) : choice.partId) || '').split('/')[0].trim().toUpperCase();
+    return code ? kitBracketCountOf({ trvRules, family: String(family || '').trim().toUpperCase(), code, lengthFeet, proj }) : null;
+}
+/** What the kit includes at this length, for the screens to say — { feet, count, centre, where }, read off the bracket the count is spread by (the
+ *  centre's pick, else a whole-count step's, else an end's) or, before one is picked, off the single at the depth sold; null when no
+ *  chart governs, or the bracket the centre holds has no count (6.5 then counts it, and says so). */
+export function kitChartBracketsOf({ chartBrackets, trvRules, family = '', model, livePicks, ourId, lengthFeet, proj = '' }) {
+    if (!chartBrackets || !trvRules || !(Number(lengthFeet) > 0)) return null;
+    const fam = String(family || '').trim().toUpperCase();
+    const picked = model.slots.filter(sl => sl.kind === 'BRACKET' && !sl.suppressedBy && livePicks[sl.key]);
+    const sl = picked.find(isCentreSlot) || picked.find(takesChartCount) || picked[0] || null;
+    const count = sl ? chartBracketsFor({ trvRules, family: fam, choice: (sl.options || []).find(o => o.id === livePicks[sl.key]), ourId, lengthFeet, proj })
+        : kitBracketCountOf({ trvRules, family: fam, code: singleCodeAt(fam, proj), lengthFeet, proj });
+    if (count == null) return null;
+    // what the centre step asks for (the ends that carry take theirs) — null where the configuration has no centre step — and the words
+    const centreSlot = model.slots.find(x => isCentreSlot(x) && !x.suppressedBy && (x.options || []).length);
+    const centre = centreSlot ? centreBracketsFor(count, bearingEnds(model.choices, Object.values(livePicks), model.slots)) : null;
+    const where = centre == null ? 'the bracket step asks for all of them' : centre > 0 ? `${centre} in the centre, the ends carry the rest` : 'the ends carry them, none in the centre';
+    return { feet: Math.max(Number(lengthFeet), 2), count, centre, where };
+}
+
+export function recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet, splice = null, chartCount = null }) {
     if (!slot) return null;
+    // a kit-chart family (chartBracketsFor): the kit's count — the centre step less the ends that carry, a step with no end position all
+    // of it; an end step keeps its own one (below)
+    if (chartCount != null && takesChartCount(slot)) return isCentreSlot(slot) ? centreBracketsFor(chartCount, bearingEnds(model.choices, Object.values(livePicks), model.slots)) : chartCount;
     if (isCentreSlot(slot)) {
         // `supports` is the column that applies — in a stud, or drywall with toggles (bracketAdviceOf).
         const base = advice ? centreBracketsFor(advice.supports ?? advice.brackets, bearingEnds(model.choices, Object.values(livePicks), model.slots)) : null;
@@ -1554,9 +1610,19 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const splice = spliceInfoOf({ extras, spliceCodes, sameItemCode, trvJoiners: trvJoinersOf({ trvRules, model, livePicks, answers, lengthFeet, trvSel: savedTrvSel && typeof savedTrvSel === 'object' ? savedTrvSel : null }), drawnSplices, lengthInches, spliceOverIn });
     // What the span depends on — the fabric weight, the curtain length, into studs or not — as the operator answered it.
     const span = spanAnswersOf({ fabricId, dropFt, onStud });
-    const advice = bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId });
-    const rodOptions = rodOptionsAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId });
-    const recommendFor = (slot, choice) => recommendedFor({ slot, choice, advice, model, livePicks, lengthFeet, splice });
+    // (a family whose brackets the 4.6 kit chart counts — H1-2TRV, 2026-10-20 — takes the kit's count; 6.5's span words step aside for it)
+    const chartBrackets = chartGovernsBracketsOf({ flow, trvRules }) && isTraverseOf(model, livePicks);   // (a traverse — a solid 2" rod on passing arms keeps 6.5)
+    const kitFamily = kitFamilyOf(flow);
+    const kitProj = effAnswers.proj != null ? String(effAnswers.proj) : '';
+    const spanAdvice = bracketAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId });
+    // …what the kit includes, for the screens to say — and where it is the count, 6.5's words step aside (one count, said once)
+    const kitChartBrackets = kitChartBracketsOf({ chartBrackets, trvRules, family: kitFamily, model, livePicks, ourId, lengthFeet, proj: kitProj });
+    const advice = kitChartBrackets ? null : spanAdvice;
+    // (a bracket step not picked yet is held to what the kit includes, as a picked one is)
+    const chartCountFor = (slot, choice) => (!chartBrackets || !slot || slot.kind !== 'BRACKET' ? null
+        : choice ? chartBracketsFor({ trvRules, family: kitFamily, choice, ourId, lengthFeet, proj: kitProj }) : (kitChartBrackets ? kitChartBrackets.count : null));
+    const recommendFor = (slot, choice) => recommendedFor({ slot, choice, advice: spanAdvice, model, livePicks, lengthFeet, splice, chartCount: chartCountFor(slot, choice) });
+    const rodOptions = kitChartBrackets ? [] : rodOptionsAdviceOf({ model, livePicks, lengthInches, spanMap, spanCaps, ...span, ourId });
     const quantities = quantitiesOf({ model, livePicks, stepQty, lengthFeet, recommendFor, trvRules, ourId, splice });
     const supportShort = supportShortfallOf({ model, livePicks, quantities, recommendFor });
     const resolved = resolvedOf({ choices, answers: effAnswers, livePicks, modelNodes, quantities });
@@ -1606,7 +1672,7 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
         kitBill: bill.kitBill, kitSource: bill.kitSource, kitPick: bill.kitPick, kitMotor: bill.kitMotor, isTraverse: bill.isTraverse, trvSel, trvComponents: bill.trvComponents, trvLive: bill.trvLive,
         renderState, steps, noSplice: bill.noSplice, spliceOverIn, span });
     return { findPart, ourId, sizeSteps, sizeSel, sizeIndex, sizeProjInches, choices, effAnswers, modelNodes, model, settledKeys, livePicks,
-        lengthInches, lengthFeetExact, lengthFeet, span, advice, rodOptions, splice, recommendFor, quantities, supportShort, resolved,
+        lengthInches, lengthFeetExact, lengthFeet, span, advice, rodOptions, splice, recommendFor, quantities, supportShort, resolved, chartBrackets, kitChartBrackets,
         sameItemCode, rodMats, offeredExtraItems, typedExtras, extras, spliceCodes, spliceCode, spliceOverIn, spliceNeeded, spliceSatisfied, joinersNeeded,
         ...fin, finishAnswers, trvSel, ...bill,
         stepNotes, stepNoteClient, drawnSplices, memo, qty, steps, answerOf, extrasOnStep, visibleOverrides, clearList, railNames, stretchSpec, spliceMarks, cloneSpecs,

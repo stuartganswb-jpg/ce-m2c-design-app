@@ -277,7 +277,9 @@ function viewOf(engine, data, raw, { level = 'STANDARD', money: showMoney = true
             support: s.advice ? { everyInches: s.advice.everyInches, supports: s.advice.supports, why: txt(s.advice.whyApplies), onStud: !!s.advice.onStud, other: s.advice.otherSupports || null,
                 // a rod on this configuration with no span listed: said, so the count is never taken as covering it
                 ...((s.advice.unlisted || []).length ? { unlisted: true } : {}) } : null,
-            rods };
+            rods,
+            // a kit-chart traverse (H1-2TRV, 2026-10-20): the brackets its kit includes at this length, from 4.6 — in place of the span line
+            ...(s.kitChartBrackets ? { kitChart: { feet: s.kitChartBrackets.feet, count: s.kitChartBrackets.count, where: s.kitChartBrackets.where } } : {}) };
         if (st.kind === 'CARRIERS') return { ...base, rows: st.carriers.map((c) => ({ code: s.ourId(c.partId), name: txt((part(c.partId) || {}).itemName || c.name) })) };
         // TRV: the track's components, asked as CPQ asks them (2026-10-20) — the draw, the motor side, the carriers, the rest
         if (st.kind === 'TRV') return { ...base, trv: trvViewOf(engine, data, s, showMoney) };

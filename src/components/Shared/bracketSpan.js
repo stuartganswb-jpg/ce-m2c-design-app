@@ -23,6 +23,10 @@ const ALUM = { E: 10000000, yield: 16000 };    // psi · 6063-T5
 // deflecting under a load it has already carried — so the published cap matters more here than the
 // beam figure does.
 const ACRYLIC = { E: 420000, yield: 10000 };   // psi · cast PMMA
+// WOOD (Stuart 2026-10-20: "wood make it 46" for both" · the 2" × 3/4" wood fascia "yes same"). Clear hardwood at the low end of the
+// published figures, so the beam can only err short. With the 46" house cap below, the cap binds in a stud and on drywall alike for
+// every fabric at the standard 8 ft drop; only a long, heavy curtain brings the beam figure under it — and the row then says so.
+const WOOD = { E: 1200000, yield: 5000 };      // psi · clear hardwood, conservative
 const FS = 2;            // safety factor on yield
 // SAG LIMIT — tightened from the workbook's L/180 to L/360 (Stuart 2026-07-28: "those spans are
 // way too long, let's set it industry best practice"). L/180 is a structural limit borrowed from
@@ -121,6 +125,8 @@ const ALUM_NO_STUD = 42;
 // creeping, not the anchor: a stud does not stop a plastic rod from bowing under its own weight
 // over time, so there is nothing for the better fixing to buy.
 const ACRYLIC_MAX_SPAN = 36;
+// Wood — 46" whether or not the bracket lands in a stud (Stuart 2026-10-20).
+const WOOD_MAX_SPAN = 46;
 // Flat Iron carries the same 72" cap as the 1-3/8" round: its stiffness (I ≈ 0.0613 in⁴) sits just
 // ABOVE the 1-3/8" 16 ga round (0.0575), so a tighter cap here would be inconsistent rather than
 // cautious. Same one-number lever as the others if that judgement should change.
@@ -164,6 +170,15 @@ export const RODS = [
         section: solidRoundSection(1.375), metal: ACRYLIC,
         maxSpan: ACRYLIC_MAX_SPAN, noStudSpan: ACRYLIC_MAX_SPAN,
         note: 'Acrylic creeps under load — 36" whether or not the bracket lands in a stud.',
+    },
+    // The wood row (2026-10-20): the 1-3/8" round wood pole and the 2" × 3/4" wood fascia read it — one row, as Stuart set it. It was
+    // joined under acrylic, which held wood to acrylic's 36" creep cap (5 brackets on a 10 ft pole where wood wants 4). The section is
+    // the round's: the fascia is the stiffer of the two, so it can only err toward a bracket more, and the cap binds both regardless.
+    {
+        id: 'H1-WOOD', collection: 'H1', label: 'wood (1-3/8" round, 2" × 3/4")', material: 'Wood',
+        section: solidRoundSection(1.375), metal: WOOD,
+        maxSpan: WOOD_MAX_SPAN, noStudSpan: WOOD_MAX_SPAN,
+        note: 'Wood — 46" whether or not the bracket lands in a stud.',
     },
     ...ROUND_SIZES.map(s => ({
         id: `H2-${s.od}`, collection: 'H2', label: `${s.label} round`, material: 'Steel',
