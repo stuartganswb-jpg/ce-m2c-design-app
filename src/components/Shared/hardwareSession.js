@@ -343,7 +343,10 @@ export const spliceCentreMissingOf = ({ model, livePicks, splice }) => !!(splice
 // end position takes all of it — whatever the wall fixing. 6.5's span words step aside for it (the support line, rods compared): one
 // count, said once. The chart already places its brackets at the splices (from 26 to 33 ft it includes fewer than an even pattern would
 // — the even-pattern rounding of 2026-10-19 does not apply to it).
-export const CHART_BRACKET_FAMILIES = ['H1-2TRV'];
+// H1-138TRV joined it (Stuart 2026-10-21: "H1-138TRV needs to follow chart"): its count is the ARM's (SBA / EBA / 6BA by depth, DBA
+// double — the ceiling arm CBA has no row and takes the single's); each backplate follows the arm it sits under (the model's own rule),
+// so the plates come to the same count.
+export const CHART_BRACKET_FAMILIES = ['H1-2TRV', 'H1-138TRV'];
 const kitFamilyOf = (flow) => String((flow && flow.kitFamily) || '').trim().toUpperCase();
 // (the family's; the session also asks that the configuration IS a traverse — the same flow sells a solid 2" rod on passing arms, which keeps 6.5)
 export const chartGovernsBracketsOf = ({ flow, trvRules }) => !!trvRules && CHART_BRACKET_FAMILIES.includes(kitFamilyOf(flow));

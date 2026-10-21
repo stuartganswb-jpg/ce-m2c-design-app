@@ -1017,10 +1017,18 @@ const picksFor = (answers, seed) => {
         { label: 'Brackets 6"', itemId: 'H1-2TRV-6WB', byFeet: { 2: 2, 4: 2, 5: 4, 10: 6, 11: 7, 18: 9 } },
         { label: 'Double track brackets', itemId: 'H1-2TRV-DWB', byFeet: { 2: 2, 4: 2, 5: 3, 10: 4, 11: 5, 18: 7 } },
         { label: 'Double ring brackets', itemId: 'H1-2TRV-DRTWB', byFeet: { 2: 2, 4: 2, 5: 3, 10: 4, 11: 5, 18: 7 } }], configurator: [] };
-    eq('the families the kit chart counts: H1-2TRV (as written on the flow, any case) — and only with its chart on file',
+    eq('the families the kit chart counts: H1-2TRV and H1-138TRV (as written on the flow, any case) — and only with their chart on file',
         [chartGovernsBracketsOf({ flow: { kitFamily: 'H1-2TRV' }, trvRules: CHART }), chartGovernsBracketsOf({ flow: { kitFamily: ' h1-2trv ' }, trvRules: CHART }),
-         chartGovernsBracketsOf({ flow: { kitFamily: 'H1-2TRV' }, trvRules: null }), chartGovernsBracketsOf({ flow: { kitFamily: 'H1-138TRV' }, trvRules: CHART }), chartGovernsBracketsOf({ flow: null, trvRules: CHART })],
-        [true, true, false, false, false]);
+         chartGovernsBracketsOf({ flow: { kitFamily: 'H1-2TRV' }, trvRules: null }), chartGovernsBracketsOf({ flow: { kitFamily: 'H1-138TRV' }, trvRules: CHART }),
+         chartGovernsBracketsOf({ flow: { kitFamily: 'H2-138' }, trvRules: CHART }), chartGovernsBracketsOf({ flow: null, trvRules: CHART })],
+        [true, true, false, true, false, false]);
+    // H1-138TRV (2026-10-21): the arm's row by depth, the double's own; the ceiling arm has none and takes the single's at the depth sold
+    const C138 = { usage: [{ label: 'Arms 3-5/8"', itemId: 'H1-138TRVSBA', byFeet: { 2: 2, 5: 3, 10: 4, 11: 5 } }, { label: 'Arms 4-5/8"', itemId: 'H1-138TRVEBA', byFeet: { 2: 2, 5: 3, 10: 5, 11: 6 } },
+        { label: 'Double arms', itemId: 'H1-138TRVDBA', byFeet: { 2: 2, 5: 4, 10: 6, 11: 7 } }], configurator: [] };
+    const at138 = (code, feet, proj = '') => chartBracketsFor({ trvRules: C138, family: 'H1-138TRV', choice: { partId: code }, ourId: (x) => x, lengthFeet: feet, proj });
+    eq('H1-138TRV: an arm by its own row (finish dropped), the double by its own, the ceiling arm by the single\'s at the depth sold — a plate is not a bracket step',
+        [at138('H1-138TRVSBA/P', 10), at138('H1-138TRVEBA', 10), at138('H1-138TRVDBA', 10), at138('H1-138TRVCBA', 10), at138('H1-138TRVCBA', 10, '4.625'), takesChartCount({ kind: 'BACKPLATE', position: 'CENTER' })],
+        [4, 5, 6, 4, 5, false]);
     const at = (code, feet, proj = '') => chartBracketsFor({ trvRules: CHART, family: 'H1-2TRV', choice: { partId: code }, ourId: (x) => x, lengthFeet: feet, proj });
     eq('a bracket\'s count is its own row at the length — by our number, the finish dropped; between entries it reads up (as the kit does)',
         [at('H1-2TRV-WB', 10), at('H1-2TRV-EWB/P09', 10), at('h1-2trv-6wb', 10), at('H1-2TRV-WB', 7), at('H1-2TRV-WB', 11), at('H1-2TRV-WB', 1)], [4, 5, 6, 4, 5, 2]);
