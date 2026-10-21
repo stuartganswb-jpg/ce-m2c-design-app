@@ -5152,6 +5152,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                                      the count is passed so the button can say what is waiting. */
                                   onCheckout={() => openCheckout()}
                                   cartCount={cart.length}
+                                  /* THE CONFIGURATIONS STRIP IS THE CART (Stuart 2026-10-21) — each line as the cart names and totals it;
+                                     the configurator kept its own log of every Add, so a line added again after Edit showed twice. */
+                                  cartLines={cart.map(c => ({ id: c.id, label: (c.sidemark && c.sidemark !== 'No Sidemark') ? c.sidemark : (c.assemblyName || 'Configured Item'), qty: c.qty || 1, total: (c.pricing?.finalPrice || 0) * (c.qty || 1) }))}
                                   /* THE TRAVERSE COMPONENT CHART (system/traverse_rules_H1-2TRV),
                                      already live here for the old path's checkout modal. The new
                                      engine asks the same questions from the same rules as its last

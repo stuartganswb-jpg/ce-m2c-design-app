@@ -33,7 +33,6 @@ import { aliasFor } from './hardwarePricing';
 import { priceLevelShort, customerPriceLevel } from './priceLevels';
 import { findClientPriceRow, customerKeys } from './clientPricing';
 import { indexForAssembly } from './partLookup.js';
-import { customerLines } from './hardwareHandoff';
 import { finishLabelOf } from './finishLabel';
 import { unansweredOf } from './finishQuestions';
 import { ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
@@ -140,6 +139,9 @@ function HardwareConfiguratorInner({
     canSetPrices = false,
     editingRowPrices = null,
     editingKey = null,
+    // THE QUOTE'S LINES for the Configurations strip — { id, label, qty, total } as CPQ's cart names and totals them; the one
+    // open here (editingKey) is marked. Display only.
+    cartLines = [],
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -884,7 +886,6 @@ function HardwareConfiguratorInner({
     // the right bracket is about the right bracket; filing them all into one box loses which
     // decision they were about, which is the only thing that makes them useful downstream.
     // EXTRAS — basic items added by hand: a splice, an extra ring, whatever the flow does not model.
-    const [saved, setSaved] = useState([]);
     // ── THE WORK IN PROGRESS, PUBLISHED (Eric 2026-09-29 · Shared/cpqWorkspace) ──────────────
     // CPQ keeps it across a tab switch or a reload and hands it back through reopenSeed. Declared
     // HERE, below configMemo and cfgQty: a dependency read above its const is a TDZ ReferenceError —
@@ -944,7 +945,6 @@ function HardwareConfiguratorInner({
         // …with the prices typed over the engine's, for CPQ to bake into the line it keeps (Shared/rowPrices.applyRowPrices)
         const withPrices = Object.keys(typedPrices).length ? { ...item, rowPrices: typedPrices } : item;
         if (typeof onAdd === 'function') onAdd(displaySnapshot ? { ...withPrices, displaySnapshot, displayBoard } : withPrices);
-        setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: configTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
         kitPicksDoneRef.current = new Set();   // the next configuration fills its own brackets
         setStepNotes({}); setStepNoteClient({}); setExtras([]); setSpliceWaived(false); setDrawnSplices([]); setPartFinish({}); setFinishAnswers({}); setStepQty({}); setTrvSel(null); setStepIx(0); setDrops([]); setSavedPickParts({}); setRowPrices({});
@@ -1300,14 +1300,22 @@ function HardwareConfiguratorInner({
                 </div>
             )}
 
-            {/* CONFIGURATIONS — a job is several rooms. */}
+            {/* CONFIGURATIONS — a job is several rooms: the quote's lines, as the cart holds them, then the one being configured.
+                ⚠ IT WAS THE CONFIGURATOR'S OWN LOG (Stuart 2026-10-21, ST102126-01: "i also see configuration 3 and configuration 4,
+                when they are really the same?") — a chip for every Add, so a line added again after Edit showed twice and a reload
+                emptied it. The chips are the cart's lines now (CPQ's cartLines); the one open here is marked. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', background: '#fff', border: '1px solid var(--line)', padding: '10px 14px' }}>
                 <span style={mono}>Configurations</span>
-                {saved.map((c, i) => (
-                    <span key={i} style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: '1px solid var(--line)', background: 'var(--paper-2)' }}>
-                        {c.memo} <b style={{ fontWeight: 400, color: 'var(--ink-soft)', marginLeft: '5px' }}>${c.total.toFixed(2)}</b>
-                    </span>
-                ))}
+                {cartLines.map(c => {
+                    const open = !!editingKey && c.id === editingKey;
+                    return (
+                        <span key={c.id} title={open ? 'Open here — Add configuration replaces this line' : undefined}
+                            style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: open ? '1px dashed var(--brass)' : '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                            {open && <span style={{ color: 'var(--brass)', marginRight: '5px' }}>editing ·</span>}
+                            {c.label}{c.qty > 1 ? ` × ${c.qty}` : ''} <b style={{ fontWeight: 400, color: 'var(--ink-soft)', marginLeft: '5px' }}>${Number(c.total || 0).toFixed(2)}</b>
+                        </span>
+                    );
+                })}
                 <span style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: '1px solid var(--ink)', background: 'var(--ink)', color: '#fff' }}>
                     {configMemo || 'This configuration'} <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '5px' }}>
                         {cfgQtyN > 1 ? `$${configTotal.toFixed(2)} × ${cfgQtyN} = $${(configTotal * cfgQtyN).toFixed(2)}` : `$${configTotal.toFixed(2)}`}
@@ -1476,12 +1484,28 @@ function HardwareConfiguratorInner({
                                 bracket repeats along the pole, and rings and carriers are spaced
                                 by the foot. An end has one treatment and each side has one arm, so
                                 neither asks. The placeholder carries the recommendation, so an
-                                empty field means "use it" rather than "none". */}
-                            {takesQty(step.slot) && livePicks[step.slot.key] && (() => {
+                                empty field means "use it" rather than "none".
+                                ON A RING STEP FROM THE MOMENT IT OPENS (Stuart 2026-10-21, H5-HEX: "when i hit the ring step
+                                it is not presenting a qty box for # of rings") — it waited for a ring to be picked, so a line
+                                went to the quote with no rings and nothing asked. Until one is picked it shows the count the
+                                length calls for and asks for the ring: a count with no ring bills nothing. */}
+                            {takesQty(step.slot) && (livePicks[step.slot.key] || (step.slot.kind === 'RING' && !!step.slot.options.length)) && (() => {
+                                const chosen = !!livePicks[step.slot.key];
                                 const picked = step.slot.options.find(o => o.id === livePicks[step.slot.key]);
-                                const rec = recommendFor(step.slot, picked);
+                                const rec = recommendFor(step.slot, chosen ? picked : step.slot.options[0]);
                                 const isCentre = step.slot.kind === 'BRACKET';
                                 const ends = isCentre ? bearingEnds(model.choices, Object.values(livePicks), model.slots) : 0;
+                                if (!chosen) return (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
+                                        <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>How many</span>
+                                        <input value="" disabled placeholder={rec ? String(rec) : '1'} aria-label="How many rings"
+                                            title="Pick a ring first"
+                                            style={{ width: '62px', padding: '5px 7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', background: 'var(--paper-2)', cursor: 'not-allowed' }} />
+                                        <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: '#8a6508' }}>
+                                            pick a ring first{rec != null ? ` — ${rec} recommended: four a foot over ${lengthFeet} ft, plus the pair at the ends` : ''}
+                                        </span>
+                                    </div>
+                                );
                                 return (
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
                                         <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>How many</span>
