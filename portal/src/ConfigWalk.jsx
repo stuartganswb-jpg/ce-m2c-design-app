@@ -225,7 +225,19 @@ export default function ConfigWalk({ flow, start, onAdd, onLeave, basketCount, o
           {!step.notAsked && !step.options.length && <div className="cf-note">Nothing to choose here for the choices so far.</div>}
           {!!shown.length && <div className="cf-opts">{shown.map((o) => optionCard(o, () => pick(step.key, o.id)))}</div>}
           {step.collapse && picked && <div className="cf-fine">{step.options.length - 1} other choice{step.options.length - 1 === 1 ? '' : 's'} hidden — click the return again to show them.</div>}
-          {step.qty && (
+          {/* BEFORE A PICK the box waits, with the count the pole calls for (CPQ the same, 2026-10-21) */}
+          {step.qty && step.qty.waiting && (
+            <label className="cf-count">
+              <span>How many</span>
+              <input value="" disabled placeholder={step.qty.recommended != null ? String(step.qty.recommended) : '1'} />
+              <span className={`cf-fine${step.qty.recommended === 0 ? '' : ' wait'}`}>
+                {step.qty.recommended === 0 ? 'None needed for this length.'
+                  : `Choose a ${step.qty.waiting} first${step.qty.recommended ? ` — ${step.qty.recommended} recommended for this length` : ''}.`}
+              </span>
+              {step.qty.splices ? <span className="cf-fine">{step.qty.splices === 1 ? 'this pole is spliced: one centre bracket sits at the splice, so the count is odd (1, 3, 5)' : `one centre bracket at each of the ${step.qty.splices} splices`}</span> : null}
+            </label>
+          )}
+          {step.qty && !step.qty.waiting && (
             <label className="cf-count">
               <span>How many</span>
               <input value={a.stepQty[step.key] !== undefined ? a.stepQty[step.key] : ''} inputMode="numeric"

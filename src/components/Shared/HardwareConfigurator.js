@@ -1488,21 +1488,30 @@ function HardwareConfiguratorInner({
                                 ON A RING STEP FROM THE MOMENT IT OPENS (Stuart 2026-10-21, H5-HEX: "when i hit the ring step
                                 it is not presenting a qty box for # of rings") — it waited for a ring to be picked, so a line
                                 went to the quote with no rings and nothing asked. Until one is picked it shows the count the
-                                length calls for and asks for the ring: a count with no ring bills nothing. */}
-                            {takesQty(step.slot) && (livePicks[step.slot.key] || (step.slot.kind === 'RING' && !!step.slot.options.length)) && (() => {
+                                length calls for and asks for the ring: a count with no ring bills nothing. The CENTRE BRACKET
+                                the same (Stuart 2026-10-21, "yes to both"): its count before a pick is the one the length — or
+                                the kit's chart — calls for, whichever bracket is then picked. */}
+                            {takesQty(step.slot) && (livePicks[step.slot.key] || !!step.slot.options.length) && (() => {
                                 const chosen = !!livePicks[step.slot.key];
                                 const picked = step.slot.options.find(o => o.id === livePicks[step.slot.key]);
-                                const rec = recommendFor(step.slot, chosen ? picked : step.slot.options[0]);
                                 const isCentre = step.slot.kind === 'BRACKET';
+                                // before a pick: a ring step holds only rings, so its first is any ring's count; a centre's count is the
+                                // pole's (recommendedFor reads no bracket but a kit chart's own row, and with none picked the kit's count)
+                                const rec = recommendFor(step.slot, chosen ? picked : (isCentre ? null : step.slot.options[0]));
                                 const ends = isCentre ? bearingEnds(model.choices, Object.values(livePicks), model.slots) : 0;
+                                // why that count — the same words before the pick and after it
+                                const why = isCentre
+                                    ? `${advice ? `${advice.supports} support${advice.supports === 1 ? '' : 's'} for this pole ${advice.onStud ? 'in a stud' : 'on drywall toggles'}, less ${ends} carried by the ends` : 'no span listed in 6.5'}${splice.count ? (splice.drawn ? ` · at least one at each of the ${splice.count} drawn splice${splice.count === 1 ? '' : 's'}` : (splice.count === 1 ? ' · odd, so one sits at the splice' : ` · one at each of the ${splice.count} splices`)) : ''}`
+                                    : `four a foot over ${lengthFeet} ft, plus the pair at the ends`;
+                                const what = isCentre ? 'centre bracket' : 'ring';
                                 if (!chosen) return (
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
                                         <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>How many</span>
-                                        <input value="" disabled placeholder={rec ? String(rec) : '1'} aria-label="How many rings"
-                                            title="Pick a ring first"
+                                        <input value="" disabled placeholder={rec ? String(rec) : (rec === 0 ? '0' : '1')} aria-label={`How many ${what}s`}
+                                            title={rec === 0 ? `No ${what} is needed on this pole` : `Pick a ${what} first`}
                                             style={{ width: '62px', padding: '5px 7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', background: 'var(--paper-2)', cursor: 'not-allowed' }} />
-                                        <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: '#8a6508' }}>
-                                            pick a ring first{rec != null ? ` — ${rec} recommended: four a foot over ${lengthFeet} ft, plus the pair at the ends` : ''}
+                                        <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: rec === 0 ? 'var(--ink-faint)' : '#8a6508' }}>
+                                            {rec === 0 ? `none needed — ${why}` : `pick a ${what} first${rec != null ? ` — ${rec} recommended: ${why}` : ''}`}
                                         </span>
                                     </div>
                                 );
@@ -1521,9 +1530,7 @@ function HardwareConfiguratorInner({
                                             style={{ width: '62px', padding: '5px 7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', background: '#fff' }} />
                                         {rec != null && (
                                             <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
-                                                {isCentre
-                                                    ? `recommended ${rec} — ${advice ? `${advice.supports} support${advice.supports === 1 ? '' : 's'} for this pole ${advice.onStud ? 'in a stud' : 'on drywall toggles'}, less ${ends} carried by the ends` : 'no span listed in 6.5'}${splice.count ? (splice.drawn ? ` · at least one at each of the ${splice.count} drawn splice${splice.count === 1 ? '' : 's'}` : (splice.count === 1 ? ' · odd, so one sits at the splice' : ` · one at each of the ${splice.count} splices`)) : ''}`
-                                                    : `recommended ${rec} — four a foot over ${lengthFeet} ft, plus the pair at the ends`}
+                                                {`recommended ${rec} — ${why}`}
                                             </span>
                                         )}
                                     </div>

@@ -396,6 +396,41 @@ ok(`the set-ups take each road — lines ${t.lines}, refused ${JSON.stringify(t.
         tr.support > 20 && tr.offStud > 5 && tr.rods > 5 && tr.better > 2 && tr.short > 3 && tr.notes > 3);
 }
 
+// ── HOW MANY BEFORE A PICK (2026-10-21, CPQ 4f84d2d9 · Stuart "yes to both"): a ring or centre-bracket step asks from the moment it
+//    opens — the box waits, naming what to pick and the count the pole calls for, which is the count the pick then gets ──
+{
+    const S2 = (raw) => P.stateFromClient(raw, { finishCodes: allowed });
+    const tw = { ring: 0, centre: 0, picked: 0 };
+    const badW = [];
+    framings.forEach((answers, fi) => {
+        const picks = picksFor(answers, `wait|${fi}`);
+        const raw = { answers, picks, lengthInches: [36, 96, 150][fi % 3], globalFinishes: { METAL: 'P14', WOOD: 'S04' } };
+        const hq = direct('FAB_RETAIL', S2(raw));
+        hq.model.slots.filter(sl => engine.takesQty(sl) && sl.options.length && hq.livePicks[sl.key]).forEach(sl => {
+            // picked: the box it always was — no waiting, the pick's own count
+            const vP = P.viewOf(engine, w0, S2(raw), { level: 'FAB_RETAIL', money: true }).steps.find(x => x.key === sl.key);
+            const wantP = hq.recommendFor(sl, sl.options.find(o => o.id === hq.livePicks[sl.key])) || null;
+            if (!vP || !vP.qty || 'waiting' in vP.qty || vP.qty.recommended !== wantP) { badW.push(`picked #${fi} ${sl.key}: ${JSON.stringify(vP && vP.qty)}`); return; }
+            tw.picked++;
+            // the same step with its pick taken back
+            const without = { ...picks }; delete without[sl.key];
+            const hq0 = direct('FAB_RETAIL', S2({ ...raw, picks: without }));
+            const sl0 = hq0.model.slots.find(x => x.key === sl.key);
+            if (!sl0 || hq0.livePicks[sl.key] || !sl0.options.length) return;   // settled by itself — never waits
+            const v0 = P.viewOf(engine, w0, S2({ ...raw, picks: without }), { level: 'FAB_RETAIL', money: true }).steps.find(x => x.key === sl.key);
+            const q = v0 && v0.qty;
+            const isCentre = sl0.kind === 'BRACKET';
+            // whichever one is then picked gets this count: every ring of the step; every centre bracket (no kit chart in this world)
+            const counts = [...new Set(sl0.options.map(o => hq0.recommendFor(sl0, o)))];
+            if (!q || q.waiting !== (isCentre ? 'centre bracket' : 'ring') || q.typed !== '' || counts.length !== 1 || q.recommended !== counts[0]
+                || (isCentre && hq0.splice.count > 0 ? q.splices !== hq0.splice.count : 'splices' in q)) badW.push(`waiting #${fi} ${sl.key}: ${JSON.stringify(q)} vs ${JSON.stringify(counts)}`);
+            else tw[isCentre ? 'centre' : 'ring']++;
+        });
+    });
+    eq('before a pick a ring or centre-bracket step waits, naming what to pick and the count its pick gets; once picked, the box it always was', badW.slice(0, 4), []);
+    ok(`…walked on both kinds — rings waiting ${tw.ring}, centre brackets waiting ${tw.centre}, picked ${tw.picked}`, tw.ring >= 3 && tw.centre >= 8 && tw.picked >= 15);
+}
+
 // ── THE SPLICE AND THE RISK WINDOW ON THE PORTAL (2026-10-19): the count rounded up at a splice, the gate's words, the risk numbers
 //    with the key a Confirm answers, and "the customer confirmed the risk" only for the count confirmed ──
 {

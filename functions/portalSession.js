@@ -258,14 +258,23 @@ function viewOf(engine, data, raw, { level = 'STANDARD', money: showMoney = true
         if (st.kind === 'SIZE') return { ...base, sizeStepId: st.sizeStep.id, options: (st.sizeStep.styleOptions || []).map((o) => ({ optId: o.optId, label: txt(o.partName || o.label || o.optId), on: state.sizePick[st.sizeStep.id] === o.optId })) };
         if (st.kind === 'SLOT') {
             const picked = (st.slot.options || []).find((o) => o.id === s.livePicks[st.slot.key]) || null;
-            const asksQty = !!picked && engine.takesQty(st.slot);
+            // HOW MANY FROM THE MOMENT A RING OR CENTRE-BRACKET STEP OPENS (CPQ 4f84d2d9 · Stuart 2026-10-21, "yes to both"): before a
+            // pick the box waits, showing the count the pole calls for — a ring step's from any ring (it holds only rings), a centre's the
+            // pole's or the kit's (recommendedFor reads no bracket but a kit chart's own row)
+            const asksQty = engine.takesQty(st.slot) && (!!picked || !!(st.slot.options || []).length);
+            const isCentre = st.slot.kind === 'BRACKET' && String(st.slot.position || '').toUpperCase() === 'CENTER';
+            const splices = s.splice && s.splice.count > 0 && isCentre ? { splices: s.splice.count } : {};
+            const waitingRec = asksQty && !picked ? s.recommendFor(st.slot, isCentre ? null : st.slot.options[0]) : null;
             return { ...base, ...slotView(st.slot), sub: st.sub ? { label: 'Matching backplate', ...slotView(st.sub) } : null,
                 // A CHOSEN RETURN COLLAPSES THE REST (CPQ, Stuart 2026-08-20): the plate picker it brings sits under the other ends.
                 collapse: !!(picked && picked.role === 'RETURN' && st.sub),
-                qty: asksQty ? { typed: state.stepQty[st.slot.key] || '', recommended: s.recommendFor(st.slot, picked) || null,
+                qty: !asksQty ? null
+                    // waiting: what to pick first; recommended 0 = a pole its ends carry alone (none needed)
+                    : !picked ? { waiting: isCentre ? 'centre bracket' : 'ring', typed: '', recommended: waitingRec, ...splices }
+                    : { typed: state.stepQty[st.slot.key] || '', recommended: s.recommendFor(st.slot, picked) || null,
                     // a typed centre count on a spliced pole, rounded up so one sits at the splice (hardwareSession.centreCountForSplices)
                     ...(Number(state.stepQty[st.slot.key]) > 0 && Number(s.quantities[picked.id]) !== Number(state.stepQty[st.slot.key]) ? { rounded: Number(s.quantities[picked.id]) } : {}),
-                    ...(s.splice && s.splice.count > 0 && st.slot.kind === 'BRACKET' && String(st.slot.position || '').toUpperCase() === 'CENTER' ? { splices: s.splice.count } : {}) } : null,
+                    ...splices },
                 // fewer centre brackets than recommended — said, never refused
                 short: shortOf(st.slot.key) ? { chosen: shortOf(st.slot.key).chosen, recommended: shortOf(st.slot.key).recommended } : null };
         }

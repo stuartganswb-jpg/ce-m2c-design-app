@@ -382,6 +382,8 @@ footer.portal a { color: var(--ink-soft); }
 .cf-sub { margin-left: 6px; padding-left: 12px; border-left: 2px solid var(--brass); }
 .cf-count { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .cf-count input { width: 84px; padding: 9px; }
+.cf-count input:disabled { background: var(--paper); cursor: not-allowed; }
+.cf-fine.wait { color: #8a6508; }
 .cf-length { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
 .cf-length label, .cf-fabric, .cf-addbar label, .cf-send label { display: flex; flex-direction: column; gap: 5px; }
 .cf-length span, .cf-fabric span, .cf-addbar label span, .cf-send label span, .cf-count > span:first-child { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); }
