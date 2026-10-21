@@ -2308,6 +2308,10 @@ const UPS_SERVICE_NAMES = {
     '01': 'Next Day Air', '02': '2nd Day Air', '03': 'Ground', '12': '3 Day Select',
     '13': 'Next Day Air Saver', '14': 'Next Day Air Early', '59': '2nd Day Air A.M.',
     '07': 'Worldwide Express', '08': 'Worldwide Expedited', '11': 'Standard', '65': 'Worldwide Saver',
+    // An unnamed code prints as "Service 54", which reads as a glitch when it is only a missing
+    // label. These are the ones an international lane answers with (seen live from Hangzhou).
+    '54': 'Worldwide Express Plus', '96': 'Worldwide Express Freight',
+    '71': 'Worldwide Express Freight Midday', '17': 'Worldwide Economy DDU', '72': 'Worldwide Economy DDP',
 };
 
 const upsErrorText = (body) => {
@@ -3655,10 +3659,15 @@ exports.upsRate = onCall({
     });
     const body = await upsCall(env, shipper.account, 'POST', '/api/rating/v2409/Shop', {
         RateRequest: {
-            Request: { TransactionReference: { CustomerContext: 'wms-rate' } },
+            // ⚠ "Shop" ALONE RETURNS NO TRANSIT TIMES — the Days column came back empty on the first
+            // live international quote. UPS returns them only for Shoptimeintransit, and only when
+            // the shipment says what kind of contents it is billing (Stuart 2026-10-21: "get a rate
+            // and transit time").
+            Request: { RequestOption: 'Shoptimeintransit', TransactionReference: { CustomerContext: 'wms-rate' } },
             Shipment: {
                 Shipper: { ...origin, ShipperNumber: shipper.account },
                 ShipFrom: from,
+                DeliveryTimeInformation: { PackageBillType: '03' },   // 03 = non-document goods
                 ShipTo: upsShipToOf(shipTo),
                 PaymentDetails: { ShipmentCharge: [{ Type: '01', BillShipper: { AccountNumber: shipper.account } }] },
                 ShipmentRatingOptions: { NegotiatedRatesIndicator: '' },
@@ -3670,6 +3679,7 @@ exports.upsRate = onCall({
     const services = [].concat((body.RateResponse && body.RateResponse.RatedShipment) || []).map((s) => {
         const code = (s.Service && s.Service.Code) || '';
         const neg = s.NegotiatedRateCharges && s.NegotiatedRateCharges.TotalCharge;
+        const eta = s.TimeInTransit && s.TimeInTransit.ServiceSummary && s.TimeInTransit.ServiceSummary.EstimatedArrival;
         // ⚠ UPS ANSWERS IN THE LANE'S OWN CURRENCY. A China-origin quote can come back in CNY, and a
         // dollar sign drawn on a yuan figure is the kind of wrong that reads as right.
         return {
@@ -3678,7 +3688,11 @@ exports.upsRate = onCall({
             publishedCurrency: (s.TotalCharges && s.TotalCharges.CurrencyCode) || null,
             negotiated: neg ? Number(neg.MonetaryValue) : null,
             negotiatedCurrency: (neg && neg.CurrencyCode) || null,
-            businessDays: (s.GuaranteedDelivery && s.GuaranteedDelivery.BusinessDaysInTransit) || null,
+            // Guaranteed delivery is the domestic shape; international answers under TimeInTransit.
+            // Either way the column means the same thing to the person reading it.
+            businessDays: (s.GuaranteedDelivery && s.GuaranteedDelivery.BusinessDaysInTransit)
+                || (eta && eta.BusinessDaysInTransit) || null,
+            arrivesOn: (eta && eta.Arrival && eta.Arrival.Date) || null,
         };
     });
     const alerts = [].concat((body.RateResponse && body.RateResponse.Response && body.RateResponse.Response.Alert) || []).map((a) => `${a.Code || ''} ${a.Description || ''}`.trim());

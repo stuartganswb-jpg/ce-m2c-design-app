@@ -146,7 +146,7 @@ export default function UpsLiveRatePanel() {
                 <div key={i} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(92px, 1fr)) auto', gap: '8px', alignItems: 'end', marginBottom: '8px' }}>
                     {[['qty', 'Qty'], ['length', 'Length in'], ['width', 'Width in'], ['height', 'Height in'], ['weight', 'Weight lb']].map(([k, lab]) => (
                         <div key={k}>
-                            {i === 0 && <div style={{ ...mono, marginBottom: '4px' }}>{lab}</div>}
+                            <div style={{ ...mono, marginBottom: '4px' }}>{lab}</div>
                             <input
                                 style={input} value={r[k]}
                                 onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, [k]: e.target.value.replace(/[^0-9.]/g, '') } : x)))}
@@ -211,7 +211,10 @@ export default function UpsLiveRatePanel() {
                                         <td style={{ padding: '7px 0' }}>{s.name}</td>
                                         <td style={{ padding: '7px 0', textAlign: 'right', color: 'var(--ink-soft)' }}>{money(s.published, s.publishedCurrency)}</td>
                                         <td style={{ padding: '7px 0', textAlign: 'right', fontWeight: 600, color: s.negotiated === null ? 'var(--ink-soft)' : '#3a7d44' }}>{money(s.negotiated, s.negotiatedCurrency)}</td>
-                                        <td style={{ padding: '7px 0', textAlign: 'right', color: 'var(--ink-soft)' }}>{s.businessDays || '—'}</td>
+                                        <td style={{ padding: '7px 0', textAlign: 'right', color: 'var(--ink-soft)' }}>
+                                            {s.businessDays || '—'}
+                                            {s.arrivesOn ? <span style={{ display: 'block', fontSize: '11px' }}>{s.arrivesOn}</span> : null}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
