@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { countryOf, isDomestic, crossesBorder, needsState, needsPostal, addressGaps, invoiceLineTotalOf } = require('../functions/upsAddress.js');
+const { countryOf, isDomestic, crossesBorder, needsState, needsPostal, addressGaps, invoiceLineTotalOf, unitsFor, toCm, toKg } = require('../functions/upsAddress.js');
 
 let n = 0;
 const ok = (c, what) => { assert.ok(c, what); n += 1; };
@@ -63,5 +63,23 @@ eq(invoiceLineTotalOf({ shipTo: gb, declaredValue: 500, currency: 'eur' }), { Cu
 eq(invoiceLineTotalOf({ shipTo: gb }), null, 'and is never invented when nobody gave one');
 eq(invoiceLineTotalOf({ shipTo: gb, declaredValue: 0 }), null, 'nor conjured from a zero');
 eq(invoiceLineTotalOf({ shipTo: gb, declaredValue: 'abc' }), null, 'nor from nonsense');
+
+// ── UNITS FOLLOW THE ORIGIN (found live 2026-10-21) ──────────────────────────
+// UPS refused the first real inbound rate — Hangzhou to High Point — with "111057 Invalid Unit of
+// Measurement for the given country". Every package went up as IN/LBS because a US origin had
+// always been the only origin.
+eq(unitsFor('US'), { dim: 'IN', weight: 'LBS' }, 'leaving the US, inches and pounds');
+eq(unitsFor('PR'), { dim: 'IN', weight: 'LBS' }, 'and Puerto Rico with it');
+eq(unitsFor('CN'), { dim: 'CM', weight: 'KGS' }, 'leaving China, centimetres and kilograms');
+eq(unitsFor('GB'), { dim: 'CM', weight: 'KGS' }, 'and Britain, whatever the floor types');
+eq(unitsFor(), { dim: 'IN', weight: 'LBS' }, 'no origin given means our own dock');
+
+// The floor keeps typing inches and pounds; the numbers are converted once, here.
+eq(toCm(20), 51, '20 in is 51 cm, rounded UP — a box is never smaller than it is');
+eq(toCm(12), 31, 'and 12 in is 31 cm');
+eq(toKg(30), 13.6, '30 lb is 13.6 kg, to one decimal');
+eq(toKg(35), 15.9, 'and 35 lb is 15.9 kg');
+ok(toKg(30) < 14, 'NOT rounded up to a whole kilo — that would add a pound to every box');
+eq(toKg(0.2), 0.5, 'and nothing is ever quoted at no weight at all');
 
 console.log(`upsAddress: ${n} assertions passed`);

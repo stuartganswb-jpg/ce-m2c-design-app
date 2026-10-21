@@ -3607,7 +3607,12 @@ const upsShipToOf = (a, label = 'Ship-to') => {
     };
 };
 
-const upsPackagesOf = (packages, packagingKey, reference) => {
+// ⚠ THE ORIGIN COUNTRY DECIDES THE UNITS, so an inbound parcel from China is quoted in cm and kg.
+// Everything typed upstream is still inches and pounds — the conversion happens here, once
+// (functions/upsAddress, after UPS refused an inbound rate with 111057, 2026-10-21).
+const upsPackagesOf = (packages, packagingKey, reference, originCountry = 'US') => {
+    const units = upsAddr.unitsFor(originCountry);
+    const metric = units.dim === 'CM';
     const list = Array.isArray(packages) ? packages : [];
     if (!list.length) throw new HttpsError('invalid-argument', 'Add at least one package.');
     if (list.length > 20) throw new HttpsError('invalid-argument', 'At most 20 packages per shipment.');
@@ -3616,10 +3621,11 @@ const upsPackagesOf = (packages, packagingKey, reference) => {
         const bad = [['length', l], ['width', w], ['height', h]].filter(([, v]) => !(v > 0 && v <= 108)).map(([k]) => k);
         if (bad.length) throw new HttpsError('invalid-argument', `Package ${i + 1}: ${bad.join(', ')} must be between 0 and 108 inches.`);
         if (!(wt > 0 && wt <= 150)) throw new HttpsError('invalid-argument', `Package ${i + 1}: weight must be between 0 and 150 lb.`);
+        const dim = (v) => String(metric ? upsAddr.toCm(v) : Math.ceil(v));
         return {
             [packagingKey]: { Code: '02' },
-            Dimensions: { UnitOfMeasurement: { Code: 'IN' }, Length: String(Math.ceil(l)), Width: String(Math.ceil(w)), Height: String(Math.ceil(h)) },
-            PackageWeight: { UnitOfMeasurement: { Code: 'LBS' }, Weight: String(Math.max(1, Math.ceil(wt))) },
+            Dimensions: { UnitOfMeasurement: { Code: units.dim }, Length: dim(l), Width: dim(w), Height: dim(h) },
+            PackageWeight: { UnitOfMeasurement: { Code: units.weight }, Weight: String(metric ? upsAddr.toKg(wt) : Math.max(1, Math.ceil(wt))) },
             ...(reference ? { ReferenceNumber: [{ Value: cleanStr(reference, 35) }] } : {}),
         };
     });
@@ -3639,6 +3645,7 @@ exports.upsRate = onCall({
     // WHERE IT ACTUALLY LEAVES FROM. Our own address unless a supplier's is given — the Shipper
     // stays us either way, because we are the account being quoted and billed.
     const from = shipFrom ? upsShipToOf(shipFrom, 'Ship-from') : origin;
+    const originCountry = shipFrom ? upsAddr.countryOf(shipFrom) : ((shipper.address && shipper.address.CountryCode) || 'US');
     // UPS wants the shipment's value to rate many INTERNATIONAL lanes and refuses, or answers
     // wrongly, without it. Sent only when the parcel actually crosses a border, and only when
     // somebody gave a figure — never invented (functions/upsAddress, Stuart 2026-10-21).
@@ -3656,17 +3663,21 @@ exports.upsRate = onCall({
                 PaymentDetails: { ShipmentCharge: [{ Type: '01', BillShipper: { AccountNumber: shipper.account } }] },
                 ShipmentRatingOptions: { NegotiatedRatesIndicator: '' },
                 ...(invoiceTotal ? { InvoiceLineTotal: invoiceTotal } : {}),
-                Package: upsPackagesOf(packages, 'PackagingType'),
+                Package: upsPackagesOf(packages, 'PackagingType', null, originCountry),
             },
         },
     });
     const services = [].concat((body.RateResponse && body.RateResponse.RatedShipment) || []).map((s) => {
         const code = (s.Service && s.Service.Code) || '';
         const neg = s.NegotiatedRateCharges && s.NegotiatedRateCharges.TotalCharge;
+        // ⚠ UPS ANSWERS IN THE LANE'S OWN CURRENCY. A China-origin quote can come back in CNY, and a
+        // dollar sign drawn on a yuan figure is the kind of wrong that reads as right.
         return {
             code, name: UPS_SERVICE_NAMES[code] || `Service ${code}`,
             published: s.TotalCharges ? Number(s.TotalCharges.MonetaryValue) : null,
+            publishedCurrency: (s.TotalCharges && s.TotalCharges.CurrencyCode) || null,
             negotiated: neg ? Number(neg.MonetaryValue) : null,
+            negotiatedCurrency: (neg && neg.CurrencyCode) || null,
             businessDays: (s.GuaranteedDelivery && s.GuaranteedDelivery.BusinessDaysInTransit) || null,
         };
     });
@@ -3678,6 +3689,8 @@ exports.upsRate = onCall({
         account: shipper.account, shipperName: shipper.name,
         international: upsAddr.crossesBorder({ shipFrom, shipTo, shipperCountry: (shipper.address && shipper.address.CountryCode) || 'US' }),
         inbound: !!shipFrom && upsAddr.isDomestic(shipTo, 'US'),
+        // So the screen can show what was actually SENT, not what was typed.
+        originCountry, units: upsAddr.unitsFor(originCountry),
         declaredValueSent: invoiceTotal ? Number(invoiceTotal.MonetaryValue) : null,
     };
 });
@@ -3706,7 +3719,7 @@ exports.upsShip = onCall({
                 PaymentInformation: { ShipmentCharge: [{ Type: '01', BillShipper: { AccountNumber: shipper.account } }] },
                 Service: { Code: code },
                 ShipmentRatingOptions: { NegotiatedRatesIndicator: '' },
-                Package: upsPackagesOf(packages, 'Packaging', reference),
+                Package: upsPackagesOf(packages, 'Packaging', reference, (shipper.address && shipper.address.CountryCode) || 'US'),
             },
             LabelSpecification: { LabelImageFormat: { Code: 'GIF' }, LabelStockSize: { Height: '6', Width: '4' } },
         },

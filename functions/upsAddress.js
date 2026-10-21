@@ -59,6 +59,22 @@ function crossesBorder({ shipFrom, shipTo, shipperCountry = 'US' }) {
     return from !== home || to !== home;
 }
 
+// ⚠ UNITS FOLLOW THE ORIGIN COUNTRY, NOT OURS. UPS refuses a parcel leaving China quoted in inches
+// and pounds — "111057 Invalid Unit of Measurement for the given country", seen live on the first
+// real inbound rate (Hangzhou → High Point, 2026-10-21). Outbound never met it, because a US origin
+// is exactly the case where inches and pounds are right. On UPS's API only the US and Puerto Rico
+// are imperial; everywhere else is centimetres and kilograms.
+const IMPERIAL_UNITS = new Set(['US', 'PR']);
+const unitsFor = (country) => (IMPERIAL_UNITS.has(up(country) || 'US')
+    ? { dim: 'IN', weight: 'LBS' }
+    : { dim: 'CM', weight: 'KGS' });
+
+// The floor types inches and pounds whatever the origin, so the conversion lives here rather than
+// in somebody's head at a desk. Dimensions round UP (a box is not smaller than it is); weight keeps
+// one decimal, because rounding 30 lb up to a whole kilo would quietly add a pound to every box.
+const toCm = (inches) => Math.ceil(Number(inches) * 2.54);
+const toKg = (pounds) => Math.max(0.5, Math.round(Number(pounds) * 0.45359237 * 10) / 10);
+
 // UPS REQUIRES A SHIPMENT VALUE to rate many international lanes, and returns a refusal or a wrong
 // figure without one. It is meaningless on a domestic move, so it is sent only when the parcel
 // actually crosses a border — never invented, never defaulted to a number nobody chose.
@@ -70,6 +86,7 @@ function invoiceLineTotalOf({ shipTo, shipFrom, shipperCountry = 'US', declaredV
 }
 
 module.exports = {
-    STATE_REQUIRED, NO_POSTAL,
+    STATE_REQUIRED, NO_POSTAL, IMPERIAL_UNITS,
     countryOf, isDomestic, crossesBorder, needsState, needsPostal, addressGaps, invoiceLineTotalOf,
+    unitsFor, toCm, toKg,
 };

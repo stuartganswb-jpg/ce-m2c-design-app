@@ -15,7 +15,14 @@ import { addressBookOf } from './UpsAddressBook';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' };
 const input = { padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', width: '100%', boxSizing: 'border-box' };
-const usd = (v) => (v === null || v === undefined ? '—' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+// ⚠ NEVER DRAW A DOLLAR SIGN ON A FIGURE UPS SENT IN ANOTHER CURRENCY. An inbound lane can answer
+// in the origin's money, and $1,240 beside a number that means ¥1,240 is wrong in the direction
+// that costs you.
+const money = (v, code) => {
+    if (v === null || v === undefined) return '—';
+    const n = Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return !code || code === 'USD' ? `$${n}` : `${n} ${code}`;
+};
 
 const BRANDS = [['ce', 'Classical Elements'], ['uniquity', "Uniq'uity (MC America)"], ['m2c', 'M2C Studio'], ['leyla', 'Leyla']];
 
@@ -29,18 +36,29 @@ export default function UpsLiveRatePanel() {
     const [book, setBook] = useState([]);
     useEffect(() => onSnapshot(doc(db, 'system', 'ups_config'),
         (s2) => setBook(addressBookOf(s2.exists() ? s2.data() : {})), () => setBook([])), []);
-    const [pkg, setPkg] = useState({ length: '12', width: '12', height: '12', weight: '5' });
+    // A SHIPMENT IS USUALLY SEVERAL BOXES, and six single-box quotes added up is not a six-box
+    // shipment — UPS applies its per-shipment minimums and surcharges once, not per parcel. A row
+    // carries a qty so "4 of these and 2 of those" is two lines (Stuart 2026-10-21).
+    const [rows, setRows] = useState([{ qty: '1', length: '12', width: '12', height: '12', weight: '5' }]);
     const [declaredValue, setDeclaredValue] = useState('');
     const [res, setRes] = useState(null);
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
+
+    const num = (v) => (Number(v) > 0 ? Number(v) : 0);
+    const qtyOf = (r) => Math.max(1, Math.floor(num(r.qty) || 1));
+    const packagesOf = () => rows.flatMap((r) => Array.from({ length: qtyOf(r) }, () => ({
+        length: num(r.length), width: num(r.width), height: num(r.height), weight: num(r.weight),
+    })));
+    const boxCount = rows.reduce((t, r) => t + qtyOf(r), 0);
+    const totalWeight = rows.reduce((t, r) => t + qtyOf(r) * num(r.weight), 0);
 
     const run = async () => {
         setBusy(true); setErr(''); setRes(null);
         try {
             const r = await httpsCallable(functions, 'upsRate')({
                 brand, shipTo: to, ...(from ? { shipFrom: from } : {}),
-                packages: [{ length: Number(pkg.length), width: Number(pkg.width), height: Number(pkg.height), weight: Number(pkg.weight) }],
+                packages: packagesOf(),
                 ...(Number(declaredValue) > 0 ? { declaredValue: Number(declaredValue) } : {}),
             });
             setRes(r.data);
@@ -123,11 +141,38 @@ export default function UpsLiveRatePanel() {
                     <input style={input} value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="USD" /></div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '10px', marginBottom: '12px' }}>
-                {[['length', 'Length in'], ['width', 'Width in'], ['height', 'Height in'], ['weight', 'Weight lb']].map(([k, lab]) => (
-                    <div key={k}><div style={{ ...mono, marginBottom: '4px' }}>{lab}</div>
-                        <input style={input} value={pkg[k]} onChange={(e) => setPkg({ ...pkg, [k]: e.target.value.replace(/[^0-9.]/g, '') })} /></div>
-                ))}
+            <div style={{ ...mono, marginBottom: '6px' }}>Boxes</div>
+            {rows.map((r, i) => (
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(92px, 1fr)) auto', gap: '8px', alignItems: 'end', marginBottom: '8px' }}>
+                    {[['qty', 'Qty'], ['length', 'Length in'], ['width', 'Width in'], ['height', 'Height in'], ['weight', 'Weight lb']].map(([k, lab]) => (
+                        <div key={k}>
+                            {i === 0 && <div style={{ ...mono, marginBottom: '4px' }}>{lab}</div>}
+                            <input
+                                style={input} value={r[k]}
+                                onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, [k]: e.target.value.replace(/[^0-9.]/g, '') } : x)))}
+                            />
+                        </div>
+                    ))}
+                    <button
+                        type="button" disabled={rows.length === 1}
+                        onClick={() => setRows(rows.filter((_, j) => j !== i))}
+                        style={{ ...mono, padding: '9px 11px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: rows.length === 1 ? 'not-allowed' : 'pointer', opacity: rows.length === 1 ? 0.3 : 1 }}
+                        title="Remove this line"
+                    >×</button>
+                </div>
+            ))}
+            {/* THE TOTALS, BEFORE IT ASKS. A typed 3 that should have been 30 is visible here and
+                nowhere else — UPS will happily quote whatever it is given. */}
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' }}>
+                <button
+                    type="button" disabled={boxCount >= 20}
+                    onClick={() => setRows([...rows, { qty: '1', length: '', width: '', height: '', weight: '' }])}
+                    style={{ ...mono, padding: '8px 13px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: boxCount >= 20 ? 'not-allowed' : 'pointer', opacity: boxCount >= 20 ? 0.4 : 1 }}
+                >+ Add a box</button>
+                <span style={{ fontSize: '13px', color: 'var(--ink-soft)' }}>
+                    {boxCount} {boxCount === 1 ? 'box' : 'boxes'} · {totalWeight.toLocaleString('en-US', { maximumFractionDigits: 1 })} lb
+                    {boxCount > 20 ? ' — UPS rates at most 20 packages in one shipment.' : ''}
+                </span>
             </div>
 
             <button onClick={run} disabled={busy} style={{ ...mono, padding: '11px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: busy ? 'wait' : 'pointer' }}>
@@ -143,7 +188,8 @@ export default function UpsLiveRatePanel() {
                     <div style={{ ...mono, marginBottom: '8px' }}>
                         {res.environment} · {res.shipperName} · account {res.account}
                         {res.international ? ' · INTERNATIONAL' : ' · domestic'}{res.inbound ? ' · INBOUND' : ''}
-                        {res.declaredValueSent ? ` · value ${usd(res.declaredValueSent)}` : ''}
+                        {res.declaredValueSent ? ` · value ${money(res.declaredValueSent, 'USD')}` : ''}
+                        {res.units && res.units.dim !== 'IN' ? ` · sent in ${res.units.dim}/${res.units.weight} (origin ${res.originCountry})` : ''}
                     </div>
                     {res.environment !== 'PRODUCTION' && (
                         <div style={{ fontSize: '12.5px', color: '#9b6a2c', marginBottom: '8px' }}>
@@ -163,8 +209,8 @@ export default function UpsLiveRatePanel() {
                                 {res.services.map((s) => (
                                     <tr key={s.code}>
                                         <td style={{ padding: '7px 0' }}>{s.name}</td>
-                                        <td style={{ padding: '7px 0', textAlign: 'right', color: 'var(--ink-soft)' }}>{usd(s.published)}</td>
-                                        <td style={{ padding: '7px 0', textAlign: 'right', fontWeight: 600, color: s.negotiated === null ? 'var(--ink-soft)' : '#3a7d44' }}>{usd(s.negotiated)}</td>
+                                        <td style={{ padding: '7px 0', textAlign: 'right', color: 'var(--ink-soft)' }}>{money(s.published, s.publishedCurrency)}</td>
+                                        <td style={{ padding: '7px 0', textAlign: 'right', fontWeight: 600, color: s.negotiated === null ? 'var(--ink-soft)' : '#3a7d44' }}>{money(s.negotiated, s.negotiatedCurrency)}</td>
                                         <td style={{ padding: '7px 0', textAlign: 'right', color: 'var(--ink-soft)' }}>{s.businessDays || '—'}</td>
                                     </tr>
                                 ))}
