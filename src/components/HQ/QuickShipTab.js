@@ -27,7 +27,7 @@ import { oneOfAKindCartPlanOf, oneOfAKindSoldPatchOf } from '../Shared/oneOfAKin
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, query, where, serverTimestamp, writeBatch } from "firebase/firestore";
 import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
-import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp, orderDiscountApplies, withPillowDiscountMarks } from '../Shared/lineDiscount';
+import { orderPercentRate, orderPercentInfoRow, orderDiscountStamp, orderDiscountApplies, withPillowDiscountMarks, canLineDiscount } from '../Shared/lineDiscount';
 import { placeholderLineOf, nsHoldOf, PLACEHOLDER_HELD_STATUS } from '../Shared/placeholderLine';
 import { cartLineFactsOf } from '../Shared/cartLineFacts';   // a pillow line's facts in full on the cart row (Stuart 2026-10-17)   // ✚ Quick add: an item not yet in the system (2026-10-16)
 import { enqueueNsWrite } from '../Shared/nsOutbox';
@@ -141,7 +141,7 @@ const KIT_CFG_KEYS = Object.keys(EMPTY_KB).filter(k => !k.startsWith('rush'));
 
 // `counterMode` (the Uniquity show counter, 2026-10-12): the same tab — cart, customer, save, every rule — wearing the
 // counter's screens (HQ/CounterScreens) instead of the hardware catalog. One door, one spine.
-const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole = '' }) => {
+const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole = '', isSuperAdmin = false }) => {
     const [allItems, setAllItems] = useState([]);     // every brand part (for fee lookup)
     const [customers, setCustomers] = useState([]);
     const [kits, setKits] = useState([]);             // saved prebuilt kits
@@ -1149,7 +1149,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         // AN ITEM KIT IN A FINISH (2026-09-28): its parts go on in that finish, beneath the kit (Shared/itemKit).
         if (isItemKit(real)) {
             if (!tbfFinish) return alert('Pick the finish the kit is made in.');
-            const kPriced = parseFloat(tbfPrice);
+            const kPriced = maySetPrice ? parseFloat(tbfPrice) : NaN;   // (below manager the customer's price stands)
             pushItemKitLines(real, tbfQty, { finishCode: tbfFinish, note: `KIT · TO BE FINISHED · ${tbfFinish}`, rateOverride: Number.isFinite(kPriced) && Math.abs(kPriced - tbfResolved) > 0.004 ? kPriced : null, aliasOpts: isAl ? { aliasErp: erpOf(it), aliasItemId: it.id } : {} });
             setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setTbfPrice(''); setTbfFeet(''); setTbfCut('');
             return;
@@ -1166,7 +1166,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         if (isAl && String(it.manufacturingSpecs?.uom || 'EA').toUpperCase() !== String(real.manufacturingSpecs?.uom || 'EA').toUpperCase()) {
             addLog(`⚠ Alias ${erpOf(it)} UOM (${it.manufacturingSpecs?.uom || 'EA'}) disagrees with ${erpOf(real)} (${real.manufacturingSpecs?.uom || 'EA'}) — the REAL item's UOM was used. Align the alias in the Library.`, 'warn');
         }
-        const typed = parseFloat(tbfPrice);
+        const typed = maySetPrice ? parseFloat(tbfPrice) : NaN;   // (below manager the customer's price stands)
         const priced = Number.isFinite(typed) ? typed : tbfResolved;
         const fin = finishList.find(f => f.code === tbfFinish);
         // THE SAME PART IN ANOTHER MATERIAL IS ANOTHER ITEM (Stuart 2026-10-06, the 1" brass · Shared/materialTwin):
@@ -1640,6 +1640,9 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // A guard against a default being cleared by accident, NOT a security boundary — the figure is
     // written by the browser, so this stops a slip, not a determined person. Stuart knows.
     const mayOverrideShip = canOverrideShipping(userRole);
+    // A PRICE TYPED OVER THE CUSTOMER'S (Stuart 2026-10-21: "on tab 7 make it manager and above") — the To Be Finished form's Price /
+    // $ per ft box: CPQ's own rule for its Pricing box (Shared/lineDiscount.canLineDiscount — manager, executive, admin, super admin).
+    const maySetPrice = canLineDiscount(userRole, isSuperAdmin);
 
     const myKits = kits.filter(k => k.brand === activeBrand);
     // Collections this customer is entitled to in the PORTAL (CRM → Portal Access). Surfaced here
@@ -2713,7 +2716,9 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                                 <div><span style={lbl}>{tbfPerFoot ? 'Pieces' : 'Qty'}</span><input type="number" min="1" value={tbfQty} onChange={e => setTbfQty(e.target.value)} style={qtyInp} /></div>
                                 <div>
                                     <span style={lbl}>{tbfPerFoot ? '$ / ft' : 'Price'}</span>
-                                    <input type="number" min="0" step="0.01" value={tbfPrice} onChange={e => setTbfPrice(e.target.value)} placeholder="—" style={{ ...qtyInp, width: '82px', textAlign: 'right' }} />
+                                    <input type="number" min="0" step="0.01" value={tbfPrice} onChange={e => setTbfPrice(e.target.value)} placeholder="—" readOnly={!maySetPrice}
+                                        title={maySetPrice ? "The customer's price — type over it to sell at another" : `Changing the price is for a manager or higher — this login is "${userRole || 'none'}". The customer's price stands.`}
+                                        style={{ ...qtyInp, width: '82px', textAlign: 'right', ...(maySetPrice ? {} : { background: 'var(--paper-2)', color: 'var(--ink-soft)' }) }} />
                                 </div>
                                 <button onClick={addToBeFinished} style={btn('var(--ink)', '#fff')}>Add</button>
                             </div>
