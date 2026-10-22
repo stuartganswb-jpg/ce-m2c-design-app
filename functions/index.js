@@ -3661,6 +3661,12 @@ exports.upsRate = onCall({
     // /Shoptimeintransit. `Request.RequestOption` in the BODY is the legacy XML shape and is simply
     // ignored, which is why asking for transit times in the body changed nothing at all: rates came
     // back, no TimeInTransit block, Days still empty (2026-10-21, after the first deploy).
+    // ⚠ TIME IN TRANSIT WANTS THE SHIPMENT'S TOTAL WEIGHT, which a plain rate request never asked
+    // for — without it UPS refuses the whole quote with "111546 Invalid Weight", naming a field the
+    // caller never sent. Summed from the packages as they are ACTUALLY going up, in their units, so
+    // the total can never disagree with the parcels it is the total of.
+    const pkgs = upsPackagesOf(packages, 'PackagingType', null, originCountry);
+    const totalWeight = pkgs.reduce((t, pk) => t + Number(pk.PackageWeight.Weight), 0);
     const body = await upsCall(env, shipper.account, 'POST', '/api/rating/v2409/Shoptimeintransit', {
         RateRequest: {
             // ⚠ "Shop" ALONE RETURNS NO TRANSIT TIMES — the Days column came back empty on the first
@@ -3672,11 +3678,15 @@ exports.upsRate = onCall({
                 Shipper: { ...origin, ShipperNumber: shipper.account },
                 ShipFrom: from,
                 DeliveryTimeInformation: { PackageBillType: '03' },   // 03 = non-document goods
+                ShipmentTotalWeight: {
+                    UnitOfMeasurement: { Code: upsAddr.unitsFor(originCountry).weight },
+                    Weight: totalWeight.toFixed(1),
+                },
                 ShipTo: upsShipToOf(shipTo),
                 PaymentDetails: { ShipmentCharge: [{ Type: '01', BillShipper: { AccountNumber: shipper.account } }] },
                 ShipmentRatingOptions: { NegotiatedRatesIndicator: '' },
                 ...(invoiceTotal ? { InvoiceLineTotal: invoiceTotal } : {}),
-                Package: upsPackagesOf(packages, 'PackagingType', null, originCountry),
+                Package: pkgs,
             },
         },
     });
