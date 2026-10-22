@@ -616,16 +616,19 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     // offer EXACTLY the vocabulary the Master Library editor + Vision engine use (BRACKET
     // PROJECTIONS / BRACKET MOUNT TYPES) — add a projection there (e.g. .75) and it appears here,
     // so CPQ and Vision can never drift apart.
+    // …and the MATERIALS a part can be made in — the "made in" chips (Stuart 2026-10-21, M2C's leather ring). The chips
+    // were written to read this list but it was never loaded, so they always fell back to METAL / WOOD / CLEAR: no part
+    // could be made in any other material, and a leather ring left as METAL is never offered the leather colours in CPQ.
     const [dictLists, setDictLists] = useState(null);
     const ensureDictLists = async () => {
         if (dictLists) return dictLists;
         try {
             const s = await getDoc(doc(db, 'system', 'master_lists'));
             const d = s.exists() ? s.data() : {};
-            const lists = { projections: Array.isArray(d.projections) ? d.projections : [], bracketMounts: Array.isArray(d.bracketMounts) ? d.bracketMounts : [] };
+            const lists = { projections: Array.isArray(d.projections) ? d.projections : [], bracketMounts: Array.isArray(d.bracketMounts) ? d.bracketMounts : [], materials: Array.isArray(d.materials) ? d.materials : [] };
             setDictLists(lists);
             return lists;
-        } catch (e) { const empty = { projections: [], bracketMounts: [] }; setDictLists(empty); return empty; }
+        } catch (e) { const empty = { projections: [], bracketMounts: [], materials: [] }; setDictLists(empty); return empty; }
     };
     // FRESH index on user actions (Stuart 2026-07-22): items/ALIASES created in another tab
     // mid-session never appeared in the picker because the index was cached once per session
