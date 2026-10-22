@@ -315,6 +315,11 @@ export const quickShipStatusOf = (so) => {
     // a quick-add placeholder on the order (Shared/placeholderLine): the NetSuite write is held until every item is identified
     if (st === 'HELD_PLACEHOLDER') return { ...S, stage: 'AWAITING_NS', detail: 'held — an item to identify', since: so.createdAt || null };
     if (st === 'Shipped') return { ...S, stage: 'SHIPPED', detail: so.nsIfTran ? `fulfilment ${so.nsIfTran}` : 'marked shipped', since: so.shippedAt || so.packedAt || null, by: so.shippedBy || so.packedBy || '' };
+    // SHIPPED BY ITS SHIPMENT, not only by Mark Shipped (Stuart 2026-10-22, RTG: "should show status as shipped"): the Fulfillment
+    // tab — a UPS shipment, "Shipped outside the app" — stamps `shippedAt` on a stocked order and never its status. A line still
+    // held on 12.7 Launch means part of it is still to go, so that order stays open work below (a Launch shipment is a child
+    // record of its own; a void clears the stamp).
+    if (so.shippedAt && !heldLinesOf(so).length) return { ...S, stage: 'SHIPPED', detail: (so.shippedOutside || so.shipCarrier === 'OUTSIDE') ? 'shipped outside the app' : (so.shipService ? `UPS ${so.shipService}` : 'shipped'), since: so.shippedAt, by: so.shippedBy || '' };
     if (so.packStatus === 'Packed') return { ...S, stage: 'PACKED', detail: so.nsIfTran ? `fulfilment ${so.nsIfTran} posted` : 'awaiting shipment', since: so.packedAt || null, by: so.packedBy || '' };
     // pick/packInProgress are CLAIMS ("this person has it open on a tablet"), not progress — cleared
     // on complete/abort, kept on logout, so an old one means a tablet died, not a slow picker.

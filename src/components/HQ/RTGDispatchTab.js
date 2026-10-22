@@ -37,6 +37,9 @@ import { jobFabFactsOf, cutSheetMissingOf, jobDrawingOf, shopReleaseFieldsOf } f
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState, planBulkReopen, applyBulkReopen, planOrderReopen, identityKeysOf, BULK_CLOSE_FROM, toMs } from '../Shared/orderLifecycle';
+import { shipStateOf } from '../Shared/soPackBoard';
+import { soKeyOf, billStateOf, soStatusFor } from '../Shared/shippedOutside';
+import { useNsSoStatus } from '../Shared/useNsSoStatus';
 import { woRefOf } from '../Shared/woRef';
 import { isOpenPo, isDraftPo, approvePurchaseOrder, markPoSent, poRef, PO_STATUS } from '../Shared/purchaseOrders';
 import { poLinesLocked, poLockMessage } from '../Shared/poLock';
@@ -90,6 +93,18 @@ const cleanLineName = (name) => String(name || '').replace(/^\s*[-▶]\s*/, '').
 // The missing `location` fields here were why Route A NetSuite work orders never queued.
 // ONE copy now — Shared/brandNetsuite.js (2026-08-25).
 
+
+// 🚚 What has shipped, for RTG (Stuart 2026-10-22): a configured order from its finishing documents (Shared/soPackBoard —
+// the same answer SO Pack gives); a stocked order from its own shipment (Shared/orderStatus.quickShipStatusOf, which keeps an
+// order with a line still held on 12.7 Launch open).
+// `finBySo` = the finishing documents by their salesOrderId (finBySoOf) — built once per feed, not searched per order.
+const finBySoOf = (fins) => { const m = new Map(); (fins || []).forEach(f => { if (f && f.salesOrderId) { const k = String(f.salesOrderId); if (!m.has(k)) m.set(k, []); m.get(k).push(f); } }); return m; };
+const finOfSale = (o, finBySo) => [...(finBySo.get(String(o.id)) || []), ...(o.soId && String(o.soId) !== String(o.id) ? (finBySo.get(String(o.soId)) || []) : [])];
+const shipOfSale = (o, finBySo) => {
+    if (!isQuickShip(o)) return shipStateOf(o, finOfSale(o, finBySo));
+    const st = quickShipStatusOf(o) || {};
+    return st.stage === 'SHIPPED' ? { state: 'SHIPPED', shipped: 1, of: 1, at: toMs(o.shippedAt) || toMs(o.updatedAt) || 0, how: st.detail || '' } : { state: '', shipped: 0, of: 0, at: 0, how: '' };
+};
 
 const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // NETSUITE TRANSMIT LOG (Stuart 2026-07-17): live ns_outbox tail so THIS screen shows the
@@ -511,6 +526,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         subs.push(mkB("rod_cut_orders", "brand", setLiveRodCuts));
         return () => subs.forEach(u => u && u());
     }, [activeBrand]);
+
+    // 🚚 SHIPPED ON RTG, AND BILLED OR NOT (Stuart 2026-10-22: "on RTG should show status as shipped, but leave the billed open
+    // so that we can easily find these, we do have occasions where they forget to bill"). Every open sales order that has
+    // shipped — read from its documents, the answer SO Pack gives (Shared/soPackBoard.shipStateOf), a stocked order from its own
+    // shipment (Shared/orderStatus.quickShipStatusOf) — and NetSuite's status for those, read once per set. The stored status
+    // stays as it is and nothing closes by itself.
+    const finBySo = useMemo(() => finBySoOf(liveFin), [liveFin]);
+    const shippedSales = useMemo(() => liveSO.filter(o => !isClosedState(o)).map(o => ({ o, ship: shipOfSale(o, finBySo) })).filter(x => x.ship.state), [liveSO, finBySo]);
+    const soStatus = useNsSoStatus(useMemo(() => shippedSales.map(x => soKeyOf(x.o, x.o.nsInternalId)), [shippedSales]));
+    const billOf = (o) => (soStatus.idx ? billStateOf(soStatusFor(soKeyOf(o, o.nsInternalId), soStatus.idx)) : null);
+    const notBilled = shippedSales.filter(x => { const b = billOf(x.o); return !!b && b.billed === false; }).sort((a, b) => (a.ship.at || 0) - (b.ship.at || 0));
+    const [showNotBilled, setShowNotBilled] = useState(false);
 
     // ⚡ THE ONE RELEASE ENGINE (Brief B3, Stuart 2026-09-04) — S3: everything auto-routes, RTG
     // records everything, no manual push. Until today there were TWO effects: this one, governed by
@@ -1260,6 +1287,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                         {st.detail && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{st.detail}</span>}
                         {st.by && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: tone }}>· {st.by}</span>}
                     </span>
+                    {st.stage === 'SHIPPED' && (() => { const b = billOf(so); return b ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', fontWeight: 700, letterSpacing: '.04em', color: b.billed === false ? '#c0392b' : (b.billed ? '#2e7d32' : 'var(--ink-soft)') }}>{b.word}</span> : null; })()}
                 </div>
                 {hasPlaceholders(so) && <PlaceholderResolve record={so} collection="hq_sales_orders" brand={so.brand || activeBrand} currentUser={currentUser} />}
                 {tbfRows.length > 0 && (
@@ -1447,6 +1475,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     };
     const dispatchedChip = (o) => [o.pushedToFinishing ? (String(o.division || '').toUpperCase() === 'SEW' ? 'STITCH & SEW ✓' : 'FINISHING ✓') : null, o.pushedToShop ? 'SHOP ✓' : null].filter(Boolean).join('  ·  ') || 'SENT';   // a sewing document names its own floor (S7, 2026-10-14)
     const whenStr = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
+    // "🚚 SHIPPED Oct 9 · UPS Ground · NOT BILLED" / "🚚 PART SHIPPED 1 of 3" — on a dispatched sales order (above).
+    const shipBadge = (o) => {
+        const sh = shipOfSale(o, finBySo);
+        if (!sh.state) return null;
+        const b = billOf(o);
+        return (
+            <span title={sh.how || ''} style={{ marginLeft: '8px', color: '#2e7d32', fontWeight: 700 }}>
+                · 🚚 {sh.state === 'SHIPPED' ? 'SHIPPED' : `PART SHIPPED ${sh.shipped} of ${sh.of}`}{sh.at ? ` ${whenStr(sh.at)}` : ''}{sh.how ? ` · ${sh.how}` : ''}
+                {b && <span style={{ color: b.billed === false ? '#c0392b' : (b.billed ? '#2e7d32' : 'var(--ink-soft)') }}> · {b.word}</span>}
+            </span>
+        );
+    };
 
     // ── THE MORNING STOCK REFRESH (Stuart 2026-09-23) ────────────────────────────────────
     // "the work order information updates naturally in the app by the step stamps but the stock
@@ -3224,6 +3264,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                 </div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#5a8f5a', marginTop: '3px' }}>
                     Sent to floor · {dispatchedChip(o)} · {whenStr(o.dispatchedAt)}
+                    {kind === 'sales' && shipBadge(o)}
                     {/* THE CUSTOM HALF ON THE CARD (S3's finding on SO60420, 2026-09-12): "SENT TO FLOOR ·
                         SHOP ✓" said nothing while the poles were at the plater. The mirror lives on the
                         fin doc; one honest word here, the same word the job-log row uses. */}
@@ -3662,6 +3703,28 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Custom</span>
                         </div>
                         <div style={{ padding: '24px', flex: 1, background: 'var(--paper)', maxHeight: '600px', overflowY: 'auto' }}>
+                            {/* 🚚 SHIPPED, NOT BILLED — every open order that has gone while NetSuite has not billed it, oldest first, archived ones
+                                too ("we do have occasions where they forget to bill"). */}
+                            {notBilled.length > 0 && (
+                                <div style={{ marginBottom: '16px', border: '1px solid #c0392b', background: '#fdf3f3' }}>
+                                    <button onClick={() => setShowNotBilled(v => !v)} title="Shipped orders NetSuite has not billed — open the list"
+                                        style={{ width: '100%', textAlign: 'left', padding: '9px 12px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#c0392b' }}>
+                                        {showNotBilled ? '▾' : '▸'} 🚚 Shipped, not billed: {notBilled.length}
+                                    </button>
+                                    {showNotBilled && notBilled.map(({ o, ship }) => {
+                                        const b = billOf(o);
+                                        return (
+                                            <div key={o.id} style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline', padding: '6px 12px', borderTop: '1px solid #f3d6d3', fontSize: '0.82rem' }}>
+                                                <b style={{ fontFamily: 'var(--mono)' }}>{o.soId || o.id}</b>
+                                                <span>{o.customer || o.customerName || ''}</span>
+                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>shipped {whenStr(ship.at)}{ship.how ? ` · ${ship.how}` : ''}{ship.state === 'PART' ? ` · ${ship.shipped} of ${ship.of} work orders` : ''}</span>
+                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#c0392b', fontWeight: 700 }}>{b ? b.word : ''}</span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                            {soStatus.err && shippedSales.length > 0 && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#c77d1a', marginBottom: '10px' }}>NetSuite billing could not be read ({soStatus.err}) — shipped orders show without it.</div>}
                             {soBoard.pending.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved sales orders pending dispatch.</p>}
                             
                             {soBoard.pending.map(so => (

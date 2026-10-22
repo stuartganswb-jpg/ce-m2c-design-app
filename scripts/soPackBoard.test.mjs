@@ -1,6 +1,6 @@
 // 🧪 SO Pack, line by line — ordered beside packed, the box, and the stamps that are about that line (Stuart 2026-10-06).
 //    node scripts/soPackBoard.test.mjs
-import { soPackBoardOf, lineStampsOf, lineBoxOf, boxSlotOf, LINE_STATE, ORDER_VERDICT, orderShippedOf, orderShippedAtOf } from '../src/components/Shared/soPackBoard.js';
+import { soPackBoardOf, lineStampsOf, lineBoxOf, boxSlotOf, LINE_STATE, ORDER_VERDICT, orderShippedOf, orderShippedAtOf, shipStateOf, shipHowOf } from '../src/components/Shared/soPackBoard.js';
 import { packLinesOf } from '../src/components/Shared/pickLines.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -129,6 +129,18 @@ eq('an Order Entry order, by its own lines (keys stay the sold line numbers)', o
     ok('no documents → not shipped', !orderShippedOf(so, []));
     eq('when it left: the latest shipment (a timestamp read as ms)', orderShippedAtOf([{ shippedAt: 1500 }, { shippedAt: { seconds: 2 } }, {}]), 2000);
     eq('nothing shipped → 0', orderShippedAtOf([{}]), 0);
+}
+// ── the ship state RTG shows (2026-10-22): SHIPPED / PART SHIPPED · when · how ──
+{
+    const so = { id: 'SO-APP-1', soId: 'SO60831', status: 'Dispatched' };
+    let st = shipStateOf(so, [{ id: 'a', shippedAt: 1000, shipCarrier: 'UPS', shipService: 'Ground' }, { id: 'b' }, { id: 'c', shippedAt: 3000, shipCarrier: 'OUTSIDE', shippedOutside: {} }]);
+    eq('two of three shipped → PART, the latest shipment and how', [st.state, st.shipped, st.of, st.at, st.how], ['PART', 2, 3, 3000, 'shipped outside the app']);
+    st = shipStateOf(so, [{ id: 'a', shippedAt: 1000, shipCarrier: 'UPS', shipService: 'Ground' }, { id: 'b', currentPhase: 'Closed' }]);
+    eq('the rest closed → SHIPPED, UPS service named', [st.state, st.shipped, st.of, st.how], ['SHIPPED', 1, 1, 'UPS Ground']);
+    eq('nothing shipped → no state', shipStateOf(so, [{ id: 'a' }]).state, '');
+    eq('a stocked order marked Shipped with no stamp → SHIPPED, "marked shipped"', [shipStateOf({ status: 'Shipped', updatedAt: 7 }, [{}]).state, shipStateOf({ status: 'Shipped', updatedAt: 7 }, [{}]).how], ['SHIPPED', 'marked shipped']);
+    eq('how, in words', [shipHowOf({ shipCarrier: 'UPS', shipService: '2nd Day Air' }), shipHowOf({ shipCarrier: 'OUTSIDE' }), shipHowOf({})], ['UPS 2nd Day Air', 'shipped outside the app', '']);
+    ok('orderShippedOf agrees with the state', orderShippedOf(so, [{ shippedAt: 1 }, { currentPhase: 'Closed' }]) && !orderShippedOf(so, [{ shippedAt: 1 }, {}]));
 }
 console.log(`soPackBoard: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

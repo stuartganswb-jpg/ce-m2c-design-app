@@ -84,6 +84,13 @@ eq('Complete still reads FINISHED (unchanged)', doneShop.streams.find(s => s.key
 // The QUICKSHIP vocabulary is status === pickStatus in {'Pending','Picked','Shipped'} (D's
 // setQSStatus writes both together) — never the finishing job's pickStatus values.
 eq('QS: NS_QUEUED = awaiting NetSuite', quickShipStatusOf({ status: 'NS_QUEUED' }).stage, 'AWAITING_NS');
+// a stocked order shipped from the Fulfillment tab carries shippedAt, never status 'Shipped' (2026-10-22)
+eq('QS: shipped by UPS (status still Picked) → SHIPPED', [quickShipStatusOf({ status: 'Picked', packStatus: 'Packed', shippedAt: 5, shipCarrier: 'UPS', shipService: 'Ground', shippedBy: 'Eric' })].map(x => [x.stage, x.detail, x.by])[0], ['SHIPPED', 'UPS Ground', 'Eric']);
+eq('QS: shipped outside the app → SHIPPED, said so', quickShipStatusOf({ status: 'Picked', packStatus: 'Packed', shippedAt: 5, shipCarrier: 'OUTSIDE', shippedOutside: { by: 'Eric' } }).detail, 'shipped outside the app');
+// a mixed order (a shelf throw + a sewn pillow) with no 12.7 decision holds the throw back from the shelf (Shared/launchBoard)
+const heldQs = { orderClass: 'QUICKSHIP', status: 'Picked', packStatus: 'Packed', shippedAt: 5, lines: [{ erp: 'Bell/10T', name: 'Bell throw', qty: 1 }, { erp: 'CUSTOM PILLOW', name: 'Custom Pillow 19x19', qty: 1, madeToOrder: 'SEW', pillow: { requestId: 'q' } }] };
+eq('QS: a line still held on 12.7 → not shipped yet (part of it is still to go)', quickShipStatusOf(heldQs).stage !== 'SHIPPED', true);
+eq('QS: packed, no shipment → PACKED as before', quickShipStatusOf({ status: 'Picked', packStatus: 'Packed' }).stage, 'PACKED');
 eq('QS: Pending = in the pick queue', quickShipStatusOf({ status: 'Pending', pickStatus: 'Pending' }).stage, 'PICKING');
 eq('QS: a pick CLAIM names who has it open', quickShipStatusOf({ status: 'Pending', pickInProgress: { by: 'Andrea', startedAt: 1 } }).by, 'Andrea');
 eq('QS: a pick claim is "open on a tablet", not progress', quickShipStatusOf({ status: 'Pending', pickInProgress: { by: 'Andrea', startedAt: 1 } }).detail, 'open on a pick tablet');

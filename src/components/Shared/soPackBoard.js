@@ -162,13 +162,26 @@ export function soPackBoardOf({ docs = [], linesOf = () => [], refOf = (d) => (d
 // document has shipped moves to the Shipped list — a closed or deleted document counts as done, but at least one must have
 // shipped. The documents decide, the same for every door.
 const isShutDoc = (d) => d.closed === true || d.deleted === true || String(d.currentPhase || '') === 'Closed' || String(d.status || '') === 'Closed';
-export const orderShippedOf = (so, docs = []) => {
-    if (so && String(so.status || '') === 'Shipped') return true;
+const shipMs = (v) => (v && typeof v === 'object' && v.seconds != null ? v.seconds * 1000 : (Number(v) || 0));
+/** How a document left, in words: "UPS Ground", "shipped outside the app", or ''. */
+export const shipHowOf = (d) => (!d ? '' : (d.shippedOutside || d.shipCarrier === 'OUTSIDE') ? 'shipped outside the app' : (d.shipService ? `UPS ${d.shipService}` : String(d.shipCarrier || '')));
+/**
+ * An order's shipping, from its documents — the SO Pack board and RTG read the same answer (Stuart 2026-10-22: "on RTG
+ * should show status as shipped"). → { state: 'SHIPPED' | 'PART' | '', shipped, of, at (the latest shipment, ms), how }.
+ * A closed document is out of the count; a record the WMS marked Shipped (Mark Shipped) with no stamp is SHIPPED.
+ */
+export const shipStateOf = (so, docs = []) => {
     const list = (docs || []).filter(Boolean);
-    return list.some(d => !!d.shippedAt) && list.every(d => !!d.shippedAt || isShutDoc(d));
+    const shipped = list.filter(d => !!d.shippedAt);
+    const open = list.filter(d => !d.shippedAt && !isShutDoc(d));
+    if (!shipped.length) {
+        return so && String(so.status || '') === 'Shipped'
+            ? { state: 'SHIPPED', shipped: 0, of: 0, at: shipMs(so.shippedAt) || shipMs(so.updatedAt), how: 'marked shipped' }
+            : { state: '', shipped: 0, of: open.length, at: 0, how: '' };
+    }
+    const last = [...shipped].sort((a, b) => shipMs(b.shippedAt) - shipMs(a.shippedAt))[0];
+    return { state: open.length ? 'PART' : 'SHIPPED', shipped: shipped.length, of: shipped.length + open.length, at: shipMs(last.shippedAt), how: shipHowOf(last) };
 };
+export const orderShippedOf = (so, docs = []) => (so && String(so.status || '') === 'Shipped') || shipStateOf(so, docs).state === 'SHIPPED';
 /** When the order left — its latest document's shipment (ms; 0 when none). */
-export const orderShippedAtOf = (docs = []) => Math.max(0, ...(docs || []).filter(Boolean).map(d => {
-    const v = d.shippedAt;
-    return v && typeof v === 'object' && v.seconds != null ? v.seconds * 1000 : (Number(v) || 0);
-}));
+export const orderShippedAtOf = (docs = []) => Math.max(0, ...(docs || []).filter(Boolean).map(d => shipMs(d.shippedAt)));

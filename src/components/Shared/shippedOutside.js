@@ -68,6 +68,27 @@ export const nsShipStateOf = (so, ifs = []) => {
     return { ...base, state: 'OPEN', line: '' };
 };
 
+// ── BILLED, OR NOT (Stuart 2026-10-22: "on RTG should show status as shipped, but leave the billed open so that we can easily
+// find these, we do have occasions where they forget to bill") — what NetSuite's sales order status says once it has gone.
+/** → { billed: true | false | null, word } — null when the status says nothing about billing. */
+export const billStateOf = (status) => {
+    const s = statusWordOf(status);
+    if (!s) return null;
+    if (s === 'Billed') return { billed: true, word: 'billed ✓', status: s };
+    if (/^Pending Billing/.test(s)) return { billed: false, word: 'NOT BILLED', status: s };
+    if (s === 'Pending Fulfillment' || s === 'Partially Fulfilled') return { billed: false, word: `NetSuite: ${s} — not fulfilled there`, status: s };
+    if (s === 'Closed' || s === 'Cancelled') return { billed: null, word: `NetSuite: ${s.toLowerCase()}`, status: s };
+    return { billed: null, word: `NetSuite: ${s}`, status: s };
+};
+/** The status NetSuite gave for an order, by id or number, out of indexSoStatus. */
+export const soStatusFor = (key, idx) => (!key || !idx ? '' : ((key.nsId && idx.byId[key.nsId]) || (key.tran && idx.byTran[key.tran]) || ''));
+/** Status rows (soStatusSqlOf) → { byId: {id → status}, byTran: {tran → status} }. */
+export const indexSoStatus = (rows = []) => {
+    const byId = {}, byTran = {};
+    (rows || []).forEach(r => { const st = S(r.st); if (S(r.id)) byId[S(r.id)] = st; if (S(r.tranid)) byTran[S(r.tranid).toUpperCase()] = st; });
+    return { byId, byTran };
+};
+
 /** The answers indexed → { byId: {nsId → check}, byTran: {tran → check} }. */
 export const indexShipChecks = (soRows = [], ifRows = []) => {
     const ifsBySo = {};

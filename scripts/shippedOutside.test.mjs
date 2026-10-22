@@ -1,6 +1,6 @@
 // Shipped outside the app (Stuart 2026-10-21).   node scripts/shippedOutside.test.mjs
 // The 26 left on the WMS Fulfillment tab on 10-21, as NetSuite answered for them.
-import { soKeyOf, soStatusSqlOf, fulfilmentsSqlOf, statusWordOf, nsDateMs, nsShipStateOf, indexShipChecks, checkFor, sameOrderDocsOf, outsideShipPatchOf, outsideShipConfirmOf } from '../src/components/Shared/shippedOutside.js';
+import { soKeyOf, soStatusSqlOf, fulfilmentsSqlOf, statusWordOf, nsDateMs, nsShipStateOf, indexShipChecks, checkFor, sameOrderDocsOf, outsideShipPatchOf, outsideShipConfirmOf, billStateOf, indexSoStatus, soStatusFor } from '../src/components/Shared/shippedOutside.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g === w) { pass++; return; } fail++; console.log(`✗ ${n}\n    got  ${g}\n    want ${w}`); };
@@ -70,6 +70,18 @@ ok('nothing undefined (Firestore refuses it)', !JSON.stringify(p).includes('unde
 eq('no date from NetSuite → when it was marked', outsideShipPatchOf({ check: { ...check, shipDate: 0, ifs: [] }, by: 'Eric', now }).shippedAt, now);
 const words = outsideShipConfirmOf({ check, docs: q.slice(0, 3), refOf: (d) => d.id });
 ok('the confirm names the order, NetSuite, every piece and what is not done', /Mark SO60831 shipped outside the app/.test(words) && /NetSuite: Billed · IF74316 — left Oct 9/.test(words) && /3 packed pieces/.test(words) && /• WO-SO60831-S11/.test(words) && /nothing is sent to NetSuite/.test(words), words);
+
+// ── billed, or not (RTG, 2026-10-22: "we do have occasions where they forget to bill") ──
+eq('Billed → billed ✓', billStateOf('Sales Order : Billed'), { billed: true, word: 'billed ✓', status: 'Billed' });
+eq('Pending Billing → NOT BILLED', billStateOf('Sales Order : Pending Billing').billed, false);
+eq('…partly fulfilled too', billStateOf('Sales Order : Pending Billing/Partially Fulfilled').word, 'NOT BILLED');
+eq('the app shipped it but NetSuite has no fulfilment (SO60838)', billStateOf('Sales Order : Pending Fulfillment'), { billed: false, word: 'NetSuite: Pending Fulfillment — not fulfilled there', status: 'Pending Fulfillment' });
+eq('closed → says nothing about billing', billStateOf('Sales Order : Closed').billed, null);
+eq('no status → null', billStateOf(''), null);
+const sidx = indexSoStatus([{ id: 903782, tranid: 'SO60169', st: 'Sales Order : Billed' }, { id: '939279', tranid: 'so60838', st: 'Sales Order : Pending Fulfillment' }]);
+eq('found by id', soStatusFor({ nsId: '903782', tran: '' }, sidx), 'Sales Order : Billed');
+eq('found by number, any case', soStatusFor({ nsId: '', tran: 'SO60838' }, sidx), 'Sales Order : Pending Fulfillment');
+eq('not asked → empty', soStatusFor({ nsId: '1', tran: 'SO1' }, sidx), '');
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
