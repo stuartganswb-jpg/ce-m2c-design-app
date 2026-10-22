@@ -2584,9 +2584,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (line.isPole && job.hasCustomSibling && !customPartsReady(job)) {
             return alert(`${line.erp || 'The pole'} is ${job.customFabStatus === 'Sent to Plating' ? 'AT THE PLATER' : `not finished yet (${job.customFabStatus || 'Pending'})`}.\n\nPack the ready parts now — the pole ticks when it is received and put away on the Plating tab, and the box closes then.`);
         }
-        // EVERY PACKED PIECE GOES IN A NUMBERED BOX (Shared/orderBoxes): the tick names the box that is open.
-        const intoBox = usesBoxes(job) ? openBoxNoOf(job) : null;
-        if (usesBoxes(job) && !intoBox) return alert('Open a box first — tap one of the order\'s boxes, or add one with + New box.\n\nEvery packed piece goes in a numbered box.');
+        // EVERY PACKED PIECE GOES IN A NUMBERED BOX (Shared/orderBoxes): the tick names the box that is open — except a CPQ
+        // document PACKAGED here at Packaging Prep, whose ORDER is boxed on SO Pack (Shared/soPackStep, 10-17): its lines tick with
+        // no box, and SO Pack puts them in ("packed lines not in a box yet — open a box and put them in"). Open on SO Pack, the
+        // tick names the order's open box as before. (Eric's App Imp card 2026-10-22: "The custom orders are still asking for
+        // Boxes on Pack Prep … There is no way to add a box … we cannot progress these orders.")
+        const boxedHere = usesBoxes(job) && (!packagesForSoPack(job) || !!soPackOrderOf(job));
+        const intoBox = boxedHere ? openBoxNoOf(job) : null;
+        if (boxedHere && !intoBox) return alert('Open a box first — tap one of the order\'s boxes, or add one with + New box.\n\nEvery packed piece goes in a numbered box.');
         const stampAt = Date.now(), by = operator?.name || 'Packer';
         const patch = { [`packedLines.${line.key}`]: tickIntoBox(line, intoBox, { by, at: stampAt }) };
         if (line.isPole && !isQsOrder(job) && job.orderType !== 'stock') {
