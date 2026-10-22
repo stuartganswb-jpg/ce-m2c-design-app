@@ -24,6 +24,15 @@ const money = (v, code) => {
     return !code || code === 'USD' ? `$${n}` : `${n} ${code}`;
 };
 
+// UPS sends the arrival as YYYYMMDD. Printed raw it reads as a serial number, not a date, and a
+// person checking whether a container lands before a show should not have to parse it.
+const arrival = (v) => {
+    const t = String(v || '');
+    if (!/^\d{8}$/.test(t)) return t;
+    const d = new Date(Number(t.slice(0, 4)), Number(t.slice(4, 6)) - 1, Number(t.slice(6, 8)));
+    return Number.isNaN(d.getTime()) ? t : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+};
+
 const BRANDS = [['ce', 'Classical Elements'], ['uniquity', "Uniq'uity (MC America)"], ['m2c', 'M2C Studio'], ['leyla', 'Leyla']];
 
 export default function UpsLiveRatePanel() {
@@ -213,7 +222,7 @@ export default function UpsLiveRatePanel() {
                                         <td style={{ padding: '7px 0', textAlign: 'right', fontWeight: 600, color: s.negotiated === null ? 'var(--ink-soft)' : '#3a7d44' }}>{money(s.negotiated, s.negotiatedCurrency)}</td>
                                         <td style={{ padding: '7px 0', textAlign: 'right', color: 'var(--ink-soft)' }}>
                                             {s.businessDays || '—'}
-                                            {s.arrivesOn ? <span style={{ display: 'block', fontSize: '11px' }}>{s.arrivesOn}</span> : null}
+                                            {s.arrivesOn ? <span style={{ display: 'block', fontSize: '11px' }}>{arrival(s.arrivesOn)}</span> : null}
                                         </td>
                                     </tr>
                                 ))}
