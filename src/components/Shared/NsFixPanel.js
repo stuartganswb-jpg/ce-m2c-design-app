@@ -3,14 +3,17 @@
 //   · NsFixPanel — 11.1 shows it at the top; the chip opens it anywhere else.
 //   · NsFixChip  — RTG and the WMS header: "NetSuite: 3 to fix", red, one tap opens the list.
 // The read is three small listeners (the queue's last fortnight, every refused entry, every failed direct call), shared by
-// the chip and the list it opens — never one per row.
+// the chip and the list it opens — never one per row. When the list is open it asks NetSuite once for the numbers behind
+// every row (the record's SO / PO / estimate number and status, item codes, bin names, the record's own lines) — Stuart
+// 2026-10-21: "there are no transactions #'s to chase down as well as little description of what went wrong".
 import React, { useEffect, useMemo, useState } from 'react';
 import { db } from '../../firebase';
 import { collection, query, where, onSnapshot, doc, updateDoc, getDoc } from 'firebase/firestore';
 import { nsProxyFetch } from './nsProxy';
 import {
     fixRowsOf, resendPatchOf, resendWriteBackOf, waitingBehindOf, rewaitPatchOf, fixMarkOf, tranLookupSql, fixChipTextOf,
-    FIX_HOW, FIX_WINDOW_DAYS, NS_FIX_OWNER, DIRECT_NO_RESEND,
+    FIX_HOW, FIX_WINDOW_DAYS, NS_FIX_OWNER, DIRECT_NO_RESEND, DIRECT_KEPT_NOTHING,
+    readBackIdsOf, readBackSqlOf, indexReadBackRows, nsUiUrlOf, lineWordsOf, lineNowOf, rowCopyTextOf,
 } from './nsFixList';
 
 const DAY = 86400000;
@@ -40,11 +43,42 @@ export function useNsFixes({ enabled = true } = {}) {
     return { ...result, outbox, err };
 }
 
+const SUITEQL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
+
+/** The NetSuite numbers behind the rows, read once per set of ids (one query per kind, one after another). → { rb, err } */
+function useNsReadBack(rows) {
+    const ids = useMemo(() => readBackIdsOf(rows), [rows]);
+    const key = JSON.stringify(ids);
+    const [state, setState] = useState({ key: '', rb: null, err: '' });
+    useEffect(() => {
+        let gone = false;
+        const sql = readBackSqlOf(JSON.parse(key));
+        (async () => {
+            const got = {}, errs = [];
+            for (const [k, q] of Object.entries(sql)) {
+                if (!q) continue;
+                try {
+                    const resp = await nsProxyFetch({ targetUrl: SUITEQL, method: 'POST', payload: { q } });
+                    const data = await resp.json().catch(() => ({}));
+                    if (!resp.ok) throw new Error(String((data && (data.title || data.error)) || `HTTP ${resp.status}`).slice(0, 120));
+                    got[k] = data.items || [];
+                } catch (e) { errs.push(`${k}: ${e.message || e}`); }
+                if (gone) return;
+            }
+            if (!gone) setState({ key, rb: indexReadBackRows(got), err: errs.join(' · ') });
+        })();
+        return () => { gone = true; };
+    }, [key]);
+    return { rb: state.rb, err: state.err, reading: state.key !== key };   // while a new set is read, the last answers stay up
+}
+
+const linkBtn = { background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textDecoration: 'underline' };
 const btn = (color) => ({ padding: '6px 11px', background: 'transparent', border: `1px solid ${color}`, color, cursor: 'pointer', ...mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', whiteSpace: 'nowrap' });
 
 /** One row and its three ways off the list. */
-function FixRow({ r, outbox, currentUser, canAct, onNote }) {
+function FixRow({ r, outbox, currentUser, canAct, onNote, rb }) {
     const [open, setOpen] = useState(false);
+    const [showSent, setShowSent] = useState(false);
     const [busy, setBusy] = useState(false);
     const by = currentUser || '';
     const tone = r.state === 'STUCK' ? ORANGE : RED;
@@ -85,6 +119,20 @@ function FixRow({ r, outbox, currentUser, canAct, onNote }) {
         await updateDoc(markDoc(), { [markField]: fixMarkOf({ how: FIX_HOW.NOT_NEEDED, by, why }) });
         onNote(`✕ ${r.label} — marked not needed.`);
     });
+    const copy = async () => {
+        const text = rowCopyTextOf(r, rb);
+        try { await navigator.clipboard.writeText(text); onNote(`📋 ${r.label} — copied.`); } catch (e) { window.prompt('Copy this:', text); }
+    };
+
+    // What it was for: the NetSuite record (its number, status and who, a link that opens it) and the app's own record.
+    const rec = r.nsRecord;
+    const t = rec && rec.id && rb ? rb.tx[rec.id] : null;
+    const recUrl = rec && rec.id ? nsUiUrlOf(rec.rec, rec.id) : '';
+    const recName = rec ? (t ? `${rec.label} ${t.tranid || `#${rec.id}`}` : (rec.id ? (rb && rb.items[rec.id] ? `${rec.label} ${rb.items[rec.id]}` : (rb && rb.customers[rec.id] ? `${rec.label} ${rb.customers[rec.id]}` : `${rec.label} #${rec.id}`)) : `new ${rec.label}`)) : '';
+    const forWho = (t && t.who) || (r.customerId && rb && rb.customers[r.customerId]) || '';
+    const sent = (r.lines || []).filter(l => !l.skipped);
+    const isPointed = (l) => r.pointed && l.idx === r.pointed.idx;
+    const isCode = (l) => (r.codeItems || []).includes(l.item);
 
     return (
         <div style={{ padding: '10px 14px', borderTop: '1px solid var(--paper-2)', borderLeft: `3px solid ${tone}`, background: r.carried ? '#fdf6f5' : '#fff' }}>
@@ -95,16 +143,46 @@ function FixRow({ r, outbox, currentUser, canAct, onNote }) {
                 <span>{r.type}{r.source === 'DIRECT' ? ' · sent straight to NetSuite' : ''}</span>
             </div>
             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)', margin: '4px 0 2px' }}>{r.label}</div>
+            {(rec || (r.appRecords || []).length > 0) && (
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'baseline', margin: '2px 0 4px', fontFamily: 'var(--sans)', fontSize: '0.84rem', color: 'var(--ink)' }}>
+                    {rec && <span>NetSuite: {recUrl ? <a href={recUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--ink)', fontWeight: 600 }}>{recName} ↗</a> : <b>{recName}</b>}
+                        {t && t.st ? <span style={{ color: 'var(--ink-soft)' }}> · {t.st}</span> : null}
+                        {forWho ? <span style={{ color: 'var(--ink-soft)' }}> · {forWho}</span> : null}
+                        {rec.makes ? <span style={{ color: 'var(--ink-soft)' }}> → {rec.id ? 'its' : 'a'} {rec.makes}</span> : null}
+                        {!rec.id ? <span style={{ color: 'var(--ink-soft)' }}> (NetSuite did not create it)</span> : null}</span>}
+                    {(r.appRecords || []).length > 0 && <span style={{ ...mono, color: 'var(--ink-soft)' }}>app: {r.appRecords.map(a => a.id).join(', ')}</span>}
+                </div>
+            )}
             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.88rem', color: tone, fontWeight: 600 }}>{r.state === 'STUCK' ? '⏳' : '⛔'} {r.words}</div>
+            {r.pointed && (
+                <div style={{ fontFamily: 'var(--sans)', fontSize: '0.84rem', color: 'var(--ink)', marginTop: '3px' }}>
+                    NetSuite stopped at {r.pointed.orderLine != null ? `order line ${r.pointed.orderLine}` : `line ${r.pointed.n} of ${sent.length}`}: <b>{lineWordsOf(r.pointed, rb, r)}</b>
+                    {lineNowOf(r, r.pointed, rb) ? <span style={{ color: 'var(--ink-soft)' }}> · {lineNowOf(r, r.pointed, rb)}</span> : null}
+                </div>
+            )}
             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.84rem', color: 'var(--ink-soft)', marginTop: '2px' }}>→ {r.fix}</div>
             {r.laterHint && <div style={{ ...mono, color: GREEN, marginTop: '4px' }}>✓ The same thing went through later{r.laterHint.ref ? ` as ${r.laterHint.ref}` : ''}{r.laterHint.who ? ` (${r.laterHint.who})` : ''} · {whenOf(r.laterHint.at, true)} — if that covers it, mark it Not needed.</div>}
             {r.source === 'DIRECT' && <div style={{ ...mono, color: 'var(--ink-soft)', marginTop: '4px' }}>{DIRECT_NO_RESEND}</div>}
+            {r.source === 'DIRECT' && r.keptNothing && <div style={{ ...mono, color: ORANGE, marginTop: '4px' }}>{DIRECT_KEPT_NOTHING}</div>}
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px' }}>
                 {canAct && r.canResend && <button disabled={busy} onClick={resend} style={btn('var(--ink)')}>↻ Re-send</button>}
                 {canAct && r.state === 'REFUSED' && <button disabled={busy} onClick={doneInNs} style={btn(GREEN)}>✓ Done in NetSuite</button>}
                 {canAct && r.state === 'REFUSED' && <button disabled={busy} onClick={notNeeded} style={btn('var(--ink-soft)')}>✕ Not needed</button>}
-                {r.detail && <button onClick={() => setOpen(v => !v)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', ...mono, fontSize: '9px', color: 'var(--ink-soft)', textDecoration: 'underline' }}>{open ? 'hide' : 'NetSuite\'s words'}</button>}
+                {sent.length > 0 && <button onClick={() => setShowSent(v => !v)} style={linkBtn}>{showSent ? 'hide what was sent' : `what was sent (${sent.length} line${sent.length === 1 ? '' : 's'})`}</button>}
+                {r.detail && <button onClick={() => setOpen(v => !v)} style={linkBtn}>{open ? 'hide' : 'NetSuite\'s words'}</button>}
+                <button onClick={copy} title="Copy this row — the record, the lines, NetSuite's words — to paste into an email or a NetSuite search" style={linkBtn}>📋 copy</button>
             </div>
+            {showSent && (
+                <div style={{ marginTop: '6px', border: '1px solid var(--paper-2)' }}>
+                    {sent.map(l => (
+                        <div key={l.idx} style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '4px 8px', borderTop: l.idx ? '1px solid var(--paper-2)' : 'none', background: isPointed(l) ? '#fdf3f3' : 'transparent', ...mono, color: isPointed(l) || isCode(l) ? RED : 'var(--ink)' }}>
+                            <span style={{ minWidth: '52px', color: 'var(--ink-soft)' }}>{l.orderLine != null ? `line ${l.orderLine}` : `#${l.n}`}</span>
+                            <span>{lineWordsOf(l, rb, r)}{isCode(l) ? ' — no NetSuite id' : ''}{isPointed(l) ? '  ◀ NetSuite stopped here' : ''}</span>
+                            {lineNowOf(r, l, rb) && <span style={{ color: 'var(--ink-soft)' }}>{lineNowOf(r, l, rb)}</span>}
+                        </div>
+                    ))}
+                </div>
+            )}
             {open && <div style={{ ...mono, color: 'var(--ink-soft)', marginTop: '6px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{r.detail}</div>}
         </div>
     );
@@ -117,6 +195,8 @@ export function NsFixPanel({ currentUser = '', canAct = true, data = null, onClo
     const [note, setNote] = useState('');
     const [showEarlier, setShowEarlier] = useState(false);
     const { rows = [], earlier = [], counts = { open: 0, carried: 0, today: 0, earlier: 0 }, outbox = [], err = '' } = d;
+    const shown = useMemo(() => (showEarlier ? [...rows, ...earlier] : rows), [rows, earlier, showEarlier]);
+    const { rb, err: rbErr, reading } = useNsReadBack(shown);
     return (
         <div style={{ background: '#fff', border: `1px solid ${counts.open ? RED : 'var(--line)'}`, borderRadius: '2px' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap', padding: '14px 18px', background: counts.open ? '#fdf3f3' : 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
@@ -126,16 +206,17 @@ export function NsFixPanel({ currentUser = '', canAct = true, data = null, onClo
                 {onClose && <button onClick={onClose} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', ...mono, color: 'var(--ink-soft)' }}>✕ close</button>}
             </div>
             {err && <div style={{ padding: '8px 18px', ...mono, color: RED }}>Could not read — {err}. What is shown is what could be read.</div>}
+            {rows.length > 0 && (reading || rbErr) && <div style={{ padding: '6px 18px', ...mono, color: rbErr ? ORANGE : 'var(--ink-soft)', borderBottom: '1px solid var(--paper-2)' }}>{reading ? 'Reading the NetSuite numbers…' : `Some NetSuite numbers could not be read (${rbErr}) — ids are shown instead.`}</div>}
             {note && <div style={{ padding: '8px 18px', ...mono, color: GREEN, borderBottom: '1px solid var(--paper-2)' }}>{note}</div>}
             {!rows.length && <div style={{ padding: '14px 18px', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)' }}>Nothing is owed to NetSuite — every write of the last {FIX_WINDOW_DAYS} days went through or was dealt with.</div>}
             <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-                {rows.map(r => <FixRow key={r.key} r={r} outbox={outbox} currentUser={currentUser} canAct={canAct} onNote={setNote} />)}
+                {rows.map(r => <FixRow key={r.key} r={r} outbox={outbox} currentUser={currentUser} canAct={canAct} onNote={setNote} rb={rb} />)}
                 {earlier.length > 0 && (
                     <div style={{ borderTop: '1px solid var(--line)' }}>
                         <button onClick={() => setShowEarlier(v => !v)} style={{ width: '100%', textAlign: 'left', padding: '10px 18px', background: 'var(--paper)', border: 'none', cursor: 'pointer', ...mono, color: 'var(--ink-soft)' }}>
                             {showEarlier ? '▾' : '▸'} {earlier.length} older than {FIX_WINDOW_DAYS} days, never dealt with — not counted above
                         </button>
-                        {showEarlier && earlier.map(r => <FixRow key={r.key} r={r} outbox={outbox} currentUser={currentUser} canAct={canAct} onNote={setNote} />)}
+                        {showEarlier && earlier.map(r => <FixRow key={r.key} r={r} outbox={outbox} currentUser={currentUser} canAct={canAct} onNote={setNote} rb={rb} />)}
                     </div>
                 )}
             </div>

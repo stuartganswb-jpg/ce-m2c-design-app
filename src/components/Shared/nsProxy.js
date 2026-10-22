@@ -9,6 +9,7 @@ import { getToken } from "firebase/app-check";
 import { appCheck, auth, db } from "../../firebase";
 import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { auditPageOf, auditUserOf } from "./auditContext";
+import { directSentOf } from "./nsFixList";
 
 export const NS_PROXY_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
@@ -59,7 +60,7 @@ const logDirectWrite = (body, res) => {
     let copy = null;
     try { copy = res.clone(); } catch (e) { copy = null; }
     (async () => {
-        let nsId = null, error = "";
+        let nsId = null, error = "", errorPath = "";
         try {
             const loc = copy && copy.headers ? (copy.headers.get("location") || "") : "";
             const txt = copy ? await copy.text() : "";
@@ -67,6 +68,7 @@ const logDirectWrite = (body, res) => {
             try { j = JSON.parse(txt); } catch (e) { j = null; }
             nsId = (j && (j.id || j.internalId || (j.result && j.result.id))) || (loc.match(/\/(\d+)\s*$/) || [])[1] || null;
             if (!res.ok) error = (j && ((j["o:errorDetails"] && j["o:errorDetails"][0] && j["o:errorDetails"][0].detail) || j.title || j.error)) || txt.slice(0, 300);
+            if (!res.ok) errorPath = String((j && j["o:errorDetails"] && j["o:errorDetails"][0] && j["o:errorDetails"][0]["o:errorPath"]) || "");
             else if (j && j.success === false) error = String(j.error || j.message || "the RESTlet answered success:false");
         } catch (e) { /* the record still says what was called and the HTTP status */ }
         const url = String(body.targetUrl || "");
@@ -83,6 +85,9 @@ const logDirectWrite = (body, res) => {
                 recordKind: restlet ? "restlet" : ((url.match(/\/record\/v1\/([a-zA-Z]+)/) || [])[1] || ""),
                 ok, httpStatus: res.status || null, nsId: nsId ? String(nsId) : null, error: String(error || "").slice(0, 500),
                 payloadQty: Number(body.payload && body.payload.quantity) || null,
+                // A refused call keeps what it sent and the line NetSuite pointed at, so "NetSuite — to fix today" can say
+                // which item, bin and quantity it was (Stuart 2026-10-21). A call NetSuite took keeps only the above.
+                ...(ok ? {} : { sent: directSentOf(body), errorPath: errorPath.slice(0, 200) }),
             },
         });
     })().catch(() => { /* an audit line must never break a NetSuite call */ });
