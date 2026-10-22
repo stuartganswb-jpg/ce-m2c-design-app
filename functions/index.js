@@ -1662,7 +1662,10 @@ exports.portalConfigFlows = onCall({ cors: true }, async (request) => {
         // loaded model, which "look funny"), else the assembly's own picture (on the record, as HQ keeps it).
         out.push({ id: f.id, name: String(f.name || asm.itemName || 'Product').slice(0, 120), picture: String(f.portalPicture || asm.finalImageUrl || ''), preview: ids.preview.includes(f.id) });
     }
-    out.sort((a, b) => a.name.localeCompare(b.name));
+    // In the catalog's order — each flow's portalOrder, set in System Admin (Stuart 2026-10-22: "should match the table of contents") —
+    // then A–Z (portalSession.byPortalOrder). The number stays on the server; the portal gets the list in order.
+    const flowOf = new Map(flows.map((f) => [f.id, f]));
+    out.sort((a, b) => portalSession.byPortalOrder({ portalOrder: (flowOf.get(a.id) || {}).portalOrder, name: a.name }, { portalOrder: (flowOf.get(b.id) || {}).portalOrder, name: b.name }));
     return { flows: out };
 });
 

@@ -339,7 +339,8 @@ footer.portal a { color: var(--ink-soft); }
 .cf-products { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
 .cf-product { text-align: left; background: var(--card); border: 1px solid var(--line); padding: 0 0 16px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; transition: border-color 0.15s; }
 .cf-product:hover { border-color: var(--brass); }
-.cf-product-img { height: 160px; background: var(--paper) center / contain no-repeat; border-bottom: 1px solid var(--line-soft); }
+/* white behind the picture: the catalog's pictures are on white, so a strip wider than the card shows whole with no bands (2026-10-22) */
+.cf-product-img { height: 160px; background: #fff center / contain no-repeat; border-bottom: 1px solid var(--line-soft); }
 .cf-product-name { font-family: var(--serif); font-size: 1.25rem; font-weight: 500; padding: 0 16px; color: var(--ink); }
 .cf-product .cf-preview { margin: 0 16px; align-self: flex-start; }
 .cf-product-go { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--brass); padding: 0 16px; }

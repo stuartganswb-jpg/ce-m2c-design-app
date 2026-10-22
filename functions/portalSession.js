@@ -556,6 +556,12 @@ function picturesThatFit(pictures, baseBytes, limit = REQUEST_DOC_LIMIT) {
 // ── IN LINE, OR BEHIND ───────────────────────────────────────────────────────────────────────
 // Functions are deployed by hand, the portal site on every push: after an engine change this server runs
 // the OLD engine until it is deployed. Two halves that disagree must not quote — said, never guessed.
+// THE ORDER THE CONFIGURE TAB LISTS PRODUCTS IN (Stuart 2026-10-22: "the order of the flows from left to right should match the table
+// of contents"): the flow's portalOrder (System Admin → CPQ Flows, the Portal picture box) — 1 first — then the name; a flow with no
+// number follows those that have one, A–Z as before.
+const portalOrderOf = (flow) => { const v = flow && flow.portalOrder; const n = (v === '' || v == null) ? NaN : Number(v); return Number.isFinite(n) ? n : Infinity; };
+const byPortalOrder = (a, b) => (portalOrderOf(a) - portalOrderOf(b)) || String((a && a.name) || '').localeCompare(String((b && b.name) || ''));
+
 const inLine = (serverStamp, siteStamp) => !!serverStamp && !!siteStamp && !!serverStamp.closureHash && serverStamp.closureHash === siteStamp.closureHash && serverStamp.engineVersion === siteStamp.engineVersion;
 
-module.exports = { loadEngine, worldFor, trvFamilyOf, levelsFor, portalFinishesOf, stateFromClient, uiFromClient, flowIdsFor, viewOf, requestLineOf, pictureOf, picturesThatFit, PICTURE_MAX, REQUEST_DOC_LIMIT, trvSelShapeOf, trvSelForOffer, inLine, Refused, REFUSAL_WORDS, SHOWABLE };
+module.exports = { loadEngine, worldFor, trvFamilyOf, levelsFor, portalFinishesOf, stateFromClient, uiFromClient, flowIdsFor, viewOf, requestLineOf, pictureOf, picturesThatFit, PICTURE_MAX, REQUEST_DOC_LIMIT, trvSelShapeOf, trvSelForOffer, inLine, Refused, REFUSAL_WORDS, SHOWABLE, portalOrderOf, byPortalOrder };

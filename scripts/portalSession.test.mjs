@@ -656,6 +656,17 @@ ok(`the set-ups take each road — lines ${t.lines}, refused ${JSON.stringify(t.
 
 eq('in line: the server\'s copy and the site\'s bundle carry the same engine and the same files — anything else is behind', [P.inLine(engine.stamp, { ...engine.stamp }), P.inLine(engine.stamp, { ...engine.stamp, closureHash: 'x' }), P.inLine(engine.stamp, { ...engine.stamp, engineVersion: 'y' }), P.inLine(engine.stamp, null), P.inLine(null, engine.stamp), P.inLine({ engineVersion: '', closureHash: '' }, { engineVersion: '', closureHash: '' })], [true, false, false, false, false, false]);
 
+// THE CONFIGURE TAB IN THE CATALOG'S ORDER (Stuart 2026-10-22: "the order of the flows from left to right should match the table of
+// contents, H1-75S, H1-75, H1-1, H1-138, H1-2TRV") — each flow's portalOrder, then A–Z; a flow with no number follows.
+{
+    const flows = [{ name: 'H1-1', portalOrder: 3 }, { name: 'H1-138', portalOrder: '4' }, { name: 'H1-2TRV', portalOrder: 5 }, { name: 'H1-75', portalOrder: 2 }, { name: 'H1-75S', portalOrder: 1 },
+        { name: 'BRIMAR' }, { name: 'A-NEW', portalOrder: '' }, { name: 'ZZ', portalOrder: null }, { name: 'H5-HEX', portalOrder: 'x' }];
+    eq('numbered first in their order, then the rest A–Z (blank, missing or not a number read as none)', [...flows].sort(P.byPortalOrder).map((f) => f.name),
+        ['H1-75S', 'H1-75', 'H1-1', 'H1-138', 'H1-2TRV', 'A-NEW', 'BRIMAR', 'H5-HEX', 'ZZ']);
+    eq('…two with one number go A–Z between themselves', [{ name: 'B', portalOrder: 1 }, { name: 'A', portalOrder: 1 }].sort(P.byPortalOrder).map((f) => f.name), ['A', 'B']);
+    eq('…and nothing numbered is today\'s A–Z exactly', [{ name: 'H1-75S' }, { name: 'H1-1' }, { name: 'H1-75' }].sort(P.byPortalOrder).map((f) => f.name), ['H1-1', 'H1-75', 'H1-75S']);
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

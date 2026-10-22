@@ -2407,6 +2407,17 @@ const AdminTab = ({ currentUser, activeBrand, TABS, writeLog }) => {   // writeL
                                     assembly's own render. Saved the moment it is chosen; read from the live flow, not part of Save and Cascade. */}
                                 {(() => {
                                     const pic = String((cpqFlows.find(f => f.id === activeFlowId) || {}).portalPicture || '');
+                                    // the place this flow takes on the portal's Configure tab (1 first; blank = after the numbered ones, A–Z) — 2026-10-22
+                                    const portalOrderRaw = (cpqFlows.find(f => f.id === activeFlowId) || {}).portalOrder;
+                                    const portalOrder = (portalOrderRaw === '' || portalOrderRaw == null || !Number.isFinite(Number(portalOrderRaw))) ? null : Number(portalOrderRaw);
+                                    const savePortalOrder = async (raw) => {
+                                        const v = String(raw == null ? '' : raw).trim();
+                                        if (v !== '' && !(Number(v) >= 1)) { alert('The order is a number, 1 or more — or leave it blank.'); return; }
+                                        const next = v === '' ? null : Math.round(Number(v));
+                                        if (next === portalOrder) return;
+                                        try { await updateDoc(doc(db, 'cpq_flows', activeFlowId), { portalOrder: next }); }
+                                        catch (err) { alert('Save failed: ' + (err.message || err)); }
+                                    };
                                     const asmPic = String((masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId) || {}).finalImageUrl || '');
                                     const shown = pic || asmPic;
                                     return (
@@ -2425,6 +2436,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS, writeLog }) => {   // writeL
                                                 <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePortalPictureUpload} disabled={isUploadingPortalPic} style={{ display: 'none' }} />
                                             </label>
                                             {pic && <button onClick={handlePortalPictureRemove} style={{ flexShrink: 0, padding: '10px 14px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Remove</button>}
+                                            {/* THE ORDER ON THE PORTAL (Stuart 2026-10-22: "the order of the flows from left to right should match the table of contents") —
+                                                functions portalConfigFlows lists by it. Saved when the box is left, read from the live flow; not part of Save and Cascade. */}
+                                            <label title="Where this product sits on the portal's Configure tab, left to right: 1 first. Blank = after the numbered ones, A–Z. Saved when you leave the box." style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)' }}>
+                                                Order on the portal
+                                                <input key={`${activeFlowId}:${portalOrder ?? ''}`} type="number" min="1" step="1" defaultValue={portalOrder ?? ''} placeholder="—"
+                                                    onBlur={(e) => savePortalOrder(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                    style={{ width: '64px', padding: '8px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--mono)', fontSize: '0.85rem', background: '#fff' }} />
+                                            </label>
                                         </div>
                                     );
                                 })()}
