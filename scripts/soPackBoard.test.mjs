@@ -1,6 +1,6 @@
 // 🧪 SO Pack, line by line — ordered beside packed, the box, and the stamps that are about that line (Stuart 2026-10-06).
 //    node scripts/soPackBoard.test.mjs
-import { soPackBoardOf, lineStampsOf, lineBoxOf, boxSlotOf, LINE_STATE, ORDER_VERDICT } from '../src/components/Shared/soPackBoard.js';
+import { soPackBoardOf, lineStampsOf, lineBoxOf, boxSlotOf, LINE_STATE, ORDER_VERDICT, orderShippedOf, orderShippedAtOf } from '../src/components/Shared/soPackBoard.js';
 import { packLinesOf } from '../src/components/Shared/pickLines.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
@@ -114,6 +114,21 @@ eq('an Order Entry order, by its own lines (keys stay the sold line numbers)', o
     eq('every document packaged → TO BOX', board([pk(ep5), pk(s11), pk(unf)]).verdict, ORDER_VERDICT.TO_BOX);
     eq('once the order is packed here → ALL PACKED', board([ep5, s11, unf].map(d => ({ ...pk(d), packStage: 'ORDER_PACKED' }))).verdict, ORDER_VERDICT.ALL_PACKED);
     eq('packed the old way (no stage) → ALL PACKED, as before', board([ep5, s11, unf].map(d => ({ ...d, currentPhase: 'Complete', packStatus: 'Packed' }))).verdict, ORDER_VERDICT.ALL_PACKED);
+}
+// ── shipped leaves the open list (2026-10-22) — SO60831 as it stood on 10-21: three documents, one shipped by IF74316 ──
+{
+    const so = { id: 'SO-APP-QUOTE-1', soId: 'SO60831', status: 'Dispatched' };
+    const ep5 = { id: 'WO-SO60831-EP5', packStatus: 'Packed' }, s11 = { id: 'WO-SO60831-S11', packStatus: 'Packed' }, unf = { id: 'WO-SO60831-UNFINISHED', packStatus: 'Packed' };
+    ok('packed, none shipped → still open', !orderShippedOf(so, [ep5, s11, unf]));
+    ok('one of three shipped → still open', !orderShippedOf(so, [ep5, s11, { ...unf, shippedAt: 1 }]));
+    ok('all three shipped ("Shipped outside the app") → Shipped', orderShippedOf(so, [{ ...ep5, shippedAt: 1 }, { ...s11, shippedAt: 1 }, { ...unf, shippedAt: 2 }]));
+    ok('a closed document counts as done', orderShippedOf(so, [{ ...ep5, shippedAt: 1 }, { ...s11, currentPhase: 'Closed' }]));
+    ok('…but all closed and none shipped is not shipped', !orderShippedOf(so, [{ ...ep5, closed: true }, { ...s11, currentPhase: 'Closed' }]));
+    ok('a Firestore timestamp counts', orderShippedOf(so, [{ ...ep5, shippedAt: { seconds: 1790000000 } }]));
+    ok('the record saying Shipped is enough', orderShippedOf({ ...so, status: 'Shipped' }, [ep5]));
+    ok('no documents → not shipped', !orderShippedOf(so, []));
+    eq('when it left: the latest shipment (a timestamp read as ms)', orderShippedAtOf([{ shippedAt: 1500 }, { shippedAt: { seconds: 2 } }, {}]), 2000);
+    eq('nothing shipped → 0', orderShippedAtOf([{}]), 0);
 }
 console.log(`soPackBoard: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

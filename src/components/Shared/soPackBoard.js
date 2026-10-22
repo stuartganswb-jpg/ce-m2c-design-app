@@ -154,3 +154,21 @@ export function soPackBoardOf({ docs = [], linesOf = () => [], refOf = (d) => (d
     const verdict = !live ? ORDER_VERDICT.NONE : done === live ? (toBox ? ORDER_VERDICT.TO_BOX : ORDER_VERDICT.ALL_PACKED) : anyWaiting ? ORDER_VERDICT.WAITING : ORDER_VERDICT.READY;
     return { rows, pieces, lines: { all: counted.length, packed: counted.filter(r => r.state === LINE_STATE.PACKED).length }, verdict };
 }
+
+// ── SHIPPED LEAVES THE OPEN LIST (Stuart 2026-10-22, "go ahead on so pack screen") ───────────────────────────────────────
+// A configured order left SO Pack only when its sales order's status said Shipped or Closed, and a shipment stamps the
+// DOCUMENTS (`shippedAt` — a UPS shipment, a document riding in a shipped box, "Shipped outside the app"), never that status.
+// So an order that had gone sat on the board as "ALL PACKED — READY TO SHIP": fourteen of them on 10-21. An order whose every
+// document has shipped moves to the Shipped list — a closed or deleted document counts as done, but at least one must have
+// shipped. The documents decide, the same for every door.
+const isShutDoc = (d) => d.closed === true || d.deleted === true || String(d.currentPhase || '') === 'Closed' || String(d.status || '') === 'Closed';
+export const orderShippedOf = (so, docs = []) => {
+    if (so && String(so.status || '') === 'Shipped') return true;
+    const list = (docs || []).filter(Boolean);
+    return list.some(d => !!d.shippedAt) && list.every(d => !!d.shippedAt || isShutDoc(d));
+};
+/** When the order left — its latest document's shipment (ms; 0 when none). */
+export const orderShippedAtOf = (docs = []) => Math.max(0, ...(docs || []).filter(Boolean).map(d => {
+    const v = d.shippedAt;
+    return v && typeof v === 'object' && v.seconds != null ? v.seconds * 1000 : (Number(v) || 0);
+}));

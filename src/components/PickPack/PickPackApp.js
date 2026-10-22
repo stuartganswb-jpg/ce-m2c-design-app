@@ -78,7 +78,7 @@ import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
 import { packingListOf, packedQtyOf } from '../Shared/packingList';
 import { isBlindShipment, withBlindPacking } from '../Shared/blindShip';
-import { soPackBoardOf, lineBoxOf, LINE_STATE, ORDER_VERDICT } from '../Shared/soPackBoard';
+import { soPackBoardOf, lineBoxOf, LINE_STATE, ORDER_VERDICT, orderShippedOf, orderShippedAtOf } from '../Shared/soPackBoard';
 import { PACK_STAGE, orderAwaitsPackOf, orderPackBlockerOf, orderPackedPatchOf, docOrderPackedPatchOf, awaitsOrderPack } from '../Shared/soPackStep';
 import { fetchShipClearance, shipHoldStampOf, shipClearedStampOf, shipReleaseStampOf, isShipHeld, mayReleaseShipHold, termsStampOf, holdMayBeReleased, NO_SO_RULE } from '../Shared/shipClearance';   // the customer's NetSuite terms decide whether it ships (2026-10-17)   // a CPQ order is boxed and packed on SO Pack (step 2, 2026-10-17)
 import { boxHomeFor, boxOpenRefusal, isBoxShipped, spreadTrackingOf, orderBoxesOf, withNewBox, newBoxRefusal, boxOf, boxName, tickBoxesOf, tickIntoBox, moveIntoBox, unboxedQtyOf, boxSpreadLabel, boxContentsOf, boxRemovalRefusal, unboxedLinesOf, boxCompleteBlocker, packBoxesOfTicks, docBoxLinesOf } from '../Shared/orderBoxes';
@@ -310,7 +310,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [shipCosts, setShipCosts] = useState({}); // {plating_shipments docId: plating $/ea string}
     const [platingFees, setPlatingFees] = useState({}); // system/plating_fees.rules — { PRODUCTTYPE: { fee, unit } }
     const [expandedShip, setExpandedShip] = useState({}); // out-at-plater shipments: collapsed by default
-    const [expandedSo, setExpandedSo] = useState({});     // SO Pack: force a not-yet-ready card open
+    const [expandedSo, setExpandedSo] = useState({});     // SO Pack: a card's + / – (unset = open when ready)
+    const [cpqShippedOpen, setCpqShippedOpen] = useState(false); // SO Pack: the shipped configured orders, folded away
     const [soLinesHidden, setSoLinesHidden] = useState({}); // SO Pack: a configured order's lines folded away by hand
     // ── WHICH POLE IS THIS? (Stuart 2026-09-09) ──────────────────────────────────────────────
     // "if the labels fall of the pole there is no way for packaging to be sure they are packing
@@ -7171,6 +7172,21 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         .map(so => ({ so, docs: finAll.filter(f => f.salesOrderId && (f.salesOrderId === so.id || String(f.salesOrderId) === String(so.soId || ''))) }))
                         .filter(x => x.docs.length)
                         .sort((a, b) => String(a.so.needBy || a.so.needByDate || '￿').localeCompare(String(b.so.needBy || b.so.needByDate || '￿')));
+                    // THE SO NUMBER FIRST, AS LARGE AS THE CUSTOMER, AND A + / – YOU CAN SEE (Stuart 2026-10-22: "the expand/collapse icon
+                    // is tiny and hidden in the center … a larger and clearer + and – icon before the customer name … making SO# the same
+                    // size as customer name and prior to it, being it is the identifier across the board"). The number as the order is
+                    // known everywhere — "SO61269", never "SO SO61269".
+                    const soNumberOf = (x) => { const n = String((x && (x.soId || x.id)) || ''); return /^SO/i.test(n) ? n : `SO ${n}`; };
+                    const soToggle = (isOpen, onToggle) => (
+                        <button onClick={onToggle} title={isOpen ? t('Hide the lines') : t('Show the lines')} aria-expanded={isOpen}
+                            style={{ flex: '0 0 auto', width: '30px', height: '30px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1.5px solid ${theme.ink}`, color: theme.ink, fontFamily: theme.mono, fontSize: '18px', fontWeight: 700, lineHeight: 1, cursor: 'pointer' }}>
+                            {isOpen ? '−' : '+'}
+                        </button>
+                    );
+                    // SHIPPED LEAVES THE OPEN LIST (Shared/soPackBoard.orderShippedOf, Stuart 2026-10-22): a configured order whose every
+                    // document has shipped — by UPS, in a shipped box, or "Shipped outside the app" — moves to Shipped below.
+                    const cpqOpen = cpqOrders.filter(x => !orderShippedOf(x.so, x.docs));
+                    const cpqShipped = cpqOrders.filter(x => orderShippedOf(x.so, x.docs)).sort((a, b) => orderShippedAtOf(b.docs) - orderShippedAtOf(a.docs));
                     // A closed order is not open work: the closer stamps `closed`, or the status says so.
                     const isClosedSo = (o) => o.closed === true || ['Closed', 'CANCELLED', 'Cancelled', 'Deleted'].includes(String(o.status || ''));
                     const open = quickShipOrders.filter(o => o.packMode !== 'DISPLAY' && !isShipmentRecord(o) && (o.status || 'Pending') !== 'Shipped' && !isClosedSo(o));   // a display's shipments, and a Launch shipment, ship from the Fulfilment tab
@@ -7201,7 +7217,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     const canShip = (byCount && o.displayBuildId) ? Math.min(shippableDisplaysOf({ so: o, boards: o.releaseOf, isFeeCode }), trv.shipCap) : 0;
                     const loaded = !!soStats[o.id];
                     const cBin = committedBinOf(o) || 'the order\'s bin';
-                    const showLines = !!expandedSo[o.id] || ready || !loaded;
+                    // A ready card (or one still loading) opens by itself, and the + / – decides from then on — a ready card was held
+                    // open whatever was pressed (Stuart 2026-10-22: "you cannot collapse anything with items showing below").
+                    const showLines = expandedSo[o.id] !== undefined ? !!expandedSo[o.id] : (ready || !loaded);
                     // PACKED · BOX, line by line (Shared/soPackBoard, Stuart 2026-10-06): this order is its own pack document —
                     // the packer's count on each sold line (`packedLines.L<n>`) and the numbered box(es) that tick names.
                     const packLineByKey = Object.fromEntries(packLinesOf(o, { isFeeCode }).map(l => [l.key, l]));
@@ -7220,21 +7238,24 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     return (
                         <div style={{ border: `1px solid ${ready ? '#3a7d44' : theme.line}`, boxShadow: ready ? '0 0 0 2px rgba(58,125,68,0.18)' : 'none', marginBottom: '16px', background: '#fff' }}>
                             <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.line}`, background: theme.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div>
-                                    <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{o.customer || 'Customer'}</span>
-                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginLeft: '12px' }}>SO {o.soId || o.id} · {o.totalParts || 0} pcs{o.jobName ? ` · ${o.jobName}` : ''}</span>
-                                    {/* ONE DATE KEY (Brief E's header): `needBy`. `needByDate` and
-                                        `reqDate` are aliases E writes equal to it for one release,
-                                        kept here only so orders saved BEFORE the header landed still
-                                        show a date. E deletes the aliases once every reader has
-                                        moved; this one has. */}
-                                    {(o.needBy || o.needByDate) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#d9534f', marginLeft: '12px' }}>{t('NEED BY')} {o.needBy || o.needByDate}</span>}
-                                    {/* Made-to-order lines arrive from the floors over days/weeks — the order
-                                        typically PACKS & HOLDS in a bin until every part is in. */}
-                                    {(o.lines || []).some(l => l.toBeFinished) && <span style={{ fontFamily: theme.mono, fontSize: '9px', fontWeight: 700, color: theme.brass, marginLeft: '12px', letterSpacing: '.05em' }}>📦 PACK &amp; HOLD — parts arrive from the floors</span>}
-                                    {o.productionNotes && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.ink, marginTop: '4px' }}>📝 {o.productionNotes}</div>}
+                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                                    {soToggle(showLines, () => setExpandedSo(p => ({ ...p, [o.id]: !showLines })))}
+                                    <div>
+                                        <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 600 }}>{soNumberOf(o)}</span>
+                                        <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500, marginLeft: '12px' }}>{o.customer || 'Customer'}</span>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginLeft: '12px' }}>{o.totalParts || 0} pcs{o.jobName ? ` · ${o.jobName}` : ''}</span>
+                                        {/* ONE DATE KEY (Brief E's header): `needBy`. `needByDate` and
+                                            `reqDate` are aliases E writes equal to it for one release,
+                                            kept here only so orders saved BEFORE the header landed still
+                                            show a date. E deletes the aliases once every reader has
+                                            moved; this one has. */}
+                                        {(o.needBy || o.needByDate) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#d9534f', marginLeft: '12px' }}>{t('NEED BY')} {o.needBy || o.needByDate}</span>}
+                                        {/* Made-to-order lines arrive from the floors over days/weeks — the order
+                                            typically PACKS & HOLDS in a bin until every part is in. */}
+                                        {(o.lines || []).some(l => l.toBeFinished) && <span style={{ fontFamily: theme.mono, fontSize: '9px', fontWeight: 700, color: theme.brass, marginLeft: '12px', letterSpacing: '.05em' }}>📦 PACK &amp; HOLD — parts arrive from the floors</span>}
+                                        {o.productionNotes && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.ink, marginTop: '4px' }}>📝 {o.productionNotes}</div>}
+                                    </div>
                                 </div>
-                                <span onClick={() => setExpandedSo(p => ({ ...p, [o.id]: !p[o.id] }))} title={showLines ? 'Collapse' : 'Show the lines anyway'} style={{ cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', marginRight: '10px', color: theme.inkSoft }}>{showLines ? '▾' : '▸'}</span>
                                 {finishAsAvailable(o) && <span title={`Parts go to finishing AS THEY ARRIVE instead of waiting for the whole order.${o.finishAsAvailableReason ? ` — ${o.finishAsAvailableReason}` : ''}`} style={{ fontFamily: theme.mono, fontSize: '9px', fontWeight: 700, letterSpacing: '.08em', color: theme.brass, border: `1px solid ${theme.brass}`, padding: '2px 6px', marginRight: '10px' }}>⚡ {t('FINISH AS AVAILABLE')}</span>}
                                 {committedBinOf(o) && <span title={`${totalGathered(o)} piece(s) gathered for this order. App-only — NetSuite still shows them in their shelf bin.`} style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.06em', color: '#2e7d32', marginRight: '12px' }}>📦 {t('BIN')} {committedBinOf(o)} · {totalGathered(o)}</span>}
                                 {loaded && gs.byCount && !gs.anyReleased
@@ -7364,6 +7385,81 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             )}
                         </div>
                     ); };
+                    const cpqCardOf = ({ so, docs }) => {
+                        // LINE BY LINE (Shared/soPackBoard, Stuart 2026-10-06): every part of the order — ordered beside
+                        // packed, the box it is in, and the stamps that are about THAT line. The rows are the ones the
+                        // packer ticks at Packaging Prep (a packed document's poles come off its own stamp, so only an
+                        // open document asks the shop order for them).
+                        const soBoxes = orderBoxesOf(so);
+                        const board = soPackBoardOf({ docs, refOf: woRefOf, boxes: soBoxes, linesOf: packLinesAsPacked, coatsOf });
+                        const allPacked = board.verdict === ORDER_VERDICT.ALL_PACKED;
+                        const toBox = board.verdict === ORDER_VERDICT.TO_BOX;   // packaged at Prep — boxed and packed here (step 2)
+                        const readyToPack = board.verdict === ORDER_VERDICT.READY;
+                        const boxHere = orderAwaitsPackOf(so, docs) && soPackOpenId !== so.id;
+                        const hidden = !!soLinesHidden[so.id];
+                        // A HELD document says so above its lines, with the reason (a backorder names the material it waits for).
+                        const holdOfDoc = Object.fromEntries(docs.map(d => [d.id, (d.packStatus === 'Packed' || d.currentPhase === 'Closed') ? null : holdGateOf(d)]));
+                        const th = (h, align = 'left') => <th key={h} style={{ textAlign: align, padding: '7px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}`, whiteSpace: 'nowrap' }}>{t(h)}</th>;
+                        const rowBg = { [LINE_STATE.PACKED]: '#f0f7f1', [LINE_STATE.PART]: '#fdf6e3', [LINE_STATE.CLOSED]: theme.paper };
+                        const cell = { padding: '8px 10px', borderBottom: `1px solid ${theme.paper2}`, verticalAlign: 'middle' };
+                        return (<React.Fragment key={so.id}>
+                            <div style={{ border: `1px solid ${allPacked ? '#3a7d44' : theme.line}`, boxShadow: allPacked ? '0 0 0 2px rgba(58,125,68,0.18)' : 'none', marginBottom: '14px', background: '#fff' }}>
+                                <div style={{ padding: '12px 18px', borderBottom: `1px solid ${theme.line}`, background: theme.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                                        {soToggle(!hidden, () => setSoLinesHidden(p => ({ ...p, [so.id]: !hidden })))}
+                                        <div>
+                                            <span style={{ fontFamily: theme.serif, fontSize: '1.1rem', color: theme.ink, fontWeight: 600 }}>{soNumberOf(so)}</span>
+                                            <span style={{ fontFamily: theme.serif, fontSize: '1.1rem', color: theme.ink, fontWeight: 500, marginLeft: '12px' }}>{so.customer || so.customerName || 'Customer'}</span>
+                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginLeft: '12px' }}>{docs.length} {docs.length === 1 ? t('work order') : t('work orders')}</span>
+                                            {(so.needBy || so.needByDate) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#d9534f', marginLeft: '12px' }}>{t('NEED BY')} {so.needBy || so.needByDate}</span>}
+                                            {so.sidemark && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '3px', textTransform: 'uppercase', letterSpacing: '.05em' }}>REF: {so.sidemark}</div>}
+                                        </div>
+                                    </div>
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
+                                            <b>{board.pieces.packed} {t('of')} {board.pieces.ordered}</b> {t('pieces packed')}
+                                            {board.pieces.ready > 0 && <span style={{ color: '#3f7fc4' }}> · {board.pieces.ready} {t('ready to pack')}</span>}
+                                            {board.pieces.waiting > 0 && <span style={{ color: theme.brass }}> · {board.pieces.waiting} {t('still coming')}</span>}
+                                            {soBoxes.length > 0 && <span title={soBoxes.map(b => `${boxName(b)}${isBoxShipped(b) ? ` — shipped ${b.trackingNumber || ''}` : ''}`).join('\n')}> · 📦 {soBoxes.length} {soBoxes.length === 1 ? t('box') : t('boxes')}{soBoxes.some(isBoxShipped) ? ` · 🚚 ${soBoxes.filter(isBoxShipped).length} ${t('shipped')}` : ''}</span>}
+                                        </span>
+                                        {committedBinOf(so) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#2e7d32' }}>📦 {t('BIN')} {committedBinOf(so)} · {totalGathered(so)}</span>}
+                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: allPacked ? '#2e7d32' : (toBox ? theme.ink : (readyToPack ? '#3f7fc4' : theme.brass)) }}>{allPacked ? `✓ ${t('ALL PACKED')} — ${t('READY TO SHIP')}` : (toBox ? `📦 ${t('PACKAGED — BOX IT HERE')}` : (readyToPack ? t('READY TO PACK') : t('WAITING ON PARTS')))}</span>
+                                        {shipHoldBar(so, docs)}
+                                        {boxHere && <button onClick={() => openSoPack(so)} title="Box the order, photograph the closed boxes and press ✓ Packed — that sends the NetSuite fulfilment" style={{ padding: '8px 14px', background: theme.brass, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📦 {t('Pack & ship')}</button>}
+                                    </span>
+                                </div>
+                                {!hidden && (
+                                    <div style={{ overflowX: 'auto' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                                            <thead><tr style={{ background: theme.paper2 }}>
+                                                {th('Item #')}{th('Description')}{th('Work order')}{th('Ordered', 'center')}{th('Packed', 'center')}{th('Box')}{th('Where it is')}
+                                            </tr></thead>
+                                            <tbody>
+                                                {board.rows.map((r, i) => {
+                                                    const full = r.state === LINE_STATE.PACKED, part = r.state === LINE_STATE.PART, off = r.state === LINE_STATE.CLOSED;
+                                                    const hold = (i === 0 || board.rows[i - 1].docId !== r.docId) ? holdOfDoc[r.docId] : null;
+                                                    return (<React.Fragment key={`${r.docId}-${r.key || i}`}>
+                                                        {hold && <tr><td colSpan={7} style={{ padding: '7px 10px', background: '#fdf3f3', borderBottom: `1px solid ${theme.paper2}`, fontFamily: theme.mono, fontSize: '10px', color: '#c0392b', lineHeight: 1.5 }}><b style={{ letterSpacing: '.06em' }}>{hold.label}</b> · {r.ref}{hold.reason ? <span style={{ color: theme.ink }}> — {hold.reason}</span> : null}</td></tr>}
+                                                        <tr style={{ background: rowBg[r.state] || '#fff', opacity: off ? 0.6 : 1 }}>
+                                                            <td style={{ ...cell, fontFamily: theme.mono, color: theme.ink, whiteSpace: 'nowrap' }}>{r.noLines ? '—' : (r.code || '—')}</td>
+                                                            <td style={{ ...cell, color: theme.inkSoft }}>{r.noLines ? t('no line detail recorded on this document') : r.name}</td>
+                                                            <td style={{ ...cell, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, whiteSpace: 'nowrap' }}>{r.ref}</td>
+                                                            <td style={{ ...cell, textAlign: 'center', fontFamily: theme.mono, fontSize: '13px', color: theme.ink }}>{r.noLines ? '—' : r.ordered}</td>
+                                                            <td style={{ ...cell, textAlign: 'center', fontFamily: theme.mono, fontSize: '13px', fontWeight: 700, color: full ? '#2e7d32' : (part ? '#b8860b' : theme.inkSoft) }}>{r.noLines ? '—' : r.packed}</td>
+                                                            <td title={!r.box && r.packed > 0 ? t('Packed, but not in a numbered box yet') : undefined} style={{ ...cell, fontFamily: theme.mono, fontSize: '11px', color: r.box ? theme.ink : theme.inkSoft, whiteSpace: 'nowrap' }}>{r.box ? `📦 ${r.box}` : '—'}
+                                                                {(r.boxTracking || []).map(tk => <div key={tk.no} title={tk.shipService ? `UPS ${tk.shipService}` : undefined} style={{ fontSize: '10px', color: '#2e7d32' }}>🚚 {(r.boxSpread || []).length > 1 ? `${t('Box')} ${tk.no} ` : ''}{tk.trackingNumber}</div>)}</td>
+                                                            <td style={cell}><OrderStatusChips stamps={r.stamps} showWho={full || part} /></td>
+                                                        </tr>
+                                                    </React.Fragment>);
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
+                            {soPackOpenId === so.id && orderPackStepView(so, docs)}
+                        </React.Fragment>);
+                    };
                     return (
                         <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem', marginBottom: '6px' }}>Stock / Quick Ship Orders</div>
@@ -7375,89 +7471,28 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {packJob && packJob.id === o.id && packingStationView(o)}
                                 </React.Fragment>
                             ))}
-                            {cpqOrders.length > 0 && (
+                            {cpqOpen.length > 0 && (
                                 <div style={{ marginTop: '26px' }}>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '10px' }}>
-                                        {t('Configured orders in production')} · {cpqOrders.length} — {t('each work order is packaged at Packaging Prep; the order is boxed and packed here')}
+                                        {t('Configured orders in production')} · {cpqOpen.length} — {t('each work order is packaged at Packaging Prep; the order is boxed and packed here')}
                                     </div>
-                                    {cpqOrders.map(({ so, docs }) => {
-                                        // LINE BY LINE (Shared/soPackBoard, Stuart 2026-10-06): every part of the order — ordered beside
-                                        // packed, the box it is in, and the stamps that are about THAT line. The rows are the ones the
-                                        // packer ticks at Packaging Prep (a packed document's poles come off its own stamp, so only an
-                                        // open document asks the shop order for them).
-                                        const soBoxes = orderBoxesOf(so);
-                                        const board = soPackBoardOf({ docs, refOf: woRefOf, boxes: soBoxes, linesOf: packLinesAsPacked, coatsOf });
-                                        const allPacked = board.verdict === ORDER_VERDICT.ALL_PACKED;
-                                        const toBox = board.verdict === ORDER_VERDICT.TO_BOX;   // packaged at Prep — boxed and packed here (step 2)
-                                        const readyToPack = board.verdict === ORDER_VERDICT.READY;
-                                        const boxHere = orderAwaitsPackOf(so, docs) && soPackOpenId !== so.id;
-                                        const hidden = !!soLinesHidden[so.id];
-                                        // A HELD document says so above its lines, with the reason (a backorder names the material it waits for).
-                                        const holdOfDoc = Object.fromEntries(docs.map(d => [d.id, (d.packStatus === 'Packed' || d.currentPhase === 'Closed') ? null : holdGateOf(d)]));
-                                        const th = (h, align = 'left') => <th key={h} style={{ textAlign: align, padding: '7px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}`, whiteSpace: 'nowrap' }}>{t(h)}</th>;
-                                        const rowBg = { [LINE_STATE.PACKED]: '#f0f7f1', [LINE_STATE.PART]: '#fdf6e3', [LINE_STATE.CLOSED]: theme.paper };
-                                        const cell = { padding: '8px 10px', borderBottom: `1px solid ${theme.paper2}`, verticalAlign: 'middle' };
-                                        return (<React.Fragment key={so.id}>
-                                            <div style={{ border: `1px solid ${allPacked ? '#3a7d44' : theme.line}`, boxShadow: allPacked ? '0 0 0 2px rgba(58,125,68,0.18)' : 'none', marginBottom: '14px', background: '#fff' }}>
-                                                <div style={{ padding: '12px 18px', borderBottom: `1px solid ${theme.line}`, background: theme.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                                                    <div>
-                                                        <span style={{ fontFamily: theme.serif, fontSize: '1.1rem', color: theme.ink, fontWeight: 500 }}>{so.customer || so.customerName || 'Customer'}</span>
-                                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginLeft: '12px' }}>SO {so.soId || so.id} · {docs.length} {docs.length === 1 ? t('work order') : t('work orders')}</span>
-                                                        {(so.needBy || so.needByDate) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#d9534f', marginLeft: '12px' }}>{t('NEED BY')} {so.needBy || so.needByDate}</span>}
-                                                        {so.sidemark && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '3px', textTransform: 'uppercase', letterSpacing: '.05em' }}>REF: {so.sidemark}</div>}
-                                                    </div>
-                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
-                                                            <b>{board.pieces.packed} {t('of')} {board.pieces.ordered}</b> {t('pieces packed')}
-                                                            {board.pieces.ready > 0 && <span style={{ color: '#3f7fc4' }}> · {board.pieces.ready} {t('ready to pack')}</span>}
-                                                            {board.pieces.waiting > 0 && <span style={{ color: theme.brass }}> · {board.pieces.waiting} {t('still coming')}</span>}
-                                                            {soBoxes.length > 0 && <span title={soBoxes.map(b => `${boxName(b)}${isBoxShipped(b) ? ` — shipped ${b.trackingNumber || ''}` : ''}`).join('\n')}> · 📦 {soBoxes.length} {soBoxes.length === 1 ? t('box') : t('boxes')}{soBoxes.some(isBoxShipped) ? ` · 🚚 ${soBoxes.filter(isBoxShipped).length} ${t('shipped')}` : ''}</span>}
-                                                        </span>
-                                                        {committedBinOf(so) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#2e7d32' }}>📦 {t('BIN')} {committedBinOf(so)} · {totalGathered(so)}</span>}
-                                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: allPacked ? '#2e7d32' : (toBox ? theme.ink : (readyToPack ? '#3f7fc4' : theme.brass)) }}>{allPacked ? `✓ ${t('ALL PACKED')} — ${t('READY TO SHIP')}` : (toBox ? `📦 ${t('PACKAGED — BOX IT HERE')}` : (readyToPack ? t('READY TO PACK') : t('WAITING ON PARTS')))}</span>
-                                                        {shipHoldBar(so, docs)}
-                                                        {boxHere && <button onClick={() => openSoPack(so)} title="Box the order, photograph the closed boxes and press ✓ Packed — that sends the NetSuite fulfilment" style={{ padding: '8px 14px', background: theme.brass, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📦 {t('Pack & ship')}</button>}
-                                                        <span onClick={() => setSoLinesHidden(p => ({ ...p, [so.id]: !p[so.id] }))} title={hidden ? t('Show the lines') : t('Hide the lines')} style={{ cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{hidden ? '▸' : '▾'}</span>
-                                                    </span>
-                                                </div>
-                                                {!hidden && (
-                                                    <div style={{ overflowX: 'auto' }}>
-                                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                                                            <thead><tr style={{ background: theme.paper2 }}>
-                                                                {th('Item #')}{th('Description')}{th('Work order')}{th('Ordered', 'center')}{th('Packed', 'center')}{th('Box')}{th('Where it is')}
-                                                            </tr></thead>
-                                                            <tbody>
-                                                                {board.rows.map((r, i) => {
-                                                                    const full = r.state === LINE_STATE.PACKED, part = r.state === LINE_STATE.PART, off = r.state === LINE_STATE.CLOSED;
-                                                                    const hold = (i === 0 || board.rows[i - 1].docId !== r.docId) ? holdOfDoc[r.docId] : null;
-                                                                    return (<React.Fragment key={`${r.docId}-${r.key || i}`}>
-                                                                        {hold && <tr><td colSpan={7} style={{ padding: '7px 10px', background: '#fdf3f3', borderBottom: `1px solid ${theme.paper2}`, fontFamily: theme.mono, fontSize: '10px', color: '#c0392b', lineHeight: 1.5 }}><b style={{ letterSpacing: '.06em' }}>{hold.label}</b> · {r.ref}{hold.reason ? <span style={{ color: theme.ink }}> — {hold.reason}</span> : null}</td></tr>}
-                                                                        <tr style={{ background: rowBg[r.state] || '#fff', opacity: off ? 0.6 : 1 }}>
-                                                                            <td style={{ ...cell, fontFamily: theme.mono, color: theme.ink, whiteSpace: 'nowrap' }}>{r.noLines ? '—' : (r.code || '—')}</td>
-                                                                            <td style={{ ...cell, color: theme.inkSoft }}>{r.noLines ? t('no line detail recorded on this document') : r.name}</td>
-                                                                            <td style={{ ...cell, fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, whiteSpace: 'nowrap' }}>{r.ref}</td>
-                                                                            <td style={{ ...cell, textAlign: 'center', fontFamily: theme.mono, fontSize: '13px', color: theme.ink }}>{r.noLines ? '—' : r.ordered}</td>
-                                                                            <td style={{ ...cell, textAlign: 'center', fontFamily: theme.mono, fontSize: '13px', fontWeight: 700, color: full ? '#2e7d32' : (part ? '#b8860b' : theme.inkSoft) }}>{r.noLines ? '—' : r.packed}</td>
-                                                                            <td title={!r.box && r.packed > 0 ? t('Packed, but not in a numbered box yet') : undefined} style={{ ...cell, fontFamily: theme.mono, fontSize: '11px', color: r.box ? theme.ink : theme.inkSoft, whiteSpace: 'nowrap' }}>{r.box ? `📦 ${r.box}` : '—'}
-                                                                                {(r.boxTracking || []).map(tk => <div key={tk.no} title={tk.shipService ? `UPS ${tk.shipService}` : undefined} style={{ fontSize: '10px', color: '#2e7d32' }}>🚚 {(r.boxSpread || []).length > 1 ? `${t('Box')} ${tk.no} ` : ''}{tk.trackingNumber}</div>)}</td>
-                                                                            <td style={cell}><OrderStatusChips stamps={r.stamps} showWho={full || part} /></td>
-                                                                        </tr>
-                                                                    </React.Fragment>);
-                                                                })}
-                                                            </tbody>
-                                                        </table>
-                                                    </div>
-                                                )}
-                                            </div>
-                                            {soPackOpenId === so.id && orderPackStepView(so, docs)}
-                                        </React.Fragment>);
+                                    {cpqOpen.map(cpqCardOf)}
                                     })}
                                 </div>
                             )}
-                            {shipped.length > 0 && (
+                            {(shipped.length > 0 || cpqShipped.length > 0) && (
                                 <>
-                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', margin: '30px 0 14px' }}>Shipped ({shipped.length})</div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', margin: '30px 0 14px' }}>Shipped ({shipped.length + cpqShipped.length})</div>
                                     {shipped.map(o => <Card key={o.id} o={o} />)}
+                                    {cpqShipped.length > 0 && (
+                                        <div style={{ marginTop: shipped.length ? '14px' : 0 }}>
+                                            <div onClick={() => setCpqShippedOpen(v => !v)} style={{ cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: cpqShippedOpen ? '14px' : 0, userSelect: 'none' }}
+                                                title="Configured orders whose every work order has shipped — newest first">
+                                                {cpqShippedOpen ? '▾' : '▸'} Configured orders ({cpqShipped.length}) — {cpqShippedOpen ? 'hide' : 'show'}
+                                            </div>
+                                            {cpqShippedOpen && cpqShipped.map(cpqCardOf)}
+                                        </div>
+                                    )}
                                 </>
                             )}
                             {closed.length > 0 && (
