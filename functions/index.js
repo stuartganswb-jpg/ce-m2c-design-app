@@ -3657,7 +3657,11 @@ exports.upsRate = onCall({
         shipTo, shipFrom, shipperCountry: (shipper.address && shipper.address.CountryCode) || 'US',
         declaredValue, currency,
     });
-    const body = await upsCall(env, shipper.account, 'POST', '/api/rating/v2409/Shop', {
+    // ⚠ THE REQUEST OPTION IS A **PATH** PARAMETER on UPS's REST Rating API — /Shop vs
+    // /Shoptimeintransit. `Request.RequestOption` in the BODY is the legacy XML shape and is simply
+    // ignored, which is why asking for transit times in the body changed nothing at all: rates came
+    // back, no TimeInTransit block, Days still empty (2026-10-21, after the first deploy).
+    const body = await upsCall(env, shipper.account, 'POST', '/api/rating/v2409/Shoptimeintransit', {
         RateRequest: {
             // ⚠ "Shop" ALONE RETURNS NO TRANSIT TIMES — the Days column came back empty on the first
             // live international quote. UPS returns them only for Shoptimeintransit, and only when
@@ -3679,7 +3683,8 @@ exports.upsRate = onCall({
     const services = [].concat((body.RateResponse && body.RateResponse.RatedShipment) || []).map((s) => {
         const code = (s.Service && s.Service.Code) || '';
         const neg = s.NegotiatedRateCharges && s.NegotiatedRateCharges.TotalCharge;
-        const eta = s.TimeInTransit && s.TimeInTransit.ServiceSummary && s.TimeInTransit.ServiceSummary.EstimatedArrival;
+        const summary = [].concat((s.TimeInTransit && s.TimeInTransit.ServiceSummary) || [])[0];
+        const eta = summary && summary.EstimatedArrival;
         // ⚠ UPS ANSWERS IN THE LANE'S OWN CURRENCY. A China-origin quote can come back in CNY, and a
         // dollar sign drawn on a yuan figure is the kind of wrong that reads as right.
         return {
