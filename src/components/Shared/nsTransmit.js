@@ -159,6 +159,9 @@ export function resolveJobLines(job, data) {
           || (c.engine === 'TAGS' && c.breakdown.length > 0));
 
       const rawLines = []; // per-assembly lines, aggregated by NetSuite item at the end
+      // Every real NetSuite internal id the library holds — what a line's id must be for NetSuite to take it (a flow set to
+      // roll its NetSuite-less parts into the roll-up asks this, below).
+      const knownNsIds = new Set((libraryParts || []).map(p => String((p && p.netSuiteInternalId) || '').trim()).filter(Boolean));
 
       carts.forEach(cart => {
           const firstLineOfCart = rawLines.length; // every line this cart item emits gets its netFactor (below)
@@ -453,6 +456,16 @@ export function resolveJobLines(job, data) {
           if (cart.netFactor && cart.netFactor !== 1) {
               for (let i = firstLineOfCart; i < rawLines.length; i++) rawLines[i].netFactor = cart.netFactor;
           }
+          // ── PARTS NOT IN NETSUITE RIDE THE ROLLUP, ON A FLOW SET SO (Stuart 2026-10-21, H5-HEX / ST102126-01: "when netsuite has
+          // no parts to match like H5- then can we push all items into the roll up? … a check box on the cpq flow as this one was
+          // created for all custom order and if it goes thru then we will set up parts in netsuite"). A part whose id would not be a
+          // real NetSuite internal id (no item has it — its CODE stood in for one, which NetSuite refuses, or it is UNMAPPED) goes
+          // inside its configuration's roll-up instead of as its own line; buildNsTransaction leaves it out of the item lines, so its
+          // money stays in the roll-up, and groupedItemsOf names it there. A part NetSuite knows keeps its line — so each one Eric
+          // sets up starts going as its own line without anyone unticking. An unticked flow is untouched: the 08-31 refusal stands.
+          if (flow && flow.nsRollupUnmappedParts === true) {
+              for (let i = firstLineOfCart; i < rawLines.length; i++) if (!knownNsIds.has(String(rawLines[i].nsId))) rawLines[i].onRollup = true;
+          }
           for (let i = firstLineOfCart; i < rawLines.length; i++) rawLines[i].group = cart.cartIndex == null ? 0 : cart.cartIndex;
           const kitsOfCart = cart.engine === 'TAGS' ? cart.breakdown.filter(l => l && l.isKit && !l.itemKit).map(l => String(l.legacyErpId || l.partId || l.name || 'KIT')) : [];
           result.groups.push({ group: cart.cartIndex == null ? 0 : cart.cartIndex, engine: cart.engine, flowId: cart.flowId, sidemark: cart.sidemark || '',
@@ -545,7 +558,15 @@ export async function resolveShipMethod() {
 // fees, fabrication and labor (a traverse kit's dollars ride the CE-TRV-SYSTEM holder, as before). The checkout's add-ons
 // and fees are the last group. An order-wide discount (a set % or the customer's code) scales every line to land at the
 // quoted total; any cent of rounding rides the first roll-up. Pure: no I/O.
-export function groupedItemsOf({ job, groups = [], lineItems = [], lineGroups = [], cpqGrandTotal = 0, data = {}, log = () => {} }) {
+// What a roll-up says of the parts riding it (a flow set to roll its NetSuite-less parts in) — one entry per code, capped: a
+// NetSuite line description is finite. A per-foot part's quantity is its feet, as its own line's would have been.
+const rolledUpWords = (rolled) => {
+    const merged = new Map();
+    rolled.forEach(r => merged.set(r.code, (merged.get(r.code) || 0) + (Number(r.qty) || 0)));
+    const text = `parts not in NetSuite yet: ${[...merged].map(([c, q]) => `${c} ×${Math.round(q * 100) / 100}`).join(', ')}`;
+    return text.length > 900 ? `${text.slice(0, 899)}…` : text;
+};
+export function groupedItemsOf({ job, groups = [], lineItems = [], lineGroups = [], cpqGrandTotal = 0, data = {}, log = () => {}, rolledUp = [] }) {
     const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
     const fl2 = (n) => Math.floor((Number(n) || 0) * 100 + 1e-6) / 100;
     const flows = data.cpqFlows || [];
@@ -557,11 +578,14 @@ export function groupedItemsOf({ job, groups = [], lineItems = [], lineGroups = 
         const label = g.sidemark || g.assemblyName || (g.group === 'ADDONS' ? 'Add-ons & Fees' : `line ${n + 1}`);
         const kit = (g.kitCodes || []).length > 0;
         const itemId = kit && holder ? String(holder.netSuiteInternalId) : String((flow && flow.nsRollupItemId) || '61502');
-        const description = g.group === 'ADDONS'
+        // …and the parts riding it because they are not in NetSuite yet (a flow set so — resolveJobLines), named
+        const rolledHere = rolledUp.filter(r => r.group === g.group);
+        const description = (g.group === 'ADDONS'
             ? `Add-ons & fees · quote# ${quoteNo} Job: ${job.jobName || 'N/A'}`
             : kit
                 ? `${[...new Set(g.kitCodes)].join(' + ')} [traverse system — components below at $0] · ${label} · quote# ${quoteNo} Job: ${job.jobName || 'N/A'}`
-                : `${(flow && flow.name) || 'Custom Assembly'} — ${label} · fees, fabrication & labor · quote# ${quoteNo} Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`;
+                : `${(flow && flow.name) || 'Custom Assembly'} — ${label} · fees, fabrication & labor · quote# ${quoteNo} Job: ${job.jobName || 'N/A'} Sidemark: ${job.sidemark || 'N/A'}`)
+            + (rolledHere.length ? ` · ${rolledUpWords(rolledHere)}` : '');
         const target = r2((Number(g.money) || 0) * (Number(g.netFactor) || 1));
         let itemsMoney = r2(items.reduce((s, l) => s + l.rate * l.quantity, 0));
         // Items quoted above their group (never, from CPQ — but a hand-edited cart): scale this group's items to fit.
@@ -611,7 +635,7 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     if (hardMisses.length) {
         return { ok: false, error: { code: 'LINES_UNRESOLVED', message: `${hardMisses.length} line(s) on this quote can't be resolved to a library item — pushing would silently roll their dollars into the fee line:\n${hardMisses.map(u => `• ${u.stepTitle} (${u.partId})${u.total ? ` — $${u.total.toFixed(2)}` : ''}`).join('\n')}\nFix the item(s), then push from Tab 12 / RTG.` } };
     }
-    const hardUnmapped = linesToPush.filter(l => (l.nsId === 'UNMAPPED' || l.nsId === 'PENDING')
+    const hardUnmapped = linesToPush.filter(l => (l.nsId === 'UNMAPPED' || l.nsId === 'PENDING') && !l.onRollup
         && /^(tags:|addon:|trvcfg:)/.test(String(l.stepId || '')));
     if (hardUnmapped.length) {
         return { ok: false, error: { code: 'LINES_UNMAPPED', message: `${hardUnmapped.length} real item(s) on this quote have no NetSuite internal ID — pushing would silently roll their dollars into the fee line:\n${hardUnmapped.map(l => `• ${l.masterPart?.itemName || l.masterPart?.id}`).join('\n')}\nSync them in 11.1 first, then push from Tab 12 / RTG.` } };
@@ -624,6 +648,8 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     let lineDiscounted = 0;
     let kitZeroed = 0;
     const unmappedNames = [];
+    // the parts a flow set to roll its NetSuite-less parts into the roll-up sent there (resolveJobLines) — by CPQ line, for its words
+    const rolledUp = [];
     // THE SAME MATCHER CPQ PRICED WITH — resolve the CRM record once so line rates match the quote.
     let custRec = null;
     if (job.customer?.id && ctx?.getDoc) {
@@ -633,6 +659,11 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
     const custKeys = customerKeys(job.customer?.id, custRec || { name: job.customer?.name || job.clientName });
 
     for (const line of linesToPush) {
+        // On the roll-up, not its own line: its quoted money stays in the configuration's roll-up (never counted as an item here)
+        if (line.onRollup) {
+            rolledUp.push({ group: line.group, code: String(line.masterPart?.legacyErpId || line.masterPart?.itemId || line.masterPart?.itemName || line.stepId || ''), qty: line.qty });
+            continue;
+        }
         if (line.nsId !== 'UNMAPPED' && line.nsId !== 'PENDING') {
             if (line.feetReconstructed) log(`Per-foot line ${line.masterPart?.legacyErpId || line.masterPart?.itemId}: footage reconstructed — pushing qty ${line.qty} (ft).`, 'warn');
             let itemRate = parseFloat(line.masterPart.manufacturingSpecs?.basePrice || 0) || 0;
@@ -677,9 +708,11 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
             log(`WARNING: Skipping "${line.masterPart.itemName}" — no NetSuite ID mapped.`, 'warn');
         }
     }
-    if (lineItems.length === 0) {
+    // …a configuration whose every part is on its roll-up (a flow set so, none of its parts in NetSuite yet) pushes as roll-ups alone
+    if (lineItems.length === 0 && !rolledUp.length) {
         return { ok: false, error: { code: 'NO_NS_IDS', message: `${linesToPush.length} part(s) resolved but none have a NetSuite internal ID yet:\n${unmappedNames.map(n => `• ${n}`).join('\n')}\nSync them in 11.1 first.` } };
     }
+    if (rolledUp.length) log(`${rolledUp.length} part(s) not in NetSuite ride their configuration's roll-up (the flow is set to): ${rolledUp.map(r => `${r.code} ×${r.qty}`).join(', ')}.`, 'info');
 
     const cpqGrandTotal = parseFloat(job.cpqData.totalPrice || 0);
     // THE ONE WAY THIS QUOTE WAS DISCOUNTED (Shared/lineDiscount.orderDiscountStamp on the job):
@@ -734,16 +767,17 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
         poNumber: job.poNumber, internalMemo: job.internalMemo, appJobId: job.jobId || job.id, customerNumber: job.customerNumber,
         shipping: { method: job.shippingMethod, addressId: job.shippingAddressId, custom: job.customShippingAddress, amount: shippingAmount, shipMethod: sm },
         // The class follows what is sold where a brand has two (M2C Hardware / Lighting) — each pushed line's own item.
-        itemClasses: linesToPush.filter(l => l.nsId !== 'UNMAPPED' && l.nsId !== 'PENDING').map(l => itemClassOf(l.masterPart)),
+        itemClasses: linesToPush.filter(l => l.nsId !== 'UNMAPPED' && l.nsId !== 'PENDING' && !l.onRollup).map(l => itemClassOf(l.masterPart)),
     });
     if (!hdr.ok) return { ok: false, error: hdr.error };
     hdr.warnings.forEach(w => log(`⚠️ ${w}`, 'warn'));
 
     if (grouped && groups.length) {
-        const built = groupedItemsOf({ job, groups, lineItems, lineGroups, cpqGrandTotal, data, log });
+        const built = groupedItemsOf({ job, groups, lineItems, lineGroups, cpqGrandTotal, data, log, rolledUp });
         const payload = withLineLocations({ ...hdr.header, item: { items: built.items } }, asType);
-        return { ok: true, payload, meta: { silentFeeBalance: built.rollupTotal, unmappedNames, finishFallbacks, lineCount: lineItems.length, quotedTotal: cpqGrandTotal, groups: built.summary } };
+        return { ok: true, payload, meta: { silentFeeBalance: built.rollupTotal, unmappedNames, finishFallbacks, lineCount: lineItems.length, quotedTotal: cpqGrandTotal, groups: built.summary, rolledUp } };
     }
+    if (rolledUp.length) headerDesc = `${headerDesc} · ${rolledUpWords(rolledUp)}`;
     const payload = withLineLocations({
         ...hdr.header,
         item: {
@@ -753,7 +787,7 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
             ]
         }
     }, asType);
-    return { ok: true, payload, meta: { silentFeeBalance, unmappedNames, finishFallbacks, lineCount: lineItems.length, quotedTotal: cpqGrandTotal } };
+    return { ok: true, payload, meta: { silentFeeBalance, unmappedNames, finishFallbacks, lineCount: lineItems.length, quotedTotal: cpqGrandTotal, rolledUp } };
 }
 
 // Standard writeBack specs — the worker stamps the returned NetSuite ids into these fields.

@@ -3274,6 +3274,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
           // back on this quote via writeBack. A Sales Order save also puts the order on the RTG
           // board immediately — the real SO # replaces the app id when NetSuite posts.
           let nsQueueNote = '';
+          // the parts a flow set so sent inside their configuration's roll-up, not in NetSuite yet (Shared/nsTransmit) — said, never silent
+          const rolledNote = (meta) => ((meta && meta.rolledUp) || []).length
+              ? `\n· ${meta.rolledUp.length} part(s) not in NetSuite ride the rollup (this flow is set to): ${[...new Set(meta.rolledUp.map(r => r.code))].join(', ')}` : '';
           // ── A REFUSED QUEUE IS WRITTEN ON THE JOB (S2's hand-off, 2026-09-10) ────────────────
           // "everything hits RTG": a save whose NetSuite queue was refused (LINES_UNRESOLVED,
           // NO_CUSTOMER …) used to write nothing on the job — only an alert pointing at tab 12,
@@ -3327,7 +3330,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                       by: currentUser || '', writeBacks: [jobsSalesOrderWriteBack(targetJobId), boardSalesOrderWriteBack(soDocId)],
                   });
                   nsQueueNote = res.ok
-                      ? `\n\n⇄ NetSuite Sales Order queued — posts in ~1 min; the SO # lands on this order and the RTG board automatically.${res.meta.finishFallbacks.length ? `\n⚠ Unmapped finished SKUs push as BASE items: ${res.meta.finishFallbacks.join(', ')}` : ''}`
+                      ? `\n\n⇄ NetSuite Sales Order queued — posts in ~1 min; the SO # lands on this order and the RTG board automatically.${res.meta.finishFallbacks.length ? `\n⚠ Unmapped finished SKUs push as BASE items: ${res.meta.finishFallbacks.join(', ')}` : ''}${rolledNote(res.meta)}`
                       : `\n\n⚠ NetSuite Sales Order NOT queued (${res.error.code}): ${res.error.message}\nThe order is saved and on the RTG board — queue the NetSuite push from Tab 12 / RTG once fixed.`;
                   await updateDoc(doc(db, 'jobs', targetJobId), res.ok ? queuedStamp(res.outboxId) : refusedStamp(res.error?.code, res.error?.message));
               } else {
@@ -3336,7 +3339,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                       by: currentUser || '', writeBacks: [jobsEstimateWriteBack(targetJobId)],
                   });
                   nsQueueNote = res.ok
-                      ? `\n\n⇄ NetSuite Quote/Estimate queued — posts in ~1 min; the estimate # lands on this quote automatically.${res.meta.finishFallbacks.length ? `\n⚠ Unmapped finished SKUs push as BASE items: ${res.meta.finishFallbacks.join(', ')}` : ''}`
+                      ? `\n\n⇄ NetSuite Quote/Estimate queued — posts in ~1 min; the estimate # lands on this quote automatically.${res.meta.finishFallbacks.length ? `\n⚠ Unmapped finished SKUs push as BASE items: ${res.meta.finishFallbacks.join(', ')}` : ''}${rolledNote(res.meta)}`
                       : `\n\n⚠ NetSuite estimate NOT queued (${res.error.code}): ${res.error.message}\nThe quote is saved in the pipeline — push it from Tab 12 once fixed.`;
                   await updateDoc(doc(db, 'jobs', targetJobId), res.ok ? queuedStamp(res.outboxId) : refusedStamp(res.error?.code, res.error?.message));
               }

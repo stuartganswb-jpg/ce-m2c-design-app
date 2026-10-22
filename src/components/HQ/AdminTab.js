@@ -2546,6 +2546,26 @@ const AdminTab = ({ currentUser, activeBrand, TABS, writeLog }) => {   // writeL
                                         {isCreatingRollup ? 'Creating…' : (flowSettings.nsRollupItemId ? 'Re-create Item' : 'Create Rollup Item in NetSuite')}
                                     </button>
                                 </div>
+                                {/* PARTS NOT IN NETSUITE RIDE THE ROLLUP (Stuart 2026-10-21, H5-HEX: "when netsuite has no parts to match like
+                                    H5- then can we push all items into the roll up? … a check box on the cpq flow as this one was created for all
+                                    custom order and if it goes thru then we will set up parts in netsuite"). Shared/nsTransmit reads it. Saved the
+                                    moment it is ticked and read from the live flow — not part of Save and Cascade, so that button can never write
+                                    a stale value back. */}
+                                {(() => {
+                                    const on = (cpqFlows.find(f => f.id === activeFlowId) || {}).nsRollupUnmappedParts === true;
+                                    return (
+                                        <label style={{ marginTop: '10px', padding: '12px 20px', background: on ? '#fff7ed' : 'var(--paper)', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}`, display: 'flex', gap: '12px', alignItems: 'flex-start', cursor: 'pointer' }}>
+                                            <input type="checkbox" checked={on} style={{ marginTop: '3px' }}
+                                                onChange={async (e) => { try { await updateDoc(doc(db, 'cpq_flows', activeFlowId), { nsRollupUnmappedParts: e.target.checked }); } catch (err) { alert('Save failed: ' + (err.message || err)); } }} />
+                                            <span>
+                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: on ? 'var(--ink)' : 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Parts not in NetSuite ride the rollup</span>
+                                                <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)', lineHeight: 1.45, display: 'block' }}>
+                                                    For a custom flow whose parts are not set up in NetSuite yet. A part with no NetSuite id goes inside its configuration's rollup line, named in its description, instead of as its own line (NetSuite refuses an item it does not have). Parts NetSuite knows still go as their own lines, and each part set up in NetSuite starts going as its own line — no need to untick.
+                                                </span>
+                                            </span>
+                                        </label>
+                                    );
+                                })()}
 
                                 <div style={{ display: 'flex', gap: '15px', marginTop: '24px' }}>
                                     <button onClick={handleSaveFlowSettings} style={{ flex: 2, padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
