@@ -287,11 +287,12 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
 
   // ---- DEPARTMENTS & TEAM ACCESS (Stuart 2026-08-09: per-user portal visibility) --------------
   // The access matrix lives on crm_records (staff-editable here, like every other portal
-  // entitlement); the BFF will enforce it server-side in the next phase:
-  //   LEAD      sees every quote in their department; invites their own members from the portal
-  //   MEMBER    sees only quotes they generated (matched by createdBy.email)
-  //   REGIONAL  sees every quote in each department assigned to them
-  // A portal login with NO team entry keeps today's account-wide visibility, so turning this on
+  // entitlement). The portal's Orders & Quotes enforces it server-side since 2026-10-22
+  // (functions/portalVisibility):
+  //   MEMBER    sees only the quotes and orders they sent from the portal
+  //   LEAD      sees their own and their department's, grouped by person (the invite flow is not built)
+  //   REGIONAL  still the whole account — department scoping waits on Stuart
+  // A portal login with NO team entry keeps account-wide visibility, so turning this on
   // never darkens an existing customer's portal.
   const PORTAL_ROLES = [
     { id: 'LEAD', label: 'Team Lead' },
@@ -360,7 +361,7 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
   };
   const removeTeamEntry = (idx) => {
     const t = portalTeam[idx];
-    if (!window.confirm(`Remove ${t.email} from the team list? Their portal login (if any) stays — they fall back to account-wide visibility until the per-user gate is enforced.`)) return;
+    if (!window.confirm(`Remove ${t.email} from the team list?\n\nTheir portal login (if any) stays — and with no team entry it sees the WHOLE account's orders and quotes. To shut a login out, Disable or Remove the login itself (above).`)) return;
     writeTeamList(portalTeam.filter((_, i) => i !== idx), portalTeam);
   };
   const teamRoleOf = (email) => portalTeam.find(t => t.email === String(email || '').trim().toLowerCase());
@@ -459,7 +460,7 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
               <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: portalTeam.length ? 'var(--brass)' : 'var(--ink-soft)' }}>{portalTeam.length ? `${portalTeam.length} in team` : 'not configured — everyone sees the whole account'}</span>
             </div>
             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', marginBottom: '12px' }}>
-              <strong>Team Leads</strong> see every quote in their department and will invite their own team members from the portal. <strong>Team Members</strong> see only quotes they created. <strong>Regional Managers</strong> see all the departments assigned to them. Logins with no role keep full-account visibility.
+              <strong>Team Members</strong> see only the quotes and orders they sent from the portal. <strong>Team Leads</strong> see their own and their department's, grouped by person (inviting their own members from the portal is not built yet). <strong>Regional Managers</strong> still see the whole account until their department scoping is decided. Logins with no role keep full-account visibility.
             </div>
 
             {/* The department list — the unit everything above scopes to. */}
@@ -534,7 +535,7 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
               )}
               <button onClick={addTeamEntry} disabled={!teamForm.email} style={{ padding: '9px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', opacity: teamForm.email ? 1 : 0.5, whiteSpace: 'nowrap' }}>+ Add to Team</button>
             </div>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '8px', letterSpacing: '.04em' }}>Saved on the CRM record and matched to quotes by email (createdBy). Portal-side enforcement + the lead's invite flow ship next — until then every login still sees the whole account.</div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '8px', letterSpacing: '.04em' }}>Saved on the CRM record and matched to each quote's portal sender by email. Enforced on the portal's Orders &amp; Quotes since 2026-10-22 — quotes your team builds in CPQ / tab 7 show only to the logins that see the whole account.</div>
           </div>
 
           {/* Which CPQ flows this customer's portal may use. A flow's assembly + BOM defines

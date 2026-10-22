@@ -19,7 +19,7 @@ import CounterScreens from './CounterScreens';   // 🛋 the show counter's scre
 import PayLinkPanel from '../Shared/PayLinkPanel';   // the QR the customer scans at the counter
 import { portalRequestMemoOf } from '../Shared/reopenQuote';   // a portal request's customer note → the internal memo, as CPQ's Reopen does (2026-10-20)
 import { fetchCustomerPriceLevel, priceLevelNoteOf, mayAutoSetDiscount, priceLevelCacheOf, fetchAllCustomerPriceLevels, nsLevelAppliesAt, nsLevelSkippedNoteOf } from '../Shared/nsPriceLevel';
-import { chainOf, revisionStampOf, lineageWordsOf, convertedPatchesOf, fromQuoteStampOf } from '../Shared/quoteChain';   // a reopened quote's revisions; conversion closes the chain (2026-10-16)   // the customer's NetSuite price level → the order discount (Stuart 2026-10-12)
+import { chainOf, revisionStampOf, lineageWordsOf, convertedPatchesOf, fromQuoteStampOf, portalSenderStampOf } from '../Shared/quoteChain';   // a reopened quote's revisions; conversion closes the chain (2026-10-16)   // the customer's NetSuite price level → the order discount (Stuart 2026-10-12)
 import { nsCustomerIdOf } from '../Shared/nsHeader';   // 🛋 Uniquity standard pillows + throws in three clicks (S7 step 2, 2026-10-12) — ONE guarded mount
 import { QUICK_SELL_REQUEST_ID } from '../Shared/pillowQuickSell';
 import { fabricNsLineOf, parseUniquityCode, KINDS as PILLOW_KINDS } from '../Shared/pillowCatalog';   // an app-only fabric pushes as a fraction of its throw (Stuart 2026-10-12); a reopened cart's pillow lines are marked discountable (2026-10-15)
@@ -439,6 +439,12 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     // quote as its successor and marks this one superseded, so two live quotes never chase the
     // same job — the confusion the Fabricut re-quotes caused on 2026-08-31.
     const [reopenedQuote, setReopenedQuote] = useState('');
+    // THE PORTAL REQUEST THIS CART WAS LOADED FROM (Stuart 2026-10-22: the portal's Orders & Quotes shows each login what it sent).
+    // CPQ prices a portal request in the request's own record, so its sender stays on it; the Load below builds a NEW quote or
+    // order, so the request rides along — a quote saved from it takes the portal sender as its creator and supersedes the request,
+    // an order records the request it came from and converts it (Shared/quoteChain). Any other reopen, the banner's Cancel and
+    // the save clear it.
+    const [fromPortalReq, setFromPortalReq] = useState(null);   // { id, no, by }
     // ONE loader for a stored QUOTE — the CRM's handoff and the counter's ⟲ Reopen both call it (2026-10-15)
     const reopenQuoteById = async (jobId) => {
         try {
@@ -457,7 +463,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
             if (ex.ship) setShip(p2 => ({ ...p2, ...ex.ship }));
             // a quote saved before 2026-10-15 carries no discount mark on its pillow lines — marked on the way in, so the order % reaches them
             setCart(withPillowDiscountMarks(saved.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })), isUniquityPillowCode));
-            setReopenedQuote(j.jobId || j.id);
+            setReopenedQuote(j.jobId || j.id); setFromPortalReq(null);
             addLog(`✎ Quote ${j.jobId || j.id} reopened — ${saved.length} line(s). Saving creates the corrected quote and supersedes this one.`, 'info');
         } catch (e) { console.warn('quote reopen failed', e); alert(`Could not reopen that quote: ${e.message || e}`); }
     };
@@ -475,6 +481,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
             const snap = await getDoc(doc(db, 'hq_sales_orders', soId));
             if (!snap.exists()) return alert('That sales order no longer exists.');
             const so = { id: snap.id, ...snap.data() };
+            setFromPortalReq(null);
             setCustomerId(so.customerId || '');
             setCustSearch(so.customer ? `${so.customer} (${so.customerId || ''})` : '');
             const ex = so.quickShipExtras || {};
@@ -662,6 +669,10 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
     const loadPortalReq = async (job) => {
         const pr = job.portalRequest || {};
         const lines = Array.isArray(pr.lines) ? pr.lines : [];
+        // The cart below replaces whatever was here — so a quote reopened or an order being edited before this Load is no longer
+        // what a save would supersede; the request is (2026-10-22).
+        setReopenedQuote(''); setEditingSo(null);
+        setFromPortalReq({ id: job.id, no: job.quoteNo || job.id, by: (job.createdBy && job.createdBy.name) || pr.byEmail || '' });
         setCustomerId(job.customer?.id || '');
         setCustSearch(job.customer ? `${job.customer.name || ''} (${job.customer.id})` : '');
         setJobName(job.jobName || '');
@@ -1390,7 +1401,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
         setShip({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
         setTrvCfg(null); setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
         setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setQuickQty('');
-        setEditingSo(null); setReopenedQuote(''); setPackOff(false);
+        setEditingSo(null); setReopenedQuote(''); setFromPortalReq(null); setPackOff(false);
     };
     const removeLine = (key) => {
         if (cart.some(l => l.key === key && l.autoPack)) setPackOff(true);   // taken off by hand: it stays off for this order
@@ -1907,6 +1918,16 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                 // the quote this one revises (its root and revision ride the new one — Shared/quoteChain)
                 let reopenedPrev = null;
                 if (reopenedQuote) { try { const ps = await getDoc(doc(db, 'jobs', reopenedQuote)); reopenedPrev = ps.exists() ? { id: ps.id, ...ps.data() } : null; } catch (e) { reopenedPrev = null; } }
+                // …or the portal request it prices, read fresh — its sender becomes this quote's creator. One already priced (a second
+                // tab got there first) is left alone and this quote is saved as the counter's own.
+                let portalPrev = null;
+                if (!reopenedQuote && fromPortalReq) {
+                    try { const ps = await getDoc(doc(db, 'jobs', fromPortalReq.id)); portalPrev = ps.exists() ? { id: ps.id, ...ps.data() } : null; } catch (e) { portalPrev = null; }
+                    if (portalPrev && (portalPrev.supersededBy || portalPrev.convertedTo)) {
+                        addLog(`⚠ Portal request ${fromPortalReq.no} was already priced (${portalPrev.supersededBy || portalPrev.convertedTo}) — this quote is saved without the link to it.`, 'warn');
+                        portalPrev = null;
+                    }
+                }
                 await setDoc(doc(db, 'jobs', qJobId), {
                     jobId: qJobId, brandId: activeBrand, status: 'CONFIGURED', source: 'QUICKSHIP',
                     customer: { id: customerId, name: selectedCustomer?.name || customerId },
@@ -1919,7 +1940,7 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                     needBy: String(soExtras.needBy || '').trim(), productionNotes: String(soExtras.prodNotes || '').trim(),
                     shippingMethod: ship.method || 'SAVED', shippingAddressId: ship.addressId || null,
                     customShippingAddress: ship.method === 'CUSTOM' ? (ship.custom || null) : null, shippingAmount: parseFloat(ship.amount) || 0,
-                    createdBy: { name: currentUser || '', via: 'QUICKSHIP' },
+                    createdBy: portalSenderStampOf(portalPrev) || { name: currentUser || '', via: 'QUICKSHIP' },
                     orderDiscount,
                     cpqData: {
                         lineImages: lineImagesOf(lines),   // 🖼 the pictures on the lines (Shared/lineImage) — the CRM's documents print them
@@ -1976,7 +1997,8 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                     // here: the tab reprices on render, which is what it has always done.
                     quickShipCart: JSON.parse(JSON.stringify(cart || [])),
                     quickShipExtras: JSON.parse(JSON.stringify({ soExtras, ship, jobName: jobName || '' })),
-                    ...(reopenedQuote ? { supersedes: reopenedQuote, ...revisionStampOf(reopenedPrev, []) } : {}),
+                    ...(reopenedQuote ? { supersedes: reopenedQuote, ...revisionStampOf(reopenedPrev, []) }
+                        : portalPrev ? { supersedes: portalPrev.jobId || portalPrev.id, ...revisionStampOf(portalPrev, []) } : {}),
                     dateSaved: new Date().toISOString().split('T')[0], author: currentUser || '', createdAt: serverTimestamp(),
                 });
                 // The quote this one replaces stops being live paper.
@@ -1985,6 +2007,13 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                         await updateDoc(doc(db, 'jobs', reopenedQuote), { supersededBy: qJobId, status: 'SUPERSEDED', supersededAt: Date.now() });
                         addLog(`✎ Quote ${reopenedQuote} superseded by ${qJobId}.${'' } ⚠ Close the OLD estimate in NetSuite too.`, 'warn');
                     } catch (e) { addLog(`⚠ Could not mark ${reopenedQuote} superseded: ${e.message || e}`, 'error'); }
+                }
+                // The request this priced leaves the customer's portal list and the CRM's live pipeline — one record of it, as CPQ keeps.
+                if (portalPrev) {
+                    try {
+                        await updateDoc(doc(db, 'jobs', portalPrev.id), { supersededBy: qJobId, status: 'SUPERSEDED', supersededAt: Date.now() });
+                        addLog(`📨 Portal request ${fromPortalReq.no} priced as ${qJobId} — the customer's portal shows this quote in its place.`, 'success');
+                    } catch (e) { addLog(`⚠ Could not mark portal request ${fromPortalReq.no} as priced: ${e.message || e}`, 'error'); }
                 }
                 const obId = await enqueueNsWrite({
                     kind: 'estimate', label: `Quick Ship Quote · ${selectedCustomer?.name || customerId}`,
@@ -2180,6 +2209,21 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                     await batch.commit();
                     addLog(`✅ Quote ${reopenedQuote}${chain.length > 1 ? ` and its ${chain.length - 1} earlier revision(s)` : ''} marked CONVERTED → ${hqId}; the order records the quote it came from.`, 'success');
                 } catch (e) { addLog(`⚠ The quote chain could not be marked converted (${e.message || e}) — mark ${reopenedQuote} from the CRM.`, 'warn'); }
+            }
+            // …AND A PORTAL REQUEST THAT BECAME THIS ORDER (2026-10-22): converted the same way, and the order records it — so the
+            // customer's portal shows this order to the login that sent the request (functions/portalVisibility).
+            if (!reopenedQuote && fromPortalReq) {
+                try {
+                    const ps = await getDoc(doc(db, 'jobs', fromPortalReq.id));
+                    const req = ps.exists() ? { id: ps.id, ...ps.data() } : null;
+                    if (req && !req.supersededBy && !req.convertedTo) {
+                        const batch = writeBatch(db);
+                        convertedPatchesOf([req], { soId: hqId, soNumber: hqId, by: currentUser || '', at: stamp }).forEach(p => batch.update(doc(db, 'jobs', p.id), p.patch));
+                        batch.update(doc(db, 'hq_sales_orders', hqId), fromQuoteStampOf([req], req.jobId || req.id));
+                        await batch.commit();
+                        addLog(`📨 Portal request ${fromPortalReq.no} marked CONVERTED → ${hqId}; the order records the request it came from.`, 'success');
+                    } else if (req) addLog(`⚠ Portal request ${fromPortalReq.no} was already priced (${req.supersededBy || req.convertedTo}) — this order is saved without the link to it.`, 'warn');
+                } catch (e) { addLog(`⚠ Portal request ${fromPortalReq.no} could not be marked converted (${e.message || e}) — the order is saved; the request stays as loaded.`, 'warn'); }
             }
             // The whole bill, goods AND freight — see the quote above.
             setLastCreated({ kind: 'SALES ORDER', id: hqId, total: cartTotal + (parseFloat(ship.amount) || 0), customerName: selectedCustomer?.name || customerId, toIdentify: phLines.length });
@@ -2447,6 +2491,15 @@ const QuickShipTab = ({ currentUser, activeBrand, counterMode = false, userRole 
                     </span>
                     <button onClick={() => { setEditingSo(null); setCart([]); setJobName(''); addLog('✎ Edit cancelled — original SO untouched.', 'info'); }}
                         style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Cancel edit</button>
+                </div>
+            )}
+            {fromPortalReq && (
+                <div style={{ ...card, padding: '14px 24px', border: '2px solid var(--brass)', background: '#fdf8ef', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', letterSpacing: '.04em' }}>
+                        📨 PORTAL REQUEST <b>{fromPortalReq.no}</b>{fromPortalReq.by ? <> from <b>{fromPortalReq.by}</b></> : null} — saving prices it for them: the quote or order carries them as its sender, and their portal shows it in place of the request.
+                    </span>
+                    <button onClick={() => { setFromPortalReq(null); addLog(`📨 Unlinked from portal request ${fromPortalReq.no} — the cart stays; the request stays as loaded.`, 'info'); }}
+                        style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Unlink</button>
                 </div>
             )}
 

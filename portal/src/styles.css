@@ -173,6 +173,9 @@ h2.sec {
 .stage { display: flex; flex-direction: column; gap: 14px; }
 .finish-bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .count { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); margin-left: 10px; }
+/* Orders & Quotes: whose page this is (a member's own, a lead's team by person — 2026-10-22) */
+.scope-note { margin-top: 22px; font-size: 0.85rem; font-style: italic; color: var(--ink-soft); }
+.sub-sec { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); margin: 16px 0 8px; }
 
 .card {
   background: var(--card);

@@ -2127,6 +2127,34 @@ const AdminTab = ({ currentUser, activeBrand, TABS, writeLog }) => {   // writeL
       setIsUploadingLogo(false);
   };
 
+  // ── THE FLOW'S PICTURE ON THE PORTAL (Stuart 2026-10-22: "on the main configure tab can you replace the assembly thumbnails (they
+  // are made from the full loaded .fbx so they look funny) replace them with the images from the fabricut catalog table of contents
+  // that align with each"). The portal's Configure card shows it instead of the assembly's own picture (functions portalConfigFlows);
+  // nothing else reads it. Saved the moment it is chosen and read from the live flow — not part of Save and Cascade.
+  const [isUploadingPortalPic, setIsUploadingPortalPic] = useState(false);
+  const handlePortalPictureUpload = async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file || !activeFlowId) return;
+      if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return alert('Please choose a JPEG, PNG or WebP picture.');
+      if (file.size > 2 * 1024 * 1024) return alert('That picture is over 2 MB — the portal card shows it 160 px tall, so a smaller file loads faster. Please save a smaller copy.');
+      setIsUploadingPortalPic(true);
+      try {
+          const picRef = ref(storage, `cpq_flow_pictures/${activeFlowId}_${Date.now()}.${(file.name.split('.').pop() || 'jpg').toLowerCase()}`);
+          await uploadBytes(picRef, file, { contentType: file.type });
+          await updateDoc(doc(db, 'cpq_flows', activeFlowId), { portalPicture: await getDownloadURL(picRef) });
+      } catch (err) {
+          console.error(err);
+          alert('Could not save the picture: ' + (err.message || err));
+      }
+      setIsUploadingPortalPic(false);
+  };
+  const handlePortalPictureRemove = async () => {
+      if (!activeFlowId || !window.confirm("Remove this flow's portal picture? The portal goes back to the assembly's own picture.")) return;
+      try { await updateDoc(doc(db, 'cpq_flows', activeFlowId), { portalPicture: '' }); }
+      catch (err) { alert('Could not remove the picture: ' + (err.message || err)); }
+  };
+
   const handleSaveFormTemplate = async () => {
       try {
           await setDoc(doc(db, "hq_config", "form_templates"), {
@@ -2375,8 +2403,34 @@ const AdminTab = ({ currentUser, activeBrand, TABS, writeLog }) => {   // writeL
                                     <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>Scopes the checkout add-ons for this flow. Items/fees with no collection tags in 4.6 stay global regardless.</span>
                                 </div>
 
+                                {/* THE FLOW'S PICTURE ON THE PORTAL (Stuart 2026-10-22) — the Configure card's picture, in place of the
+                                    assembly's own render. Saved the moment it is chosen; read from the live flow, not part of Save and Cascade. */}
+                                {(() => {
+                                    const pic = String((cpqFlows.find(f => f.id === activeFlowId) || {}).portalPicture || '');
+                                    const asmPic = String((masterAssemblies.find(a => a.id === flowSettings.linkedAssemblyId) || {}).finalImageUrl || '');
+                                    const shown = pic || asmPic;
+                                    return (
+                                        <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: `1px solid ${pic ? 'var(--brass)' : 'var(--line)'}`, display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                            <div title={shown ? (pic ? 'The portal picture' : "The assembly's own picture — what the portal shows now") : 'No picture'}
+                                                style={{ width: '176px', height: '96px', flexShrink: 0, border: '1px solid var(--line)', opacity: pic ? 1 : 0.55, background: shown ? `#fff url("${shown}") center / contain no-repeat` : '#fff' }} />
+                                            <div style={{ flex: '1 1 260px' }}>
+                                                <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Portal picture</label>
+                                                <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)', lineHeight: 1.45, display: 'block' }}>
+                                                    {pic ? "The portal's Configure tab shows this picture on this flow's card."
+                                                        : "None — the portal's Configure tab shows the assembly's own picture (shown faded here). Upload a JPEG, PNG or WebP to show instead; it saves the moment you choose it."}
+                                                </span>
+                                            </div>
+                                            <label style={{ flexShrink: 0, padding: '10px 16px', background: pic ? 'transparent' : 'var(--ink)', color: pic ? 'var(--ink)' : '#fff', border: pic ? '1px solid var(--line)' : 'none', cursor: isUploadingPortalPic ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                                                {isUploadingPortalPic ? 'Saving…' : (pic ? 'Replace' : 'Upload picture')}
+                                                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePortalPictureUpload} disabled={isUploadingPortalPic} style={{ display: 'none' }} />
+                                            </label>
+                                            {pic && <button onClick={handlePortalPictureRemove} style={{ flexShrink: 0, padding: '10px 14px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Remove</button>}
+                                        </div>
+                                    );
+                                })()}
+
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
-                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Fabrication Preset (drives the Vision Hardware tool)</label>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Fabrication Preset (drives the VisionHardware tool)</label>
                                     <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>This flow is 1:1 with a bay configuration + end style + bracket projection — set it here and Vision auto-applies it. CPQ item/finish picks never change fabrication.</span>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                                         <div>

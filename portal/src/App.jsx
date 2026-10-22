@@ -215,23 +215,49 @@ const Orders = () => {
   if (err) return <div className="empty" style={{ marginTop: 24 }}>{err}</div>;
   if (!data) return <div className="empty" style={{ marginTop: 24 }}>Loading your orders…</div>;
 
-  const { quotes = [], orders = [] } = data;
+  // WHO SEES WHAT (Stuart 2026-10-22): the server decides and says which view this is (functions/portalVisibility) — a Team Member
+  // gets what they sent, a Team Lead their department's filed by person, everyone else the whole account as before.
+  const { quotes = [], orders = [], view } = data;
+  const orderCards = (list) => list.map((o) => <OrderCard key={o.id} o={o} badge={o.stage} badgeClass={stageClass(o.stage)} />);
+  const quoteCards = (list) => list.map((q) => (
+    <OrderCard key={q.docId || q.id} o={q}
+      badge={busyId === (q.docId || q.id) ? 'Deleting…' : (QUOTE_LABELS[q.status] || 'In review')}
+      badgeClass="s-received" onDelete={deleteQuote} />
+  ));
+  // A TEAM LEAD'S PAGE: one block per person — the lead first, then each member of the department by name.
+  if (view?.role === 'LEAD') {
+    return (
+      <>
+        <div className="scope-note">Your team's orders and quotes, by person.</div>
+        {note && <div className={`msg${note.ok ? ' ok' : ''}`} style={{ marginTop: 14 }}>{note.text}</div>}
+        {(view.people || []).map((p) => {
+          const po = orders.filter((o) => o.person === p.key);
+          const pq = quotes.filter((q) => q.person === p.key);
+          return (
+            <section key={p.key}>
+              <h2 className="sec">{p.name}{p.you ? ' (you)' : ''}<span className="count">{po.length + pq.length}</span></h2>
+              {!po.length && !pq.length && <div className="empty">Nothing sent from the portal yet.</div>}
+              {po.length > 0 && <><div className="sub-sec">Orders in progress · {po.length}</div>{orderCards(po)}</>}
+              {pq.length > 0 && <><div className="sub-sec">Quotes · {pq.length}</div>{quoteCards(pq)}</>}
+            </section>
+          );
+        })}
+      </>
+    );
+  }
   return (
     <>
+      {view?.role === 'MEMBER' && <div className="scope-note">The orders and quotes you sent from this portal.</div>}
       <h2 className="sec">Orders in progress<span className="count">{orders.length}</span></h2>
       {orders.length === 0
         ? <div className="empty">No orders in progress. Your quotes appear below — contact us to place an order.</div>
-        : orders.map((o) => <OrderCard key={o.id} o={o} badge={o.stage} badgeClass={stageClass(o.stage)} />)}
+        : orderCards(orders)}
 
       <h2 className="sec">Quotes<span className="count">{quotes.length}</span></h2>
       {note && <div className={`msg${note.ok ? ' ok' : ''}`} style={{ marginBottom: 14 }}>{note.text}</div>}
       {quotes.length === 0
         ? <div className="empty">No open quotes. Reach out to your representative to start one.</div>
-        : quotes.map((q) => (
-            <OrderCard key={q.docId || q.id} o={q}
-              badge={busyId === (q.docId || q.id) ? 'Deleting…' : (QUOTE_LABELS[q.status] || 'In review')}
-              badgeClass="s-received" onDelete={deleteQuote} />
-          ))}
+        : quoteCards(quotes)}
     </>
   );
 };

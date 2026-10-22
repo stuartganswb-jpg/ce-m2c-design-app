@@ -11,6 +11,7 @@
 //   lineageWordsOf(job, jobs)     "Rev 2 · supersedes QSQUOTE-…" · "Superseded by …" · "Converted → …"
 //   convertedPatchesOf(chain, so) the patch per quote when the chain becomes a sales order
 //   isQuoteArchived(job)          superseded / converted / done — out of the active pipeline
+//   portalSenderStampOf(job)      a portal request's sender, as the creation stamp of the quote Order Entry prices it as
 
 const str = (v) => String(v == null ? '' : v).trim();
 
@@ -61,7 +62,9 @@ export function lineageWordsOf(job, jobs = []) {
     const parts = [];
     const st = str(job.status).toUpperCase();
     if (st === 'CONVERTED' || job.convertedTo) parts.push(`Converted → ${str(job.convertedToNo) || str(job.convertedTo) || 'sales order'}`);
-    else if (st === 'SUPERSEDED' || job.supersededBy) parts.push(`Superseded by ${str(job.supersededBy)} — close its old NetSuite estimate by hand`);
+    // (a portal request Order Entry priced never reached NetSuite — it has no estimate to close, 2026-10-22)
+    else if (st === 'SUPERSEDED' || job.supersededBy) parts.push(str(job.source).toUpperCase() === 'PORTAL' && !str(job.netsuiteEstimateId) && !str(job.netsuiteEstimateNo)
+        ? `Priced as ${str(job.supersededBy)}` : `Superseded by ${str(job.supersededBy)} — close its old NetSuite estimate by hand`);
     const rev = Number(job.revision) || (job.supersedes ? Math.max(2, chainOf(jobs, keyOf(job)).findIndex(j => keyOf(j) === keyOf(job)) + 1) : 0);
     if (rev > 1) parts.push(`Rev ${rev} · supersedes ${str(job.supersedes) || str(job.rootQuote)}`);
     return parts.join(' · ');
@@ -77,3 +80,16 @@ export const convertedPatchesOf = (chain = [], { soId = '', soNumber = '', by = 
 
 /** What the sales order records about the quotes it came from. */
 export const fromQuoteStampOf = (chain = [], fromJobId = '') => ({ fromQuote: str(fromJobId), quoteChain: (chain || []).map(keyOf).filter(Boolean) });
+
+// ── WHO SENT IT, CARRIED ONTO THE QUOTE THAT PRICES IT (Stuart 2026-10-22: the portal's Orders & Quotes shows each login what it
+// sent). CPQ prices a portal request in the request's own record, which keeps its createdBy; Order Entry's Load builds a NEW quote,
+// which takes this as its createdBy (`author` keeps the staff member) — so the CRM reads "By … (portal) · priced by …" from either
+// door, and functions/portalVisibility finds the sender on the quote itself. Older requests carry only portalRequest.byEmail.
+/** A portal request's sender as a creation stamp { name, email, via: 'PORTAL' }; null for anything not sent from the portal. */
+export const portalSenderStampOf = (job) => {
+    if (!job) return null;
+    const cb = job.createdBy;
+    if (cb && typeof cb === 'object' && cb.via === 'PORTAL' && (str(cb.email) || str(cb.name))) return { name: str(cb.name) || str(cb.email), email: str(cb.email).toLowerCase(), via: 'PORTAL' };
+    const by = str(job.portalRequest && job.portalRequest.byEmail).toLowerCase();
+    return by ? { name: by, email: by, via: 'PORTAL' } : null;
+};

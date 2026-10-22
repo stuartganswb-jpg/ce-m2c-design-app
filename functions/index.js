@@ -1224,6 +1224,8 @@ const buildSkuLookup = async (db, customerId, crm, codes) => {
 // through the src/ mirror of the same module, so the customer's card and the team's document say
 // the same words. price/total/sku stay null-shaped here for the card renderer.
 const { portalRequestLines, printsFromRequest } = require('./portalRequestLines');
+// Who on the account sees which quotes and orders — a Team Member their own, a Team Lead their department's (2026-10-22).
+const portalVisibility = require('./portalVisibility');
 // flowById covers multi-line requests (portalRequest.lines[]); the single-doc second argument
 // keeps legacy single-flow requests resolving exactly as before.
 const requestLines = (job, flowById, finishes, custNames) =>
@@ -1249,7 +1251,8 @@ const rollupStage = (so, shopDocs, finDocs) => {
 };
 
 // Everything the signed-in customer may see about their quotes and orders — shaped here, filtered
-// by the customerId CLAIM (never by anything the browser sends).
+// by the customerId CLAIM (never by anything the browser sends), and by the login's place on the
+// account's team (functions/portalVisibility, 2026-10-22).
 exports.portalMyOrders = onCall({ cors: true }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const db = admin.firestore();
@@ -1258,6 +1261,14 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
     const jobsSnap = await db.collection('jobs').where('customer.id', '==', customerId).get();
     const jobs = jobsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
     const jobIds = jobs.map((j) => j.jobId || j.id).filter(Boolean);
+
+    // WHO SEES WHAT ON THIS ACCOUNT (functions/portalVisibility, Stuart 2026-10-22): a Team Member what they sent from the portal, a
+    // Team Lead their department's grouped by person; Regional Managers and logins with no team entry the whole account, as before.
+    // The login is the email on its token. (The CRM record is read here now — the part #s below read it too.)
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const view = portalVisibility.viewOf({ email: request.auth.token && request.auth.token.email, team: crm.portalTeam });
+    const jobOf = portalVisibility.jobIndexOf(jobs);
 
     // Their sales orders: ERP-pulled SOs carry no customerId but link via hqJobId → their quote;
     // QuickShip SOs carry customerId directly.
@@ -1271,9 +1282,12 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
     // HQ soft-delete tombstones stay in the collection by design (2026-08-25 ledger model) —
     // they must never resurface in the customer's own list.
     for (let i = soDocs.length - 1; i >= 0; i--) { if (soDocs[i].deleted) soDocs.splice(i, 1); }
+    // …and the ones this login sees, each with whoever sent the quote it came from (the quotes that became orders are worked out from
+    // all of them, below — a quote that became an order is history whoever can see the order).
+    const mySos = soDocs.map((so) => ({ so, sender: portalVisibility.senderOfOrder(so, jobOf) })).filter((x) => portalVisibility.sees(view, x.sender));
 
     // Floor docs for the stage rollup, joined by the same keys RTG Dispatch uses.
-    const joinKeys = [...new Set(soDocs.flatMap((so) => [so.soId, so.id, so.hqJobId]).filter(Boolean).map(String))];
+    const joinKeys = [...new Set(mySos.flatMap(({ so }) => [so.soId, so.id, so.hqJobId]).filter(Boolean).map(String))];
     const shopDocs = []; const finDocs = [];
     for (const keys of chunk(joinKeys, 30)) {
         const [sh, fi] = await Promise.all([
@@ -1300,11 +1314,9 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
 
     // THEIR part #s for every code on every line we are about to return — one batched lookup for
     // the whole page rather than a read per line.
-    const crmSnap = await db.collection('crm_records').doc(customerId).get();
-    const crm = crmSnap.exists ? crmSnap.data() : {};
     const allCodes = [
         ...liveJobs.flatMap((j) => ((j.cpqData && j.cpqData.breakdown) || []).map((l) => l && (l.legacyErpId || l.partId))),
-        ...soDocs.flatMap((so) => (so.lines || []).map((l) => l && (l.erp || l.itemId))),
+        ...mySos.flatMap(({ so }) => (so.lines || []).map((l) => l && (l.erp || l.itemId))),
     ];
     const skuOf = await buildSkuLookup(db, customerId, crm, allCodes);
 
@@ -1342,9 +1354,13 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
     const reqCustNames = new Set([crm.name, crm.companyName].filter(Boolean).map((s) => String(s).trim().toUpperCase()));
 
     return {
+        // what this login is (no emails): a lead's page groups its quotes and orders by `person`, in the order of view.people
+        view: portalVisibility.publicViewOf(view),
         quotes: liveJobs
             .filter((j) => !orderedJobIds.has(String(j.jobId || j.id)) && !isHistory(j))
-            .map((j) => {
+            .map((j) => ({ j, sender: portalVisibility.senderOfJob(j, jobOf) }))
+            .filter((x) => portalVisibility.sees(view, x.sender))
+            .map(({ j, sender }) => {
                 const priced = sanitizeBreakdown(j.cpqData, skuOf);
                 // (a Quick Ship request staff have loaded into 7. Quick Ship but not priced prints its own record too — 2026-10-20)
                 const isRequest = j.status === 'PORTAL_REQUEST' || printsFromRequest(j);
@@ -1366,11 +1382,13 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
                     canDelete: ['PORTAL_REQUEST', 'CONFIGURED', 'SENT_TO_CLIENT', 'REVISION_REQUESTED'].includes(String(j.status || 'CONFIGURED')),
                     lines: priced.length ? priced : (isRequest ? requestLines(j, flowById, reqFinishes, reqCustNames) : []),
                     awaitingPricing: isRequest && !priced.length,
+                    ...(view.role === 'LEAD' ? { person: portalVisibility.personKeyOf(view, sender) } : {}),
                 };
             }),
-        orders: soDocs.map((so) => {
+        orders: mySos.map(({ so, sender }) => {
             const job = jobs.find((j) => String(j.jobId || j.id) === String(so.hqJobId || ''));
             return {
+                ...(view.role === 'LEAD' ? { person: portalVisibility.personKeyOf(view, sender) } : {}),
                 id: so.soId || so.id,
                 name: (job && job.jobName) || so.jobName || 'Order',
                 sidemark: (job && job.sidemark) || '',
@@ -1401,6 +1419,17 @@ exports.portalDeleteQuote = onCall({ cors: true }, async (request) => {
     // OWNERSHIP is checked against the CLAIM, never against anything the browser sent.
     if (String((job.customer && job.customer.id) || '') !== String(customerId)) {
         throw new HttpsError('permission-denied', 'That quote is not on your account.');
+    }
+    // …and one this login may see — the Orders & Quotes rule (functions/portalVisibility, 2026-10-22): a Team Member deletes only
+    // what they sent, a Team Lead what their department sent. A revision's sender is its chain root's, read when it is needed.
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const view = portalVisibility.viewOf({ email: request.auth.token && request.auth.token.email, team: crmSnap.exists ? crmSnap.data().portalTeam : [] });
+    if (view.role !== 'ALL') {
+        const root = String(job.rootQuote || '').trim();
+        const rootSnap = !portalVisibility.ownSenderOf(job) && root && root !== quoteId ? await db.collection('jobs').doc(root).get() : null;
+        const rootJob = rootSnap && rootSnap.exists ? { id: rootSnap.id, ...rootSnap.data() } : null;
+        const sender = portalVisibility.senderOfJob({ id: quoteId, ...job }, portalVisibility.jobIndexOf(rootJob ? [rootJob] : []));
+        if (!portalVisibility.sees(view, sender)) throw new HttpsError('permission-denied', 'That quote is not one of yours.');
     }
     const status = String(job.status || 'CONFIGURED');
     if (!['PORTAL_REQUEST', 'CONFIGURED', 'SENT_TO_CLIENT', 'REVISION_REQUESTED'].includes(status)) {
@@ -1626,7 +1655,9 @@ exports.portalConfigFlows = onCall({ cors: true }, async (request) => {
         if (inCollection && !inCollection(asm)) continue;
         const pin = await db.collection('assembly_pins').where('assemblyId', '==', String(f.linkedAssemblyId)).limit(1).get();
         if (pin.empty) continue;                                // no pins — the engine has nothing to offer
-        out.push({ id: f.id, name: String(f.name || asm.itemName || 'Product').slice(0, 120), picture: String(asm.finalImageUrl || ''), preview: ids.preview.includes(f.id) });   // the assembly's own picture (on the record, as HQ keeps it)
+        // The flow's own portal picture (System Admin → CPQ Flows, Stuart 2026-10-22: the catalog's pictures, not the render of the
+        // loaded model, which "look funny"), else the assembly's own picture (on the record, as HQ keeps it).
+        out.push({ id: f.id, name: String(f.name || asm.itemName || 'Product').slice(0, 120), picture: String(f.portalPicture || asm.finalImageUrl || ''), preview: ids.preview.includes(f.id) });
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
     return { flows: out };
