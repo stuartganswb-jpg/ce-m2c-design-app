@@ -39,6 +39,10 @@ export function parseKitCode(code) {
             drive: /M/.test(flags) ? 'MOTORIZED' : 'MANUAL',
             mount: mountLetter ? (mountLetter === 'C' ? 'CEILING' : 'WALL') : (/C$/.test(flags) ? 'CEILING' : 'WALL'),
             material, minFeet: 4,
+            // Every code of this family is a traverse SYSTEM (Stuart 2026-10-22: the H1-2TRV assembly now holds solid rods
+            // beside the traverse, so it opens on Rod Type as H1-138 does — and a kit that did not answer it left the solid
+            // rods on offer). Not part of axesKeyOf: the kits' keys do not move.
+            rodKind: 'TRAVERSE',
         };
         return { family, align, watt: watt || null };
     }

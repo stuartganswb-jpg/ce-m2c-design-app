@@ -14,11 +14,11 @@ const { parseTraverseKitSheets } = await import('../src/components/Shared/traver
 
 test('hand-picked codes parse to their known meanings', () => {
     assert.deepEqual(parseKitCode('H1-2TRV-4/P').align,
-        { setup: 'SINGLE', frontRail: 'TRACK', drive: 'MANUAL', mount: 'WALL', material: 'P', minFeet: 4 });
+        { setup: 'SINGLE', frontRail: 'TRACK', drive: 'MANUAL', mount: 'WALL', material: 'P', minFeet: 4, rodKind: 'TRAVERSE' });
     assert.deepEqual(parseKitCode('H1-2TRV-4FRT/W').align,
-        { setup: 'DOUBLE', frontRail: 'RING', drive: 'MANUAL', mount: 'WALL', material: 'W', minFeet: 4 });
+        { setup: 'DOUBLE', frontRail: 'RING', drive: 'MANUAL', mount: 'WALL', material: 'W', minFeet: 4, rodKind: 'TRAVERSE' });
     assert.deepEqual(parseKitCode('H1-2TRV-4MDC/EP').align,
-        { setup: 'DOUBLE', frontRail: 'TRACK', drive: 'MOTORIZED', mount: 'CEILING', material: 'EP', minFeet: 4 });
+        { setup: 'DOUBLE', frontRail: 'TRACK', drive: 'MOTORIZED', mount: 'CEILING', material: 'EP', minFeet: 4, rodKind: 'TRAVERSE' });
     // the motor suffix letter is the MOUNT — no C in the flags, ceiling all the same
     const c = parseKitCode('H1-2TRV-4M/P-35C');
     assert.equal(c.align.mount, 'CEILING');

@@ -3,7 +3,7 @@
 //
 // CPQ's OWN inline code, as it stood before the move, is kept below verbatim as the reference (CPQTab seedableKits / kitSeedDiag,
 // HardwareConfigurator applyKit + its kit-bracket effect). Every function of the module is held against it.
-import { kitsForFlowOf, unalignedKitsForFlowOf, kitMatcherOf, kitIdOf, kitStartOf, kitFillsOf } from '../src/components/Shared/kitStart.js';
+import { kitsForFlowOf, unalignedKitsForFlowOf, kitMatcherOf, kitIdOf, kitStartOf, kitFillsOf, kitAsItsCodeSays } from '../src/components/Shared/kitStart.js';
 import { kitsForSeeding, seedFromKit } from '../src/components/Shared/kitSeed.js';
 import { kitBracketPicksOf, kitBracketSummary } from '../src/components/Shared/kitBracketPicks.js';
 import { sessionOf } from '../src/components/Shared/hardwareSession.js';
@@ -121,7 +121,10 @@ let started = 0, blocked = 0, typedKept = 0;
 starts.forEach((st, si) => {
     const model = sessionOf(data, { answers: st.answers, picks: {} }).model;
     [...KITS.map(kitIdOf), '', 'K-GONE'].forEach((id) => {
-        const want = oldApplyKit({ id, kits: KITS, model, poleIn: st.poleIn });
+        // (the reference is handed each kit as its code says — the one change since the move, held on its own below)
+        const want = oldApplyKit({ id, kits: KITS.map(kitAsItsCodeSays), model, poleIn: st.poleIn });
+        // …while the kit in hand stays the record as stored — the bill prices that, not the reading of its code
+        if (want.kitSource && want.kitSource.record) want.kitSource = { ...want.kitSource, record: KITS.find(x => kitIdOf(x) === id) };
         const got = newApplyKit({ id, kits: KITS, model, poleIn: st.poleIn });
         if (want.armed) started++;
         if (want.report && want.report.blocked) blocked++;
@@ -130,6 +133,22 @@ starts.forEach((st, si) => {
     });
 });
 eq(`…${started} kit starts, ${blocked} refusals, ${typedKept} typed lengths left standing (none vacuous)`, [started > 10, blocked > 2, typedKept > 1], [true, true, true]);
+{   // THE KIT'S CODE ANSWERS ROD TYPE (Stuart 2026-10-22, H1-2TRV-4M/P: "it did not push the traverse rod as selected and that allows
+    // the wrong options to still be shown"). This assembly holds solid rods beside the traverse; the kits were imported before it did.
+    const model = sessionOf(data, { answers: {}, picks: {} }).model;
+    const axis = (model.axes || []).find(a => a.key === 'rodKind');
+    eq('the assembly asks Rod Type — solid rods beside the traverse (why a kit must answer it)', axis ? [...axis.values].sort() : null, ['SOLID', 'TRAVERSE']);
+    const k4mp = KITS.find(x => x.id === 'K-4MP');
+    const start = kitStartOf({ model, kit: k4mp });
+    eq('picking H1-2TRV-4M/P (no rod type stored) answers Rod Type: Traverse, first on the strip', [start.answers.rodKind, start.report.carried[0]], ['TRAVERSE', 'traverse rod type']);
+    const after = sessionOf(data, { answers: start.answers, picks: {} }).model;
+    eq('…so no solid rod is offered any more', after.slots.flatMap(s => s.options || []).filter(o => o.rodKind === 'SOLID').map(o => o.name), []);
+    eq('…where before the kit answered, the solid rods were on offer (the test is not vacuous)', model.slots.flatMap(s => s.options || []).some(o => o.rodKind === 'SOLID'), true);
+    const stored = { ...k4mp, manufacturingSpecs: { ...k4mp.manufacturingSpecs, kitAlign: { ...k4mp.manufacturingSpecs.kitAlign, rodKind: 'SOLID' } } };
+    eq('a rod type stored on the kit wins over its code', kitAsItsCodeSays(stored).manufacturingSpecs.kitAlign.rodKind, 'SOLID');
+    eq('a kit whose code is not a system code is left exactly as it is', kitAsItsCodeSays(KITS.find(x => x.id === 'K-4V')) === KITS.find(x => x.id === 'K-4V'), true);
+    eq('…and the record in hand is never changed', [k4mp.manufacturingSpecs.kitAlign.rodKind, kitAsItsCodeSays(null), kitAsItsCodeSays({ id: 'X' })], [undefined, null, { id: 'X' }]);
+}
 {   // a kit sold with its own backplates: the old "pick the V backplate" instruction is dropped — the kit fills them in
     const model = sessionOf(data, { answers: {}, picks: {} }).model;
     const seed = seedFromKit({ model, kit: KITS.find(x => x.id === 'K-4V') });

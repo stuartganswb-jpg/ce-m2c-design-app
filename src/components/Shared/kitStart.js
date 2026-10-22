@@ -8,8 +8,24 @@
 // files, so nothing was added there (a change would read as "engine changed" on every saved quote). Pure.
 import { kitsForSeeding, seedFromKit } from './kitSeed.js';
 import { kitBracketPicksOf, kitBracketSummary } from './kitBracketPicks.js';
+import { parseKitCode } from './kitCode.js';
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
+
+/**
+ * THE ROD TYPE THE KIT'S OWN CODE SAYS (Stuart 2026-10-22, H1-2TRV-4M/P: "when we select a fabricut kit it correctly makes all
+ * the selections on step 1 except it did not push the traverse rod as selected and that allows the wrong options to still be
+ * shown"). Every H1-2TRV-4… code is a traverse system, but the family's kits were imported while H1-2TRV held only the traverse,
+ * so their stored alignment never answered Rod Type — and kitSeed leaves a field the kit does not carry alone. The code is the
+ * kit's identity (Shared/kitCode), so where the record is silent the code answers; a stored rodKind always wins. kitSeed.js is
+ * a stamped engine file, so the reading is done here, before the seed.
+ */
+export const kitAsItsCodeSays = (kit) => {
+    const align = kit && kit.manufacturingSpecs && kit.manufacturingSpecs.kitAlign;
+    if (!align || U(align.rodKind)) return kit;
+    const fromCode = U(((parseKitCode(kit.legacyErpId || kit.itemId) || {}).align || {}).rodKind);
+    return fromCode ? { ...kit, manufacturingSpecs: { ...kit.manufacturingSpecs, kitAlign: { ...align, rodKind: fromCode } } } : kit;
+};
 
 /** The id a kit is picked by, as CPQ's picker holds it. */
 export const kitIdOf = (k) => String((k && (k.id || k.legacyErpId)) || '');
@@ -59,7 +75,7 @@ export function unalignedKitsForFlowOf(kitLibrary = [], { assembly = null, flow 
  */
 export function kitStartOf({ model, kit, lengthTyped = false } = {}) {
     const name = String((kit && (kit.legacyErpId || kit.itemName)) || 'the kit');
-    const seed = seedFromKit({ model, kit });
+    const seed = seedFromKit({ model, kit: kitAsItsCodeSays(kit) });
     if (seed.blocked) return { name, blocked: seed.blocked, answers: {}, picks: {}, lengthInches: null, report: { name, blocked: seed.blocked, carried: [], missed: [] }, kitSource: null };
     // The brackets are filled in as they become answerable (kitFillsOf), not reported: the strip says what the kit will pick, and
     // the old "pick the V backplate" instruction is dropped where the kit names its own (Shared/kitBracketPicks).
