@@ -87,7 +87,7 @@ async function loadEngine(dir = path.join(__dirname, 'engine')) {
 // the flow's own add-by-hand list and finish list, 6.5's span map, the flow family's traverse chart, and
 // the customer's CRM record. This builds exactly that from the records the function read. `records` is
 // every Approved_Designs record (the brand filter is CPQ's: the brand itself, or shared with it).
-function worldFor(engine, { flow, records = [], pins = [], finishes = [], outsourceFinishes = [], spanDoc = null, trvRules = null, customer = null, customerId = '' }) {
+function worldFor(engine, { flow, records = [], pins = [], finishes = [], outsourceFinishes = [], spanDoc = null, trvRules = null, customer = null, customerId = '', bendableMaterials = null }) {
     const brand = (flow && flow.brandId) || (customer && customer.brandId) || '';
     const mine = (records || []).filter((d) => d && (d.brandId === brand || (Array.isArray(d.sharedBrands) && d.sharedBrands.includes(brand))));
     const libraryParts = mine.filter((d) => ['Inventory', 'Fee', 'Alias'].includes(d.partClass) || (d.manufacturingSpecs && d.manufacturingSpecs.checkoutSelectable === true));
@@ -104,6 +104,8 @@ function worldFor(engine, { flow, records = [], pins = [], finishes = [], outsou
         extraItems: (Array.isArray(flow && flow.extraItems) ? flow.extraItems : []).filter((x) => String((x && x.code) || '').trim()),
         flowFinishes: Array.isArray(flow && flow.flowFinishes) ? flow.flowFinishes : [],
         trvRules: trvRules || null, customer: customer || null, customerId: String(customerId || ''),
+        // 4.5's "can be bent" materials — which rods take a French return, as CPQ reads them (2026-10-22); null = metal only
+        bendableMaterials: Array.isArray(bendableMaterials) ? bendableMaterials : null,
     };
 }
 // The traverse chart a flow reads: its kit family, H1-2TRV where it names none (CPQTab's own rule).

@@ -125,6 +125,8 @@ function HardwareConfiguratorInner({
     // Quick Ship kits this assembly could be started from. Empty on every flow that has none, and
     // the picker does not render — so a collection with no kits is untouched by all of this.
     kits = [],
+    // 4.5's "can be bent" materials (system/master_lists.bendableMaterials) — which rods take a French return (2026-10-22).
+    bendableMaterials = null,
     kitsUnaligned = 0,
     kitSeedDiag = null,
     // Publishes { choices, answers, index } so the part-lookup box ABOVE this component can judge a
@@ -258,7 +260,7 @@ function HardwareConfiguratorInner({
     const [sizePick, setSizePick] = useState({});       // size step id -> optId
     const sizeSel = useMemo(() => sizeSelOf(flow, sizePick, sizeSteps), [flow, sizePick, sizeSteps]);
     const sizeIndex = useMemo(() => sizeIndexOf(sizeSel, parts), [sizeSel, parts]);
-    const choices = useMemo(() => choicesAtSize({ assembly, pins, sizeSel, sizeIndex, findPart }), [assembly, pins, sizeSel, sizeIndex, findPart]);
+    const choices = useMemo(() => choicesAtSize({ assembly, pins, sizeSel, sizeIndex, findPart, bendable: bendableMaterials }), [assembly, pins, sizeSel, sizeIndex, findPart, bendableMaterials]);
     const sizeProjInches = useMemo(() => sizeProjInchesOf(sizeSel), [sizeSel]);
     const effAnswers = useMemo(() => answersAtSize(answers, sizeProjInches), [answers, sizeProjInches]);
     const modelNodes = useMemo(() => modelNodesOf(assembly), [assembly]);

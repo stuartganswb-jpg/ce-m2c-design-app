@@ -23,7 +23,7 @@
 // Harness: scripts/hardwareSession.test.mjs.
 
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter.js';
-import { resolve, reseatPicks, recommendedQty, bearingEnds, centreBracketsFor, finishesFor, ROD_ROLES, TRAVERSE } from './hardwareModel.js';
+import { resolve, reseatPicks, recommendedQty, bearingEnds, centreBracketsFor, finishesFor, withBendable, ROD_ROLES, TRAVERSE } from './hardwareModel.js';
 import { autoPicksOf } from './hardwareAutoPicks.js';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, projInchesOfSel } from './sizeMatrix.js';
 import { bracketAdviceFor, DEFAULT_DROP_FT, FABRIC_CLASSES } from './bracketSpan.js';
@@ -86,8 +86,10 @@ export const sizeStepsOf = (flow) => (flow?.steps || []).filter(st => st?.type =
 // render — an unanswered diameter quotes the base size rather than nothing at all.
 export const sizeSelOf = (flow, sizePick, sizeSteps) => (sizeSteps.length ? sizeSelectionsOf(flow, sizePick) : null);
 export const sizeIndexOf = (sizeSel, parts) => (sizeSel ? buildSizeIndex(parts) : null);
-export function choicesAtSize({ assembly, pins, sizeSel, sizeIndex, findPart }) {
-    const raw = choicesFromAssembly(assembly, pins);
+export function choicesAtSize({ assembly, pins, sizeSel, sizeIndex, findPart, bendable = null }) {
+    // `bendable` = 4.5's "can be bent" materials (system/master_lists.bendableMaterials): each part told whether it bends, for the
+    // French-return rule (hardwareModel.withBendable). Not handed = unchanged, and the engine reads metal.
+    const raw = withBendable(choicesFromAssembly(assembly, pins), bendable);
     if (!sizeSel || !sizeIndex) return raw;
     const returnsOk = returnsAllowedFor(sizeSel);
     const out = [];
@@ -1582,7 +1584,7 @@ export function cartLineOf({ resolved, pricingCtx, assembly, flow, findPart, qty
  * what it touched; this makes them in the same order, with the same arguments.
  *
  * @param data   { assembly, pins, parts, flow, spanMap, spanCaps, trvRules, extraItems, finishes, flowFinishes,
- *                 customer, customerId, priceLevel, outsourceCodes, kits } — what the screen is handed
+ *                 customer, customerId, priceLevel, outsourceCodes, kits, bendableMaterials } — what the screen is handed
  * @param state  { answers, picks, sizePick, lengthInches, stepQty, fabricId, dropFt, onStud, extras, spliceWaived, globalFinishes,
  *                 globalFinish, partFinish, finishAnswers, kitPick, kitCode, kitMotor, trvSel, stepNotes,
  *                 stepNoteClient, memo, qty, drawnSplices, drops, pickParts } — what the operator has answered, as a cart
@@ -1594,7 +1596,7 @@ export function cartLineOf({ resolved, pricingCtx, assembly, flow, findPart, qty
  *          `refusal` (why it may not be added yet, or null) and `item` (the cart line; null while refused)
  */
 export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMap = {}, spanCaps = {}, trvRules = null, extraItems = [],
-    finishes = [], flowFinishes = [], customer = null, customerId = '', priceLevel = 'STANDARD', outsourceCodes = [], kits = [] } = {},
+    finishes = [], flowFinishes = [], customer = null, customerId = '', priceLevel = 'STANDARD', outsourceCodes = [], kits = [], bendableMaterials = null } = {},
     { answers = {}, picks = {}, sizePick = {}, lengthInches: savedLength = null, stepQty = {}, fabricId = 'PRINT', dropFt = null, onStud = true, extras: savedExtras = [], spliceWaived = false,
         globalFinishes: savedGlobalFinishes = null, globalFinish: savedGlobalFinish = '', partFinish: savedPartFinish = null,
         finishAnswers: savedFinishAnswers = null, kitPick = '', kitCode = '', kitMotor = '', trvSel: savedTrvSel = null,
@@ -1606,7 +1608,7 @@ export function sessionOf({ assembly, pins = [], parts = [], flow = null, spanMa
     const sizeSteps = sizeStepsOf(flow);
     const sizeSel = sizeSelOf(flow, sizePick, sizeSteps);
     const sizeIndex = sizeIndexOf(sizeSel, parts);
-    const choices = choicesAtSize({ assembly, pins, sizeSel, sizeIndex, findPart });
+    const choices = choicesAtSize({ assembly, pins, sizeSel, sizeIndex, findPart, bendable: bendableMaterials });
     const sizeProjInches = sizeProjInchesOf(sizeSel);
     const effAnswers = answersAtSize(answers, sizeProjInches);
     const modelNodes = modelNodesOf(assembly);

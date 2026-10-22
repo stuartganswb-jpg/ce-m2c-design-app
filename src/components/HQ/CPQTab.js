@@ -5111,6 +5111,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false,
                                   // carries no system alignment joins the index, and pricing opens it into those components.
                                   parts={[...libraryParts, ...liveAssemblies, ...kitLibrary.filter(isItemKit)]}
                                   kits={seedableKits}
+                                  bendableMaterials={globalLists?.bendableMaterials}
                                   kitsUnaligned={kitSeedDiag.unaligned}
                                   kitSeedDiag={kitSeedDiag}
                                   /* THE JOB'S CUSTOMER WINS; the flow's own account is the fallback,

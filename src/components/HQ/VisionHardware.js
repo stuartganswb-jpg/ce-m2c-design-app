@@ -3,7 +3,7 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize, projInchesOfSel } from '../Shared/sizeMatrix';
 import { pinProjectionOf, choicesFromAssembly } from '../Shared/hardwareAdapter';
-import { admits, axisValues, AXES, activeAxes, contextOf, normalizeChoice, applyFitsDefaults, parseProjTiers, measureOf } from '../Shared/hardwareModel';
+import { admits, axisValues, AXES, activeAxes, contextOf, normalizeChoice, applyFitsDefaults, parseProjTiers, measureOf, withBendable } from '../Shared/hardwareModel';
 import { traverseCutList } from '../Shared/traverseTags';
 import { projLabel } from '../Shared/traverseExplode';
 import { splitNodesLower } from '../Shared/nodeList';
@@ -12,7 +12,7 @@ import { computeBayMath } from '../Shared/bayMath';
 import { visionPickers, engDataFromPickers, enginePicksForDraft, engineEndSettled } from '../Shared/visionEngine';
 import { droppedPicks, mergeDrops, unacknowledged } from '../Shared/pickDrops';
 
-const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
+const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession, bendableMaterials = null }) => {
   // Default to TAKEOFF as Step 1
   const [viewMode, setViewMode] = useState('TAKEOFF');
   const [showQuotePanel, setShowQuotePanel] = useState(false);
@@ -456,8 +456,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const linkedAssembly = useMemo(() => (activeFlow?.linkedAssemblyId ? libraryParts.find(p => p.id === activeFlow.linkedAssemblyId) || null : null), [activeFlow, libraryParts]);
   const engineChoices = useMemo(() => {
       if (!linkedAssembly || !flowPins.length) return [];
-      return applyFitsDefaults(choicesFromAssembly(linkedAssembly, flowPins).map(c => normalizeChoice(c)).filter(c => c && c.role));
-  }, [linkedAssembly, flowPins]);
+      // (each part told whether it can be bent — 4.5's ticks — so a French return leaves a rod that cannot be, as in CPQ: 2026-10-22)
+      return withBendable(applyFitsDefaults(choicesFromAssembly(linkedAssembly, flowPins).map(c => normalizeChoice(c)).filter(c => c && c.role)), bendableMaterials);
+  }, [linkedAssembly, flowPins, bendableMaterials]);
   // ── THE ENGINE'S FRAMING AXES, ASKED HERE (Stuart 2026-09-08: "we should present single or
   // double as an option. the motorized components should be presented as Drive Type, not in end
   // style") ────────────────────────────────────────────────────────────────────────────────────

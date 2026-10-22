@@ -117,7 +117,9 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { 
           if (docSnap.exists()) {
               const data = docSnap.data();
-              setGlobalLists(prev => ({ ...prev, pillowSizes: data.pillowSizes || prev.pillowSizes, fillTypes: data.fillTypes || prev.fillTypes, flangeStyles: data.flangeStyles || prev.flangeStyles, stitchTypes: data.stitchTypes || prev.stitchTypes }));
+              setGlobalLists(prev => ({ ...prev, pillowSizes: data.pillowSizes || prev.pillowSizes, fillTypes: data.fillTypes || prev.fillTypes, flangeStyles: data.flangeStyles || prev.flangeStyles, stitchTypes: data.stitchTypes || prev.stitchTypes,
+                  // which rods take a French return (4.5's "can be bent" ticks, 2026-10-22) — Vision Hardware's engine pickers read it
+                  bendableMaterials: Array.isArray(data.bendableMaterials) ? data.bendableMaterials : null }));
           }
       });
 
@@ -231,6 +233,7 @@ const ClientVisionTab = ({ currentUser, activeBrand, cpqActiveItems }) => {
               activeBrand={activeBrand} 
               visionConfigs={visionConfigs.filter(c => c.category === 'HARDWARE')} 
               activeSession={activeSession}
+              bendableMaterials={globalLists.bendableMaterials}
           />
       )}
 

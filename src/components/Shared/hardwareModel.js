@@ -237,6 +237,28 @@ export const MOUNTED_ROLES = ['BRACKET', 'BACKPLATE'];
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 
+// ── WHAT CAN BE BENT (Stuart 2026-10-22, H1-138: "the french return option is shown even [when] wood pole is selected, this should
+// only be available for metal, we need a check box of when what materials can be bent as one day we may add french return
+// acrylic"). A French return is bent from the rod itself, so the rod's MATERIAL decides — ticked "can be bent" in 4.5's materials
+// dictionary (system/master_lists.bendableMaterials). Until anything is ticked, metal bends and nothing else does.
+export const BENDABLE_DEFAULT = ['METAL'];
+/** The materials that can be bent: the 4.5 ticks when a list is handed (an empty list = nothing bends), else METAL. */
+export const bendableListOf = (list) => (Array.isArray(list) ? list : BENDABLE_DEFAULT).map(m => U(m)).filter(Boolean);
+/**
+ * Each choice told whether it can be bent, from what it is made in (blank = METAL, a clear-only part = CLEAR (NO FINISH) — the
+ * reading normalizeChoice gives). A caller that hands no list changes nothing: the rule then reads BENDABLE_DEFAULT.
+ */
+export function withBendable(choices = [], list) {
+    if (!Array.isArray(list)) return choices;
+    const can = new Set(bendableListOf(list));
+    return (choices || []).map(c => {
+        if (!c) return c;
+        const named = (Array.isArray(c.materials) ? c.materials : String(c.materials || '').split(/[,;|]+/)).map(x => U(x)).filter(Boolean);
+        const made = named.length ? named : (c.noFinish === true ? ['CLEAR (NO FINISH)'] : ['METAL']);
+        return { ...c, bendable: made.some(m => can.has(m)) };
+    });
+}
+
 // A projection (or any measure tag) compared by VALUE, not spelling: 3-5/8, 3.625 and "3.625 in"
 // are one projection. Returns null when there is no usable number, which reads as "untagged".
 export const measureOf = (v) => {
@@ -419,6 +441,9 @@ export function normalizeChoice(input = {}) {
             || (String(input.materials || '').trim()
                 ? String(input.materials).split(/[,;|]+/).every(x => /CLEAR|NO\s*FINISH/i.test(x.trim()))
                 : false),
+        // Whether this part can be BENT, from what it is made in (withBendable — 4.5's "can be bent" ticks). Absent = nobody said;
+        // the French-return rule in slots() then reads BENDABLE_DEFAULT.
+        ...(input.bendable === true || input.bendable === false ? { bendable: input.bendable } : {}),
         isBasic: input.isBasic === true,
         // "this end treatment mounts without a backplate" — see the plate pairing in slots().
         noBackplate: input.noBackplate === true,
@@ -1155,6 +1180,30 @@ export function slots(choices, answers = {}, selectedIds = []) {
             slot.rejected = [...slot.rejected, ...dropped.map(choice => ({
                 choice, ok: false, rule: 'pole construction',
                 detail: `${chosenPoles[0].name} is a single-piece pole — a return replaces an end SEGMENT, and there is none to replace`,
+            }))];
+        });
+    }
+
+    // ── A FRENCH RETURN IS BENT FROM THE ROD, SO ONLY A ROD THAT CAN BE BENT TAKES ONE (Stuart 2026-10-22, H1-138 with the wood
+    // pole: "this should only be available for metal" — see BENDABLE_DEFAULT / withBendable above). The rod chosen at each end's tier
+    // decides: made in a material that cannot be bent, its French returns leave that end's choices, named; a miter return, a finial
+    // and an inside mount stand. Read from the tags already there — a return's endTreatment, a rod's materials. Only once a rod is
+    // chosen: before that the engine does not know which rod it is, and guessing would hide a legitimate choice.
+    const canBend = (rod) => (rod.bendable === true || rod.bendable === false)
+        ? rod.bendable
+        : (rod.materials || []).some(m => BENDABLE_DEFAULT.includes(m));
+    const stiffRods = chosenRods.filter(r => !canBend(r));
+    if (stiffRods.length) {
+        bucket.forEach(slot => {
+            if (slot.kind !== 'END') return;
+            const rod = stiffRods.find(r => !slot.tier || !r.tier || r.tier === slot.tier);
+            if (!rod) return;
+            const dropped = slot.options.filter(o => o.endTreatment === 'FRENCH_RETURN');
+            if (!dropped.length) return;
+            slot.options = slot.options.filter(o => o.endTreatment !== 'FRENCH_RETURN');
+            slot.rejected = [...slot.rejected, ...dropped.map(choice => ({
+                choice, ok: false, rule: 'material',
+                detail: `${rod.name} is made in ${(rod.materials || []).join(' / ').toLowerCase()}, which cannot be bent — a French return is bent from the rod`,
             }))];
         });
     }

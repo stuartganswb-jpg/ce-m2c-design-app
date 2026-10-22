@@ -1582,17 +1582,20 @@ const loadFlowRecords = async (db, flowId) => {
     if (!flowSnap.exists) throw new HttpsError('not-found', 'Product configuration not found.');
     const flow = { id: flowSnap.id, ...flowSnap.data() };
     const asmId = String(flow.linkedAssemblyId || '');
-    const [pinSnap, mf, outSnap, spanSnap, trvSnap] = await Promise.all([
+    const [pinSnap, mf, outSnap, spanSnap, trvSnap, listsSnap] = await Promise.all([
         asmId ? db.collection('assembly_pins').where('assemblyId', '==', asmId).get() : Promise.resolve({ docs: [] }),
         db.collection('system').doc('master_finishes').get(),
         db.collection('hq_outsource_finishes').get(),
         db.collection('system').doc('bracket_span_map').get(),
         db.collection('system').doc(`traverse_rules_${portalSession.trvFamilyOf(flow)}`).get(),
+        db.collection('system').doc('master_lists').get(),
     ]);
     const kept = {
         at: Date.now(), flow, pins: pinSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
         finishes: (mf.exists && mf.data().finishes) || [], outsourceFinishes: outSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
         spanDoc: spanSnap.exists ? spanSnap.data() : null, trvRules: trvSnap.exists ? trvSnap.data() : null,
+        // 4.5's "can be bent" materials (the French-return rule, 2026-10-22) — the one field of master_lists the engine reads
+        bendableMaterials: (listsSnap.exists && Array.isArray(listsSnap.data().bendableMaterials)) ? listsSnap.data().bendableMaterials : null,
     };
     flowKept.set(flowId, kept);
     return kept;
@@ -1610,7 +1613,7 @@ const portalWorldFor = async (db, engine, customerId, flowId, uid) => {
     await assertCollectionAllowed(db, crm, kept.flow, fid);
     const records = await loadLibrary(db, (kept.flow && kept.flow.brandId) || crm.brandId || '');
     const customer = { id: customerId, ...crm };
-    const data = portalSession.worldFor(engine, { flow: kept.flow, records, pins: kept.pins, finishes: kept.finishes, outsourceFinishes: kept.outsourceFinishes, spanDoc: kept.spanDoc, trvRules: kept.trvRules, customer, customerId });
+    const data = portalSession.worldFor(engine, { flow: kept.flow, records, pins: kept.pins, finishes: kept.finishes, outsourceFinishes: kept.outsourceFinishes, spanDoc: kept.spanDoc, trvRules: kept.trvRules, customer, customerId, bendableMaterials: kept.bendableMaterials });
     if (!data.assembly || !data.pins.length) throw new HttpsError('failed-precondition', 'This product is not ready on the portal yet.');
     return { data, customer, crm };
 };
@@ -1789,7 +1792,7 @@ exports.portalConfigCheck = onCall({ enforceAppCheck: true, memory: '512MiB', ti
     const crmSnap = customerId ? await db.collection('crm_records').doc(String(customerId)).get() : null;
     const customer = (crmSnap && crmSnap.exists) ? { id: crmSnap.id, ...crmSnap.data() } : null;
     const records = await loadLibrary(db, (kept.flow && kept.flow.brandId) || (customer && customer.brandId) || '');
-    const data = portalSession.worldFor(engine, { flow: kept.flow, records, pins: kept.pins, finishes: kept.finishes, outsourceFinishes: kept.outsourceFinishes, spanDoc: kept.spanDoc, trvRules: kept.trvRules, customer, customerId: customer ? customer.id : '' });
+    const data = portalSession.worldFor(engine, { flow: kept.flow, records, pins: kept.pins, finishes: kept.finishes, outsourceFinishes: kept.outsourceFinishes, spanDoc: kept.spanDoc, trvRules: kept.trvRules, customer, customerId: customer ? customer.id : '', bendableMaterials: kept.bendableMaterials });
     const results = (Array.isArray(states) ? states : []).slice(0, 60).map((raw) => {
         try {
             const req = portalSession.requestLineOf(engine, data, portalStateOf(engine, data, raw), { level: 'STANDARD' });

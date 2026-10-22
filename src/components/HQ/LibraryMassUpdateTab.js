@@ -25,6 +25,7 @@ import { finishCodeOf, missingMaterialOf, duplicateCodesOf, duplicateRemovalText
 import { parseQuestions, questionsText } from '../Shared/finishQuestions';
 import { planItemDelete, residualsOf, samePlan, applyItemDelete, itemLabelOf, lineCountOf } from '../Shared/itemDelete';
 import { recordDeletion } from '../Shared/orderLifecycle';
+import { bendableListOf } from '../Shared/hardwareModel';   // which materials can be bent — the French-return rule's list (2026-10-22)
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -1765,6 +1766,18 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand, canDelete = false }) =
         );
     };
 
+    // ── "CAN BE BENT" PER MATERIAL (Stuart 2026-10-22: "we need a check box of when what materials can be bent as one day we may
+    // add french return acrylic"). A French return is bent from the rod, so the engine offers one only on a rod made in a ticked
+    // material (Shared/hardwareModel — CPQ, Vision, the portal). Metal until anything is ticked. Its own key, written with merge:
+    // nothing else in master_lists is touched.
+    const handleToggleBendable = async (item, isChecked) => {
+        const current = bendableListOf(globalLists.bendableMaterials);
+        const it = String(item || '').trim().toUpperCase();
+        const updated = isChecked ? [...new Set([...current, it])] : current.filter(m => m !== it);
+        try { await setDoc(doc(db, "system", "master_lists"), { bendableMaterials: updated }, { merge: true }); }
+        catch (e) { alert('Could not save: ' + (e?.message || e)); }
+    };
+
     const handleToggleCpqRouting = async (item, isChecked) => {
         const current = globalLists.cpqRoutingTypes || [];
         const updated = isChecked ? [...current, item] : current.filter(i => i !== item);
@@ -2736,7 +2749,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand, canDelete = false }) =
                                     </div>
 
                                     {/* ALL OTHER GLOBAL LISTS UI */}
-                                    {Object.keys(globalLists).filter(k => k !== 'cpqRoutingTypes' && k !== 'collections' && k !== 'bins').map(listKey => {
+                                    {Object.keys(globalLists).filter(k => k !== 'cpqRoutingTypes' && k !== 'collections' && k !== 'bins' && k !== 'bendableMaterials').map(listKey => {
                                         
                                         // 🚀 Unify Admin rendering with dropdown dynamic lists
                                         let mergedList = globalLists[listKey] || [];
@@ -2764,6 +2777,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand, canDelete = false }) =
                                                                         <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: theme.inkSoft }}>
                                                                             <input type="checkbox" checked={globalLists.cpqRoutingTypes?.includes(item) || false} onChange={(e) => handleToggleCpqRouting(item, e.target.checked)} />
                                                                             CPQ Enabled
+                                                                        </label>
+                                                                    )}
+                                                                    {listKey === 'materials' && (
+                                                                        <label title="A French return is bent from the rod: CPQ, Vision and the portal offer one only on a rod made in a ticked material. Metal until anything is ticked." style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: theme.inkSoft }}>
+                                                                            <input type="checkbox" checked={bendableListOf(globalLists.bendableMaterials).includes(String(item || '').trim().toUpperCase())} onChange={(e) => handleToggleBendable(item, e.target.checked)} />
+                                                                            Can be bent (French return)
                                                                         </label>
                                                                     )}
                                                                     <span>{item}</span>
