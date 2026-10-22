@@ -50,6 +50,7 @@ import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import WallboardScreen from '../Shared/WallboardScreen';   // 📺 the bench's wallboard (Stuart 2026-10-13)
+import { watchCollection, FEED_EMPTY, FEED_RETRY_MS } from '../Shared/liveFeed';
 import { resolveStagingScan, stagingKeyOf, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf, mirrorCustomStatusToSibling, makeFullTasks } from '../Shared/workOrderContract';
 import { hardDeleteWithLedger, propagateFloorState, closeOrderEverywhere, sendBackToFloor, floorResetRefusalOf, floorResetPromptOf } from '../Shared/orderLifecycle';
 import { startReadyLinesOf, startReadyLinesText } from '../Shared/oeAsAvailable';
@@ -608,16 +609,21 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         catch (error) { console.error("Failed to write log:", error); }
     };
 
+    // 📡 Watched so a lost connection shows on the wallboard and comes back by itself (2026-10-21 · Shared/liveFeed).
+    const [finFeed, setFinFeed] = useState(FEED_EMPTY);
+    const [finRetry, setFinRetry] = useState(0);
     useEffect(() => {
-        const unsub = onSnapshot(collection(db, "fin_workorders"), (snap) => {
-            const fetched = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            setJobs(fetched.filter(j => j.sentToPickPack));
-            // Packing station reads the UNfiltered set: an order can finish without ever being
-            // released to pick (pole-only jobs), and it still has to be packed.
-            setFinAll(fetched);
-        });
-        return () => unsub();
-    }, []);
+        let retry = null;
+        const unsub = watchCollection({ onSnapshot, ref: collection(db, "fin_workorders"), onFeed: setFinFeed,
+            onLost: () => { retry = setTimeout(() => setFinRetry(n => n + 1), FEED_RETRY_MS); },
+            onDocs: (fetched) => {
+                setJobs(fetched.filter(j => j.sentToPickPack));
+                // Packing station reads the UNfiltered set: an order can finish without ever being
+                // released to pick (pole-only jobs), and it still has to be packed.
+                setFinAll(fetched);
+            } });
+        return () => { unsub(); clearTimeout(retry); };
+    }, [finRetry]);
 
     // Standard boxes from HQ → Packaging (tab 15) — the box designs the packing groups align to.
     const [stdBoxes, setStdBoxes] = useState([]);
@@ -9926,7 +9932,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 {/* 📺 TAB: WALLBOARD — the large-monitor screen (Stuart 2026-10-13): the bench now, fed this tab's own lists, and the
                     week's hall of fame / shame (Shared/WallboardScreen). Reads only. */}
                 {activeTab === 'WALLBOARD' && (
-                    <WallboardScreen side="wms" db={db} wms={{
+                    <WallboardScreen side="wms" db={db} feed={finFeed} wms={{
                         openPicks: jobs.filter(isOpenPick),
                         staging: jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging' && j.packStatus !== 'Packed' && j.currentPhase !== 'Closed'),
                         // the bench's whole picture: Order Entry orders waiting to pack on SO Pack count with Packaging Prep's

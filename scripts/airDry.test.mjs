@@ -1,6 +1,6 @@
 // 🧪 A sprayed coat on wood air-dries; it is never baked (Grace, App Imp 2026-10-19 · Stuart: "yes, 20min air dry").
 //    node scripts/airDry.test.mjs
-import { woAirDries, isAirDryStep, isOvenStep, airDryMinsOf, dryMinsOf, dryAwareLabel, dryAwareLabelEs, WOOD_AIR_DRY_MINS } from '../src/components/Shared/airDry.js';
+import { woAirDries, isAirDryStep, isOvenStep, airDryMinsOf, dryMinsOf, dryAwareLabel, dryAwareLabelEs, WOOD_AIR_DRY_MINS, stepButtonWords } from '../src/components/Shared/airDry.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 const eq = (n, a, b) => ok(`${n}\n    got  ${JSON.stringify(a)}\n    want ${JSON.stringify(b)}`, JSON.stringify(a) === JSON.stringify(b));
@@ -32,6 +32,11 @@ eq('not a dry slot → 0', dryMinsOf('spinSpray', wo('S04'), cfg, FIN), 0);
 
 eq('the words: Air Dry / Pole Air Dry on wood, the caller\'s own otherwise', [dryAwareLabel('spinBake', wo('S04'), FIN, 'Sled Bake'), dryAwareLabel('poleBake', wo('S04'), FIN, 'Pole Bake'), dryAwareLabel('spinBake', wo('P16'), FIN, 'Sled Bake')], ['Air Dry', 'Pole Air Dry', 'Sled Bake']);
 eq('…and in Spanish', [dryAwareLabelEs('spinBake', wo('S04'), FIN, 'Horno'), dryAwareLabelEs('poleBake', wo('P16'), FIN, 'Horno de barras')], ['Secado al aire', 'Horno de barras']);
+
+// ── the buttons say what they do (Stuart 2026-10-21) ──────────────────────────────────────────────────────────────
+eq('an oven slot: into the oven / out of the oven', [stepButtonWords('spinBake', 'START'), stepButtonWords('poleBake', 'COMPLETE')], ['▶ Into the oven · Al horno', '✓ Out of the oven · Fuera del horno']);
+eq('a wood coat\'s slot: onto the rack / dry', [stepButtonWords('poleBake', 'START', true), stepButtonWords('spinBake', 'COMPLETE', true)], ['▶ Onto the drying rack · Al secadero', '✓ Dry — off the rack · Seco']);
+eq('every other step is unchanged', [stepButtonWords('spinSpray', 'START'), stepButtonWords('hand', 'COMPLETE', true)], ['▶ Start · Empieza', '✓ Complete · Completado']);
 
 console.log(`airDry: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

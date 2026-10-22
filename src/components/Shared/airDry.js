@@ -51,3 +51,19 @@ export const AIR_DRY_LABEL_ES = Object.freeze({ spinBake: 'Secado al aire', pole
 /** A step's name: the air dry's on a wood coat, else the caller's own label for it. */
 export const dryAwareLabel = (taskKey, wo, finishes, label) => (isAirDryStep(taskKey, wo, finishes) ? AIR_DRY_LABEL[taskKey] : label);
 export const dryAwareLabelEs = (taskKey, wo, finishes, label) => (isAirDryStep(taskKey, wo, finishes) ? AIR_DRY_LABEL_ES[taskKey] : label);
+
+// ── THE BUTTONS SAY WHAT THEY DO (Stuart 2026-10-21) ────────────────────────────────────────────────────────────
+// WO11718 on 10-21: the last pole bake was punched complete at 2:26 — "out of the oven" — while the floor thought the
+// poles were still in; the wallboard (rightly) showed the oven empty. On the bake slot "Start" and "Complete" read as
+// the same thing to a painter. So the slot's buttons say the act: into the oven, out of the oven — or, on a wood coat
+// (above), onto the drying rack and dry. Every other step keeps Start · Empieza / Complete · Completado.
+const BUTTON_WORDS = {
+    oven: { START: '▶ Into the oven · Al horno', COMPLETE: '✓ Out of the oven · Fuera del horno' },
+    airDry: { START: '▶ Onto the drying rack · Al secadero', COMPLETE: '✓ Dry — off the rack · Seco' },
+    step: { START: '▶ Start · Empieza', COMPLETE: '✓ Complete · Completado' },
+};
+/** The words on a step's Start / Complete button. `airDry` = this coat air-dries (woAirDries). */
+export const stepButtonWords = (taskKey, action, airDry = false) => {
+    const kind = DRY_SLOT_KEYS.includes(String(taskKey || '')) ? (airDry ? 'airDry' : 'oven') : 'step';
+    return BUTTON_WORDS[kind][action === 'COMPLETE' ? 'COMPLETE' : 'START'];
+};

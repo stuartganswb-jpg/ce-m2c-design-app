@@ -1,5 +1,5 @@
 // ⏱ A punch that does not match the work (Stuart 2026-10-01, WO-SO60712).   node scripts/punchCheck.test.mjs
-import { normalMinutesOf, minHonestMinutes, punchCheckOf, catchUpRunOf, punchWarning, punchFlagText, PUNCH_FLAG } from '../src/components/Shared/punchCheck.js';
+import { normalMinutesOf, minHonestMinutes, punchCheckOf, catchUpRunOf, punchWarning, punchFlagText, PUNCH_FLAG, doublePunchSecsOf, doublePunchWords, DOUBLE_PUNCH_SECS } from '../src/components/Shared/punchCheck.js';
 let pass = 0, fail = 0;
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 const eq = (n, a, b) => ok(`${n} — got ${JSON.stringify(a)}`, JSON.stringify(a) === JSON.stringify(b));
@@ -75,6 +75,18 @@ eq('booth: a coat of 4 minutes passes', punchCheckOf({ startedMs: 1e12, complete
     eq('a CE stain is wood even with no list (the S-code fallback)', normalMinutesOf('spinBake', { recipe: 'S04' }, cfg), 20);
     eq('a 12-minute air dry is honest (a quarter of 20 is 5)', punchCheckOf({ startedMs: 1_000_000, completedMs: 1_000_000 + 12 * 60000, normalMins: 20 }).flag || '', '');
 }
+
+// ── the double punch (Stuart 2026-10-21 — WO11718: pole spray started and completed at 2:14:02) ────────────────────
+const T0 = 1_800_000_000_000;
+eq('the line: under a minute', DOUBLE_PUNCH_SECS, 60);
+eq('Rafa\'s pole spray, 0 and 6 seconds apart: a double punch, with the seconds', [doublePunchSecsOf({ taskKey: 'poleSpray', startedMs: T0, completedMs: T0 }), doublePunchSecsOf({ taskKey: 'spinSpray', startedMs: T0, completedMs: T0 + 6000 })], [0, 6]);
+eq('a minute or more is not (the short-punch warning still judges it)', [doublePunchSecsOf({ taskKey: 'spinSpray', startedMs: T0, completedMs: T0 + 60000 }), doublePunchSecsOf({ taskKey: 'hand', startedMs: T0, completedMs: T0 + 300000 })], [null, null]);
+eq('a hand coat completed at once is one too', doublePunchSecsOf({ taskKey: 'poleHand', startedMs: T0, completedMs: T0 + 2000 }), 2);
+eq('a bake is not asked here — its own stop refuses it', [doublePunchSecsOf({ taskKey: 'spinBake', startedMs: T0, completedMs: T0 + 1000 }), doublePunchSecsOf({ taskKey: 'poleBake', startedMs: T0, completedMs: T0 + 1000 })], [null, null]);
+eq('never started is not a double punch (it is NO_START)', doublePunchSecsOf({ taskKey: 'spinSpray', startedMs: null, completedMs: T0 }), null);
+const dw = doublePunchWords({ who: 'Rafa', order: 'WO11718', step: 'Pole Spray', stepEs: 'Pintura de barras', secs: 0 });
+eq('the words, in both languages', [dw.title, dw.titleEs, dw.rule, dw.ruleEs], ['STOP — THAT IS NOT CORRECT', 'ALTO — ESO NO ES CORRECTO', 'Press ONCE to START when you begin the step. Press AGAIN when the step is COMPLETE.', 'Presione UNA VEZ para EMPEZAR cuando comience el paso. Presione OTRA VEZ cuando el paso esté TERMINADO.']);
+eq('who, what, how far apart', [dw.detail, dw.detailEs], ['Rafa · Pole Spray on WO11718 — started and completed 0 seconds apart. This is logged.', 'Rafa · Pintura de barras en WO11718 — empezado y terminado con 0 segundos de diferencia. Esto queda registrado.']);
 
 console.log(`punchCheck: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

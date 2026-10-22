@@ -17,6 +17,7 @@ import { MixModal, QcModal } from './Modals';
 import { woRecipeCode, isPendingRecipe } from '../Shared/finishingTime';
 import { coatCountsOf } from '../Shared/floorActivity';
 import WallboardScreen from '../Shared/WallboardScreen';   // 📺 the floor's wallboard (Stuart 2026-10-13)
+import { watchCollection, FEED_EMPTY, FEED_RETRY_MS } from '../Shared/liveFeed';
 
 // 🚀 SHARED APPS
 import FloorAssetViewer from './FloorAssetViewer';
@@ -83,10 +84,22 @@ const FinishingFloor = () => {
     return () => clearInterval(timer); 
   }, []);
 
+  // 📡 THE ORDERS, WATCHED SO A LOST CONNECTION SHOWS AND COMES BACK (2026-10-21 · Shared/liveFeed): a listener that fails
+  // with an error never returns by itself, and a wallboard left on all day would keep its last numbers under a ticking
+  // clock. The feed's state rides to the wallboard; a failure re-subscribes after FEED_RETRY_MS.
+  const [woFeed, setWoFeed] = useState(FEED_EMPTY);
+  const [woRetry, setWoRetry] = useState(0);
+  useEffect(() => {
+    if (!user) return undefined;
+    let retry = null;
+    const unsub = watchCollection({ onSnapshot, ref: collection(db, "fin_workorders"), onDocs: setWorkOrders, onFeed: setWoFeed,
+      onLost: () => { retry = setTimeout(() => setWoRetry(n => n + 1), FEED_RETRY_MS); } });
+    return () => { unsub(); clearTimeout(retry); };
+  }, [user, woRetry]);
+
   useEffect(() => {
     if (!user) return;
     const unsubs = [
-      onSnapshot(collection(db, "fin_workorders"), (snap) => setWorkOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, "fin_recipes"), (snap) => { let r = {}; snap.docs.forEach(d => r[d.id] = d.data()); setRecipes(r); }),
       onSnapshot(collection(db, "fin_paint_profiles"), (snap) => { let p = {}; snap.docs.forEach(d => p[d.id] = d.data()); setPaintProfiles(p); }),
       onSnapshot(collection(db, "fin_pots"), (snap) => { let pts = {}; snap.docs.forEach(d => pts[d.id] = d.data().mixedAt); setActivePots(pts); }),
@@ -225,7 +238,7 @@ const FinishingFloor = () => {
           {activeTab === 'PRODUCTION TIMES' && <ProductionTimes sysConfig={sysConfig} capacityMatrix={capacityMatrix} recipes={recipes} workOrders={workOrders} prodTypes={prodTypes} writeLog={writeLog} user={user} finishes={masterFinishes} />}
           {activeTab === 'SUPPLIES' && <Supplies supplies={supplies} writeLog={writeLog} user={user} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}
-          {activeTab === 'WALLBOARD' && <WallboardScreen side="finishing" db={db} workOrders={workOrders} sysConfig={sysConfig} finishes={masterFinishes} />}
+          {activeTab === 'WALLBOARD' && <WallboardScreen side="finishing" db={db} workOrders={workOrders} sysConfig={sysConfig} finishes={masterFinishes} feed={woFeed} />}
           
           {/* 🚀 SHARED APPS */}
           {activeTab === 'ASSET GALLERY' && <FloorAssetViewer activeBrand={null} />}

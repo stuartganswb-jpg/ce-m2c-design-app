@@ -7,6 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { floorNowOf, wmsNowOf, boardHalfOf, sayMins } from './wallboard';
+import { feedStatusOf } from './liveFeed';
 import { floorTimersOf, GROUP } from './floorMetrics';
 
 const C = { bg: '#121110', panel: '#1c1a17', line: 'rgba(244,241,234,.12)', ink: '#f4f1ea', soft: 'rgba(244,241,234,.6)', brass: '#c9a36a', good: '#5cb85c', bad: '#e5534b', warn: '#e0a63a', oven: '#5aa9e6' };
@@ -200,7 +201,9 @@ function WeekRight({ half }) {
  * @param sysConfig  (finishing) fin_config/settings — the floor's timers
  * @param wms        (wms) { openPicks, staging, packQueue, docs, refOf } — the WMS's own lists
  */
-export default function WallboardScreen({ side = 'finishing', db, workOrders = [], sysConfig = {}, wms = {}, finishes = null }) {
+// `feed` (Shared/liveFeed) — whether the app's order list is live; printed under the clock so a frozen board can never pass
+// for a live one (2026-10-21).
+export default function WallboardScreen({ side = 'finishing', db, workOrders = [], sysConfig = {}, wms = {}, finishes = null, feed = null }) {
     const [now, setNow] = useState(Date.now());
     const [published, setPublished] = useState(null);
     const [full, setFull] = useState(false);
@@ -248,6 +251,7 @@ export default function WallboardScreen({ side = 'finishing', db, workOrders = [
                     <div style={{ textAlign: 'right' }}>
                         <div style={{ fontSize: T.big, fontWeight: 600, lineHeight: 1 }}>{clock.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</div>
                         <div style={{ fontSize: T.small, color: C.soft }}>{clock.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</div>
+                        {feed && (() => { const f = feedStatusOf(feed); return <div title={f.textEs} style={{ fontSize: T.small, fontFamily: mono, marginTop: '0.2vw', color: f.tone === 'live' ? C.good : f.tone === 'lost' ? C.bad : f.tone === 'offline' ? C.warn : C.soft }}>{f.text}</div>; })()}
                     </div>
                     <button onClick={toggleFull} title={full ? 'Leave full screen' : 'Fill the monitor (and keep it awake)'} style={{ background: 'transparent', color: C.soft, border: `1px solid ${C.line}`, padding: '0.4vw 0.8vw', fontFamily: mono, fontSize: T.small, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                         {full ? '✕ Exit' : '⛶ Full screen'}

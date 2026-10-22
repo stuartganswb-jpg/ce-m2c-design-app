@@ -1,12 +1,12 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { isFloorSupervisor } from '../Shared/finishingRoles';
 import { runningStepsOf, activityOf, activityTone, OVEN_KEYS as OVEN_TASK_KEYS, woHasPoles, woHasSmallParts, isHandStep,
     FLOOR_WINDOWS, WINDOW_LABEL, SPRAY_STATIONS, sprayStationOf, windowOfCoat, windowOfTask, coatTaskKeys, comingCoatsOf, sprayStationLockOf, sprayStationPatch, poleCoatIndexOf,
     isHandTask, mayRunHandStep, handStepWarning, TASK_LABEL as FLOOR_TASK_LABEL } from '../Shared/floorActivity';
 import { runsInLoads, spinLoadsOf, spinLoadQtyError, spinLoadRollover, spinFinalLoadRecord } from '../Shared/spinLoads';
-import { normalMinutesOf, punchCheckOf, catchUpRunOf, punchWarning, punchFlagText, TASK_LABEL_ES } from '../Shared/punchCheck';
+import { normalMinutesOf, punchCheckOf, catchUpRunOf, punchWarning, punchFlagText, TASK_LABEL_ES, doublePunchSecsOf, doublePunchWords } from '../Shared/punchCheck';
 import { startStopOf, bakeStopOf, stepStopText, stepOverrideText, stepStopLogText } from '../Shared/stepOrder';
-import { woAirDries, isAirDryStep, dryMinsOf, dryAwareLabel, dryAwareLabelEs } from '../Shared/airDry';
+import { woAirDries, isAirDryStep, dryMinsOf, dryAwareLabel, dryAwareLabelEs, stepButtonWords } from '../Shared/airDry';
 import { typedWoNumber } from '../Shared/skippedBuild';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp, deleteField } from "firebase/firestore";
@@ -163,6 +163,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // "yes, 20min air dry" · Shared/airDry). The slot after a sprayed coat keeps its task key; on a finish the library tags WOOD
   // it is twenty minutes on the rack — its own words, its own time, never the oven station, never "oven busy".
   const airDries = (wo) => woAirDries(wo, masterFinishes);
+  // ✋ the double-punch stop on this tablet (Stuart 2026-10-21) — { who, order, step, stepEs, secs } | null
+  const [doublePunch, setDoublePunch] = useState(null);
   const dryMins = (taskKey, wo) => dryMinsOf(taskKey, wo, cfg, masterFinishes);
   const stepWord = (taskKey, wo, label) => dryAwareLabel(taskKey, wo, masterFinishes, label);
   const stepWordEs = (taskKey, wo, label) => dryAwareLabelEs(taskKey, wo, masterFinishes, label);
@@ -680,7 +682,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               updates[`tasks.${taskKey}.punchRanMs`] = startedMs ? nowMs - startedMs : null;
               updates[`tasks.${taskKey}.punchNormalMins`] = check.normalMins;
           }
-          if (check.flag || catchUp) punch = { who, check, catchUp };
+          // ✋ started and completed in the same moment (Stuart 2026-10-21) — the whole screen says stop (DoublePunchStop below)
+          const dbl = doublePunchSecsOf({ taskKey, startedMs, completedMs: nowMs });
+          if (check.flag || catchUp || dbl != null) punch = { who, check, catchUp, dbl };
       }
       try {
           await updateDoc(doc(db, 'fin_workorders', wo.id), updates);
@@ -705,11 +709,13 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               ].filter(Boolean).join(' · ');
               await logManual({
                   ...(punch.who ? { u: punch.who } : {}),
-                  msg: `⏱ PUNCH WARNING · ${taskKey} · ${woRef(wo)} — ${bits}`,
+                  msg: `⏱ PUNCH WARNING · ${taskKey} · ${woRef(wo)} — ${punch.dbl != null ? `DOUBLE PUNCH (${punch.dbl}s) · ` : ''}${bits}`,
                   action: 'PUNCH_WARNING', station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey, recipe: wo.recipe || '',
                   stepIndex: wo.currentStepIndex || 0, poleStepIndex: poleIdxOf(wo), elapsedMs, startedAtMs: startedMs,
+                  ...(punch.dbl != null ? { doublePunch: true } : {}),
               });
-              alert(punchWarning({ who: punch.who, order: woRef(wo), step: stepWord(taskKey, wo, TASK_LABEL[taskKey] || taskKey), stepEs: stepWordEs(taskKey, wo, TASK_LABEL_ES[taskKey] || ''), check: punch.check, catchUp: punch.catchUp }));
+              if (punch.dbl != null) setDoublePunch({ who: punch.who, order: woRef(wo), step: stepWord(taskKey, wo, TASK_LABEL[taskKey] || taskKey), stepEs: stepWordEs(taskKey, wo, TASK_LABEL_ES[taskKey] || ''), secs: punch.dbl });
+              else alert(punchWarning({ who: punch.who, order: woRef(wo), step: stepWord(taskKey, wo, TASK_LABEL[taskKey] || taskKey), stepEs: stepWordEs(taskKey, wo, TASK_LABEL_ES[taskKey] || ''), check: punch.check, catchUp: punch.catchUp }));
           }
           loadManualRecent();
       } catch (e) { alert('Manual update failed: ' + (e.message || e)); }
@@ -770,8 +776,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const seq = [['spinSetup', 'Sled Setup'], ['spinSpray', 'Spray Coat'], ['spinBake', airDries(wo) ? `Air Dry · ${dryMins('spinBake', wo)} min (rack)` : 'Bake (oven)']];
       for (const [key, label] of seq) {
           const st = t[key]?.status;
-          if (st === 'Running') return { key, action: 'COMPLETE', label: `✓ Complete · Completado — ${label}`, running: t[key] };
-          if (st !== 'Complete') return { key, action: 'START', label: `▶ Start · Empieza — ${label}` };
+          // the bake slot says the act — into / out of the oven, or onto / off the rack (Shared/airDry.stepButtonWords, 2026-10-21)
+          if (st === 'Running') return { key, action: 'COMPLETE', label: `${stepButtonWords(key, 'COMPLETE', airDries(wo))} — ${label}`, running: t[key] };
+          if (st !== 'Complete') return { key, action: 'START', label: `${stepButtonWords(key, 'START', airDries(wo))} — ${label}` };
       }
       return { advance: true, label: idx + 1 >= len ? finalCoatLabel(wo) : `→ Unload — Advance to Coat ${idx + 2}` };
   };
@@ -802,8 +809,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       }
       if (t.poleBake?.status !== 'Complete') {
           const poleDry = airDries(wo) ? `Pole Air Dry · ${dryMins('poleBake', wo)} min (rack)` : 'Pole Bake';
-          if (t.poleBake?.status === 'Running') return { key: 'poleBake', action: 'COMPLETE', label: `✓ Complete · Completado — ${poleDry}`, running: t.poleBake };
-          return { key: 'poleBake', action: 'START', label: `▶ Start · Empieza — ${poleDry}` };
+          if (t.poleBake?.status === 'Running') return { key: 'poleBake', action: 'COMPLETE', label: `${stepButtonWords('poleBake', 'COMPLETE', airDries(wo))} — ${poleDry}`, running: t.poleBake };
+          return { key: 'poleBake', action: 'START', label: `${stepButtonWords('poleBake', 'START', airDries(wo))} — ${poleDry}` };
       }
       return { advance: true, label: idx + 1 >= len ? '✓ Poles Finished' : `→ Poles — Next Coat ${idx + 2}` };
   };
@@ -858,8 +865,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               {st === 'Pending' && lastDoneOf(tk) && <span title={lastDoneOf(tk)} style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#3a7d44' }}>✓ coat {tk.completedCoat || '?'}</span>}
               {/* START · EMPIEZA / COMPLETE · COMPLETADO (Stuart 2026-10-01: "be clearer on the buttons … rather than stop") —
                   the old "■ Stop" MEANT done, and read as "abandon it". Both languages, on the button. */}
-              {st === 'Pending' && <button onClick={() => run('START')} style={{ ...base, background: 'var(--ink)', color: '#fff', border: 'none' }}>▶ Start · Empieza</button>}
-              {st === 'Running' && <button onClick={() => run('COMPLETE')} title="The step ran and is done — logs the elapsed time" style={{ ...base, background: 'var(--brass)', color: '#fff', border: 'none' }}>✓ Complete · Completado</button>}
+              {st === 'Pending' && <button onClick={() => run('START')} style={{ ...base, background: 'var(--ink)', color: '#fff', border: 'none' }}>{stepButtonWords(key, 'START', airDries(wo))}</button>}
+              {st === 'Running' && <button onClick={() => run('COMPLETE')} title="The step ran and is done — logs the elapsed time" style={{ ...base, background: 'var(--brass)', color: '#fff', border: 'none' }}>{stepButtonWords(key, 'COMPLETE', airDries(wo))}</button>}
               {st === 'Complete' && (
                   <>
                       <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44' }}>✓</span>
@@ -1420,9 +1427,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 const blockSpray = machineState.ovenPos === 'SPINDLE' && machineState.isOvenRunning;
 
                                 if (!isSetupComplete) {
-                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} />
+                                    return <TaskCard onDoublePunch={setDoublePunch} key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} />
                                 } else if (!isSprayComplete) {
-                                    return <TaskCard key={item.wo.id+"spinSpray"} titleOverride="2. Spray Coat" wo={item.wo} type="spinSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={cfg.spinPaintMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSpray')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSpray ? "Waiting on Station 2 Oven" : null} />
+                                    return <TaskCard onDoublePunch={setDoublePunch} key={item.wo.id+"spinSpray"} titleOverride="2. Spray Coat" wo={item.wo} type="spinSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={cfg.spinPaintMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSpray')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSpray ? "Waiting on Station 2 Oven" : null} />
                                 } else if (item.wo.tasks?.spinBake?.status === 'Complete') {
                                     // Fully baked but parked at the RIGHT spot (manual completes can do
                                     // this) — without this card the WO dead-ends on "Ready for track
@@ -1460,9 +1467,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 const blockBake = machineState.ovenPos === 'POLES';
 
                                 if (!isSetupComplete) {
-                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSetup ? "Oven is blocking station" : null} />
+                                    return <TaskCard onDoublePunch={setDoublePunch} key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSetup ? "Oven is blocking station" : null} />
                                 } else if (!isBakeComplete) {
-                                    return <TaskCard key={item.wo.id+"spinBake"} titleOverride={airDries(item.wo) ? '2. Air Dry (rack)' : '2. Bake Cycle'} wo={item.wo} type="spinBake" step={item.step} user={user} estTime={dryMins('spinBake', item.wo)} finishes={masterFinishes} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinBake')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockBake ? "Oven is at pole rack" : null} />
+                                    return <TaskCard onDoublePunch={setDoublePunch} key={item.wo.id+"spinBake"} titleOverride={airDries(item.wo) ? '2. Air Dry (rack)' : '2. Bake Cycle'} wo={item.wo} type="spinBake" step={item.step} user={user} estTime={dryMins('spinBake', item.wo)} finishes={masterFinishes} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinBake')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockBake ? "Oven is at pole rack" : null} />
                                 } else {
                                     return (
                                         <div key={item.wo.id} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center' }}>
@@ -1505,9 +1512,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                     );
                                 }
                                 if (!isSprayComplete) {
-                                    return <TaskCard key={item.wo.id+"poleSpray"} titleOverride={`Spray Poles (coat ${idx + 1}/${len})`} wo={item.wo} type="poleSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={poleQty * cfg.poleMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('poleSpray')} users={users} activeWOs={activeWOs} cfg={cfg} />
+                                    return <TaskCard onDoublePunch={setDoublePunch} key={item.wo.id+"poleSpray"} titleOverride={`Spray Poles (coat ${idx + 1}/${len})`} wo={item.wo} type="poleSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={poleQty * cfg.poleMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('poleSpray')} users={users} activeWOs={activeWOs} cfg={cfg} />
                                 } else if (!isBakeComplete) {
-                                    return <TaskCard key={item.wo.id+"poleBake"} titleOverride={`${airDries(item.wo) ? 'Air Dry Poles' : 'Bake Poles'} (coat ${idx + 1}/${len})`} wo={item.wo} type="poleBake" step={item.step} user={user} estTime={dryMins('poleBake', item.wo)} finishes={masterFinishes} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('poleBake')} users={users} activeWOs={activeWOs} cfg={cfg} blockReason={blockBake ? "Oven busy curing a sled" : null} />
+                                    return <TaskCard onDoublePunch={setDoublePunch} key={item.wo.id+"poleBake"} titleOverride={`${airDries(item.wo) ? 'Air Dry Poles' : 'Bake Poles'} (coat ${idx + 1}/${len})`} wo={item.wo} type="poleBake" step={item.step} user={user} estTime={dryMins('poleBake', item.wo)} finishes={masterFinishes} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('poleBake')} users={users} activeWOs={activeWOs} cfg={cfg} blockReason={blockBake ? "Oven busy curing a sled" : null} />
                                 } else {
                                     return (
                                         <div key={item.wo.id + 'poleNext'} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center' }}>
@@ -1526,7 +1533,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 {/* Small parts only — a pole-only order hand-finishes on the pole card above, never here
                                     (its small-parts hand task is not a step it has). */}
                                 {colorGroups[color]?.map(item => item.step.app === 'Hand Applied' && woHasSmallParts(item.wo) && item.wo.tasks?.hand?.status !== 'Complete' && (
-                                    <TaskCard key={item.wo.id+"hand"} wo={item.wo} type="hand" step={item.step} user={user} setQcModal={setQcModal} estTime={item.wo.type === 'Poles' ? ((item.wo.totalParts || 0) * cfg.handPoleMins) : ((item.wo.totalParts || 0) * cfg.handSmallMins)} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('hand')} users={users} activeWOs={activeWOs} cfg={cfg} />
+                                    <TaskCard onDoublePunch={setDoublePunch} key={item.wo.id+"hand"} wo={item.wo} type="hand" step={item.step} user={user} setQcModal={setQcModal} estTime={item.wo.type === 'Poles' ? ((item.wo.totalParts || 0) * cfg.handPoleMins) : ((item.wo.totalParts || 0) * cfg.handSmallMins)} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('hand')} users={users} activeWOs={activeWOs} cfg={cfg} />
                                 ))}
                             </div>
                         </div>
@@ -1659,10 +1666,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                       {stChip(t.status)}
                                       {elapsed !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)' }}>{elapsed}m</span>}
                                       <span style={{ display: 'flex', gap: '8px' }}>
-                                          {t.status !== 'Running' && t.status !== 'Complete' && btn('▶ Start · Empieza', () => manualTask(wo, key, 'START'), true)}
+                                          {t.status !== 'Running' && t.status !== 'Complete' && btn(stepButtonWords(key, 'START', airDries(wo)), () => manualTask(wo, key, 'START'), true)}
                                           {/* This one puts a STARTED step back to not-started — it never meant "done", so it no longer says Stop. */}
                                           {running && btn('↩ Undo start · Deshacer', () => manualTask(wo, key, 'STOP'))}
-                                          {t.status !== 'Complete' && btn('✓ Complete · Completado', () => manualTask(wo, key, 'COMPLETE'))}
+                                          {t.status !== 'Complete' && btn(stepButtonWords(key, 'COMPLETE', airDries(wo)), () => manualTask(wo, key, 'COMPLETE'))}
                                           {t.status === 'Complete' && btn('↩ Reopen', () => manualTask(wo, key, 'STOP'))}
                                       </span>
                                   </div>
@@ -1933,6 +1940,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       {/* ⤴ COAT DONE — WHAT NOW. Raised the moment the last step of a coat is stopped, because
           that is the moment the operator believes they are finished. Without it the order sits on
           the floor with every step ticked, waiting on a press nothing asked for. */}
+      {doublePunch && <DoublePunchStop info={doublePunch} onClose={() => setDoublePunch(null)} />}
       {advancePrompt && (() => {
           const wo = workOrders.find(w => w.id === advancePrompt.woId);
           const close = () => setAdvancePrompt(null);
@@ -1976,6 +1984,28 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   );
 };
 
+// ✋ THE DOUBLE PUNCH, SAID SO NOBODY CAN MISS IT (Stuart 2026-10-21: "make the warning for immediate double punch like what
+// Rafa is doing take the whole screen and tell him stop that is not correct, press once to start and press again when this
+// step is complete"). The step has completed and the punch is logged (Shared/punchCheck.doublePunchSecsOf); the screen is
+// red until it is acknowledged — the button wakes after five seconds, so it cannot be tapped away unread.
+const DoublePunchStop = ({ info, onClose }) => {
+    const [left, setLeft] = useState(5);
+    useEffect(() => { const t = setInterval(() => setLeft(n => Math.max(0, n - 1)), 1000); return () => clearInterval(t); }, []);
+    const w = doublePunchWords(info || {});
+    return (
+        <div role="alertdialog" aria-modal="true" style={{ position: 'fixed', inset: 0, zIndex: 100000, background: '#b71c1c', color: '#fff', fontFamily: "'Inter', -apple-system, sans-serif", display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '3vh', padding: '4vh 5vw', textAlign: 'center', boxSizing: 'border-box' }}>
+            <div style={{ fontSize: 'clamp(36px, 6.5vw, 110px)', fontWeight: 800, lineHeight: 1.05 }}>✋ {w.title}</div>
+            <div style={{ fontSize: 'clamp(26px, 4.2vw, 70px)', fontWeight: 700, lineHeight: 1.1 }}>{w.titleEs}</div>
+            <div style={{ fontSize: 'clamp(20px, 2.8vw, 46px)', maxWidth: '92vw', lineHeight: 1.25 }}>{w.rule}</div>
+            <div style={{ fontSize: 'clamp(20px, 2.8vw, 46px)', maxWidth: '92vw', lineHeight: 1.25, opacity: 0.92 }}>{w.ruleEs}</div>
+            <div style={{ fontSize: 'clamp(13px, 1.4vw, 22px)', opacity: 0.85, lineHeight: 1.5 }}>{w.detail}<br />{w.detailEs}</div>
+            <button onClick={onClose} disabled={left > 0} style={{ fontSize: 'clamp(18px, 2.2vw, 34px)', fontWeight: 700, padding: '2vh 5vw', border: 'none', background: left > 0 ? 'rgba(255,255,255,.3)' : '#fff', color: '#b71c1c', cursor: left > 0 ? 'default' : 'pointer' }}>
+                {left > 0 ? `I understand · Entiendo (${left})` : 'I understand · Entiendo'}
+            </button>
+        </div>
+    );
+};
+
 // 🧰 A CHORE ENDS — one writer for every place a chore closes (Shared/floorChores): its slot on the order is cleared and the
 // floor log gets its end, how long it ran and why it ended. Nothing else on the order is touched.
 const choreKeyMatch = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
@@ -1988,7 +2018,7 @@ async function endChoreOnFloor(c, why) {
     } catch (e) { console.warn('chore end failed', e); }
 }
 
-const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, activePots, now, aiRec, users, activeWOs, cfg, sled, blockReason: blockReasonProp, onViewWo, finishes = null }) => {
+const TaskCard = ({ onDoublePunch, titleOverride, wo, type, step, user, setQcModal, estTime, activePots, now, aiRec, users, activeWOs, cfg, sled, blockReason: blockReasonProp, onViewWo, finishes = null }) => {
     // A held document's card shows the hold where the START button would be (S1 spec 2026-09-15).
     const hold = holdGateOf(wo);
     const blockReason = hold ? `${hold.label} — ${hold.reason || 'held'}` : blockReasonProp;
@@ -2026,18 +2056,20 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
             [`tasks.${type}.punchFlag`]: check.flag || '',
             ...(check.flag ? { [`tasks.${type}.punchRanMs`]: startedMs ? nowMs - startedMs : null, [`tasks.${type}.punchNormalMins`]: check.normalMins } : {}),
         });
-        if (!check.flag && !catchUp) return;
+        const dbl = doublePunchSecsOf({ taskKey: type, startedMs, completedMs: nowMs });   // ✋ 2026-10-21
+        if (!check.flag && !catchUp && dbl == null) return;
         const bits = [
             check.flag === 'NO_START' ? 'completed with no start punch' : (check.flag === 'TOO_SHORT' ? `ran ${(check.ranMins || 0).toFixed(1)}m — normal ~${Math.round(check.normalMins)}m` : ''),
             catchUp ? `catch-up run: ${catchUp.count} steps in 5 min (${catchUp.keys.join(', ')})` : '',
         ].filter(Boolean).join(' · ');
         addDoc(collection(db, 'fin_logs'), {
             u: who, cat: 'manual', t: serverTimestamp(), at: nowMs,
-            msg: `⏱ PUNCH WARNING · ${type} · ${woRef(wo)} — ${bits}`, action: 'PUNCH_WARNING', station: 'CARD',
+            msg: `⏱ PUNCH WARNING · ${type} · ${woRef(wo)} — ${dbl != null ? `DOUBLE PUNCH (${dbl}s) · ` : ''}${bits}`, action: 'PUNCH_WARNING', station: 'CARD',
             woId: wo.id, woRefNo: woRef(wo), task: type, recipe: wo.recipe || '',
-            elapsedMs: startedMs ? nowMs - startedMs : null, startedAtMs: startedMs,
+            elapsedMs: startedMs ? nowMs - startedMs : null, startedAtMs: startedMs, ...(dbl != null ? { doublePunch: true } : {}),
         }).catch(() => {});
-        alert(punchWarning({ who, order: woRef(wo), step: dryAwareLabel(type, wo, finishes, FLOOR_TASK_LABEL[type] || type), stepEs: dryAwareLabelEs(type, wo, finishes, TASK_LABEL_ES[type] || ''), check, catchUp }));
+        if (dbl != null && onDoublePunch) onDoublePunch({ who, order: woRef(wo), step: dryAwareLabel(type, wo, finishes, FLOOR_TASK_LABEL[type] || type), stepEs: dryAwareLabelEs(type, wo, finishes, TASK_LABEL_ES[type] || ''), secs: dbl });
+        else alert(punchWarning({ who, order: woRef(wo), step: dryAwareLabel(type, wo, finishes, FLOOR_TASK_LABEL[type] || type), stepEs: dryAwareLabelEs(type, wo, finishes, TASK_LABEL_ES[type] || ''), check, catchUp }));
     };
     
     const [manualOp, setManualOp] = useState("");
@@ -2082,7 +2114,8 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
     const isPaintReady = !!activePots[step.color];
     const disabledStart = !loggedInUserHasAccess || !isPaintReady || !currentOp || isSelectedOpBusy || blockReason;
     
-    let btnText = 'Start Task';
+    // a bake / air-dry card says the act (Shared/airDry.stepButtonWords, 2026-10-21); every other card says Start Task
+    let btnText = ['spinBake', 'poleBake'].includes(type) ? stepButtonWords(type, 'START', isAirDryStep(type, wo, finishes)) : 'Start Task';
     if (!loggedInUserHasAccess) btnText = 'Role Restricted';
     else if (!isPaintReady) btnText = 'Awaiting Paint Mix';
     else if (!currentOp) btnText = 'No Op Available';
@@ -2097,7 +2130,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                 <div onClick={() => onViewWo && onViewWo(wo)} title={`${wo.id} — tap for order details`} style={{ color: 'var(--ink)', fontWeight: 500, fontSize: '0.95rem', cursor: onViewWo ? 'pointer' : 'default', textDecoration: onViewWo ? 'underline' : 'none', textDecorationColor: 'var(--line)' }}>{woRef(wo)}</div>
                 {sled && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{sled} Station ({isAirDryStep(type, wo, finishes) ? 'Air Dry — rack, not the oven' : 'Oven'})</div>}
                 <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)', margin: '16px 0' }}>{rem} mins</div>
-                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); completeFromCard(); }} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
+                <button onClick={() => { if (hold) return alert(`${hold.label} — ${wo.id} cannot advance.\n\n${hold.reason}\n\n${hold.liftedBy}`); completeFromCard(); }} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{stepButtonWords(type, 'COMPLETE', isAirDryStep(type, wo, finishes))}</button>
             </div>
         );
     }

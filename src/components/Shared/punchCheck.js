@@ -124,3 +124,29 @@ export function punchFlagText(task) {
     }
     return '';
 }
+
+// ── THE DOUBLE PUNCH (Stuart 2026-10-21) ─────────────────────────────────────────────────────────────────────────
+// WO11718, 10-21: Rafa's pole spray was started and completed at 2:14:02 — the same second, after the spraying — and
+// the same at 11:49. "make the warning for immediate double punch like what Rafa is doing take the whole screen and tell
+// him stop that is not correct, press once to start and press again when this step is complete." A hands-on step
+// completed within this many seconds of its start is a double punch: the step still completes (the work was done) and is
+// logged as before, but the screen is taken over until it is acknowledged. A bake is not asked here — it has its own stop
+// (Shared/stepOrder.bakeStopOf) that refuses completing it before the oven time has run.
+export const DOUBLE_PUNCH_SECS = 60;
+const DRY_SLOTS = ['spinBake', 'poleBake'];
+/** → seconds between start and complete when this completion is a double punch, else null. */
+export function doublePunchSecsOf({ taskKey, startedMs, completedMs } = {}) {
+    if (DRY_SLOTS.includes(String(taskKey || '')) || !num(startedMs) || !num(completedMs)) return null;
+    const secs = Math.max(0, Math.round((num(completedMs) - num(startedMs)) / 1000));
+    return secs < DOUBLE_PUNCH_SECS ? secs : null;
+}
+/** The full-screen words, English and Spanish. */
+export function doublePunchWords({ who = '', order = '', step = '', stepEs = '', secs = 0 } = {}) {
+    return {
+        title: 'STOP — THAT IS NOT CORRECT', titleEs: 'ALTO — ESO NO ES CORRECTO',
+        rule: 'Press ONCE to START when you begin the step. Press AGAIN when the step is COMPLETE.',
+        ruleEs: 'Presione UNA VEZ para EMPEZAR cuando comience el paso. Presione OTRA VEZ cuando el paso esté TERMINADO.',
+        detail: `${who || 'This step'}${step ? ` · ${step}` : ''}${order ? ` on ${order}` : ''} — started and completed ${secs} second${secs === 1 ? '' : 's'} apart. This is logged.`,
+        detailEs: `${who || 'Este paso'}${stepEs ? ` · ${stepEs}` : ''}${order ? ` en ${order}` : ''} — empezado y terminado con ${secs} segundo${secs === 1 ? '' : 's'} de diferencia. Esto queda registrado.`,
+    };
+}
