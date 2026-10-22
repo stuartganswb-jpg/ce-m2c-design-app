@@ -1,6 +1,7 @@
 // node scripts/fulfilmentBins.test.mjs — the bin a fulfilment takes from, asked when an item sits in more than one
 // (Stuart 2026-10-12). The rows are SO60991's, read live from NetSuite the day its fulfilment failed.
-import { binsSql, fulfilItemIdsOf, binChoicesOf, binPickRefusal, fulfilmentItemsWithBins, binPickText, namesBins, fulfilmentTargetOf } from '../src/components/Shared/fulfilmentBins.js';
+import { binsSql, fulfilItemIdsOf, binChoicesOf, binPickRefusal, fulfilmentItemsWithBins, binPickText, namesBins, fulfilmentTargetOf, preferredBinLinesOf, binNamedItemIdsOf, PREFERRED_BIN_REPLACE } from '../src/components/Shared/fulfilmentBins.js';
+import { preferredBinsSql } from '../src/components/Shared/poReceiptLines.js';
 import { soLinesSql, fulfilmentItemsOf } from '../src/components/Shared/fulfilmentLines.js';
 let pass = 0, fail = 0;
 const eq = (n, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.log(`✗ ${n}\n   got  ${JSON.stringify(got)}\n   want ${JSON.stringify(want)}`); } };
@@ -62,5 +63,32 @@ eq('in words', [binPickText(choices, { 2: [{ binId: '7957', qty: 12 }] }), binPi
     ok('a sales order id that is not one is refused', threw);
     const sent = fulfilmentItemsWithBins(ifItems.items, choices, { 2: [{ binId: '7957', qty: 12 }] });
     ok('SO60991 with its bin chosen goes with replace', /\?replace=item$/.test(fulfilmentTargetOf('1', sent)) && !/replace/.test(fulfilmentTargetOf('1', fulfilmentItemsWithBins(ifItems.items, [], {}))));
+}
+
+// ── SO60838 (2026-10-21): a bin named for an item with a PREFERRED bin — NetSuite's own is replaced, not added to ──
+// Read live: HSOM-04 / HSOM-19 have preferred M E3R-N9-R3 (3928) and stock in Somfy Parts (10289); HTSLNTCAR's preferred
+// is M E6R-N14-R1 (7259); H1-2TRV has no preferred bin (Production Stock 7957 + ORDERS-COM1).
+{
+    const so = [
+        { line: '4', itemid: '61104', item: 'HSOM-04', itemtype: 'InvtPart', location: '17', qty: '2', shipped: '0' },
+        { line: '5', itemid: '58301', item: 'H1-2TRV', itemtype: 'InvtPart', location: '17', qty: '5', shipped: '0' },
+        { line: '11', itemid: '44120', item: 'HTSLNTCAR', itemtype: 'InvtPart', location: '17', qty: '20', shipped: '0' },
+    ];
+    const items = [
+        { orderLine: 4, location: { id: '17' }, itemReceive: true, quantity: 2, inventoryDetail: { quantity: 2, inventoryAssignment: { items: [{ binNumber: { id: '10289' }, quantity: 2 }] } } },
+        { orderLine: 5, location: { id: '17' }, itemReceive: true, quantity: 5, inventoryDetail: { quantity: 5, inventoryAssignment: { items: [{ binNumber: { id: '7957' }, quantity: 5 }] } } },
+        { orderLine: 11, location: { id: '17' }, itemReceive: true },
+    ];
+    const pref = [{ item_internal: '61104', bin: 'M E3R-N9-R3', location: '17' }, { item_internal: '44120', bin: 'M E6R-N14-R1', location: '17' }];
+    eq('the items whose preferred bins are asked: only the lines that name a bin', binNamedItemIdsOf(items, so), ['61104', '58301']);
+    ok('…asked of itemBinQuantity, the table that answers', /FROM itemBinQuantity ibq JOIN bin b ON b.id = ibq.bin WHERE ibq.preferredbin = 'T' AND ibq.item IN \(61104,58301\)/.test(preferredBinsSql(binNamedItemIdsOf(items, so))));
+    eq('HSOM-04 names Somfy Parts and has a preferred bin → the line to replace', preferredBinLinesOf(items, so, pref), [{ orderLine: 4, itemId: '61104', item: 'HSOM-04', preferredBin: 'M E3R-N9-R3' }]);
+    eq('a line with no bin named is not counted (HTSLNTCAR, NetSuite fills its preferred bin alone)', preferredBinLinesOf([items[2]], so, pref), []);
+    eq('a preferred bin at ANOTHER location does not count', preferredBinLinesOf(items, so, [{ item_internal: '61104', bin: 'X', location: '19' }]), []);
+    eq('no preferred bins → nothing to replace', preferredBinLinesOf(items, so, []), []);
+    eq('the target replaces the inventory assignment too', fulfilmentTargetOf('939279', items, { replaceBins: true }), `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/939279/!transform/itemFulfillment?replace=item,${PREFERRED_BIN_REPLACE}`);
+    eq('…the name reported to clear it', PREFERRED_BIN_REPLACE, 'item.inventoryDetail.inventoryassignment');
+    eq('no preferred bin → exactly as before (the path that posts)', fulfilmentTargetOf('939279', items), 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/939279/!transform/itemFulfillment?replace=item');
+    eq('names no bin → no replace at all, even when asked', fulfilmentTargetOf('939279', [items[2]], { replaceBins: true }), 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/939279/!transform/itemFulfillment');
 }
 console.log(`fulfilmentBins: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

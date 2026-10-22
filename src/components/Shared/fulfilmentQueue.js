@@ -12,7 +12,8 @@ import { doc, getDocs, query, collection, where, updateDoc } from 'firebase/fire
 import { nsProxyFetch } from './nsProxy';
 import { enqueueNsWrite } from './nsOutbox';
 import { soLinesSql, fulfilmentItemsOf, refusalText } from './fulfilmentLines';
-import { binsSql, fulfilItemIdsOf, binChoicesOf, fulfilmentItemsWithBins, binPickText, fulfilmentTargetOf } from './fulfilmentBins';
+import { binsSql, fulfilItemIdsOf, binChoicesOf, fulfilmentItemsWithBins, binPickText, fulfilmentTargetOf, namesBins, binNamedItemIdsOf, preferredBinLinesOf } from './fulfilmentBins';
+import { preferredBinsSql } from './poReceiptLines';
 
 const SUITEQL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
 const suiteql = async (q, what) => {
@@ -45,6 +46,15 @@ export const queueSoFulfilment = async ({ nsSoId, ref = '', label = '', memo = '
         picks = typeof askBins === 'function' ? await askBins(ref || `SO ${id}`, choices) : null;
         if (!picks) return { ok: false, reason: 'NOT_CHOSEN', choices, text: `No bin was chosen for ${choices.map(c => c.item).join(', ')} — NetSuite holds ${choices.length === 1 ? 'it' : 'them'} in more than one bin and cannot fulfil without it. The fulfilment was NOT sent.` };
     }
+    const binText = binPickText(choices, picks);
+    const items = fulfilmentItemsWithBins(ifItems.items, choices, picks);
+    // A bin named for an item NetSuite keeps a PREFERRED bin for: NetSuite fills that one in itself, so it is replaced, not
+    // added to (Shared/fulfilmentBins, SO60838). Read live like the bins; a read that fails stops the send.
+    let preferredLines = [];
+    if (namesBins(items)) {
+        const pSql = preferredBinsSql(binNamedItemIdsOf(items, soRows));
+        preferredLines = pSql ? preferredBinLinesOf(items, soRows, await suiteql(pSql, 'the preferred bins of these items')) : [];
+    }
     const dedupeKey = `if:${id}`;
     // A FAILED entry for this order can only fail again as it is: it is cancelled, with the reason, before the new one.
     try {
@@ -54,14 +64,12 @@ export const queueSoFulfilment = async ({ nsSoId, ref = '', label = '', memo = '
             await updateDoc(doc(db, 'ns_outbox', d.id), { status: 'CANCELLED', cancelledAt: Date.now(), cancelledBy: createdBy || '', cancelReason: 'superseded — the fulfilment was sent again from the WMS (bins confirmed)' });
         }
     } catch (e) { console.warn('could not cancel the failed fulfilment entry (the new one is still queued)', e); }
-    const binText = binPickText(choices, picks);
-    const items = fulfilmentItemsWithBins(ifItems.items, choices, picks);
     await enqueueNsWrite({
         kind: 'itemfulfillment', dedupeKey,
         label: `${label}${binText ? ` · ${binText}` : ''}`,
         sourceApp, createdBy,
         // A line that names its bin replaces the bin NetSuite fills in itself (the preferred one) — Shared/fulfilmentBins.
-        targetUrl: fulfilmentTargetOf(id, items),
+        targetUrl: fulfilmentTargetOf(id, items, { replaceBins: preferredLines.length > 0 }),
         method: 'POST',
         payload: { shipStatus: { id: 'B' }, memo, item: { items } },
         writeBack,

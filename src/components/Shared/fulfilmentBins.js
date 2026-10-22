@@ -100,11 +100,45 @@ export function fulfilmentItemsWithBins(items = [], choices = [], picks = {}) {
 // fulfilment that names no bin is sent exactly as before — NetSuite still picks the only bin, or the preferred one.
 /** Does this fulfilment carry a bin on any line? */
 export const namesBins = (items = []) => (items || []).some(it => !!(it && it.inventoryDetail));
-/** Where the fulfilment is sent — with `replace=item` only when it names a bin. */
-export const fulfilmentTargetOf = (nsSoId, items = []) => {
+
+// ── …AND replace=item DID NOT STOP IT FOR AN ITEM THAT HAS A PREFERRED BIN (Stuart 2026-10-21, SO60838 — "go on the bin
+// fix") ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// SO60838 was refused "The total inventory detail quantity must be 2." on order line 4: 2 × HSOM-04 taken from Somfy Parts,
+// while HSOM-04's PREFERRED bin is M E3R-N9-R3. Every fulfilment naming a bin since 10-16 whose items have NO preferred bin
+// posted (five of five: H1-75R, H1-138WR-O, HCUDEC1 …); SO60838 is the only one with preferred-bin items and the only one
+// refused. replace=item replaces the item LINES; NetSuite still fills the preferred bin into each line it initialises
+// (Oracle: "NetSuite assigns the preferred bin for the item by default" on fulfilling transactions) and the app's bin is
+// added beside it — 2 + 2 against a line of 2. So a fulfilment that names a bin for an item WITH a preferred bin at the
+// line's location also asks NetSuite to replace each line's inventory assignment. That name is not in Oracle's
+// documentation; it is the one reported to clear this exact refusal. A fulfilment of items with no preferred bin is sent
+// exactly as before — the path that posts is not touched. Should NetSuite refuse the option, nothing is created and the
+// refusal is on "NetSuite — to fix today" with its words.
+export const PREFERRED_BIN_REPLACE = 'item.inventoryDetail.inventoryassignment';
+/**
+ * The lines that name a bin for an item NetSuite keeps a preferred bin for at that line's location.
+ * @param preferredRows Shared/poReceiptLines.preferredBinsSql rows: { item_internal, bin, location }
+ * @returns Array<{ orderLine, itemId, item, preferredBin }>
+ */
+export const preferredBinLinesOf = (items = [], soRows = [], preferredRows = []) => {
+  const byLine = new Map((soRows || []).map(r => [S(r.line), r]));
+  return (items || []).filter(it => it && it.inventoryDetail).map(it => {
+    const row = byLine.get(S(it.orderLine));
+    if (!row || !S(row.itemid)) return null;
+    const location = S((it.location && it.location.id) || row.location);
+    const pref = (preferredRows || []).find(p => S(p.item_internal) === S(row.itemid) && (!location || !S(p.location) || S(p.location) === location));
+    return pref ? { orderLine: Number(it.orderLine), itemId: S(row.itemid), item: S(row.item), preferredBin: S(pref.bin) } : null;
+  }).filter(Boolean);
+};
+/** The item ids of the lines that name a bin — the ones whose preferred bins are asked. */
+export const binNamedItemIdsOf = (items = [], soRows = []) => fulfilItemIdsOf((items || []).filter(it => it && it.inventoryDetail), soRows);
+
+/** Where the fulfilment is sent — with `replace=item` only when it names a bin, and the inventory assignment as well when
+ *  a named bin is for an item with a preferred one (`replaceBins`). */
+export const fulfilmentTargetOf = (nsSoId, items = [], { replaceBins = false } = {}) => {
   const id = S(nsSoId);
   if (!/^\d+$/.test(id)) throw new Error(`Not a NetSuite sales order id: "${nsSoId}"`);
-  return `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${id}/!transform/itemFulfillment${namesBins(items) ? '?replace=item' : ''}`;
+  const replace = namesBins(items) ? `?replace=item${replaceBins ? `,${PREFERRED_BIN_REPLACE}` : ''}` : '';
+  return `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${id}/!transform/itemFulfillment${replace}`;
 };
 
 /** "H1-75R × 12 from Production Stock" — for the log and the record on the document. */
