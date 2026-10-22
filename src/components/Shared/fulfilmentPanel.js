@@ -22,6 +22,7 @@ import {
 import { orderBoxesOf, boxHomeFor, boxShipStampsOf, boxesAfterVoid, boxOf, isBoxShipped } from './orderBoxes';
 import { queueSoFulfilment } from './fulfilmentQueue';
 import { useBinAsk } from './BinChoiceModal';
+import { useNsShipCheck, NsShippedLine, ShippedOutsideBox } from './ShippedOutsideBox';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 const NS_BASE = 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1';
@@ -117,6 +118,8 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
     // Not a document still waiting for its siblings to pack (the last one packed sends the order's fulfilment), and not
     // a display shipment (its fulfilment is sent by itself, from the order's bin).
     const needsNsFulfilment = (d) => !!d && !d.nsIfId && !((soOf(d) || {}).nsIfId) && !!nsSoIdOf(d) && d.nsFulfillDeferred !== true && d.packMode !== 'DISPLAY';
+    // What NetSuite already shipped (Shared/ShippedOutsideBox — one read for the whole queue).
+    const nsShip = useNsShipCheck({ queue, nsSoIdOf });
     const sendNsFulfilment = async (d) => {
         setBusy(`if:${d.id}`); setNote(null);
         try {
@@ -319,6 +322,7 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                             <div style={{ fontFamily: theme.mono, fontSize: '12px' }}>{packRefOf(d)}</div>
                             <div style={{ fontSize: '12px', color: theme.inkSoft }}>{d.customerName || d.clientName || d.customer || ''}</div>
                             <div style={{ fontSize: '11px', color: theme.inkSoft }}>Packed {when(d.packedAt)}{d.packedBy ? ` · ${d.packedBy}` : ''}{d.nsIfTran ? ` · IF ${d.nsIfTran}` : (d.nsFulfillQueued ? ' · IF queued' : '')}</div>
+                            <NsShippedLine check={nsShip[d.id]} />
                         </button>
                     ))}
                 </div>
@@ -329,7 +333,9 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                     {selected && address && (
                         <div style={{ border: `1px solid ${theme.line}`, background: '#fff', padding: '16px' }}>
                             <div style={{ fontFamily: theme.mono, fontSize: '13px', marginBottom: '12px' }}>{packRefOf(selected)} — {selected.customerName || selected.clientName || selected.customer || ''}</div>
-                            {needsNsFulfilment(selected) && (
+                            <ShippedOutsideBox doc={selected} check={nsShip[selected.id]} queue={queue} operator={operator} isQsOrder={isQsOrder} packDocRef={packDocRef} soOf={soOf} packRefOf={packRefOf} nsSoIdOf={nsSoIdOf} writeLog={writeLog} onDone={(text) => { setSelectedId(null); setNote({ ok: true, text }); }} />
+                            {/* Never claim NetSuite has no fulfilment for an order NetSuite fulfilled by hand. */}
+                            {needsNsFulfilment(selected) && !(nsShip[selected.id] && nsShip[selected.id].state === 'SHIPPED') && (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '8px 10px', marginBottom: '12px', border: `1px solid ${theme.line}`, background: theme.paper2 }}>
                                     <span style={{ fontSize: '12px', color: theme.inkSoft, flex: 1, minWidth: '220px' }}>
                                         NetSuite has no fulfilment for this order yet{selected.nsFulfillNeedsBins ? ' — it was not sent: no bin was chosen' : (selected.nsFulfillQueued ? ' — it is queued, or it failed (11.1 → NetSuite Sync Queue says which)' : ' — it was not sent')}.
@@ -445,7 +451,7 @@ export default function FulfilmentPanel({ operator, activeBrand, docs = [], soIn
                         {shipped.map((d) => (
                             <div key={d.id} style={{ padding: '10px 12px', borderBottom: `1px solid ${theme.line}`, display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                                 <div style={{ marginRight: 'auto', fontSize: '12px' }}>
-                                    <span style={{ fontFamily: theme.mono }}>{packRefOf(d)}</span> · UPS {d.shipService} · {(d.shipPackages || []).some((p) => p.boxNo) ? (d.shipPackages || []).map((p) => `${p.boxNo ? `Box ${p.boxNo} ` : ''}${p.trackingNumber}${p.shippedEarlier ? ' (shipped earlier)' : ''}`).join(', ') : (d.trackingNumbers || []).join(', ')}
+                                    <span style={{ fontFamily: theme.mono }}>{packRefOf(d)}</span> · {d.shippedOutside ? 'shipped outside the app' : `UPS ${d.shipService}`} · {(d.shipPackages || []).some((p) => p.boxNo) ? (d.shipPackages || []).map((p) => `${p.boxNo ? `Box ${p.boxNo} ` : ''}${p.trackingNumber}${p.shippedEarlier ? ' (shipped earlier)' : ''}`).join(', ') : (d.trackingNumbers || []).join(', ')}
                                     <div style={{ fontSize: '11px', color: theme.inkSoft }}>
                                         {when(d.shippedAt)}{d.shippedBy ? ` · ${d.shippedBy}` : ''} · {d.nsShipPosted ? 'NetSuite updated' : (d.nsShipQueued ? 'NetSuite update queued' : (d.nsShipPending ? 'NetSuite waiting' : ''))}
                                     </div>
