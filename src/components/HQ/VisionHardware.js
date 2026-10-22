@@ -265,9 +265,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       // ⚠ THE END-ARM TAG LIVES ON THE PIN (Stuart 2026-09-07: "it correctly blocks the end treatment
       // choices but does not update the graphic of the end of the poles"). The flow option carries
       // it as isReturnArm; the part's isReturnBracket is the legacy spelling. Either makes that end
-      // a return — the arm IS the end, so the pole is drawn (and cut) mitering back to the wall.
+      // a return — the arm IS the end, so the pole is drawn returning to the wall — but it is CUT
+      // STRAIGHT: the arm is its own piece (RETURN_ARM, Stuart 2026-10-21 — it read RETURN_MITER and
+      // the rod was cut 2 × projection + 2" long at each arm; Shared/bayMath).
       const armPicked = (st) => armOfOpt(optSel(st));
-      const sideStyle = (mount, bktId, st) => mount === 'INSIDE' ? 'FLUSH' : (((bktId && isRet(bktId)) || armPicked(st)) ? 'RETURN_MITER' : null);
+      const sideStyle = (mount, bktId, st) => mount === 'INSIDE' ? 'FLUSH' : (((bktId && isRet(bktId)) || armPicked(st)) ? 'RETURN_ARM' : null);
       const lMount = engData.shape === 'STRAIGHT' ? engData.mountLeft : engData.mountOuter;
       const rMount = engData.shape === 'STRAIGHT' ? engData.mountRight : engData.mountOuter;
       const lStyle = sideStyle(lMount, engData.bracketId, stepBrL);
@@ -510,9 +512,12 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const pk = useMemo(() => {
       if (!useEngine) return null;
       const answers = { ...framing.answers, ...(engineProj != null ? { proj: engineProj } : {}) };
-      return visionPickers({ choices: engineChoices, answers, picks: enginePicks, nameOf: engineNameOf });
+      // a miter-return FEE vs an end-arm PART (Shared/visionEngine.endStyleOf): the pin says fee, or its item is one
+      const isFee = (c) => { const pin = flowPins.find(p => p.id === c.id); const part = libPartOf(c.partId);
+          return !!((pin && (pin.isFee || pin.feeItemNo)) || (part && (part.partClass === 'Fee' || String(part.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE'))); };
+      return visionPickers({ choices: engineChoices, answers, picks: enginePicks, nameOf: engineNameOf, isFee });
       // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useEngine, engineChoices, framing.answers, engineProj, enginePicks, libraryParts]);
+  }, [useEngine, engineChoices, framing.answers, engineProj, enginePicks, libraryParts, flowPins]);
   const pickEngine = (slotKey, choiceId) => setEnginePicks(prev => { const n = { ...prev }; if (choiceId) n[slotKey] = choiceId; else delete n[slotKey]; return n; });
   // What a later choice removed — named, never silent (the #45 rule, here as in CPQ).
   useEffect(() => {
@@ -660,10 +665,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       if (/^OPT-(BEND|MITER)/i.test(o.optId || '')) return true;
       return /bend|return|miter|mitre|mtr|french/i.test(String(o.partName || ''));
   };
+  // A MITER_RETURN is the rod mitred back to the wall (stock used) — unless the option is an END ARM and no fee: its own
+  // piece, the rod cut straight (Stuart 2026-10-21 — Shared/visionEngine.endStyleOf, the same rule on the engine path).
+  // Called from the step effect only, after armOfOpt below exists.
   const endStyleOf = (o) => {
       const t = upperS(o?.endTreatment);
       if (t === 'FRENCH_RETURN') return 'RETURN_BEND';
-      if (t === 'MITER_RETURN') return 'RETURN_MITER';
+      if (t === 'MITER_RETURN') return (!o.isFee && armOfOpt(o)) ? 'RETURN_ARM' : 'RETURN_MITER';
       if (t === 'INSIDE_MOUNT') return 'FLUSH';
       if (t === 'FINIAL') return 'FINIAL';
       if (/^OPT-FLUSH/i.test(o?.optId || '')) return 'FLUSH';
@@ -945,7 +953,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           const fw = engData.finialW * S;
           return forceFlatten ? <circle cx={startOrig.x + outVec.x * fw} cy="0" r="10" fill="var(--brass)" /> : <line x1={startOrig.x} y1={startOrig.y} x2={startOrig.x + outVec.x*fw} y2={startOrig.y + outVec.y*fw} stroke="var(--brass)" strokeWidth="6" />;
       }
-      if (es === 'RETURN_MITER') {
+      if (es === 'RETURN_MITER' || es === 'RETURN_ARM') {   // an end arm is drawn going back to the wall as a miter return is
           const wx = startOrig.x + norm.x * (safeProj * S); const wy = startOrig.y + norm.y * (safeProj * S);
           let outVec = {x: -1, y: 0};
           if (engData.shape === 'STRAIGHT') outVec = isLeft ? {x: -1, y: 0} : {x: 1, y: 0};
@@ -1052,7 +1060,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       const keptSplices = attachments.filter(a => a.type === 'splice');
       if (attachments.some(a => a.type === 'bracket') && !window.confirm("Replace the current bracket placements with a fresh auto-layout? Splices are kept (each gets a support bracket); manual bracket positions are cleared.")) return;
       const isRet = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
-      const isRetStyle = (s) => s === 'RETURN_BEND' || s === 'RETURN_MITER';
+      const isRetStyle = (s) => s === 'RETURN_BEND' || s === 'RETURN_MITER' || s === 'RETURN_ARM';
       const snap = (n) => Math.round(n * 8) / 8;
       const maxSpan = (parseFloat(engData.poleDiameter) || 1) <= 0.76 ? 36 : 48; // ¾" rod carries less — tighter spacing
       let idc = Date.now();
@@ -1699,6 +1707,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                             <option value="FLUSH">Flush Cut</option>
                                             <option value="FINIAL">Finials</option>
                                             <option value="RETURN_MITER">Miter Return</option>
+                                            <option value="RETURN_ARM">Return Arm (own piece)</option>
                                             <option value="RETURN_BEND">Bent Return (FR)</option>
                                         </select>
                                     )}
@@ -1715,6 +1724,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                             <option value="FLUSH">Flush Cut</option>
                                             <option value="FINIAL">Finials</option>
                                             <option value="RETURN_MITER">Miter Return</option>
+                                            <option value="RETURN_ARM">Return Arm (own piece)</option>
                                             <option value="RETURN_BEND">Bent Return (FR)</option>
                                         </select>
                                     )}

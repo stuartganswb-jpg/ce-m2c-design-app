@@ -114,5 +114,35 @@ const nameOf = (id) => ({ 'H1-MRPF': 'MITER RETURN - H1-MRPF' })[id] || null;
     eq('…and the raw-row answer is identical (CPQ and Vision agree)', visionPickers({ choices: FAM, answers: { ...SINGLE, proj: 3.625 }, picks: {} }).at('BRACKET', 'LEFT')?.options.map(o => o.id) || [], []);
 }
 
+{
+    // A MITER RETURN USES STOCK, AN END ARM IS ITS OWN PIECE (Stuart 2026-10-21: "these are not miter returns but actual
+    // return arms the rod cut should be the rod cut length … on the H1-2TRV when miter cut we add the length when using
+    // return arms we do not"). The arm is the END-ARM tag; the fee is asked first (H1-2TRV's miter fees carry END-ARM too —
+    // the 10-20 snapshot: H1-2TRMR, H1-2TRVMTR); a MITER_RETURN on a part with no END-ARM is the pole's own mitred end
+    // (H2-138INPOLE) and uses stock.
+    const ARMS = [...FAM,
+        C({ id: 'TRV-ERA-L', partId: 'H1-2TRVERA', name: 'Traverse End Return Arm', role: 'RETURN', endTreatment: 'MITER_RETURN', isReturnArm: true, proj: '6', tier: 'FRONT', position: 'LEFT', nodes: ['eral'] }),
+        C({ id: 'TRV-MTR-L', partId: 'H1-2TRVMTR', name: 'Traverse Miter Return', role: 'RETURN', endTreatment: 'MITER_RETURN', isReturnArm: true, isFee: true, proj: '6', tier: 'FRONT', position: 'LEFT', nodes: ['mtrl'] }),
+        C({ id: 'ARM-BK-L', partId: 'FICERA', name: 'RTN Ceiling Bracket left 1.5', role: 'BRACKET', isReturnArm: true, proj: '6', position: 'LEFT', nodes: ['armbk'] }),
+        C({ id: 'POLE-MTR-L', partId: 'H2-138INPOLE', name: '1-3/8" Metal Pole', role: 'RETURN', endTreatment: 'MITER_RETURN', proj: '6', tier: 'FRONT', position: 'LEFT', nodes: ['polemtr'] }),
+    ];
+    const endL = visionPickers({ choices: ARMS, answers: SINGLE, picks: {} }).at('END', 'LEFT');
+    const styleOf = (id) => ((endL && endL.options.find(o => o.id === id)) || {}).endStyle;
+    eq('an END-ARM part (on an end, or a bracket re-roled to the end) reads RETURN_ARM; a miter fee — END-ARM or not — and the pole\'s own miter read RETURN_MITER',
+        ['TRV-ERA-L', 'ARM-BK-L', 'TRV-MTR-L', 'MTR-L', 'POLE-MTR-L'].map(styleOf), ['RETURN_ARM', 'RETURN_ARM', 'RETURN_MITER', 'RETURN_MITER', 'RETURN_MITER']);
+    eq('…and the drawing reads it from the pick', ['TRV-ERA-L', 'TRV-MTR-L', 'ARM-BK-L', 'POLE-MTR-L'].map(id => engDataFromPickers(visionPickers({ choices: ARMS, answers: SINGLE, picks: { 'END|FRONT|LEFT': id } })).endStyle),
+        ['RETURN_ARM', 'RETURN_MITER', 'RETURN_ARM', 'RETURN_MITER']);
+    eq('the decorative arm is an arm too', engDataFromPickers(visionPickers({ choices: FAM, answers: SINGLE, picks: { 'END|FRONT|RIGHT': 'DEC-R' } })).endStyleRight, 'RETURN_ARM');
+    // VisionHardware hands over rows it normalized (the fee flag gone with it) and answers the fee from the pins
+    const pre = applyFitsDefaults(ARMS.map(normalizeChoice));
+    const pinsSayFee = (c) => ['TRV-MTR-L', 'MTR-L', 'FR-L'].includes(c.id);
+    eq('normalized rows: the caller\'s fee answer decides', ['TRV-ERA-L', 'TRV-MTR-L', 'MTR-L'].map(id => engDataFromPickers(visionPickers({ choices: pre, answers: SINGLE, picks: { 'END|FRONT|LEFT': id }, isFee: pinsSayFee })).endStyle),
+        ['RETURN_ARM', 'RETURN_MITER', 'RETURN_MITER']);
+    eq('endStyleOf on bare choices', [endStyleOf({ role: 'RETURN', endTreatment: 'MITER_RETURN' }), endStyleOf({ role: 'RETURN', endTreatment: 'MITER_RETURN', isReturnArm: true }),
+        endStyleOf({ role: 'RETURN', endTreatment: 'MITER_RETURN', isReturnArm: true }, () => true), endStyleOf({ role: 'RETURN', isReturnArm: true }), endStyleOf({ role: 'RETURN' }),
+        endStyleOf({ role: 'RETURN', endTreatment: 'FRENCH_RETURN', isReturnArm: true })],
+        ['RETURN_MITER', 'RETURN_ARM', 'RETURN_MITER', 'RETURN_ARM', 'RETURN_MITER', 'RETURN_BEND']);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

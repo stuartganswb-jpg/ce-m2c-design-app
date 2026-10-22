@@ -87,6 +87,12 @@ export function computeBayMath({ engData, safeProj, libraryParts = [] }) {
     // all read the face length alone (SO60551: 18" oak fascias with two miters each). Stuart's rule:
     // "projection x 2 plus 2\" — a 4-5/8\" projection miter return needs … 11-1/4\" material used."
     // The customer is billed the SOLD feet either way: the extra is in the price of the return fee.
+    // A RETURN ARM (RETURN_ARM) is its own piece — the rod is cut straight and the arm butts it (Stuart 2026-10-21, M2C's
+    // Flat Iron ceiling arms and CE's H1-2TRV end arms: "these are not miter returns but actual return arms the rod cut
+    // should be the rod cut length not any longer as it is its own piece … when miter cut we add the length when using
+    // return arms we do not"). It adds nothing here and is no miter return (qtyMiterReturns); it is still a return END
+    // below — the arm lands on its plate, which is the system's outside edge. Until then an arm read RETURN_MITER and its
+    // rod was cut 2 × projection + 2" long at each arm.
     const endAddRaw = (style) => (style === 'RETURN_BEND' ? engData.gripAllowance : (style === 'RETURN_MITER' ? miterReturnMaterial(safeProj) : 0));
     const addL_RAW = !isLeftInside ? endAddRaw(endStyleL) : 0;
     const addR_RAW = !isRightInside ? endAddRaw(endStyleR) : 0;
@@ -129,8 +135,8 @@ export function computeBayMath({ engData, safeProj, libraryParts = [] }) {
     //      edge is the system's outside edge. Fires only when the plate's dims resolve (> 0);
     //   3. otherwise the legacy half-bracket-width share — so nothing changes until a real plate
     //      with real dims is selected.
-    const returnEndL = endStyleL === 'RETURN_BEND' || endStyleL === 'RETURN_MITER';
-    const returnEndR = endStyleR === 'RETURN_BEND' || endStyleR === 'RETURN_MITER';
+    const returnEndL = endStyleL === 'RETURN_BEND' || endStyleL === 'RETURN_MITER' || endStyleL === 'RETURN_ARM';
+    const returnEndR = endStyleR === 'RETURN_BEND' || endStyleR === 'RETURN_MITER' || endStyleR === 'RETURN_ARM';
     const endAddOf = (inside, isReturnEnd, bktId, bpId) => {
         if (inside) return 0;
         if (isRetBkt(bktId) && bpId) return bpEndHalf(bpId) + armThk(bktId);

@@ -29,11 +29,22 @@ export function settleVision({ choices = [], answers = {}, picks = {}, modelNode
     return { model: m, live: reseatPicks(m, picks) };
 }
 
-/** What the drawing's fabrication math calls this end. */
-export const endStyleOf = (choice) => {
+/**
+ * What the drawing's fabrication math calls this end. ⚠ A MITER RETURN AND A RETURN ARM ARE NOT THE SAME CUT (Stuart
+ * 2026-10-21): a miter return is the rod mitred back to the wall and uses stock (RETURN_MITER); an end ARM is its own
+ * piece — the rod is cut straight and the arm butts it (RETURN_ARM, no stock). The arm is the part tagged END-ARM
+ * (isReturnArm: M2C's FICERA / FIWERA, CE's H1-2TRV and H1-2RCT arms). Not a MITER_RETURN on any part: H2-138INPOLE's
+ * miter pin is the POLE's own mitred end, and that uses stock. And never a fee — H1-2TRV's miter fees carry END-ARM
+ * too — so the fee is asked first. `isFee(choice)` answers it: the engine's choice does not keep the pin's fee flag.
+ */
+export const endStyleOf = (choice, isFee = () => false) => {
     if (!choice) return '';
     if (choice.role === 'INSIDE_MOUNT') return 'FLUSH';
-    if (choice.role === 'RETURN') return END_STYLE[U(choice.endTreatment)] || 'RETURN_MITER';
+    if (choice.role === 'RETURN') {
+        const et = U(choice.endTreatment);
+        if (et !== 'FRENCH_RETURN' && choice.isReturnArm && !isFee(choice)) return 'RETURN_ARM';
+        return END_STYLE[et] || 'RETURN_MITER';
+    }
     if (choice.role === 'FINIAL') return 'FINIAL';
     return END_STYLE[U(choice.endTreatment)] || '';
 };
@@ -41,9 +52,9 @@ export const endStyleOf = (choice) => {
 /** A return that carries the rod (not decorative: END-ARM + NO PLATE dresses the end and leaves the bracket). */
 export const carriesRod = (choice) => !!choice && (choice.role === 'RETURN' || choice.role === 'INSIDE_MOUNT') && !(choice.isReturnArm && choice.noBackplate);
 
-const optionOf = (c, nameOf) => ({
+const optionOf = (c, nameOf, isFee) => ({
     id: c.id, partId: c.partId || '', name: (typeof nameOf === 'function' && nameOf(c.partId)) || c.name || c.partId || c.id,
-    role: c.role, endStyle: endStyleOf(c), isReturn: c.role === 'RETURN' || c.role === 'INSIDE_MOUNT',
+    role: c.role, endStyle: endStyleOf(c, isFee), isReturn: c.role === 'RETURN' || c.role === 'INSIDE_MOUNT',
     decorative: !!(c.isReturnArm && c.noBackplate), isReturnArm: !!c.isReturnArm, isBasic: !!c.isBasic,
     depths: Array.isArray(c.projs) ? c.projs.slice() : [], projTiers: c.projTiers || null,
 });
@@ -60,10 +71,15 @@ const optionOf = (c, nameOf) => ({
  * Picks are keyed by the engine's slot key; options by the engine's choice id. A one-part step
  * (an option nobody can change) is still a picker — the drawing shows it chosen.
  */
-export function visionPickers({ choices = [], answers = {}, picks = {}, modelNodes = [], nameOf = null } = {}) {
+export function visionPickers({ choices = [], answers = {}, picks = {}, modelNodes = [], nameOf = null, isFee = null } = {}) {
     const { model, live } = settleVision({ choices, answers, picks, modelNodes });
+    // WHICH CHOICES ARE FEES (a miter return, not an arm — endStyleOf): rows that still say so (the adapter's), else the
+    // caller's answer from the pins; the settled model's choices no longer carry the flag. Kept on the result for
+    // engDataFromPickers.
+    const feeIds = new Set((choices || []).filter(c => c && (c.isFee || c.feeItemNo)).map(c => String(c.id)));
+    const feeOf = (c) => !!c && (feeIds.has(String(c.id)) || (typeof isFee === 'function' && !!isFee(c)));
     const pickers = (model.slots || []).map(s => {
-        const options = (s.options || []).map(c => optionOf(c, nameOf));
+        const options = (s.options || []).map(c => optionOf(c, nameOf, feeOf));
         // Where one part is listed more than once, say its depth (CPQ never lists twice — the
         // projection answer picks the copy; a dropdown has to say it).
         const counts = options.reduce((m, o) => { m[o.partId] = (m[o.partId] || 0) + 1; return m; }, {});
@@ -76,7 +92,7 @@ export function visionPickers({ choices = [], answers = {}, picks = {}, modelNod
     });
     const at = (kind, position = '', tier) => pickers.find(p => p.kind === kind && (p.position || '') === (position || '')
         && (tier === undefined ? true : (p.tier || '') === (tier || ''))) || null;
-    return { model, live, pickers, at };
+    return { model, live, pickers, at, isFee: feeOf };
 }
 
 /**
@@ -104,7 +120,7 @@ export function engDataFromPickers(pk, { libraryIdOf = (partId) => partId } = {}
     [['LEFT', 'endStyle', 'mountLeft'], ['RIGHT', 'endStyleRight', 'mountRight']].forEach(([pos, key, mkey]) => {
         const { c } = chosenAt('END', pos);
         if (!c) return;
-        const style = endStyleOf(c);
+        const style = endStyleOf(c, typeof pk.isFee === 'function' ? pk.isFee : undefined);
         if (style) out[key] = style;
         out[mkey] = c.role === 'INSIDE_MOUNT' ? 'INSIDE' : 'OPEN';
     });
