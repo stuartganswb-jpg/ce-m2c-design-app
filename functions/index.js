@@ -4006,15 +4006,39 @@ exports.emailOutboxWorker = onSchedule({
 }, async () => {
     const db = admin.firestore();
     const now = Date.now();
-    const due = await db.collection('email_outbox')
-        .where('status', '==', 'PENDING')
-        .orderBy('createdAt')
-        .limit(40)
-        .get();
-    for (const d of due.docs) {
-        const e = d.data() || {};
-        if (Number(e.sendAfter || 0) > now) continue;      // a digest waiting for its hour
-        await sendOneEmail(d.id);                          // serial: Postmark is not a race
+    // ⚠ THIS RAN AND THREW EVERY FIVE MINUTES FOR A DAY AND NOBODY KNEW (2026-10-22): the
+    // PENDING + orderBy(createdAt) query needs a composite index that did not exist, so every run
+    // ended in FAILED_PRECONDITION. A letter that sends first time goes through sendEmailSoon, so
+    // receipts kept arriving and nothing looked wrong — what died quietly was the RETRY and the
+    // delayed digest. The failure was visible only in Cloud Run logs, which is to say: not visible.
+    // Now every run leaves a mark a person can see, in HQ 11's Email sent panel.
+    const mark = (patch) => db.doc('system/email_worker')
+        .set({ lastRunAt: now, ...patch }, { merge: true }).catch(() => {});
+    try {
+        const due = await db.collection('email_outbox')
+            .where('status', '==', 'PENDING')
+            .orderBy('createdAt')
+            .limit(40)
+            .get();
+        let sent = 0;
+        for (const d of due.docs) {
+            const e = d.data() || {};
+            if (Number(e.sendAfter || 0) > now) continue;      // a digest waiting for its hour
+            await sendOneEmail(d.id);                          // serial: Postmark is not a race
+            sent += 1;
+        }
+        await mark({ lastOkAt: now, lastError: '', failingSince: 0, consecutiveFailures: 0, lastSent: sent, waiting: due.size });
+    } catch (e) {
+        // Keep the FIRST failure's time: "failing since 21:47 yesterday" is the useful sentence,
+        // not "it failed a moment ago", which is true of the hundredth run as well as the first.
+        const prev = (await db.doc('system/email_worker').get().catch(() => null));
+        const was = (prev && prev.exists && prev.data()) || {};
+        await mark({
+            lastError: String((e && e.message) || e).slice(0, 500),
+            failingSince: Number(was.failingSince) || now,
+            consecutiveFailures: (Number(was.consecutiveFailures) || 0) + 1,
+        });
+        throw e;                                               // still a failed run to Cloud Run
     }
 });
 
@@ -4022,7 +4046,11 @@ exports.emailOutboxWorker = onSchedule({
 exports.emailLog = onCall({ enforceAppCheck: true }, async (request) => {
     assertStaffAdmin(request);
     const snap = await admin.firestore().collection('email_outbox').orderBy('createdAt', 'desc').limit(30).get();
+    // How the five-minute worker is getting on. Without this, a worker that has been throwing since
+    // yesterday looks exactly like a quiet afternoon.
+    const w = await admin.firestore().doc('system/email_worker').get().catch(() => null);
     return {
+        worker: (w && w.exists && w.data()) || null,
         emails: snap.docs.map((d) => {
             const e = d.data() || {};
             return {

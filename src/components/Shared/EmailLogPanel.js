@@ -22,6 +22,7 @@ const TONE = {
 
 export default function EmailLogPanel() {
     const [rows, setRows] = useState(null);
+    const [worker, setWorker] = useState(null);
     const [busy, setBusy] = useState('');
     const [err, setErr] = useState('');
 
@@ -30,6 +31,7 @@ export default function EmailLogPanel() {
         try {
             const res = await httpsCallable(functions, 'emailLog')({});
             setRows(res.data.emails || []);
+            setWorker(res.data.worker || null);
         } catch (e) { setErr(e.message || String(e)); setRows([]); }
     }, []);
     useEffect(() => { load(); }, [load]);
@@ -53,6 +55,24 @@ export default function EmailLogPanel() {
                     The last 30. A letter that failed says why and can be sent again.
                 </span>
             </div>
+
+            {/* ⚠ THE FIVE-MINUTE WORKER, OUT LOUD. It threw every run for a day in October and
+                nothing on any screen said so — receipts still arrived, because those send on the
+                spot, while every RETRY and delayed digest sat waiting for a worker that could not
+                read its own queue. A failure that only reaches Cloud Run logs is not reported. */}
+            {worker && worker.lastError ? (
+                <div style={{ fontSize: '12.5px', color: '#9b2c2c', border: '1px solid #e7c9c7', background: '#fdf6f5', padding: '9px 11px', marginBottom: '10px' }}>
+                    ⚠ The send-again worker is failing{worker.failingSince ? ` since ${new Date(Number(worker.failingSince)).toLocaleString()}` : ''}
+                    {worker.consecutiveFailures ? ` · ${worker.consecutiveFailures} run${worker.consecutiveFailures === 1 ? '' : 's'}` : ''}.
+                    Letters still send first time; what is not happening is the retry and the delayed digest.
+                    <div style={{ fontFamily: theme.mono, fontSize: '11px', marginTop: '4px' }}>{worker.lastError}</div>
+                </div>
+            ) : worker && worker.lastOkAt ? (
+                <div style={{ fontSize: '12px', color: theme.inkSoft, marginBottom: '10px' }}>
+                    Send-again worker ran {new Date(Number(worker.lastOkAt)).toLocaleString()}
+                    {worker.waiting ? ` · ${worker.waiting} waiting` : ' · nothing waiting'}.
+                </div>
+            ) : null}
 
             {err && <div style={{ fontSize: '12.5px', color: '#9b2c2c', marginBottom: '8px' }}>✗ {err}</div>}
             {rows === null && <div style={{ fontSize: '13px', color: theme.inkSoft }}>Reading…</div>}
