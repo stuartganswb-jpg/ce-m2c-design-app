@@ -69,13 +69,14 @@ eq('the counts', w.counts, { awaitingPick: 3, picking: 1, staging: 1, readyToPac
 eq('the claim line is the WMS\'s own', CLAIM_STALE_MS, 4 * 60 * MIN);
 
 // ── the week ────────────────────────────────────────────────────────────────────────────────────────────────
-const row = (who, group, o) => ({ pk: who.toLowerCase(), who, group, week: '2026-10-05', activeDays: 4, steps: 40, actions: 40, startLagMins: 10, realShare: 1, paceRatio: 1, nextGapMins: 5, steadyShare: 0.9, actionsPerHour: 2, onTime: { ok: 4, total: 4 }, ...o });
+const row = (who, group, o) => ({ pk: who.toLowerCase(), who, group, week: '2026-10-05', activeDays: 4, floorDays: 4, floorDates: ['2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08'], steps: 40, actions: 40, startLagMins: 10, realShare: 1, paceRatio: 1, nextGapMins: 5, steadyShare: 0.9, actionsPerHour: 2, onTime: { ok: 4, total: 4 }, ...o });
 const ranked = rankWeek([row('Ace', GROUP.FINISHING), row('Bea', GROUP.FINISHING, { realShare: 0.4 }), row('Hal', GROUP.WMS), row('Ivy', GROUP.WMS, { steadyShare: 0.5 })]);
 const published = wallboardDocOf({ week: '2026-10-05', ranked, by: 'Admin', nowMs: 99 });
 const fin = boardHalfOf(published, GROUP.FINISHING);
 eq('the finishing half: the week, who published, the ranks in order', [fin.week, fin.weekEnd, fin.publishedBy, fin.ranked.map(r => `${r.rank}.${r.name}`)], ['2026-10-05', '2026-10-11', 'Admin', ['1.Ace', '2.Bea']]);
-eq('the halls of fame and shame, one each side of two', [fin.fame.map(x => x.name), fin.shame.map(x => x.name)], [['Ace'], ['Bea']]);
+eq('the halls: one of two in fame; Bea, 60 or more, is not shamed (shame is under 60 only)', [fin.fame.map(x => x.name), fin.shame.map(x => x.name)], [['Ace'], []]);
 eq('the WMS half', boardHalfOf(published, GROUP.WMS).ranked.map(r => r.name), ['Hal', 'Ivy']);
+eq('the finishing half carries the days the floor worked that week, and each person\'s two scores', [fin.weekDays, fin.ranked.map(r => [r.name, r.punching, r.production])], [4, [['Ace', 100, null], ['Bea', 78, null]]]);
 eq('nothing published yet, or a board that does not exist', [boardHalfOf(null, GROUP.FINISHING), boardHalfOf({}, GROUP.WMS), boardHalfOf(published, 'both')], [null, null, null]);
 
 // ── chores on the wallboard (Stuart 2026-10-14) ─────────────────────────────────────────────────────────────────

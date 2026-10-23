@@ -6,7 +6,7 @@ import {
 } from '../src/components/Shared/timecardImport.js';
 import {
     floorTimersOf, standardMinsOf, floorStepsOf, activityOf, wmsKindOf, isWmsLog, clockIndexOf, personDaysOf, weekRowsOf,
-    rankWeek, wallboardDocOf, weeksOf, boardOfRole, boardsOf, personKeyOf, CHORES_FROM, msOf, GROUP, WMS_KIND, SRC, SCORE_PARTS, standardsCheckOf,
+    rankWeek, wallboardDocOf, weeksOf, boardOfRole, boardsOf, personKeyOf, CHORES_FROM, msOf, GROUP, WMS_KIND, SRC, SCORE_PARTS, standardsCheckOf, stationRatesOf, FLOOR_DAY_MINS,
 } from '../src/components/Shared/floorMetrics.js';
 
 let pass = 0, fail = 0;
@@ -158,7 +158,7 @@ eq('week: hours are the hours PAID', robW.hours, 15.5);
 eq('weeks with anything in them, newest first', weeksOf([{ week: '2026-09-28' }, { week: '2026-10-05' }, { week: '2026-09-28' }]), ['2026-10-05', '2026-09-28']);
 
 // ── the score, the ranks, the halls ───────────────────────────────────────────────────────────────────────
-const fin = (who, o) => ({ pk: personKeyOf(who), who, group: GROUP.FINISHING, week: '2026-10-05', activeDays: 4, steps: 40, startLagMins: 10, realShare: 1, paceRatio: 1, nextGapMins: 5, steadyShare: 0.9, onTime: { ok: 4, total: 4 }, ...o });
+const fin = (who, o) => ({ pk: personKeyOf(who), who, group: GROUP.FINISHING, week: '2026-10-05', activeDays: 4, floorDays: 4, steps: 40, overruns: 0, startLagMins: 10, realShare: 1, paceRatio: 1, nextGapMins: 5, steadyShare: 0.9, onTime: { ok: 4, total: 4 }, ...o });
 const wmsRow = (who, o) => ({ pk: personKeyOf(who), who, group: GROUP.WMS, week: '2026-10-05', activeDays: 4, actions: 60, startLagMins: 10, steadyShare: 0.9, actionsPerHour: 2, onTime: { ok: 2, total: 2 }, ...o });
 const weekRows = [
     fin('Ace'), fin('Bea', { realShare: 0.5 }), fin('Cal', { startLagMins: 60, realShare: 0.2, paceRatio: 2.5, steadyShare: 0.3 }),
@@ -168,12 +168,13 @@ const weekRows = [
 ];
 const ranked = rankWeek(weekRows);
 eq('a perfect week scores 100', ranked.finishing[0].who + ':' + ranked.finishing[0].score, 'Ace:100');
-eq('finishing, ranked', ranked.finishing.map(r => `${r.rank}.${r.who}:${r.score}`), ['1.Ace:100', '2.Fay:98', '3.Dee:93', '4.Eve:93', '5.Bea:88', '6.Cal:30']);
+eq('finishing, ranked (no production read here — the score is out of the other 75)', ranked.finishing.map(r => `${r.rank}.${r.who}:${r.score}`), ['1.Ace:100', '2.Fay:98', '3.Dee:93', '4.Eve:93', '5.Bea:90', '6.Cal:37']);
 eq('too little to rank, a part-read row, and the not-ranked roles wait aside', ranked.unranked.map(r => r.who).sort(), ['Boss', 'Gus', 'Jo']);
 eq('WMS volume is against the group\'s own median (Jo\'s rate counts, though Jo cannot be scored)', ranked.wms.map(r => `${r.who}:${r.score}`), ['Hal:100', 'Ivy:58']);
 eq('hall of fame: the top three, with what they did best', ranked.fame.finishing.map(f => f.name), ['Ace', 'Fay', 'Dee']);
-eq('hall of shame: the bottom three, worst first, with what pulled them down', ranked.shame.finishing.map(f => `${f.name} — ${f.why}`),
-    ['Cal — working 30% of the day', 'Bea — 50% of 40 steps punched for real', 'Eve — 1.5× the standard time']);
+eq('hall of shame: from the bottom three, only a score under 60 is named (Stuart 10-22) — Bea 88 and Eve 93 are not', ranked.shame.finishing.map(f => `${f.name} — ${f.why}`),
+    ['Cal — working 30% of the day']);
+eq('a week where everyone scores 60 or more shames nobody', rankWeek([fin('Ace'), fin('Bea', { realShare: 0.5 }), fin('Dee', { nextGapMins: 35 }), fin('Eve', { paceRatio: 1.5 })]).shame.finishing, []);
 eq('a group of two: one each side', [ranked.fame.wms.map(f => f.name), ranked.shame.wms.map(f => f.name)], [['Hal'], ['Ivy']]);
 eq('every part has a weight, and each group sums to 100', Object.values(SCORE_PARTS).map(ps => ps.reduce((t, p) => t + p.weight, 0)), [100, 100]);
 eq('roles → boards (the setup manager is on both)', ['painter', 'hand_painter', 'Paint_Manager', 'setup_manager', 'setup', 'operator', 'admin', 'csr', ''].map(boardOfRole),
@@ -186,7 +187,7 @@ eq('the wallboard: the week, who published', [board.week, board.weekEnd, board.p
 eq('the wallboard: names, ranks, scores', board.groups.finishing.map(r => `${r.rank}.${r.name}:${r.score}`).slice(0, 2), ['1.Ace:100', '2.Fay:98']);
 const flat = JSON.stringify(board);
 ok('the wallboard carries NO hours and no clock times', !/hours|clocked|inMs|outMs|"clock"/i.test(flat));
-eq('the wallboard: parts in whole percent', board.groups.finishing[5].parts, { start: 0, punches: 20, pace: 0, next: 100, steady: 0, onTime: 100 });
+eq('the wallboard: parts in whole percent', board.groups.finishing[5].parts, { start: 0, punches: 20, closed: 100, next: 100, pace: 0, steady: 0, output: null, onTime: 100 });
 eq('the halls ride along', [board.fame.finishing.length, board.shame.wms.length], [3, 1]);
 eq('nothing to publish is an empty board, not a crash', wallboardDocOf({ week: '2026-10-05', ranked: rankWeek([]) }).groups, { finishing: [], wms: [] });
 
@@ -230,10 +231,34 @@ const sidRows = weekRowsOf({ personDays: sidDays, week: '2026-10-05', wosById: s
 eq('a row per board', sidRows.map(r => r.group), ['finishing', 'wms']);
 eq('finishing due dates: the orders set up, found by the ref the log names (WO11688 on time, WO-STK-9 late)', sidRows[0].onTime, { ok: 1, total: 2 });
 eq('pick / pack due dates: what was picked', sidRows[1].onTime, { ok: 0, total: 1 });
-const sidWeek = (o) => ({ pk: 'sid', who: 'Sid', group: GROUP.FINISHING, week: '2026-10-05', activeDays: 4, steps: 0, setups: 40, startLagMins: 10, realShare: null, paceRatio: null, nextGapMins: null, steadyShare: 0.9, onTime: { ok: 3, total: 4 }, ...o });
+const sidWeek = (o) => ({ pk: 'sid', who: 'Sid', group: GROUP.FINISHING, week: '2026-10-05', activeDays: 4, floorDays: 4, steps: 0, setups: 40, startLagMins: 10, realShare: null, paceRatio: null, nextGapMins: null, steadyShare: 0.9, onTime: { ok: 3, total: 4 }, ...o });
 const sidRank = rankWeek([sidWeek(), fin('Ace'), fin('Bea', { realShare: 0.5 })]);
-eq('a setup manager is ranked on the finishing board by start, steady and due dates — punches, pace and next order left out', [sidRank.finishing.find(r => r.who === 'Sid').score, sidRank.finishing.find(r => r.who === 'Sid').parts.filter(p => p.value == null).map(p => p.key)], [94, ['punches', 'pace', 'next']]);
+eq('a setup manager is ranked on the finishing board by start, steady and due dates — punches, punched out, next order, pace and production left out', [sidRank.finishing.find(r => r.who === 'Sid').score, sidRank.finishing.find(r => r.who === 'Sid').parts.filter(p => p.value == null).map(p => p.key)], [93, ['punches', 'closed', 'next', 'pace', 'output']]);
 eq('…and not without the setups', rankWeek([sidWeek({ setups: 3 })]).unranked.map(r => r.who), ['Sid']);
+
+// ── production and punching, scored on their own (Stuart 2026-10-22) ──────────────────────────────────────────────
+// "add a score one for prompt and correct punching … and one for actual production amounts"; rank on three floor days
+const pr = rankWeek([fin('Ann', { outputRatio: 1.3 }), fin('Bo', { outputRatio: 0.7 }), fin('Cy', { outputRatio: 1 }), fin('Di', { outputRatio: 2, floorDays: 2, activeDays: 4 })]);
+eq('production against a usual day at their stations: 1.2× or more is 100, 1.0× is 75, 0.7× is 37; punching is its own', pr.finishing.map(r => `${r.who}:${r.score}:punching ${r.punching}:production ${r.production}`),
+    ['Ann:100:punching 100:production 100', 'Cy:94:punching 100:production 75', 'Bo:84:punching 100:production 37']);
+eq('two floor days is not ranked on finishing, however good — whatever else they did', pr.unranked.map(r => r.who), ['Di']);
+eq('production says what it read', pr.finishing.find(r => r.who === 'Bo').parts.find(p => p.key === 'output').says, '0.7× a usual day at their stations');
+eq('punching reads start, real punches, punched out and next order — and a step left running costs it', rankWeek([fin('Ace'), fin('Lo', { overruns: 4, realShare: 0.75, nextGapMins: 35 }), fin('Mo')]).finishing.map(r => `${r.who}:${r.punching}`), ['Ace:100', 'Mo:100', 'Lo:72']);
+const wb2 = wallboardDocOf({ week: '2026-10-05', ranked: pr, nowMs: 1 });
+eq('the wallboard carries both scores and the floor days', [wb2.groups.finishing[0].punching, wb2.groups.finishing[0].production, wb2.groups.finishing[0].facts.floorDays, wb2.groups.finishing[0].facts.outputRatio], [100, 100, 4, 1.3]);
+// what a step is worth: the crew's usual time for it at that station and batch size (three real punches), else its standard
+const P = (h, mi) => at(2026, 10, 5, h, mi);
+const pw = { W: { id: 'W', totalParts: 100, sprayStation: 'SPIN', partsList: [{ legacyErpId: 'R1', productType: 'RING', quantity: 100 }] }, B: { id: 'B', totalParts: 10, sprayStation: 'BOOTH', partsList: [{ legacyErpId: 'K1', productType: 'BRACKET', quantity: 10 }] } };
+const ps = (who, woId, h1, m1, h2, m2) => ({ who, woId, task: 'spinSpray', person: true, oven: false, startMs: P(h1, m1), endMs: P(h2, m2), ranMins: (P(h2, m2) - P(h1, m1)) / 60000, normalMins: 20, short: false, overrun: false });
+const pdd = personDaysOf({ steps: [ps('Zed', 'W', 8, 0, 8, 20), ps('Zed', 'B', 9, 0, 9, 30), ps('Yo', 'W', 10, 0, 10, 10), ps('Xi', 'W', 11, 0, 11, 30)], wosById: pw, boardOf: () => GROUP.FINISHING });
+eq('earned: a sled of 100 rings is worth the crew\'s usual 20 min (three punches: 20, 10, 30); the lone booth coat its 20-min standard — and a day with no clock row is a full 8 h, however short its punches', ['zed', 'yo', 'xi'].map(k => { const d = pdd.find(x => x.pk === k); return [d.earnedMins, d.attendedMins, d.earnedByStation]; }), [[40, FLOOR_DAY_MINS, { spin: 20, booth: 20 }], [20, 480, { spin: 20 }], [20, 480, { spin: 20 }]]);
+const pwk = weekRowsOf({ personDays: pdd, week: '2026-10-05', wosById: pw, rates: { spin: 0.05, booth: 0.1, all: 0.05 } });
+eq('the week: earned against what a usual day at those stations earns (Zed half spin at 5%, half booth at 10% of a day)', pwk.map(r => [r.who, Math.round(r.outputRatio * 100) / 100, r.floorDays]), [['xi', 0.83, 1], ['yo', 0.83, 1], ['zed', 1.11, 1]]);
+// what a usual FULL day at a station earns — six hours on the floor, most of it at the one station; a helper's steps are no day
+const rd = (st, earned, o = {}) => ({ group: GROUP.FINISHING, earnedMins: earned, earnedByStation: { [st]: earned }, attendedMins: 480, spanMins: 480, clock: null, ...o });
+const rates = stationRatesOf([rd('spin', 180, { spanMins: 500 }), rd('spin', 200), rd('spin', 160, { spanMins: 420 }), rd('booth', 400), rd('spin', 20, { spanMins: 60 }),
+    rd('booth', 300, { clock: {}, attendedMins: 400, spanMins: 100 }), { ...rd('spin', 400), group: GROUP.WMS }]);
+eq('a station\'s usual day from its full days (spin: three); too few (booth: two) reads every full day\'s median', [rates.spin, rates.booth, rates.hand, rates.spinDays, rates.boothDays].map(x => Math.round(x * 1000) / 1000), [0.375, 0.417, 0.417, 3, 2]);
 
 // ── chores (Stuart 2026-10-14) — work like a step; from the day they exist, oven time with nothing done is idle ─────
 eq('chores count from the day after they shipped', CHORES_FROM, '2026-10-15');

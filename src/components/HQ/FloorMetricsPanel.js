@@ -5,17 +5,21 @@
 // a button: the name map (app name → time-clock employee number, and which board a person is ranked on) to
 // hq_config/floor_metrics; and "Publish to wallboard" — names, scores and the facts behind them, NO hours — to
 // fin_config/wallboard, which the floor's and the WMS's screens may read. Nothing else is written: no order,
-// no floor document, no RTG, WMS or NetSuite record.
+// no floor document, no RTG, WMS or NetSuite record. Below the boards, "Production & capacity" (HQ/FloorProductionSection,
+// Stuart 2026-10-22) — what the floor finished and what it took, read from the same documents.
 import React, { useEffect, useMemo, useState } from 'react';
 import { db } from '../../firebase';
 import { collection, doc, getDoc, getDocs, orderBy, query, setDoc, where } from 'firebase/firestore';
 import { timecardDaysOf, mergeTimecardDays, timecardPeopleOf, weekKeyOf, addDays, dateKeyOf, dayStartOf } from '../Shared/timecardImport';
 import {
     floorTimersOf, floorStepsOf, activityOf, clockIndexOf, personDaysOf, weekRowsOf, rankWeek, wallboardDocOf, weeksOf,
-    boardOfRole, personKeyOf, standardsCheckOf, GROUP, GROUP_LABEL, SCORE_PARTS, RANK_MIN,
+    boardOfRole, personKeyOf, standardsCheckOf, stationRatesOf, GROUP, GROUP_LABEL, SCORE_PARTS, RANK_MIN,
 } from '../Shared/floorMetrics';
+import { codesToAskOf, typeOfCodeFrom, periodsOf } from '../Shared/floorOutput';
+import { fetchPartsByCode } from '../Shared/PullLinesLive';
 import { choreIntervalsOf } from '../Shared/floorChores';
 import { clockDaysByPersonOf } from '../Shared/timeClock';
+import FloorProductionSection from './FloorProductionSection';
 
 const box = { background: '#fff', border: '1px solid var(--line)', padding: '20px', marginBottom: '20px' };
 const h4 = { margin: '0 0 12px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', fontWeight: 500 };
@@ -36,7 +40,7 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
     const [weeksBack, setWeeksBack] = useState(6);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
-    const [data, setData] = useState({ wos: [], finLogs: [], hqLogs: [], people: [], settings: {}, punches: [] });
+    const [data, setData] = useState({ wos: [], finLogs: [], hqLogs: [], people: [], settings: {}, punches: [], recipes: {} });
     const [cfg, setCfg] = useState({ map: {}, groups: {} });
     const [draft, setDraft] = useState({ map: {}, groups: {} });
     const [timecards, setTimecards] = useState([]);      // the dropped exports — this browser only, never stored
@@ -53,13 +57,14 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
         (async () => {
             setLoading(true); setLoadError('');
             try {
-                const [wosS, finS, hqS, dirS, setS, cfgS] = await Promise.all([
+                const [wosS, finS, hqS, dirS, setS, cfgS, recS] = await Promise.all([
                     getDocs(collection(db, 'fin_workorders')),
                     getDocs(query(collection(db, 'fin_logs'), where('at', '>=', fromMs), orderBy('at'))),
                     getDocs(query(collection(db, 'hq_logs'), where('t', '>=', new Date(fromMs)), orderBy('t'))),
                     getDocs(collection(db, 'directory')),
                     getDoc(doc(db, 'fin_config', 'settings')),
                     getDoc(doc(db, 'hq_config', 'floor_metrics')),
+                    getDocs(collection(db, 'fin_recipes')),
                 ]);
                 if (!live) return;
                 const saved = cfgS.exists() ? cfgS.data() : {};
@@ -71,6 +76,7 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                     hqLogs: hqS.docs.map(d => d.data()),
                     people: dirS.docs.map(d => d.data()).filter(p => p && p.name),
                     settings: setS.exists() ? setS.data() : {},
+                    recipes: Object.fromEntries(recS.docs.map(d => [d.id, d.data()])),
                     // ⏱ the app's own time clock (admin-read; empty until its rules are deployed or anyone punches)
                     punches: await getDocs(query(collection(db, 'time_punches'), where('at', '>=', fromMs - 24 * 3600000))).then(s => s.docs.map(d => d.data())).catch(() => []),
                 });
@@ -79,6 +85,26 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
         })();
         return () => { live = false; };
     }, [fromMs]);
+
+    // ── the item master's type, for the finished codes no line types — the production section's categories, and what
+    // the score's production counts (Shared/floorOutput). Asked in parallel batches; unreachable = read by order and name.
+    const [partsByCode, setPartsByCode] = useState({});
+    const [partsNote, setPartsNote] = useState('');
+    const askFrom = Math.min(fromMs, periodsOf().lastWeek.fromMs);
+    const codes = useMemo(() => codesToAskOf(data.wos, { fromMs: askFrom }), [data.wos, askFrom]);
+    useEffect(() => {
+        let live = true;
+        if (!codes.length) { setPartsByCode({}); setPartsNote(''); return undefined; }
+        setPartsNote(`Reading the item master for ${codes.length} codes…`);
+        const chunks = []; for (let i = 0; i < codes.length; i += 100) chunks.push(codes.slice(i, i + 100));
+        Promise.all(chunks.map(c => fetchPartsByCode(c).catch(() => null))).then(res => {
+            if (!live) return;
+            setPartsByCode(Object.assign({}, ...res.filter(Boolean)));
+            setPartsNote(res.some(r => !r) ? 'Some of the item master could not be read — those pieces are placed by their order and name.' : '');
+        });
+        return () => { live = false; };
+    }, [codes]);
+    const typeOfCode = useMemo(() => typeOfCodeFrom(partsByCode), [partsByCode]);
 
     // ── the reading ──────────────────────────────────────────────────────────────────────────────────────
     const directory = useMemo(() => {
@@ -101,9 +127,9 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
             clock.set(pk, merged);
         });
         const chores = choreIntervalsOf(data.finLogs).filter(c => c.startMs >= fromMs);
-        const personDays = personDaysOf({ steps, events, chores, clockByPerson: clock, boardOf, nameOf });
+        const personDays = personDaysOf({ steps, events, chores, clockByPerson: clock, boardOf, nameOf, wosById, typeOfCode });
         return { wosById, steps, events, personDays, weeks: weeksOf(personDays), nameOf, standards: standardsCheckOf(steps, wosById) };
-    }, [data, timecards, cfg.map, boardOf, directory, fromMs, fromKey]);
+    }, [data, timecards, cfg.map, boardOf, directory, fromMs, fromKey, typeOfCode]);
     useEffect(() => { if (!week || !computed.weeks.includes(week)) setWeek(computed.weeks[0] || ''); }, [computed.weeks, week]);
     const rows = useMemo(() => (week ? weekRowsOf({ personDays: computed.personDays, week, wosById: computed.wosById }) : []), [computed, week]);
     const ranked = useMemo(() => rankWeek(rows), [rows]);
@@ -184,9 +210,11 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                         <table style={{ borderCollapse: 'collapse', width: '100%' }}>
                             <thead><tr>
                                 <th style={th}>#</th><th style={th}>Name</th><th style={th}>Score</th>
+                                {g === GROUP.FINISHING && <th style={th} title="Prompt and correct punching: start, real punches, punched out, next order">Punching</th>}
                                 {parts.map(p => <th key={p.key} style={th} title={`weight ${p.weight}`}>{p.label}</th>)}
-                                <th style={th}>Days</th><th style={th}>Hours</th><th style={th}>First touch</th>
+                                <th style={th}>Days</th>{g === GROUP.FINISHING && <th style={th} title="Days with a step punched or a Setup Queue setup — three to be ranked">Floor days</th>}<th style={th}>Hours</th><th style={th}>First touch</th>
                                 {g === GROUP.FINISHING ? (<>
+                                    <th style={th} title="Hours of work done — each step at the crew's usual time for it, at that station, for a batch that size">Earned</th><th style={th} title="The work's worth against what a usual day at the same stations earns">Output</th>
                                     <th style={th}>Steps</th><th style={th} title="Setup Queue: started setup or staged to the floor">Setups</th><th style={th}>Real</th><th style={th}>Pace</th><th style={th}>Next order</th><th style={th} title="Chores punched in between the steps">Chores</th><th style={th}>Oven-free</th>
                                 </>) : (<>
                                     <th style={th}>Picks</th><th style={th}>Packs</th><th style={th}>Actions</th><th style={th}>Per hour</th>
@@ -199,11 +227,15 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                                         <td style={td}>{r.rank}</td>
                                         <td style={{ ...td, fontWeight: 500 }}>{r.who}{r.unclockedDays ? <span title="Days worked with no time-clock row" style={{ color: '#c62828' }}> · {r.unclockedDays} unclocked</span> : null}</td>
                                         <td style={{ ...td, fontWeight: 600, color: scoreColour(r.score) }}>{r.score}</td>
-                                        {parts.map(p => <td key={p.key} style={{ ...td, color: 'var(--ink-soft)' }}>{partCell(r, p.key)}</td>)}
+                                        {g === GROUP.FINISHING && <td style={{ ...td, fontWeight: 600, color: scoreColour(r.punching) }}>{r.punching == null ? '—' : r.punching}</td>}
+                                        {parts.map(p => <td key={p.key} style={{ ...td, color: p.key === 'output' ? scoreColour(r.production) : 'var(--ink-soft)', fontWeight: p.key === 'output' ? 600 : 400 }}>{partCell(r, p.key)}</td>)}
                                         <td style={td}>{r.activeDays}</td>
+                                        {g === GROUP.FINISHING && <td style={td}>{r.floorDays}</td>}
                                         <td style={td}>{r.hours ? r.hours.toFixed(1) : '—'}</td>
                                         <td style={td}>{mins(r.startLagMins)}</td>
                                         {g === GROUP.FINISHING ? (<>
+                                            <td style={td}>{r.earnedMins ? `${(r.earnedMins / 60).toFixed(1)} h` : '—'}</td>
+                                            <td style={td}>{r.outputRatio == null ? '—' : `${r.outputRatio.toFixed(1)}×`}</td>
                                             <td style={td}>{r.steps}{r.overruns ? <span style={{ color: 'var(--ink-soft)' }} title="Left running — not timed"> +{r.overruns}</span> : null}</td>
                                             <td style={td}>{r.setups || '—'}</td>
                                             <td style={td}>{pct(r.realShare)}</td>
@@ -348,12 +380,16 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                         <h4 style={h4}>Not ranked this week</h4>
                         <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', lineHeight: 1.7 }}>
                             {ranked.unranked.map(r => {
-                                const why = r.group === GROUP.NONE ? 'not on a board (role)' : r.activeDays < RANK_MIN.days ? `${r.activeDays} day worked` : (r.group === GROUP.FINISHING ? (r.steps || 0) + (r.setups || 0) : r.actions) < RANK_MIN.work ? `${r.group === GROUP.FINISHING ? `${r.steps} steps, ${r.setups || 0} setups` : r.actions + ' actions'}` : 'too little could be read';
+                                const why = r.group === GROUP.NONE ? 'not on a board (role)'
+                                    : r.group === GROUP.FINISHING && (r.floorDays || 0) < RANK_MIN.floorDays ? `${r.floorDays || 0} floor day${r.floorDays === 1 ? '' : 's'} (${RANK_MIN.floorDays} to rank)`
+                                    : r.activeDays < RANK_MIN.days ? `${r.activeDays} day worked` : (r.group === GROUP.FINISHING ? (r.steps || 0) + (r.setups || 0) : r.actions) < RANK_MIN.work ? `${r.group === GROUP.FINISHING ? `${r.steps} steps, ${r.setups || 0} setups` : r.actions + ' actions'}` : 'too little could be read';
                                 return <span key={`${r.pk}|${r.group}`} style={{ marginRight: '18px', display: 'inline-block' }}><strong style={{ color: 'var(--ink)' }}>{r.who}</strong>{r.group !== GROUP.NONE ? ` (${GROUP_LABEL[r.group]})` : ''} — {why}</span>;
                             })}
                         </div>
                     </div>
                 )}
+
+                {week && <FloorProductionSection wos={data.wos} steps={computed.steps} recipes={data.recipes} week={week} rows={rows} nameOf={computed.nameOf} fromMs={fromMs} weeksBack={weeksBack} currentUser={currentUser} writeLog={writeLog} typeOfCode={typeOfCode} partsNote={partsNote} stationRates={stationRatesOf(computed.personDays)} />}
 
                 <div style={box}>
                     <h4 style={h4}>The standards, against the floor ({weeksBack} weeks)</h4>
@@ -387,6 +423,9 @@ export default function FloorMetricsPanel({ currentUser, writeLog }) {
                         <li><strong>Next order</strong> — from finishing a step on one order to starting a step on the next.</li>
                         <li><strong>Steady</strong> — the clocked half-hours with something done or a step running, a chore running, less the day's unpaid break. Oven time with nothing else done is shown as oven-free; before chores could be punched (until 2026-10-14) it is not scored, from 2026-10-15 it counts as idle — the operator is free and expected to do chores.</li>
                         <li><strong>Due dates</strong> — finishing: the orders they worked that the floor finished by their due date; WMS: picks and packs done by the due date.</li>
+                        <li><strong>Punching</strong> (finishing, beside the score) — prompt and correct: start, real punches, punched out (steps not left running) and next order, out of those that could be read.</li>
+                        <li><strong>Production</strong> (finishing) — every step they set up, sprayed or hand-finished, worth the crew's usual time for that step at that station for a batch that size (the table "What a step is worth" below — a sled of rings on the spin is worth what a sled takes, not its ring count). Against what a usual full day at the same stations earns: the spin is paced by its oven and earns far less of a day than the booth, so each station is held to its own. A day is the clocked day less lunch, or a full 8 hours where the clock has no row. 1.0× scores 75, 1.2× or more 100, 0.4× or less 0. A quarter of the score.</li>
+                        <li><strong>Ranked</strong> (finishing) — three floor days (a step punched or a Setup Queue setup) and ten steps or setups in the week.</li>
                         <li>Not in the history: the machine cards' Start / Complete (only Manual Control is logged); when a pick or pack STARTED (the WMS keeps only when it finished); lunch punches; chores.</li>
                         <li>Hours are shown here only. The wallboard gets names, scores and the facts behind them — never hours or clock times.</li>
                     </ul>

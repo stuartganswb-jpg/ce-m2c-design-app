@@ -238,7 +238,7 @@ const FinishingFloor = () => {
           {activeTab === 'PRODUCTION TIMES' && <ProductionTimes sysConfig={sysConfig} capacityMatrix={capacityMatrix} recipes={recipes} workOrders={workOrders} prodTypes={prodTypes} writeLog={writeLog} user={user} finishes={masterFinishes} />}
           {activeTab === 'SUPPLIES' && <Supplies supplies={supplies} writeLog={writeLog} user={user} />}
           {activeTab === 'DAILY SUMMARY' && <Summary workOrders={workOrders} />}
-          {activeTab === 'WALLBOARD' && <WallboardScreen side="finishing" db={db} workOrders={workOrders} sysConfig={sysConfig} finishes={masterFinishes} feed={woFeed} />}
+          {activeTab === 'WALLBOARD' && <WallboardScreen side="finishing" db={db} workOrders={workOrders} sysConfig={sysConfig} finishes={masterFinishes} feed={woFeed} recipes={recipes} />}
           
           {/* 🚀 SHARED APPS */}
           {activeTab === 'ASSET GALLERY' && <FloorAssetViewer activeBrand={null} />}

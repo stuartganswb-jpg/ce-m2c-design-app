@@ -137,6 +137,7 @@ export function boardHalfOf(published, group) {
         week: published.week, weekEnd: published.weekEnd || '', publishedAt: N(published.publishedAt), publishedBy: published.publishedBy || '',
         ranked: ((published.groups || {})[group] || []).slice().sort((a, b) => N(a.rank) - N(b.rank)),
         fame: ((published.fame || {})[group] || []), shame: ((published.shame || {})[group] || []),
+        weekDays: N((published.floorDays || {})[group]) || null,   // the days the floor worked that week (2026-10-22)
     };
 }
 

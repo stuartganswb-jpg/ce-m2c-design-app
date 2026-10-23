@@ -28,6 +28,7 @@ import { runsInLoads, spinLoadsOf } from './spinLoads.js';
 import { sprayStationOf, SPRAY_STATIONS, BOOTH_COAT_MINS, BOOTH_LOAD_PCS } from './floorActivity.js';
 import { dateKeyOf, weekKeyOf, addDays, clockedMinsOf, breakMinsOf } from './timecardImport.js';
 import { woRefOf } from './woRef.js';
+import { stepWorthOf, stationOf, STATIONS } from './floorOutput.js';
 
 const MIN = 60000;
 const N = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -273,10 +274,22 @@ const RELEVANT_SRC = { [GROUP.FINISHING]: [SRC.FLOOR, SRC.FLOOR_APP], [GROUP.WMS
  * @param boardOf    personKey → a board setting (role + Floor Metrics' moves); BOTH gives a day row on each board
  * @param nameOf     personKey → the name to show
  * @param chores     finished chores (Shared/floorChores.choreIntervalsOf) — work, like a step
+ * @param wosById    the orders the steps name — what each step's pieces were (production)
+ * @param typeOfCode the item master's type by code (Shared/floorOutput)
  * @returns [{ pk, who, date, week, group, clock, firstMs, startLagMins, steps, short, overruns, ratios, gaps,
- *             busyMins, choreMins, ovenFreeMins, clockedMins, slots, picks, packs, actions, done, orders, setups, setupRefs, unclocked }]
+ *             busyMins, choreMins, ovenFreeMins, clockedMins, slots, picks, packs, actions, done, orders, setups, setupRefs, unclocked,
+ *             earnedMins, attendedMins }]
+ *
+ * PRODUCTION (Stuart 2026-10-22: "one for actual production amounts"): every step a person set up, sprayed or hand-
+ * finished, worth the crew's usual time for that step at that station for a batch that size (Shared/floorOutput.
+ * stepWorthOf, read from these same steps) — `earnedMins`, and by station `earnedByStation`. Against `attendedMins`:
+ * the clocked day less its unpaid break where the clock has the day, else a full FLOOR_DAY_MINS — never first punch to
+ * last, which a morning's work punched in one burst would shrink to nothing. weekRowsOf sets that against what a
+ * usual full day at those stations earns (stationRatesOf): the spin is paced by its oven and earns less of a day
+ * than the booth, so each station is held to its own.
  */
-export function personDaysOf({ steps = [], events = [], chores = [], clockByPerson = new Map(), boardOf = () => GROUP.NONE, nameOf = (pk) => pk } = {}) {
+export function personDaysOf({ steps = [], events = [], chores = [], clockByPerson = new Map(), boardOf = () => GROUP.NONE, nameOf = (pk) => pk, wosById = {}, typeOfCode } = {}) {
+    const { worthOf } = stepWorthOf({ steps, wosById, typeOfCode });
     const days = new Map();
     const dayOf = (pk, date) => {
         const k = `${pk}|${date}`;
@@ -303,6 +316,13 @@ export function personDaysOf({ steps = [], events = [], chores = [], clockByPers
         const choreIvs = minus(clipTo(unionOf(d.chores.map(c => [c.startMs, c.endMs])), win), busy);
         const working = unionOf([...busy, ...choreIvs]);
         const oven = minus(clipTo(unionOf(d.steps.filter(s => s.oven && !s.overrun).map(s => [s.startMs, s.endMs])), win), working);
+        // production: what each of their own steps is usually worth, over the day they were there
+        const earnedMins = own.reduce((t, s) => t + worthOf(s), 0);
+        const earnedByStation = {};
+        own.forEach(s => { const v = worthOf(s); if (v) { const st = stationOf(s.task, wosById[s.woId]); earnedByStation[st] = (earnedByStation[st] || 0) + v; } });
+        const ends = own.map(s => (s.overrun ? s.startMs + N(s.normalMins) * MIN : s.endMs));
+        const spanMins = own.length ? (Math.max(...ends) - Math.min(...own.map(s => s.startMs))) / MIN : 0;
+        const attendedMins = win ? Math.max(0, (win[1] - win[0]) / MIN - N(breakMinsOf(clock))) : (own.length ? FLOOR_DAY_MINS : 0);
         const gaps = [];
         let last = null;
         own.slice().sort((a, b) => a.startMs - b.startMs).forEach(s => {
@@ -339,8 +359,36 @@ export function personDaysOf({ steps = [], events = [], chores = [], clockByPers
             setups: d.events.filter(e => e.src === SRC.FLOOR_APP && (e.kind === SETUP_KIND.SETUP || e.kind === SETUP_KIND.STAGED)).length,
             setupRefs: [...new Set(d.events.filter(e => e.src === SRC.FLOOR_APP && e.ref).map(e => e.ref))],
             unclocked: !clock && (d.events.length > 0 || d.steps.length > 0),
+            earnedMins, earnedByStation, attendedMins, spanMins,
         };
     })).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.pk.localeCompare(b.pk) || a.group.localeCompare(b.group)));
+}
+
+// ── what a usual full day at a station earns (production) ──────────────────────────────────────────────────────
+/** A floor day the clock does not cover counts as a full shift's worth of minutes (8 h). */
+export const FLOOR_DAY_MINS = 480;
+/** A FULL station day — what the station's usual day is read from: six hours on the floor (clocked, or first punch to last
+ *  without the clock), most of its work (STATION_DAY_SHARE) at the one station. A helper's two steps are not a day. */
+export const FULL_DAY_MINS = 360;
+export const STATION_DAY_SHARE = 0.6;
+export const STATION_DAYS_MIN = 3;
+/**
+ * The share of a full day that a usual day at each station earns — { spin: 0.39, booth: 0.92, … , all } — the median over
+ * the finishing floor's full station days in the history given; a station with fewer than STATION_DAYS_MIN full days
+ * reads `all` (every full day's median).
+ */
+export function stationRatesOf(personDays = []) {
+    const full = personDays.filter(d => d && d.group === GROUP.FINISHING && N(d.earnedMins) > 0 && N(d.attendedMins) > 0
+        && (d.clock ? N(d.attendedMins) : N(d.spanMins)) >= FULL_DAY_MINS);
+    const mainOf = (d) => Object.entries(d.earnedByStation || {}).sort((a, b) => b[1] - a[1])[0] || [null, 0];
+    const all = median(full.map(d => d.earnedMins / d.attendedMins));
+    const out = { all };
+    STATIONS.forEach(st => {
+        const xs = full.filter(d => { const [m, v] = mainOf(d); return m === st && v / d.earnedMins >= STATION_DAY_SHARE; }).map(d => d.earnedMins / d.attendedMins);
+        out[st] = xs.length >= STATION_DAYS_MIN ? median(xs) : all;
+        out[`${st}Days`] = xs.length;
+    });
+    return out;
 }
 
 // ── a person's week ───────────────────────────────────────────────────────────────────────────────────────
@@ -348,7 +396,7 @@ export function personDaysOf({ steps = [], events = [], chores = [], clockByPers
 const byDue = (atMs, reqDate) => !!reqDate && dateKeyOf(atMs) <= String(reqDate).slice(0, 10);
 
 /** One row per person for the week starting `week` (a Monday, 'YYYY-MM-DD'). Hours stay on the row — never published. */
-export function weekRowsOf({ personDays = [], week, wosById = {} } = {}) {
+export function weekRowsOf({ personDays = [], week, wosById = {}, rates = stationRatesOf(personDays) } = {}) {
     const by = new Map();
     personDays.filter(d => d.week === week).forEach(d => { const k = `${d.pk}|${d.group}`; if (!by.has(k)) by.set(k, []); by.get(k).push(d); });
     // the Setup Queue names an order the way every log line does (Shared/woRef) — back to its document
@@ -375,6 +423,9 @@ export function weekRowsOf({ personDays = [], week, wosById = {} } = {}) {
         return {
             pk, who: ds[0].who, group: ds[0].group, week,
             days: ds.filter(d => d.firstMs || d.clock).length, activeDays: ds.filter(d => d.firstMs).length,
+            // days with the floor's own work — a step punched or a Setup Queue setup (Stuart 2026-10-22: rank on three)
+            floorDays: ds.filter(d => d.steps > 0 || d.setups > 0).length,
+            floorDates: ds.filter(d => d.steps > 0 || d.setups > 0).map(d => d.date),
             clockDays: ds.filter(d => d.clock).length, unclockedDays: ds.filter(d => d.unclocked).length,
             hours: ds.reduce((t, d) => t + N(d.clock && d.clock.totalHours), 0),
             startLagMins: median(ds.map(d => d.startLagMins).filter(x => x != null)),
@@ -389,6 +440,14 @@ export function weekRowsOf({ personDays = [], week, wosById = {} } = {}) {
             picks: sum(d => d.picks), packs: sum(d => d.packs), actions,
             actionsPerHour: clockedMins > 0 ? actions / (clockedMins / 60) : null,
             onTime,
+            // production: the work's worth against what a usual day at those stations earns, on the days they punched steps
+            earnedMins: sum(d => d.earnedMins),
+            ...(() => {
+                const wd = ds.filter(d => N(d.earnedMins) > 0 && N(d.attendedMins) > 0);
+                const earned = wd.reduce((t, d) => t + d.earnedMins, 0), attended = wd.reduce((t, d) => t + d.attendedMins, 0);
+                const expected = wd.reduce((t, d) => t + d.attendedMins * Object.entries(d.earnedByStation || {}).reduce((u, [st, v]) => u + (v / d.earnedMins) * N(rates[st] != null ? rates[st] : rates.all), 0), 0);
+                return { productivity: attended > 0 ? earned / attended : null, outputRatio: expected > 0 ? earned / expected : null };
+            })(),
         };
     });
 }
@@ -400,12 +459,17 @@ export function weekRowsOf({ personDays = [], week, wosById = {} } = {}) {
 const lin = (v, good, bad) => (v == null || !Number.isFinite(v)) ? null : Math.max(0, Math.min(1, (v - bad) / (good - bad)));
 const pct = (x) => `${Math.round(x * 100)}%`;
 export const SCORE_PARTS = {
+    // Stuart 2026-10-22: the score read only HOW a person punched, so two clean days topped the board over a full week's
+    // work — "add a score one for prompt and correct punching … and one for actual production amounts". Production is
+    // a quarter of the score; the punching parts and production are also shown on their own (SUB_SCORES).
     [GROUP.FINISHING]: [
-        { key: 'start', label: 'Start', weight: 15, of: r => lin(r.startLagMins, 15, 60), says: r => `${Math.round(r.startLagMins)} min from clock-in to first pin` },
-        { key: 'punches', label: 'Real punches', weight: 25, of: r => r.realShare, says: r => `${pct(r.realShare)} of ${r.steps} steps punched for real` },
-        { key: 'pace', label: 'Pace', weight: 15, of: r => lin(r.paceRatio, 1, 2), says: r => `${r.paceRatio.toFixed(1)}× the standard time` },
-        { key: 'next', label: 'Next order', weight: 15, of: r => lin(r.nextGapMins, 10, 60), says: r => `${Math.round(r.nextGapMins)} min to start the next order` },
-        { key: 'steady', label: 'Steady', weight: 20, of: r => lin(r.steadyShare, 0.85, 0.4), says: r => `working ${pct(r.steadyShare)} of the day` },
+        { key: 'start', label: 'Start', weight: 10, of: r => lin(r.startLagMins, 15, 60), says: r => `${Math.round(r.startLagMins)} min from clock-in to first pin` },
+        { key: 'punches', label: 'Real punches', weight: 15, of: r => r.realShare, says: r => `${pct(r.realShare)} of ${r.steps} steps punched for real` },
+        { key: 'closed', label: 'Punched out', weight: 5, of: r => (r.steps ? lin(N(r.overruns) / r.steps, 0, 0.2) : null), says: r => (N(r.overruns) ? `${r.overruns} of ${r.steps} steps left running` : `no step of ${r.steps} left running`) },
+        { key: 'next', label: 'Next order', weight: 10, of: r => lin(r.nextGapMins, 10, 60), says: r => `${Math.round(r.nextGapMins)} min to start the next order` },
+        { key: 'pace', label: 'Pace', weight: 10, of: r => lin(r.paceRatio, 1, 2), says: r => `${r.paceRatio.toFixed(1)}× the standard time` },
+        { key: 'steady', label: 'Steady', weight: 15, of: r => lin(r.steadyShare, 0.85, 0.4), says: r => `working ${pct(r.steadyShare)} of the day` },
+        { key: 'output', label: 'Production', weight: 25, of: r => lin(r.outputRatio, 1.2, 0.4), says: r => `${r.outputRatio.toFixed(1)}× a usual day at their stations` },
         { key: 'onTime', label: 'Due dates', weight: 10, of: r => (r.onTime.total ? r.onTime.ok / r.onTime.total : null), says: r => `${r.onTime.ok} of ${r.onTime.total} orders done by their due date` },
     ],
     [GROUP.WMS]: [
@@ -415,25 +479,35 @@ export const SCORE_PARTS = {
         { key: 'onTime', label: 'Due dates', weight: 15, of: r => (r.onTime.total ? r.onTime.ok / r.onTime.total : null), says: r => `${r.onTime.ok} of ${r.onTime.total} picks / packs by their due date` },
     ],
 };
-/** Enough of a week to rank: two days of work; ten steps or Setup Queue setups (floor) or ten actions (WMS); three parts read. */
-export const RANK_MIN = { days: 2, work: 10, parts: 3 };
+/** The two scores shown beside the score (finishing): PUNCHING — prompt and correct (started, punched for real, punched out,
+ *  onto the next order) — and PRODUCTION — what was made, against the crew. Each is out of the parts it could read. */
+export const SUB_SCORES = { [GROUP.FINISHING]: { punching: ['start', 'punches', 'closed', 'next'], production: ['output'] } };
+/** Enough of a week to rank: three days of the floor's own work (finishing — Stuart 2026-10-22) or two days of work (WMS);
+ *  ten steps or Setup Queue setups (floor) or ten actions (WMS); three parts read. */
+export const RANK_MIN = { days: 2, floorDays: 3, work: 10, parts: 3 };
 export const FAME_SIZE = 3;
+/** The hall of shame names only a score under this (Stuart 2026-10-22: "yes, shame under 60") — a close week shames nobody. */
+export const SHAME_BELOW = 60;
 
 /** Score each row against its group; rank the groups; name the top and the bottom. */
 export function rankWeek(rows = []) {
-    const eligible = (r) => r.group !== GROUP.NONE && r.activeDays >= RANK_MIN.days
+    const eligible = (r) => r.group !== GROUP.NONE
+        && (r.group === GROUP.FINISHING ? N(r.floorDays) >= RANK_MIN.floorDays : r.activeDays >= RANK_MIN.days)
         && (r.group === GROUP.FINISHING ? N(r.steps) + N(r.setups) : r.actions) >= RANK_MIN.work;
-    const out = { [GROUP.FINISHING]: [], [GROUP.WMS]: [], unranked: [], fame: {}, shame: {} };
+    const out = { [GROUP.FINISHING]: [], [GROUP.WMS]: [], unranked: [], fame: {}, shame: {}, floorDays: {} };
+    const weighOf = (parts) => { const read = parts.filter(p => p.value != null); const w = read.reduce((t, p) => t + p.weight, 0); return w > 0 ? Math.round(100 * read.reduce((t, p) => t + p.weight * p.value, 0) / w) : null; };
     [GROUP.FINISHING, GROUP.WMS].forEach(g => {
         const mine = rows.filter(r => r.group === g && eligible(r));
         const ctx = { medianRate: median(mine.map(r => r.actionsPerHour).filter(x => x != null)) };
+        const subs = SUB_SCORES[g] || {};
         const scored = mine.map(r => {
-            const parts = SCORE_PARTS[g].map(p => { const v = p.of(r, ctx); return { key: p.key, label: p.label, weight: p.weight, value: v, says: v == null ? '' : p.says(r) }; });
+            const parts = SCORE_PARTS[g].map(p => { const v = p.of(r, ctx); return { key: p.key, label: p.label, weight: p.weight, value: v, says: v == null ? '' : p.says(r, ctx) }; });
             const read = parts.filter(p => p.value != null);
-            const w = read.reduce((t, p) => t + p.weight, 0);
-            const score = read.length >= RANK_MIN.parts && w > 0 ? Math.round(100 * read.reduce((t, p) => t + p.weight * p.value, 0) / w) : null;
-            return { ...r, parts, score };
+            const score = read.length >= RANK_MIN.parts ? weighOf(parts) : null;
+            const sub = Object.fromEntries(Object.entries(subs).map(([k, keys]) => [k, weighOf(parts.filter(p => keys.includes(p.key)))]));
+            return { ...r, parts, score, ...sub };
         });
+        out.floorDays[g] = new Set(rows.filter(r => r.group === g).flatMap(r => r.floorDates || [])).size;
         const ranked = scored.filter(r => r.score != null).sort((a, b) => b.score - a.score || a.who.localeCompare(b.who));
         ranked.forEach((r, i) => { r.rank = i + 1; });
         out[g] = ranked;
@@ -442,7 +516,7 @@ export function rankWeek(rows = []) {
         const best = (r) => r.parts.filter(p => p.value != null).sort((a, b) => b.value - a.value || b.weight - a.weight)[0];
         const worst = (r) => r.parts.filter(p => p.value != null).sort((a, b) => a.value - b.value || b.weight - a.weight)[0];
         out.fame[g] = ranked.slice(0, n).map(r => ({ name: r.who, score: r.score, why: best(r).says }));
-        out.shame[g] = ranked.slice(ranked.length - n).reverse().map(r => ({ name: r.who, score: r.score, why: worst(r).says }));
+        out.shame[g] = ranked.slice(ranked.length - n).reverse().filter(r => r.score < SHAME_BELOW).map(r => ({ name: r.who, score: r.score, why: worst(r).says }));
     });
     out.unranked.push(...rows.filter(r => !eligible(r)));
     return out;
@@ -457,17 +531,19 @@ export function wallboardDocOf({ week, ranked, by = '', nowMs = Date.now() } = {
     const r1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
     const pub = (r) => ({
         name: r.who, rank: r.rank, score: r.score,
+        ...(r.punching !== undefined ? { punching: r.punching, production: r.production } : {}),
         parts: Object.fromEntries(r.parts.map(p => [p.key, p.value == null ? null : Math.round(p.value * 100)])),
         facts: {
             days: r.activeDays, startLagMins: r1(r.startLagMins), steps: r.steps, setups: r.setups || 0, realPunchPct: r.realShare == null ? null : Math.round(r.realShare * 100),
             paceRatio: r1(r.paceRatio), nextGapMins: r1(r.nextGapMins), steadyPct: r.steadyShare == null ? null : Math.round(r.steadyShare * 100),
             longestIdleMins: r.longestIdleMins, picks: r.picks, packs: r.packs, actions: r.actions, actionsPerHour: r1(r.actionsPerHour), onTime: r.onTime,
+            floorDays: r.floorDays == null ? null : r.floorDays, outputRatio: r1(r.outputRatio),
         },
     });
     return {
         week, weekEnd: addDays(week, 6), publishedAt: nowMs, publishedBy: by,
         groups: { [GROUP.FINISHING]: (ranked[GROUP.FINISHING] || []).map(pub), [GROUP.WMS]: (ranked[GROUP.WMS] || []).map(pub) },
-        fame: ranked.fame || {}, shame: ranked.shame || {},
+        fame: ranked.fame || {}, shame: ranked.shame || {}, floorDays: ranked.floorDays || {},
     };
 }
 
